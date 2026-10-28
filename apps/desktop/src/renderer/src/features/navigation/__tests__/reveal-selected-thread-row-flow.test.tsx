@@ -39,20 +39,22 @@ function box(top: number, height: number): DOMRect {
 it("lets the title click's centering finish instead of stopping it at the list edge", () => {
   document.body.innerHTML = `
     <aside class="sidebar">
-      <div class="sidebar__scroll-region">
-        <section class="directory-row">
-          <div class="directory-row__header"></div>
-          <div class="row-host"></div>
-        </section>
+      <div class="sidebar__scroll-region" style="overflow: hidden">
+        <div class="directory-groups" style="overflow-y: auto">
+          <section class="directory-row">
+            <div class="directory-row__header"></div>
+            <div class="row-host"></div>
+          </section>
+        </div>
       </div>
     </aside>`;
-  const region = document.querySelector<HTMLElement>(".sidebar__scroll-region")!;
+  const lane = document.querySelector<HTMLElement>(".directory-groups")!;
   const scrollBy = vi.fn();
-  region.scrollBy = scrollBy as typeof region.scrollBy;
+  lane.scrollBy = scrollBy as typeof lane.scrollBy;
   // The list shows y=100 to y=500 under a 30px sticky header. The selected
   // row sits above it, scrolled out of sight.
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-    if (this === region) return box(100, 400);
+    if (this === lane) return box(100, 400);
     if (this.classList.contains("directory-row__header")) return box(100, 30);
     if (this.classList.contains("thread-row") && this.classList.contains("is-selected")) return box(20, 60);
     return box(0, 0);
@@ -87,5 +89,5 @@ it("lets the title click's centering finish instead of stopping it at the list e
   expect(scroll).toHaveBeenCalledWith({ behavior: "smooth", block: "center", inline: "nearest" });
   expect(scrollBy).not.toHaveBeenCalled();
   expect(props.onRevealSelectedThreadComplete).toHaveBeenCalledWith(1);
-  region.dispatchEvent(new Event("scrollend"));
+  lane.dispatchEvent(new Event("scrollend"));
 });

@@ -12,7 +12,7 @@ beforeEach(() => {
 
 afterEach(() => {
   // End any centering a test started, so the next test starts clean.
-  document.querySelector(".sidebar__scroll-region")?.dispatchEvent(new Event("scrollend"));
+  document.querySelector(".directory-groups")?.dispatchEvent(new Event("scrollend"));
   document.body.innerHTML = "";
   if (originalScrollIntoView) {
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", originalScrollIntoView);
@@ -28,24 +28,32 @@ function place(element: Element, top: number, height: number): void {
   } as DOMRect);
 }
 
-// The list scrolls from y=100 to y=500 in the window. The selected row's
+// The lane scrolls from y=100 to y=500 in the window. The selected row's
 // directory header is stuck to the top of it, 30px tall.
 function mountSidebar(rowTop: number, rowHeight = 60, section = "directory-row"): void {
   document.body.innerHTML = `
     <aside class="sidebar">
-      <div class="sidebar__scroll-region">
-        <section class="${section}">
-          <div class="directory-row__header"></div>
-          <div class="thread-row-shell"><div class="thread-row is-selected"></div></div>
-        </section>
+      <div class="sidebar__scroll-region" style="overflow: hidden">
+        <div class="directory-groups" style="overflow-y: auto">
+          <section class="${section}">
+            <div class="directory-row__header"></div>
+            <div class="thread-row-shell"><div class="thread-row is-selected"></div></div>
+          </section>
+        </div>
       </div>
     </aside>`;
-  place(document.querySelector(".sidebar__scroll-region")!, 100, 400);
+  place(document.querySelector(".directory-groups")!, 100, 400);
   place(document.querySelector(".directory-row__header")!, 100, 30);
   place(document.querySelector(".thread-row.is-selected")!, rowTop, rowHeight);
-  const region = document.querySelector<HTMLElement>(".sidebar__scroll-region")!;
+  // The lane scrolls. The region around it only clips, so scrolling it
+  // would move nothing.
+  const lane = document.querySelector<HTMLElement>(".directory-groups")!;
   scrollBy = vi.fn();
-  region.scrollBy = scrollBy as typeof region.scrollBy;
+  lane.scrollBy = scrollBy as typeof lane.scrollBy;
+  const region = document.querySelector<HTMLElement>(".sidebar__scroll-region")!;
+  region.scrollBy = vi.fn(() => {
+    throw new Error("The region clips the lane; it does not scroll.");
+  }) as typeof region.scrollBy;
 }
 
 function selectedRow(): HTMLElement {
@@ -53,7 +61,7 @@ function selectedRow(): HTMLElement {
 }
 
 function endScroll(): void {
-  document.querySelector(".sidebar__scroll-region")!.dispatchEvent(new Event("scrollend"));
+  document.querySelector(".directory-groups")!.dispatchEvent(new Event("scrollend"));
 }
 
 describe("revealSelectedSidebarThreadRow", () => {
@@ -109,7 +117,7 @@ describe("revealSelectedSidebarThreadRow", () => {
 
   it("still scrolls while the sidebar is hidden and measures zero", () => {
     mountSidebar(0, 0);
-    place(document.querySelector(".sidebar__scroll-region")!, 0, 0);
+    place(document.querySelector(".directory-groups")!, 0, 0);
 
     revealSelectedSidebarThreadRow({ instant: true });
 
@@ -175,7 +183,7 @@ describe("revealThreadRowAtNearestEdge", () => {
 
   it("falls back to scrollIntoView while the sidebar is hidden", () => {
     mountSidebar(0, 0);
-    place(document.querySelector(".sidebar__scroll-region")!, 0, 0);
+    place(document.querySelector(".directory-groups")!, 0, 0);
 
     revealThreadRowAtNearestEdge(selectedRow());
 

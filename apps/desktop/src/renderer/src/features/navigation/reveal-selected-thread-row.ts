@@ -43,7 +43,7 @@ export function revealSelectedSidebarThreadRow(options?: { instant?: boolean }):
     inline: "nearest",
   });
   if (smooth && placement) {
-    trackCentering(row, placement.region);
+    trackCentering(row, placement.scroller);
   }
 }
 
@@ -59,16 +59,16 @@ export function revealThreadRowAtNearestEdge(row: HTMLElement): void {
   if (isInFullView(placement)) {
     return;
   }
-  const { region, rowBox, stuckTop, view } = placement;
+  const { scroller, rowBox, stuckTop, view } = placement;
   const delta = rowBox.top < placement.visibleTop
     ? rowBox.top - stuckTop
     // A row taller than the list keeps its top in view.
     : Math.min(rowBox.bottom - view.bottom, rowBox.top - stuckTop);
-  region.scrollBy({ top: delta, behavior: "auto" });
+  scroller.scrollBy({ top: delta, behavior: "auto" });
 }
 
 type Placement = {
-  region: HTMLElement;
+  scroller: HTMLElement;
   view: DOMRect;
   rowBox: DOMRect;
   // The top of what the operator can see, below the header if it covers it.
@@ -78,11 +78,11 @@ type Placement = {
 };
 
 function measure(row: HTMLElement): Placement | undefined {
-  const region = row.closest<HTMLElement>(REGION);
-  if (!region) {
+  const scroller = scrollerOf(row);
+  if (!scroller) {
     return undefined;
   }
-  const view = region.getBoundingClientRect();
+  const view = scroller.getBoundingClientRect();
   const rowBox = row.getBoundingClientRect();
   // A hidden sidebar (⌘B) measures zero. Scroll as before, so the row is
   // placed when the sidebar comes back.
@@ -98,7 +98,26 @@ function measure(row: HTMLElement): Placement | undefined {
     visibleTop = Math.max(visibleTop, headerBox.bottom);
     stuckTop = view.top + headerBox.height;
   }
-  return { region, view, rowBox, visibleTop, stuckTop };
+  return { scroller, view, rowBox, visibleTop, stuckTop };
+}
+
+// The region clips the lens; the lane inside it (`.sidebar-list--dense`,
+// `.directory-groups`) is what scrolls.
+function scrollerOf(row: HTMLElement): HTMLElement | undefined {
+  const region = row.closest<HTMLElement>(REGION);
+  if (!region) {
+    return undefined;
+  }
+  for (let element = row.parentElement; element; element = element.parentElement) {
+    const { overflowY } = window.getComputedStyle(element);
+    if (overflowY === "auto" || overflowY === "scroll") {
+      return element;
+    }
+    if (element === region) {
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 function isInFullView({ rowBox, view, visibleTop }: Placement): boolean {
@@ -113,16 +132,16 @@ function isInFullView({ rowBox, view, visibleTop }: Placement): boolean {
   return fitsInside || coversView;
 }
 
-function trackCentering(row: HTMLElement, region: HTMLElement): void {
+function trackCentering(row: HTMLElement, scroller: HTMLElement): void {
   centering?.finish();
   const finish = (): void => {
-    region.removeEventListener("scrollend", finish);
+    scroller.removeEventListener("scrollend", finish);
     window.clearTimeout(limit);
     if (centering?.row === row) {
       centering = undefined;
     }
   };
   const limit = window.setTimeout(finish, CENTERING_LIMIT_MS);
-  region.addEventListener("scrollend", finish);
+  scroller.addEventListener("scrollend", finish);
   centering = { row, finish };
 }
