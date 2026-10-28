@@ -206,7 +206,7 @@ export function readAgentDynamicToolCall(
   const threadId = readString(call.threadId);
   const turnId = readString(call.turnId) ?? "";
   const callId = readString(call.callId) ?? readString(call.requestId);
-  const tool = readString(call.tool);
+  let tool = readString(call.tool);
   const namespace =
     typeof call.namespace === "string"
       ? call.namespace
@@ -215,6 +215,11 @@ export function readAgentDynamicToolCall(
         : undefined;
   if (!threadId || !callId || !tool || namespace === undefined) {
     return undefined;
+  }
+  // Flat Responses functions retain an explicit prefix to avoid built-in
+  // collisions. Normalize only unnamespaced calls, preserving saved contracts.
+  if (call.namespace === null && tool.startsWith(`${PWRAGENT_TOOL_NAMESPACE}__`)) {
+    tool = tool.slice(PWRAGENT_TOOL_NAMESPACE.length + 2);
   }
   return {
     threadId,

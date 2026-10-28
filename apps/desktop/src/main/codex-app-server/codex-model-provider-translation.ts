@@ -30,6 +30,11 @@ export class CodexModelProviderTranslator {
     return provider && this.resolveProviderIds().has(provider) ? provider : undefined;
   }
 
+  /** Includes providers defined only in the operator's Codex profile. */
+  reportedProviderForThread(threadId: string): string | undefined {
+    return this.threadProviders.get(threadId);
+  }
+
   /** Qualify a model Codex reported for a thread. */
   qualifyModel(threadId: string | undefined, model: string | undefined): string | undefined {
     if (!model || !threadId) return model;
