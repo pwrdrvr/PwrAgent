@@ -9474,6 +9474,73 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedLaunchpad?.parentThreadInstanceId).toBeUndefined();
   });
 
+  it("takes the peer's provider for a sub-thread when the peer cannot run the parent's", async () => {
+    const parent: NavigationThreadSummary = {
+      id: "claude-parent", title: "Research", titleSource: "explicit", source: "claude", executionMode: "full-access",
+      projectKey: "/scratch/research", linkedDirectories: [
+        { id: "scratch", label: "Research", path: "/scratch/research", kind: "local" },
+      ], inbox: { inInbox: true },
+    };
+    // This machine stores the draft, even for a peer, and it can run Claude.
+    const defaults = { backend: "claude" as const, executionMode: "auto" as const, model: "opus" };
+    const ensureDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["ensureDirectoryLaunchpad"]>>(async (request) => ({
+      launchpad: { ...request, ...defaults, prompt: "", workMode: "local", createdAt: 1, updatedAt: 1 },
+      defaults,
+      // The peer has no Claude sign-in and would start the thread on Codex.
+      ...(request.federationTarget ? { preferredBackendFallback: "codex" as const } : {}),
+    }));
+    const updateDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>(async (request) => {
+      const switched = request.patch.backend !== undefined && request.patch.backend !== defaults.backend;
+      return {
+        launchpad: {
+          ...defaults, prompt: "", workMode: "local", createdAt: 1, updatedAt: 2,
+          directoryKey: request.directoryKey, directoryKind: "workspace", directoryLabel: "New Workspace",
+          ...request.patch,
+          // A provider switch drops the other provider's model.
+          ...(switched ? { model: undefined } : {}),
+        },
+        defaults,
+      };
+    });
+    const api: DesktopApi = {
+      ...actionDetailApi(parent), ensureDirectoryLaunchpad, updateDirectoryLaunchpad,
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false,
+        inboxThreadKeys: ["claude:claude-parent"], threads: [parent], directories: [], launchpadDefaults: defaults }),
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(api, { localFederationInstanceId: "harbor" }));
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.createSubthread(parent, "new-workspace", { instanceId: "studio" });
+    });
+
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+      federationTarget: { scope: "remote", instanceId: "studio" }, preferredBackend: "claude",
+    }));
+    const peerPatch = updateDirectoryLaunchpad.mock.calls.at(-1)?.[0].patch;
+    expect(peerPatch).toMatchObject({ backend: "codex" });
+    expect(peerPatch).not.toHaveProperty("executionMode");
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      directoryKey: "subthread:claude:claude-parent:new-workspace:studio",
+      backend: "codex", parentThreadBackend: "claude", parentThreadInstanceId: "harbor",
+    });
+    expect(result.current.selectedLaunchpad?.model).toBeUndefined();
+
+    // Where the parent's provider runs, the child still inherits it and the
+    // parent's access.
+    await act(async () => {
+      await result.current.createSubthread(parent, "new-workspace", {});
+    });
+    expect(updateDirectoryLaunchpad.mock.calls.at(-1)?.[0].patch).toMatchObject({
+      backend: "claude", executionMode: "full-access",
+    });
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      directoryKey: "subthread:claude:claude-parent:new-workspace",
+      backend: "claude", model: "opus", executionMode: "full-access",
+    });
+  });
+
   it("starts a new-worktree sub-thread on a peer from the peer's checkout and a branch it has", async () => {
     const parent: NavigationThreadSummary = {
       id: "worktree-parent", title: "Tighten retries", titleSource: "explicit", source: "codex", executionMode: "default",

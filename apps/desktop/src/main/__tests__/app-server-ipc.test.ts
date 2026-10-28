@@ -10759,6 +10759,55 @@ describe("app server ipc", () => {
     );
   });
 
+  it("reports the owner's provider when the owner cannot start the preferred one", async () => {
+    const { NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "owner_one" };
+    const draft = (backend: "claude" | "codex") => ({
+      launchpad: {
+        directoryKey: "subthread:claude:parent:new-worktree:owner_one",
+        directoryKind: "directory",
+        directoryLabel: "PwrAgent",
+        directoryPath: "/repo/PwrAgent",
+        backend,
+        executionMode: "auto",
+        prompt: "",
+        branchName: undefined,
+        createdAt: 100,
+        updatedAt: 100,
+      },
+      defaults: { backend, executionMode: "auto" },
+    });
+    const request = {
+      federationTarget,
+      directoryKey: "subthread:claude:parent:new-worktree:owner_one",
+      directoryKind: "directory",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/repo/PwrAgent",
+      preferredBackend: "claude",
+    };
+    registerAppServerIpcHandlers();
+    const ensure = handlers.get(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL)!;
+
+    // The owner has no Claude sign-in. This viewer, which stores the draft,
+    // does, so its own defaults cannot say so.
+    federationMock.remoteBackend.ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("codex"));
+    ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("claude"));
+    await expect(ensure({}, request)).resolves.toMatchObject({
+      launchpad: { backend: "claude" },
+      preferredBackendFallback: "codex",
+    });
+
+    federationMock.remoteBackend.ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("claude"));
+    ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("claude"));
+    await expect(ensure({}, request)).resolves.not.toHaveProperty("preferredBackendFallback");
+
+    // A local draft answers from this instance's own providers.
+    ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("codex"));
+    await expect(ensure({}, { ...request, federationTarget: undefined })).resolves.toMatchObject({
+      preferredBackendFallback: "codex",
+    });
+  });
+
   it("falls back to owner snapshot metadata when the peer lacks launchpad metadata RPC support", async () => {
     const { NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL } = await import("../../shared/ipc");
     const federationTarget = {

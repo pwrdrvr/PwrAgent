@@ -1054,6 +1054,14 @@ export type EnsureDirectoryLaunchpadResponse = {
    * branch picker independent of notification/render ordering.
    */
   gitStatus?: NavigationDirectoryGitStatus | null;
+  /**
+   * The provider the instance that runs the new thread chose instead of the
+   * request's `preferredBackend`, because it cannot start that one. Absent
+   * when it can, when no provider was preferred, or when the owner was not
+   * asked. A remote draft is stored by the viewer, whose own `defaults` say
+   * nothing about the owner's providers.
+   */
+  preferredBackendFallback?: AppServerBackendKind;
 };
 
 export type UpdateDirectoryLaunchpadRequest = {
