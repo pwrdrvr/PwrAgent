@@ -11,6 +11,9 @@ import type Database from "better-sqlite3";
  * Separate point dimensions also support malformed/reversed intervals with
  * precisely the same predicate as the ledger. No epoch or date-range limit.
  * Stable integer keys survive VACUUM; ledger rowids do not.
+ * Coordinates cover whole minutes, so streamed live updates maintain the
+ * tree only on a minute boundary, never on every token event. Exact interval
+ * checks remain at read time. No timer, separate commit, or idle write.
  */
 const SCHEMA = `
 CREATE TABLE usage_activity_keys (
@@ -26,23 +29,29 @@ CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_usage_turn
   ON thread_usage_lines(usage_turn_id) WHERE usage_turn_id IS NOT NULL;
 
 CREATE TRIGGER usage_activity_key_insert AFTER INSERT ON usage_activity_keys BEGIN
-  INSERT INTO usage_activity_intervals VALUES (NEW.id, NEW.started_at, NEW.started_at, NEW.ended_at, NEW.ended_at);
+  INSERT INTO usage_activity_intervals VALUES (NEW.id, NEW.started_at, NEW.started_at + 60000, NEW.ended_at, NEW.ended_at + 60000);
 END;
 CREATE TRIGGER usage_activity_key_update AFTER UPDATE OF started_at, ended_at ON usage_activity_keys BEGIN
-  UPDATE usage_activity_intervals SET start_min = NEW.started_at, start_max = NEW.started_at,
-    end_min = NEW.ended_at, end_max = NEW.ended_at WHERE id = NEW.id;
+  UPDATE usage_activity_intervals SET start_min = NEW.started_at, start_max = NEW.started_at + 60000,
+    end_min = NEW.ended_at, end_max = NEW.ended_at + 60000 WHERE id = NEW.id;
 END;
 CREATE TRIGGER usage_activity_key_delete AFTER DELETE ON usage_activity_keys BEGIN
   DELETE FROM usage_activity_intervals WHERE id = OLD.id;
 END;
 
 CREATE VIEW usage_activity_endpoints AS
+  WITH endpoints AS (
   SELECT l.usage_line_id, COALESCE(t.started_at, l.created_at) AS started_at,
     COALESCE(t.completed_at, l.completed_at,
       CASE WHEN l.scope = 'monitor' AND l.status = 'finalized' THEN l.created_at END,
       l.updated_at) AS ended_at
   FROM thread_usage_lines l LEFT JOIN thread_usage_turns t ON t.usage_turn_id = l.usage_turn_id
-  WHERE l.status != 'superseded';
+  WHERE l.status != 'superseded'
+  )
+  SELECT usage_line_id,
+    (CAST(started_at / 60000 AS INTEGER) - (started_at < 0 AND started_at % 60000 != 0)) * 60000 AS started_at,
+    (CAST(ended_at / 60000 AS INTEGER) - (ended_at < 0 AND ended_at % 60000 != 0)) * 60000 AS ended_at
+  FROM endpoints;
 
 CREATE TRIGGER usage_activity_line_insert AFTER INSERT ON thread_usage_lines BEGIN
   INSERT INTO usage_activity_keys(usage_line_id, started_at, ended_at)

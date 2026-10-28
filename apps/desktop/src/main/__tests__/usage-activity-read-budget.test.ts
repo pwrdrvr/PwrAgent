@@ -1,14 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
+import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+import { StateDb } from "../state/state-db";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 const start = Date.UTC(2026, 9, 27, 15);
 const window = { from: start, to: start + 10_000 };
 
-function fixture() {
-  const db = openInMemoryStateDb();
+function fixture(db = openInMemoryStateDb()) {
   const store = new SqliteOverlayStore(db);
   const insert = db.raw.prepare(`INSERT INTO thread_usage_lines
     (usage_line_id, backend, thread_id, parent_thread_id, provider, source, source_item_id,
@@ -49,6 +52,30 @@ function observe(db: ReturnType<typeof openInMemoryStateDb>) {
 }
 
 describe("Usage Activity read budgets", () => {
+  it.each(["within-minute", "minute-boundaries"])("measures interval maintenance for live updates: %s", async (scenario) => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-activity-budget-");
+    const { db, store, add } = fixture(StateDb.open(temp.dbPath));
+    try {
+      db.raw.pragma("wal_autocheckpoint = 0");
+      add("live-budget", { created: start, completed: null, updated: start });
+      const update = db.raw.prepare("UPDATE thread_usage_lines SET updated_at = ?, output_tokens = ? WHERE usage_line_id = 'live-budget'");
+      const { writes } = await measureSqliteWrites(() => {
+        for (let index = 1; index <= 100; index++) {
+          update.run(start + index * (scenario === "within-minute" ? 100 : 60_000), index);
+        }
+      });
+      expectSqliteWriteBudget({ scenario: `usage-activity-index-${scenario}`, writes,
+        note: "100 existing live-row commits; minute-wide interval coordinates avoid tree maintenance within a minute; no timer or added commit" });
+      const read = await measureSqliteWrites(async () => {
+        await store.readUsageActivity(window);
+        await store.readUsageActivity(window);
+      });
+      expect(read.writes.commits).toBe(0);
+      expect(read.writes.walBytes).toBe(0);
+    } finally { db.close(); removeTempStateDbDir(temp.tempDir); }
+  });
+
   it.each([1_000, 20_000])("seeks a narrow interval across %i past and future rows", async (count) => {
     const { db, store, add } = fixture();
     try {
