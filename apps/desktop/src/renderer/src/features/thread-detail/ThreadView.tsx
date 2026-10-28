@@ -4628,6 +4628,7 @@ export function ThreadView(props: ThreadViewProps) {
       >
         <TranscriptList
           entries={visibleTranscriptEntries}
+          finalPhaseIsAnswer={thread.source === "codex"}
           rewind={
             rewindableMessageIds && threadRewindSupport
               ? {

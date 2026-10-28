@@ -2057,6 +2057,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             desktopApi={desktopApi}
             entries={transcriptWindow.visibleEntries}
             error={session.error}
+            finalPhaseIsAnswer={thread.source === "codex"}
             loading={session.loading}
             loadingMore={session.loadingMore}
             onLoadOlder={transcriptWindow.loadOlder}
