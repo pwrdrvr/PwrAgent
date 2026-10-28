@@ -191,11 +191,14 @@ export const THREAD_TODOS_LIST_PROJECTS_CHANNEL = "thread-todos:list-projects";
 export const THREAD_TODOS_SET_PROJECT_CHANNEL = "thread-todos:set-project";
 export const THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL = "thread-todos:set-item-checked";
 /**
- * Marker event: a thread's to-do cards changed. Listeners refetch with
- * `thread-todos:list`. Sent to local windows only; a peer's cards stay on
- * the peer.
+ * Marker event: a thread's to-do cards changed. Review details refetch with
+ * `thread-reviews:list`. A window hears only its own owner's markers.
  */
 export const THREAD_TODOS_CHANGED_EVENT_CHANNEL = "thread-todos:changed";
+/** The window's open cards at a revision; `thread-todos:delta` follows it. */
+export const THREAD_TODOS_SNAPSHOT_CHANNEL = "thread-todos:snapshot";
+/** One revision of change to the window's open cards. */
+export const THREAD_TODOS_DELTA_EVENT_CHANNEL = "thread-todos:delta";
 export const OPERATOR_REQUESTS_LIST_CHANNEL = "operator-requests:list";
 export const OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL = "operator-requests:list-dismissed-questions";
 export const OPERATOR_REQUESTS_MARK_SEEN_CHANNEL = "operator-requests:mark-seen";

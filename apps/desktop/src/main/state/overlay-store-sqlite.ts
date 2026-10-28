@@ -9095,6 +9095,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       : overlay;
   }
 
+  /** Private execution threads, which navigation never lists. */
+  readManagedSubAgentThreadKeys(): ReadonlySet<string> {
+    return this.listManagedSubAgentThreadKeys();
+  }
+
   private listManagedSubAgentThreadKeys(): Set<string> {
     // Transactions can reuse a generation after a savepoint rollback. Never
     // consume or publish the committed cache while reading such a snapshot.

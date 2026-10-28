@@ -12,7 +12,8 @@ import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
 import { buildNavigationIndexMessagingBindings } from "../messaging/messaging-bindings-snapshot";
-import { NavigationIndexReadPool } from "./navigation-index-read-pool";
+import { NavigationIndexReadPool, type NavigationIndexCheckpoint } from "./navigation-index-read-pool";
+import { nextNavigationObservation } from "./navigation-observation-clock";
 import {
   directorySetMayHaveChanged,
   NavigationDirectorySetAnnouncer,
@@ -48,25 +49,25 @@ export async function loadLocalNavigationQueryIndex(params: {
   const overlayStore = getDesktopOverlayStore();
   const backend = params.backend ?? "all";
   // A refresh reads under its own key: it must not be served a retained or
-  // in-flight index that predates it, nor cost other readers a retry.
+  // in-flight index that predates it, nor overtake other readers' scans.
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
     ...(params.refreshProviders ? ["refresh-providers"] : [])]);
   const version = overlayStore.readNavigationSourceVersion?.();
-  let subscribed = false;
-  return indexReads.read(key, async (signal, assertCurrent) => {
-    // An event during a scan makes its result stale. The read pool shares one
-    // replacement with all consumers admitted in the meantime. Own one event
-    // listener for the whole read, including any replacement attempt.
-    if (!subscribed) {
-      subscribed = true;
-      const unsubscribe = registry.onEvent?.((event) => {
-        if (navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)) indexReads.invalidate(key);
-      });
-      // The pool owns this listener through its bounded completed reuse window.
-      // Eviction/expiry/cancellation aborts the lifetime and releases it.
-      signal.addEventListener("abort", () => unsubscribe?.(), { once: true });
-    }
-    const index = await buildLocalNavigationQueryIndex({ ...params, registry, signal, assertCurrent });
+  return indexReads.read(key, async (signal, checkpoint) => {
+    // An event during a scan stops later readers from joining it; they share
+    // one follow-up scan. Each run owns its listener, because the pool can
+    // run this same load again for a follow-up.
+    const unsubscribe = registry.onEvent?.((event) => {
+      if (navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)) indexReads.invalidate(key);
+    });
+    // The pool owns this listener through its bounded completed reuse window.
+    // Eviction/expiry/cancellation aborts the lifetime and releases it.
+    signal.addEventListener("abort", () => unsubscribe?.(), { once: true });
+    // Taken before listing. The registry drops its cached and pending
+    // listings for a boundary before it tells listeners, so this listing
+    // reflects every boundary observed before this value.
+    const observedAt = nextNavigationObservation();
+    const index = { ...await buildLocalNavigationQueryIndex({ ...params, registry, signal, checkpoint }), observedAt };
     // Only the whole-owner index is what viewers read as its directory set.
     if (backend === "all" && !params.registry) {
       getNavigationDirectorySetAnnouncer().observe(index.directories);
@@ -114,7 +115,7 @@ async function buildLocalNavigationQueryIndex(params: {
   refreshProviders?: boolean;
   registry: DesktopBackendRegistry;
   signal: AbortSignal;
-  assertCurrent: () => void;
+  checkpoint: NavigationIndexCheckpoint;
 }): Promise<NavigationQueryIndex> {
   const registry = params.registry;
   const overlayStore = getDesktopOverlayStore();
@@ -126,10 +127,9 @@ async function buildLocalNavigationQueryIndex(params: {
     ...(params.refreshProviders ? { forceRefresh: true } : {}),
   });
   params.signal?.throwIfAborted();
-  // A mutation during provider pagination already requires a replacement.
-  // Reject that generation before spending CPU on SQLite overlay projection.
-  // Later mutations are still fenced by the pool after hydration completes.
-  params.assertCurrent();
+  // An overtaken scan whose follow-up already has readers hands them over
+  // here instead of spending CPU on a projection nobody would keep.
+  params.checkpoint();
   const index = overlayStore.readNavigationQueryIndex({
     backend,
     threads: listedThreads,

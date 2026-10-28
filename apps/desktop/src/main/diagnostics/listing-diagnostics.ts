@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { NavigationQueryRequest } from "@pwragent/shared";
 
 export type ListingStage = "ipc" | "navigation" | "owner-page" | "owner-read" | "index" | "registry" | "provider" | "provider-rpc";
-type Phase = "start" | "end" | "coalesced" | "cache-hit" | "invalidate" | "retry" | "cancel" | "cursor-hit";
+type Phase = "start" | "end" | "coalesced" | "cache-hit" | "invalidate" | "overtaken" | "cancel" | "cursor-hit";
 export type ListingFields = {
   origin?: string;
   targetId?: number;

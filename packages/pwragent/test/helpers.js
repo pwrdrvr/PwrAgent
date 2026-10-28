@@ -5,13 +5,12 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { call } from "../src/client.js";
 
-const repo = fileURLToPath(new URL("../../../", import.meta.url));
 const cli = process.env.PWRAGENT_TEST_CLI || fileURLToPath(new URL("../bin/pwragent.js", import.meta.url));
 const fixture = fileURLToPath(new URL("./fixtures/codex.js", import.meta.url));
 const timeout = 10000;
 
-export async function eventually(check) {
-  const end = Date.now() + timeout;
+export async function eventually(check, waitMs = timeout) {
+  const end = Date.now() + waitMs;
   while (Date.now() < end) {
     const value = await check();
     if (value) return value;
@@ -21,11 +20,11 @@ export async function eventually(check) {
 }
 
 export async function setup(t) {
-  // All test artifacts stay inside the assigned checkout. Use a short root
-  // because Unix-domain socket addresses have a small platform limit.
-  const local = path.join(repo, ".local");
-  mkdirSync(local, { recursive: true });
-  const root = mkdtempSync(path.join(local, "h"));
+  // The daemon refuses a socket path over 100 bytes (the Unix sun_path
+  // limit), and the socket sits 35 bytes below this root. A root inside the
+  // checkout fails in long checkouts such as Sandboxer's ~/pwragent/wt/<sha>,
+  // so use /tmp: os.tmpdir() is a long /private/var/folders/... on macOS.
+  const root = mkdtempSync("/tmp/pwragent-h-");
   const workspace = path.join(root, "w");
   const home = path.join(root, "c");
   const data = path.join(root, "f");

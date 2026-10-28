@@ -10,23 +10,52 @@ import type {
   SetThreadTodoItemCheckedRequest,
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
+  ThreadTodoFeedSnapshot,
   ListThreadReviewsRequest,
   UpdateThreadReviewRequest,
 } from "@pwragent/shared";
 import {
+  buildThreadIdentityKey,
   isThreadTodoMergeMethod,
   isThreadTodoResolution,
   isThreadTodoStatus,
   threadReviewTodo,
 } from "@pwragent/shared";
 import {
+  getThreadTodoFeed,
   getThreadTodoService,
   listThreadTodoProjects,
   setThreadTodoProject,
 } from "../thread-todos/thread-todo-runtime";
 import { getThreadReviewService } from "../thread-reviews/thread-review-runtime";
-import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { getDesktopBackendRegistry } from "../app-server/backend-registry";
+import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { listThreadTodosForAvailableOwners } from "../thread-todos/thread-todo-owners";
+
+/**
+ * This owner's threads, as the cached provider listing has them. The same
+ * listing backs the sidebar, so this is usually a cache hit: no navigation
+ * index, overlay projection, PR, Git or messaging work for a card filter.
+ */
+export async function listLocalTodoOwnerThreads() {
+  return await getDesktopBackendRegistry().listThreads({
+    callerReason: "thread-todo-owners",
+    // The sidebar index lists with directories, so this shares its cache entry.
+    enrichDirectories: true,
+  });
+}
+
+/** Private managed sub-agent threads; their cards never reach the queue. */
+export function readManagedTodoThreadKeys(): ReadonlySet<string> {
+  return getDesktopOverlayStore().readManagedSubAgentThreadKeys();
+}
+
+async function listLocalTodoOwners() {
+  const threads = await listLocalTodoOwnerThreads();
+  const managed = readManagedTodoThreadKeys();
+  return managed.size === 0 ? threads
+    : threads.filter((thread) => !managed.has(buildThreadIdentityKey(thread.source, thread.id)));
+}
 
 /**
  * The note an operator's click records, which the agent reads in
@@ -75,12 +104,13 @@ export const localThreadTodoOperations = {
         ...getThreadReviewService().list({
           ...request, status: request.status === "done" ? "handled" : request.status,
         }).map(threadReviewTodo),
-      ].sort((a, b) => b.createdAt - a.createdAt), async () => (await loadLocalNavigationQueryIndex({
-        callerReason: "thread-todo-owners",
-      })).threads)),
+      ].sort((a, b) => b.createdAt - a.createdAt), listLocalTodoOwners)),
       mergeMethods: todos.mergeMethodPreferences(),
     };
   },
+  /** Open cards at the live feed's revision; `thread/todos/delta` follows it. */
+  snapshotFeed: async (_request: Record<string, never> = {}): Promise<ThreadTodoFeedSnapshot> =>
+    await getThreadTodoFeed().snapshot(),
   resolveTodo: (request: ResolveThreadTodoRequest): ThreadTodoMutationResponse => {
     // The status is written to the row as given, so it is checked here.
     if (!isThreadTodoStatus(request.status)) {

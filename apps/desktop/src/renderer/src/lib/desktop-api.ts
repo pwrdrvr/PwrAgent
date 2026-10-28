@@ -17,6 +17,8 @@ import type {
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
+  ThreadTodoFeedDelta,
+  ThreadTodoFeedSnapshot,
   ThreadReview,
   ListThreadReviewsRequest,
   UpdateThreadReviewRequest,
@@ -1118,9 +1120,14 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setThreadTodoItemChecked?: (
     request: SetThreadTodoItemCheckedRequest,
   ) => Promise<ThreadTodoMutationResponse>;
-  /** Marker event; refetch owner-routed cards with `listThreadTodos`. */
+  /** Marker event for review details; the To-do queue follows deltas instead. */
   onThreadTodosChanged?: (
     callback: (event: ThreadTodosChangedEvent) => void,
+  ) => () => void;
+  /** This window's open cards at a revision; `onThreadTodosDelta` follows it. */
+  snapshotThreadTodos?: () => Promise<ThreadTodoFeedSnapshot>;
+  onThreadTodosDelta?: (
+    callback: (delta: ThreadTodoFeedDelta) => void,
   ) => () => void;
   /** Every local thread's pending requests and open async questions. */
   listOperatorRequests?: (request?: ListOperatorRequestsRequest) => Promise<ListOperatorRequestsResponse>;

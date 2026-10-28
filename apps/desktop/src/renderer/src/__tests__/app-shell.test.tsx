@@ -2523,6 +2523,7 @@ describe("App", () => {
         activeContextTab: { value: "info", source: "default" },
         editedFilesDock: { value: "above", source: "default" },
         actionRunsDock: { value: "above", source: "default" },
+        launchpadConnectionsDock: { value: "launchpad", source: "default" },
       },
       federation: {
         mode: { value: "disabled", source: "default" },
@@ -2960,6 +2961,7 @@ describe("App", () => {
             activeContextTab: { value: "info", source: "default" },
             editedFilesDock: { value: "above", source: "default" },
             actionRunsDock: { value: "above", source: "default" },
+            launchpadConnectionsDock: { value: "launchpad", source: "default" },
           },
         } as DesktopSettingsSnapshot,
       });

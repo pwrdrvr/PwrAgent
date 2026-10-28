@@ -1,0 +1,98 @@
+import type { AppServerBackendKind, ThreadIdentifier } from "@pwragent/shared";
+import type { DynamicToolCallResponse } from "@pwrdrvr/codex-app-server-protocol/v2";
+import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
+
+export type AgentToolTransport = "codex_dynamic_tool" | "mcp";
+
+export type AgentToolCallContext = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  callId?: string;
+  turnId?: string;
+  transport: AgentToolTransport;
+  signal?: AbortSignal;
+};
+
+export type AgentToolCallContentItems = NonNullable<
+  DynamicToolCallResponse["contentItems"]
+>;
+
+export type AgentToolMcpContentItem = CallToolResult["content"][number];
+
+export type AgentToolDispatchSuccess = {
+  ok: true;
+  data: unknown;
+  contentItems?: AgentToolCallContentItems;
+  mcpContentItems?: AgentToolMcpContentItem[];
+  mcpResult?: CallToolResult;
+};
+
+export type AgentToolDispatchFailure = {
+  ok: false;
+  code: string;
+  message: string;
+  data?: unknown;
+  contentItems?: AgentToolCallContentItems;
+  mcpContentItems?: AgentToolMcpContentItem[];
+  mcpResult?: CallToolResult;
+};
+
+export type AgentToolDispatchResult =
+  | AgentToolDispatchSuccess
+  | AgentToolDispatchFailure;
+
+export type AgentToolDefinition<TName extends string = string> = {
+  namespace: string;
+  name: TName;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  /** MCP hints describe behavior. They do not grant permission. */
+  annotations?: ToolAnnotations;
+  /**
+   * Hidden definitions are callable compatibility facades, but are not
+   * advertised to new Agent turns or MCP clients.
+   */
+  advertise?: boolean;
+  /**
+   * Omit a dynamic-only tool from the generic MCP server while leaving it
+   * advertised to Codex threads created with PwrAgent dynamic tools.
+   */
+  advertiseMcp?: boolean;
+  deferLoading?: boolean;
+  dispatch: (
+    args: Record<string, unknown>,
+    context: AgentToolCallContext,
+  ) => AgentToolDispatchResult | Promise<AgentToolDispatchResult>;
+};
+
+export function agentToolSuccess(
+  data: unknown,
+  options: {
+    contentItems?: AgentToolCallContentItems;
+    mcpContentItems?: AgentToolMcpContentItem[];
+  } = {},
+): AgentToolDispatchSuccess {
+  return {
+    ok: true,
+    data,
+    contentItems: options.contentItems,
+    mcpContentItems: options.mcpContentItems,
+  };
+}
+
+export function agentToolFailure(params: {
+  code: string;
+  message: string;
+  data?: unknown;
+  contentItems?: AgentToolCallContentItems;
+  mcpContentItems?: AgentToolMcpContentItem[];
+}): AgentToolDispatchFailure {
+  return {
+    ok: false,
+    code: params.code,
+    message: params.message,
+    data: params.data,
+    contentItems: params.contentItems,
+    mcpContentItems: params.mcpContentItems,
+  };
+}

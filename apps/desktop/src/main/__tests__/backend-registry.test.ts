@@ -3421,11 +3421,19 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("keeps a Claude thread busy for quit while its session outlives the turn, and revokes MCP grants as it closes", async () => {
+  it.each(["task notification", "registry shutdown"])("keeps a Claude thread busy for quit while its session outlives the turn, and revokes MCP grants as it closes (%s)", async (closure) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-registry-"));
-    const events: AgentEvent[] = [];
+    const turnFinished = Promise.withResolvers<AgentEvent>();
     const taskDone = Promise.withResolvers<void>();
-    const revokeBridge = vi.fn();
+    const queryClosed = Promise.withResolvers<void>();
+    const bridgeRevoked = Promise.withResolvers<void>();
+    let closed = false;
+    const closeQuery = vi.fn(() => {
+      closed = true;
+      taskDone.resolve();
+      queryClosed.resolve();
+    });
+    const revokeBridge = vi.fn(() => bridgeRevoked.resolve());
     const registerBridge = vi.fn(async () => ({
       server: { name: "fixture_gateway", command: "/fixture/bridge", args: ["--stdio"], env: {} },
       bindThread: vi.fn(), revoke: revokeBridge,
@@ -3454,26 +3462,35 @@ describe("DesktopBackendRegistry", () => {
             yield { type: "assistant", parent_tool_use_id: null, message: { id: "started", content: [{ type: "text", text: "Started." }] } } as ClaudeMessage;
             yield { type: "result", subtype: "success", is_error: false, result: "Started." } as ClaudeMessage;
             await taskDone.promise;
+            if (closed) return;
             yield { type: "system", subtype: "task_notification", task_id: "task-1", tool_use_id: "tool-bash",
               status: "stopped", output_file: "", summary: "Stopped" } as ClaudeMessage;
+            // Keep the SDK read open until the backend closes the query after
+            // its follow-up grace. close() must also unblock a pending task.
+            await queryClosed.promise;
           }
-          return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+          return Object.assign(messages(), { close: closeQuery, setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
         },
       },
     });
-    registry.onEvent((event) => { events.push(event); });
+    registry.onEvent((event) => {
+      if (["turn/completed", "turn/failed", "turn/cancelled"].includes(event.notification.method)) turnFinished.resolve(event);
+    });
     try {
       const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
       await registry.setThreadMcpConnections({ backend: "claude", threadId, connectionIds: ["fixture-connection"] });
       await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "Start the dev server" }] });
-      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+      expect((await turnFinished.promise).notification.method).toBe("turn/completed");
       expect(registry.getActiveTurnForThread({ backend: "claude", threadId })).toBeUndefined();
       expect(registry.getInProgressThreadSnapshotForQuit()).toMatchObject({ count: 1, threadIds: [`claude:${threadId}`] });
       expect((await registry.listBackgroundTerminals({ backend: "claude", threadId })).terminals).toMatchObject([{ processId: "task-1" }]);
       // The process still uses the connection the turn handed it.
       expect(revokeBridge).not.toHaveBeenCalled();
-      taskDone.resolve();
-      await vi.waitFor(() => expect(revokeBridge).toHaveBeenCalledOnce());
+      if (closure === "task notification") taskDone.resolve();
+      else await registry.close();
+      await bridgeRevoked.promise;
+      expect(revokeBridge).toHaveBeenCalledOnce();
+      expect(closeQuery).toHaveBeenCalled();
       expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0);
     } finally {
       await registry.close();
@@ -20482,6 +20499,43 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("leaves a launchpad as stored when its update condition fails", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      overlayStore,
+    });
+
+    await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+    });
+    await registry.updateDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      patch: { prompt: "keep me" },
+    });
+    const skipped = await registry.updateDirectoryLaunchpad(
+      { directoryKey: "directory:/repo-a", patch: { prompt: "replaced" } },
+      { onlyIf: (current) => current.prompt === "" },
+    );
+    expect(skipped.launchpad.prompt).toBe("keep me");
+    expect(
+      (await overlayStore.getDirectoryLaunchpad({ directoryKey: "directory:/repo-a" }))?.prompt,
+    ).toBe("keep me");
+
+    const applied = await registry.updateDirectoryLaunchpad(
+      { directoryKey: "directory:/repo-a", patch: { prompt: "replaced" } },
+      { onlyIf: (current) => current.prompt === "keep me" },
+    );
+    expect(applied.launchpad.prompt).toBe("replaced");
+
+    await registry.close();
+  });
+
   it("seeds empty launchpad defaults from the profile provider baseline", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
@@ -22584,6 +22638,42 @@ command = "pnpm grok"
         ],
       }),
     ]);
+
+    await registry.close();
+  });
+
+  it("asks the launchpad for a default-branch worktree base without leaking it to the backend", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/start"] },
+      threads: [],
+    });
+    const prepareLaunchpadWorkspace = vi.fn(async () => ({
+      cwd: "/Users/test/.codex/worktrees/abc/repo",
+      repositoryPath: "/Users/test/repo",
+      workMode: "worktree" as const,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace,
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+
+    await registry.startThread({
+      backend: "codex",
+      cwd: "/Users/test/.codex/worktrees/parent/repo",
+      workMode: "worktree",
+      worktreeBase: "default_branch",
+    });
+
+    expect(prepareLaunchpadWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+      directoryPath: "/Users/test/.codex/worktrees/parent/repo",
+      workMode: "worktree",
+      worktreeBase: "default_branch",
+    }));
+    expect(codexClient.lastStartThreadParams).not.toHaveProperty("worktreeBase");
 
     await registry.close();
   });

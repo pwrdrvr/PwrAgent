@@ -145,14 +145,14 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
   );
 
   return (
-    <aside className="live-work-rail mcp-access-panel" aria-label="MCP access">
+    <aside className="live-work-rail mcp-access-panel" aria-label="PwrAgent MCPs">
       <header className="live-work-rail__header">
-        <span className="live-work-rail__title">MCP access</span>
+        <span className="live-work-rail__title">PwrAgent MCPs</span>
         <div className="live-work-rail__header-actions">
           <button
-            aria-label="Close MCP access"
+            aria-label="Close PwrAgent MCPs"
             className="mcp-inventory-panel__dismiss"
-            title="Close MCP access"
+            title="Close PwrAgent MCPs"
             type="button"
             onClick={props.onDismiss}
           >
@@ -599,9 +599,9 @@ export function ThreadMcpAccessPanel(props: ThreadMcpAccessPanelProps) {
 
   if (!selection) {
     return (
-      <aside className="live-work-rail mcp-access-panel" aria-label="MCP access">
+      <aside className="live-work-rail mcp-access-panel" aria-label="PwrAgent MCPs">
         <header className="live-work-rail__header">
-          <span className="live-work-rail__title">MCP access</span>
+          <span className="live-work-rail__title">PwrAgent MCPs</span>
         </header>
         <div className="live-work-rail__body">
           <p className="mcp-access-panel__state" role="status">

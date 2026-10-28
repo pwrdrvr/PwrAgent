@@ -719,7 +719,7 @@ function inputSchemaForOperation(
                 type: "string",
                 enum: ["local", "worktree"],
                 description:
-                  "start_thread only: worktree starts the thread in a new git worktree from this thread's directory. Local, the default, shares the directory.",
+                  "start_thread only: worktree starts the thread in a new git worktree of this thread's repository, based on the default branch. Local, the default, shares the directory.",
               },
             },
           },

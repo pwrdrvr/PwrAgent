@@ -6,6 +6,7 @@ import type {
   AppServerThreadTurnMetadata,
   ThreadGitWorkingState,
   AppServerThreadStatus,
+  AppServerTranscriptPhase,
   ThreadExecutionMode,
   ThreadIdentifier,
   ThreadTokenMiserSavings,
@@ -572,7 +573,7 @@ export type ThreadReadEntrySummary =
       origin?: AppServerThreadMessage["origin"];
       text: string;
       createdAt?: number;
-      phase?: "commentary" | "final";
+      phase?: AppServerTranscriptPhase;
       turn?: AppServerThreadTurnMetadata;
       messageUrl: string;
       messageLink: string;

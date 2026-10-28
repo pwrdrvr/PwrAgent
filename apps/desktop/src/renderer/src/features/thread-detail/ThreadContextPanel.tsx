@@ -12,6 +12,8 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
+  type ReactNode,
+  type Ref,
 } from "react";
 import type {
   BackendSummary,
@@ -33,6 +35,7 @@ import { operatorTodoItemKey } from "@pwragent/shared";
 import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
 import {
   AutomationsIcon,
+  ConnectionsIcon,
   EditsIcon,
   InfoIcon,
   HistoryIcon,
@@ -68,6 +71,7 @@ import { EditsPanel } from "./context-panels/EditsPanel";
 import { PricingPanel } from "./context-panels/PricingPanel";
 import { ToolCallsPanel } from "./context-panels/ToolCallsPanel";
 import { ActionRunsPanel } from "./context-panels/ActionRunsPanel";
+import { ConnectionsPanel } from "./context-panels/ConnectionsPanel";
 import { buildRailTooltipText } from "./context-panels/context-rail-shared";
 import type {
   ContextTabId,
@@ -91,6 +95,7 @@ type ContextTab = {
 };
 
 const CONTEXT_TABS: ContextTab[] = [
+  { id: "connections", label: "Connections", Icon: ConnectionsIcon },
   { id: "info", label: "Thread info", Icon: InfoIcon },
   { id: "todos", label: "To-dos", Icon: TodoIcon },
   { id: "edits", label: "Edits", Icon: EditsIcon },
@@ -106,6 +111,19 @@ const CONTEXT_TABS: ContextTab[] = [
 ];
 
 type ThreadContextPanelProps = {
+  /**
+   * The launchpad's connection cards, once the operator moved them here.
+   * `landing` counts those moves; each new value replays the tab's arrival
+   * ring so the eye follows the cards to it.
+   */
+  launchpadConnections?: {
+    content: ReactNode;
+    landing: number;
+    /** `keyboard` is true when the button was activated from the keyboard. */
+    onShowOnLaunchpad: (keyboard: boolean) => void;
+  };
+  /** The always-visible tab spine, which the launchpad cards fly into. */
+  spineRef?: Ref<HTMLDivElement>;
   /** To-dos for the thread on screen. */
   todos?: {
     view: ThreadTodosView;
@@ -274,8 +292,22 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? true;
   const threadToolAccountingEnabled = props.threadToolAccountingEnabled ?? false;
 
+  // The launchpad picks its own tab and never persists it: the stored tab
+  // belongs to threads, and a launchpad visit should not reset it.
+  const [launchpadTab, setLaunchpadTab] = useState<"connections" | "providers">(
+    "connections",
+  );
+  const connectionsLanding = props.launchpadConnections?.landing ?? 0;
+  // The last move whose ring has played. Without it the tab would replay
+  // the ring on every remount, i.e. every return to a launchpad.
+  const [landedRingPlayed, setLandedRingPlayed] = useState(0);
+  useEffect(() => {
+    if (connectionsLanding > 0) setLaunchpadTab("connections");
+  }, [connectionsLanding]);
   const activeTab = !props.thread
-    ? "providers"
+    ? props.launchpadConnections && launchpadTab === "connections"
+      ? "connections"
+      : "providers"
     : props.activeTab === "pricing" && !threadPricingSummaryEnabled
       ? "info"
       : props.activeTab === "tool-calls" && !threadToolAccountingEnabled
@@ -292,10 +324,12 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   });
   const visibleTabs = CONTEXT_TABS.filter((tab) =>
     props.thread
-      ? (tab.id !== "pricing" || threadPricingSummaryEnabled)
+      ? tab.id !== "connections"
+        && (tab.id !== "pricing" || threadPricingSummaryEnabled)
         && (tab.id !== "tool-calls" || threadToolAccountingEnabled)
         && (tab.id !== "todos" || props.todos !== undefined)
-      : tab.id === "providers",
+      : tab.id === "providers"
+        || (tab.id === "connections" && props.launchpadConnections !== undefined),
   );
   const topTabs = visibleTabs.filter((tab) => !tab.bottom);
   const bottomTabs = visibleTabs.filter((tab) => tab.bottom);
@@ -545,7 +579,11 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   ]);
 
   const selectTab = (tab: ContextTabId): void => {
-    props.onActiveTabChange(tab);
+    if (!props.thread) {
+      setLaunchpadTab(tab === "connections" ? "connections" : "providers");
+    } else {
+      props.onActiveTabChange(tab);
+    }
     if (!pinned) {
       revealRail();
     }
@@ -666,7 +704,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         </div>
       ) : null}
 
-      <div className="context-rail__spine">
+      <div ref={props.spineRef} className="context-rail__spine">
         <div
           className="context-rail__tablist"
           role="tablist"
@@ -700,6 +738,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         : todoBadge
           ? `${tab.label} · ${todoBadge.count} open for this thread`
           : tab.label;
+    const landing = tab.id === "connections" && connectionsLanding > landedRingPlayed;
     return (
       <button
         key={tab.id}
@@ -707,12 +746,15 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         aria-label={label}
         aria-selected={isActive && open}
         aria-controls={open ? "context-rail-panel" : undefined}
-        className={`context-rail__tab${isActive ? " is-active" : ""}`}
+        className={`context-rail__tab${isActive ? " is-active" : ""}${
+          landing ? " is-landing" : ""
+        }`}
         role="tab"
         tabIndex={isActive ? 0 : -1}
         title={label}
         type="button"
         onClick={() => selectTab(tab.id)}
+        onAnimationEnd={landing ? () => setLandedRingPlayed(connectionsLanding) : undefined}
       >
         <TabIcon size={18} aria-hidden="true" />
         {commandCount > 0 ? <span className="context-rail__activity status-dot status-dot--active" aria-hidden="true" /> : null}
@@ -771,6 +813,13 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
 
   function renderActivePanel() {
     switch (activeTab) {
+      case "connections":
+        if (!props.launchpadConnections) return null;
+        return (
+          <ConnectionsPanel onShowOnLaunchpad={props.launchpadConnections.onShowOnLaunchpad}>
+            {props.launchpadConnections.content}
+          </ConnectionsPanel>
+        );
       case "pr-activity":
         return <PrActivityPanel desktopApi={props.desktopApi} thread={props.thread} />;
       case "info":

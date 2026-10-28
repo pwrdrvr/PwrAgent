@@ -1357,6 +1357,8 @@ export type DesktopSettingsSnapshot = {
    * renderer-validated
    * pattern: "above" (default, edited files render above the composer)
    * or "sidebar" (the content only shows in its context-rail tab).
+   * `launchpadConnectionsDock` is the same idea for the new-thread
+   * connection cards: "launchpad" (default) or "sidebar".
    */
   ui: {
     sidebarHidden: DesktopSettingsValue<boolean>;
@@ -1364,6 +1366,7 @@ export type DesktopSettingsSnapshot = {
     activeContextTab: DesktopSettingsValue<string>;
     editedFilesDock: DesktopSettingsValue<string>;
     actionRunsDock: DesktopSettingsValue<string>;
+    launchpadConnectionsDock: DesktopSettingsValue<string>;
   };
   federation: DesktopFederationSettingsSnapshot;
   messaging: {
@@ -1692,6 +1695,7 @@ export type DesktopSettingsConfigPatch = {
     activeContextTab?: string;
     editedFilesDock?: string;
     actionRunsDock?: string;
+    launchpadConnectionsDock?: string;
     logs?: Partial<DesktopLogsViewerPreferences>;
   };
   federation?: {

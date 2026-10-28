@@ -31,6 +31,8 @@ import {
 } from "./pty-resize";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
+import { resolveBundledClaudeExecutable } from "../claude/claude-bundled-executable";
+import { resolveClaudeExecutable } from "../claude/claude-executable";
 import { resolvePwragentRoot } from "../profile";
 import { terminalHasForegroundCommand } from "./terminal-foreground-command";
 import { isWithinWorktree } from "./worktree-terminals";
@@ -985,8 +987,15 @@ export async function spawnTerminalPty(params: {
 }): Promise<SpawnedTerminalPty> {
   const platform = params.platform ?? process.platform;
   const settings = getDesktopSettingsService();
-  const runtimeCommands = settings.resolveIntegratedTerminalCommands();
   const baseEnv = await settings.resolveTerminalSpawnEnvAsync();
+  const bundledClaude = await resolveTerminalBundledClaudeCommand(
+    baseEnv,
+    platform,
+  );
+  const runtimeCommands = [
+    ...settings.resolveIntegratedTerminalCommands(),
+    ...(bundledClaude ? [bundledClaude] : []),
+  ];
   let env = prependIntegratedTerminalRuntimePaths(
     baseEnv,
     runtimeCommands,
@@ -1015,6 +1024,36 @@ export async function spawnTerminalPty(params: {
     }),
   });
   return { pty, cwd, shell };
+}
+
+// The bundled binary's location is fixed for the life of the app.
+const bundledClaudeLookups = new Map<NodeJS.Platform, Promise<string | undefined>>();
+
+/**
+ * PwrAgent's bundled Claude Code CLI, for a terminal that has no `claude` of
+ * its own. A `claude` on the terminal's PATH always wins. Install directories
+ * that are not on PATH do not count: the shell could not run them.
+ */
+async function resolveTerminalBundledClaudeCommand(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): Promise<string | undefined> {
+  if (await resolveClaudeExecutable({
+    env,
+    platform,
+    includeInstallDirectories: false,
+  })) return undefined;
+  let lookup = bundledClaudeLookups.get(platform);
+  if (!lookup) {
+    lookup = resolveBundledClaudeExecutable({ platform });
+    bundledClaudeLookups.set(platform, lookup);
+  }
+  return await lookup;
+}
+
+/** Test seam: forget the cached bundled Claude lookup. */
+export function resetBundledClaudeLookupForTests(): void {
+  bundledClaudeLookups.clear();
 }
 
 export function prependIntegratedTerminalRuntimePaths(

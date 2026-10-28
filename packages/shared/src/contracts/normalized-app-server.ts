@@ -785,7 +785,8 @@ export type AppServerThreadMessagePart =
   | AppServerThreadImagePart
   | AppServerThreadFilePart;
 
-export type AppServerTranscriptPhase = "commentary" | "final";
+/** Partial answers are interim output; only final identifies a terminal answer. */
+export type AppServerTranscriptPhase = "commentary" | "partial" | "final";
 
 export type AppServerThreadTurnStatus =
   | "in_progress"
@@ -1906,6 +1907,9 @@ export type AppServerNotification =
   | { method: "thread/operatorQuestions/changed"; params: { backend: AppServerBackendKind; threadId: string } }
   | { method: "thread/operatorRequests/changed" | "thread/operatorRequestDetails/changed"; params: import("./operator-requests").OperatorRequestsChangedEvent }
   | { method: "thread/todos/changed" | "thread/todoDetails/changed"; params: import("./thread-todos").ThreadTodosChangedEvent }
+  | { method: "thread/todos/delta"; params: import("./thread-todos").ThreadTodoFeedDelta }
+  /** See `THREAD_TODO_FEED_ACKNOWLEDGED_METHOD`. */
+  | { method: "thread/todos/feedAcknowledged"; params: { reason: "subscribed" } }
   | {
       method: "thread/dependencies/updated";
       params: { threadId: string; dependencyId: string };

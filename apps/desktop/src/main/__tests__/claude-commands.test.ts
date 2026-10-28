@@ -6,6 +6,7 @@ import type { Query, SDKMessage, SlashCommand, query } from "@anthropic-ai/claud
 import type { AgentEvent, AppServerAvailableCommandSummary } from "@pwragent/shared";
 import { ClaudeBackend, type ClaudeBackendOptions } from "../claude/claude-backend";
 import { claudeCommandSummaries } from "../claude/claude-commands";
+import { readClaudeMcpServerStatus } from "../claude/claude-models";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 
 // Record a missing fixture seam without launching the SDK's real Git probes.
@@ -35,6 +36,7 @@ async function fixture(params: {
   messages?: () => AsyncGenerator<SDKMessage>;
   supportedCommands?: () => Promise<SlashCommand[]>;
   readCommands?: ClaudeBackendOptions["readCommands"];
+  readMcpServers?: ClaudeBackendOptions["readMcpServers"];
 } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-commands-"));
   roots.push(root);
@@ -49,6 +51,7 @@ async function fixture(params: {
     discoverModels: async () => [],
     inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" as const }),
     readCommands: params.readCommands,
+    readMcpServers: params.readMcpServers,
     resolveEnv: async () => ({ PATH: "/fixture" }),
     emit: async (event) => { events.push(event); },
     request: async () => ({ decision: "accept" }),
@@ -131,5 +134,56 @@ describe("Claude slash commands", () => {
     expect(await f.backend.listCommands({ cwd: f.root })).toEqual([]);
     expect(readCommands).toHaveBeenCalledTimes(1);
     expect(await f.backend.listCommands({})).toEqual([]);
+  });
+});
+
+describe("Claude MCP inventory", () => {
+  it("asks Claude Code for its own config's servers while the thread is idle", async () => {
+    const readMcpServers = vi.fn(async () => [
+      { name: "acme-docs", status: "connected" as const, tools: [{ name: "search_docs" }] },
+      { name: "weather-lab", status: "needs-auth" as const },
+    ]);
+    const f = await fixture({ readMcpServers });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+
+    expect(await f.backend.listMcpServers(threadId)).toEqual([
+      { name: "acme-docs", authStatus: "unsupported", startupStatus: "ready", startupError: undefined, tools: ["search_docs"] },
+      { name: "weather-lab", authStatus: "notLoggedIn", startupStatus: "failed", startupError: undefined, tools: [] },
+    ]);
+    expect(readMcpServers).toHaveBeenCalledWith(expect.objectContaining({ executable: "/fixture/claude", cwd: f.root }));
+  });
+});
+
+describe("readClaudeMcpServerStatus", () => {
+  it("loads Claude's own MCP config and waits for pending servers to settle", async () => {
+    const mcpServerStatus = vi.fn()
+      .mockResolvedValueOnce([{ name: "acme-docs", status: "pending" }])
+      .mockResolvedValueOnce([{ name: "acme-docs", status: "connected", tools: [{ name: "search_docs" }] }]);
+    const run = vi.fn((_args: Parameters<typeof query>[0]) => ({ mcpServerStatus, close: vi.fn() }) as unknown as Query);
+
+    const servers = await readClaudeMcpServerStatus({
+      executable: "/fixture/claude", env: {}, cwd: "/fixture/project", query: run as unknown as typeof query,
+    });
+
+    expect(servers).toEqual([{ name: "acme-docs", status: "connected", tools: [{ name: "search_docs" }] }]);
+    expect(mcpServerStatus).toHaveBeenCalledTimes(2);
+    const options = run.mock.calls[0][0].options;
+    expect(options).toMatchObject({ cwd: "/fixture/project", tools: [] });
+    expect(options).not.toHaveProperty("strictMcpConfig");
+    expect(options).not.toHaveProperty("mcpServers");
+  });
+
+  it("shares one idle probe between overlapping requests", async () => {
+    const answer = Promise.withResolvers<Awaited<ReturnType<NonNullable<ClaudeBackendOptions["readMcpServers"]>>>>();
+    const readMcpServers = vi.fn(() => answer.promise);
+    const f = await fixture({ readMcpServers });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const first = f.backend.listMcpServers(threadId);
+    const second = f.backend.listMcpServers(threadId);
+    await vi.waitFor(() => expect(readMcpServers).toHaveBeenCalledTimes(1));
+    answer.resolve([{ name: "acme-docs", status: "connected" }]);
+    expect((await first).map((server) => server.name)).toEqual(["acme-docs"]);
+    expect((await second).map((server) => server.name)).toEqual(["acme-docs"]);
+    expect(readMcpServers).toHaveBeenCalledTimes(1);
   });
 });

@@ -19,6 +19,7 @@ import {
   IntegratedTerminalService,
   prependIntegratedTerminalRuntimePaths,
   prepareIntegratedTerminalShellEnvironment,
+  resetBundledClaudeLookupForTests,
   resolveTerminalShell,
   writeZshIntegrationDirectory,
 } from "../terminal/integrated-terminal-service";
@@ -34,6 +35,26 @@ const settingsServiceMock = vi.hoisted(() => ({
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
   getDesktopSettingsService: () => settingsServiceMock,
+}));
+
+const claudeLookupMock = vi.hoisted(() => ({
+  resolveClaudeExecutable: vi.fn(
+    async (_options?: {
+      env?: NodeJS.ProcessEnv;
+      includeInstallDirectories?: boolean;
+    }): Promise<string | undefined> => undefined,
+  ),
+  resolveBundledClaudeExecutable: vi.fn(
+    async (): Promise<string | undefined> => undefined,
+  ),
+}));
+
+vi.mock("../claude/claude-executable", () => ({
+  resolveClaudeExecutable: claudeLookupMock.resolveClaudeExecutable,
+}));
+
+vi.mock("../claude/claude-bundled-executable", () => ({
+  resolveBundledClaudeExecutable: claudeLookupMock.resolveBundledClaudeExecutable,
 }));
 
 const temporaryRoots: string[] = [];
@@ -58,6 +79,9 @@ beforeEach(() => {
   settingsServiceMock.resolveTerminalSpawnEnvAsync.mockResolvedValue({
     SHELL: "/bin/sh",
   });
+  claudeLookupMock.resolveClaudeExecutable.mockResolvedValue(undefined);
+  claudeLookupMock.resolveBundledClaudeExecutable.mockResolvedValue(undefined);
+  resetBundledClaudeLookupForTests();
 });
 
 describe("integrated terminal runtime PATH", () => {
@@ -735,6 +759,91 @@ describe("resolveTerminalShell", () => {
       TERM: "xterm-256color",
       COLORTERM: "truecolor",
     });
+  });
+
+  it("puts the bundled Claude CLI on PATH when the terminal has no claude", async () => {
+    const pty = fakePty();
+    let spawnOptions: { env?: NodeJS.ProcessEnv } | undefined;
+    const spawn = vi.fn((...args: unknown[]) => {
+      spawnOptions = args[2] as { env?: NodeJS.ProcessEnv } | undefined;
+      return pty;
+    });
+    settingsServiceMock.resolveTerminalSpawnEnvAsync.mockResolvedValue({
+      PATH: "/usr/bin",
+      SHELL: "/bin/sh",
+    });
+    settingsServiceMock.resolveIntegratedTerminalCommands.mockReturnValue([
+      "/managed/codex/bin/codex",
+    ]);
+    claudeLookupMock.resolveBundledClaudeExecutable.mockResolvedValue(
+      "/Applications/PwrAgent.app/sdk-darwin-arm64/claude",
+    );
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({
+        spawn: spawn as unknown as typeof import("node-pty").spawn,
+      }),
+      platform: "darwin",
+    });
+
+    await service.createOrAttach(
+      {
+        threadKey: "claude:thread-bundled-cli",
+        cwd: os.tmpdir(),
+        cols: 80,
+        rows: 24,
+      },
+      fakeWebContents(),
+    );
+
+    // The search covers only the terminal's own PATH, before any prefix: an
+    // install directory missing from PATH is not a claude the shell can run.
+    expect(claudeLookupMock.resolveClaudeExecutable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({ PATH: "/usr/bin" }),
+        includeInstallDirectories: false,
+      }),
+    );
+    expect(spawnOptions?.env?.PATH).toBe(
+      "/managed/codex/bin:/Applications/PwrAgent.app/sdk-darwin-arm64:/usr/bin",
+    );
+  });
+
+  it("leaves an installed Claude CLI in charge of the terminal's claude", async () => {
+    const pty = fakePty();
+    let spawnOptions: { env?: NodeJS.ProcessEnv } | undefined;
+    const spawn = vi.fn((...args: unknown[]) => {
+      spawnOptions = args[2] as { env?: NodeJS.ProcessEnv } | undefined;
+      return pty;
+    });
+    settingsServiceMock.resolveTerminalSpawnEnvAsync.mockResolvedValue({
+      PATH: "/Users/alice/.local/bin:/usr/bin",
+      SHELL: "/bin/sh",
+    });
+    claudeLookupMock.resolveClaudeExecutable.mockResolvedValue(
+      "/Users/alice/.local/share/claude/versions/2.1.300",
+    );
+    claudeLookupMock.resolveBundledClaudeExecutable.mockResolvedValue(
+      "/Applications/PwrAgent.app/sdk-darwin-arm64/claude",
+    );
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({
+        spawn: spawn as unknown as typeof import("node-pty").spawn,
+      }),
+      platform: "darwin",
+    });
+
+    await service.createOrAttach(
+      {
+        threadKey: "claude:thread-installed-cli",
+        cwd: os.tmpdir(),
+        cols: 80,
+        rows: 24,
+      },
+      fakeWebContents(),
+    );
+
+    expect(spawnOptions?.env?.PATH).toBe("/Users/alice/.local/bin:/usr/bin");
+    expect(claudeLookupMock.resolveBundledClaudeExecutable).not.toHaveBeenCalled();
   });
 
   it("wires the zsh startup integration through the real spawn path", async () => {

@@ -6,12 +6,14 @@ import {
   connectFederationClient, FederationGatewayWebSocketServer, FederationRouter,
   generateFederationIdentityKeyPair, generateFederationNoiseStaticKeyPair,
   noiseKeyPairFromRawPrivate, decodeFederationInvite, encodeFederationInvite,
-  FEDERATION_PROTOCOL_VERSION, FEDERATION_INVITE_VERSION,
+  FEDERATION_PROTOCOL_VERSION, FEDERATION_INVITE_VERSION, FederationRpcEndpoint,
+  authenticateMessageOrigin, FederationPtyService, TerminalHistoryStore, FEDERATION_PTY_METHOD_CAPABILITIES, registerFederationPtyHandlers,
 } from "../dist/federation-core.js";
+import { setupHandoffs, HANDOFF_CAPABILITIES } from "./handoffs.js";
 import { atomicJson } from "./store.js";
 import { HeadlessBackend, METHOD_CAPABILITIES } from "./federation-backend.js";
 
-export const HEADLESS_CAPABILITIES = ["remote_window", "thread_navigation", "thread_detail", "turn_control", "event_subscriptions", "gateway_relay", "transport_brotli"];
+export const HEADLESS_CAPABILITIES = ["remote_window", "thread_navigation", "thread_detail", "turn_control", "event_subscriptions", "gateway_relay", "transport_brotli", "remote_pty", "messaging_route", "messaging_destinations", "environment_actions", "thread_handoff", "file_push"];
 
 const EVENT_CAPABILITIES = new Map([
   ["navigation", "thread_navigation"], ["star_map", "thread_navigation"],
@@ -36,6 +38,8 @@ export class HeadlessFederation {
     this.profile = profile;
     this.onFailure = onFailure;
     this.connections = new Map();
+    this.endpoints = new Map();
+    this.ptyRoutes = new Map();
     this.subscriptions = new Map();
     this.retryDelay = 1000;
     this.generation = 0;
@@ -47,6 +51,23 @@ export class HeadlessFederation {
     } catch (error) { if (error.code !== "ENOENT") throw error; }
     this.backend = new HeadlessBackend(runtime, (event, eventClass) => this.publish(event, eventClass));
     runtime.onEvent = (message) => this.backend.event(message);
+    runtime.requestMessaging = (request) => this.requestMessaging(request);
+    this.backend.authenticateOrigin = (origin, envelope) => this.authenticateOrigin(origin, envelope);
+    this.pty = new FederationPtyService({
+      historyStore: new TerminalHistoryStore(path.join(directory, "terminal-history")),
+      resolveThreadCwd: async ({ backend, threadId }) => {
+        if (backend !== "codex") throw new Error("This outpost serves Codex only");
+        return runtime.projects.resolve(this.backend.owned(threadId).cwd || runtime.workspace);
+      },
+      spawnPty: async ({ cwd, cols, rows }) => {
+        const { spawn } = await import("node-pty");
+        if (!cwd) throw new Error("An owned thread cwd is required");
+        const shell = { file: "/bin/bash", args: ["--noprofile", "--norc"] };
+        const pty = spawn(shell.file, shell.args, { cwd, cols, rows, name: "xterm-256color", env: { ...process.env, TERM: "xterm-256color" } });
+        return { pty, cwd, shell };
+      },
+      sendNotification: (peer, method, params) => this.notify(peer, method, params),
+    });
   }
 
   save() {
@@ -65,7 +86,17 @@ export class HeadlessFederation {
 
   setupRouter() {
     this.router = new FederationRouter({ localInstanceId: this.state.instanceId,
-      trustedRelayPeerId: () => this.state.gateway?.gatewayInstanceId, methodCapabilities: METHOD_CAPABILITIES });
+      trustedRelayPeerId: () => this.state.gateway?.gatewayInstanceId, methodCapabilities: { ...METHOD_CAPABILITIES, ...FEDERATION_PTY_METHOD_CAPABILITIES, ...HANDOFF_CAPABILITIES,
+        "outpost.projects.list": "thread_navigation", "outpost.projects.create": "environment_actions",
+        "outpost.projects.add": "environment_actions", "outpost.projects.remove": "environment_actions" },
+      additionalRequiredCapabilities: (envelope) => envelope.params?.messageOrigin?.kind === "messaging"
+        || envelope.params?.messageOrigin?.causalMessagingSource ? ["messaging_route"]
+          : envelope.method.startsWith("thread.handoff.") ? ["turn_control", "environment_actions", "file_push"] : [] });
+    this.handoffs = setupHandoffs(this, path.dirname(this.file));
+    registerFederationPtyHandlers({ router: this.router, service: this.pty });
+    for (const [method, command] of [["list", "project-list"], ["create", "project-create"], ["add", "project-add"], ["remove", "project-remove"]]) {
+      this.router.registerHandler(`outpost.projects.${method}`, (envelope) => this.runtime.handle(command, envelope.params));
+    }
     for (const method of Object.keys(METHOD_CAPABILITIES)) {
       this.router.registerHandler(method, (envelope) => this.backend.handle(method, envelope.params, envelope));
     }
@@ -85,7 +116,7 @@ export class HeadlessFederation {
   }
 
   status() {
-    return { enabled: Boolean(this.state), instanceId: this.state?.instanceId,
+    return { enabled: Boolean(this.state), supportedCapabilities: HEADLESS_CAPABILITIES, messagingService: "consumer-only", instanceId: this.state?.instanceId,
       label: this.state?.label, lifecycle: this.state?.lifecycle, listener: this.listenerAddress,
       gateway: this.state?.gateway ? { instanceId: this.state.gateway.gatewayInstanceId,
         endpoint: this.state.gateway.endpoint, status: this.client ? "connected" : "unreachable", error: this.connectionError } : undefined,
@@ -227,6 +258,7 @@ export class HeadlessFederation {
 
   register(id, capabilities, connection) {
     this.connections.set(id, connection);
+    this.pty.notifyPeerConnected(id);
     this.router.registerConnection({ peerId: id, capabilities, sendEnvelope: (envelope) => connection.sendEnvelope(envelope) });
   }
 
@@ -234,12 +266,74 @@ export class HeadlessFederation {
     if (this.connections.get(id) !== connection) return;
     this.connections.delete(id);
     this.router.unregisterConnection(id);
+    this.pty.notifyPeerDisconnected(id);
+    for (const [origin, via] of this.ptyRoutes) {
+      if (via === id) { this.pty.notifyPeerDisconnected(origin); this.ptyRoutes.delete(origin); }
+    }
+    for (const [target, endpoint] of this.endpoints) {
+      if (target === id || id === this.state.gateway?.gatewayInstanceId) endpoint.rejectAll(new Error("Original messaging owner unavailable; send outcome may be uncertain. No automatic replay."));
+    }
     for (const [subscriber, subscription] of this.subscriptions) {
       if (subscription.via === id) this.subscriptions.delete(subscriber);
     }
   }
 
+  endpoint(target) {
+    if (!this.endpoints.has(target)) this.endpoints.set(target, new FederationRpcEndpoint({
+      localInstanceId: this.state.instanceId, remoteInstanceId: target,
+      sendEnvelope: (envelope) => {
+        const route = this.connections.get(target) || this.connections.get(this.state.gateway?.gatewayInstanceId);
+        if (!route) throw new Error("Original service owner is unavailable");
+        route.sendEnvelope(envelope);
+      },
+    }));
+    return this.endpoints.get(target);
+  }
+
+  notify(target, method, params) {
+    const route = this.connections.get(target) || this.connections.get(this.state?.gateway?.gatewayInstanceId);
+    if (!route || !this.state) return false;
+    try { route.sendEnvelope({ kind: "notification", method, params, id: randomUUID(), protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: this.state.instanceId, targetInstanceId: target, createdAt: Date.now() }); return true; } catch { return false; }
+  }
+
+  authenticateOrigin(origin, envelope) {
+    if (!origin) return undefined;
+    if (Buffer.byteLength(JSON.stringify(origin)) > 16384) throw new Error("Messaging origin exceeds its byte budget");
+    const source = origin.causalMessagingSource;
+    if (source && (typeof source.ownerId !== "string" || !source.ownerId || typeof source.requestId !== "string" || !source.requestId
+      || (origin.kind === "messaging" && source.instanceId && source.instanceId !== envelope.sourceInstanceId))) throw new Error("Messaging source must belong to the authenticated originating peer");
+    return authenticateMessageOrigin({ messageOrigin: { ...origin,
+      ...(source ? { causalMessagingSource: { ...source, instanceId: source.instanceId || envelope.sourceInstanceId } } : {}) },
+    sourceInstanceId: envelope.sourceInstanceId });
+  }
+
+  async requestMessaging(request) {
+    const owner = request.context.causalMessagingSource?.instanceId;
+    if (!owner || request.context.causalMessagingAmbiguous) return { ok: false, error: { code: "forbidden", message: "No unambiguous original messaging destination is retained for this turn" } };
+    // Capability negotiation is necessary on the selected route, and the owner
+    // repeats admission/RBAC/route checks. Connection alone grants no service.
+    const route = this.router?.getConnection(owner) || this.router?.getConnection(this.state?.gateway?.gatewayInstanceId);
+    if (!route?.capabilities.includes("messaging_route") || !route.capabilities.includes("messaging_destinations")) return { ok: false, error: { code: "peer_unavailable", message: "The original messaging owner is unavailable or messaging_route is not granted" } };
+    try {
+      const endpoint = this.endpoint(owner);
+      const check = { ...request.context, category: "messaging_context", tool: request.operation, arguments: request.args };
+      const permission = await endpoint.request({ method: "messaging.destination", params: { kind: "authorize", context: request.context, check } });
+      if (!permission.allowed) return { ok: false, error: { code: "forbidden", message: "The original messaging owner denied this operation" } };
+      return await endpoint.request({ method: "messaging.destination", params: { kind: "request", request } });
+    } catch {
+      return { ok: false, error: { code: "peer_unavailable", message: "The original messaging service is unavailable. A send may have an uncertain outcome; it was not replayed." } };
+    }
+  }
+
   receive(envelope, peerId) {
+    if (envelope.kind === "request" && envelope.targetInstanceId === this.state.instanceId && envelope.method.startsWith("pty.")
+      && this.router.authenticatesOrigin(envelope, peerId) && this.router.getConnection(peerId)?.capabilities.includes("remote_pty")) {
+      if (!this.ptyRoutes.has(envelope.sourceInstanceId)) this.pty.notifyPeerConnected(envelope.sourceInstanceId);
+      this.ptyRoutes.set(envelope.sourceInstanceId, peerId);
+    }
+    if (envelope.targetInstanceId === this.state.instanceId && this.router.authenticatesOrigin(envelope, peerId)
+      && this.endpoints.get(envelope.sourceInstanceId)?.receiveEnvelope(envelope)) return;
     if (envelope.kind === "notification" && envelope.method === "federation.eventSubscription") {
       if (envelope.sourceInstanceId !== peerId && (peerId !== this.state.gateway?.gatewayInstanceId || !(envelope.hopCount >= 1))) return;
       const capabilities = this.router.getConnection(peerId)?.capabilities || [];
@@ -308,6 +402,9 @@ export class HeadlessFederation {
     this.generation++;
     clearTimeout(this.retryTimer);
     this.client?.close();
+    for (const endpoint of this.endpoints.values()) endpoint.rejectAll(new Error("Outpost is stopping"));
+    await this.pty.disposeAll();
+    await this.handoffs?.stop();
     await this.listener?.stop();
   }
 }

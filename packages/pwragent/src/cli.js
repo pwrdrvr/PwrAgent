@@ -10,9 +10,14 @@ import { ACTIVE } from "./store.js";
 const help = `PwrAgent Headless (experimental, Linux/macOS, Node >=22)
 
   pwragent serve --workspace /project --codex-home /codex-home --codex-bin /path/to/codex
+  pwragent project-list
+  pwragent project-create --name NAME [--label NAME]
+  pwragent project-clone --name NAME --remote URL [--label NAME]
+  pwragent project-add|project-remove --path /workspace/project
+  pwragent git-auth-configure --config-file /outpost/git-auth-settings.json
   pwragent status | list
   pwragent submit --id JOB --prompt-file /task.txt [--sandbox read-only|workspace-write]
-                  [--model MODEL] [--thread THREAD_ID]
+                  [--model MODEL] [--thread THREAD_ID] [--cwd /workspace/project]
   pwragent show|read|interrupt|wait --id JOB
   pwragent federation-join --invite-file /invite.txt --gateway ws://127.0.0.1:47830 [--label NAME]
   pwragent federation-invite [--port 47831] [--label NAME]
@@ -25,7 +30,7 @@ serve runs in the foreground; use systemd to own its lifetime remotely.
 submit returns durable acceptance. wait exits 0 only for completed, 2 otherwise.
 Approvals are never granted. Job IDs cannot be reused for different input.
 Federation uses private retained identity files and the standard encrypted protocol.
-No provisioning, login, queue, automatic replay, or desktop services.
+No provisioning, login, queue, automatic replay, or local messaging providers.
 `;
 
 export async function main(args) {
@@ -45,13 +50,16 @@ export async function main(args) {
     label: { type: "string" },
     port: { type: "string" },
     peer: { type: "string" },
+    name: { type: "string" }, remote: { type: "string" }, path: { type: "string" }, cwd: { type: "string" }, "config-file": { type: "string" },
   } });
   if (values.help || !positionals.length) { console.log(help); return 0; }
   if (positionals.length !== 1) throw new Error("Expected one command; see --help");
   const command = positionals[0];
   const allowed = {
     serve: ["workspace", "codex-home", "codex-bin"],
-    submit: ["id", "prompt-file", "thread", "model", "sandbox"],
+    submit: ["id", "prompt-file", "thread", "model", "sandbox", "cwd"],
+    "project-list": [], "project-create": ["name", "label"], "project-clone": ["name", "remote", "label"],
+    "project-add": ["path", "label"], "project-remove": ["path"], "git-auth-configure": ["config-file"],
     show: ["id"], read: ["id"], interrupt: ["id"], wait: ["id"], status: [], list: [],
     "federation-join": ["invite-file", "gateway", "label"],
     "federation-invite": ["port", "label"],
@@ -69,6 +77,17 @@ export async function main(args) {
   if (command === "serve") {
     return serve({ directory, workspace: values.workspace, home: values["codex-home"], command: values["codex-bin"], profile });
   }
+  if (command.startsWith("project-") || command === "git-auth-configure") {
+    let params = { name: values.name, remote: values.remote, path: values.path, label: values.label };
+    if (command === "project-clone" && !values.remote) throw new Error("--remote is required");
+    if (command === "git-auth-configure") {
+      const file = values["config-file"];
+      if (!file || !statSync(file).isFile() || statSync(file).size > 16384) throw new Error("--config-file must name an outpost JSON file of at most 16 KiB");
+      params = JSON.parse(readFileSync(file, "utf8"));
+    }
+    console.log(JSON.stringify(await call(directory, command, params)));
+    return 0;
+  }
   if (command.startsWith("federation-")) {
     let invite;
     if (command === "federation-join") {
@@ -85,7 +104,7 @@ export async function main(args) {
     const file = values["prompt-file"];
     if (!file || !statSync(file).isFile() || statSync(file).size > 256 * 1024) throw new Error("--prompt-file must name a file of at most 256 KiB");
     const result = await call(directory, "submit", { id: values.id, prompt: readFileSync(file, "utf8"),
-      threadId: values.thread, model: values.model, sandbox: values.sandbox });
+      threadId: values.thread, cwd: values.cwd, model: values.model, sandbox: values.sandbox });
     console.log(JSON.stringify(result));
     return 0;
   }

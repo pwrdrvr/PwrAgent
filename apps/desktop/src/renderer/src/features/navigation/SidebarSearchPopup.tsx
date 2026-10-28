@@ -351,14 +351,13 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     ) {
       return;
     }
-    if (event.key === "ArrowDown") {
+    // The arrows wrap, so the bottom row is one ArrowUp away from the top.
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      setActiveIndex((index) => Math.min(index + 1, combinedRows.length - 1));
-      return;
-    }
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setActiveIndex((index) => Math.max(index - 1, 0));
+      const count = combinedRows.length;
+      if (count === 0) return;
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      setActiveIndex((index) => (index + step + count) % count);
       return;
     }
     if (event.key === "Enter") {

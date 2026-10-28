@@ -49,6 +49,7 @@ export * from "./contracts/thread-link";
 export * from "./contracts/thread-tools";
 export * from "./contracts/thread-todos";
 export * from "./contracts/thread-reviews";
+export * from "./thread-todo-feed";
 export * from "./contracts/operator-requests";
 export * from "./contracts/thread-dependencies";
 export * from "./contracts/thread-system-messages";
@@ -114,3 +115,6 @@ export * from "./thread-archive-policy";
 export * from "./transcript-file-reference";
 export * from "./acp-permission-mode";
 export * from "./uuid-v7";
+
+export type { IntegratedTerminalRemoteInfo, IntegratedTerminalSessionSummary, TerminalSnapshot } from "./contracts/terminal";
+export { mergeCausalMessagingContext } from "./messaging-causal-context";

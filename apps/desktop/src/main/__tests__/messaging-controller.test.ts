@@ -6188,6 +6188,34 @@ describe("MessagingController", () => {
     } finally { db.close(); }
   });
 
+  it("authorizes federated retained-source inspection and private replies on the provider owner", async () => {
+    const db = StateDb.open(":memory:");
+    try {
+      let authorized = true;
+      const requests = new SqliteMessagingRequestStore(db.raw);
+      const resolvePrivateConversation = vi.fn(async () => ({ channel: "telegram" as const, outcome: "resolved" as const,
+        conversation: { id: "fixture-private", kind: "dm" as const }, updatedAt: 2000 }));
+      const harness = await createHarness({ requestStore: requests, authorizeRetainedSource: () => authorized, resolvePrivateConversation });
+      const event = buildTextEvent("reply from an outpost", { channel: buildTopicChannel("100") });
+      await harness.store.upsertBinding({ id: "remote-binding", backend: "codex", threadId: "thread-1", targetKind: "thread",
+        channel: event.channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000 });
+      const source = requests.remember({ connectionId: "fixture", agent: { backend: "codex", threadId: "thread-1" }, bindingId: "remote-binding", event })!;
+      const context = { backend: "codex" as const, threadId: "thread-1", turnId: "outpost-turn", causalMessagingSource: source.ref,
+        requestingInstanceId: "pwr_outpost_fixture" };
+      expect(await harness.controller.authorizeRetainedTool(context, { ...context, category: "messaging_context", tool: "send_private_response" }))
+        .toMatchObject({ owns: true, allowed: true });
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "get_current_messaging_surface", context, args: {} }))
+        .toMatchObject({ ok: true, data: { location: { channel: "telegram" } } });
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "send_private_response", context, args: { text: "mock provider reply" } }))
+        .toMatchObject({ ok: true, data: { outcome: "delivered" } });
+      expect(resolvePrivateConversation).toHaveBeenCalledTimes(1);
+      authorized = false;
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "send_private_response", context, args: { text: "revoked" } }))
+        .toMatchObject({ ok: false, error: { code: "forbidden" } });
+      expect(resolvePrivateConversation).toHaveBeenCalledTimes(1);
+    } finally { db.close(); }
+  });
+
   it("keeps Slack channel4 causal through a completion despite newer human traffic in four other channels", async () => {
     const db = StateDb.open(":memory:");
     try {
@@ -17294,6 +17322,112 @@ describe("MessagingController", () => {
     );
     expect(binding).not.toHaveProperty("activeTurn");
   });
+
+  it.each(["show_none", "show_all"] as const)(
+    "routes partial answers through %s without buffering them into the final answer stream",
+    async (toolUpdateDefaultMode) => {
+      let now = 1_000;
+      const harness = await createHarness({
+        streamingResponsesDefault: true,
+        toolUpdateDefaultMode,
+        now: () => now,
+      });
+      await bindThread(harness);
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "turn/started",
+        params: { threadId: "thread-1", turn: { id: "turn-1", status: "in_progress" } },
+      } });
+      harness.delivered.length = 0;
+      for (const delta of ["Initial ", "result."]) {
+        now += 1_000; // Exceed stream coalescing so an accidental answer stream is visible.
+        await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+          method: "item/agentMessage/delta",
+          params: { threadId: "thread-1", turnId: "turn-1", itemId: "partial",
+            phase: "partial", delta },
+        } });
+      }
+      expect(harness.delivered).toEqual([]);
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "item/completed",
+        params: { threadId: "thread-1", turnId: "turn-1", item: {
+          id: "partial", type: "agentMessage", phase: "partial", text: "Initial result.",
+        } },
+      } });
+      const prose = harness.delivered.filter((intent) => intent.kind === "message");
+      if (toolUpdateDefaultMode === "show_all") {
+        expect(prose).toContainEqual(expect.objectContaining({
+          parts: [expect.objectContaining({ text: "Initial result." })],
+        }));
+      } else {
+        expect(prose).toEqual([]);
+      }
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "item/started",
+        params: { threadId: "thread-1", turnId: "turn-1", item: {
+          id: "tool", type: "commandExecution", command: "pwd", status: "inProgress",
+        } },
+      } });
+      expect(harness.delivered.filter((intent) => intent.kind === "stream_update")).toEqual([]);
+      harness.delivered.length = 0;
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "item/agentMessage/delta",
+        params: { threadId: "thread-1", turnId: "turn-1", itemId: "final",
+          phase: "final", delta: "Complete result." },
+      } });
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "item/completed",
+        params: { threadId: "thread-1", turnId: "turn-1", item: {
+          id: "final", type: "agentMessage", phase: "final", text: "Complete result.",
+        } },
+      } });
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "turn/completed",
+        params: { threadId: "thread-1", turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] } },
+      } });
+      expect(harness.delivered.filter((intent) => intent.kind === "stream_update")).toEqual([
+        expect.objectContaining({
+          text: "Complete result.",
+          stream: expect.objectContaining({ isFinal: true, itemId: "final" }),
+        }),
+      ]);
+      expect(JSON.stringify(harness.delivered)).not.toContain("Initial result.");
+    },
+  );
+
+  it.each(["partial", undefined] as const)(
+    "does not flush a partial answer as a final reply after tool work (delta phase: %s)",
+    async (phase) => {
+      const harness = await createHarness({ streamingResponsesDefault: true, toolUpdateDefaultMode: "show_none" });
+      await bindThread(harness);
+      harness.delivered.length = 0;
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "item/agentMessage/delta",
+        params: { threadId: "thread-1", turnId: "turn-1", itemId: "partial",
+          phase, delta: "Initial result." },
+      } });
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "item/completed",
+        params: { threadId: "thread-1", turnId: "turn-1", item: {
+          id: "partial", type: "agentMessage", phase: "partial", text: "Initial result.",
+        } },
+      } });
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "item/started",
+        params: { threadId: "thread-1", turnId: "turn-1", item: {
+          id: "tool", type: "commandExecution", command: "pwd", status: "inProgress",
+        } },
+      } });
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "turn/completed",
+        params: { threadId: "thread-1", turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] } },
+      } });
+      expect(harness.delivered.filter((intent) =>
+        intent.kind === "stream_update" || intent.kind === "message",
+      )).toEqual([]);
+    },
+  );
 
   it("coalesces assistant stream deltas with backoff and flushes the final turn text", async () => {
     let now = 1000;

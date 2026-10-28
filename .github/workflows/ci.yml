@@ -723,19 +723,31 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repository
+        id: checkout
         uses: actions/checkout@v7
         timeout-minutes: 10
         with:
-          lfs: true
+          # Hydrate ordinary Git blobs before LFS opens its object database.
+          # In a reused partial clone, LFS can otherwise miss packs created
+          # by Git's concurrent lazy fetch and report a source blob missing.
+          lfs: false
 
       - name: Materialize Git LFS assets
+        id: lfs
         # These jobs reuse persistent runner workspaces. A previous checkout
         # can leave an LFS pointer at an unchanged path, and checkout --force
         # does not necessarily rewrite it after fetching the LFS object.
         # Pull explicitly so Playwright always receives PNG bytes rather than
         # the pointer text, even when this runner served another job first.
         timeout-minutes: 5
-        run: git lfs pull
+        run: |
+          git config --local --get-regexp '^remote\.origin\.(promisor|partialclonefilter)$' || true
+          git lfs pull
+
+      - name: Report Git LFS checkout failure
+        if: failure() && (steps.checkout.outcome == 'failure' || steps.lfs.outcome == 'failure')
+        timeout-minutes: 1
+        run: git lfs logs last
 
       - name: Locate the guest cache root
         # One directory on the guest that only this repository uses. The
@@ -804,7 +816,13 @@ jobs:
           # Same lane sizes as Linux and Windows; see the desktop-e2e
           # strategy comment.
           PWTEST_SHARD_WEIGHTS: "9:12:12:14"
+        # The wrapper keeps a cancelled step alive until Playwright has closed
+        # Electron, and kills Electron's main first if the runner escalates.
+        # Without it, the runner's orphan reap killed the renderer under a
+        # pending failure screenshot and the main segfaulted; see the script.
+        # `exec` makes the wrapper the step process, so it gets the signals.
         run: >-
+          exec bash ./scripts/ci/macos-e2e-run-lane.sh
           pnpm --filter @pwragent/desktop test:e2e:prebuilt
           --shard=${{ matrix.lane }}/4
 

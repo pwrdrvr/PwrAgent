@@ -536,7 +536,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         return await this.authorizeRetainedTool(context, operation.check);
       }
       if (operation?.kind !== "request" || !operation.request?.context?.causalMessagingSource
-        || !["list_messaging_surfaces", "attach_thread_to_surface"].includes(operation.request.operation)
+        || !["get_current_location", "get_current_messaging_surface", "send_private_response", "rename_current_messaging_conversation", "attach_thread_here", "list_messaging_surfaces", "attach_thread_to_surface"].includes(operation.request.operation)
         || operation.request.context.causalMessagingSource.instanceId !== getDesktopFederationRuntime().messagingSourceInstanceId()) {
         return { ok: false, error: { code: "forbidden", message: "The destination must be resolved by its original messaging owner." } };
       }

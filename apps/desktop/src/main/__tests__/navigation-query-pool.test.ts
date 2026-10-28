@@ -44,13 +44,14 @@ describe("NavigationQueryPool", () => {
     expect(pool.getBudgetUsage().retainedBytes).toBe(0);
   });
 
-  it("replaces invalidated exact results without rejecting demand or rereading unrelated owners", async () => {
+  it("serves invalidated exact results to their own readers without rejecting demand or rereading unrelated owners", async () => {
     const pool = new NavigationQueryPool();
     const ref = { backend: "codex" as const, threadId: "same" };
     const pending: Array<Promise<unknown>> = [];
     const signals: AbortSignal[] = [];
     const finish: Array<() => void> = [];
     const loads: Array<ReturnType<typeof vi.fn>> = [];
+    const detailLoads: Array<Parameters<typeof pool.readExact<"detail">>[0]["load"]> = [];
     for (const instanceId of ["a", "b"]) {
       let reads = 0;
       const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
@@ -61,6 +62,7 @@ describe("NavigationQueryPool", () => {
         return reads === 1 ? new Promise<typeof value>((resolve) => finish.push(() => resolve(value))) : Promise.resolve(value);
       });
       loads.push(load);
+      detailLoads.push(load);
       pending.push(pool.readExact({ kind: "detail", consumerId: instanceId, identity: "same", operation: "full", ref,
         owner: { scope: "remote", instanceId }, load }));
     }
@@ -69,19 +71,23 @@ describe("NavigationQueryPool", () => {
         signals.push(signal);
         return new Promise((resolve) => finish.push(() => resolve({ protocol: 2, revision: "config" })));
       } }));
+    pool.invalidateExactOwner({ scope: "remote", instanceId: "a" }, ref);
+    pool.invalidateExactOwner({ scope: "remote", instanceId: "a" }, ref);
+    // A reader admitted after the change waits for a read that starts after it.
+    pending.push(pool.readExact({ kind: "detail", consumerId: "a", identity: "same", operation: "full", ref,
+      owner: { scope: "remote", instanceId: "a" }, load: detailLoads[0]! }));
     const settled = Promise.allSettled(pending);
-    pool.invalidateExactOwner({ scope: "remote", instanceId: "a" }, ref);
-    pool.invalidateExactOwner({ scope: "remote", instanceId: "a" }, ref);
     expect(signals.map((signal) => signal.aborted)).toEqual([false, false, false]);
     for (const done of finish) done();
-    expect((await settled).map((result) => result.status)).toEqual(["fulfilled", "fulfilled", "fulfilled"]);
-    await expect(pending[0]).resolves.toMatchObject({ revision: "canonical" });
+    expect((await settled).map((result) => result.status)).toEqual(["fulfilled", "fulfilled", "fulfilled", "fulfilled"]);
+    await expect(pending[0]).resolves.toMatchObject({ revision: "stale" });
+    await expect(pending[3]).resolves.toMatchObject({ revision: "canonical" });
     expect(loads.map((load) => load.mock.calls.length)).toEqual([2, 1]);
     for (const consumer of ["a", "b", "config"]) pool.release(consumer);
     expect(pool.getBudgetUsage().retainedBytes).toBe(0);
   });
 
-  it("replaces a coalesced selected detail after a branch check without rereading its queue", async () => {
+  it("gives a selected detail joined after a branch check its own read without rereading its queue", async () => {
     const pool = new NavigationQueryPool();
     const ref = { backend: "codex" as const, threadId: "branch-thread" };
     let finishStale!: () => void;
@@ -103,8 +109,9 @@ describe("NavigationQueryPool", () => {
       operation: "full", ref, load: loadQueue });
     pool.invalidateExactOwner(undefined, ref, "detail");
     const joined = pool.readExact(detailParams);
+    expect(loadDetail).toHaveBeenCalledTimes(1);
     finishStale();
-    await expect(stale).resolves.toMatchObject({ revision: "current" });
+    await expect(stale).resolves.toMatchObject({ revision: "stale" });
     await expect(joined).resolves.toMatchObject({ revision: "current" });
     await expect(queue).resolves.toMatchObject({ revision: "queue" });
     expect(loadDetail).toHaveBeenCalledTimes(2);
@@ -113,12 +120,14 @@ describe("NavigationQueryPool", () => {
     pool.release("queue");
   });
 
-  it("replaces a pre-event query before satisfying a post-event joined refresh", async () => {
+  it("serves a pre-event page to its own reader and gives a post-event refresh a page built after it", async () => {
     const pool = new NavigationQueryPool();
     let finish!: (value: NavigationQueryPage) => void;
+    let finishStarted!: (value: NavigationQueryPage) => void;
+    const started = { ...page, counts: { ...page.counts, active: 1 }, countsRevision: "started" };
     const load = vi.fn()
       .mockImplementationOnce(() => new Promise<NavigationQueryPage>((resolve) => { finish = resolve; }))
-      .mockResolvedValue({ ...page, counts: { ...page.counts, active: 1 }, countsRevision: "started" });
+      .mockImplementationOnce(() => new Promise<NavigationQueryPage>((resolve) => { finishStarted = resolve; }));
     const first = pool.read({ consumerId: "sidebar", request, load });
     let finishRemote!: (value: NavigationQueryPage) => void;
     const remoteLoad = vi.fn(() => new Promise<NavigationQueryPage>((resolve) => { finishRemote = resolve; }));
@@ -127,21 +136,92 @@ describe("NavigationQueryPool", () => {
     }, load: remoteLoad });
     pool.invalidateQueryOwner();
     const refreshed = pool.read({ consumerId: "map", request, load });
+    const joined = pool.read({ consumerId: "star-map", request, load });
     finish(page);
     finishRemote(page);
     await expect(remote).resolves.toEqual(page);
     expect(remoteLoad).toHaveBeenCalledTimes(1);
-    for (const result of await Promise.all([first, refreshed])) {
-      expect(result.counts.active).toBe(1);
-      expect(result.countsRevision).toBe("started");
-    }
+    await expect(first).resolves.toEqual(page);
+    // An overtaken page is served, never kept as the query's current backing.
+    expect(pool.getBudgetUsage().retainedBytes).toBe(Buffer.byteLength(JSON.stringify(page)));
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+    finishStarted(started);
+    await expect(Promise.all([refreshed, joined])).resolves.toEqual([started, started]);
     expect(load).toHaveBeenCalledTimes(2);
-    expect(load.mock.calls[0]![0].signal).toBe(load.mock.calls[1]![0].signal);
-    expect(load.mock.calls[0]![0].deadlineAt).toBe(load.mock.calls[1]![0].deadlineAt);
+    expect(load.mock.calls[0]![0].signal).not.toBe(load.mock.calls[1]![0].signal);
+    expect(pool.getBudgetUsage().retainedBytes)
+      .toBe(Buffer.byteLength(JSON.stringify(page)) + Buffer.byteLength(JSON.stringify(started)));
     pool.release("sidebar");
     pool.release("map");
+    pool.release("star-map");
     pool.release("remote");
     expect(pool.getBudgetUsage().retainedBytes).toBe(0);
+  });
+
+  it("never reloads a page for its own readers while invalidations land during every load", async () => {
+    const pool = new NavigationQueryPool();
+    const gates: Array<(value: NavigationQueryPage) => void> = [];
+    const load = vi.fn(() => new Promise<NavigationQueryPage>((resolve) => { gates.push(resolve); }));
+    const reads = [pool.read({ consumerId: "reader-0", request, load })];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(attempt + 1));
+      pool.invalidateQueryOwner();
+      // Two later readers share one follow-up, however many changes land.
+      reads.push(pool.read({ consumerId: `reader-${attempt + 1}`, request, load }));
+      pool.invalidateQueryOwner();
+      reads.push(pool.read({ consumerId: `joined-${attempt + 1}`, request, load }));
+      gates[attempt]!({ ...page, generation: `load-${attempt}` });
+    }
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(4));
+    gates[3]!({ ...page, generation: "load-3" });
+    expect((await Promise.all(reads)).map((result) => result.generation))
+      .toEqual(["load-0", "load-1", "load-1", "load-2", "load-2", "load-3", "load-3"]);
+    expect(load).toHaveBeenCalledTimes(4);
+    // Only the page no change overtook is the query's current backing.
+    expect(pool.getBudgetUsage().retainedBytes).toBe(Buffer.byteLength(JSON.stringify({ ...page, generation: "load-3" })));
+    for (const consumer of ["reader-0", "reader-1", "joined-1", "reader-2", "joined-2", "reader-3", "joined-3"]) pool.release(consumer);
+    expect(pool.getBudgetUsage()).toEqual({ queries: 0, exactResources: 0, retainedBytes: 0, activeReads: 0 });
+  });
+
+  it("returns an overtaken read's own failure to its readers without retrying it", async () => {
+    const pool = new NavigationQueryPool();
+    let fail!: (error: Error) => void;
+    const load = vi.fn()
+      .mockImplementationOnce(() => new Promise<NavigationQueryPage>((_resolve, reject) => { fail = reject; }))
+      .mockResolvedValue(page);
+    const first = pool.read({ consumerId: "first", request, load });
+    pool.invalidateQueryOwner();
+    const later = pool.read({ consumerId: "later", request, load });
+    fail(new Error("earlier owner failure"));
+    await expect(first).rejects.toThrow("earlier owner failure");
+    await expect(later).resolves.toEqual(page);
+    expect(load).toHaveBeenCalledTimes(2);
+    pool.release("first");
+    pool.release("later");
+  });
+
+  it("cancels an overtaken read and its follow-up only after the query's last consumer leaves", async () => {
+    const pool = new NavigationQueryPool();
+    const signals: AbortSignal[] = [];
+    const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
+      signals.push(signal);
+      return new Promise<NavigationQueryPage>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    });
+    const first = pool.read({ consumerId: "first", request, load });
+    pool.invalidateQueryOwner();
+    const later = pool.read({ consumerId: "later", request: { ...request, consumer: "star-map" }, load });
+    const settled = Promise.allSettled([first, later]);
+    pool.release("first");
+    expect(signals[0]!.aborted).toBe(false);
+    pool.release("later");
+    expect(signals[0]!.aborted).toBe(true);
+    expect((await settled).map((result) => result.status)).toEqual(["rejected", "rejected"]);
+    // The follow-up was cancelled while it waited, before it read anything.
+    expect(load).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(pool.getBudgetUsage())
+      .toEqual({ queries: 0, exactResources: 0, retainedBytes: 0, activeReads: 0 }));
   });
 
   it("shares eight physical slots between collection and exact configuration reads", async () => {

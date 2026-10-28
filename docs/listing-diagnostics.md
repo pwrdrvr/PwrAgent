@@ -18,7 +18,7 @@ logical request as another physical execution.
 | --- | --- |
 | `ipc` | A renderer request crossed IPC, with numeric sender and cause metadata. |
 | `navigation` | A logical pool request. Different consumers may join one execution. |
-| `owner-page` | One admitted page operation, including capacity wait and invalidation retries. |
+| `owner-page` | One admitted page operation, including capacity wait. It loads once, whatever lands during it. |
 | `owner-read` | An actual owner load attempt after admission. |
 | `index` | Shared local membership-index construction, pending reuse, or completed reuse. |
 | `registry` | Registry listing execution, pending reuse, or completed listing cache hit. |
@@ -28,9 +28,15 @@ logical request as another physical execution.
 A cursor hit skips index construction. An index cache hit skips the registry
 and provider. A registry hit skips the provider. `cancel` records revocation or
 a deadline; it does **not** claim that a non-cooperative underlying provider
-has stopped. Its physical attempt may settle later. `retry` with
-`owner-invalidated` means an event arrived during the read. RPC fallback
-attempts carry `provider-fallback`. Durations are wall time, not CPU time.
+has stopped. Its physical attempt may settle later. `overtaken` with
+`owner-invalidated` means an event arrived during the read. The page still
+went to the readers that joined it, but was not kept as the query's current
+result; readers that arrived after the event wait for one follow-up page,
+which has its own `owner-page` start. An `owner-read` `overtaken` means the
+Attention view held something observed after that index's listing began: a
+boundary, or a newer listing from another read for the view. The index was
+reconciled without changing those members, not reread. RPC fallback attempts carry
+`provider-fallback`. Durations are wall time, not CPU time.
 
 `source` distinguishes local viewer work, remote viewer demand, and incoming
 Federation owner work. `inventory` distinguishes owner and viewer inventories.

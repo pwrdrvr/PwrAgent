@@ -94,16 +94,18 @@ describe("bounded listing diagnostics", () => {
     pool.release("one"); pool.release("two"); indexPool.invalidate("fixture");
   });
 
-  it("records invalidation retries and cancellation separately from provider settlement", async () => {
+  it("records overtaken owner pages and cancellation separately from provider settlement", async () => {
     const before = listingDiagnostics.snapshot().recorded;
     const pool = new NavigationQueryPool();
     let finish!: (value: NavigationQueryPage) => void;
     const load = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; })).mockResolvedValue(page);
     const first = pool.read({ consumerId: "a", request, load });
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
     pool.invalidateQueryOwner(undefined, "turn", "turn/completed");
     finish(page);
     await first;
-    expect(load).toHaveBeenCalledTimes(2);
+    // The overtaken page is served to its reader, not loaded again.
+    expect(load).toHaveBeenCalledTimes(1);
     const pending = pool.read({ consumerId: "b", request: { ...request, consumer: "star-map", query: { kind: "directory-index" } },
       load: () => new Promise((resolve) => { finish = resolve; }) });
     pool.release("b");
@@ -111,7 +113,9 @@ describe("bounded listing diagnostics", () => {
     finish(page);
     await new Promise((resolve) => setImmediate(resolve));
     const events = eventsSince(before);
-    expect(events.some((event) => event.phase === "retry" && event.reason === "owner-invalidated")).toBe(true);
+    const owner = events.find((event) => event.stage === "owner-page" && event.phase === "start")!;
+    expect(events.filter((event) => event.phase === "overtaken"))
+      .toEqual([expect.objectContaining({ stage: "owner-page", id: owner.id, reason: "owner-invalidated" })]);
     expect(events.some((event) => event.phase === "cancel" && event.targetId !== undefined)).toBe(true);
     expect(events.some((event) => event.stage === "navigation" && event.phase === "invalidate" && event.trigger === "turn/completed")).toBe(true);
     pool.release("a");

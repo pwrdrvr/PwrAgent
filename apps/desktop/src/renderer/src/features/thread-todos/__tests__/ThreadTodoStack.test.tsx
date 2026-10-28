@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary, ThreadReview, ThreadTodo, ThreadTodoProject } from "@pwragent/shared";
 import type { AppServerPendingRequestNotification } from "@pwragent/shared";
 import {
+  THREAD_TODO_BUSY_RETRY_MS,
   codexAsyncQuestionItemId,
   threadTodoThreadKey,
   threadReviewTodo,
@@ -14,6 +15,7 @@ import { ThreadMetaChips } from "../../navigation/ThreadMetaChips";
 import { ThreadTodoStack } from "../ThreadTodoStack";
 import { ThreadTodosPanel } from "../ThreadTodosPanel";
 import { ThreadTodoCountsContext } from "../useThreadTodos";
+import { unwrapNavigationRead } from "../../../../../shared/navigation-ipc-result";
 import type { ThreadTodosView } from "../thread-todos-view";
 import { buildOperatorWaits, type OperatorWait } from "../../operator-requests/operator-waits";
 import { OperatorWaitsContext } from "../../operator-requests/useOperatorRequests";
@@ -599,6 +601,127 @@ describe("thread to-do checklists", () => {
     expect(screen.getByRole("alert").textContent).toContain("Owner disconnected");
   });
 
+  // One pinned owner's failure must not hide the cards every other owner sent.
+  it("shows a pinned owner's failure beside the resolved cards that did load", async () => {
+    const done = todo({ id: "d0", status: "done", title: "Shipped locally", resolvedAt: 1 });
+    const view = createView([], { listResolved: vi.fn(async () => ({ todos: [done], errors: ["peer: Owner store failed"] })) });
+    render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Resolved" })); });
+    expect(screen.getByText("Shipped locally")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("peer: Owner store failed");
+  });
+
+  it("drops the Done list's owner failure when Done is hidden", async () => {
+    const view = createView([], { listResolved: vi.fn(async () => ({ todos: [], errors: ["peer: Owner store failed"] })) });
+    render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Resolved" })); });
+    expect(screen.getByRole("alert").textContent).toContain("peer: Owner store failed");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Resolved" })); });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows the Done list's owner failure beside the queue's, once per line", async () => {
+    const view = createView([], {
+      listResolved: vi.fn(async () => ({ todos: [], errors: ["peer: Owner store failed"] })),
+      queueError: "peer: Owner store failed\nRequests failed",
+    });
+    render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Resolved" })); });
+    expect(screen.getByRole("alert").textContent).toBe("peer: Owner store failed\nRequests failed");
+  });
+
+  it("keeps a busy owner's resolved queue quiet", async () => {
+    const busy = Object.assign(new Error("handler_failed: [navigation_busy] Busy"), { code: "navigation_busy" });
+    const view = createView([], { listResolved: vi.fn(async () => { throw busy; }) });
+    render(<ThreadTodosPanel view={view} threadKey="remote:owner:codex:thread-a" onStartReview={vi.fn()} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Resolved" })); });
+    expect(view.listResolved).toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  describe("a resolved-queue read while an owner is busy", () => {
+    const peer = { scope: "remote" as const, instanceId: "peer" };
+    const done = todo({ id: "d1", status: "done", title: "Shipped the fix", resolvedAt: 2 });
+    const later = todo({ id: "d2", status: "done", title: "Merged the docs", resolvedAt: 3 });
+    const pinned = todo({ id: "remote-todo:peer:d3", threadId: "pinned", status: "done", title: "Pinned owner card",
+      federationTarget: peer, resolvedAt: 1 });
+    const busyPinned = { todos: [later], busyThreads: [{ federationTarget: peer, backend: "codex" as const, threadId: "pinned" }] };
+    // The rejection the preload hands the renderer for a busy owner.
+    const busy = () => {
+      try {
+        return unwrapNavigationRead({ navigationReadFailure: true, code: "navigation_busy",
+          message: "handler_failed: [navigation_busy] Navigation read deadline expired." });
+      } catch (error) {
+        return error;
+      }
+    };
+    const flush = (ms = 0) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+
+    function setup(...responses: unknown[]) {
+      vi.useFakeTimers();
+      const listResolved = vi.fn();
+      for (const response of responses) {
+        if (response instanceof Error) listResolved.mockRejectedValueOnce(response);
+        else listResolved.mockResolvedValueOnce(response);
+      }
+      const view = createView([], { listResolved });
+      const panel = render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+      fireEvent.click(screen.getByRole("tab", { name: /All/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Resolved" }));
+      // A change event bumps the revision, which lists the queue again.
+      const change = () => panel.rerender(
+        <ThreadTodosPanel view={{ ...view, revision: 1 }} threadKey="codex:thread-a" onStartReview={vi.fn()} />,
+      );
+      return { listResolved, change };
+    }
+
+    afterEach(() => {
+      // The scope is remembered across panels; leave the default for later tests.
+      fireEvent.click(screen.getByRole("tab", { name: /Thread/ }));
+    });
+
+    it("keeps the last cards without an error and re-lists once", async () => {
+      const { listResolved, change } = setup({ todos: [done] }, busy(), { todos: [later, done] });
+      await flush();
+      change();
+      await flush();
+      expect(listResolved).toHaveBeenCalledTimes(2);
+      expect(screen.getByText("Shipped the fix")).toBeTruthy();
+      expect(screen.queryByRole("alert")).toBeNull();
+      await flush(THREAD_TODO_BUSY_RETRY_MS);
+      expect(listResolved).toHaveBeenCalledTimes(3);
+      expect(screen.getByText("Merged the docs")).toBeTruthy();
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("re-lists only once when the owner is still busy", async () => {
+      const { listResolved, change } = setup({ todos: [done] }, busy(), busy(), { todos: [] });
+      await flush();
+      change();
+      await flush(THREAD_TODO_BUSY_RETRY_MS);
+      expect(listResolved).toHaveBeenCalledTimes(3);
+      await flush(THREAD_TODO_BUSY_RETRY_MS * 10);
+      expect(listResolved).toHaveBeenCalledTimes(3);
+      expect(screen.getByText("Shipped the fix")).toBeTruthy();
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("keeps a busy pinned thread's last cards beside fresh ones and re-lists once", async () => {
+      const { listResolved, change } = setup({ todos: [done, pinned] }, busyPinned, busyPinned, { todos: [later] });
+      await flush();
+      change();
+      await flush();
+      // `done` was reopened elsewhere and leaves; the busy owner's card stays.
+      expect(screen.getByText("Merged the docs")).toBeTruthy();
+      expect(screen.getByText("Pinned owner card")).toBeTruthy();
+      expect(screen.queryByText("Shipped the fix")).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
+      await flush(THREAD_TODO_BUSY_RETRY_MS * 10);
+      expect(listResolved).toHaveBeenCalledTimes(3);
+      expect(screen.getByText("Pinned owner card")).toBeTruthy();
+    });
+  });
+
   it("shows a rejected owner action without hiding the card", async () => {
     const card = todo({ id: "remote-todo:owner:card", title: "Ship it", federationTarget: { scope: "remote", instanceId: "owner" } });
     const view = createView([card], { resolve: vi.fn(async () => { throw new Error("Owner disconnected"); }) });
@@ -865,7 +988,7 @@ describe("ThreadTodosPanel", () => {
       result: "Squash-merged #42",
       resolvedAt: Date.now(),
     });
-    const view = createView([], { listResolved: async () => [handled, merged] });
+    const view = createView([], { listResolved: async () => ({ todos: [handled, merged] }) });
     render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
 
     await act(async () => {

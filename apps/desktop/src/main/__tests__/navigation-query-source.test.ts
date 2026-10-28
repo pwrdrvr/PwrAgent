@@ -255,6 +255,79 @@ describe("owner index source event admission", () => {
   });
 });
 
+describe("owner index reads under live turns", () => {
+  it("finishes the scan it started while row events keep landing", async () => {
+    // Each scan stays open until the test has emitted its events, the way a
+    // busy owner's live turns land while a slow listing is in flight. The
+    // pool used to restart for each one and failed the third time with
+    // "Navigation changed repeatedly during its owner index read".
+    const scans: Array<() => void> = [];
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const listThreads = vi.fn(() => new Promise<[]>((resolve) => { scans.push(() => resolve([])); }));
+    const registry = {
+      listThreads,
+      onEvent: (listener: (event: AgentEvent) => void) => {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+      canonicalizeNavigationThreadPullRequests: async (threads: []) => threads,
+      hydrateThreadGitWorkingStates: async (threads: []) => threads,
+      withNavigationSubAgentActivity: (threads: []) => threads,
+      getNavigationInputRequestThreadKeys: () => new Set<string>(),
+    } as unknown as DesktopBackendRegistry;
+    const emit = (method: string) => {
+      const event = { backend: "codex", notification: { method, params: { threadId: "thread" } } } as AgentEvent;
+      for (const listener of listeners) listener(event);
+    };
+    let settled = false;
+    const read = loadLocalNavigationQueryIndex({ registry, callerReason: "thread-todo-owners" })
+      .finally(() => { settled = true; });
+    for (let scan = 1; scan <= 3 && !settled; scan += 1) {
+      await vi.waitFor(() => expect(scans.length).toBe(1));
+      emit("turn/started");
+      emit("thread/status/changed");
+      emit("thread/archived");
+      scans.shift()!();
+      await vi.waitFor(() => expect(settled || scans.length === 1).toBe(true));
+    }
+    await expect(read).resolves.toMatchObject({ threads: [] });
+    expect(listThreads).toHaveBeenCalledTimes(1);
+    // An overtaken scan is not reused, so it holds no listener afterwards.
+    await vi.waitFor(() => expect(listeners.size).toBe(0));
+  });
+
+  it("stamps each scan as it begins, and a reused index keeps the stamp of the listing it holds", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const listThreads = vi.fn(async () => []);
+    const registry = {
+      listThreads,
+      onEvent: (listener: (event: AgentEvent) => void) => {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+      canonicalizeNavigationThreadPullRequests: async (threads: []) => threads,
+      hydrateThreadGitWorkingStates: async (threads: []) => threads,
+      withNavigationSubAgentActivity: (threads: []) => threads,
+      getNavigationInputRequestThreadKeys: () => new Set<string>(),
+    } as unknown as DesktopBackendRegistry;
+    const load = () => loadLocalNavigationQueryIndex({ registry, callerReason: "observation-stamp" });
+    const first = await load();
+    expect(first.observedAt).toEqual(expect.any(Number));
+    const reused = await load();
+    expect(listThreads).toHaveBeenCalledTimes(1);
+    expect(reused.observedAt).toBe(first.observedAt);
+    for (const listener of listeners) {
+      listener({ backend: "codex", notification: { method: "thread/archived", params: { threadId: "thread" } } } as AgentEvent);
+    }
+    const next = await load();
+    expect(listThreads).toHaveBeenCalledTimes(2);
+    expect(next.observedAt).toBeGreaterThan(first.observedAt!);
+    for (const listener of listeners) {
+      listener({ backend: "codex", notification: { method: "thread/archived", params: { threadId: "thread" } } } as AgentEvent);
+    }
+  });
+});
+
 it.each([
   ["Inbox lens", { kind: "lens", lens: "inbox" }],
   ["selected thread's exact row", { kind: "exact", identities: [{ backend: "codex", threadId: "bound" }] }],

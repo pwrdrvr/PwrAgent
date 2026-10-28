@@ -1,0 +1,21 @@
+{
+  "name": "@pwragent/agent-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@pwragent/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@pwrdrvr/codex-app-server-protocol": "0.164.0",
+    "@types/node": "^24.12.4"
+  },
+  "scripts": {
+    "typecheck": "node ../../node_modules/typescript-native/bin/tsc --noEmit -p tsconfig.json"
+  }
+}

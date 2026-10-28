@@ -15,7 +15,10 @@ export type ContextTabId =
   | "pr-activity"
   | "prs"
   | "projects"
-  | "providers";
+  | "providers"
+  // Launchpad-only, and never persisted: CONTEXT_TAB_IDS leaves it out so a
+  // stored tab can never name it.
+  | "connections";
 
 export const CONTEXT_TAB_IDS: ContextTabId[] = [
   "info",
@@ -61,4 +64,20 @@ export const DEFAULT_ACTION_RUNS_DOCK: ActionRunsDock = "above";
 
 export function isActionRunsDock(value: unknown): value is ActionRunsDock {
   return value === "above" || value === "sidebar";
+}
+
+/**
+ * Where the new-thread connection cards (PwrGit, PwrSnap, Sandboxer) render:
+ * in the launchpad above the composer (default), or only in the context
+ * rail's Connections tab. Persisted to `config.toml`
+ * `[ui] launchpad_connections_dock`.
+ */
+export type LaunchpadConnectionsDock = "launchpad" | "sidebar";
+
+export const DEFAULT_LAUNCHPAD_CONNECTIONS_DOCK: LaunchpadConnectionsDock = "launchpad";
+
+export function isLaunchpadConnectionsDock(
+  value: unknown,
+): value is LaunchpadConnectionsDock {
+  return value === "launchpad" || value === "sidebar";
 }

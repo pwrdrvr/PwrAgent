@@ -34,6 +34,16 @@ describe("Claude executable discovery", () => {
     expect(probe.mock.calls.every(([candidate]) => !/\.(cmd|bat|ps1)$/i.test(candidate))).toBe(true);
   });
 
+  it("can limit the search to PATH", async () => {
+    const probe = vi.fn(async (candidate: string) =>
+      candidate === "/Users/fixture/.local/bin/claude" ? candidate : undefined);
+    await expect(resolveClaudeExecutable({
+      platform: "darwin", homeDir: "/Users/fixture", env: { PATH: "/usr/bin" },
+      includeInstallDirectories: false, resolveCandidate: probe,
+    })).resolves.toBeUndefined();
+    expect(probe.mock.calls).toEqual([["/usr/bin/claude"]]);
+  });
+
   it("resolves the official npm entry on Windows without executing a shim", async () => {
     const executable = "C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js";
     await expect(resolveClaudeExecutable({

@@ -34,7 +34,7 @@ describe("shared owner index reads", () => {
     expect(pool.usage()).toEqual({ physical: 0, readers: 0 });
   });
 
-  it("joins an invalidated read's replacement and never caches completed source backing", async () => {
+  it("finishes a scan for its own readers after a change, and later readers share one follow-up", async () => {
     const pool = new NavigationIndexReadPool();
     const old = deferred();
     const stale = { ...index, localInstanceId: "stale" };
@@ -43,16 +43,18 @@ describe("shared owner index reads", () => {
     await Promise.resolve();
     pool.invalidate("owner");
     const second = pool.read("owner", current);
+    const third = pool.read("owner", current);
     expect(current).toHaveBeenCalledTimes(1);
+    expect(pool.usage()).toEqual({ physical: 1, readers: 3 });
     old.resolve(stale);
-    await expect(Promise.all([first, second])).resolves.toEqual([index, index]);
+    await expect(Promise.all([first, second, third])).resolves.toEqual([stale, index, index]);
     expect(current).toHaveBeenCalledTimes(2);
     await pool.read("owner", current);
     expect(current).toHaveBeenCalledTimes(3);
     expect(pool.usage()).toEqual({ physical: 0, readers: 0 });
   });
 
-  it("keeps remaining readers after cancellation and replays a real mutation during replacement", async () => {
+  it("keeps one scan running per key and drops a follow-up nobody waits for", async () => {
     const pool = new NavigationIndexReadPool();
     const gates = [deferred(), deferred(), deferred()];
     const load = vi.fn((_: AbortSignal) => gates[load.mock.calls.length - 1]!.promise);
@@ -61,67 +63,48 @@ describe("shared owner index reads", () => {
     await Promise.resolve();
     pool.invalidate("local");
     const second = pool.read("local", load);
+    cancelled.abort();
+    await expect(first).rejects.toThrow();
+    // The follow-up waits for the running scan instead of racing it.
+    expect(load).toHaveBeenCalledTimes(1);
     gates[0]!.resolve({ ...index, localInstanceId: "old" });
     await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
     pool.invalidate("local");
-    const third = pool.read("local", load);
-    cancelled.abort();
-    await expect(first).rejects.toThrow();
-    expect(pool.usage()).toEqual({ physical: 1, readers: 2 });
-    gates[1]!.resolve({ ...index, localInstanceId: "middle" });
-    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(3));
-    const fresh = { ...index, localInstanceId: "new" };
-    gates[2]!.resolve(fresh);
-    await expect(Promise.all([second, third])).resolves.toEqual([fresh, fresh]);
+    const leaving = new AbortController();
+    const third = pool.read("local", load, leaving.signal);
+    leaving.abort();
+    await expect(third).rejects.toThrow();
+    const middle = { ...index, localInstanceId: "middle" };
+    gates[1]!.resolve(middle);
+    await expect(second).resolves.toBe(middle);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(load).toHaveBeenCalledTimes(2);
     expect(pool.usage()).toEqual({ physical: 0, readers: 0 });
   });
 
-  it("bounds repeated invalidation for readers without cancellation and permits a later retry", async () => {
+  it("never fails a read because changes keep landing during every scan", async () => {
     const pool = new NavigationIndexReadPool(1_000);
     const gates = [deferred(), deferred(), deferred()];
     const load = vi.fn((_: AbortSignal) => gates[load.mock.calls.length - 1]?.promise ?? Promise.resolve(index));
-    const first = pool.read("owner", load);
-    const second = pool.read("owner", load);
-    const results = Promise.allSettled([first, second]);
-
+    const reads = [pool.read("owner", load), pool.read("owner", load)];
     for (let attempt = 0; attempt < gates.length; attempt++) {
       await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(attempt + 1));
       pool.invalidate("owner");
-      gates[attempt]!.resolve({ ...index, localInstanceId: `obsolete-${attempt}` });
+      reads.push(pool.read("owner", load));
+      gates[attempt]!.resolve({ ...index, localInstanceId: `scan-${attempt}` });
     }
-
-    expect(await results).toEqual([
-      expect.objectContaining({ status: "rejected", reason: expect.objectContaining({ code: "navigation_busy" }) }),
-      expect.objectContaining({ status: "rejected", reason: expect.objectContaining({ code: "navigation_busy" }) }),
-    ]);
-    expect(load).toHaveBeenCalledTimes(3);
+    expect((await Promise.all(reads)).map((result) => result.localInstanceId))
+      .toEqual(["scan-0", "scan-0", "scan-1", "scan-2", undefined]);
+    expect(load).toHaveBeenCalledTimes(4);
     expect(pool.usage()).toEqual({ physical: 0, readers: 0 });
-    expect(pool.retainedUsage().entries).toBe(0);
+    // Only the scan no change overtook is reused.
+    expect(pool.retainedUsage().entries).toBe(1);
     await expect(pool.read("owner", load)).resolves.toBe(index);
     expect(load).toHaveBeenCalledTimes(4);
+    pool.invalidate("owner");
   });
 
-  it("bounds retries when every invalidated provider scan fails", async () => {
-    const pool = new NavigationIndexReadPool();
-    const gates = [deferred(), deferred(), deferred()];
-    const load = vi.fn((_: AbortSignal) => gates[load.mock.calls.length - 1]?.promise ?? Promise.resolve(index));
-    const result = pool.read("owner", load);
-    const settled = Promise.allSettled([result]);
-
-    for (let attempt = 0; attempt < gates.length; attempt++) {
-      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(attempt + 1));
-      pool.invalidate("owner");
-      gates[attempt]!.reject(new Error(`obsolete provider failure ${attempt}`));
-    }
-
-    expect(await settled).toEqual([
-      expect.objectContaining({ status: "rejected", reason: expect.objectContaining({ code: "navigation_busy" }) }),
-    ]);
-    expect(load).toHaveBeenCalledTimes(3);
-    expect(pool.usage()).toEqual({ physical: 0, readers: 0 });
-  });
-
-  it("retries a failed obsolete scan, but returns a current provider failure", async () => {
+  it("returns a scan's own failure to its readers without retrying it", async () => {
     const pool = new NavigationIndexReadPool();
     const old = deferred();
     const load = vi.fn().mockImplementationOnce(() => old.promise).mockResolvedValueOnce(index)
@@ -129,12 +112,106 @@ describe("shared owner index reads", () => {
     const first = pool.read("owner", load);
     await Promise.resolve();
     pool.invalidate("owner");
-    const joined = pool.read("owner", load);
-    // The original provider failure is obsolete after the event. Both readers
-    // receive the replacement instead of failing independently.
-    old.reject(new Error("obsolete provider failure"));
-    await expect(Promise.all([first, joined])).resolves.toEqual([index, index]);
+    const later = pool.read("owner", load);
+    old.reject(new Error("earlier provider failure"));
+    await expect(first).rejects.toThrow("earlier provider failure");
+    await expect(later).resolves.toBe(index);
     await expect(pool.read("owner", load)).rejects.toThrow("current provider failure");
+    expect(load).toHaveBeenCalledTimes(3);
+  });
+
+  describe("hand-off before projection", () => {
+    // Each scan waits on its own gate (the provider listing), calls the
+    // checkpoint, then counts a projection.
+    function scans() {
+      const gates = Array.from({ length: 4 }, () => deferred());
+      const projections: string[] = [];
+      const load = vi.fn(async (_signal: AbortSignal, checkpoint: () => void) => {
+        const scan = load.mock.calls.length;
+        const listed = await gates[scan - 1]!.promise;
+        checkpoint();
+        projections.push(`scan-${scan}`);
+        return { ...listed, localInstanceId: `scan-${scan}` };
+      });
+      return { gates, projections, load, list: (scan: number) => gates[scan - 1]!.resolve(index) };
+    }
+
+    it("hands an overtaken scan's readers to the follow-up instead of projecting", async () => {
+      const pool = new NavigationIndexReadPool();
+      const { projections, load, list } = scans();
+      const first = pool.read("owner", load);
+      await Promise.resolve();
+      pool.invalidate("owner");
+      const second = pool.read("owner", load);
+      list(1);
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+      list(2);
+      expect((await Promise.all([first, second])).map((result) => result.localInstanceId)).toEqual(["scan-2", "scan-2"]);
+      expect(projections).toEqual(["scan-2"]);
+      expect(pool.usage()).toEqual({ physical: 0, readers: 0 });
+    });
+
+    it("finishes a scan that took readers over, even when overtaken again", async () => {
+      const pool = new NavigationIndexReadPool();
+      const { projections, load, list } = scans();
+      const first = pool.read("owner", load);
+      await Promise.resolve();
+      pool.invalidate("owner");
+      const second = pool.read("owner", load);
+      list(1);
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+      pool.invalidate("owner");
+      const third = pool.read("owner", load);
+      list(2);
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(3));
+      list(3);
+      expect((await Promise.all([first, second, third])).map((result) => result.localInstanceId))
+        .toEqual(["scan-2", "scan-2", "scan-3"]);
+      expect(projections).toEqual(["scan-2", "scan-3"]);
+    });
+
+    it("finishes an overtaken scan when no later reader is waiting", async () => {
+      const pool = new NavigationIndexReadPool();
+      const { projections, load, list } = scans();
+      const first = pool.read("owner", load);
+      await Promise.resolve();
+      pool.invalidate("owner");
+      list(1);
+      expect((await first).localInstanceId).toBe("scan-1");
+      expect(projections).toEqual(["scan-1"]);
+      expect(load).toHaveBeenCalledTimes(1);
+    });
+
+    it("still serves handed-over readers when the follow-up's own readers leave first", async () => {
+      const pool = new NavigationIndexReadPool();
+      const { load, list } = scans();
+      let leaving!: AbortController;
+      const first = pool.read("owner", async (signal, checkpoint) => {
+        // The only later reader leaves between the checkpoint decision and the hand-off.
+        const result = load(signal, () => {
+          try { checkpoint(); } finally { leaving.abort(); }
+        });
+        return await result;
+      });
+      await Promise.resolve();
+      pool.invalidate("owner");
+      leaving = new AbortController();
+      const second = pool.read("owner", load, leaving.signal);
+      list(1);
+      await expect(second).rejects.toThrow();
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+      list(2);
+      expect((await first).localInstanceId).toBe("scan-2");
+      expect(pool.usage()).toEqual({ physical: 0, readers: 0 });
+    });
+  });
+
+  it("rejects instead of hanging when a snapshot cannot be retained", async () => {
+    const pool = new NavigationIndexReadPool(1_000);
+    const unsizable = { ...index, localInstanceId: 1n } as unknown as NavigationQueryIndex;
+    await expect(pool.read("owner", async () => unsizable)).rejects.toThrow(/BigInt/);
+    expect(pool.usage()).toEqual({ physical: 0, readers: 0 });
+    expect(pool.retainedUsage()).toEqual({ entries: 0, bytes: 0 });
   });
 
   it("retains physical admission for non-cooperative work after zero-ref cancellation", async () => {
@@ -151,17 +228,18 @@ describe("shared owner index reads", () => {
     await expect(pool.read("ninth", async () => index)).resolves.toBe(index);
   });
 
-  it("replaces a stale revision once and retains only the latest version", async () => {
+  it("sends a reader with newer durable state to the follow-up and retains only the latest version", async () => {
     const pool = new NavigationIndexReadPool(1_000);
     const old = deferred();
+    const stale = { ...index, localInstanceId: "stale" };
     const fresh = { ...index, localInstanceId: "fresh" };
     const load = vi.fn().mockImplementationOnce(() => old.promise).mockResolvedValue(fresh);
     const first = pool.read("owner", load, undefined, "v1");
     const second = pool.read("owner", load, undefined, "v2");
     const third = pool.read("owner", load, undefined, "v2");
     expect(pool.usage()).toEqual({ physical: 1, readers: 3 });
-    old.resolve({ ...index, localInstanceId: "stale" });
-    await expect(Promise.all([first, second, third])).resolves.toEqual([fresh, fresh, fresh]);
+    old.resolve(stale);
+    await expect(Promise.all([first, second, third])).resolves.toEqual([stale, fresh, fresh]);
     expect(load).toHaveBeenCalledTimes(2);
     expect(await pool.read("owner", load, undefined, "v2")).toBe(fresh);
     expect(load).toHaveBeenCalledTimes(2);
@@ -171,24 +249,20 @@ describe("shared owner index reads", () => {
     expect(pool.retainedUsage()).toEqual({ entries: 0, bytes: 0 });
   });
 
-  it("keeps the replacement limit when durable versions change during every scan", async () => {
+  it("shares one follow-up across every durable version written during a scan", async () => {
     const pool = new NavigationIndexReadPool(1_000);
-    const gates = [deferred(), deferred(), deferred()];
-    const load = vi.fn((_: AbortSignal) => gates[load.mock.calls.length - 1]!.promise);
+    const gate = deferred();
+    const load = vi.fn((_: AbortSignal) => load.mock.calls.length === 1 ? gate.promise : Promise.resolve(index));
     const reads = [pool.read("owner", load, undefined, "v0")];
-    for (let attempt = 0; attempt < gates.length; attempt++) {
-      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(attempt + 1));
-      const read = pool.read("owner", load, undefined, `v${attempt + 1}`);
-      void read.catch(() => undefined);
-      reads.push(read);
-      gates[attempt]!.resolve(index);
-    }
-    expect(await Promise.allSettled(reads)).toEqual(reads.map(() =>
-      expect.objectContaining({ status: "rejected", reason: expect.objectContaining({ code: "navigation_busy" }) })));
-    expect(load).toHaveBeenCalledTimes(3);
+    for (let version = 1; version <= 12; version++) reads.push(pool.read("owner", load, undefined, `v${version}`));
+    gate.resolve({ ...index, localInstanceId: "v0" });
+    const results = await Promise.all(reads);
+    expect(results[0]!.localInstanceId).toBe("v0");
+    expect(results.slice(1).every((result) => result === index)).toBe(true);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(await pool.read("owner", load, undefined, "v12")).toBe(index);
+    expect(load).toHaveBeenCalledTimes(2);
     expect(pool.usage()).toEqual({ physical: 0, readers: 0 });
-    expect(pool.retainedUsage()).toEqual({ entries: 0, bytes: 0 });
-    await expect(pool.read("owner", async () => index, undefined, "v4")).resolves.toBe(index);
     pool.invalidate("owner");
   });
 });
@@ -214,7 +288,7 @@ it("shares successive project batches only within a versioned bounded reuse wind
   } finally { vi.useRealTimers(); }
 });
 
-it("retains only the replacement after in-flight invalidation and caps completed backing", async () => {
+it("retains only a scan no change overtook and caps completed backing", async () => {
   const pool = new NavigationIndexReadPool(1_000);
   const old = deferred();
   const fresh = { ...index, localInstanceId: "fresh" };
@@ -222,9 +296,13 @@ it("retains only the replacement after in-flight invalidation and caps completed
   const first = pool.read("owner", load);
   await Promise.resolve();
   pool.invalidate("owner");
-  old.resolve(index); await first;
-  expect(load).toHaveBeenCalledTimes(2);
+  old.resolve(index);
+  expect(await first).toBe(index);
+  expect(load).toHaveBeenCalledTimes(1);
+  // The overtaken scan served its reader but is never reused.
+  expect(pool.retainedUsage().entries).toBe(0);
   expect(await pool.read("owner", load)).toBe(fresh);
+  expect(load).toHaveBeenCalledTimes(2);
   expect(pool.retainedUsage().entries).toBe(1);
   for (let i = 0; i < 12; i++) await pool.read(String(i), async () => index);
   expect(pool.retainedUsage().entries).toBe(8);

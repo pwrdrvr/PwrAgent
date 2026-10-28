@@ -219,7 +219,10 @@ test("isolates terminal side tabs, renames, restores a renderer and retains exit
     const panel = app.window.getByRole("region", { name: "Thread terminals", exact: true });
     const visibleTerminal = () => panel.locator('.integrated-terminal:visible');
     const run = async (command: string) => {
-      await visibleTerminal().locator(".integrated-terminal__viewport").click();
+      // The open sessions rail overlays the right side, including the center
+      // of a narrow terminal. Focus through the exposed left side instead.
+      await visibleTerminal().locator(".xterm-screen").click({ position: { x: 8, y: 8 } });
+      await expect(visibleTerminal().locator(".xterm-helper-textarea")).toBeFocused();
       await app.window.keyboard.type(command);
       await app.window.keyboard.press("Enter");
     };

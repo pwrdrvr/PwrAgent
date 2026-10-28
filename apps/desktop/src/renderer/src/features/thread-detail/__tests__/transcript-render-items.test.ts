@@ -7,6 +7,38 @@ import type {
 import { buildTranscriptRenderItems } from "../transcript-render-items";
 
 describe("buildTranscriptRenderItems", () => {
+  it("keeps a partial answer visible while active and folds it before the final answer", () => {
+    const turn = { id: "partial-turn", status: "in_progress" as const };
+    const partial: AppServerThreadMessageEntry = {
+      ...commentary("partial", "Initial result.", turn),
+      phase: "partial",
+    };
+    expect(buildTranscriptRenderItems({ entries: [partial] }))
+      .toEqual([{ type: "entry", entry: partial }]);
+
+    const completed = completedTurn(turn.id, 5_000);
+    const settledPartial = { ...partial, turn: completed };
+    const answer = final("final", "Complete result.", completed);
+    expect(buildTranscriptRenderItems({ entries: [settledPartial, answer] })).toEqual([
+      expect.objectContaining({ type: "workPhaseGroup", entries: [settledPartial] }),
+      { type: "entry", entry: answer },
+    ]);
+  });
+
+  it("keeps partial answers and continued tool work in the same completed work group", () => {
+    const turn = completedTurn("partial-tool-turn", 5_000);
+    const partial: AppServerThreadMessageEntry = {
+      ...commentary("partial", "Initial result.", turn),
+      phase: "partial",
+    };
+    const tool: AppServerThreadActivityEntry = {
+      type: "activity", id: "tool", summary: "Read a file", details: [], turn,
+    };
+    expect(buildTranscriptRenderItems({ entries: [partial, tool] })).toEqual([
+      expect.objectContaining({ type: "workPhaseGroup", entries: [partial, tool] }),
+    ]);
+  });
+
   it("collapses completed commentary before a final answer", () => {
     const entries = [
       commentary("c1", "First scan."),

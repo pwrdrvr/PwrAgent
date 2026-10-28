@@ -1199,6 +1199,23 @@ describe("CompactComposer markdown", () => {
       expect(onSend).toHaveBeenCalledWith("run [$debug](/skills/debug.md)");
     });
 
+    it("wraps the picker cursor from the first row to the last and back", () => {
+      renderComposer({ mentionSources: { skills: SKILLS } });
+      const input = openPicker("run $de");
+      const selectedIndex = () =>
+        screen
+          .getAllByRole("option")
+          .findIndex((option) => option.getAttribute("aria-selected") === "true");
+      expect(screen.getAllByRole("option")).toHaveLength(2);
+      expect(selectedIndex()).toBe(0);
+
+      fireEvent.keyDown(input, { key: "ArrowUp" });
+      expect(selectedIndex()).toBe(1);
+
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      expect(selectedIndex()).toBe(0);
+    });
+
     it("hands Enter back to the send path once Escape closes the picker", async () => {
       const { onSend } = renderComposer({
         mentionSources: { skills: SKILLS },

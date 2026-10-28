@@ -34,11 +34,17 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   const message = JSON.parse(line);
   log(message);
   const { method, id, params } = message;
-  if (!method) continue;
+  if (!method) {
+    if (String(id).startsWith("fixture-tool-")) {
+      appendFileSync(path.join(directory, "tool-results.jsonl"), JSON.stringify(message.result) + "\n");
+      complete("completed");
+    }
+    continue;
+  }
   const reply = (result) => send({ id, result });
   if (method === "initialize") {
     assert.equal(initialized, false);
-    assert.equal(params.capabilities.experimentalApi, false);
+    assert.equal(params.capabilities.experimentalApi, true);
     initialized = true;
     reply({ userAgent: "fixture-codex/0.159.2" });
   } else if (method === "initialized") {
@@ -51,7 +57,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     } else if (method === "thread/start" || method === "thread/resume") {
       assert.equal(params.approvalPolicy, "never");
       assert.ok(["read-only", "workspace-write"].includes(params.sandbox));
-      assert.equal(params.cwd, process.cwd());
+      assert.ok(params.cwd === process.cwd() || params.cwd.startsWith(process.cwd() + path.sep));
       const threadId = params.threadId || `thread-${Date.now()}-${++sequence}`;
       if (method === "thread/resume") {
         assert.ok(threads[threadId]);
@@ -60,16 +66,23 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
           continue;
         }
       }
-      threads[threadId] ||= { id: threadId, turns: [] };
+      threads[threadId] ||= { id: threadId, cwd: params.cwd, turns: [] };
       persist();
       reply({ thread: threads[threadId] });
     } else if (method === "turn/start") {
       assert.equal(params.approvalPolicy, "never");
       assert.equal(params.sandboxPolicy.networkAccess, false);
-      assert.equal(params.cwd, process.cwd());
+      assert.ok(params.cwd === process.cwd() || params.cwd.startsWith(process.cwd() + path.sep));
       const prompt = params.input[0].text;
       active = { id: `turn-${++sequence}`, threadId: params.threadId };
       const initial = { turn: { id: active.id, status: "inProgress", items: [], error: null } };
+      if (prompt.startsWith("tool ")) {
+        reply(initial);
+        const tool = JSON.parse(prompt.slice(5));
+        send({ id: `fixture-tool-${active.id}`, method: "item/tool/call", params: { threadId: params.threadId, turnId: active.id,
+          callId: `call-${active.id}`, namespace: "pwragent", tool: tool.operation, arguments: tool.args || {} } });
+        continue;
+      }
       if (prompt === "early") { complete("completed"); reply(initial); continue; }
       reply(initial);
       if (prompt === "crash") { setTimeout(() => process.exit(7), 30); continue; }
@@ -82,7 +95,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
           params: { threadId: params.threadId, turnId: active.id } });
       }
       active.timer = setTimeout(() => {
-        writeFileSync(path.join(process.cwd(), "fixture-result.txt"), prompt);
+        writeFileSync(path.join(params.cwd, "fixture-result.txt"), prompt);
         complete(prompt === "fail" ? "failed" : "completed");
       }, ["slow", "descendant", "approval", "question"].includes(prompt) ? 30000 : 100);
     } else if (method === "turn/steer") {
@@ -94,8 +107,21 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       complete("interrupted");
       reply({});
     } else if (method === "thread/read") {
-      assert.equal(params.includeTurns, true);
-      reply({ thread: threads[params.threadId] });
+      reply({ thread: { ...threads[params.threadId], path: `/fixture-provider/${params.threadId}` } });
+    } else if (method === "fs/readFile") {
+      const thread = threads[path.basename(params.path)];
+      assert.ok(thread);
+      reply({ dataBase64: Buffer.from(JSON.stringify(thread)).toString("base64") });
+    } else if (method === "thread/fork") {
+      const imported = JSON.parse(readFileSync(params.path, "utf8"));
+      const threadId = `imported-${++sequence}-${Date.now()}`;
+      threads[threadId] = { ...imported, id: threadId, cwd: params.cwd };
+      persist();
+      reply({ thread: threads[threadId] });
+    } else if (method === "thread/archive") {
+      threads[params.threadId].archived = true;
+      persist();
+      reply({});
     } else {
       send({ id, error: { code: -32601, message: "Fixture method not found" } });
     }

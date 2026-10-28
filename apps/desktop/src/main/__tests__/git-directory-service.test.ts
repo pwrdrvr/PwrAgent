@@ -862,6 +862,50 @@ describe("GitDirectoryService", () => {
     expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).not.toBe(featureRevision);
   });
 
+  it("bases a worktree on the default branch, not the source's feature branch, when asked", async () => {
+    // A to-do raised on a thread whose worktree sat on an unpublished feature
+    // branch started its new-worktree thread on that branch: the child showed
+    // the parent's five commits as its own unpublished work.
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const mainRevision = runGit(repoDir, ["rev-parse", "main"]);
+    const sourceWorktree = path.join(
+      await mkdtemp(path.join(os.tmpdir(), "pwragent-source-feature-worktree-")),
+      "fixture",
+    );
+    cleanupPaths.push(path.dirname(sourceWorktree));
+    runGit(repoDir, ["worktree", "add", "-b", "feat/parent-work", sourceWorktree, "main"]);
+    execFileSync(
+      "git",
+      ["-C", sourceWorktree, "commit", "--allow-empty", "-m", "Parent feature work"],
+      { stdio: "ignore" },
+    );
+    const featureRevision = runGit(sourceWorktree, ["rev-parse", "HEAD"]);
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+    const launchpad = {
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: sourceWorktree,
+      workMode: "worktree",
+    } as const;
+
+    const fromDefault = await service.prepareLaunchpadWorkspace({
+      ...launchpad,
+      worktreeBase: "default_branch",
+    });
+    // Without the option a launchpad still starts from the source's branch.
+    const fromCurrent = await service.prepareLaunchpadWorkspace(launchpad);
+
+    expect(fromDefault.workMode).toBe("worktree");
+    expect(runGit(fromDefault.cwd!, ["branch", "--show-current"])).toBe("");
+    expect(runGit(fromDefault.cwd!, ["rev-parse", "HEAD"])).toBe(mainRevision);
+    expect(fromCurrent.workMode).toBe("worktree");
+    expect(runGit(fromCurrent.cwd!, ["rev-parse", "HEAD"])).toBe(featureRevision);
+    expect(runGit(sourceWorktree, ["branch", "--show-current"])).toBe("feat/parent-work");
+  });
+
   it("creates an attached branch worktree and reuses it for the same branch", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);

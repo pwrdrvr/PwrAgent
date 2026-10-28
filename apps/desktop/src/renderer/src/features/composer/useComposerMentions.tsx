@@ -634,12 +634,12 @@ export function useComposerMentions(params: {
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setActiveIndex(Math.min(activeOption + 1, optionCount - 1));
+      setActiveIndex((activeOption + 1) % optionCount);
       return true;
     }
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      setActiveIndex(Math.max(activeOption - 1, 0));
+      setActiveIndex((activeOption - 1 + optionCount) % optionCount);
       return true;
     }
     if (event.key === "Escape") {

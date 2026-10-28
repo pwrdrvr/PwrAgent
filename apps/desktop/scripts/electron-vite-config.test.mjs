@@ -13,10 +13,8 @@ const packageJson = JSON.parse(
   await readFile(resolve(desktopRoot, "package.json"), "utf8"),
 );
 const dependencies = Object.keys(packageJson.dependencies);
-const workspaceMessagingPackages = dependencies.filter(
-  (name) =>
-    name === "@pwragent/messaging-interface"
-    || name.startsWith("@pwragent/messaging-provider-"),
+const workspacePackages = dependencies.filter(
+  (name) => packageJson.dependencies[name].startsWith("workspace:"),
 );
 
 afterEach(() => vi.unstubAllEnvs());
@@ -52,13 +50,12 @@ describe("electron-vite dependency policy", () => {
     },
   );
 
-  it("bundles ws and every workspace messaging package in main", async () => {
+  it("bundles ws and every workspace source package in main", async () => {
     const config = await loadDesktopConfig("build");
     const excluded = config.main.build.externalizeDeps.exclude;
 
     expect(excluded).toEqual(expect.arrayContaining([
-      "@pwragent/shared",
-      ...workspaceMessagingPackages,
+      ...workspacePackages,
       "ws",
     ]));
   });

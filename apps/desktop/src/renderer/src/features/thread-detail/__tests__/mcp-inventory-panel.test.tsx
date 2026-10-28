@@ -65,6 +65,34 @@ describe("McpInventoryPanel", () => {
     });
   });
 
+  it("names Claude's own MCPs and offers no Codex reload", async () => {
+    const listThreadMcpServers = vi.fn(async () => ({
+      backend: "claude" as const,
+      threadId: "thread-1",
+      detail: "toolsAndAuthOnly" as const,
+      servers: [{ name: "acme-docs", authStatus: "unsupported" as const, tools: ["search_docs"] }],
+    }));
+
+    render(
+      <McpInventoryPanel
+        desktopApi={{ listThreadMcpServers, reloadCodexMcpConfig: vi.fn() }}
+        onDismiss={vi.fn()}
+        request={{ detail: "toolsAndAuthOnly", requestId: 1 }}
+        thread={{ ...thread, source: "claude" }}
+      />,
+    );
+
+    expect(await screen.findByRole("complementary", {
+      name: "Claude MCPs · 1 server · 1 tool",
+    })).toHaveTextContent("Gateway connections are under PwrAgent MCPs.");
+    expect(screen.queryByRole("button", { name: "Reload Config" })).not.toBeInTheDocument();
+    expect(listThreadMcpServers).toHaveBeenCalledWith({
+      backend: "claude",
+      threadId: "thread-1",
+      detail: "toolsAndAuthOnly",
+    });
+  });
+
   it("shows an unknown authentication status without hiding the inventory", async () => {
     render(
       <McpInventoryPanel
@@ -181,7 +209,7 @@ describe("McpInventoryPanel", () => {
     );
 
     const panel = await screen.findByRole("complementary", {
-      name: "MCP Tools · 1 server · 10 tools",
+      name: "Codex MCPs · 1 server · 10 tools",
     });
     expect(panel).toHaveTextContent("tool-8");
     expect(panel).not.toHaveTextContent("tool-9");

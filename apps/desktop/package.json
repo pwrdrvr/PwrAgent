@@ -7,7 +7,7 @@
   "homepage": "https://pwragent.ai",
   "author": "PwrDrvr LLC",
   "license": "MIT",
-  "copyright": "Copyright © 2026 PwrDrvr LLC.",
+  "copyright": "Copyright \u00a9 2026 PwrDrvr LLC.",
   "type": "module",
   "main": "out/main/index.js",
   "scripts": {
@@ -118,7 +118,8 @@
     "sigstore": "5.0.0",
     "tar": "^7.5.22",
     "unist-util-visit": "5.1.0",
-    "ws": "8.22.0"
+    "ws": "8.22.0",
+    "@pwragent/agent-tools": "workspace:*"
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "1.9.0",
