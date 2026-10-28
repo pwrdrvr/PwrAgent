@@ -206,6 +206,65 @@ async function flushReactUpdates(): Promise<void> {
 }
 
 describe("useThreadSessionState", () => {
+  it.each(["partial_answer", "partial", undefined] as const)(
+    "retains live %s output through continued tool work until the turn completes",
+    async (phase) => {
+      let emit: (event: AgentEvent) => void = () => undefined;
+      const desktopApi: DesktopApi = {
+        onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+        readThread: vi.fn().mockResolvedValue(readThreadResponse({
+          entries: [], hasPreviousPage: false,
+        })),
+      };
+      const { result } = renderHook(() => useThreadSessionState({
+        desktopApi, thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      }));
+      await waitForThreadHydration(result);
+      act(() => emit({ backend: "codex", notification: {
+        method: "turn/started",
+        params: { threadId: "thread-1", turn: { id: "turn-1", status: "in_progress" } },
+      } }));
+      act(() => emit({ backend: "codex", notification: {
+        method: "item/completed",
+        params: { threadId: "thread-1", turnId: "turn-1", item: {
+          id: "partial", type: "agentMessage", phase, text: "Initial result.",
+        } },
+      } }));
+      const partialEntry = result.current.entries.find((entry) => entry.id === "partial");
+      if (phase) {
+        expect(partialEntry).toMatchObject({ type: "message", phase: "partial" });
+      } else {
+        expect(partialEntry).not.toHaveProperty("phase");
+      }
+      expect(result.current.activeTurnId).toBe("turn-1");
+      expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+      act(() => emit({ backend: "codex", notification: {
+        method: "item/started",
+        params: { threadId: "thread-1", turnId: "turn-1", item: {
+          id: "tool", type: "commandExecution", command: "pwd", status: "inProgress",
+        } },
+      } }));
+      expect(result.current.entries.some((entry) => entry.type === "activity")).toBe(true);
+      expect(result.current.activeTurnId).toBe("turn-1");
+      act(() => emit({ backend: "codex", notification: {
+        method: "item/completed",
+        params: { threadId: "thread-1", turnId: "turn-1", item: {
+          id: "final", type: "agentMessage", phase: "final_answer", text: "Complete result.",
+        } },
+      } }));
+      expect(result.current.activeTurnId).toBe("turn-1");
+      act(() => emit({ backend: "codex", notification: {
+        method: "turn/completed",
+        params: { threadId: "thread-1", turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] } },
+      } }));
+      expect(result.current.activeTurnId).toBeUndefined();
+      expect(result.current.entries.filter((entry) =>
+        entry.type === "message" && entry.phase === "final",
+      )).toEqual([expect.objectContaining({ id: "final", text: "Complete result." })]);
+    },
+  );
+
   it("hydrates the Claude context moon without treating occupancy as billed tokens", async () => {
     const response = readThreadResponse({ entries: [], hasPreviousPage: false });
     const desktopApi: DesktopApi = {

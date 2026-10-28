@@ -17295,6 +17295,112 @@ describe("MessagingController", () => {
     expect(binding).not.toHaveProperty("activeTurn");
   });
 
+  it.each(["show_none", "show_all"] as const)(
+    "routes partial answers through %s without buffering them into the final answer stream",
+    async (toolUpdateDefaultMode) => {
+      let now = 1_000;
+      const harness = await createHarness({
+        streamingResponsesDefault: true,
+        toolUpdateDefaultMode,
+        now: () => now,
+      });
+      await bindThread(harness);
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "turn/started",
+        params: { threadId: "thread-1", turn: { id: "turn-1", status: "in_progress" } },
+      } });
+      harness.delivered.length = 0;
+      for (const delta of ["Initial ", "result."]) {
+        now += 1_000; // Exceed stream coalescing so an accidental answer stream is visible.
+        await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+          method: "item/agentMessage/delta",
+          params: { threadId: "thread-1", turnId: "turn-1", itemId: "partial",
+            phase: "partial", delta },
+        } });
+      }
+      expect(harness.delivered).toEqual([]);
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "item/completed",
+        params: { threadId: "thread-1", turnId: "turn-1", item: {
+          id: "partial", type: "agentMessage", phase: "partial", text: "Initial result.",
+        } },
+      } });
+      const prose = harness.delivered.filter((intent) => intent.kind === "message");
+      if (toolUpdateDefaultMode === "show_all") {
+        expect(prose).toContainEqual(expect.objectContaining({
+          parts: [expect.objectContaining({ text: "Initial result." })],
+        }));
+      } else {
+        expect(prose).toEqual([]);
+      }
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "item/started",
+        params: { threadId: "thread-1", turnId: "turn-1", item: {
+          id: "tool", type: "commandExecution", command: "pwd", status: "inProgress",
+        } },
+      } });
+      expect(harness.delivered.filter((intent) => intent.kind === "stream_update")).toEqual([]);
+      harness.delivered.length = 0;
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "item/agentMessage/delta",
+        params: { threadId: "thread-1", turnId: "turn-1", itemId: "final",
+          phase: "final", delta: "Complete result." },
+      } });
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "item/completed",
+        params: { threadId: "thread-1", turnId: "turn-1", item: {
+          id: "final", type: "agentMessage", phase: "final", text: "Complete result.",
+        } },
+      } });
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "turn/completed",
+        params: { threadId: "thread-1", turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] } },
+      } });
+      expect(harness.delivered.filter((intent) => intent.kind === "stream_update")).toEqual([
+        expect.objectContaining({
+          text: "Complete result.",
+          stream: expect.objectContaining({ isFinal: true, itemId: "final" }),
+        }),
+      ]);
+      expect(JSON.stringify(harness.delivered)).not.toContain("Initial result.");
+    },
+  );
+
+  it.each(["partial", undefined] as const)(
+    "does not flush a partial answer as a final reply after tool work (delta phase: %s)",
+    async (phase) => {
+      const harness = await createHarness({ streamingResponsesDefault: true, toolUpdateDefaultMode: "show_none" });
+      await bindThread(harness);
+      harness.delivered.length = 0;
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "item/agentMessage/delta",
+        params: { threadId: "thread-1", turnId: "turn-1", itemId: "partial",
+          phase, delta: "Initial result." },
+      } });
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "item/completed",
+        params: { threadId: "thread-1", turnId: "turn-1", item: {
+          id: "partial", type: "agentMessage", phase: "partial", text: "Initial result.",
+        } },
+      } });
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "item/started",
+        params: { threadId: "thread-1", turnId: "turn-1", item: {
+          id: "tool", type: "commandExecution", command: "pwd", status: "inProgress",
+        } },
+      } });
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "turn/completed",
+        params: { threadId: "thread-1", turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] } },
+      } });
+      expect(harness.delivered.filter((intent) =>
+        intent.kind === "stream_update" || intent.kind === "message",
+      )).toEqual([]);
+    },
+  );
+
   it("coalesces assistant stream deltas with backoff and flushes the final turn text", async () => {
     let now = 1000;
     const recordPlatformResponseActivity = vi.fn();

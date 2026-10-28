@@ -1623,6 +1623,48 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it("carries partial-answer phases from item start to phase-less deltas until turn completion", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient();
+    const notifications: AppServerNotification[] = [];
+    client.onNotification((notification) => { notifications.push(notification); });
+    try {
+      await client.readRateLimits();
+      const transport = MockTransport.instances.at(-1)!;
+      const ids = { threadId: "phase-thread", turnId: "phase-turn" };
+      transport.emitInbound({ method: "item/started", params: {
+        ...ids, item: { id: "partial", type: "agentMessage", phase: "partial_answer", text: "" },
+      } });
+      transport.emitInbound({ method: "item/agentMessage/delta", params: {
+        ...ids, itemId: "partial", delta: "Initial result.",
+      } });
+      transport.emitInbound({ method: "item/completed", params: {
+        ...ids, item: { id: "partial", type: "agentMessage", phase: "partial_answer", text: "Initial result." },
+      } });
+      transport.emitInbound({ method: "item/started", params: {
+        ...ids, item: { id: "final", type: "agentMessage", phase: "final_answer", text: "" },
+      } });
+      transport.emitInbound({ method: "item/agentMessage/delta", params: {
+        ...ids, itemId: "final", delta: "Complete result.",
+      } });
+      transport.emitInbound({ method: "turn/completed", params: {
+        ...ids, turn: { id: ids.turnId, status: "completed", items: [] },
+      } });
+      // Reusing fixture IDs after the boundary must retain legacy unknown phase.
+      transport.emitInbound({ method: "item/agentMessage/delta", params: {
+        ...ids, itemId: "partial", delta: "Older unphased output.",
+      } });
+      await vi.waitFor(() => expect(notifications).toHaveLength(7));
+      expect(notifications[0]).toMatchObject({ params: { item: { phase: "partial" } } });
+      expect(notifications[2]).toMatchObject({ params: { item: { phase: "partial" } } });
+      expect(notifications.filter((event) => event.method === "item/agentMessage/delta")
+        .map((event) => (event.params as { phase?: string }).phase))
+        .toEqual(["partial", "final", undefined]);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("reports a Codex thread/reverted as a provider-neutral rewind", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient();
@@ -5488,6 +5530,48 @@ describe("CodexAppServerClient", () => {
 
     await client.close();
   });
+
+  it.each(["final", "tool", "legacy"] as const)(
+    "preserves replay partial answers before %s output without assigning a terminal timestamp",
+    async (following) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const nextItem = following === "tool"
+        ? { id: "tool", type: "commandExecution", command: "pwd", status: "inProgress" }
+        : { id: "next", type: "agentMessage", text: "Next result.",
+            ...(following === "final" ? { phase: "final_answer" } : {}) };
+      MockTransport.readThreadResultByThreadId.set("phase-replay", { thread: { turns: [{
+        id: "phase-turn",
+        status: following === "tool" ? "inProgress" : "completed",
+        startedAt: 1_763_500_100,
+        ...(following === "tool" ? {} : { completedAt: 1_763_500_200 }),
+        items: [
+          { id: "partial", type: "agentMessage", phase: "partial_answer", text: "Initial result." },
+          nextItem,
+          { id: "unknown", type: "agentMessage", phase: "future_phase", text: "Unknown phase." },
+        ],
+      }] } });
+      const client = new CodexAppServerClient({ directoryResolver: async () => [] });
+      try {
+        const replay = await client.readThread({ threadId: "phase-replay" });
+        expect(replay.entries[0]).toMatchObject({
+          id: "partial", type: "message", phase: "partial", text: "Initial result.",
+        });
+        expect(replay.entries[0].createdAt).toBeUndefined();
+        expect(replay.entries[0].turn?.status).toBe(following === "tool" ? "in_progress" : "completed");
+        const next = replay.entries.find((entry) => entry.id === "next");
+        if (following === "final") {
+          expect(next).toMatchObject({ phase: "final", createdAt: 1_763_500_200_000 });
+        } else if (following === "legacy") {
+          expect(next).not.toHaveProperty("phase");
+        } else {
+          expect(replay.entries.some((entry) => entry.type === "activity")).toBe(true);
+        }
+        expect(replay.entries.find((entry) => entry.id === "unknown")).not.toHaveProperty("phase");
+      } finally {
+        await client.close();
+      }
+    },
+  );
 
   it("extracts transcript messages and pagination metadata from thread/read", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");

@@ -3190,6 +3190,9 @@ function normalizeLiveAssistantMessagePhase(
   if (value === "commentary") {
     return "commentary";
   }
+  if (value === "partial" || value === "partial_answer") {
+    return "partial";
+  }
   if (value === "final" || value === "final_answer") {
     return "final";
   }
@@ -4632,7 +4635,7 @@ function hasCompletedAssistantMessageForTurn(
     (entry) =>
       entry.type === "message" &&
       entry.role === "assistant" &&
-      entry.phase !== "commentary" &&
+      (!entry.phase || entry.phase === "final") &&
       entry.turn?.id === turnId &&
       normalizeTranscriptText(entry.text) === normalizedText
   );
