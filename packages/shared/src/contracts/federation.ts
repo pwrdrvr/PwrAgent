@@ -130,6 +130,12 @@ export const FEDERATION_EVENT_CLASSES = [
   "star_map",
   /** Threadless; carries only `navigation/directorySet/changed`. */
   "directory_set",
+  /**
+   * Threadless; carries only `THREAD_TODO_FEED_ACKNOWLEDGED_METHOD`. A relay
+   * that does not know the class drops it, so the acknowledgement proves
+   * every hop relays `thread/todos/delta`.
+   */
+  "todo_feed",
 ] as const;
 
 export type FederationEventClass =

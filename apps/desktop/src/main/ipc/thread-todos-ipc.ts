@@ -94,6 +94,7 @@ export function registerThreadTodoIpcHandlers(options: {
     local: { snapshot: () => localThreadTodoOperations.snapshotFeed() },
     remote: {
       supportsFeed: (target) => runtime.remotePeerSupportsTodoFeed(target),
+      watchFeeds: (targets) => runtime.setTodoFeedWatches(targets.map((target) => target.instanceId)),
       snapshot: (target) => runtime.requestThreadTodoOperation(target, "snapshotFeed", {}),
       list: (target, request) => runtime.requestThreadTodoOperation(target, "listTodos", request),
     },

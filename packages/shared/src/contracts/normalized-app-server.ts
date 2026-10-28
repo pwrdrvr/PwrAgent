@@ -1908,6 +1908,8 @@ export type AppServerNotification =
   | { method: "thread/operatorRequests/changed" | "thread/operatorRequestDetails/changed"; params: import("./operator-requests").OperatorRequestsChangedEvent }
   | { method: "thread/todos/changed" | "thread/todoDetails/changed"; params: import("./thread-todos").ThreadTodosChangedEvent }
   | { method: "thread/todos/delta"; params: import("./thread-todos").ThreadTodoFeedDelta }
+  /** See `THREAD_TODO_FEED_ACKNOWLEDGED_METHOD`. */
+  | { method: "thread/todos/feedAcknowledged"; params: { reason: "subscribed" } }
   | {
       method: "thread/dependencies/updated";
       params: { threadId: string; dependencyId: string };

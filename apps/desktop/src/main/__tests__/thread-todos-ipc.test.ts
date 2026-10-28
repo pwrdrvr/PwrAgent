@@ -23,6 +23,7 @@ const fixture = vi.hoisted(() => {
     localResolve: vi.fn(),
     localSnapshot: vi.fn(async (): Promise<ThreadTodoFeedSnapshot> => ({ epoch: "local", revision: 0, todos: [] })),
     supportsFeed: vi.fn(() => false),
+    watchFeeds: vi.fn(),
     publishDelta: vi.fn(),
     feedDelta: undefined as ((delta: ThreadTodoFeedDelta) => void) | undefined,
     remote: vi.fn(async (_target: unknown, operation: string) => operation === "listTodos" ? { todos: [card] } : { todo: card }),
@@ -42,6 +43,7 @@ vi.mock("electron", () => ({ ipcMain: {
 vi.mock("../federation/federation-runtime", () => ({ getDesktopFederationRuntime: () => ({
   requestThreadTodoOperation: fixture.remote, publishThreadTodosChanged: fixture.publish,
   publishThreadTodoDelta: fixture.publishDelta, remotePeerSupportsTodoFeed: fixture.supportsFeed,
+  setTodoFeedWatches: fixture.watchFeeds,
   onPeerStatusChanged: (listener: () => void) => { fixture.peerStatusListener = listener; return () => {}; },
   onRemoteBackendEvent: (listener: (event: AgentEvent) => void) => { fixture.remoteListener = listener; return () => {}; },
 }) }));
@@ -158,6 +160,8 @@ describe("owner-routed To-do IPC", () => {
     const remote = await fixture.handlers.get(THREAD_TODOS_SNAPSHOT_CHANNEL)!({ sender: fixture.windows[1] }) as ThreadTodoFeedSnapshot;
     expect(fixture.remote).toHaveBeenCalledWith(fixture.target, "listTodos", { status: "open" });
     expect(remote.todos.map((todo) => todo.id)).toEqual(["remote-todo:owner:card"]);
+    // A relayed owner's feed is followed once it acknowledges this watch.
+    expect(fixture.watchFeeds).toHaveBeenLastCalledWith(["owner"]);
     const delta: ThreadTodoFeedDelta = { epoch: "local", revision: 1, backend: "codex", threadId: "thread", upserts: [card] };
     fixture.feedDelta!(delta);
     expect(fixture.publishDelta).toHaveBeenCalledWith(delta);
