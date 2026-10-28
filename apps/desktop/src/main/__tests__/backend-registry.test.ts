@@ -39112,7 +39112,7 @@ command = "pnpm dev"
     { parentMode: "auto", requestedMode: undefined, expectedMode: "default" },
     { parentMode: "full-access", requestedMode: undefined, expectedMode: "full-access" },
     { parentMode: "auto", requestedMode: "default", expectedMode: "default" },
-    { parentMode: "auto", requestedMode: "full-access", expectedMode: "full-access" },
+    { parentMode: "full-access", requestedMode: "full-access", expectedMode: "full-access" },
     { parentMode: "auto", requestedMode: "auto", expectedMode: undefined },
   ] as const)("resolves ACP handoff access from $parentMode with override $requestedMode", async ({ parentMode, requestedMode, expectedMode }) => {
     const parentDirectory = {
@@ -48502,6 +48502,7 @@ script = "printf setup"
       {
         backend: "codex",
         threadId: "agent-thread",
+        turnId: "turn-1",
       },
     );
 
@@ -49776,6 +49777,7 @@ script = "printf setup"
       {
         backend: "codex",
         threadId: "agent-thread",
+        turnId: "turn-1",
       },
     );
 
@@ -49854,6 +49856,7 @@ script = "printf setup"
       {
         backend: "codex",
         threadId: "agent-thread",
+        turnId: "turn-1",
       },
     );
     expect(response).toMatchObject({ success: true });
