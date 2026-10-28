@@ -723,10 +723,16 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repository
+        id: checkout
         uses: actions/checkout@v7
         timeout-minutes: 10
         with:
           lfs: true
+
+      - name: Report Git LFS checkout failure
+        if: failure() && steps.checkout.outcome == 'failure'
+        timeout-minutes: 1
+        run: git lfs logs last
 
       - name: Materialize Git LFS assets
         # These jobs reuse persistent runner workspaces. A previous checkout
