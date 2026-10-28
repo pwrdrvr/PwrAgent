@@ -1599,7 +1599,11 @@ test.describe("federation remote window", () => {
         preferredBackend: "acp:kimi",
       }));
       await prompt.fill("Start on a provider the peer has");
-      await remote.getByRole("button", { name: "Start thread" }).click();
+      // Over this machine's Kimi Code the peer could not start the thread,
+      // and send stayed disabled.
+      const startThread = remote.getByRole("button", { name: "Start thread" });
+      await expect(startThread).toBeEnabled();
+      await startThread.click();
       await expect.poll(startedBackends, { timeout: 30_000 }).toEqual(["codex"]);
 
       // A sub-thread asks for its parent's Kimi Code and gets OpenAI too.
@@ -1613,7 +1617,9 @@ test.describe("federation remote window", () => {
         expect.objectContaining({ preferredBackend: "acp:kimi" }),
       );
       await prompt.fill("Start the child on a provider the peer has");
-      await remote.getByRole("button", { name: "Start sub-thread" }).click();
+      const startChild = remote.getByRole("button", { name: "Start sub-thread" });
+      await expect(startChild).toBeEnabled();
+      await startChild.click();
       await expect
         .poll(startedBackends, { timeout: 30_000 })
         .toEqual(["codex", "codex"]);
