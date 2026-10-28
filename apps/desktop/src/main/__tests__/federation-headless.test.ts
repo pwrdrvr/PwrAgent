@@ -18,8 +18,13 @@ describe.skipIf(process.platform === "win32")("desktop client against the standa
     const repo = process.cwd();
     const packageRoot = path.join(repo, "packages/pwragent");
     execFileSync(process.execPath, [path.join(packageRoot, "scripts/build.mjs")], { cwd: repo, stdio: "pipe" });
-    mkdirSync(path.join(repo, ".local"), { recursive: true });
-    const root = mkdtempSync(path.join(repo, ".local/h"));
+    // The outpost listens on $PWRAGENT_HOME/profiles/t/state/headless/rpc.sock
+    // and refuses a socket path over 100 bytes (the Unix sun_path limit). A
+    // root inside the checkout makes that depend on where the checkout lives,
+    // and Sandboxer's ~/pwragent/wt/<sha> worktrees overflow it. /tmp keeps
+    // the path short everywhere; os.tmpdir() does not on macOS, where it
+    // resolves to a long /private/var/folders/... path.
+    const root = mkdtempSync("/tmp/pwragent-h-");
     const workspace = path.join(root, "w");
     const home = path.join(root, "c");
     const data = path.join(root, "f");
