@@ -53,6 +53,8 @@ export type NavigationQueryIndex = {
   directories: NavigationDirectorySummary[];
   threads: NavigationThreadSummary[];
   inputRequestThreadKeys?: ReadonlySet<string>;
+  /** The observation clock value taken when this index's listing began. */
+  observedAt?: number;
 };
 
 function hashValue(value: unknown): string {
