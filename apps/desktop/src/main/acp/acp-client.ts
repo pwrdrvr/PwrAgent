@@ -134,9 +134,17 @@ export function acpSafeMcpServerName(name: string): string {
 function toAcpMcpServerWireConfigs(
   servers: readonly AcpMcpServerConfig[],
 ): ReturnType<typeof normalizeAcpMcpServerConfigs> {
+  // Two names can rewrite to the same string (`a:b` and `a.b`). An agent
+  // keeps one server per name, so give a rewritten name a numeric suffix
+  // rather than let it hide another server's tools.
+  const taken = new Set(servers.map((server) => server.name));
   return normalizeAcpMcpServerConfigs(servers.map((server) => {
-    const name = acpSafeMcpServerName(server.name);
-    return name === server.name ? server : { ...server, name };
+    const safe = acpSafeMcpServerName(server.name);
+    if (safe === server.name) return server;
+    let name = safe;
+    for (let suffix = 2; taken.has(name); suffix += 1) name = `${safe}_${suffix}`;
+    taken.add(name);
+    return { ...server, name };
   }));
 }
 

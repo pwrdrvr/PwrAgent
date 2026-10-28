@@ -143,6 +143,29 @@ describe("ACP MCP request serialization", () => {
     // The bridge keeps its connection ID everywhere else.
     expect(sandboxer.name).toBe("builtin:sandboxer");
   });
+
+  it("keeps rewritten server names unique within a session", async () => {
+    const db = openInMemoryStateDb();
+    cleanup.push(() => db.close());
+    const store = new AcpSessionStore(db);
+    const { transport, requests } = validatingTransport();
+    cleanup.push(() => transport.close?.());
+    const client = new AcpAgentClient({
+      backendId: "acp:grok", store, transport,
+      mcpServers: () => ({
+        servers: [
+          { name: "_a_b", command: "node" },
+          { name: "a:b", command: "node" },
+          { name: "a.b", command: "node" },
+        ],
+      }),
+    });
+    await client.initialize();
+    await client.startSession({ sessionId: "local-session", cwd: "/repo", executionMode: "default" });
+    const request = requests.find((request) => request.method === "session/new")!;
+    const servers = request.params?.mcpServers as Array<Record<string, unknown>>;
+    expect(servers.map((server) => server.name)).toEqual(["_a_b", "_a_b_2", "_a_b_3"]);
+  });
 });
 
 describe("acpSafeMcpServerName", () => {
