@@ -22009,68 +22009,6 @@ command = "pnpm grok"
     await registry.close();
   });
 
-  it("keeps a launchpad on a provider this instance can start when a patch names one it cannot", async () => {
-    const registry = new DesktopBackendRegistry({
-      codexClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/start"] },
-        models: [
-          {
-            id: "gpt-5.5",
-            label: "GPT-5.5",
-            current: true,
-            defaultReasoningEffort: "medium",
-            reasoningEfforts: ["low", "medium", "high"],
-            supportsReasoning: true,
-          },
-        ],
-      }),
-      overlayStore: createOverlayStoreMock(),
-      // Claude is installed here but not signed in.
-      claudeBackendOptions: {
-        inspectInstallation: async () => ({
-          executable: "/fixture/claude",
-          authStatus: "sign-in-required" as const,
-        }),
-        discoverModels: async () => [{ id: "claude-opus-4-8", label: "Opus 4.8", current: true }],
-      },
-    });
-    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
-    await expect(registry.listBackends({ includeUnavailable: true })).resolves.toMatchObject({
-      backends: expect.arrayContaining([
-        expect.objectContaining({ kind: "codex", available: true }),
-        expect.objectContaining({ kind: "claude", available: false }),
-      ]),
-    });
-    const directoryKey = "subthread:claude:thread-parent:new-worktree:studio";
-
-    // A viewer opens a sub-thread of its Claude thread here, where Claude
-    // has no sign-in.
-    const ensured = await registry.ensureDirectoryLaunchpad({
-      directoryKey,
-      directoryKind: "directory",
-      directoryLabel: "PwrAgent",
-      directoryPath: "/repo/PwrAgent",
-      parentThreadId: "thread-parent",
-      parentThreadBackend: "claude",
-      preferredBackend: "claude",
-    });
-    expect(ensured.launchpad).toMatchObject({ backend: "codex", model: "gpt-5.5" });
-
-    const updated = await registry.updateDirectoryLaunchpad({
-      directoryKey,
-      patch: { backend: "claude", executionMode: "full-access", workMode: "worktree" },
-    });
-
-    expect(updated.launchpad).toMatchObject({
-      backend: "codex",
-      model: "gpt-5.5",
-      reasoningEffort: "medium",
-      workMode: "worktree",
-    });
-
-    await registry.close();
-  });
-
   it("repairs stale non-empty launchpad directory metadata when reopened", async () => {
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({

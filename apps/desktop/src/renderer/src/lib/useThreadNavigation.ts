@@ -6336,18 +6336,17 @@ export function useThreadNavigation(
         };
         let defaults: NavigationLaunchpadDefaults = response.defaults;
         // The child inherits the parent's provider and access only where it
-        // can run. The owner resolved `defaults` from `preferredBackend`
-        // against its own providers, so a peer without the parent's
-        // provider answers with its own. Its ensured draft then stands,
-        // with that provider's model, instead of a provider it cannot start.
-        const inheritParentProvider = response.defaults.backend === parent.source;
+        // can run. An owner that cannot start the parent's provider (a peer
+        // without its sign-in) names its own instead, and the draft takes
+        // that provider with its own model and access.
+        const ownerFallbackBackend = response.preferredBackendFallback;
         const patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"] = {
-          ...(inheritParentProvider
-            ? {
+          ...(ownerFallbackBackend
+            ? { backend: ownerFallbackBackend }
+            : {
                 backend: parent.source,
                 executionMode: parent.executionMode ?? response.launchpad.executionMode,
-              }
-            : {}),
+              }),
           workMode: directory.workMode,
           directoryLabel: directory.directoryLabel,
           directoryPath: launchpadDirectoryPath,

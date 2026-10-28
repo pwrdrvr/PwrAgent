@@ -9481,28 +9481,23 @@ describe("useThreadNavigation", () => {
         { id: "scratch", label: "Research", path: "/scratch/research", kind: "local" },
       ], inbox: { inInbox: true },
     };
-    const localDefaults = { backend: "claude" as const, executionMode: "auto" as const, model: "opus" };
-    // The peer has no Claude sign-in, so it resolves the parent's provider to
-    // its own Codex default.
-    const peerDefaults = {
-      backend: "codex" as const, executionMode: "auto" as const, model: "gpt-5.5", reasoningEffort: "medium",
-    };
-    const ensureDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["ensureDirectoryLaunchpad"]>>(async (request) => {
-      const defaults = request.federationTarget ? peerDefaults : localDefaults;
-      return {
-        launchpad: { ...request, ...defaults, prompt: "", workMode: "local", createdAt: 1, updatedAt: 1 },
-        defaults,
-      };
-    });
+    // This machine stores the draft, even for a peer, and it can run Claude.
+    const defaults = { backend: "claude" as const, executionMode: "auto" as const, model: "opus" };
+    const ensureDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["ensureDirectoryLaunchpad"]>>(async (request) => ({
+      launchpad: { ...request, ...defaults, prompt: "", workMode: "local", createdAt: 1, updatedAt: 1 },
+      defaults,
+      // The peer has no Claude sign-in and would start the thread on Codex.
+      ...(request.federationTarget ? { preferredBackendFallback: "codex" as const } : {}),
+    }));
     const updateDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>(async (request) => {
-      const defaults = request.directoryKey.endsWith(":studio") ? peerDefaults : localDefaults;
-      const backend = request.patch.backend ?? defaults.backend;
+      const switched = request.patch.backend !== undefined && request.patch.backend !== defaults.backend;
       return {
         launchpad: {
           ...defaults, prompt: "", workMode: "local", createdAt: 1, updatedAt: 2,
           directoryKey: request.directoryKey, directoryKind: "workspace", directoryLabel: "New Workspace",
           ...request.patch,
-          ...(backend === defaults.backend ? {} : { model: undefined, reasoningEffort: undefined }),
+          // A provider switch drops the other provider's model.
+          ...(switched ? { model: undefined } : {}),
         },
         defaults,
       };
@@ -9510,7 +9505,7 @@ describe("useThreadNavigation", () => {
     const api: DesktopApi = {
       ...actionDetailApi(parent), ensureDirectoryLaunchpad, updateDirectoryLaunchpad,
       readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false,
-        inboxThreadKeys: ["claude:claude-parent"], threads: [parent], directories: [], launchpadDefaults: localDefaults }),
+        inboxThreadKeys: ["claude:claude-parent"], threads: [parent], directories: [], launchpadDefaults: defaults }),
       onAgentEvent: () => () => undefined,
     };
     const { result } = renderHook(() => useThreadNavigation(api, { localFederationInstanceId: "harbor" }));
@@ -9524,13 +9519,13 @@ describe("useThreadNavigation", () => {
       federationTarget: { scope: "remote", instanceId: "studio" }, preferredBackend: "claude",
     }));
     const peerPatch = updateDirectoryLaunchpad.mock.calls.at(-1)?.[0].patch;
-    expect(peerPatch).not.toHaveProperty("backend");
+    expect(peerPatch).toMatchObject({ backend: "codex" });
     expect(peerPatch).not.toHaveProperty("executionMode");
     expect(result.current.selectedLaunchpad).toMatchObject({
       directoryKey: "subthread:claude:claude-parent:new-workspace:studio",
-      backend: "codex", model: "gpt-5.5", reasoningEffort: "medium", executionMode: "auto",
-      parentThreadBackend: "claude", parentThreadInstanceId: "harbor",
+      backend: "codex", parentThreadBackend: "claude", parentThreadInstanceId: "harbor",
     });
+    expect(result.current.selectedLaunchpad?.model).toBeUndefined();
 
     // Where the parent's provider runs, the child still inherits it and the
     // parent's access.

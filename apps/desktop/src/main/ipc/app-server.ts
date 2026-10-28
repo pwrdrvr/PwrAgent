@@ -598,6 +598,21 @@ function rejectNonUserDirectoryKey(directoryKey: string): void {
 }
 
 /**
+ * `preferredBackendFallback` for an ensure response, given the provider the
+ * thread's owner resolved its defaults to. Ensure resolves `preferredBackend`
+ * to itself whenever the owner can start it, so any other answer is the
+ * owner's fallback.
+ */
+function preferredBackendFallback(
+  preferredBackend: AppServerBackendKind | undefined,
+  ownerBackend: AppServerBackendKind | undefined,
+): Pick<EnsureDirectoryLaunchpadResponse, "preferredBackendFallback"> {
+  return preferredBackend && ownerBackend && ownerBackend !== preferredBackend
+    ? { preferredBackendFallback: ownerBackend }
+    : {};
+}
+
+/**
  * Classify combined reference-picker paths as files or directories via
  * `fs.stat`. Unreadable paths (and exotic kinds like sockets) are
  * skipped — the renderer only knows how to route these two kinds.
@@ -7954,6 +7969,12 @@ class DesktopAppServerService {
           branchName,
         },
         gitStatus: ownerGitStatus,
+        // The owner resolved its defaults from `preferredBackend` against its
+        // own providers; the local draft above used this instance's.
+        ...preferredBackendFallback(
+          request.preferredBackend,
+          ownerResponse?.defaults.backend,
+        ),
       };
     }
 
@@ -7966,6 +7987,7 @@ class DesktopAppServerService {
       ...(refreshed.gitStatus !== undefined
         ? { gitStatus: refreshed.gitStatus }
         : {}),
+      ...preferredBackendFallback(request.preferredBackend, response.defaults.backend),
     };
   }
 
