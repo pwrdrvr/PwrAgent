@@ -43,12 +43,19 @@ type FakeRegistry = OperatorRequestRegistry & {
   pending: Array<{ backend: AppServerBackendKind; notification: AppServerPendingRequestNotification }>;
   emit: (event: AgentEvent) => void;
   listenerCount: () => number;
+  titles: Map<string, string>;
+  getThreadInfo: (identity: { backend: AppServerBackendKind; threadId: string }) => { title: string } | undefined;
 };
 
 function createRegistry(): FakeRegistry {
   const listeners = new Set<(event: AgentEvent) => void | Promise<void>>();
   const registry: FakeRegistry = {
     pending: [],
+    titles: new Map(),
+    getThreadInfo: ({ backend, threadId }) => {
+      const title = registry.titles.get(`${backend}:${threadId}`);
+      return title ? { title } : undefined;
+    },
     listPendingServerRequests: () => registry.pending,
     onEvent: (listener) => {
       listeners.add(listener);
@@ -144,6 +151,33 @@ function createService(existing?: StateDb) {
 }
 
 describe("OperatorRequestService", () => {
+  it("names requests from owner metadata without a loaded navigation row", () => {
+    const { registry, service } = createService();
+    registry.titles.set("codex:thread-a", "Warm CI dependencies");
+    registry.pending.push({ backend: "codex", notification: approval("thread-a", "req-1") });
+    registry.emit(askedEvent("thread-a", "question-1"));
+    service.start();
+    registry.emit(askedEvent("thread-a", "question-1"));
+
+    expect(service.list().serverRequests[0]).toHaveProperty("threadTitle", "Warm CI dependencies");
+    expect(service.list().questions[0]).toHaveProperty("threadTitle", "Warm CI dependencies");
+  });
+
+  it("refreshes a pending request when its title arrives or changes", () => {
+    const { broadcasts, registry, service } = createService();
+    registry.pending.push({ backend: "codex", notification: approval("thread-a", "req-1") });
+    service.start();
+    broadcasts.length = 0;
+    for (const title of ["Warm CI dependencies", "Fix CI install hangs"]) {
+      registry.titles.set("codex:thread-a", title);
+      registry.emit(event({ method: "thread/name/updated", params: { threadId: "thread-a", threadName: title } }));
+      expect(broadcasts.pop()).toEqual({ reason: "requests", backend: "codex", threadId: "thread-a" });
+      expect(service.list().serverRequests[0]).toHaveProperty("threadTitle", title);
+    }
+    registry.emit(event({ method: "thread/name/updated", params: { threadId: "unrelated", threadName: "Other" } }));
+    expect(broadcasts).toEqual([]);
+  });
+
   it("lists pending server requests with the time each was first seen", () => {
     const { broadcasts, registry, service, setNow } = createService();
     service.start();
