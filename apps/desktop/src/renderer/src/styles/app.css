@@ -14870,13 +14870,21 @@ a.button {
   overflow-wrap: anywhere;
 }
 
-/* Stays muted on the cursor row: it is the supporting clause, not the name
-   being picked. Matches `.composer-dropdown__option-description`. */
+/* The supporting clause, not the name being picked, so it never takes the
+   accent. Matches `.composer-dropdown__option-description`. */
 .select-option__description {
   min-width: 0;
   color: var(--text-muted);
   font-size: 11.5px;
   overflow-wrap: anywhere;
+}
+
+/* The cursor row lays the accent tint under the description, and
+   `--text-muted` on it falls to 4.37:1 in Tangerine. It stays neutral
+   metadata, one step up the text ladder: the label already carries the
+   row's one accent. */
+.select-option.is-active .select-option__description {
+  color: var(--text-secondary);
 }
 
 /* A group heading (`SelectOption.group`): the eyebrow type the Settings
@@ -41768,15 +41776,23 @@ button.composer__subthread-source-parent:hover {
   color: var(--text-muted);
 }
 
-/* A choice whose name does not explain it gets one line that does. Stays
-   muted through hover and selection: it is the supporting clause, not the
-   name being picked. */
+/* A choice whose name does not explain it gets one line that does. It is
+   the supporting clause, not the name being picked, so it never takes the
+   accent. */
 .composer-dropdown__option-description {
   min-width: 0;
   color: var(--text-muted);
   font-size: 11.5px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+/* A highlighted option lays the accent tint under the description, and
+   `--text-muted` on it falls to 4.37:1 in Tangerine. It goes one step up
+   the text ladder instead, as `.select-option__description` does. */
+.composer-dropdown__option:hover:not([aria-disabled="true"]) .composer-dropdown__option-description,
+.composer-dropdown__option:focus-visible:not([aria-disabled="true"]) .composer-dropdown__option-description {
+  color: var(--text-secondary);
 }
 
 .composer-dropdown--branch .composer-dropdown__menu {
@@ -44700,13 +44716,20 @@ button.composer__subthread-source-parent:hover {
   gap: 2px;
 }
 
-/* The supporting clause stays muted through hover, like
+/* The supporting clause never takes the accent. On a highlighted item it
+   goes one step up the text ladder, because `--text-muted` on the accent
+   tint falls to 4.37:1 in Tangerine. Like
    .composer-dropdown__option-description. */
 .composer__schedule-menu-item-description {
   color: var(--text-muted);
   font-size: 11.5px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.composer__schedule-menu-item:hover:not([aria-disabled="true"]) .composer__schedule-menu-item-description,
+.composer__schedule-menu-item:focus-visible:not([aria-disabled="true"]) .composer__schedule-menu-item-description {
+  color: var(--text-secondary);
 }
 
 /* Same chip as .thread-context-menu__shortcut. */
@@ -48677,6 +48700,16 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .messaging-surface-picker__list .project-picker__row:hover .messaging-surface-picker__glyph,
 .messaging-surface-picker__list .project-picker__row:hover .messaging-surface-picker__seen {
   color: var(--accent-bright);
+}
+
+/* The context is metadata, like the ID beside it, so on a highlighted row
+   it lifts to `--text-secondary` with the ID (`.project-picker__row-path`)
+   rather than taking the accent: `--text-muted` on the accent tint falls
+   to 4.37:1 in Tangerine. */
+.messaging-surface-picker__list .project-picker__row:hover:not(:disabled) .messaging-surface-picker__context,
+.messaging-surface-picker__list .project-picker__row:focus-visible:not(:disabled) .messaging-surface-picker__context,
+.messaging-surface-picker__list .project-picker__row.is-cursor .messaging-surface-picker__context {
+  color: var(--text-secondary);
 }
 
 /* Usage Activity reads top to bottom: the account's limits beside the
