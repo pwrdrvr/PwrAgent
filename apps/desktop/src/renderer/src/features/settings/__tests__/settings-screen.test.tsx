@@ -116,6 +116,10 @@ function createSnapshot(
         value: true,
         source: "default",
       },
+      blockAgentMessagesToHigherAccess: {
+        value: true,
+        source: "default",
+      },
       mcpGatewayEnabled: {
         value: true,
         source: "default",
@@ -593,6 +597,48 @@ describe("SettingsScreen agent forge tools", () => {
     await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ git: { agentTools: { access: { pull_requests: "ask" } } } }));
     fireEvent.click(within(section).getByRole("switch", { name: /Offer forge tools to threads/ }));
     await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ git: { agentTools: { enabled: false } } }));
+  });
+});
+
+describe("SettingsScreen agent message access", () => {
+  it("shows the block on by default beside the access defaults and saves the opt-out", async () => {
+    const settings = createSettingsState();
+    render(<SettingsScreen initialSection="models" settings={settings} onClose={() => undefined} />);
+    const section = screen.getByRole("heading", { name: "Agent messages" }).closest("section")!;
+    const toggle = within(section).getByRole("switch", {
+      name: /Block agent messages to threads with higher access/,
+    });
+    expect(toggle).toBeChecked();
+    expect(section).toHaveTextContent("Messages you type are never blocked.");
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    expect(settings.writeConfig).toHaveBeenCalledWith({
+      general: { blockAgentMessagesToHigherAccess: false },
+    });
+  });
+
+  it("shows a saved opt-out as off and turns the block back on", async () => {
+    const base = createSnapshot();
+    const settings = createSettingsState(createSnapshot({
+      general: {
+        ...base.general,
+        blockAgentMessagesToHigherAccess: { value: false, source: "config" },
+      },
+    }));
+    render(<SettingsScreen initialSection="models" settings={settings} onClose={() => undefined} />);
+    const section = screen.getByRole("heading", { name: "Agent messages" }).closest("section")!;
+    const toggle = within(section).getByRole("switch", {
+      name: /Block agent messages to threads with higher access/,
+    });
+    expect(toggle).not.toBeChecked();
+    expect(section).toHaveTextContent("Agents can message any thread.");
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    expect(settings.writeConfig).toHaveBeenCalledWith({
+      general: { blockAgentMessagesToHigherAccess: true },
+    });
   });
 });
 

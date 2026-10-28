@@ -20,6 +20,7 @@ import type {
   DesktopProviderThreadModelMigration,
   DesktopSettingsSecretName,
   DesktopSettingsSnapshot,
+  DesktopSettingsValue,
   DesktopTaskMonitorModelChoice,
   DesktopUpdateChannel,
   ThreadExecutionMode,
@@ -179,6 +180,8 @@ export function ModelsSettings(props: {
   ) => Promise<unknown>;
   onSaveUsageAccountGroups?: (groups: Record<string, string>) => Promise<unknown>;
   onSaveCodexFastAllowed: (allowed: boolean) => Promise<boolean>;
+  /** Persist `general.block_agent_messages_to_higher_access`. */
+  onBlockAgentMessagesToHigherAccessChange?: (block: boolean) => Promise<unknown>;
   /** Persist Settings → Codex → Model providers. */
   onSaveCodexModelProviders?: (providers: CodexModelProviderSettings[]) => Promise<boolean>;
   /** Persist Defaults → Decisions and the decision provider screens. */
@@ -836,6 +839,14 @@ export function ModelsSettings(props: {
         onSaveMigrations={props.onSaveProviderThreadMigrations}
         onSaveCodexFastAllowed={props.onSaveCodexFastAllowed}
       />
+
+      {props.onBlockAgentMessagesToHigherAccessChange ? (
+        <AgentMessageAccessSettings
+          block={props.snapshot.general.blockAgentMessagesToHigherAccess}
+          saving={props.saving}
+          onChange={props.onBlockAgentMessagesToHigherAccessChange}
+        />
+      ) : null}
 
       <HelperModelSettings
         backends={backends}
@@ -1804,6 +1815,43 @@ function withoutModel(
   return defaults?.executionMode
     ? { reasoningEffortsByModel: {}, executionMode: defaults.executionMode }
     : undefined;
+}
+
+/**
+ * Whether an agent may message a thread with more access than its own. The
+ * target's agent would act on the message with that access, so a Default
+ * Access thread could get Full Access work done. It sits beside the access
+ * defaults because both decide how much access a thread's work gets.
+ */
+function AgentMessageAccessSettings(props: {
+  block: DesktopSettingsValue<boolean>;
+  saving: boolean;
+  onChange: (block: boolean) => Promise<unknown>;
+}) {
+  return (
+    <SettingsSection
+      eyebrow="Access"
+      title="Agent messages"
+      sectionId="agent-message-access"
+      chip={sourceBadge(props.block)}
+    >
+      <div className="settings-fields">
+        <ToggleField
+          checked={props.block.value}
+          disabled={props.saving}
+          label="Block agent messages to threads with higher access"
+          sub="Every provider in this profile."
+          help={
+            props.block.value
+              ? "An agent cannot send or steer a message into a thread that runs with more access than its own, such as Default Access to Full Access. It is told to raise a to-do card instead. Messages you type are never blocked."
+              : "Agents can message any thread. The receiving thread acts on the message with its own access, even when that is more than the sender has."
+          }
+          source={sourceBadge(props.block)}
+          onChange={props.onChange}
+        />
+      </div>
+    </SettingsSection>
+  );
 }
 
 const ACCESS_DEFAULT_MODES: readonly ThreadExecutionMode[] = [

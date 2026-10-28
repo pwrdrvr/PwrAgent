@@ -3183,6 +3183,35 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("blocks agent messages to higher-access threads by default and persists the opt-out", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettingsProjection()).general.blockAgentMessagesToHigherAccess).toEqual({
+      value: true,
+      source: "default",
+    });
+    expect(service.resolveBlockAgentMessagesToHigherAccess()).toBe(true);
+
+    await service.writeConfigPatchTargeted({
+      general: {
+        blockAgentMessagesToHigherAccess: false,
+      },
+    });
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain("block_agent_messages_to_higher_access = false");
+    expect((await service.readSettingsProjection()).general.blockAgentMessagesToHigherAccess).toEqual({
+      value: false,
+      source: "config",
+    });
+    expect(service.resolveBlockAgentMessagesToHigherAccess()).toBe(false);
+  });
+
   it("defaults both interactive SVG preferences off and persists overrides", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
