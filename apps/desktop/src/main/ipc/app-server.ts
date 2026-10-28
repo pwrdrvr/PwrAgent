@@ -149,6 +149,8 @@ import {
   type NavigationQueueProjectionRequest,
   type NavigationLaunchpadConfigRequest,
   type NavigationLaunchpadConfigResponse,
+  type NavigationLaunchpadDraft,
+  type BackendSummary,
   type NavigationSelectedDetailRequest,
   type NavigationSelectedDetailResponse,
   type NavigationSnapshot,
@@ -266,6 +268,7 @@ import {
   normalizePullRequestProvider as normalizeSharedPullRequestProvider,
   parseThreadIdentityKey,
   rankInboxThreadKeys,
+  resolveNewThreadBackend,
 } from "@pwragent/shared";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { readWorktreeImage } from "../app-server/worktree-image-reader";
@@ -610,6 +613,69 @@ function preferredBackendFallback(
   return preferredBackend && ownerBackend && ownerBackend !== preferredBackend
     ? { preferredBackendFallback: ownerBackend }
     : {};
+}
+
+/**
+ * The viewer's draft for a thread another instance runs, switched to a
+ * provider that instance can start.
+ *
+ * The viewer stores the draft and resolves its provider against its own
+ * providers: its sticky default, the request's `preferredBackend`, or what
+ * the draft already held. That can name one the owner lacks, such as this
+ * instance's Claude on a peer without a Claude sign-in, and the thread could
+ * not start. The owner resolves `preferredBackend` to itself whenever it can
+ * start it, so its `defaults.backend` answers the question when the owner was
+ * asked about the draft's provider. Otherwise the owner's provider list does,
+ * by the rule the owner itself applies, without a second ensure there.
+ *
+ * A provider the owner can start stays. So does a draft whose settings the
+ * operator picked (`settingsTouchedAt`): that choice is theirs to change.
+ */
+async function resolveRemoteLaunchpadBackend(params: {
+  localResponse: EnsureDirectoryLaunchpadResponse;
+  ownerResponse: EnsureDirectoryLaunchpadResponse;
+  preferredBackend: AppServerBackendKind | undefined;
+  listOwnerBackends: () => Promise<BackendSummary[]>;
+  /** Switches the stored draft only while it still holds `from`, untouched. */
+  switchDraftBackend: (
+    from: AppServerBackendKind,
+    to: AppServerBackendKind,
+  ) => Promise<NavigationLaunchpadDraft>;
+}): Promise<EnsureDirectoryLaunchpadResponse> {
+  const { localResponse, ownerResponse } = params;
+  const draftBackend = localResponse.launchpad.backend;
+  if (
+    localResponse.launchpad.settingsTouchedAt !== undefined
+    || ownerResponse.defaults.backend === draftBackend
+  ) {
+    return localResponse;
+  }
+  let ownerBackend: AppServerBackendKind | undefined =
+    ownerResponse.defaults.backend;
+  if (params.preferredBackend !== draftBackend) {
+    try {
+      // Undefined while the owner can start nothing (discovery still
+      // running): keep the draft rather than guess.
+      ownerBackend = resolveNewThreadBackend(
+        await params.listOwnerBackends(),
+        draftBackend,
+      )?.kind;
+    } catch (error) {
+      // The draft is already stored; keep it rather than fail the open.
+      appServerLog.warn("remote_launchpad_backend_check_failed", {
+        backend: draftBackend,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return localResponse;
+    }
+  }
+  if (!ownerBackend || ownerBackend === draftBackend) {
+    return localResponse;
+  }
+  return {
+    ...localResponse,
+    launchpad: await params.switchDraftBackend(draftBackend, ownerBackend),
+  };
 }
 
 /**
@@ -7949,14 +8015,37 @@ class DesktopAppServerService {
           skipMcpConnectionDefaults: true,
         },
       );
+      const resolvedLocalResponse = ownerResponse
+        ? await resolveRemoteLaunchpadBackend({
+            localResponse,
+            ownerResponse,
+            preferredBackend: request.preferredBackend,
+            listOwnerBackends: async () =>
+              (await federationRuntime
+                .remoteBackend(federationTarget)
+                .listBackends({ includeUnavailable: true })).backends,
+            switchDraftBackend: async (from, to) =>
+              (await registry.updateDirectoryLaunchpad(
+                { directoryKey: request.directoryKey, patch: { backend: to } },
+                {
+                  skipFilesystemInspection: true,
+                  // The owner was asked over the wire; an operator pick made
+                  // meanwhile, here or in another window, is theirs.
+                  onlyIf: (current) =>
+                    current.backend === from
+                    && current.settingsTouchedAt === undefined,
+                },
+              )).launchpad,
+          })
+        : localResponse;
       const branchName = reconcileRemoteLaunchpadBranch(
-        localResponse.launchpad.branchName,
+        resolvedLocalResponse.launchpad.branchName,
         ownerGitStatus,
       );
       return {
-        ...localResponse,
+        ...resolvedLocalResponse,
         launchpad: {
-          ...localResponse.launchpad,
+          ...resolvedLocalResponse.launchpad,
           federationTarget,
           directoryKind:
             ownerResponse?.launchpad.directoryKind ?? request.directoryKind,

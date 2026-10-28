@@ -112,6 +112,7 @@ const federationMock = vi.hoisted(() => {
     refreshDirectoryGitStatuses: vi.fn(async () => ({ scheduledCount: 1 })),
     refreshThreadGitWorkingState: vi.fn(async () => ({ scheduled: true })),
     ensureDirectoryLaunchpad: vi.fn(),
+    listBackends: vi.fn(),
     listRecentFileReferences: vi.fn(async () => ({
       files: [] as Array<{ label: string; path: string }>,
     })),
@@ -1388,6 +1389,7 @@ describe("app server ipc", () => {
     federationMock.remoteBackend.refreshThreadPullRequests.mockClear();
     federationMock.remoteBackend.refreshDirectoryGitStatuses.mockClear();
     federationMock.remoteBackend.ensureDirectoryLaunchpad.mockReset();
+    federationMock.remoteBackend.listBackends.mockReset();
     federationMock.remoteBackend.listRecentFileReferences.mockReset();
     federationMock.remoteBackend.recordRecentFileReferences.mockReset();
     federationMock.remoteBackend.attachDirectoryToThread.mockReset();
@@ -10789,23 +10791,170 @@ describe("app server ipc", () => {
     const ensure = handlers.get(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL)!;
 
     // The owner has no Claude sign-in. This viewer, which stores the draft,
-    // does, so its own defaults cannot say so.
+    // does, so its own defaults cannot say so. The stored draft switches to
+    // the owner's provider; the owner was already asked about Claude.
     federationMock.remoteBackend.ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("codex"));
     ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("claude"));
     await expect(ensure({}, request)).resolves.toMatchObject({
-      launchpad: { backend: "claude" },
+      launchpad: { backend: "codex" },
       preferredBackendFallback: "codex",
     });
+    expect(federationMock.remoteBackend.ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
+    expect(federationMock.remoteBackend.listBackends).not.toHaveBeenCalled();
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith(
+      { directoryKey: request.directoryKey, patch: { backend: "codex" } },
+      expect.objectContaining({ skipFilesystemInspection: true }),
+    );
 
+    updateDirectoryLaunchpad.mockClear();
     federationMock.remoteBackend.ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("claude"));
     ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("claude"));
-    await expect(ensure({}, request)).resolves.not.toHaveProperty("preferredBackendFallback");
+    const kept = await ensure({}, request);
+    expect(kept).not.toHaveProperty("preferredBackendFallback");
+    expect(kept).toMatchObject({ launchpad: { backend: "claude" } });
+    expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
 
     // A local draft answers from this instance's own providers.
     ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("codex"));
     await expect(ensure({}, { ...request, federationTarget: undefined })).resolves.toMatchObject({
       preferredBackendFallback: "codex",
     });
+  });
+
+  it("resolves a remote draft's provider against the owner's providers", async () => {
+    const { NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "owner_one" };
+    const directoryKey = "workspace:/Users/fixture/.pwragent/projects";
+    const draft = (
+      backend: "claude" | "codex",
+      extra: { settingsTouchedAt?: number } = {},
+    ) => ({
+      launchpad: {
+        directoryKey,
+        directoryKind: "workspace",
+        directoryLabel: "Workspaces",
+        directoryPath: "/Users/fixture/.pwragent/projects",
+        backend,
+        executionMode: "auto",
+        prompt: "",
+        branchName: undefined,
+        createdAt: 100,
+        updatedAt: 100,
+        ...extra,
+      },
+      defaults: { backend, executionMode: "auto" },
+    });
+    const backend = (kind: "claude" | "codex", available = true) => ({
+      kind,
+      label: kind,
+      available,
+      capabilities: { createThread: true },
+      executionModes: [{ mode: "default", label: "Default", available: true }],
+    });
+    // A new top-level draft names no provider: each side takes its own
+    // sticky default, Claude on this viewer and Codex on the owner.
+    const request = {
+      federationTarget,
+      directoryKey,
+      directoryKind: "workspace",
+      directoryLabel: "Workspaces",
+      directoryPath: "/Users/fixture/.pwragent/projects",
+    };
+    const ownerEnsure = federationMock.remoteBackend.ensureDirectoryLaunchpad;
+    const ownerBackends = federationMock.remoteBackend.listBackends;
+    registerAppServerIpcHandlers();
+    const ensure = handlers.get(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL)!;
+
+    // The owner's default says nothing about Claude, so its provider list
+    // is read, not a second ensure. Without a Claude sign-in it has Codex.
+    ownerEnsure.mockResolvedValueOnce(draft("codex"));
+    ownerBackends.mockResolvedValueOnce({
+      fetchedAt: 1,
+      backends: [backend("codex"), backend("claude", false)],
+    });
+    ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("claude"));
+    const switched = await ensure({}, request);
+    expect(ownerEnsure).toHaveBeenCalledTimes(1);
+    expect(ownerBackends).toHaveBeenCalledWith({ includeUnavailable: true });
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith(
+      { directoryKey, patch: { backend: "codex" } },
+      expect.objectContaining({ skipFilesystemInspection: true }),
+    );
+    expect(switched).toMatchObject({
+      launchpad: { backend: "codex", federationTarget },
+    });
+    // Nothing was preferred, so nothing fell back from a preference.
+    expect(switched).not.toHaveProperty("preferredBackendFallback");
+    // The switch waits for no operator pick made while the owner answered.
+    const onlyIf = (updateDirectoryLaunchpad.mock.calls[0] as unknown as [
+      unknown,
+      { onlyIf: (current: object) => boolean },
+    ])[1].onlyIf;
+    expect(onlyIf(draft("claude").launchpad)).toBe(true);
+    expect(onlyIf(draft("codex").launchpad)).toBe(false);
+    expect(onlyIf(draft("claude", { settingsTouchedAt: 60 }).launchpad)).toBe(false);
+
+    // An owner that can start Claude keeps it, whatever its own default.
+    ownerEnsure.mockReset();
+    ownerBackends.mockReset();
+    updateDirectoryLaunchpad.mockClear();
+    ownerEnsure.mockResolvedValueOnce(draft("codex"));
+    ownerBackends.mockResolvedValueOnce({
+      fetchedAt: 1,
+      backends: [backend("codex"), backend("claude")],
+    });
+    ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("claude"));
+    await expect(ensure({}, request)).resolves.toMatchObject({
+      launchpad: { backend: "claude" },
+    });
+    expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
+
+    // An owner that can start nothing yet (discovery still running) is
+    // no reason to replace the draft's provider.
+    ownerEnsure.mockReset();
+    ownerBackends.mockReset();
+    ownerEnsure.mockResolvedValueOnce(draft("codex"));
+    ownerBackends.mockResolvedValueOnce({
+      fetchedAt: 1,
+      backends: [backend("codex", false), backend("claude", false)],
+    });
+    ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("claude"));
+    await expect(ensure({}, request)).resolves.toMatchObject({
+      launchpad: { backend: "claude" },
+    });
+    expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
+
+    // A provider the owner already resolved to needs no second question.
+    ownerEnsure.mockReset();
+    ownerBackends.mockReset();
+    ownerEnsure.mockResolvedValueOnce(draft("codex"));
+    ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("codex"));
+    await ensure({}, request);
+    expect(ownerBackends).not.toHaveBeenCalled();
+    expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
+
+    // Settings the operator picked in this draft are theirs to change.
+    ownerEnsure.mockReset();
+    ownerEnsure.mockResolvedValueOnce(draft("codex"));
+    ensureDirectoryLaunchpad.mockResolvedValueOnce(
+      draft("claude", { settingsTouchedAt: 50 }),
+    );
+    await expect(ensure({}, request)).resolves.toMatchObject({
+      launchpad: { backend: "claude" },
+    });
+    expect(ownerBackends).not.toHaveBeenCalled();
+    expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
+
+    // If the owner cannot be asked, the stored draft still opens.
+    ownerEnsure.mockReset();
+    ownerBackends.mockReset();
+    ownerEnsure.mockResolvedValueOnce(draft("codex"));
+    ownerBackends.mockRejectedValueOnce(new Error("peer went away"));
+    ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("claude"));
+    await expect(ensure({}, request)).resolves.toMatchObject({
+      launchpad: { backend: "claude" },
+    });
+    expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
   });
 
   it("falls back to owner snapshot metadata when the peer lacks launchpad metadata RPC support", async () => {
