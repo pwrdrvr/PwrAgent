@@ -1370,6 +1370,13 @@
     "rowsChanged": 100,
     "statements": 100
   },
+  "usage-activity-turn-lifecycle": {
+    "commits": 2,
+    "note": "One real pending turn insert and authoritative completion: two existing commits, existing thread-index lookup, no persistent interval maintenance; measured 70,040 bytes (~7.0 MB/day at 100 turns/day)",
+    "observedWalBytes": 70040,
+    "rowsChanged": 4,
+    "statements": 4
+  },
   "usage-activity-within-minute": {
     "commits": 100,
     "note": "100 existing live-row commits within ten seconds: 412,000 bytes WAL, no additional activity-index writes",

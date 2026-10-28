@@ -154,7 +154,7 @@ describe("Usage Activity read budgets", () => {
           turnId: "fixture-turn", completedAt: start + 1000 })).toBe(true);
       });
       expectSqliteWriteBudget({ scenario: "usage-activity-turn-lifecycle", writes,
-        note: "One real pending turn insert and authoritative completion: two existing commits, existing thread-index lookup, no persistent interval maintenance; measured 86,520 bytes (~8.7 MB/day at 100 turns/day)" });
+        note: "One real pending turn insert and authoritative completion: two existing commits, existing thread-index lookup, no persistent interval maintenance; measured 70,040 bytes (~7.0 MB/day at 100 turns/day)" });
       expect((await store.readUsageActivity(window)).rows[0].line)
         .toMatchObject({ status: "pending", createdAt: start, completedAt: start + 1000 });
     } finally { db.close(); removeTempStateDbDir(temp.tempDir); }
