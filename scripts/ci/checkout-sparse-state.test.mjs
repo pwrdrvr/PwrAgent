@@ -30,6 +30,8 @@ test.each([
       git("config", "user.name", "Fixture");
       git("config", "user.email", "fixture@example.invalid");
       git("config", "commit.gpgsign", "false");
+      git("config", "core.autocrlf", "false");
+      git("config", "core.eol", "lf");
       writeFileSync(path.join(directory, "package.json"), "{}");
       const script = path.join(directory, "scripts/ci/macos-e2e-pre-run-cleanup.sh");
       mkdirSync(path.dirname(script), { recursive: true });
