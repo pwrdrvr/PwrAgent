@@ -314,6 +314,18 @@ describe("backend forge tool dispatch", () => {
       expect(input).not.toHaveProperty("action");
     });
 
+    it("leaves the to-do when the turn fails while the card waits", async () => {
+      const prompt = nextApproval();
+      const pending = internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests" }, "call-pr-failed"));
+      await prompt;
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: { method: "turn/failed", params: { threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "failed", error: { message: "Connection lost" } } } },
+      });
+      await pending;
+      await vi.waitFor(() => expect(addTodo).toHaveBeenCalledTimes(1));
+    });
+
     it("leaves no to-do when the operator stopped the turn", async () => {
       const prompt = nextApproval();
       const pending = internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests" }, "call-pr-stopped"));

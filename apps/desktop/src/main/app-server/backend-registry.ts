@@ -51,6 +51,7 @@ import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
 import { createProviderRuntimeClient } from "../codex-app-server/provider-runtime-client";
 import { bonsaiNativeMcpOverrides, prepareBonsaiRuntime } from "../codex-app-server/bonsai-runtime";
 import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-structured-generation";
+import type { PendingThreadApprovalSummary } from "@pwragent/shared";
 import { USAGE_ANALYSIS_MODEL_BACKENDS, type ReadUsageActivityRequest, type ReadUsageActivityResponse, type AnalyzeUsageActivityRequest, type AnalyzeUsageActivityResponse, type UsageLimitObservation } from "@pwragent/shared";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import {
@@ -9798,8 +9799,8 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     threadId: string,
     includeMessages: boolean,
-  ): Array<{ method: string; serverName?: string; message?: string }> {
-    const approvals: Array<{ method: string; serverName?: string; message?: string }> = [];
+  ): PendingThreadApprovalSummary[] {
+    const approvals: PendingThreadApprovalSummary[] = [];
     for (const pending of this.pendingServerRequests.values()) {
       const request = pending.notification;
       if (pending.backend !== backend || request.params.threadId !== threadId) continue;
