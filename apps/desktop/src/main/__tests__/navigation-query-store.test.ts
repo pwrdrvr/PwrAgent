@@ -198,6 +198,77 @@ describe("NavigationQueryStore", () => {
     expect(next.entries.map(({ row, attentionRank }) => [row.id, attentionRank])).toEqual([["thread-1", 1]]);
   });
 
+  it("does not let an older listing undo a newer one when reads for one Attention view overlap", async () => {
+    const store = new NavigationQueryStore();
+    const view = { id: "window", promoteOnTurnEnd: true };
+    const rows = (status: "active" | "idle", updatedAt: number) => [
+      { ...thread("thread-1"), threadStatus: status, inbox: { inInbox: true }, updatedAt },
+      { ...thread("thread-2"), threadStatus: "idle" as const, inbox: { inInbox: true }, updatedAt: 2 },
+    ];
+    const attention = request({ query: { kind: "lens", lens: "attention" }, attentionView: view });
+    // The main window sends one Attention view with every query it demands.
+    const recents = request({ query: { kind: "lens", lens: "recents" }, attentionView: view });
+    await store.readPage({ scopeKey: "viewer", request: attention,
+      loadIndex: async () => ({ ...snapshot(rows("active", 1)), observedAt: 1 }) });
+    let resolveOlder!: (value: NavigationSnapshot & { observedAt: number }) => void;
+    const older = store.readPage({ scopeKey: "viewer", request: attention,
+      loadIndex: () => new Promise((resolve) => { resolveOlder = resolve; }) });
+    // A later listing sees the turn end and moves the thread once, for review.
+    const newer = await store.readPage({ scopeKey: "viewer", request: recents,
+      loadIndex: async () => ({ ...snapshot(rows("idle", 5)), observedAt: 3 }) });
+    expect(newer.counts.active).toBe(0);
+    resolveOlder({ ...snapshot(rows("active", 1)), observedAt: 2 });
+    const olderPage = await older;
+    expect(olderPage.entries.map(({ row, attentionRank }) => [row.id, attentionRank])).toEqual([["thread-1", 3], ["thread-2", 2]]);
+    const next = await store.readPage({ scopeKey: "viewer", request: attention,
+      loadIndex: async () => ({ ...snapshot(rows("idle", 5)), observedAt: 4 }) });
+    // The older listing neither restarted the turn nor caused another move.
+    expect(next.entries.map(({ row, attentionRank }) => [row.id, attentionRank])).toEqual([["thread-1", 3], ["thread-2", 2]]);
+    expect(next.counts.active).toBe(0);
+  });
+
+  it("does not let a listing that began before a boundary undo it when the read starts after the boundary", async () => {
+    const store = new NavigationQueryStore();
+    const threads = [1, 2].map((id) => ({ ...thread(`thread-${id}`), threadStatus: "idle" as const, inbox: { inInbox: true },
+      updatedAt: id }));
+    const view = request({ query: { kind: "lens", lens: "attention" }, attentionView: { id: "window", promoteOnTurnEnd: true } });
+    await store.readPage({ scopeKey: "viewer", request: view, loadIndex: async () => snapshot(threads) });
+    store.observeAttentionEvent({ backend: "codex",
+      notification: { method: "navigation/thread/seen", params: { threadId: "thread-2" } } } as AgentEvent);
+    // The index pool learns of the boundary after the store does, so this read
+    // can still be served a scan that began before the seen mark.
+    const page = await store.readPage({ scopeKey: "viewer", request: view,
+      loadIndex: async () => ({ ...snapshot(threads), observedAt: 0 }) });
+    expect(page.entries.map(({ row, attentionRank }) => [row.id, attentionRank])).toEqual([["thread-1", 1], ["thread-2", undefined]]);
+    const seen = [threads[0]!, { ...threads[1]!, inbox: { inInbox: false } }];
+    const next = await store.readPage({ scopeKey: "viewer", request: view, loadIndex: async () => snapshot(seen) });
+    expect(next.entries.map(({ row, attentionRank }) => [row.id, attentionRank])).toEqual([["thread-1", 1]]);
+  });
+
+  it("keeps a thread archived during an owner read out of Attention under incomplete coverage", async () => {
+    const store = new NavigationQueryStore();
+    const threads = [1, 2].map((id) => ({ ...thread(`thread-${id}`), threadStatus: "idle" as const, inbox: { inInbox: true },
+      updatedAt: id }));
+    const checking = (rows: NavigationThreadSummary[]) => ({ ...snapshot(rows), coverage: { state: "checking" as const } });
+    const view = request({ query: { kind: "lens", lens: "attention" }, attentionView: { id: "window", promoteOnTurnEnd: true } });
+    await store.readPage({ scopeKey: "viewer", request: view, loadIndex: async () => checking(threads) });
+    const overtaken = await store.readPage({ scopeKey: "viewer", request: view, loadIndex: async () => {
+      store.observeAttentionEvent({ backend: "codex",
+        notification: { method: "thread/archived", params: { threadId: "thread-2" } } } as AgentEvent);
+      return checking(threads);
+    } });
+    // The older listing still shows the thread, but cannot rank it again.
+    expect(overtaken.entries.map(({ row, attentionRank }) => [row.id, attentionRank])).toEqual([["thread-1", 1], ["thread-2", undefined]]);
+    // A partial listing that omits the thread proves nothing about it, and
+    // must not keep its old member alive either.
+    const partial = await store.readPage({ scopeKey: "viewer", request: view, loadIndex: async () => checking([threads[0]!]) });
+    expect(partial.entries.map(({ row, attentionRank }) => [row.id, attentionRank])).toEqual([["thread-1", 1]]);
+    // Unarchived later, it returns as a new member at the top, not at its old rank.
+    const restored = await store.readPage({ scopeKey: "viewer", request: view, loadIndex: async () => checking(threads) });
+    expect(restored.entries.map(({ row }) => row.id)).toEqual(["thread-2", "thread-1"]);
+    expect(restored.entries[0]!.attentionRank).toBeGreaterThan(2);
+  });
+
   it("admits remote event ranks only for the exact viewer-owned mounted identity", async () => {
     const store = new NavigationQueryStore();
     const local = thread("same-id");
