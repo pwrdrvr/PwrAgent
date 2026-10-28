@@ -1857,13 +1857,26 @@ function findUniqueTranscriptOrderSource(
     return exactMatch;
   }
 
+  // A row matched by content alone must come from the same turn. The same
+  // command or reply in another turn is a different row, and taking its time
+  // or place moves this row into that turn.
   return findOnlyTranscriptMatch(
     logicalTranscriptMatchCandidates(entry, logicalSourceIndex),
     (source) =>
       typeof source.createdAt === "number" &&
       source.id !== entry.id &&
+      sameTurnOrUnknown(entry, source) &&
       transcriptEntriesMatch(entry, source),
   );
+}
+
+function sameTurnOrUnknown(
+  entry: AppServerThreadEntry,
+  source: AppServerThreadEntry,
+): boolean {
+  const entryTurnId = entry.turn?.id;
+  const sourceTurnId = source.turn?.id;
+  return !entryTurnId || !sourceTurnId || entryTurnId === sourceTurnId;
 }
 
 type HydratedEntryOrderMatch = {
@@ -1915,30 +1928,53 @@ function reorderHydratedEntriesByKnownOrder(
     return entries;
   }
 
-  const sourceOrderAlreadyMatches = matchedEntries.every(
-    (entry, index) =>
-      index === 0
-      || matchedEntries[index - 1]!.sourceIndex <= entry.sourceIndex
-  );
-  if (sourceOrderAlreadyMatches) {
+  // The read is the authority on which turn comes first. The live ledger can
+  // only refine the order inside one turn: after a compaction drops the
+  // loaded response, it can hold a later turn's rows ahead of earlier turns'
+  // unpruned live rows, and a refill across turns then moves whole turns.
+  const matchesByTurn = new Map<string | undefined, MatchedHydratedEntry[]>();
+  for (const entry of matchedEntries) {
+    const turnId = entry.entry.turn?.id;
+    const turnMatches = matchesByTurn.get(turnId);
+    if (turnMatches) {
+      turnMatches.push(entry);
+    } else {
+      matchesByTurn.set(turnId, [entry]);
+    }
+  }
+  let changed = false;
+  for (const turnMatches of matchesByTurn.values()) {
+    const sourceOrderAlreadyMatches = turnMatches.every(
+      (entry, index) =>
+        index === 0
+        || turnMatches[index - 1]!.sourceIndex <= entry.sourceIndex
+    );
+    if (!sourceOrderAlreadyMatches) {
+      changed = true;
+      turnMatches.sort(
+        (left, right) =>
+          left.sourceIndex - right.sourceIndex
+          || left.hydrationIndex - right.hydrationIndex
+      );
+    }
+  }
+  if (!changed) {
     return entries;
   }
 
   // Do not invent positions for newly hydrated entries. Refill only the slots
-  // for entries the live ledger can identify, preserving their observed order.
-  const orderedMatches = [...matchedEntries].sort(
-    (left, right) =>
-      left.sourceIndex - right.sourceIndex || left.hydrationIndex - right.hydrationIndex
-  );
-  let orderedMatchIndex = 0;
+  // for entries the live ledger can identify, each from its own turn,
+  // preserving their observed order.
+  const nextMatchIndexByTurn = new Map<string | undefined, number>();
   return hydratedEntries.map((entry) => {
     if (entry.sourceIndex === undefined) {
       return entry.entry;
     }
 
-    const orderedEntry = orderedMatches[orderedMatchIndex]?.entry;
-    orderedMatchIndex += 1;
-    return orderedEntry ?? entry.entry;
+    const turnId = entry.entry.turn?.id;
+    const nextMatchIndex = nextMatchIndexByTurn.get(turnId) ?? 0;
+    nextMatchIndexByTurn.set(turnId, nextMatchIndex + 1);
+    return matchesByTurn.get(turnId)?.[nextMatchIndex]?.entry ?? entry.entry;
   });
 }
 
@@ -1967,14 +2003,29 @@ function carryForwardTranscriptEntryOrder(
     AppServerThreadEntry,
     AppServerThreadEntry
   >();
-  let changed = false;
-  let entries = response.replay.entries.map((entry) => {
-    const source = findUniqueTranscriptOrderSource(
+  const matchedSources = response.replay.entries.map((entry) =>
+    findUniqueTranscriptOrderSource(
       entry,
       exactSourcesById,
       logicalSourceIndex,
-    );
-    if (!source) {
+    )
+  );
+  const claimsBySource = new Map<AppServerThreadEntry, number>();
+  for (const source of matchedSources) {
+    if (source) {
+      claimsBySource.set(source, (claimsBySource.get(source) ?? 0) + 1);
+    }
+  }
+  let changed = false;
+  let entries = response.replay.entries.map((entry, index) => {
+    const source = matchedSources[index];
+    // One live row stands for one read row. When a turn repeats a command,
+    // several read rows match the same live row by content; none of them
+    // can take its time or place.
+    if (
+      !source
+      || (source.id !== entry.id && (claimsBySource.get(source) ?? 0) > 1)
+    ) {
       return entry;
     }
 
