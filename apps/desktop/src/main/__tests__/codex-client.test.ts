@@ -10499,6 +10499,20 @@ describe("CodexAppServerClient", () => {
       ).toEqual(["interrupted", "completed", "interrupted", "interrupted"]);
       await client.close();
     });
+
+    it("drops an unused denial warning when the thread closes", async () => {
+      const { client, notifications, emit, startTurn, completeTurn } = await startClient();
+      startTurn("turn-1");
+      emit("guardianWarning", { threadId: "thread-1", message: denialLimitMessage });
+      emit("thread/closed", { threadId: "thread-1" });
+      completeTurn("turn-1", "interrupted");
+
+      await vi.waitFor(() => expect(
+        notifications.some((n) => n.method === "turn/completed" || n.method === "turn/failed"),
+      ).toBe(true));
+      expect(notifications.filter((n) => n.method === "turn/failed")).toEqual([]);
+      await client.close();
+    });
   });
 
   it("normalizes config warnings with project trust metadata", async () => {

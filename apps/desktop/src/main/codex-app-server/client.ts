@@ -8334,6 +8334,10 @@ export class CodexAppServerClient {
     method: string,
     params: unknown,
   ): string | undefined {
+    if (method !== "guardianWarning" && method !== "turn/started"
+      && method !== "turn/completed" && method !== "thread/closed") {
+      return undefined;
+    }
     const record = asRecord(params) ?? {};
     const threadId = pickString(record, ["threadId", "thread_id"]);
     if (!threadId) return undefined;
@@ -8345,9 +8349,6 @@ export class CodexAppServerClient {
           ...(turnId ? { turnId } : {}),
         });
       }
-      return undefined;
-    }
-    if (method !== "turn/started" && method !== "turn/completed" && method !== "thread/closed") {
       return undefined;
     }
     const pending = this.guardianDenialLimitsByThread.get(threadId);
