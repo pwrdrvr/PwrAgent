@@ -12,7 +12,11 @@ import type {
   ThreadTodosChangedEvent,
   TodoUnavailableInstance,
 } from "@pwragent/shared";
-import { compareThreadTodosNewestFirst, ThreadTodoFeedFollower } from "@pwragent/shared";
+import {
+  compareThreadTodosNewestFirst,
+  THREAD_TODO_FEED_ACKNOWLEDGED_METHOD,
+  ThreadTodoFeedFollower,
+} from "@pwragent/shared";
 import { projectRemoteThreadTodo, remoteThreadTodoId } from "../federation/federation-thread-todos";
 import { expectedNavigationReadFailure } from "../../shared/navigation-ipc-result";
 
@@ -22,8 +26,13 @@ export type ThreadTodoViewHubOptions = {
   /** This owner's live feed. */
   local: { snapshot: () => Promise<ThreadTodoFeedSnapshot> };
   remote: {
-    /** The owner advertises `thread_todo_feed` and is connected. */
+    /** The owner sends this viewer deltas: see `remotePeerSupportsTodoFeed`. */
     supportsFeed: (target: FederationRemoteTarget) => boolean;
+    /**
+     * The owners a remote view shows. A relayed owner's feed is followed
+     * once it acknowledges the watch, which arrives as a remote event.
+     */
+    watchFeeds: (targets: FederationRemoteTarget[]) => void;
     /** `threadTodos.snapshot`: owner-local ids. */
     snapshot: (target: FederationRemoteTarget) => Promise<ThreadTodoFeedSnapshot>;
     /** `threadTodos.list`: owner-local ids; a quiet footnote when unavailable. */
@@ -197,12 +206,13 @@ type MountEntry = {
  * The To-do state each window shows, kept in step with its owners.
  *
  * The main window shows this owner's live feed plus its pinned remote
- * threads. A remote window shows one owner. An owner that advertises
- * `thread_todo_feed` is read once with `threadTodos.snapshot` and then
- * followed through its deltas; an older owner is listed again on each of its
- * change markers. Either way a window receives deltas: one snapshot, then
- * one delta per card that changed. A pinned thread is listed when it is
- * pinned, after a reconnect, and on each of its owner's change markers for it.
+ * threads. A remote window shows one owner. An owner that sends this viewer
+ * deltas is read once with `threadTodos.snapshot` and then followed through
+ * them; any other owner is listed again on each of its change markers. A
+ * relayed owner is listed until its feed acknowledgement arrives, then
+ * followed. Either way a window receives deltas: one snapshot, then one
+ * delta per card that changed. A pinned thread is listed when it is pinned,
+ * after a reconnect, and on each of its owner's change markers for it.
  */
 export class ThreadTodoViewHub {
   private localView: TodoView | undefined;
@@ -261,7 +271,8 @@ export class ThreadTodoViewHub {
     // detail viewers; reading both would list twice.
     const isMarker = method === "thread/todos/changed";
     const isReconnect = method === "federation/eventStream/changed";
-    if (!isDelta && !isMarker && !isReconnect) return;
+    const isFeedAcknowledged = method === THREAD_TODO_FEED_ACKNOWLEDGED_METHOD;
+    if (!isDelta && !isMarker && !isReconnect && !isFeedAcknowledged) return;
 
     let remote = this.remoteViews.get(target.instanceId);
     if (remote && !this.options.hasViewers(target)) {
@@ -272,6 +283,8 @@ export class ThreadTodoViewHub {
     }
     if (remote) {
       if (isReconnect) void this.resyncRemote(remote);
+      // The owner now sends deltas; a view that was listing reads its feed.
+      else if (isFeedAcknowledged && remote.mode !== "feed") void this.resyncRemote(remote);
       else if (isDelta && remote.mode === "feed") {
         remote.follower.receive(params as ThreadTodoFeedDelta);
         // A failed read stops the feed; the owner's next change reads it again.
@@ -280,6 +293,7 @@ export class ThreadTodoViewHub {
       else if (isMarker && remote.mode === "list") void remote.listing.run();
     }
 
+    if (isFeedAcknowledged) return;
     const mounts = [...this.mounts.values()].filter((entry) => entry.mount.target.instanceId === target.instanceId);
     if (mounts.length === 0) return;
     if (isReconnect) {
@@ -319,7 +333,10 @@ export class ThreadTodoViewHub {
       target, view, mode: undefined, busyRetrySpent: false,
       follower: new ThreadTodoFeedFollower({
         fetch: () => this.options.remote.snapshot(target),
+        // A read that finishes after the view went back to listing is
+        // dropped; the next switch to the feed reads it again.
         onSnapshot: (snapshot) => {
+          if (remote.mode !== "feed") return;
           this.clearBusyRetry(remote);
           view.replaceSource("owner", snapshot.todos.map((todo) =>
             projectRemoteThreadTodo(todo, target, snapshot.mergeMethods)));
@@ -327,28 +344,35 @@ export class ThreadTodoViewHub {
           view.setStatus("owner", snapshot.errors, snapshot.unavailableInstances);
         },
         onDelta: (delta) => {
+          if (remote.mode !== "feed") return;
           for (const id of delta.removedIds ?? []) view.remove(remoteThreadTodoId(target, id));
           for (const todo of delta.upserts ?? []) {
             view.upsert("owner", projectRemoteThreadTodo(todo, target, delta.mergeMethods));
           }
           view.setMergeMethods(delta.mergeMethods);
         },
-        onError: (error) => this.remoteFailed(remote, error),
+        onError: (error) => {
+          if (remote.mode === "feed") this.remoteFailed(remote, error);
+        },
       }),
       listing: new Coalesced(async () => {
         try {
           const response = await this.options.remote.list(target, { status: "open" });
+          // The view switched to the feed while this read was out; the
+          // snapshot is newer.
+          if (remote.mode !== "list") return;
           this.clearBusyRetry(remote);
           view.replaceSource("owner", response.todos.map((todo) =>
             projectRemoteThreadTodo(todo, target, response.mergeMethods)));
           view.setMergeMethods(response.mergeMethods);
           view.setStatus("owner", response.errors, response.unavailableInstances);
         } catch (error) {
-          this.remoteFailed(remote, error);
+          if (remote.mode === "list") this.remoteFailed(remote, error);
         }
       }),
     };
     this.remoteViews.set(target.instanceId, remote);
+    this.watchFeeds();
     return remote;
   }
 
@@ -391,6 +415,11 @@ export class ThreadTodoViewHub {
     this.clearBusyRetry(remote);
     remote.follower.close();
     this.remoteViews.delete(remote.target.instanceId);
+    this.watchFeeds();
+  }
+
+  private watchFeeds(): void {
+    this.options.remote.watchFeeds([...this.remoteViews.values()].map((remote) => remote.target));
   }
 
   private async syncMounts(): Promise<void> {

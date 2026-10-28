@@ -18,7 +18,7 @@ function remoteId(id: string): string {
 
 function harness(options: {
   local?: ThreadTodoFeedSnapshot;
-  capable?: boolean;
+  capable?: () => boolean;
   remoteSnapshots?: ThreadTodoFeedSnapshot[];
   list?: (request: Record<string, unknown>) => ListThreadTodosResponse;
   mounts?: Array<{ target: FederationRemoteTarget; backend: "codex"; threadId: string }>;
@@ -28,7 +28,8 @@ function harness(options: {
   const remoteSnapshots = [...(options.remoteSnapshots ?? [])];
   const local = { snapshot: vi.fn(async () => options.local ?? { epoch: "local", revision: 0, todos: [], mergeMethods: prefs }) };
   const remote = {
-    supportsFeed: vi.fn(() => options.capable ?? false),
+    supportsFeed: vi.fn(() => options.capable?.() ?? false),
+    watchFeeds: vi.fn(),
     snapshot: vi.fn(async () => remoteSnapshots.length > 1 ? remoteSnapshots.shift()! : remoteSnapshots[0]!),
     list: vi.fn(async (_target: FederationRemoteTarget, request: Record<string, unknown>) =>
       options.list?.(request) ?? { todos: [] }),
@@ -69,7 +70,7 @@ describe("ThreadTodoViewHub", () => {
   });
 
   it("follows a capable owner's deltas in a remote window and re-snapshots once on a gap", async () => {
-    const { hub, remote, sent } = harness({ capable: true, remoteSnapshots: [
+    const { hub, remote, sent } = harness({ capable: () => true, remoteSnapshots: [
       { epoch: "owner", revision: 1, todos: [card("a", "t", 1)], mergeMethods: prefs },
       { epoch: "owner", revision: 6, todos: [card("a", "t", 1), card("b", "t", 2), card("c", "t", 3)], mergeMethods: prefs },
     ] });
@@ -119,7 +120,7 @@ describe("ThreadTodoViewHub", () => {
 
   it("lists a mounted remote thread on its own markers, since a list never seeds the owner's feed", async () => {
     let todos = [card("a", "t", 1)];
-    const { hub, remote, sent } = harness({ capable: true, mounts: [{ target: peer, backend: "codex", threadId: "t" }],
+    const { hub, remote, sent } = harness({ capable: () => true, mounts: [{ target: peer, backend: "codex", threadId: "t" }],
       list: () => ({ todos, mergeMethods: prefs }) });
     const snapshot = await hub.snapshot(undefined);
     expect(snapshot.todos.map((todo) => todo.id)).toEqual([remoteId("a")]);
@@ -143,7 +144,7 @@ describe("ThreadTodoViewHub", () => {
   });
 
   it("reads a capable owner once for windows that open together", async () => {
-    const { hub, remote } = harness({ capable: true, remoteSnapshots: [
+    const { hub, remote } = harness({ capable: () => true, remoteSnapshots: [
       { epoch: "owner", revision: 1, todos: [card("a", "t", 1)], mergeMethods: prefs },
     ] });
     const [first, second] = await Promise.all([hub.snapshot(peer), hub.snapshot(peer)]);
@@ -151,9 +152,66 @@ describe("ThreadTodoViewHub", () => {
     expect(remote.snapshot).toHaveBeenCalledTimes(1);
   });
 
+  it("switches a listed owner to its feed when it acknowledges the watch, and lists no more", async () => {
+    let acknowledged = false;
+    const { hub, remote, sent } = harness({ capable: () => acknowledged,
+      list: () => ({ todos: [card("a", "t", 1)], mergeMethods: prefs }),
+      remoteSnapshots: [{ epoch: "owner", revision: 3, todos: [card("a", "t", 1), card("b", "t", 2)], mergeMethods: prefs }] });
+    expect((await hub.snapshot(peer)).todos.map((todo) => todo.id)).toEqual([remoteId("a")]);
+    expect(remote.watchFeeds).toHaveBeenLastCalledWith([peer]);
+    expect(remote.list).toHaveBeenCalledTimes(1);
+
+    acknowledged = true;
+    hub.handleRemoteEvent(ownerEvent("thread/todos/feedAcknowledged", { reason: "subscribed" }));
+    await vi.waitFor(() => expect(sent.map((entry) => entry.delta.upserts?.[0]?.id)).toEqual([remoteId("b")]));
+    expect(remote.snapshot).toHaveBeenCalledTimes(1);
+    for (let revision = 4; revision <= 6; revision++) {
+      hub.handleRemoteEvent(ownerEvent("thread/todos/delta", { epoch: "owner", revision, backend: "codex",
+        threadId: "t", upserts: [card(`c${revision}`, "t", revision)], mergeMethods: prefs }));
+      hub.handleRemoteEvent(ownerEvent("thread/todos/changed", { backend: "codex", threadId: "t", at: revision }));
+    }
+    await Promise.resolve();
+    expect(sent.slice(1).map((entry) => entry.delta.upserts?.[0]?.id))
+      .toEqual([remoteId("c4"), remoteId("c5"), remoteId("c6")]);
+    // A repeated acknowledgement, from a re-sent subscription, reads nothing.
+    hub.handleRemoteEvent(ownerEvent("thread/todos/feedAcknowledged", { reason: "subscribed" }));
+    await Promise.resolve();
+    expect(remote.snapshot).toHaveBeenCalledTimes(1);
+    expect(remote.list).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a listing that returns after the view switched to the feed", async () => {
+    let acknowledged = false;
+    let answer: ((response: ListThreadTodosResponse) => void) | undefined;
+    const { hub, remote, sent } = harness({ capable: () => acknowledged,
+      remoteSnapshots: [{ epoch: "owner", revision: 1, todos: [card("new", "t", 2)], mergeMethods: prefs }] });
+    remote.list.mockResolvedValueOnce({ todos: [], mergeMethods: prefs });
+    await hub.snapshot(peer);
+    remote.list.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    hub.handleRemoteEvent(ownerEvent("thread/todos/changed", { backend: "codex", threadId: "t", at: 1 }));
+    await vi.waitFor(() => expect(answer).toBeDefined());
+    acknowledged = true;
+    hub.handleRemoteEvent(ownerEvent("thread/todos/feedAcknowledged", { reason: "subscribed" }));
+    await vi.waitFor(() => expect(sent.map((entry) => entry.delta.upserts?.[0]?.id)).toEqual([remoteId("new")]));
+    // The older listing still names a card the snapshot no longer has.
+    answer!({ todos: [card("stale", "t", 1)], mergeMethods: prefs });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent.flatMap((entry) => entry.delta.upserts ?? []).map((todo) => todo.id)).toEqual([remoteId("new")]);
+  });
+
+  it("stops watching an owner's feed once no window shows it", async () => {
+    let viewers = true;
+    const { hub, remote } = harness({ hasViewers: () => viewers });
+    await hub.snapshot(peer);
+    expect(remote.watchFeeds).toHaveBeenLastCalledWith([peer]);
+    viewers = false;
+    hub.peerStatusChanged();
+    expect(remote.watchFeeds).toHaveBeenLastCalledWith([]);
+  });
+
   it("drops a remote view no window shows, so a sparse stream cannot read as a gap", async () => {
     let viewers = true;
-    const { hub, remote } = harness({ capable: true, hasViewers: () => viewers, remoteSnapshots: [
+    const { hub, remote } = harness({ capable: () => true, hasViewers: () => viewers, remoteSnapshots: [
       { epoch: "owner", revision: 1, todos: [], mergeMethods: prefs },
     ] });
     await hub.snapshot(peer);

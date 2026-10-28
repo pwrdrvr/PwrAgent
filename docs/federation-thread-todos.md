@@ -60,13 +60,30 @@ the card upsert or removal plus merge preferences. A navigation-class event
 reaches sparse mounted-thread subscribers only for their own threads.
 
 Owners that advertise the additive `thread_todo_feed` capability answer
-`threadTodos.snapshot`. They send deltas only to directly connected viewers
-that advertise the same capability. A gateway that predates the feed would
-classify the new event as transcript traffic and not relay it to a
-navigation subscriber. Both ends therefore read the capability from the same
-direct connection, and a relayed owner uses the list fallback. Owners still
-publish the `thread/todos/changed` and `thread/todoDetails/changed` markers
-for older viewers, relayed viewers, and review details.
+`threadTodos.snapshot`. A gateway that predates the feed classifies
+`thread/todos/delta` as transcript traffic and does not relay it to a
+navigation subscriber. So an owner sends deltas only on a path that proves
+every hop relays them:
+
+- **Direct connection.** Both ends read `thread_todo_feed` from the same
+  connection's capabilities.
+- **Gateway relay.** A viewer with a remote To-do view adds the threadless
+  `todo_feed` event class to its subscription for that owner. Each gateway
+  keeps the class only if it knows it and the peer that sent the subscription
+  advertises `thread_navigation` and `thread_todo_feed`. A gateway that does
+  not know the class drops it. The owner answers every subscription that
+  still carries the class with `thread/todos/feedAcknowledged`, and sends
+  deltas to that subscription. Any gateway that knows the class also relays
+  deltas as navigation events.
+
+A relayed viewer follows the feed only after the acknowledgement arrives,
+and only while envelopes to the owner still leave through the gateway that
+carried it. An owner status change clears it until the owner acknowledges
+again. Before then, the view uses the list fallback, then reads one snapshot
+when the acknowledgement arrives. Behind an older gateway it never arrives,
+and the view keeps the list fallback. Owners still publish the
+`thread/todos/changed` and `thread/todoDetails/changed` markers for older
+viewers, listed views, and review details.
 
 The viewer's main process keeps one view per window kind. The main window
 view contains the local feed and mounted remote threads. A remote window

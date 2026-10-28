@@ -5,6 +5,14 @@ import type {
 } from "./contracts/thread-todos";
 
 /**
+ * An owner's answer to a `todo_feed` event subscription, sent on every
+ * subscription that carries the class. A relay that does not know the class
+ * drops it from the subscription, so a viewer that receives this knows every
+ * hop to the owner relays `thread/todos/delta`. It carries no cards.
+ */
+export const THREAD_TODO_FEED_ACKNOWLEDGED_METHOD = "thread/todos/feedAcknowledged";
+
+/**
  * Newest first, ties by id descending: the owner store's
  * `created_at DESC, todo_id DESC`, so a card raised in the same millisecond
  * keeps the place a list gave it.
