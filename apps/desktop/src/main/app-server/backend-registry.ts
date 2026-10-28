@@ -26941,7 +26941,9 @@ export class DesktopBackendRegistry {
       const { federationTarget: _federationTarget, ...storageRequest } = request;
       const response = await this.updateDirectoryLaunchpad(
         { ...storageRequest, directoryKey: storageKey },
-        storageOptions,
+        // The peer's path names a folder on the peer. This machine's folder
+        // at the same path holds none of the peer's environments.
+        { ...storageOptions, skipFilesystemInspection: true },
       );
       return {
         ...response,

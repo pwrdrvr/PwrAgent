@@ -22948,6 +22948,47 @@ command = "pnpm grok"
       }
     });
 
+    it("takes no environments from this machine's folder at the peer's path", async () => {
+      // This machine has its own project, with an environment, at the path
+      // the peer's project uses.
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-peer-path-"));
+      await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
+      await writeFile(
+        path.join(root, ".codex", "environments", "environment.toml"),
+        "version = 1\nname = \"This machine's environment\"\n",
+        "utf8",
+      );
+      const shared = { ...request, directoryKey: `directory:${root}`, directoryPath: root };
+      const { registry, close } = openStore();
+      try {
+        await registry.ensureDirectoryLaunchpad(shared, remote);
+        const peerEdit = await registry.updateDirectoryLaunchpad(
+          { directoryKey: shared.directoryKey, patch: { prompt: "for the peer" } },
+          { owner },
+        );
+        expect(peerEdit.launchpad.codexEnvironmentOptions).toBeUndefined();
+
+        // A late edit that recreates the peer's row takes none either.
+        await registry.resetDirectoryLaunchpad({ directoryKey: shared.directoryKey }, { owner });
+        const recreated = await registry.updateDirectoryLaunchpad(
+          { directoryKey: shared.directoryKey, patch: { prompt: "late edit" } },
+          { owner },
+        );
+        expect(recreated.launchpad.codexEnvironmentOptions).toBeUndefined();
+
+        // This machine's own draft still reads its own folder.
+        const localEdit = await registry.updateDirectoryLaunchpad({
+          directoryKey: shared.directoryKey,
+          patch: { prompt: "for this machine" },
+        });
+        expect(localEdit.launchpad.codexEnvironmentOptions?.map((option) => option.name))
+          .toEqual(["This machine's environment"]);
+      } finally {
+        await close();
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("keeps the text it held under the shared key before the split", async () => {
       vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
       const { persisted, registry, close } = openStore();

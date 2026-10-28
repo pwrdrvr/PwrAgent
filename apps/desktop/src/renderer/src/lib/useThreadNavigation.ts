@@ -7381,6 +7381,9 @@ export function useThreadNavigation(
                       current.launchpad,
                       response.launchpad,
                       patch,
+                      // The response carries no environments: those are
+                      // the owner's, already held here.
+                      { preserveOwnerCodexEnvironmentMetadata: true },
                     ),
                     federationTarget: federatedSelection.target,
                   },

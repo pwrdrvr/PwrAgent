@@ -8067,6 +8067,89 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("keeps the owner's environments when editing a pinned peer's draft in the main window", async () => {
+    const federationTarget = { scope: "remote" as const, instanceId: "remote-instance" };
+    const project = {
+      key: "directory:/Users/fixture/src/PwrAgent",
+      kind: "directory" as const,
+      label: "PwrAgent",
+      path: "/Users/fixture/src/PwrAgent",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    };
+    const defaults = { backend: "codex" as const, executionMode: "default" as const };
+    const snapshot = (target?: typeof federationTarget): NavigationSnapshot => ({
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: target ? [project] : [],
+      launchpadDefaults: defaults,
+      ...(target ? { federationTarget: target } : {}),
+    });
+    const ownerEnvironment = {
+      id: "environment",
+      name: "Owner environment",
+      sourcePath: "/Users/fixture/src/PwrAgent/.codex/environments/environment.toml",
+      actions: [],
+    };
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: project.key,
+      directoryKind: "directory",
+      directoryLabel: project.label,
+      directoryPath: project.path,
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      federationTarget,
+      codexEnvironmentOptions: [ownerEnvironment],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    // This machine stores the draft and reads none of the peer's folders.
+    const updateDirectoryLaunchpad = vi.fn(async () => ({
+      defaults,
+      launchpad: {
+        ...launchpad,
+        federationTarget: undefined,
+        codexEnvironmentId: "environment",
+        codexEnvironmentOptions: undefined,
+        updatedAt: 2,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      readPopulation: vi.fn(async (request) => snapshot(request?.federationTarget as typeof federationTarget | undefined)),
+      getNavigationQueryPage: async (request) => navigationQueryFixture(request,
+        snapshot(request.federationTarget as typeof federationTarget | undefined)),
+      ensureDirectoryLaunchpad: vi.fn(async () => ({ launchpad, defaults })),
+      updateDirectoryLaunchpad,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async () => {
+      await result.current.openFederatedDirectoryLaunchpad(federationTarget, project);
+    });
+    await act(async () => {
+      await result.current.updateDirectoryLaunchpad(project.key, {
+        codexEnvironmentId: "environment",
+        codexEnvironmentExecutionTarget: "local",
+      });
+    });
+
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({ federationTarget, directoryKey: project.key }),
+    );
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      federationTarget,
+      codexEnvironmentId: "environment",
+      codexEnvironmentOptions: [expect.objectContaining({ name: "Owner environment" })],
+    });
+  });
+
   it("keeps launchpad updates stable across remote viewer rerenders", async () => {
     const federationTarget = {
       scope: "remote" as const,
