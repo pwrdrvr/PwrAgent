@@ -118,6 +118,7 @@ const DISPOSABLE_DESKTOP_ENV = {
 const RENDERER_DOM_TS_TESTS = [
   "apps/desktop/src/renderer/src/features/native-voice/__tests__/voice-camera.test.ts",
   "apps/desktop/src/renderer/src/features/navigation/__tests__/drag-drop.test.ts",
+  "apps/desktop/src/renderer/src/features/navigation/__tests__/reveal-selected-thread-row.test.ts",
   "apps/desktop/src/renderer/src/features/navigation/__tests__/thread-row-drag-preview.test.ts",
   "apps/desktop/src/renderer/src/features/navigation/__tests__/useThreadJump.test.ts",
   "apps/desktop/src/renderer/src/features/star-map/__tests__/star-map-keyboard.test.ts",
