@@ -71,6 +71,25 @@ async function report(name: string, db: ReturnType<typeof openInMemoryStateDb>, 
 }
 
 describe("Usage Activity read budgets", () => {
+  it("does not charge read snapshots as writes and still counts exec and RETURNING transactions", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-activity-transaction-metrics-");
+    const { db, add } = fixture(StateDb.open(temp.dbPath));
+    try {
+      add("current");
+      const read = await measureSqliteWrites(() => db.raw.transaction(() =>
+        db.raw.prepare("SELECT usage_line_id FROM thread_usage_lines").all())());
+      expect(read.writes.commits).toBe(0);
+      expect(read.writes.walBytes).toBe(0);
+      const exec = await measureSqliteWrites(() => db.raw.transaction(() =>
+        db.raw.exec("UPDATE thread_usage_lines SET output_tokens = 4"))());
+      const returning = await measureSqliteWrites(() => db.raw.transaction(() =>
+        db.raw.prepare("UPDATE thread_usage_lines SET output_tokens = 5 RETURNING usage_line_id").get())());
+      expect(exec.writes.commits).toBe(1);
+      expect(returning.writes.commits).toBe(1);
+    } finally { db.close(); removeTempStateDbDir(temp.tempDir); }
+  });
+
   it("measures index maintenance inside a real helper ledger write", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("pwragent-activity-helper-write-");
@@ -93,7 +112,7 @@ describe("Usage Activity read budgets", () => {
     const { db, store, add } = fixture();
     try {
       db.raw.transaction(() => {
-        for (const backend of ["codex", "acp:qwen"]) {
+        for (const backend of ["codex", "acp:qwen"] as const) {
           for (let index = 0; index < 3; index++) add(`${backend}-${index}`, {
             backend, parent: "same-parent", thread: "same-helper", scope: "monitor", status: "finalized",
             source: `system:title:${index}`, completed: null,
@@ -163,7 +182,7 @@ describe("Usage Activity read budgets", () => {
     } finally { other.close(); db.close(); removeTempStateDbDir(temp.tempDir); }
   });
 
-  it.each(["within-minute", "minute-boundaries"])("measures interval maintenance for live updates: %s", async (scenario) => {
+  it.each(["within-minute", "minute-boundaries"] as const)("measures interval maintenance for live updates: %s", async (scenario) => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("pwragent-activity-budget-");
     const { db, store, add } = fixture(StateDb.open(temp.dbPath));
