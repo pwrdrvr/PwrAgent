@@ -232,6 +232,9 @@ describe("DesktopBackendRegistry usage turn ends", () => {
     const snapshot = await registry.readUsageActivity({ from: Date.now() - 60_000, to: Date.now() + 60_000 });
     expect(snapshot.rows[0].accountKey).toBe(usageAccountKey(undefined, "team"));
     expect(snapshot.limitObservations?.[0].accountKey).toBe(usageAccountKey(undefined, "team"));
+    // The fixture owns this synthetic turn; no Claude session can end it.
+    await internals(registry).emit({ backend: "claude", notification: { method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "claude-turn", status: "completed" } } } } as AgentEvent);
   });
 
   it("attributes refreshed quotas to the account read used for metadata recovery", async () => {
@@ -659,6 +662,8 @@ describe("DesktopBackendRegistry usage turn ends", () => {
 
       expect(startedAt(claudeTurnId)).toBe(reported);
       expect(await lineStartedAt("claude")).toBe(reported);
+      await internals(registry).emit({ backend: "claude", notification: { method: "turn/completed",
+        params: { threadId: "thread-1", turn: { id: claudeTurnId, status: "completed" } } } } as AgentEvent);
     });
 
     it("does not read a start time from a UUIDv4 turn id", async () => {
@@ -671,6 +676,8 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       const recorded = startedAt(claudeTurnId);
       expect(recorded).toBeGreaterThanOrEqual(before);
       expect(recorded).toBeLessThanOrEqual(Date.now());
+      await internals(registry).emit({ backend: "claude", notification: { method: "turn/completed",
+        params: { threadId: "thread-1", turn: { id: claudeTurnId, status: "completed" } } } } as AgentEvent);
     });
 
     it("still reads the start time from a Codex UUIDv7 turn id", async () => {
