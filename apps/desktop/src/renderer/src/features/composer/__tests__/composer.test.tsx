@@ -19692,6 +19692,8 @@ describe("Composer", () => {
       },
     });
 
+    await waitFor(() => expect(normalizeImageFile).toHaveBeenCalledTimes(1));
+
     rerender(
       <Composer
         backends={[backendSummary("codex")]}
@@ -23955,6 +23957,38 @@ describe("Composer", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Previous image" }));
     expect(within(dialog).getByText("Image 1 of 2")).toBeInTheDocument();
     expect(await within(dialog).findByAltText("first.gif")).toBeInTheDocument();
+  });
+
+  it("shows pending image preparation and blocks both button and keyboard submission", async () => {
+    const normalization = createDeferred<Awaited<ReturnType<typeof normalizeImageFile>>>();
+    vi.mocked(normalizeImageFile).mockImplementationOnce(() => normalization.promise);
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const, threadId: "thread-1", turnId: "turn-1",
+    }));
+    render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+      disabled={false} skills={[]}
+      thread={{ id: "thread-1", title: "Test", titleSource: "explicit", source: "codex", linkedDirectories: [], inbox: { inInbox: false } }}
+    />);
+    const reply = screen.getByLabelText("Reply");
+    fireEvent.change(reply, { target: { value: "Inspect this image" } });
+    const image = new File(["png"], "pending.png", { type: "image/png" });
+    fireEvent.paste(reply, {
+      clipboardData: { files: [image], items: [{ kind: "file", type: image.type, getAsFile: () => image }] },
+    });
+    await waitFor(() => expect(normalizeImageFile).toHaveBeenCalledOnce());
+    expect(screen.getByText("Preparing image attachments…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+    fireEvent.keyDown(reply, { key: "Enter", metaKey: true });
+    expect(startTurn).not.toHaveBeenCalled();
+    await act(async () => normalization.resolve({
+      dataUrl: "data:image/png;base64,AQID", height: 24, width: 24, size: 3,
+      mimeType: "image/png", conversionPath: "renderer",
+      original: { height: 24, width: 24, size: 3, mimeType: image.type, name: image.name },
+    }));
+    await screen.findByAltText("pending.png");
+    expect(screen.queryByText("Preparing image attachments…")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
   });
 
   it.each([

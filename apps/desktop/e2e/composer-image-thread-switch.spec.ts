@@ -396,3 +396,50 @@ for (const extension of ["gif", "webp"] as const) {
     }
   });
 }
+
+test("keeps an ordinary screenshot unchanged without encoding and offers only the safety limit", async ({}, testInfo) => {
+  const fixture = await createComposerImageThreadSwitchFixture();
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+  try {
+    const reply = app.window.getByRole("textbox", { name: "Reply", exact: true });
+    await expect(reply).toBeVisible();
+    const sourceUrl = await reply.evaluate(async (element) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 1820;
+      canvas.height = 1153;
+      const context = canvas.getContext("2d")!;
+      context.fillStyle = "white";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.fillStyle = "black";
+      context.font = "32px sans-serif";
+      context.fillText("Contrived screenshot fixture", 40, 80);
+      const blob = await new Promise<Blob>((resolve) => canvas.toBlob((blob) => resolve(blob!), "image/png"));
+      const sourceUrl = canvas.toDataURL("image/png");
+      HTMLCanvasElement.prototype.toBlob = function () {
+        throw new Error("An in-budget PNG must not be re-encoded");
+      };
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([blob], "ordinary-screenshot.png", { type: "image/png" }));
+      element.dispatchEvent(new ClipboardEvent("paste", {
+        bubbles: true, cancelable: true, clipboardData: transfer,
+      }));
+      return sourceUrl;
+    });
+    const preview = app.window.getByAltText("ordinary-screenshot.png", { exact: true });
+    await expect(preview).toBeVisible();
+    await expect(preview).toHaveAttribute("src", sourceUrl);
+    await expect(app.window.getByText("1820×1153", { exact: true })).toBeVisible();
+    await app.window.getByRole("button", { name: "Open settings" }).click();
+    await expect(app.window.getByRole("navigation", { name: "Settings sections" })).toBeVisible();
+    const budget = app.window.getByRole("radio", { name: "4096 patches", exact: true });
+    await expect(budget).toHaveAttribute("aria-checked", "true");
+    await expect(app.window.getByRole("radio", { name: "Actual size", exact: true })).toBeVisible();
+    await expect(app.window.getByRole("radio", { name: "1024 patches", exact: true })).toHaveCount(0);
+    await expect(app.window.getByRole("radio", { name: "1536 patches", exact: true })).toHaveCount(0);
+    await budget.scrollIntoViewIfNeeded();
+    await app.window.screenshot({ path: testInfo.outputPath("pasted-image-settings.png") });
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});

@@ -127,12 +127,15 @@ export async function getAnimationPreservingImageType(
   // Extended WebP puts VP8X first and stores its animation flag in bit 1.
   // Read only the header; decoding through canvas would flatten the animation.
   // https://developers.google.com/speed/webp/docs/riff_container#extended_file_format
-  const buffer = await new Promise<ArrayBuffer>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => resolve(reader.result as ArrayBuffer));
-    reader.addEventListener("error", () => reject(reader.error));
-    reader.readAsArrayBuffer(file.slice(0, 30));
-  });
+  const blob = file.slice(0, 30);
+  const buffer = typeof blob.arrayBuffer === "function"
+    ? await blob.arrayBuffer()
+    : await new Promise<ArrayBuffer>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.addEventListener("load", () => resolve(reader.result as ArrayBuffer));
+      reader.addEventListener("error", () => reject(reader.error));
+      reader.readAsArrayBuffer(blob);
+    });
   const header = new Uint8Array(buffer);
   if (header.length < 30) {
     return undefined;

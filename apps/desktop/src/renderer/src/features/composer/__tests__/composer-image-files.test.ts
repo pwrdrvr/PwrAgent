@@ -1,3 +1,4 @@
+import { ANIMATED_WEBP_BASE64, STATIC_WEBP_BASE64 } from "../../../test/fixtures/animated-images";
 import { describe, expect, it, vi } from "vitest";
 import { getAnimationPreservingImageType, getComposerFilesFromDataTransfer, getImageFilesFromDataTransfer } from "../composer-image-files";
 
@@ -68,4 +69,15 @@ describe("composer clipboard extraction", () => {
       expect(await getAnimationPreservingImageType(file, file.type)).toBeUndefined();
     },
   );
+});
+
+describe("WebP animation detection", () => {
+  it.each([
+    [ANIMATED_WEBP_BASE64, "image/webp"],
+    [STATIC_WEBP_BASE64, undefined],
+  ])("distinguishes real animated and still WebP files", async (base64, expected) => {
+    const bytes = Uint8Array.from(atob(base64!), (char) => char.charCodeAt(0));
+    const file = new File([bytes], "image.webp", { type: "image/webp" });
+    expect(await getAnimationPreservingImageType(file, file.type)).toBe(expected);
+  });
 });
