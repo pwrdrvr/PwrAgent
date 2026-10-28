@@ -840,6 +840,13 @@ const THREAD_LIST_REUSE_WINDOW_MS = 5 * 60_000;
 const INCOMPLETE_THREAD_LIST_REUSE_WINDOW_MS = 15_000;
 const CODEX_RATE_LIMIT_BROADCAST_WINDOW_MS = 20_000;
 const THREAD_SEARCH_REUSE_WINDOW_MS = 2_000;
+/** Marks the approval cards PwrAgent's own forge tools raise. */
+const FORGE_TOOL_REQUEST_ID_PREFIX = "forge-tool:";
+const FORGE_APPROVAL_WITHDRAWN_TODO_KEY = "forge-approval-withdrawn";
+const PENDING_APPROVAL_GUIDANCE =
+  "The operator has not answered these yet. A call waiting on one stays pending until they do. "
+  + "If this turn ends first, the request is withdrawn and the waiting call is cancelled. "
+  + "Do not ask the operator to approve it after you end the turn; say it was withdrawn and that they can reply to retry.";
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 const ACTIVE_TURN_WORKSPACE_RECOVERY_ERROR =
@@ -9671,7 +9678,7 @@ export class DesktopBackendRegistry {
     const signal = context.signal ?? new AbortController().signal;
     signal.throwIfAborted();
     const label = FORGE_AGENT_TOOL_GROUP_LABELS[group];
-    const requestId = `forge-tool:${randomUUID()}`;
+    const requestId = `${FORGE_TOOL_REQUEST_ID_PREFIX}${randomUUID()}`;
     const forge = repository?.provider === "gitlab" ? "GitLab" : "GitHub";
     // Comment-sized changes may be granted for the conversation; opening,
     // editing, approving and merging are always one call at a time.
@@ -9753,6 +9760,56 @@ export class DesktopBackendRegistry {
       grants.set(grantTarget, grantKey);
       this.forgeToolSessionApprovals.set(sessionKey, grants);
     }
+  }
+
+  /**
+   * A forge card the agent's turn outlived. Ending the turn cancels the call
+   * and withdraws the card, yet the agent's answer may still ask the operator
+   * to approve it, so the thread keeps a reminder of what was asked.
+   */
+  private async raiseWithdrawnForgeApprovalTodo(
+    backend: AppServerBackendKind,
+    threadId: string,
+    requests: AppServerPendingRequestNotification[],
+  ): Promise<void> {
+    const asked = requests.flatMap((request) => {
+      if (request.method !== "mcpServer/elicitation/request") return [];
+      const target = readRecord(request.params._meta)?.connector_name;
+      return [`“${request.params.message}”${typeof target === "string" ? ` for ${target}` : ""}`];
+    });
+    const first = requests[0];
+    if (!this.threadTodoHandler || !first || asked.length === 0) return;
+    const forge = first.method === "mcpServer/elicitation/request" ? first.params.serverName : "forge";
+    try {
+      await this.threadTodoHandler.add({ backend, threadId }, {
+        key: FORGE_APPROVAL_WITHDRAWN_TODO_KEY,
+        title: `Reply to retry the withdrawn ${forge} request`,
+        detail: `The agent asked ${asked.join(" and ")}. Its turn ended before you answered, so the request was withdrawn and nothing ran.`,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("could not raise a withdrawn forge approval to-do", { backend, threadId, error: String(error) });
+    }
+  }
+
+  /** What the operator has yet to answer on a thread, for get_thread_status. */
+  private pendingApprovalsForInspection(
+    backend: AppServerBackendKind,
+    threadId: string,
+    includeMessages: boolean,
+  ): Array<{ method: string; serverName?: string; message?: string }> {
+    const approvals: Array<{ method: string; serverName?: string; message?: string }> = [];
+    for (const pending of this.pendingServerRequests.values()) {
+      const request = pending.notification;
+      if (pending.backend !== backend || request.params.threadId !== threadId) continue;
+      const elicitation = request.method === "mcpServer/elicitation/request" ? request.params : undefined;
+      approvals.push({
+        method: request.method,
+        ...(elicitation ? { serverName: elicitation.serverName } : {}),
+        // Another thread's prompt can quote its work; only the asker sees it.
+        ...(elicitation && includeMessages ? { message: elicitation.message } : {}),
+      });
+    }
+    return approvals;
   }
 
   async readForgeForPeer(request: ForgeReadRequest, signal?: AbortSignal): Promise<unknown> {
@@ -45398,6 +45455,11 @@ export class DesktopBackendRegistry {
               },
               context,
             );
+          const pendingApprovals = this.pendingApprovalsForInspection(
+            args.backend,
+            threadId,
+            context.backend === args.backend && context.threadId === threadId,
+          );
           return {
             ok: true,
             data: {
@@ -45407,6 +45469,9 @@ export class DesktopBackendRegistry {
                 queuedExecutionMode: queued?.mode,
                 queuedExecutionModeAt: queued?.queuedAt,
                 ...(prAutomation ? { prAutomation } : {}),
+                ...(pendingApprovals.length
+                  ? { pendingApprovals, pendingApprovalGuidance: PENDING_APPROVAL_GUIDANCE }
+                  : {}),
                 ...(pendingHandoffs.length ? { pendingHandoffs } : {}),
                 ...(pendingWorkspaceMoves.length
                   ? { pendingWorkspaceMoves }
@@ -47986,6 +48051,12 @@ export class DesktopBackendRegistry {
         }
         // An MCP elicitation cannot keep its provider turn alive after that
         // turn ends. Retaining it lets a later read resurrect the ended turn.
+        // A turn the operator did not stop ended on the agent's own word, so
+        // they may still be looking for a card the agent pointed them at.
+        const endedWithoutOperator = event.notification.method === "turn/failed"
+          || (event.notification.method === "turn/completed"
+            && event.notification.params.turn?.status === "completed");
+        const withdrawnForgeApprovals: AppServerPendingRequestNotification[] = [];
         for (const [key, pending] of this.pendingServerRequests) {
           const request = pending.notification;
           if (pending.backend !== event.backend
@@ -47993,6 +48064,9 @@ export class DesktopBackendRegistry {
             || request.params.turnId !== completedTurnId
             || request.method !== "mcpServer/elicitation/request") {
             continue;
+          }
+          if (endedWithoutOperator && String(request.params.requestId).startsWith(FORGE_TOOL_REQUEST_ID_PREFIX)) {
+            withdrawnForgeApprovals.push(request);
           }
           this.pendingServerRequests.delete(key);
           pending.resolve({ action: "cancel", content: null, _meta: null });
@@ -48002,6 +48076,14 @@ export class DesktopBackendRegistry {
               requestId: request.params.requestId,
             },
           } });
+        }
+        if (withdrawnForgeApprovals.length > 0) {
+          // Off the terminal path: the card is a notice, not turn state.
+          void this.raiseWithdrawnForgeApprovalTodo(
+            event.backend,
+            event.notification.params.threadId,
+            withdrawnForgeApprovals,
+          );
         }
       }
       if (completedTurnId) {
