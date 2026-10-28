@@ -155,7 +155,6 @@ describe("OperatorRequestService", () => {
     const { registry, service } = createService();
     registry.titles.set("codex:thread-a", "Warm CI dependencies");
     registry.pending.push({ backend: "codex", notification: approval("thread-a", "req-1") });
-    registry.emit(askedEvent("thread-a", "question-1"));
     service.start();
     registry.emit(askedEvent("thread-a", "question-1"));
 
