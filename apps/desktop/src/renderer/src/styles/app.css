@@ -10725,6 +10725,19 @@ a.button {
   color: var(--text-primary);
 }
 
+/* A split action's menu leaves the card, which clips to its rounded edge
+   otherwise. The content keeps its own scroller. */
+.app-notice-toast:has(.todo-split--open) {
+  overflow: visible;
+}
+
+/* The stack sits on the window's bottom edge unless focus moved it to the
+   top, so its menus open upward there. */
+.app-toast-stack:not([data-placement="top"]) .todo-split__menu {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
 /* Borderless. 24px keeps WCAG 2.5.8's target size, which the a11y gate
    checks; Copy and Dismiss sit edge to edge, so neither can be smaller. */
 .app-notice-toast__icon-button {

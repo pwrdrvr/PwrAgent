@@ -1,9 +1,5 @@
 import { useEffect, useRef, useState, type ComponentType } from "react";
-import type { PendingRequestAction, SubmitServerRequestRequest } from "@pwragent/shared";
-import {
-  buildPendingRequestActions,
-  buildPendingRequestResponse,
-} from "@pwragent/shared";
+import type { SubmitServerRequestRequest } from "@pwragent/shared";
 import {
   CheckIcon,
   EditsIcon,
@@ -15,13 +11,9 @@ import {
   TerminalIcon,
   type IconProps,
 } from "../../icons";
-import {
-  buildMcpElicitationResponse,
-  readMcpApprovalPersistence,
-  type McpApprovalPersistence,
-} from "../thread-detail/mcp-elicitation";
 import { formatTodoAge } from "../thread-todos/ThreadTodoCard";
 import { TodoSplitButton, type TodoSplitMenuEntry } from "../thread-todos/TodoSplitButton";
+import { approvalChoices, type ApprovalChoice } from "./approval-choices";
 import { OperatorQuestionForm } from "./OperatorQuestionForm";
 import {
   operatorWaitLabel,
@@ -166,12 +158,9 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
   function renderActions() {
     switch (wait.kind) {
       case "mcp-approval":
-        return renderMcpApproval();
       case "mcp-input":
-        if (wait.mcp?.mode === "url") return renderMcpApproval();
-        return null;
       case "approval":
-        return renderApproval();
+        return renderApprovalActions();
       case "question":
         return renderQuestion();
       default:
@@ -245,29 +234,28 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
     );
   }
 
-  function renderMcpApproval() {
-    const mcp = wait.mcp;
-    if (!mcp) return null;
-    const persistence = readMcpApprovalPersistence(mcp);
-    const answer = (
-      label: string,
-      action: "accept" | "decline" | "cancel",
-      persist?: McpApprovalPersistence,
-    ): void => {
-      void run(label, () => props.respond(wait, buildMcpElicitationResponse(mcp, action, persist)));
+  function renderApprovalActions() {
+    const choices = approvalChoices(wait);
+    if (!choices) return null;
+    const answer = (choice: ApprovalChoice): void => {
+      void run(choice.busyLabel, () => props.respond(wait, choice.buildResponse()));
     };
-    if (mcp.url) {
+    const decline = choices.decline ? (
+      <button
+        type="button"
+        className="thread-todos-panel__row-link thread-todos-panel__row-link--quiet"
+        onClick={() => answer(choices.decline!)}
+      >
+        {choices.decline.label}
+      </button>
+    ) : null;
+    const accept = choices.accept;
+    if (!accept) {
       // The operator consents on the card, where the full address shows
       // before anything opens. A row has room only for the host.
       return (
         <div className="thread-todos-panel__row-actions">
-          <button
-            type="button"
-            className="thread-todos-panel__row-link thread-todos-panel__row-link--quiet"
-            onClick={() => answer("Declining…", "decline")}
-          >
-            Decline
-          </button>
+          {decline}
           <button
             type="button"
             className="thread-todos-panel__row-link"
@@ -278,107 +266,29 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
         </div>
       );
     }
-    const entries: TodoSplitMenuEntry[] = [
-      ...(persistence.includes("server-session")
-        ? [{
-            kind: "item" as const,
-            id: "server-session",
-            label: `Allow ${mcp.serverName} for this conversation`,
-            onSelect: () => answer("Allowing…", "accept", "server-session"),
-          }]
-        : []),
-      ...(persistence.includes("session")
-        ? [{
-            kind: "item" as const,
-            id: "session",
-            label: mcp._meta?.pwragent_approval_kind === "mcp_tool_call"
-              ? "Allow this tool for this conversation" : "Allow this conversation",
-            onSelect: () => answer("Allowing…", "accept", "session"),
-          }]
-        : []),
-      ...(persistence.includes("always")
-        ? [{
-            kind: "item" as const,
-            id: "always",
-            label: "Always allow",
-            onSelect: () => answer("Allowing…", "accept", "always"),
-          }]
-        : []),
-      {
-        kind: "item",
-        id: "cancel",
-        label: "Cancel turn",
-        onSelect: () => answer("Cancelling…", "cancel"),
-      },
-    ];
+    const entries: TodoSplitMenuEntry[] = choices.alternatives.map((choice) => ({
+      kind: "item",
+      id: choice.id,
+      label: choice.label,
+      onSelect: () => answer(choice),
+    }));
     return (
       <div className="thread-todos-panel__row-actions">
-        <button
-          type="button"
-          className="thread-todos-panel__row-link thread-todos-panel__row-link--quiet"
-          onClick={() => answer("Declining…", "decline")}
-        >
-          Decline
-        </button>
-        <TodoSplitButton
-          label="Allow"
-          menuLabel="Allow options"
-          entries={entries}
-          onClick={() => answer("Allowing…", "accept")}
-        />
-      </div>
-    );
-  }
-
-  function renderApproval() {
-    const request = wait.request;
-    if (!request) return null;
-    const actions = buildPendingRequestActions(request);
-    const primary = actions.find((action) => action.style === "primary")
-      ?? actions.find((action) => action.decision === "accept");
-    const decline = actions.find((action) => action.decision === "decline");
-    if (!primary) return null;
-    const answer = (action: PendingRequestAction): void => {
-      const label = action.decision === "decline"
-        ? "Declining…"
-        : action.decision === "cancel"
-          ? "Cancelling…"
-          : "Approving…";
-      void run(label, () => props.respond(wait, buildPendingRequestResponse(request, action)));
-    };
-    const entries: TodoSplitMenuEntry[] = actions
-      .filter((action) => action !== primary && action !== decline)
-      .map((action) => ({
-        kind: "item",
-        id: action.id,
-        label: action.label,
-        onSelect: () => answer(action),
-      }));
-    return (
-      <div className="thread-todos-panel__row-actions">
-        {decline ? (
-          <button
-            type="button"
-            className="thread-todos-panel__row-link thread-todos-panel__row-link--quiet"
-            onClick={() => answer(decline)}
-          >
-            {decline.label}
-          </button>
-        ) : null}
+        {decline}
         {entries.length > 0 ? (
           <TodoSplitButton
-            label={primary.label}
-            menuLabel="Approval options"
+            label={accept.label}
+            menuLabel={wait.kind === "approval" ? "Approval options" : "Allow options"}
             entries={entries}
-            onClick={() => answer(primary)}
+            onClick={() => answer(accept)}
           />
         ) : (
           <button
             type="button"
             className="thread-todos-panel__row-link"
-            onClick={() => answer(primary)}
+            onClick={() => answer(accept)}
           >
-            {primary.label}
+            {accept.label}
           </button>
         )}
       </div>

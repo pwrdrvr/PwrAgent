@@ -9,6 +9,7 @@ import { copyTextAsCodeBlock } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
 import { ThreadChip } from "../thread-detail/ThreadChip";
+import { TodoSplitButton, type TodoSplitMenuEntry } from "../thread-todos/TodoSplitButton";
 
 const AUTO_DISMISS_MS = 9_000;
 
@@ -17,6 +18,15 @@ export type AppNoticeToastNotice = {
     label: string;
     onClick: () => void;
     tone?: "primary" | "secondary";
+    /**
+     * Makes the button a split pill, as the composer's Send: the label runs
+     * `onClick` and the chevron offers these.
+     */
+    menu?: {
+      /** Names the chevron, e.g. "Approval options". */
+      label: string;
+      entries: TodoSplitMenuEntry[];
+    };
   }[];
   autoDismiss?: boolean;
   /** Retain only the highest-priority durable notice in this logical slot. */
@@ -356,7 +366,15 @@ export function AppNoticeToast(props: {
           ) : null}
           {hasFooterActions ? (
             <div className="app-notice-toast__custom-actions">
-              {customActions.map((action) => (
+              {customActions.map((action) => action.menu && action.menu.entries.length > 0 ? (
+                <TodoSplitButton
+                  key={action.label}
+                  label={action.label}
+                  menuLabel={action.menu.label}
+                  entries={action.menu.entries}
+                  onClick={action.onClick}
+                />
+              ) : (
                 <button
                   key={action.label}
                   className={`button button--${action.tone ?? "secondary"} app-notice-toast__button`}
