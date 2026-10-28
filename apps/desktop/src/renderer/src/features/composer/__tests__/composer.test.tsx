@@ -23979,7 +23979,7 @@ describe("Composer", () => {
     });
     await waitFor(() => expect(normalizeImageFile).toHaveBeenCalledOnce());
     expect(screen.getByText("Preparing image attachments…")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     fireEvent.keyDown(reply, { key: "Enter", metaKey: true });
     expect(startTurn).not.toHaveBeenCalled();
     await act(async () => normalization.resolve({
@@ -23989,7 +23989,7 @@ describe("Composer", () => {
     }));
     await screen.findByAltText("pending.png");
     expect(screen.queryByText("Preparing image attachments…")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
   });
 
   it.each([
