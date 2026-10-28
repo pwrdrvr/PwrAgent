@@ -1,5 +1,6 @@
 import path from "node:path";
-import { buildFederatedThreadRef, buildThreadIdentityKey, classifyDirectory, federatedThreadIdentityKey } from "@pwragent/shared";
+import { buildFederatedThreadRef, buildThreadIdentityKey, classifyDirectory, federatedThreadIdentityKey,
+  isToolManagedWorktreePath } from "@pwragent/shared";
 import type { LinkedDirectorySummary, NavigationDirectorySummary, NavigationIdentity, NavigationThreadSummary } from "@pwragent/shared";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
 import type { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
@@ -64,8 +65,8 @@ export function appendViewerNavigationPins(index: NavigationQueryIndex, pins: re
  * the row made selection "jump" groups, because `selectedDirectory` resolves
  * to the first directory containing the key, which is whichever sorts first,
  * not the group the user clicked in. The owner's `projectKey` is authoritative
- * when it identifies a linked directory; fallback preference is a local
- * checkout before a worktree, then linked-directory order.
+ * when it identifies a linked directory; fallback preference is any project
+ * before a tool-managed worktree folder, then linked-directory order.
  *
  * Remote threads whose project has no local counterpart receive an
  * unconfigured placeholder group. That keeps Cmd+K-mounted rows discoverable
@@ -77,8 +78,9 @@ export function appendViewerNavigationPins(index: NavigationQueryIndex, pins: re
  * paths). When the owner's projectKey identifies one of its linked
  * directories, that primary project wins even if a secondary @-referenced
  * directory is a local checkout. Otherwise, home preference mirrors
- * `pickHomeDirectory`: repo checkouts (`kind: "local"`) before worktree
- * links, then the owner's linked order.
+ * `pickHomeDirectory`: tool-managed worktree folders last, otherwise the
+ * owner's linked order. A `kind: "worktree"` link names its repository
+ * checkout in `path`, so it is a project, not a folder to demote.
  */
 export function findRemoteHomeDirectoryIndex(
   directories: ReadonlyArray<{ label: string; path?: string; kind?: NavigationDirectorySummary["kind"] }>,
@@ -133,12 +135,13 @@ function remoteLinkedDirectoriesByHomePreference(
     return [primaryProjectDirectory];
   }
 
-  return [...linkedDirectories].sort((left, right) => {
-    if (left.kind !== right.kind) {
-      return left.kind === "worktree" ? 1 : -1;
-    }
-    return 0;
-  });
+  // A `worktree` link's `path` is its repository checkout, so it ranks like
+  // any other project. Only a tool-managed worktree folder ranks last; the
+  // rest keep the owner's linked order, as `pickHomeDirectory` does.
+  const isToolManaged = (directory: LinkedDirectorySummary) =>
+    isToolManagedWorktreePath(classifyDirectory(directory).path);
+  return [...linkedDirectories].sort((left, right) =>
+    Number(isToolManaged(left)) - Number(isToolManaged(right)));
 }
 
 function remoteDirectoryPlaceholder(

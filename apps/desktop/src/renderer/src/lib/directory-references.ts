@@ -8,12 +8,14 @@ import { parseSkillMentionParts } from "./skill-mentions";
  *
  * Typing `@` in the composer opens an autocomplete over the tracked
  * directories (the same population as the project picker). Committing a
- * candidate inserts the directory's tilde-shortened path as plain text at
- * the caret — the draft text itself is the source of truth. At send time
- * `listReferencedDirectories` re-scans the draft for any tracked
- * directory's path (inserted via `@`, typed by hand, or pasted) and the
- * caller links those directories to the thread. Deleting the path from the
- * draft removes the reference; no separate token state to keep in sync.
+ * candidate inserts a chip, serialized as `[@label](~/path)`. At send time
+ * `listReferencedDirectories` resolves those chips to tracked directories
+ * and the caller links them to the thread. Deleting the chip removes the
+ * reference.
+ *
+ * Only a chip is a reference. A path typed or pasted as plain text (a log
+ * line, a diagnostics block, a stack trace) names a project without asking
+ * to work in it, and linking it filed the thread under that project.
  */
 
 export type DirectoryReferenceTrigger = {
@@ -195,9 +197,10 @@ export function buildDirectoryReferenceMarkdown(
 }
 
 /**
- * Characters that may legally follow a referenced path in prose. A separator
- * counts so a deeper reference (`~/dev/app/src/index.ts`) still resolves
- * to the tracked repo root it lives under.
+ * Characters that may follow a referenced path in the list of chip
+ * destinations. A separator counts so a file chip
+ * (`~/dev/app/src/index.ts`) still resolves to the tracked repo root it
+ * lives under.
  */
 const REFERENCE_BOUNDARY = /^[\s.,;:!?)\]}'"/]/;
 
@@ -231,11 +234,12 @@ export function normalizeDirectoryReferencePath(value: string): string {
 }
 
 /**
- * Scan a draft for tracked directories it references by path — the
- * tilde-shortened form, the absolute form, or a deeper path under either.
- * The result drives which directories get linked to the thread at send
- * time. `excludePaths` drops directories that are already linked (the
- * launchpad's own directory, a thread's existing linked directories).
+ * Resolve a draft's `@` chips to the tracked directories they reference —
+ * the tilde-shortened form, the absolute form, or a file chip under either.
+ * Paths in the draft's plain text are ignored. The result drives which
+ * directories get linked to the thread at send time. `excludePaths` drops
+ * directories that are already linked (the launchpad's own directory, a
+ * thread's existing linked directories).
  */
 export function listReferencedDirectories(
   draft: string,
@@ -261,11 +265,13 @@ export function listReferencedDirectories(
   );
   const seenPaths = new Set<string>();
   const referenced: NavigationDirectorySummary[] = [];
+  if (!referencePaths) {
+    return [];
+  }
   const containsPath = (path: string): boolean => {
     const tilde = tildifyPath(path, homeDir);
-    return draftContainsPath(draft, path)
-      || (tilde !== path && draftContainsPath(draft, tilde))
-      || draftContainsPath(referencePaths, tilde);
+    return draftContainsPath(referencePaths, path)
+      || (tilde !== path && draftContainsPath(referencePaths, tilde));
   };
   // Already-linked paths still participate in resolution, even when their
   // directory row is outside the loaded page. Excluding them before choosing
