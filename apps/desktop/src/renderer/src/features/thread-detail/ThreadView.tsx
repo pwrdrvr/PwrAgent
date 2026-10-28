@@ -1954,7 +1954,7 @@ export function ThreadView(props: ThreadViewProps) {
   // A keyboard move or return sends focus after the cards, since the control
   // it was on unmounts. A pointer move leaves focus alone: focusing the rail
   // tab would reveal an unpinned rail the operator did not ask to open.
-  const connectionsFocusAfterDockRef = useRef<LaunchpadConnectionsDock>();
+  const connectionsFocusAfterDockRef = useRef<LaunchpadConnectionsDock | undefined>(undefined);
   const connectionsDepartingRef = useRef(false);
   const [connectionsArriving, setConnectionsArriving] = useState(false);
   const [connectionsLanding, setConnectionsLanding] = useState(0);
