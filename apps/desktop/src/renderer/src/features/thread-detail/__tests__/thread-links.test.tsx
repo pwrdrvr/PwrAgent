@@ -3,7 +3,7 @@ import type { AppServerBackendKind, NavigationThreadSummary } from "@pwragent/sh
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
-import { threadCopyTargets } from "../ThreadChip";
+import { ThreadChip, threadCopyTargets } from "../ThreadChip";
 import { ThreadMarkdown } from "../ThreadMarkdown";
 
 const CHILD_THREAD_ID = "019f5d79-a595-73f2-84d9-a0976762c303";
@@ -487,6 +487,26 @@ describe("thread links in transcript markdown", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Open thread RELATED query deranking issue" }));
     expect(onShowThread).toHaveBeenCalledWith({ backend: "codex", threadId: CHILD_THREAD_ID });
+  });
+
+  it.each([false, true])("accepts updated owner titles on off-page chips (previously loaded=%s)", (previouslyLoaded) => {
+    const onShowThread = vi.fn();
+    const chip = (title: string) => <ThreadChip
+      link={{ backend: "codex", threadId: CHILD_THREAD_ID, title }} onOpen={onShowThread}
+    />;
+    const { rerender } = render(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={previouslyLoaded ? [threadSummary()] : []}>
+        {chip("Warm CI dependencies")}
+        {chip("Warm CI dependencies")}
+      </ThreadLinkProvider>,
+    );
+    rerender(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={[]}>
+        {chip("Fix CI install hangs")}
+        {chip("Fix CI install hangs")}
+      </ThreadLinkProvider>,
+    );
+    expect(screen.getAllByRole("button", { name: "Open thread Fix CI install hangs" })).toHaveLength(2);
   });
 
   it("opens explicit local identities that have never been admitted to a page", () => {

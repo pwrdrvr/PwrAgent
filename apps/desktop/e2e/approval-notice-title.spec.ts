@@ -2,7 +2,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
-import type { AppServerThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import type { ReplayFixture } from "../src/main/testing/replay-fixture";
 import { launchElectronApp } from "./fixtures/electron-app";
@@ -11,7 +10,7 @@ test("names an approval outside the loaded page and updates it on rename", async
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-approval-title-"));
   let closeApp: (() => Promise<void>) | undefined;
   try {
-    const waitingThread: AppServerThreadSummary = {
+    const waitingThread = {
       id: "off-page-approval", title: "Warm CI dependencies", titleSource: "explicit",
       source: "codex", executionMode: "default", linkedDirectories: [],
       inbox: { inInbox: true }, updatedAt: 1_760_000_000_000,
