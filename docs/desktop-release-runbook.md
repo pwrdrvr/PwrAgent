@@ -338,11 +338,11 @@ persistent guests must supply macOS 26 and stable Xcode 26 or newer:
    GitHub Release body, and fails the workflow if the body still reads back as
    empty.
 
-The macOS no-secret prepare job runs on GitHub's Apple Silicon `macos-26`
-host. Icon Composer's Xcode 26 `AssetCatalogAgent` loads macOS 26 frameworks,
+The macOS no-secret prepare job runs on the restricted self-hosted Apple Silicon
+pool. Icon Composer's Xcode 26 `AssetCatalogAgent` loads macOS 26 frameworks,
 so selecting Xcode 26 on `macos-15` crashes during the icon compile even when
 `actool --version` passes. The protected macOS signing job uses the same host
-for its electron-builder packaging step.
+pool for its electron-builder packaging step.
 
 The macOS no-secret prepare job:
 
