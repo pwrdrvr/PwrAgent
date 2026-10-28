@@ -407,6 +407,8 @@ unc_marker="/UserNotificationCenter.app/Contents/MacOS/UserNotificationCenter"
 # segfaulted, and ReportCrash had UserNotificationCenter show the dialog.
 # The dialog holds macOS activation, so no app could become active again,
 # and every later macos-window-activation.spec.ts run on those guests failed.
+# macos-e2e-run-lane.sh explains that segfault and keeps a cancelled lane
+# from causing it. Any other Electron crash still leaves this dialog.
 #
 # UserNotificationCenter starts on demand to show an alert, so a UNC process
 # that started within a minute of an Electron crash report is that crash's

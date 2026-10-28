@@ -804,7 +804,13 @@ jobs:
           # Same lane sizes as Linux and Windows; see the desktop-e2e
           # strategy comment.
           PWTEST_SHARD_WEIGHTS: "9:12:12:14"
+        # The wrapper keeps a cancelled step alive until Playwright has closed
+        # Electron, and kills Electron's main first if the runner escalates.
+        # Without it, the runner's orphan reap killed the renderer under a
+        # pending failure screenshot and the main segfaulted; see the script.
+        # `exec` makes the wrapper the step process, so it gets the signals.
         run: >-
+          exec bash ./scripts/ci/macos-e2e-run-lane.sh
           pnpm --filter @pwragent/desktop test:e2e:prebuilt
           --shard=${{ matrix.lane }}/4
 
