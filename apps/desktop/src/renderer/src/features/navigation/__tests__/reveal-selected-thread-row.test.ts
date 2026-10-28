@@ -27,11 +27,11 @@ function place(element: Element, top: number, height: number): void {
 
 // The list scrolls from y=100 to y=500 in the window. The selected row's
 // directory header is stuck to the top of it, 30px tall.
-function mountSidebar(rowTop: number, rowHeight = 60): void {
+function mountSidebar(rowTop: number, rowHeight = 60, section = "directory-row"): void {
   document.body.innerHTML = `
     <aside class="sidebar">
       <div class="sidebar__scroll-region">
-        <section class="directory-row">
+        <section class="${section}">
           <div class="directory-row__header"></div>
           <div class="thread-row-shell"><div class="thread-row is-selected"></div></div>
         </section>
@@ -63,6 +63,30 @@ describe("revealSelectedSidebarThreadRow", () => {
 
   it("centers a row hidden under its sticky directory header", () => {
     mountSidebar(110);
+
+    revealSelectedSidebarThreadRow();
+
+    expect(scroll).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a row flush with an edge where it is, despite subpixel offsets", () => {
+    mountSidebar(129.6, 370.8);
+
+    revealSelectedSidebarThreadRow();
+
+    expect(scroll).not.toHaveBeenCalled();
+  });
+
+  it("leaves a row taller than the list where it is when it covers the view", () => {
+    mountSidebar(40, 600);
+
+    revealSelectedSidebarThreadRow();
+
+    expect(scroll).not.toHaveBeenCalled();
+  });
+
+  it("centers a row hidden under the Pinned group's sticky header", () => {
+    mountSidebar(110, 60, "pinned-group");
 
     revealSelectedSidebarThreadRow();
 

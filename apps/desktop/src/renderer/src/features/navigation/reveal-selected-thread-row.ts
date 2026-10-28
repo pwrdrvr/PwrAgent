@@ -12,6 +12,9 @@ const REGION = ".sidebar__scroll-region";
 // Directory and Pinned group headers stick to the top of the list and
 // cover the rows that scroll under them.
 const STICKY_HEADER = ".directory-row__header";
+// Chromium snaps scroll offsets to device pixels, so a row flush with an
+// edge can measure a fraction past it.
+const EDGE_TOLERANCE_PX = 1;
 
 export function revealSelectedSidebarThreadRow(options?: { instant?: boolean }): void {
   const row = document.querySelector<HTMLElement>(SELECTED_ROW);
@@ -46,5 +49,14 @@ function isRowInFullView(row: HTMLElement): boolean {
   if (header && !header.contains(row)) {
     top = Math.max(top, header.getBoundingClientRect().bottom);
   }
-  return rowBox.top >= top && rowBox.bottom <= view.bottom;
+  const bottom = view.bottom;
+  const fitsInside =
+    rowBox.top >= top - EDGE_TOLERANCE_PX
+    && rowBox.bottom <= bottom + EDGE_TOLERANCE_PX;
+  // A row taller than the list can never fit. When it already covers the
+  // whole visible area, centering it would only nudge it.
+  const coversView =
+    rowBox.top <= top + EDGE_TOLERANCE_PX
+    && rowBox.bottom >= bottom - EDGE_TOLERANCE_PX;
+  return fitsInside || coversView;
 }
