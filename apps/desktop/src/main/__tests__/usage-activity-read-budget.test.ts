@@ -136,6 +136,30 @@ describe("Usage Activity read budgets", () => {
     } finally { db.close(); }
   });
 
+  it("budgets the turn lookup index through a real pending turn and its completion", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-activity-turn-write-");
+    const { db, store } = fixture(StateDb.open(temp.dbPath));
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        await store.upsertThreadUsageLine({ line: {
+          usageLineId: "fixture-turn-line", backend: "codex", provider: "openai", threadId: "fixture-thread",
+          turnId: "fixture-turn", scope: "turn", status: "pending", source: "live", sourceItemId: "fixture-turn",
+          createdAt: start, model: "fixture-unknown", inputTokens: 10, cachedInputTokens: 2,
+          uncachedInputTokens: 8, outputTokens: 3, reasoningOutputTokens: 1, totalTokens: 13,
+          currency: "USD", priceStatus: "unpriced", uncachedInputCostMicros: 0, cachedInputCostMicros: 0,
+          outputCostMicros: 0, totalCostMicros: 0,
+        } });
+        expect(await store.completeThreadUsageTurn({ backend: "codex", threadId: "fixture-thread",
+          turnId: "fixture-turn", completedAt: start + 1000 })).toBe(true);
+      });
+      expectSqliteWriteBudget({ scenario: "usage-activity-turn-lifecycle", writes,
+        note: "One real pending turn insert and authoritative completion: two existing commits, immutable turn lookup key, no persistent interval maintenance; measured 86,520 bytes (~8.7 MB/day at 100 turns/day)" });
+      expect((await store.readUsageActivity(window)).rows[0].line)
+        .toMatchObject({ status: "pending", createdAt: start, completedAt: start + 1000 });
+    } finally { db.close(); removeTempStateDbDir(temp.tempDir); }
+  });
+
   it("retains exact overlap and order at sub-minute boundaries", async () => {
     const { db, store, add } = fixture();
     try {
