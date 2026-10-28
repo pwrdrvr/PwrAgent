@@ -76,6 +76,7 @@ const connection = vi.hoisted(() => ({
 vi.mock("@pwrdrvr/agent-transport", async (importOriginal) => ({
   ...await importOriginal<typeof import("@pwrdrvr/agent-transport")>(),
   JsonRpcConnection: class {
+    request() { throw new Error("Unexpected RPC request in notification-only fixture."); }
     setNotificationHandler(handler: typeof connection.notify) { connection.notify = handler; }
     setRequestHandler() {}
   },
