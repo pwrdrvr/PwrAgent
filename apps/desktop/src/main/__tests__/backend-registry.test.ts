@@ -20499,6 +20499,43 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("leaves a launchpad as stored when its update condition fails", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      overlayStore,
+    });
+
+    await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+    });
+    await registry.updateDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      patch: { prompt: "keep me" },
+    });
+    const skipped = await registry.updateDirectoryLaunchpad(
+      { directoryKey: "directory:/repo-a", patch: { prompt: "replaced" } },
+      { onlyIf: (current) => current.prompt === "" },
+    );
+    expect(skipped.launchpad.prompt).toBe("keep me");
+    expect(
+      (await overlayStore.getDirectoryLaunchpad({ directoryKey: "directory:/repo-a" }))?.prompt,
+    ).toBe("keep me");
+
+    const applied = await registry.updateDirectoryLaunchpad(
+      { directoryKey: "directory:/repo-a", patch: { prompt: "replaced" } },
+      { onlyIf: (current) => current.prompt === "keep me" },
+    );
+    expect(applied.launchpad.prompt).toBe("replaced");
+
+    await registry.close();
+  });
+
   it("seeds empty launchpad defaults from the profile provider baseline", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({

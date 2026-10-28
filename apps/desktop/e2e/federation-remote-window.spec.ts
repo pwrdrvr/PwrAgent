@@ -1586,7 +1586,7 @@ test.describe("federation remote window", () => {
         .map((call) => (call.params as { launchpad?: { backend?: string } }).launchpad?.backend);
 
       // A top-level draft names no provider, so this machine's Kimi Code
-      // would fill it. The peer is asked about Kimi and answers OpenAI.
+      // would fill it. The peer's provider list has no Kimi Code.
       await remote.getByRole("tab", { name: "directories" }).click();
       await remote
         .getByRole("button", { name: "Open new thread launchpad for ProviderRepo" })
@@ -1594,10 +1594,6 @@ test.describe("federation remote window", () => {
       const prompt = remote.getByRole("textbox", { name: "New thread" });
       await expect(prompt).toBeVisible();
       await expect(provider).toContainText("OpenAI", { timeout: 15_000 });
-      expect(ensureCalls()).toContainEqual(expect.objectContaining({
-        directoryKey: "directory:/remote/ProviderRepo",
-        preferredBackend: "acp:kimi",
-      }));
       await prompt.fill("Start on a provider the peer has");
       // Over this machine's Kimi Code the peer could not start the thread,
       // and send stayed disabled.

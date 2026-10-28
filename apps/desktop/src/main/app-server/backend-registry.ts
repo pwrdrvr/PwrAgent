@@ -26869,6 +26869,8 @@ export class DesktopBackendRegistry {
     options?: {
       /** A remote viewer's draft takes no environment metadata from here. */
       skipFilesystemInspection?: boolean;
+      /** Leave the stored draft as it is unless this holds for it. */
+      onlyIf?: (current: NavigationLaunchpadDraft) => boolean;
     },
   ): Promise<UpdateDirectoryLaunchpadResponse> {
     const current =
@@ -26879,6 +26881,12 @@ export class DesktopBackendRegistry {
         directoryKey: request.directoryKey,
         ...fallbackLaunchpadIdentity(request.directoryKey),
       })).launchpad;
+    if (options?.onlyIf && !options.onlyIf(current)) {
+      return {
+        launchpad: current,
+        defaults: await this.overlayStore.getLaunchpadDefaults(),
+      };
+    }
 
     const patch = {
       ...request.patch,
