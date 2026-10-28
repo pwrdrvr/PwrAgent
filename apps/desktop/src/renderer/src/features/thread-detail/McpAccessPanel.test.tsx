@@ -541,6 +541,140 @@ describe("thread verification", () => {
 
 
 describe("remote MCP connection count", () => {
+  const owner = { scope: "remote" as const, instanceId: "owner" };
+  const threeConnections = {
+    connectionIds: ["rovo", "datadog", "sandboxer"],
+    providerServersEnabled: true,
+  };
+  function pendingRead() {
+    let resolve!: (value: typeof threeConnections) => void;
+    let reject!: (cause: Error) => void;
+    const promise = new Promise<typeof threeConnections>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  it("keeps the badge and subscription stable when remote snapshots replace the target object", async () => {
+    const read = vi.fn(async () => threeConnections);
+    const unsubscribe = vi.fn();
+    const onAgentEvent = vi.fn(() => unsubscribe);
+    const desktopApi = { readThreadMcpConnections: read, onAgentEvent };
+    const counts: (number | undefined)[] = [];
+    const { result, rerender } = renderHook(({ federationTarget }) => {
+      const count = useThreadMcpConnectionCount({
+        backend: "codex", threadId: "thread-1", federationTarget, desktopApi,
+      });
+      counts.push(count);
+      return count;
+    }, { initialProps: { federationTarget: owner } });
+    await waitFor(() => expect(result.current).toBe(3));
+    counts.length = 0;
+
+    for (let snapshot = 0; snapshot < 5; snapshot += 1) {
+      rerender({ federationTarget: { ...owner } });
+    }
+
+    expect(counts).toEqual([3, 3, 3, 3, 3]);
+    expect(read).toHaveBeenCalledOnce();
+    expect(onAgentEvent).toHaveBeenCalledOnce();
+    expect(unsubscribe).not.toHaveBeenCalled();
+  });
+
+  it("retains the saved count through pending and failed refreshes, then accepts a confirmed zero", async () => {
+    let receive: ((event: AgentEvent) => void) | undefined;
+    const read = vi.fn(async () => threeConnections);
+    const desktopApi = {
+      readThreadMcpConnections: read,
+      onAgentEvent: (listener: (event: AgentEvent) => void) => {
+        receive = listener;
+        return () => undefined;
+      },
+    };
+    const counts: (number | undefined)[] = [];
+    const { result, rerender } = renderHook(({ token }) => {
+      const count = useThreadMcpConnectionCount({
+        backend: "codex", threadId: "thread-1", federationTarget: owner, desktopApi, token,
+      });
+      counts.push(count);
+      return count;
+    }, { initialProps: { token: 0 } });
+    await waitFor(() => expect(result.current).toBe(3));
+    counts.length = 0;
+
+    const failed = pendingRead();
+    read.mockReturnValueOnce(failed.promise);
+    rerender({ token: 1 });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(result.current).toBe(3);
+    await act(async () => failed.reject(new Error("Owner disconnected")));
+    expect(result.current).toBe(3);
+
+    const refreshed = pendingRead();
+    read.mockReturnValueOnce(refreshed.promise);
+    act(() => receive?.({
+      backend: "codex", federationTarget: owner,
+      notification: { method: "thread/mcpConnections/updated", params: { threadId: "thread-1" } },
+    } as AgentEvent));
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(result.current).toBe(3);
+    await act(async () => refreshed.resolve({ connectionIds: [], providerServersEnabled: true }));
+    expect(result.current).toBe(0);
+    expect(counts).not.toContain(undefined);
+  });
+
+  it.each([
+    { threadId: "thread-2" },
+    { backend: "claude" as const },
+    { federationTarget: { scope: "remote" as const, instanceId: "other-owner" } },
+    { federationTarget: undefined },
+    { threadId: undefined },
+  ])("hides the previous scope's count immediately on switching to %j", async (next) => {
+    const read = vi.fn(async () => threeConnections);
+    const desktopApi = { readThreadMcpConnections: read };
+    type Params = Parameters<typeof useThreadMcpConnectionCount>[0];
+    const initialProps: Params = {
+      backend: "codex", threadId: "thread-1", federationTarget: owner, desktopApi,
+    };
+    const counts: (number | undefined)[] = [];
+    const { result, rerender } = renderHook((params: Params) => {
+      const count = useThreadMcpConnectionCount(params);
+      counts.push(count);
+      return count;
+    }, { initialProps });
+    await waitFor(() => expect(result.current).toBe(3));
+    counts.length = 0;
+    const switched = pendingRead();
+    read.mockReturnValueOnce(switched.promise);
+
+    rerender({ ...initialProps, ...next });
+    expect(result.current).toBeUndefined();
+    expect(counts.every((count) => count === undefined)).toBe(true);
+    if (read.mock.calls.length > 1) {
+      await act(async () => switched.reject(new Error("New scope unavailable")));
+    }
+    expect(result.current).toBeUndefined();
+  });
+
+  it("ignores a late refresh from the previous owner", async () => {
+    const read = vi.fn(async () => threeConnections);
+    const desktopApi = { readThreadMcpConnections: read };
+    const { result, rerender } = renderHook(({ federationTarget, token }) => useThreadMcpConnectionCount({
+      backend: "codex", threadId: "thread-1", federationTarget, desktopApi, token,
+    }), { initialProps: { federationTarget: owner, token: 0 } });
+    await waitFor(() => expect(result.current).toBe(3));
+    const previousOwner = pendingRead();
+    read.mockReturnValueOnce(previousOwner.promise);
+    rerender({ federationTarget: owner, token: 1 });
+    read.mockResolvedValueOnce({ connectionIds: ["other"], providerServersEnabled: true });
+    rerender({ federationTarget: { scope: "remote", instanceId: "other-owner" }, token: 1 });
+    await waitFor(() => expect(result.current).toBe(1));
+
+    await act(async () => previousOwner.resolve(threeConnections));
+    expect(result.current).toBe(1);
+  });
+
   it("refreshes only for the matching owner, backend, and thread", async () => {
     const federationTarget = { scope: "remote" as const, instanceId: "owner" };
     let receive: ((event: AgentEvent) => void) | undefined;
