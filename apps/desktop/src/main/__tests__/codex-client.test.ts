@@ -11476,7 +11476,7 @@ describe("CodexAppServerClient", () => {
     }];
     try {
       await client.startThread({ cwd: "/fixture/project", dynamicTools });
-      await client.resumeThread({ threadId: "thread-2", cwd: "/fixture/project", dynamicTools });
+      await client.startTurn({ threadId: "thread-2", cwd: "/fixture/project", input: [{ type: "text", text: "Continue." }], dynamicTools });
       const requests = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message));
       const spec = dynamicTools[0];
       if (spec.type !== "namespace") throw new Error("Expected namespace fixture");
