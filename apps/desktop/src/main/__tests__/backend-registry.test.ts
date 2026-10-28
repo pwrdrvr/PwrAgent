@@ -22025,6 +22025,17 @@ command = "pnpm grok"
         ],
       }),
       overlayStore: createOverlayStoreMock(),
+      // Claude is installed here but not signed in.
+      claudeBackendOptions: {
+        inspectInstallation: async () => ({
+          executable: "/fixture/claude",
+          authStatus: "sign-in-required" as const,
+        }),
+        discoverModels: async () => [{ id: "claude-opus-4-8", label: "Opus 4.8", current: true }],
+      },
+    });
+    await expect(registry.listBackends({ includeUnavailable: true })).resolves.toMatchObject({
+      backends: expect.arrayContaining([expect.objectContaining({ kind: "claude", available: false })]),
     });
     const directoryKey = "subthread:claude:thread-parent:new-worktree:studio";
 
