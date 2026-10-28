@@ -120,7 +120,7 @@ export async function getAnimationPreservingImageType(
   if (isGifFile(file, type)) {
     return "image/gif";
   }
-  if ((file.type || type).trim().toLowerCase() !== "image/webp") {
+  if ((type || file.type).trim().toLowerCase() !== "image/webp") {
     return undefined;
   }
 

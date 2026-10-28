@@ -81,3 +81,9 @@ describe("WebP animation detection", () => {
     expect(await getAnimationPreservingImageType(file, file.type)).toBe(expected);
   });
 });
+
+it.each(["", "application/octet-stream"])("uses the clipboard WebP MIME when the File type is %j", async (fileType) => {
+  const bytes = Uint8Array.from(atob(ANIMATED_WEBP_BASE64), (char) => char.charCodeAt(0));
+  const file = new File([bytes], "animated.webp", { type: fileType });
+  expect(await getAnimationPreservingImageType(file, "image/webp")).toBe("image/webp");
+});

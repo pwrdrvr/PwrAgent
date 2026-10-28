@@ -378,16 +378,10 @@ for (const extension of ["gif", "webp"] as const) {
       await expect(preview).toHaveAttribute("src", `data:image/${extension};base64,${base64}`);
       const frames = new Set<string>();
       await expect.poll(async () => {
-        const pixels = await preview.evaluate((element) => {
-          const image = element as HTMLImageElement;
-          if (!image.complete || image.naturalWidth !== 16) return "";
-          const canvas = document.createElement("canvas");
-          canvas.width = canvas.height = 16;
-          const context = canvas.getContext("2d")!;
-          context.drawImage(image, 0, 0);
-          return context.getImageData(0, 0, 16, 16).data.join(",");
-        });
-        if (pixels) frames.add(pixels);
+        // Canvas drawImage samples an animation's default frame. Capture the
+        // composited preview so this checks playback the operator can see.
+        const pixels = await preview.screenshot({ animations: "allow" });
+        frames.add(pixels.toString("base64"));
         return frames.size;
       }, { timeout: 5_000, message: `${extension} preview must display distinct animation frames` }).toBeGreaterThan(1);
     } finally {
@@ -397,7 +391,7 @@ for (const extension of ["gif", "webp"] as const) {
   });
 }
 
-test("keeps an ordinary screenshot unchanged without encoding and offers only the safety limit", async ({}, testInfo) => {
+test("keeps an ordinary screenshot unchanged without encoding and offers only the safety limit", async () => {
   const fixture = await createComposerImageThreadSwitchFixture();
   const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
   try {
@@ -437,7 +431,7 @@ test("keeps an ordinary screenshot unchanged without encoding and offers only th
     await expect(app.window.getByRole("radio", { name: "1024 patches", exact: true })).toHaveCount(0);
     await expect(app.window.getByRole("radio", { name: "1536 patches", exact: true })).toHaveCount(0);
     await budget.scrollIntoViewIfNeeded();
-    await app.window.screenshot({ path: testInfo.outputPath("pasted-image-settings.png") });
+    await app.window.screenshot({ path: test.info().outputPath("pasted-image-settings.png") });
   } finally {
     await app.close();
     await fixture.cleanup();
