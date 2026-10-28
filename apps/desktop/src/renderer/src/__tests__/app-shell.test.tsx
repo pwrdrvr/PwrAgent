@@ -413,7 +413,7 @@ describe("App", () => {
     }));
     const getNavigationSnapshot = vi.fn(async (): Promise<NavigationSnapshot> => ({
       backend: "all", fetchedAt: Date.now(), unchanged: false,
-      threads: [], directories: [],
+      threads: [], directories: [], inboxThreadKeys: [],
       launchpadDefaults: { backend: "codex", executionMode: "default" },
     }));
     Object.defineProperty(window, "pwragent", {
@@ -427,7 +427,7 @@ describe("App", () => {
       }),
     });
     await renderApp();
-    await screen.findByRole("button", { name: "Review", exact: true });
+    await screen.findByRole("button", { name: "Review" });
     expect(screen.getByText("#Untitled thread")).toBeInTheDocument();
     for (title of ["Warm CI dependencies", "Fix CI install hangs"]) {
       await act(async () => { changed!({ reason: "requests", backend: "codex", threadId: "off-page" }); });

@@ -136,7 +136,7 @@ export class OperatorRequestService {
     this.syncRequests();
     if (notification.method === "thread/name/updated") {
       const { threadId, threadName } = notification.params;
-      if (threadName?.trim()
+      if (typeof threadId === "string" && typeof threadName === "string" && threadName.trim()
         && (this.registry.listPendingServerRequests().some((entry) =>
           entry.backend === event.backend && entry.notification.params.threadId === threadId)
           || this.store.listOpenQuestions().some((entry) =>

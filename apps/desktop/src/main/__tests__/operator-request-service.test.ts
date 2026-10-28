@@ -162,16 +162,18 @@ describe("OperatorRequestService", () => {
     expect(service.list().questions[0]).toHaveProperty("threadTitle", "Warm CI dependencies");
   });
 
-  it("refreshes a pending request when its title arrives or changes", () => {
+  it.each(["approval", "question"])("refreshes a pending %s when its title arrives or changes", (kind) => {
     const { broadcasts, registry, service } = createService();
-    registry.pending.push({ backend: "codex", notification: approval("thread-a", "req-1") });
+    if (kind === "approval") registry.pending.push({ backend: "codex", notification: approval("thread-a", "req-1") });
     service.start();
+    if (kind === "question") registry.emit(askedEvent("thread-a", "question-1"));
     broadcasts.length = 0;
     for (const title of ["Warm CI dependencies", "Fix CI install hangs"]) {
       registry.titles.set("codex:thread-a", title);
       registry.emit(event({ method: "thread/name/updated", params: { threadId: "thread-a", threadName: title } }));
       expect(broadcasts.pop()).toEqual({ reason: "requests", backend: "codex", threadId: "thread-a" });
-      expect(service.list().serverRequests[0]).toHaveProperty("threadTitle", title);
+      const response = service.list();
+      expect(kind === "approval" ? response.serverRequests[0] : response.questions[0]).toHaveProperty("threadTitle", title);
     }
     registry.emit(event({ method: "thread/name/updated", params: { threadId: "unrelated", threadName: "Other" } }));
     expect(broadcasts).toEqual([]);
