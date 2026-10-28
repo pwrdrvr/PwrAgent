@@ -237,7 +237,7 @@ describe("ThreadTodoViewHub", () => {
 
     function busyFeed() {
       vi.useFakeTimers();
-      return harness({ capable: true, remoteSnapshots: [
+      return harness({ capable: () => true, remoteSnapshots: [
         { epoch: "owner", revision: 1, todos: [card("a", "t", 1)], mergeMethods: prefs },
         { epoch: "owner", revision: 2, todos: [card("a", "t", 1), card("b", "t", 2)], mergeMethods: prefs },
       ] });
@@ -362,7 +362,7 @@ describe("ThreadTodoViewHub", () => {
     it("cancels a pending read when no window shows the owner any more", async () => {
       let viewers = true;
       vi.useFakeTimers();
-      const { hub, remote } = harness({ capable: true, hasViewers: () => viewers, remoteSnapshots: [
+      const { hub, remote } = harness({ capable: () => true, hasViewers: () => viewers, remoteSnapshots: [
         { epoch: "owner", revision: 1, todos: [], mergeMethods: prefs },
       ] });
       await hub.snapshot(peer);
