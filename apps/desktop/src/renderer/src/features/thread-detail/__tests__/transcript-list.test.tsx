@@ -387,12 +387,17 @@ describe("TranscriptList", () => {
     });
 
     it("keeps work the renderer saw after an agent's reply below that reply", () => {
-      // A finished turn: only the observed order keeps the row below.
+      // A finished turn: only the observed order keeps the row below. The
+      // reply is tagged final, so it stays the answer and the late row folds
+      // into its own group after it.
       const reply = withRendererSequence(completedTurnEntries[4]!, 4);
       const { container } = render(
         <TranscriptList
           entries={[...completedTurnEntries.slice(0, 4), reply]}
-          expandedWorkPhaseGroupIds={["work:turn-1:commentary:complete"]}
+          expandedWorkPhaseGroupIds={[
+            "work:turn-1:commentary:complete",
+            "work:turn-1:live-tools-1:complete",
+          ]}
           loading={false}
           loadingMore={false}
           pendingActivityEntry={withRendererSequence(

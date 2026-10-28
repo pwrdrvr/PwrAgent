@@ -407,6 +407,75 @@ describe("buildTranscriptRenderItems", () => {
     ]);
   });
 
+  it("keeps a Codex final answer in view when a tool call cancelled at turn end lands after it", () => {
+    // Codex cancels a dynamic tool call that is still waiting when the turn
+    // ends, and reports it after the answer. That call did no work after the
+    // answer; folding the answer left the thread showing only the request.
+    const turn = completedTurn("turn-1", 2_170_000);
+    const firstNote = commentary("c1", "Tracing the read path.", turn);
+    const firstTool = tool("tool-1", turn);
+    const lastNote = commentary("c2", "The PR creation tool is still pending.", turn);
+    const secondTool = tool("tool-2", turn);
+    const answer = final("f1", "Fix pushed. PR creation is still pending.", turn);
+    const cancelledTool: AppServerThreadActivityEntry = {
+      ...tool("tool-3", turn),
+      summary: "Used 1 tool",
+      status: "failed",
+    };
+    const usage: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-turn-usage-turn-1",
+      summary: "Turn usage: 1,000 tokens",
+      details: [],
+      turn,
+    };
+
+    expect(buildTranscriptRenderItems({
+      entries: [firstNote, firstTool, lastNote, secondTool, answer, cancelledTool, usage],
+    })).toEqual([
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:c1:complete",
+        collapsible: true,
+        entries: [firstNote, firstTool, lastNote, secondTool],
+        label: "Worked for 36m 10s · 2 tool updates",
+      },
+      { type: "entry", entry: answer },
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:tool-3:complete",
+        collapsible: true,
+        entries: [cancelledTool],
+        label: "More work",
+      },
+      { type: "entry", entry: usage },
+    ]);
+  });
+
+  it("keeps an answer with no commentary in view when only a failed call follows it", () => {
+    // A short Codex turn: a tool, the answer alone, then the call Codex
+    // cancelled at turn end, which arrives as a row whose every call failed.
+    // A row with one call that ran is still work after the reply.
+    const turn = completedTurn("turn-1", 70_000);
+    const firstTool = tool("tool-1", turn);
+    const answer = final("f1", "Fix pushed. PR creation is still pending.", turn);
+    const failedCall = { id: "call-2", kind: "command" as const, label: "create_pull_request", status: "failed" as const };
+    const cancelledTool: AppServerThreadActivityEntry = { ...tool("tool-2", turn), status: "failed", details: [failedCall] };
+
+    expect(buildTranscriptRenderItems({ entries: [firstTool, answer, cancelledTool] })).toEqual([
+      expect.objectContaining({ type: "workPhaseGroup", entries: [firstTool] }),
+      { type: "entry", entry: answer },
+      expect.objectContaining({ type: "workPhaseGroup", entries: [cancelledTool], label: "More work" }),
+    ]);
+    const partlyRan: AppServerThreadActivityEntry = {
+      ...cancelledTool,
+      details: [failedCall, { ...failedCall, id: "call-3", status: "completed" }],
+    };
+    expect(buildTranscriptRenderItems({ entries: [firstTool, answer, partlyRan] })).toEqual([
+      expect.objectContaining({ type: "workPhaseGroup", entries: [firstTool, answer, partlyRan] }),
+    ]);
+  });
+
   it("keeps a finished turn's closing replies in view when only non-work entries follow them", () => {
     const turn = completedTurn("turn-1", 70_000);
     const first = reply("m1", "Running the suite:", turn);
