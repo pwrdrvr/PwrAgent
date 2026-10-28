@@ -19910,7 +19910,10 @@ describe("Composer", () => {
         "directory:/repo",
         expect.objectContaining({
           prompt: "Persist this launchpad before navigation",
-        })
+        }),
+        // The flush names whose draft it is, so it cannot land in a peer's
+        // draft for the same directory key.
+        { owner: { scope: "local" } },
       );
     });
   });

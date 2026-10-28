@@ -20,7 +20,9 @@ import {
   subscribeLaunchpadAttachmentHandoffs,
 } from "./launchpad-composer-handoff";
 import {
+  buildLaunchpadComposerScopeKey,
   getEditableLaunchpadDirectoryKey,
+  getEditableLaunchpadOwner,
   getLaunchpadScopeDirectoryKey,
   isStartingLaunchpadComposerScopeKey,
 } from "./launchpad-composer-scope";
@@ -523,7 +525,11 @@ export type ComposerProps = {
         | "agent"
       >
     >,
-    options?: { stickySettingsChanged?: boolean }
+    options?: {
+      stickySettingsChanged?: boolean;
+      /** Whose draft this is, when the caller knows (see useThreadNavigation). */
+      owner?: FederationTarget;
+    }
   ) => Promise<void>;
   removeOptimisticMessage?: (id: string) => void;
   /**
@@ -3140,7 +3146,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const pendingProgrammaticComposerChangeRef =
     useRef<PendingProgrammaticComposerChange | undefined>(undefined);
   const composerScopeKey = props.launchpad
-    ? props.launchpadComposerScopeKey ?? `launchpad:${props.launchpad.directoryKey}`
+    ? props.launchpadComposerScopeKey ?? buildLaunchpadComposerScopeKey(
+        props.launchpad.directoryKey,
+        props.launchpad.federationTarget ?? rendererFederationTarget,
+      )
     : props.thread
       ? buildThreadComposerScopeKey(props.thread.source, props.thread.id, props.thread.federation?.ref.target ?? rendererFederationTarget ?? { scope: "local" })
       : "empty";
@@ -4151,8 +4160,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       || snapshot.imageAttachments.length > 0
       || (snapshot.fileAttachments?.length ?? 0) > 0,
     );
-  const prepareDraftRetarget = (directoryKey: string): void => {
-    const targetScopeKey = `launchpad:${directoryKey}`;
+  /**
+   * `owner` is the destination launchpad's owner. Undefined means this
+   * window's own owner, as for a Composer whose launchpad names none.
+   */
+  const prepareDraftRetarget = (
+    directoryKey: string,
+    owner: FederationTarget | undefined,
+  ): void => {
+    const targetScopeKey = buildLaunchpadComposerScopeKey(directoryKey, owner);
     const latest = latestDraftSnapshotRef.current;
     if (
       latest.scopeKey === targetScopeKey
@@ -5257,6 +5273,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       fileAttachments:
         snapshot.fileAttachments?.length ? snapshot.fileAttachments : undefined,
       prompt: serializeDraftWithSkillTokens(snapshot.draft, snapshot.skillTokens),
+    }, {
+      // A scope left behind can share its key with the launchpad now open
+      // for another owner. Its text goes to its own owner's draft.
+      owner: getEditableLaunchpadOwner(scopeKey),
     });
   };
   const flushComposerDraftSnapshot = (
@@ -6609,7 +6629,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         fileAttachments: fileAttachments.length > 0 ? fileAttachments : undefined,
         prompt: canonicalDraft,
         editorDocument: editorDocument as Record<string, unknown> | undefined,
-      });
+      }, { owner: getEditableLaunchpadOwner(composerScopeKey) });
     }, 250);
 
     return () => {
@@ -13931,7 +13951,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     if (!plan || latestDraftSnapshotRef.current.scopeKey !== sourceScopeKey) {
                       return;
                     }
-                    prepareDraftRetarget(plan.directoryKey);
+                    // The draft moves to the picked machine's launchpad.
+                    prepareDraftRetarget(
+                      plan.directoryKey,
+                      instanceId ? { scope: "remote", instanceId } : undefined,
+                    );
                     await plan.open();
                   })();
                 }}
@@ -14083,7 +14107,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               picking={props.pickingDirectory}
               onSelect={(directory) => {
                 props.onClearPickDirectoryError?.();
-                prepareDraftRetarget(directory.key);
+                prepareDraftRetarget(
+                  directory.key,
+                  props.launchpad?.federationTarget,
+                );
                 props.onSelectDirectoryFromPicker?.(directory);
               }}
               onSelectNoDirectory={

@@ -219,6 +219,12 @@ export type PrAutoDispatchBudgetReservationResult =
       status: "empty" | "paused" | "stale";
     };
 
+/** A viewer's own preferences for one of a peer's directories. */
+type RemoteDirectoryOverlayPayload = DirectoryOverlayState & {
+  /** When this viewer settled the draft it kept under the owner's bare key. */
+  legacyLaunchpadSettledAt?: number;
+};
+
 type RemoteThreadTargetRow = {
   instance_id: string;
   instance_label: string;
@@ -5633,21 +5639,34 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     directoryKey: string;
     collapsed: boolean;
   }): Promise<DirectoryOverlayState> {
-    const current = this.stateDb.raw
+    const nextState: RemoteDirectoryOverlayPayload = {
+      ...this.readRemoteDirectoryOverlay(params.instanceId, params.directoryKey),
+      directoryKey: params.directoryKey,
+      directoryThreadsCollapsed: params.collapsed,
+    };
+    this.writeRemoteDirectoryOverlay(params.instanceId, nextState);
+    return nextState;
+  }
+
+  private readRemoteDirectoryOverlay(
+    instanceId: string,
+    directoryKey: string,
+  ): RemoteDirectoryOverlayPayload | undefined {
+    const row = this.stateDb.raw
       .prepare(
         `SELECT payload FROM remote_directory_overlay
          WHERE instance_id = ? AND directory_key = ?`,
       )
-      .get(params.instanceId, params.directoryKey) as
-        | { payload: string }
-        | undefined;
-    const nextState: DirectoryOverlayState = {
-      ...(current
-        ? JSON.parse(current.payload) as DirectoryOverlayState
-        : {}),
-      directoryKey: params.directoryKey,
-      directoryThreadsCollapsed: params.collapsed,
-    };
+      .get(instanceId, directoryKey) as { payload: string } | undefined;
+    return row
+      ? JSON.parse(row.payload) as RemoteDirectoryOverlayPayload
+      : undefined;
+  }
+
+  private writeRemoteDirectoryOverlay(
+    instanceId: string,
+    payload: RemoteDirectoryOverlayPayload,
+  ): void {
     this.stateDb.raw
       .prepare(
         `INSERT OR REPLACE INTO remote_directory_overlay(
@@ -5656,8 +5675,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
            payload
          ) VALUES (?, ?, ?)`,
       )
-      .run(params.instanceId, params.directoryKey, JSON.stringify(nextState));
-    return nextState;
+      .run(instanceId, payload.directoryKey, JSON.stringify(payload));
   }
 
   async readRemoteDirectoryOverlays(params: {
@@ -8781,6 +8799,88 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     if (removed.changes > 0) {
       this.notifyDirectoryLaunchpadsChanged();
     }
+  }
+
+  /**
+   * Before a viewer's drafts for a peer's directories named the peer, one row
+   * under the owner's bare key held both that draft and this machine's own
+   * draft for the same path. Which one wrote the text cannot be told.
+   *
+   * The first time this viewer opens the peer's draft, a copy of that text
+   * (never its provider settings) seeds the peer's own row. The bare-key row
+   * stays where it is: it is this machine's local draft from now on. A
+   * marker beside the peer's other per-directory preferences keeps the copy
+   * from happening twice, so a remote draft that was sent or discarded does
+   * not come back. One commit per peer directory, once; none after that.
+   */
+  async adoptLegacyRemoteDirectoryLaunchpad(params: {
+    instanceId: string;
+    directoryKey: string;
+    storageKey: string;
+  }): Promise<DirectoryLaunchpadOverlayState | undefined> {
+    const readLaunchpad = this.stateDb.raw.prepare(
+      "SELECT payload FROM directory_launchpads WHERE directory_path = ?",
+    );
+    if (readLaunchpad.get(params.storageKey)) return undefined;
+    return this.stateDb.raw.transaction(() => {
+      if (readLaunchpad.get(params.storageKey)) return undefined;
+      const overlay = this.readRemoteDirectoryOverlay(
+        params.instanceId,
+        params.directoryKey,
+      );
+      if (overlay?.legacyLaunchpadSettledAt !== undefined) return undefined;
+      const now = Date.now();
+      this.writeRemoteDirectoryOverlay(params.instanceId, {
+        ...overlay,
+        directoryKey: params.directoryKey,
+        legacyLaunchpadSettledAt: now,
+      });
+      const legacyRow = readLaunchpad.get(params.directoryKey) as
+        | { payload: string }
+        | undefined;
+      const legacy = legacyRow
+        ? JSON.parse(legacyRow.payload) as DirectoryLaunchpadOverlayState
+        : undefined;
+      if (
+        !legacy
+        || (
+          (legacy.prompt ?? "").trim().length === 0
+          && (legacy.imageAttachments?.length ?? 0) === 0
+          && (legacy.fileAttachments?.length ?? 0) === 0
+        )
+      ) {
+        return undefined;
+      }
+      // Provider settings stay behind: the operator may have picked them
+      // for this machine, and the peer may not run that provider.
+      const adopted: DirectoryLaunchpadOverlayState = {
+        directoryKey: params.storageKey,
+        directoryKind: legacy.directoryKind,
+        directoryLabel: legacy.directoryLabel,
+        directoryPath: legacy.directoryPath,
+        backend: legacy.backend,
+        executionMode: legacy.executionMode,
+        workMode: legacy.workMode,
+        prompt: legacy.prompt,
+        editorDocument: legacy.editorDocument,
+        imageAttachments: legacy.imageAttachments,
+        fileAttachments: legacy.fileAttachments,
+        createdAt: legacy.createdAt ?? now,
+        updatedAt: now,
+      };
+      this.stateDb.raw
+        .prepare(
+          `INSERT INTO directory_launchpads(directory_path, payload, created_at, updated_at, settings_touched_at)
+           VALUES (?, ?, ?, ?, NULL)`,
+        )
+        .run(
+          params.storageKey,
+          JSON.stringify(adopted),
+          adopted.createdAt,
+          adopted.updatedAt,
+        );
+      return adopted;
+    }).immediate();
   }
 
   async readDirectoryGitStatusCache(): Promise<

@@ -1,5 +1,5 @@
 import { hydrateComposerDraft } from "./composer-draft-hydration";
-import { getLaunchpadScopeDirectoryKey } from "./launchpad-composer-scope";
+import { getLaunchpadScopeStorageKey } from "./launchpad-composer-scope";
 import { parseOwnedComposerScopeKey, parseThreadIdentityKey } from "@pwragent/shared";
 import {
   useCallback,
@@ -412,7 +412,9 @@ function parseScope(scopeKey: string): {
   }
   if (scopeKey.startsWith("launchpad:")) {
     return {
-      directoryKey: getLaunchpadScopeDirectoryKey(scopeKey),
+      // The stored key names a peer's draft's owner, as main's index does, so
+      // a lookup by this machine's key never offers a peer's draft.
+      directoryKey: getLaunchpadScopeStorageKey(scopeKey),
       scopeKind: "launchpad",
     };
   }

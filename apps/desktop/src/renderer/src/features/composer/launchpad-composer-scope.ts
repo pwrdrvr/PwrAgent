@@ -1,3 +1,11 @@
+import {
+  isSubthreadLaunchpadKey,
+  launchpadStorageKey,
+  parseRemoteLaunchpadStorageKey,
+  type FederationTarget,
+} from "@pwragent/shared";
+import { readRendererFederationTarget } from "../../lib/federation-window";
+
 /**
  * Composer scopes for launchpads.
  *
@@ -13,9 +21,26 @@
  * directory's editable draft, which is what keeps a follow-up from being saved
  * as that directory's next prompt. Directory keys are `directory:` or
  * `workspace:` keys, so the `starting:` segment cannot collide with one.
+ *
+ * A peer's directory has its own editable draft, `launchpad:<storage key>`,
+ * where the storage key names the peer (`launchpadStorageKey`). It never
+ * shares a scope with this machine's draft for the same directory key.
  */
 const LAUNCHPAD_SCOPE_PREFIX = "launchpad:";
 const STARTING_LAUNCHPAD_SCOPE_PREFIX = "launchpad:starting:";
+
+/**
+ * The editable draft scope for a directory. With no `owner`, the owner is the
+ * peer this window fronts, so a remote window's drafts always name it.
+ */
+export function buildLaunchpadComposerScopeKey(
+  directoryKey: string,
+  owner?: FederationTarget,
+): string {
+  const resolvedOwner = owner
+    ?? (typeof window === "undefined" ? undefined : readRendererFederationTarget());
+  return `${LAUNCHPAD_SCOPE_PREFIX}${launchpadStorageKey(directoryKey, resolvedOwner)}`;
+}
 
 export function buildStartingLaunchpadComposerScopeKey(
   creationId: string,
@@ -28,17 +53,51 @@ export function isStartingLaunchpadComposerScopeKey(scopeKey: string): boolean {
   return scopeKey.startsWith(STARTING_LAUNCHPAD_SCOPE_PREFIX);
 }
 
-/** The directory whose editable launchpad draft this scope is, if any. */
+/**
+ * The directory whose editable launchpad draft this scope is, if any, by the
+ * key its owner uses.
+ */
 export function getEditableLaunchpadDirectoryKey(
   scopeKey: string,
 ): string | undefined {
-  if (
-    !scopeKey.startsWith(LAUNCHPAD_SCOPE_PREFIX)
-    || isStartingLaunchpadComposerScopeKey(scopeKey)
-  ) {
+  const storageKey = getEditableLaunchpadStorageKey(scopeKey);
+  return storageKey === undefined
+    ? undefined
+    : parseRemoteLaunchpadStorageKey(storageKey)?.directoryKey ?? storageKey;
+}
+
+/**
+ * Who owns an editable draft scope: the peer its key names, else this window's
+ * own owner (`{ scope: "local" }`). Undefined for a starting scope, and for a
+ * sub-thread draft, whose key names its machine without naming an owner.
+ */
+export function getEditableLaunchpadOwner(
+  scopeKey: string,
+): FederationTarget | undefined {
+  const storageKey = getEditableLaunchpadStorageKey(scopeKey);
+  if (storageKey === undefined || isSubthreadLaunchpadKey(storageKey)) {
     return undefined;
   }
-  return scopeKey.slice(LAUNCHPAD_SCOPE_PREFIX.length);
+  const peer = parseRemoteLaunchpadStorageKey(storageKey);
+  return peer ? { scope: "remote", instanceId: peer.instanceId } : { scope: "local" };
+}
+
+/**
+ * The key a launchpad scope's draft is stored under: the owner-scoped key for
+ * an editable draft, the directory key for a starting one.
+ */
+export function getLaunchpadScopeStorageKey(
+  scopeKey: string,
+): string | undefined {
+  return getEditableLaunchpadStorageKey(scopeKey)
+    ?? getLaunchpadScopeDirectoryKey(scopeKey);
+}
+
+function getEditableLaunchpadStorageKey(scopeKey: string): string | undefined {
+  return scopeKey.startsWith(LAUNCHPAD_SCOPE_PREFIX)
+    && !isStartingLaunchpadComposerScopeKey(scopeKey)
+    ? scopeKey.slice(LAUNCHPAD_SCOPE_PREFIX.length)
+    : undefined;
 }
 
 /** The directory a launchpad scope belongs to, editable or starting. */

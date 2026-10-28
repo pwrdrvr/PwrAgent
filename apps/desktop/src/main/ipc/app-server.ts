@@ -265,6 +265,7 @@ import {
   isAppServerBackendKind,
   isFederationInstanceId,
   isRemoteFederationTarget,
+  type FederationTarget,
   normalizePullRequestProvider as normalizeSharedPullRequestProvider,
   parseThreadIdentityKey,
   rankInboxThreadKeys,
@@ -419,7 +420,10 @@ import {
 } from "../../shared/ipc";
 import { githubPrAccessTargetKey } from "../../shared/github-pr-access";
 import { subscribersForChannel } from "../window-channels";
-import { isFederationWindowWebContents } from "../window";
+import {
+  federationWindowTargetForWebContents,
+  isFederationWindowWebContents,
+} from "../window";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
@@ -598,6 +602,24 @@ function rejectNonUserDirectoryKey(directoryKey: string): void {
       `Cannot persist preferences for synthetic directory entry: ${directoryKey} (only directory:* and workspace:* keys are supported)`,
     );
   }
+}
+
+/**
+ * The owner of a draft a request edits. A remote window's drafts belong to
+ * its peer unless the request names another peer, as for a draft moved to
+ * another machine with the Machine chip. It never edits this machine's own
+ * drafts. The main window names the peer itself for a pinned peer's draft.
+ */
+function withLaunchpadWindowOwner<
+  Request extends { federationTarget?: FederationTarget },
+>(
+  event: { sender?: IpcMainInvokeEvent["sender"] } | undefined,
+  request: Request,
+): Request {
+  const windowTarget = federationWindowTargetForWebContents(event?.sender);
+  return windowTarget && request.federationTarget?.scope !== "remote"
+    ? { ...request, federationTarget: windowTarget }
+    : request;
 }
 
 /**
@@ -8013,6 +8035,7 @@ class DesktopAppServerService {
         {
           skipFilesystemInspection: true,
           skipMcpConnectionDefaults: true,
+          owner: federationTarget,
         },
       );
       const resolvedLocalResponse = ownerResponse
@@ -8034,6 +8057,7 @@ class DesktopAppServerService {
                   onlyIf: (current) =>
                     current.backend === from
                     && current.settingsTouchedAt === undefined,
+                  owner: federationTarget,
                 },
               )).launchpad,
           })
@@ -8083,13 +8107,18 @@ class DesktopAppServerService {
   async updateDirectoryLaunchpad(
     request: UpdateDirectoryLaunchpadRequest,
   ): Promise<UpdateDirectoryLaunchpadResponse> {
-    return await getDesktopBackendRegistry().updateDirectoryLaunchpad(request);
+    // A peer's draft is stored apart from this machine's draft for its key.
+    return await getDesktopBackendRegistry().updateDirectoryLaunchpad(request, {
+      owner: request.federationTarget,
+    });
   }
 
   async resetDirectoryLaunchpad(
     request: ResetDirectoryLaunchpadRequest,
   ): Promise<ResetDirectoryLaunchpadResponse> {
-    return await getDesktopBackendRegistry().resetDirectoryLaunchpad(request);
+    return await getDesktopBackendRegistry().resetDirectoryLaunchpad(request, {
+      owner: request.federationTarget,
+    });
   }
 
   async pickDirectoryFromDisk(
@@ -10100,10 +10129,12 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
     async (
-      _event,
+      event,
       request: UpdateDirectoryLaunchpadRequest,
     ): Promise<UpdateDirectoryLaunchpadResponse> => {
-      return await appServerService.updateDirectoryLaunchpad(request);
+      return await appServerService.updateDirectoryLaunchpad(
+        withLaunchpadWindowOwner(event, request),
+      );
     },
   );
   ipcMain.removeHandler(NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL);
@@ -10120,10 +10151,12 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
     async (
-      _event,
+      event,
       request: ResetDirectoryLaunchpadRequest,
     ): Promise<ResetDirectoryLaunchpadResponse> => {
-      return await appServerService.resetDirectoryLaunchpad(request);
+      return await appServerService.resetDirectoryLaunchpad(
+        withLaunchpadWindowOwner(event, request),
+      );
     },
   );
   ipcMain.removeHandler(NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL);

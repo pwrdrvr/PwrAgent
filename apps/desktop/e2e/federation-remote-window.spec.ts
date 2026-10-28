@@ -1626,6 +1626,124 @@ test.describe("federation remote window", () => {
     }
   });
 
+  test("keeps a remote draft apart from this machine's draft for the same directory", async () => {
+    test.setTimeout(180_000);
+
+    let gateway: InProcessFederationGateway | undefined;
+    const fixture = await createLocalControlFixture();
+    // Two Macs with one home layout: the peer's project lives at the path
+    // this machine's project does, so both use one directory key.
+    const sharedPath = await mkdtemp(path.join(os.tmpdir(), "pwragent-shared-layout-"));
+    const directoryKey = `directory:${sharedPath}`;
+    let app: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+    try {
+      gateway = await startInProcessFederationGateway({
+        instanceLabel: "E2E Shared Layout Gateway",
+        directories: [
+          {
+            key: directoryKey,
+            label: "SharedRepo",
+            path: sharedPath,
+            threadIds: ["remote-shared-thread"],
+          },
+        ],
+        threads: [
+          {
+            id: "remote-shared-thread",
+            title: "Remote shared thread",
+            updatedAt: 1_500,
+            source: "codex",
+            executionMode: "default",
+            linkedDirectories: [
+              {
+                id: sharedPath,
+                label: "SharedRepo",
+                path: sharedPath,
+                worktreePath: sharedPath,
+                kind: "local",
+              },
+            ],
+          },
+        ],
+      });
+      app = await launchElectronApp({
+        fixturePath: fixture.fixturePath,
+        secretStorage: "memory",
+      });
+      const { electronApp, window } = app;
+
+      await window.getByRole("button", { name: "Open settings" }).click();
+      await window
+        .getByRole("navigation", { name: "Settings sections" })
+        .getByRole("button", { name: "Federation", exact: true })
+        .click();
+      await window.getByLabel("Import invite").fill(gateway.invite);
+      await window.getByRole("button", { name: "Import invite" }).click();
+      await gateway.waitForConnection(30_000);
+      await expect(
+        window
+          .getByRole("region", { name: "Connection" })
+          .getByText("Connected", { exact: true }),
+      ).toBeVisible({ timeout: 30_000 });
+
+      const remoteWindowPromise = electronApp.waitForEvent("window");
+      await window
+        .getByRole("button", { name: "Browse remote threads" })
+        .click();
+      const remote = await remoteWindowPromise;
+      await remote.waitForLoadState("domcontentloaded");
+      await expect(
+        remote.getByRole("button", { name: "Remote shared thread" }),
+      ).toBeVisible({ timeout: 30_000 });
+
+      const draftRequest = {
+        directoryKey,
+        directoryKind: "directory" as const,
+        directoryLabel: "SharedRepo",
+        directoryPath: sharedPath,
+      };
+      const remoteDraft = async () => await remote.evaluate(async ({ request, instanceId }) => {
+        const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+        const response = await api.ensureDirectoryLaunchpad!({
+          ...request,
+          federationTarget: { scope: "remote", instanceId },
+        });
+        return { directoryKey: response.launchpad.directoryKey, prompt: response.launchpad.prompt };
+      }, { request: draftRequest, instanceId: gateway!.instanceId });
+      const localDraft = async () => await window.evaluate(async (request) => {
+        const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+        return (await api.ensureDirectoryLaunchpad!(request)).launchpad.prompt;
+      }, draftRequest);
+
+      const peerText = "Draft for the peer's SharedRepo";
+      await remote.getByRole("tab", { name: "directories" }).click();
+      await remote
+        .getByRole("button", { name: "Open new thread launchpad for SharedRepo" })
+        .click();
+      await remote.getByRole("textbox", { name: "New thread" }).fill(peerText);
+      // The remote window still speaks the owner's key.
+      await expect
+        .poll(remoteDraft, { timeout: 15_000 })
+        .toEqual({ directoryKey, prompt: peerText });
+
+      // This machine's draft for the same key holds none of it.
+      expect(await localDraft()).toBe("");
+      const localText = "Draft for this machine's SharedRepo";
+      await window.evaluate(async ({ key, prompt }) => {
+        const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+        await api.updateDirectoryLaunchpad!({ directoryKey: key, patch: { prompt } });
+      }, { key: directoryKey, prompt: localText });
+
+      expect(await remoteDraft()).toEqual({ directoryKey, prompt: peerText });
+      expect(await localDraft()).toBe(localText);
+    } finally {
+      await app?.close();
+      await gateway?.close();
+      await fixture.cleanup();
+      await rm(sharedPath, { recursive: true, force: true });
+    }
+  });
+
   test("keeps a cross-instance child attached through restart, reconnect, unlink, and archive", async () => {
     test.skip(
       process.platform !== "darwin",

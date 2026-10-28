@@ -4,6 +4,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
 import { threadLockRefusalMessage } from "@pwragent/shared";
+import { launchpadStorageKey } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
 import { stageTurnInputAttachment } from "../app-server/turn-input-attachment-files";
 import * as turnInputAttachmentFiles from "../app-server/turn-input-attachment-files";
@@ -22850,6 +22851,243 @@ command = "pnpm grok"
       removeTempStateDbDir(temp.tempDir);
       vi.unstubAllEnvs();
     }
+  });
+
+  describe("a peer's draft for a directory key this machine also uses", () => {
+    // Two Macs with one home layout: the peer's key is this machine's key.
+    const request = {
+      directoryKey: "directory:/Users/fixture/src/app",
+      directoryKind: "directory" as const,
+      directoryLabel: "app",
+      directoryPath: "/Users/fixture/src/app",
+    };
+    const owner = { scope: "remote" as const, instanceId: "owner_one" };
+    const remote = {
+      skipFilesystemInspection: true,
+      skipMcpConnectionDefaults: true,
+      owner,
+    };
+    const openStore = () => {
+      const temp = createTempStateDb("pwragent-peer-launchpad-");
+      const db = StateDb.open(temp.dbPath);
+      const persisted = new SqliteOverlayStore(db);
+      const overlayStore = Object.assign(createOverlayStoreMock(), {
+        adoptLegacyRemoteDirectoryLaunchpad: (
+          params: Parameters<SqliteOverlayStore["adoptLegacyRemoteDirectoryLaunchpad"]>[0],
+        ) => persisted.adoptLegacyRemoteDirectoryLaunchpad(params),
+      });
+      vi.spyOn(overlayStore, "getDirectoryLaunchpad").mockImplementation((value) => persisted.getDirectoryLaunchpad(value));
+      vi.spyOn(overlayStore, "listDirectoryLaunchpads").mockImplementation(() => persisted.listDirectoryLaunchpads());
+      vi.spyOn(overlayStore, "upsertDirectoryLaunchpad").mockImplementation((value) => persisted.upsertDirectoryLaunchpad(value));
+      vi.spyOn(overlayStore, "resetDirectoryLaunchpad").mockImplementation((value) => persisted.resetDirectoryLaunchpad(value));
+      const registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/start"] } }),
+        overlayStore,
+      });
+      return {
+        persisted,
+        registry,
+        close: async () => {
+          await registry.close();
+          db.close();
+          removeTempStateDbDir(temp.tempDir);
+          vi.unstubAllEnvs();
+        },
+      };
+    };
+
+    it("is stored apart from this machine's own draft", async () => {
+      const { persisted, registry, close } = openStore();
+      try {
+        const opened = await registry.ensureDirectoryLaunchpad(request, remote);
+        // The renderer and the owner keep using the owner's key.
+        expect(opened.launchpad.directoryKey).toBe(request.directoryKey);
+        await registry.ensureDirectoryLaunchpad(request, { skipFilesystemInspection: true });
+
+        await registry.updateDirectoryLaunchpad(
+          { directoryKey: request.directoryKey, patch: { prompt: "this machine's draft" } },
+          { skipFilesystemInspection: true },
+        );
+        const typed = await registry.updateDirectoryLaunchpad(
+          { directoryKey: request.directoryKey, patch: { prompt: "the peer's draft" } },
+          { skipFilesystemInspection: true, owner },
+        );
+        expect(typed.launchpad).toMatchObject({
+          directoryKey: request.directoryKey,
+          prompt: "the peer's draft",
+        });
+        await expect(persisted.getDirectoryLaunchpad({ directoryKey: request.directoryKey }))
+          .resolves.toMatchObject({ prompt: "this machine's draft" });
+
+        // A provider switch for the peer (#3029) leaves this machine's draft.
+        await registry.updateDirectoryLaunchpad(
+          { directoryKey: request.directoryKey, patch: { backend: "claude" } },
+          { skipFilesystemInspection: true, owner },
+        );
+        await expect(persisted.getDirectoryLaunchpad({
+          directoryKey: launchpadStorageKey(request.directoryKey, owner),
+        })).resolves.toMatchObject({ prompt: "the peer's draft", backend: "claude" });
+        await expect(persisted.getDirectoryLaunchpad({ directoryKey: request.directoryKey }))
+          .resolves.toMatchObject({ prompt: "this machine's draft", backend: "codex" });
+        await expect(registry.ensureDirectoryLaunchpad(request, remote)).resolves.toMatchObject({
+          launchpad: { directoryKey: request.directoryKey, prompt: "the peer's draft" },
+        });
+        // One row per owner.
+        expect(await persisted.listDirectoryLaunchpads()).toHaveLength(2);
+
+        // Clearing the peer's draft leaves this machine's, and does not bring
+        // this machine's text back into the peer's draft.
+        await registry.resetDirectoryLaunchpad({ directoryKey: request.directoryKey }, { owner });
+        await expect(persisted.getDirectoryLaunchpad({ directoryKey: request.directoryKey }))
+          .resolves.toMatchObject({ prompt: "this machine's draft" });
+        await expect(registry.ensureDirectoryLaunchpad(request, remote)).resolves.toMatchObject({
+          launchpad: { prompt: "" },
+        });
+      } finally {
+        await close();
+      }
+    });
+
+    it("takes no environments from this machine's folder at the peer's path", async () => {
+      // This machine has its own project, with an environment, at the path
+      // the peer's project uses.
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-peer-path-"));
+      await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
+      await writeFile(
+        path.join(root, ".codex", "environments", "environment.toml"),
+        "version = 1\nname = \"This machine's environment\"\n",
+        "utf8",
+      );
+      const shared = { ...request, directoryKey: `directory:${root}`, directoryPath: root };
+      const { registry, close } = openStore();
+      try {
+        await registry.ensureDirectoryLaunchpad(shared, remote);
+        const peerEdit = await registry.updateDirectoryLaunchpad(
+          { directoryKey: shared.directoryKey, patch: { prompt: "for the peer" } },
+          { owner },
+        );
+        expect(peerEdit.launchpad.codexEnvironmentOptions).toBeUndefined();
+
+        // A late edit that recreates the peer's row takes none either.
+        await registry.resetDirectoryLaunchpad({ directoryKey: shared.directoryKey }, { owner });
+        const recreated = await registry.updateDirectoryLaunchpad(
+          { directoryKey: shared.directoryKey, patch: { prompt: "late edit" } },
+          { owner },
+        );
+        expect(recreated.launchpad.codexEnvironmentOptions).toBeUndefined();
+
+        // This machine's own draft still reads its own folder.
+        const localEdit = await registry.updateDirectoryLaunchpad({
+          directoryKey: shared.directoryKey,
+          patch: { prompt: "for this machine" },
+        });
+        expect(localEdit.launchpad.codexEnvironmentOptions?.map((option) => option.name))
+          .toEqual(["This machine's environment"]);
+      } finally {
+        await close();
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps the text it held under the shared key before the split", async () => {
+      vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+      const { persisted, registry, close } = openStore();
+      try {
+        // The one shared row, as an earlier build left it. Its provider pick
+        // may have been made for this machine.
+        await persisted.upsertDirectoryLaunchpad({
+          ...request,
+          backend: "codex",
+          executionMode: "default",
+          model: "gpt-5.5",
+          prompt: "typed before the upgrade",
+          workMode: "local",
+          settingsTouchedAt: 50,
+          createdAt: 10,
+          updatedAt: 20,
+        });
+
+        const opened = await registry.ensureDirectoryLaunchpad(request, remote);
+        expect(opened.launchpad).toMatchObject({
+          directoryKey: request.directoryKey,
+          prompt: "typed before the upgrade",
+        });
+        expect(opened.launchpad.settingsTouchedAt).toBeUndefined();
+        // This machine's draft is not moved.
+        await expect(persisted.getDirectoryLaunchpad({ directoryKey: request.directoryKey }))
+          .resolves.toMatchObject({
+            prompt: "typed before the upgrade",
+            model: "gpt-5.5",
+            settingsTouchedAt: 50,
+          });
+
+        // Sent or discarded, the peer's draft stays empty after that.
+        await registry.resetDirectoryLaunchpad(
+          { directoryKey: request.directoryKey, preserveEnvironment: true },
+          { owner },
+        );
+        await expect(registry.ensureDirectoryLaunchpad(request, remote)).resolves.toMatchObject({
+          launchpad: { prompt: "" },
+        });
+
+        const otherPeer = { scope: "remote" as const, instanceId: "owner_two" };
+        const { result, writes } = await measureSqliteWrites(async () =>
+          await persisted.adoptLegacyRemoteDirectoryLaunchpad({
+            instanceId: otherPeer.instanceId,
+            directoryKey: request.directoryKey,
+            storageKey: launchpadStorageKey(request.directoryKey, otherPeer),
+          }));
+        expect(result).toMatchObject({ prompt: "typed before the upgrade" });
+        expectSqliteWriteBudget({
+          scenario: "remote-launchpad-legacy-adoption",
+          note: "First open of one peer's draft after drafts named their owner: one commit for the copy and its marker, once per peer directory, none after that.",
+          writes,
+        });
+        const { writes: repeated } = await measureSqliteWrites(async () => {
+          await persisted.adoptLegacyRemoteDirectoryLaunchpad({
+            instanceId: otherPeer.instanceId,
+            directoryKey: request.directoryKey,
+            storageKey: launchpadStorageKey(request.directoryKey, otherPeer),
+          });
+        });
+        expect(repeated.commits).toBe(0);
+      } finally {
+        await close();
+      }
+    });
+
+    it("keeps the earlier text when an edit reaches the peer's draft first", async () => {
+      const { persisted, registry, close } = openStore();
+      try {
+        await persisted.upsertDirectoryLaunchpad({
+          ...request,
+          backend: "codex",
+          executionMode: "default",
+          prompt: "typed before the upgrade",
+          workMode: "local",
+          createdAt: 10,
+          updatedAt: 20,
+        });
+
+        // A settings change from another window, before any ensure.
+        const updated = await registry.updateDirectoryLaunchpad(
+          { directoryKey: request.directoryKey, patch: { executionMode: "full-access" } },
+          { owner },
+        );
+        expect(updated.launchpad).toMatchObject({
+          directoryKey: request.directoryKey,
+          executionMode: "full-access",
+          prompt: "typed before the upgrade",
+        });
+        await expect(persisted.getDirectoryLaunchpad({ directoryKey: request.directoryKey }))
+          .resolves.toMatchObject({
+            executionMode: "default",
+            prompt: "typed before the upgrade",
+          });
+      } finally {
+        await close();
+      }
+    });
   });
 
   it("keeps selected Codex environments sticky after materializing", async () => {

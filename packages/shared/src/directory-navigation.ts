@@ -8,6 +8,7 @@ import type {
 import type { LinkedDirectorySummary } from "./contracts/normalized-app-server.js";
 import {
   buildThreadIdentityKey,
+  isRemoteLaunchpadStorageKey,
   isSubthreadLaunchpadKey,
 } from "./contracts/navigation.js";
 import { compareThreadsByCreatedAtDesc } from "./thread-pins.js";
@@ -626,6 +627,11 @@ export function buildDirectorySummaries(params: {
     // merge, so skipping the persisted overlay row here only drops the leaked /
     // abandoned copies and never hides an active composer.
     if (isSubthreadLaunchpadKey(directoryKey)) {
+      continue;
+    }
+    // A draft for a peer's directory is stored here under a key naming that
+    // peer. It belongs to the peer's window, never to this machine's list.
+    if (isRemoteLaunchpadStorageKey(directoryKey)) {
       continue;
     }
     const launchpadPath = launchpad.directoryPath ?? pathFromDirectoryKey(directoryKey);
