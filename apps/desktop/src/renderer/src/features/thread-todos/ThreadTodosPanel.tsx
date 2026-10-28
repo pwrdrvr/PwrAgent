@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { FederationRemoteTarget, ThreadTodo, ThreadTodoKind } from "@pwragent/shared";
 import {
+  THREAD_TODO_BUSY_RETRY_MS,
   THREAD_TODO_RESOLUTION_RESULTS,
   codexAsyncQuestionItemId,
   operatorTodoItemKey,
@@ -23,7 +24,7 @@ import { OperatorWaitRow } from "../operator-requests/OperatorWaitRow";
 import { isBlockingWait, type OperatorWait } from "../operator-requests/operator-waits";
 import { ThreadTodoCard, formatTodoAge } from "./ThreadTodoCard";
 import type { ThreadTodoDoHereOptions, ThreadTodoResolveOptions, ThreadTodosView } from "./thread-todos-view";
-import { keepBusyThreadTodos, newestResolvedFirst, THREAD_TODOS_BUSY_RETRY_MS } from "./busy-thread-todos";
+import { keepBusyThreadTodos } from "./busy-thread-todos";
 import { operatorWaitMatchesFilter, threadTodoMatchesFilter, type ThreadTodoFilter } from "./thread-todo-filters";
 import { tooltipHandlers, useViewportTooltip } from "../../lib/useViewportTooltip";
 import { isNavigationBusy } from "../../../../shared/navigation-ipc-result";
@@ -111,6 +112,9 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
   const [scope, setScopeState] = useState<ThreadTodoScope>(rememberedScope);
   const [showResolved, setShowResolved] = useState(false);
   const [actionError, setActionError] = useState<string>();
+  // A Done-list owner failure, apart from card actions so neither clears
+  // the other.
+  const [listingError, setListingError] = useState<string>();
   const [resolved, setResolved] = useState<ThreadTodo[]>();
   // The revision whose resolved listing already spent its one busy re-list.
   const [busyRelistedRevision, setBusyRelistedRevision] = useState<number>();
@@ -125,19 +129,22 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
   };
 
   useEffect(() => {
-    if (!showResolved || !listResolved) return;
+    if (!showResolved || !listResolved) {
+      setListingError(undefined);
+      return;
+    }
     let cancelled = false;
     let busyRelist: ReturnType<typeof setTimeout> | undefined;
     // A busy owner keeps the last cards and earns one re-list per change
     // event. A later change event lists again, so it needs no loop.
     const relistOnce = (): void => {
       if (busyRelistedRevision === view.revision) return;
-      busyRelist = setTimeout(() => setBusyRelistedRevision(view.revision), THREAD_TODOS_BUSY_RETRY_MS);
+      busyRelist = setTimeout(() => setBusyRelistedRevision(view.revision), THREAD_TODO_BUSY_RETRY_MS);
     };
-    setActionError(undefined);
     void listResolved().then((listing) => {
       if (cancelled) return;
-      setResolved((current) => keepBusyThreadTodos(current, listing.todos, listing.busyThreads, newestResolvedFirst));
+      setResolved((current) => keepBusyThreadTodos(current, listing.todos, listing.busyThreads));
+      setListingError(listing.errors?.length ? listing.errors.join("\n") : undefined);
       if (listing.busyThreads?.length) relistOnce();
     }).catch((error: unknown) => {
       if (cancelled) return;
@@ -145,7 +152,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
         relistOnce();
         return;
       }
-      setActionError(String(error));
+      setListingError(String(error));
       setResolved([]);
     });
     return () => {
@@ -257,10 +264,14 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
     `${instance.label} — ${instance.reason === "disconnected" ? "Disconnected" : "To-dos unavailable; update PwrAgent on this instance"}`,
   ).join("\n");
 
+  // One peer can fail both the open queue and the Done list; say it once.
+  const alertText = [...new Set([actionError, listingError, view.queueError]
+    .flatMap((error) => error?.split("\n") ?? []))].join("\n");
+
   return (
     <section className="context-panel__section thread-todos-panel">
       <h3>To-dos</h3>
-      {actionError || view.queueError ? <p className="thread-todo-card__error" role="alert">{actionError ?? view.queueError}</p> : null}
+      {alertText ? <p className="thread-todo-card__error" role="alert">{alertText}</p> : null}
       <div className="thread-todos-panel__controls">
         <div
           aria-label="To-do scope"

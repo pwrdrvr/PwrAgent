@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary, ThreadReview, ThreadTodo, ThreadTodoProject } from "@pwragent/shared";
 import type { AppServerPendingRequestNotification } from "@pwragent/shared";
 import {
+  THREAD_TODO_BUSY_RETRY_MS,
   codexAsyncQuestionItemId,
   threadTodoThreadKey,
   threadReviewTodo,
@@ -14,7 +15,6 @@ import { ThreadMetaChips } from "../../navigation/ThreadMetaChips";
 import { ThreadTodoStack } from "../ThreadTodoStack";
 import { ThreadTodosPanel } from "../ThreadTodosPanel";
 import { ThreadTodoCountsContext } from "../useThreadTodos";
-import { THREAD_TODOS_BUSY_RETRY_MS } from "../busy-thread-todos";
 import { unwrapNavigationRead } from "../../../../../shared/navigation-ipc-result";
 import type { ThreadTodosView } from "../thread-todos-view";
 import { buildOperatorWaits, type OperatorWait } from "../../operator-requests/operator-waits";
@@ -601,6 +601,35 @@ describe("thread to-do checklists", () => {
     expect(screen.getByRole("alert").textContent).toContain("Owner disconnected");
   });
 
+  // One pinned owner's failure must not hide the cards every other owner sent.
+  it("shows a pinned owner's failure beside the resolved cards that did load", async () => {
+    const done = todo({ id: "d0", status: "done", title: "Shipped locally", resolvedAt: 1 });
+    const view = createView([], { listResolved: vi.fn(async () => ({ todos: [done], errors: ["peer: Owner store failed"] })) });
+    render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Resolved" })); });
+    expect(screen.getByText("Shipped locally")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("peer: Owner store failed");
+  });
+
+  it("drops the Done list's owner failure when Done is hidden", async () => {
+    const view = createView([], { listResolved: vi.fn(async () => ({ todos: [], errors: ["peer: Owner store failed"] })) });
+    render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Resolved" })); });
+    expect(screen.getByRole("alert").textContent).toContain("peer: Owner store failed");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Resolved" })); });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows the Done list's owner failure beside the queue's, once per line", async () => {
+    const view = createView([], {
+      listResolved: vi.fn(async () => ({ todos: [], errors: ["peer: Owner store failed"] })),
+      queueError: "peer: Owner store failed\nRequests failed",
+    });
+    render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Resolved" })); });
+    expect(screen.getByRole("alert").textContent).toBe("peer: Owner store failed\nRequests failed");
+  });
+
   it("keeps a busy owner's resolved queue quiet", async () => {
     const busy = Object.assign(new Error("handler_failed: [navigation_busy] Busy"), { code: "navigation_busy" });
     const view = createView([], { listResolved: vi.fn(async () => { throw busy; }) });
@@ -659,7 +688,7 @@ describe("thread to-do checklists", () => {
       expect(listResolved).toHaveBeenCalledTimes(2);
       expect(screen.getByText("Shipped the fix")).toBeTruthy();
       expect(screen.queryByRole("alert")).toBeNull();
-      await flush(THREAD_TODOS_BUSY_RETRY_MS);
+      await flush(THREAD_TODO_BUSY_RETRY_MS);
       expect(listResolved).toHaveBeenCalledTimes(3);
       expect(screen.getByText("Merged the docs")).toBeTruthy();
       expect(screen.queryByRole("alert")).toBeNull();
@@ -669,9 +698,9 @@ describe("thread to-do checklists", () => {
       const { listResolved, change } = setup({ todos: [done] }, busy(), busy(), { todos: [] });
       await flush();
       change();
-      await flush(THREAD_TODOS_BUSY_RETRY_MS);
+      await flush(THREAD_TODO_BUSY_RETRY_MS);
       expect(listResolved).toHaveBeenCalledTimes(3);
-      await flush(THREAD_TODOS_BUSY_RETRY_MS * 10);
+      await flush(THREAD_TODO_BUSY_RETRY_MS * 10);
       expect(listResolved).toHaveBeenCalledTimes(3);
       expect(screen.getByText("Shipped the fix")).toBeTruthy();
       expect(screen.queryByRole("alert")).toBeNull();
@@ -687,7 +716,7 @@ describe("thread to-do checklists", () => {
       expect(screen.getByText("Pinned owner card")).toBeTruthy();
       expect(screen.queryByText("Shipped the fix")).toBeNull();
       expect(screen.queryByRole("alert")).toBeNull();
-      await flush(THREAD_TODOS_BUSY_RETRY_MS * 10);
+      await flush(THREAD_TODO_BUSY_RETRY_MS * 10);
       expect(listResolved).toHaveBeenCalledTimes(3);
       expect(screen.getByText("Pinned owner card")).toBeTruthy();
     });

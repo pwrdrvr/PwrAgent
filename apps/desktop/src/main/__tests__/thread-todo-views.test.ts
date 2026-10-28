@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent, FederationRemoteTarget, ListThreadTodosResponse, ThreadTodo, ThreadTodoFeedDelta, ThreadTodoFeedSnapshot,
 } from "@pwragent/shared";
-import { THREAD_TODO_BUSY_RETRY_MS, ThreadTodoViewHub } from "../thread-todos/thread-todo-views";
+import { THREAD_TODO_BUSY_RETRY_MS } from "@pwragent/shared";
+import { ThreadTodoViewHub } from "../thread-todos/thread-todo-views";
 
 const peer: FederationRemoteTarget = { scope: "remote", instanceId: "peer" };
 const prefs = { defaultMethod: "squash" as const, byProject: {} };
