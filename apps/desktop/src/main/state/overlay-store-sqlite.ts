@@ -1,7 +1,6 @@
 import { buildLegacyEncodedThreadIdentityKey, parseUsageLimitObservation, validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRollup, type UsageActivityRow, type UsageLimitObservation, usageRollupStep } from "@pwragent/shared";
 import { createHash, randomUUID } from "node:crypto";
 import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
-import { usageActivityCandidates } from "./usage-activity-index";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 import { sqliteUsageLedgerVersions } from "./sqlite-usage-ledger-change-version";
@@ -2792,13 +2791,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     // contained ones are read separately and rolled up per parent thread, so
     // they cannot spend the row bound meant for turns.
     const rows = this.stateDb.raw.prepare(`
-      WITH activity_candidates AS (${usageActivityCandidates("overlap")})
       SELECT l.*, COALESCE(t.started_at, l.created_at) AS activity_started_at,
         COALESCE(t.completed_at, l.completed_at,
           CASE WHEN l.scope = 'monitor' AND l.status = 'finalized' THEN l.created_at END) AS activity_completed_at,
         t.rate_limit_snapshot AS activity_rate_limit_snapshot
-      FROM activity_candidates c
-        CROSS JOIN thread_usage_lines l ON l.usage_line_id = c.usage_line_id
+      FROM thread_usage_lines l
         LEFT JOIN thread_usage_turns t ON t.usage_turn_id = l.usage_turn_id
        WHERE l.status != 'superseded'
          AND activity_started_at < @to
@@ -2813,12 +2810,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     // Aggregate in SQLite. Only one representative ledger row per group
     // crosses into JS, including in a window containing thousands of helpers.
     const helperRows = this.stateDb.raw.prepare(`
-      WITH activity_candidates AS (${usageActivityCandidates("helpers")}), candidates AS (
+      WITH candidates AS (
         SELECT l.*,
           COALESCE(t.started_at, l.created_at) AS activity_started_at,
           COALESCE(t.completed_at, l.completed_at, l.created_at) AS activity_completed_at
-        FROM activity_candidates c
-          CROSS JOIN thread_usage_lines l ON l.usage_line_id = c.usage_line_id
+        FROM thread_usage_lines l
           LEFT JOIN thread_usage_turns t ON t.usage_turn_id = l.usage_turn_id
         WHERE l.scope = 'monitor' AND l.status = 'finalized'
           AND COALESCE(l.source_item_id, '') LIKE 'system:%'
