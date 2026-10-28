@@ -727,21 +727,27 @@ jobs:
         uses: actions/checkout@v7
         timeout-minutes: 10
         with:
-          lfs: true
-
-      - name: Report Git LFS checkout failure
-        if: failure() && steps.checkout.outcome == 'failure'
-        timeout-minutes: 1
-        run: git lfs logs last
+          # Hydrate ordinary Git blobs before LFS opens its object database.
+          # In a reused partial clone, LFS can otherwise miss packs created
+          # by Git's concurrent lazy fetch and report a source blob missing.
+          lfs: false
 
       - name: Materialize Git LFS assets
+        id: lfs
         # These jobs reuse persistent runner workspaces. A previous checkout
         # can leave an LFS pointer at an unchanged path, and checkout --force
         # does not necessarily rewrite it after fetching the LFS object.
         # Pull explicitly so Playwright always receives PNG bytes rather than
         # the pointer text, even when this runner served another job first.
         timeout-minutes: 5
-        run: git lfs pull
+        run: |
+          git config --local --get-regexp '^remote\.origin\.(promisor|partialclonefilter)$' || true
+          git lfs pull
+
+      - name: Report Git LFS checkout failure
+        if: failure() && (steps.checkout.outcome == 'failure' || steps.lfs.outcome == 'failure')
+        timeout-minutes: 1
+        run: git lfs logs last
 
       - name: Locate the guest cache root
         # One directory on the guest that only this repository uses. The
