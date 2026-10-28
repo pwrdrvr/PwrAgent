@@ -133,6 +133,7 @@ export function buildPwrAgentThreadToolDefinitions(
         context: {
           backend: context.backend,
           threadId: context.threadId,
+          ...(context.turnId ? { turnId: context.turnId } : {}),
         },
         args,
       } as PwrAgentThreadInspectionRequest);

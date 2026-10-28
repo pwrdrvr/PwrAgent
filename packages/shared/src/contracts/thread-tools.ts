@@ -85,6 +85,8 @@ export type PwrAgentThreadInspectionErrorCode =
 export type PwrAgentThreadInspectionContext = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  /** The calling turn. Its live access mode outranks the thread's stored one. */
+  turnId?: string;
   now?: number;
 };
 

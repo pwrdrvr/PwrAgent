@@ -852,6 +852,7 @@ describe("federation agent tools service", () => {
     const handler = createFederationAgentToolsHandler({
       // Never let unit tests mint a machine-id in the real PwrAgent root.
       collectHostInfo: async () => localHostInfo,
+      resolveCallerExecutionMode: () => "full-access",
       resolveSourceTurnAttachments: async () => [{
         type: "localImage",
         name: "source.png",
@@ -1291,6 +1292,7 @@ describe("federation agent tools service", () => {
       }));
       const handler = createFederationAgentToolsHandler({
         collectHostInfo: async () => localHostInfo,
+        resolveCallerExecutionMode: () => "full-access",
         runtime: buildRuntime({
           health: async () => buildHealth({ peers: [{
             id: "pwr_studio",
@@ -2244,5 +2246,135 @@ describe("create_instance_thread environments", () => {
       codexEnvironmentId: "project",
       codexEnvironmentActionId: "dev",
     });
+  });
+});
+
+describe("create_instance_thread access ceiling", () => {
+  const projectLaunchpad = {
+    backend: "codex",
+    executionMode: "full-access",
+    workMode: "worktree",
+    directoryKey: "dir:/repo",
+    directoryKind: "directory",
+    directoryLabel: "Repo",
+    prompt: "",
+    createdAt: 1,
+    updatedAt: 2,
+  } as const;
+
+  function buildCase(
+    resolveCallerExecutionMode?: () => "default" | "auto" | "full-access",
+  ) {
+    const materializeDirectoryLaunchpad = vi.fn(
+      async (request: MaterializeDirectoryLaunchpadRequest) => ({
+        backend: "codex" as const,
+        threadId: "remote-child",
+        executionMode: request.launchpad!.executionMode,
+        workMode: request.launchpad!.workMode!,
+      }),
+    );
+    const resolver = resolveCallerExecutionMode
+      ? vi.fn(resolveCallerExecutionMode)
+      : undefined;
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      ...(resolver ? { resolveCallerExecutionMode: resolver } : {}),
+      runtime: buildRuntime({
+        health: async () => buildHealth({ peers: [{
+          id: "pwr_studio",
+          label: "Studio Mac",
+          role: "client",
+          status: "connected",
+          capabilities: ["thread_navigation"],
+        }] }),
+        remoteBackend: (() => ({
+          readPopulation: async () => buildSnapshot({
+            directories: [{
+              key: "dir:/repo",
+              kind: "directory",
+              label: "Repo",
+              path: "/repo",
+              threadKeys: [],
+              needsAttentionCount: 0,
+              launchpad: projectLaunchpad,
+            }] as NavigationSnapshot["directories"],
+          }),
+          materializeDirectoryLaunchpad,
+        })) as never,
+      }),
+    });
+    const create = async (executionMode?: "default" | "auto" | "full-access") =>
+      await handler({
+        operation: "create_instance_thread",
+        context,
+        args: {
+          instanceId: "pwr_studio",
+          projectKey: "dir:/repo",
+          ...(executionMode ? { executionMode } : {}),
+        },
+      });
+    return { create, materializeDirectoryLaunchpad, resolver };
+  }
+
+  it.each(["auto", "full-access"] as const)(
+    "refuses a Default Access caller asking a peer for %s before the peer is called",
+    async (executionMode) => {
+      const { create, materializeDirectoryLaunchpad, resolver } = buildCase(() => "default");
+
+      const response = await create(executionMode);
+
+      expect(response).toMatchObject({
+        ok: false,
+        error: {
+          code: "forbidden",
+          message: expect.stringContaining("An agent cannot raise access"),
+        },
+      });
+      expect(resolver).toHaveBeenCalledWith(context);
+      expect(materializeDirectoryLaunchpad).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { caller: "default", requested: "default" },
+    { caller: "auto", requested: "auto" },
+    { caller: "auto", requested: "default" },
+    { caller: "full-access", requested: "auto" },
+    { caller: "full-access", requested: "full-access" },
+  ] as const)(
+    "allows a $caller caller to ask for $requested",
+    async ({ caller, requested }) => {
+      const { create, materializeDirectoryLaunchpad } = buildCase(() => caller);
+
+      const response = await create(requested);
+
+      expect(response).toMatchObject({ ok: true, data: { executionMode: requested } });
+      expect(materializeDirectoryLaunchpad.mock.calls[0][0].launchpad).toMatchObject({
+        executionMode: requested,
+      });
+    },
+  );
+
+  it("keeps the project's own mode when the request names none", async () => {
+    const { create, materializeDirectoryLaunchpad, resolver } = buildCase(() => "default");
+
+    const response = await create();
+
+    expect(response).toMatchObject({ ok: true });
+    expect(resolver).not.toHaveBeenCalled();
+    expect(materializeDirectoryLaunchpad.mock.calls[0][0].launchpad).toMatchObject({
+      executionMode: "full-access",
+    });
+  });
+
+  it("allows nothing above Default Access without a caller resolver", async () => {
+    const { create, materializeDirectoryLaunchpad } = buildCase();
+
+    expect(await create("auto")).toMatchObject({
+      ok: false,
+      error: { code: "forbidden" },
+    });
+    expect(await create("default")).toMatchObject({ ok: true });
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledTimes(1);
   });
 });
