@@ -136,7 +136,7 @@ describe("Usage Activity read budgets", () => {
     } finally { db.close(); }
   });
 
-  it("budgets the turn lookup index through a real pending turn and its completion", async () => {
+  it("budgets a real pending turn and its authoritative completion without new indexes", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("pwragent-activity-turn-write-");
     const { db, store } = fixture(StateDb.open(temp.dbPath));
@@ -154,10 +154,33 @@ describe("Usage Activity read budgets", () => {
           turnId: "fixture-turn", completedAt: start + 1000 })).toBe(true);
       });
       expectSqliteWriteBudget({ scenario: "usage-activity-turn-lifecycle", writes,
-        note: "One real pending turn insert and authoritative completion: two existing commits, immutable turn lookup key, no persistent interval maintenance; measured 86,520 bytes (~8.7 MB/day at 100 turns/day)" });
+        note: "One real pending turn insert and authoritative completion: two existing commits, existing thread-index lookup, no persistent interval maintenance; measured 86,520 bytes (~8.7 MB/day at 100 turns/day)" });
       expect((await store.readUsageActivity(window)).rows[0].line)
         .toMatchObject({ status: "pending", createdAt: start, completedAt: start + 1000 });
     } finally { db.close(); removeTempStateDbDir(temp.tempDir); }
+  });
+
+  it.each(["same", "other-thread", "other-backend"])("preserves authoritative completion for %s line identity", async (identity) => {
+    const { db, store } = fixture();
+    try {
+      await store.upsertThreadUsageLine({ line: {
+        usageLineId: "completion-line", backend: "codex", provider: "openai", threadId: "owner-thread",
+        turnId: "completion-turn", scope: "turn", status: "pending", source: "live", sourceItemId: "completion-turn",
+        createdAt: start, model: "fixture-unknown", inputTokens: 10, cachedInputTokens: 2,
+        uncachedInputTokens: 8, outputTokens: 3, reasoningOutputTokens: 1, totalTokens: 13,
+        currency: "USD", priceStatus: "unpriced", uncachedInputCostMicros: 0, cachedInputCostMicros: 0,
+        outputCostMicros: 0, totalCostMicros: 0,
+      } });
+      if (identity === "other-thread") db.raw.prepare("UPDATE thread_usage_lines SET thread_id = 'other-thread'").run();
+      if (identity === "other-backend") db.raw.prepare("UPDATE thread_usage_lines SET backend = 'acp:qwen'").run();
+      expect(await store.completeThreadUsageTurn({ backend: "codex", threadId: "owner-thread",
+        turnId: "completion-turn", completedAt: start + 1000 })).toBe(true);
+      expect((await store.readUsageActivity(window)).rows[0].line).toMatchObject({
+        backend: identity === "other-backend" ? "acp:qwen" : "codex",
+        threadId: identity === "other-thread" ? "other-thread" : "owner-thread",
+        status: "pending", completedAt: start + 1000,
+      });
+    } finally { db.close(); }
   });
 
   it("retains exact overlap and order at sub-minute boundaries", async () => {
