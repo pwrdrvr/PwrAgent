@@ -142,6 +142,9 @@ describe("windowed stream compatibility", () => {
 describe("windowed flow control", () => {
   const window = 256 * 1024;
   const frameBytes = 16 * 1024;
+  // The receiver batches grants once a quarter-window drains. A fragmented
+  // window can leave less than a quarter uncredited until more data arrives.
+  const replenishedWindow = 3 * window / 4;
 
   it("waits for fragmented held data and starts a fresh byte count after flushing", async () => {
     const gate = new ServiceLinkGate();
@@ -191,12 +194,16 @@ describe("windowed flow control", () => {
     const forward = await forwarder.connect(1, declaration, link.rpc, { streams: 2 });
     link.down.hold();
     const local = client(forward.localPort);
+    const controller = new AbortController();
+    cleanups.push(() => controller.abort());
     // Each flush is one round trip. A v1 stream would carry one 16 KiB chunk per
-    // round trip; a windowed one carries the whole window, and never more.
+    // round trip; a windowed one carries the available window, and never more.
     for (let round = 0; round < 4; round += 1) {
-      await vi.waitFor(() => expect(link.down.bytes).toBe(window));
+      const available = round === 0 ? window : replenishedWindow;
+      await link.down.waitForBytes(available, controller.signal);
       await settle();
-      expect(link.down.bytes).toBe(window);
+      expect(link.down.bytes).toBeGreaterThanOrEqual(available);
+      expect(link.down.bytes).toBeLessThanOrEqual(window);
       link.down.flush();
     }
     link.down.open();
@@ -222,13 +229,20 @@ describe("windowed flow control", () => {
     const forward = await forwarder.connect(1, declaration, link.rpc, { streams: 2 });
     link.up.hold();
     const local = client(forward.localPort);
-    local.socket.end(payload);
     const controller = new AbortController();
     cleanups.push(() => controller.abort());
+    // Force a non-frame-aligned read before sending the rest. Credit grants
+    // then batch across fragmented frames rather than restoring an exact window.
+    const prefixBytes = frameBytes + 19;
+    local.socket.write(payload.subarray(0, prefixBytes));
+    await link.up.waitForBytes(prefixBytes, controller.signal);
+    local.socket.end(payload.subarray(prefixBytes));
     for (let round = 0; round < 3; round += 1) {
-      await link.up.waitForBytes(window, controller.signal);
+      const available = round === 0 ? window : replenishedWindow;
+      await link.up.waitForBytes(available, controller.signal);
       await settle();
-      expect(link.up.bytes).toBe(window);
+      expect(link.up.bytes).toBeGreaterThanOrEqual(available);
+      expect(link.up.bytes).toBeLessThanOrEqual(window);
       link.up.flush();
     }
     link.up.open();
