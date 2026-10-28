@@ -23,6 +23,11 @@ export type NavigationAttentionOrder = {
    * began after the removal decides them and drops the entry.
    */
   removed?: Map<string, number>;
+  /**
+   * When the newest complete listing applied here began. That listing decided
+   * every thread it did not admit, so an older one cannot admit it either.
+   */
+  listedAt?: number;
 };
 
 export function observeNavigationAttentionTurn(params: {
@@ -55,7 +60,8 @@ export function observeNavigationAttentionTurn(params: {
     removed = new Map(removed);
     removed.delete(params.key);
   }
-  return { members, nextRank: params.previous.nextRank + Number(move), ...(removed?.size ? { removed } : {}) };
+  return { members, nextRank: params.previous.nextRank + Number(move), ...(removed?.size ? { removed } : {}),
+    ...(params.previous.listedAt !== undefined ? { listedAt: params.previous.listedAt } : {}) };
 }
 
 /** A boundary took the member out of Attention (archive, or a seen idle thread). */
@@ -73,6 +79,7 @@ export function removeNavigationAttentionMember(params: {
 
 /** Whether something in the order was observed after a listing that began at `observedAt`. */
 export function navigationAttentionOrderFollows(order: NavigationAttentionOrder, observedAt: number): boolean {
+  if ((order.listedAt ?? 0) > observedAt) return true;
   for (const member of order.members.values()) if ((member.observedAt ?? 0) > observedAt) return true;
   for (const at of order.removed?.values() ?? []) if (at > observedAt) return true;
   return false;
@@ -124,8 +131,12 @@ export function reconcileNavigationAttentionOrder(params: {
   for (const [key, at] of params.previous?.removed ?? []) {
     if (follows(at)) removed.set(key, at);
   }
-  // This listing has no say over a member or removal observed after it began.
-  const decides = (key: string): boolean => !follows(params.previous?.members.get(key)?.observedAt) && !removed.has(key);
+  // This listing has no say over a member or removal observed after it began,
+  // nor over a non-member a newer complete listing already left out.
+  const decides = (key: string): boolean => {
+    const member = params.previous?.members.get(key);
+    return !follows(member?.observedAt) && !removed.has(key) && (member !== undefined || !follows(params.previous?.listedAt));
+  };
   for (const thread of params.threads) {
     const key = navigationAttentionIdentity(thread);
     const previous = params.previous?.members.get(key);
@@ -168,7 +179,9 @@ export function reconcileNavigationAttentionOrder(params: {
       if (!members.has(key)) removed.set(key, observedAt);
     }
   }
-  return { members, nextRank, ...(removed.size ? { removed } : {}) };
+  const listedAt = params.complete !== false && observedAt !== undefined
+    && !follows(params.previous?.listedAt) ? observedAt : params.previous?.listedAt;
+  return { members, nextRank, ...(removed.size ? { removed } : {}), ...(listedAt !== undefined ? { listedAt } : {}) };
 }
 
 /** Serialized-equivalent backing, counted separately from page generations. */
@@ -177,5 +190,6 @@ export function navigationAttentionOrderBytes(order: NavigationAttentionOrder): 
     members: [...order.members],
     nextRank: order.nextRank,
     removed: [...order.removed ?? []],
+    listedAt: order.listedAt,
   }), "utf8");
 }
