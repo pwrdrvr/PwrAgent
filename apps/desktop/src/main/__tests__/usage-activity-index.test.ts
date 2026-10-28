@@ -43,6 +43,7 @@ it("backfills authoritative endpoints atomically and follows old and new writers
       "UPDATE thread_usage_lines SET usage_turn_id = 'renamed' WHERE usage_line_id = 'joined'",
       "UPDATE thread_usage_lines SET status = 'superseded' WHERE usage_line_id = 'live'",
       "UPDATE thread_usage_lines SET status = 'pending', updated_at = 800000 WHERE usage_line_id = 'live'",
+      "INSERT OR REPLACE INTO thread_usage_lines VALUES ('monitor', NULL, 'monitor', 'finalized', 240000, NULL, 950000)",
       "DELETE FROM thread_usage_lines WHERE usage_line_id = 'deleted-first'",
       "VACUUM",
       "UPDATE thread_usage_lines SET usage_line_id = 'moved', completed_at = 950000 WHERE usage_line_id = 'joined'",

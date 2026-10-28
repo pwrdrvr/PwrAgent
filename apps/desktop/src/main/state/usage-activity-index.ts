@@ -55,7 +55,9 @@ CREATE VIEW usage_activity_endpoints AS
 
 CREATE TRIGGER usage_activity_line_insert AFTER INSERT ON thread_usage_lines BEGIN
   INSERT INTO usage_activity_keys(usage_line_id, started_at, ended_at)
-    SELECT usage_line_id, started_at, ended_at FROM usage_activity_endpoints WHERE usage_line_id = NEW.usage_line_id;
+    SELECT usage_line_id, started_at, ended_at FROM usage_activity_endpoints WHERE usage_line_id = NEW.usage_line_id
+    ON CONFLICT(usage_line_id) DO UPDATE SET started_at = excluded.started_at, ended_at = excluded.ended_at
+    WHERE started_at != excluded.started_at OR ended_at != excluded.ended_at;
 END;
 CREATE TRIGGER usage_activity_line_delete AFTER DELETE ON thread_usage_lines BEGIN
   DELETE FROM usage_activity_keys WHERE usage_line_id = OLD.usage_line_id;
