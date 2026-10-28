@@ -3247,7 +3247,7 @@ describe("DesktopBackendRegistry", () => {
     const titleService = { generateTitle: vi.fn(async () => ({ status: "generated" as const, title: "Redundant helper title" })) };
     const sessions: AcpSessionMetadata[] = [{ backendId: backend, sessionId: "claude-title-session", title: "ACP session", titleSource: "fallback",
       cwd: "/tmp/claude-title-workspace", createdAt: 1000, updatedAt: 1000, executionMode: "default", status: "idle" }];
-    const { registry } = createKimiAcpRegistry({
+    const { registry, acpClient } = createKimiAcpRegistry({
       acpBackendId: backend,
       sessionId: "claude-title-session",
       sessions,
@@ -3268,6 +3268,7 @@ describe("DesktopBackendRegistry", () => {
         expect.objectContaining({ id: "claude-title-session", title: "Provider generated Claude title", titleSource: "derived" }),
       ]));
     } finally { await registry.close(); }
+    expect(acpClient.cancelSession).not.toHaveBeenCalled();
   });
 
   it("routes Claude creation, replay, approvals, resume and lifecycle without a Codex or ACP client", async () => {
