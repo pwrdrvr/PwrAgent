@@ -133,14 +133,18 @@ async function renderApp(): Promise<ReturnType<typeof render>> {
   return view;
 }
 
-async function clickButton(name: string | RegExp): Promise<void> {
+async function clickButton(name: string | RegExp, getContainer?: () => HTMLElement): Promise<void> {
+  const getButton = () => {
+    const scope = getContainer ? within(getContainer()) : screen;
+    return scope.getByRole("button", { name });
+  };
   const button = await waitFor(() => {
-    const button = screen.getByRole("button", { name });
+    const button = getButton();
     expect(button).toBeEnabled();
     return button;
   });
   await act(async () => {
-    fireEvent.click(button.isConnected ? button : screen.getByRole("button", { name }));
+    fireEvent.click(button.isConnected ? button : getButton());
     await Promise.resolve();
     await Promise.resolve();
     await probe("timer", () => new Promise((resolve) => setTimeout(resolve, 0)));
@@ -6767,7 +6771,7 @@ describe("App", () => {
     // destinations before the next action consumes or replaces their entries.
     const waitForHistory = async (back?: string, forward?: string): Promise<void> => {
       await waitFor(() => {
-        const history = within(screen.getByRole("group", { name: "History navigation" }));
+        const history = within(historyControls());
         for (const [name, destination] of [["Back", back], ["Forward", forward]] as const) {
           const button = history.getByRole("button", { name });
           if (destination === undefined) {
@@ -6951,31 +6955,36 @@ describe("App", () => {
       return response;
     };
     await renderThreadApp();
+    const main = screen.getByRole("main");
+    const content = within(main);
+    const sidebar = within(screen.getByRole("complementary", { name: "Threads" }));
+    // Reacquire the controls: search and thread headers replace one another.
+    const historyControls = () => content.getByRole("group", { name: "History navigation" });
 
-    await screen.findByRole("heading", {
+    await content.findByRole("heading", {
       level: 2,
       name: "First cached thread",
     });
 
     // Nowhere to go yet — the auto-selected first thread is the only entry.
-    expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Forward" })).toBeDisabled();
+    expect(within(historyControls()).getByRole("button", { name: "Back" })).toBeDisabled();
+    expect(within(historyControls()).getByRole("button", { name: "Forward" })).toBeDisabled();
 
-    const secondRow = screen.getByRole("button", { name: /Second cached thread/i });
+    const secondRow = sidebar.getByRole("button", { name: /Second cached thread/i });
     act(() => {
       secondRow.focus();
       fireEvent.pointerDown(secondRow, { pointerType: "mouse", button: 0 });
       fireEvent.pointerUp(secondRow, { pointerType: "mouse", button: 0 });
       fireEvent.click(secondRow, { detail: 1 });
     });
-    await screen.findByRole("heading", {
+    await content.findByRole("heading", {
       level: 2,
       name: "Second cached thread",
     });
     // Moving away cancels the pending request even when the operator returns
     // to its originating row before configuration becomes ready.
     act(() => {
-      screen.getByRole("button", { name: /First cached thread/i }).focus();
+      sidebar.getByRole("button", { name: /First cached thread/i }).focus();
       secondRow.focus();
       secondThreadReady.resolve();
     });
@@ -6996,20 +7005,20 @@ describe("App", () => {
       fireEvent.pointerUp(target, { pointerType: "mouse", button: 0 });
       fireEvent.click(target, { detail: 1 });
     });
-    await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toHaveFocus());
+    await waitFor(() => expect(content.getByRole("textbox", { name: "Reply" })).toHaveFocus());
     await waitForHistory("First cached thread");
 
     // Search unmounts Composer. Keyboard history must not replay the handled
     // mouse request when it mounts again, even with a sidebar row focused.
     await clickButton("Search threads");
-    await screen.findByRole("heading", { level: 2, name: "Search" });
+    await content.findByRole("heading", { level: 2, name: "Search" });
     await waitForHistory("Second cached thread");
     act(() => {
       secondRow.focus();
       fireEvent.keyDown(window, { metaKey: true, code: "BracketLeft", key: "[" });
     });
-    await screen.findByRole("heading", { level: 2, name: "Second cached thread" });
-    await screen.findByRole("textbox", { name: "Reply" });
+    await content.findByRole("heading", { level: 2, name: "Second cached thread" });
+    await content.findByRole("textbox", { name: "Reply" });
     await act(async () => {
       await new Promise((resolve) => requestAnimationFrame(resolve));
       await new Promise((resolve) => requestAnimationFrame(resolve));
@@ -7020,43 +7029,43 @@ describe("App", () => {
     // Search, then open the result (thread 1).
     await clickButton("Search threads");
     await waitForHistory("Second cached thread");
-    fireEvent.change(screen.getByRole("combobox", { name: "Search threads" }), {
+    fireEvent.change(content.getByRole("combobox", { name: "Search threads" }), {
       target: { value: "history" },
     });
-    await clickButton("Search");
-    await screen.findByText("Opened from search.");
-    await clickButton(/Opened from search/);
-    await screen.findByRole("heading", {
+    await clickButton("Search", () => main);
+    await content.findByText("Opened from search.");
+    await clickButton(/Opened from search/, () => main);
+    await content.findByRole("heading", {
       level: 2,
       name: "First cached thread",
     });
     await waitForHistory("Search");
 
     // Back lands on search with the results still populated — no re-query.
-    await clickButton("Back");
-    await screen.findByRole("heading", { level: 2, name: "Search" });
+    await clickButton("Back", historyControls);
+    await content.findByRole("heading", { level: 2, name: "Search" });
     await waitForHistory("Second cached thread", "First cached thread");
-    expect(screen.getByText("Opened from search.")).toBeInTheDocument();
+    expect(content.getByText("Opened from search.")).toBeInTheDocument();
     expect(searchThreads).toHaveBeenCalledTimes(1);
 
     // Back again: the thread we were reading before opening search.
-    await clickButton("Back");
-    await screen.findByRole("heading", {
+    await clickButton("Back", historyControls);
+    await content.findByRole("heading", {
       level: 2,
       name: "Second cached thread",
     });
     await waitForHistory("First cached thread", "Search");
 
     // Back to the start, where the affordance bottoms out.
-    await clickButton("Back");
-    await screen.findByRole("heading", {
+    await clickButton("Back", historyControls);
+    await content.findByRole("heading", {
       level: 2,
       name: "First cached thread",
     });
     await waitForHistory(undefined, "Second cached thread");
 
-    await clickButton("Forward");
-    await screen.findByRole("heading", {
+    await clickButton("Forward", historyControls);
+    await content.findByRole("heading", {
       level: 2,
       name: "Second cached thread",
     });
@@ -7072,7 +7081,7 @@ describe("App", () => {
       });
       await Promise.resolve();
     });
-    await screen.findByRole("heading", {
+    await content.findByRole("heading", {
       level: 2,
       name: "First cached thread",
     });
@@ -7082,7 +7091,7 @@ describe("App", () => {
       fireEvent.mouseUp(window, { button: 4 });
       await Promise.resolve();
     });
-    await screen.findByRole("heading", {
+    await content.findByRole("heading", {
       level: 2,
       name: "Second cached thread",
     });
