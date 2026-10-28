@@ -336,7 +336,7 @@ function inputSchemaForOperation(
           executionMode: {
             type: "string",
             description:
-              "default, auto, or full-access. Omit to inherit this thread's mode. No more access than the calling thread's own mode; only the operator raises access.",
+              "default, auto, or full-access. Cannot exceed this thread's mode. Omit to inherit it.",
           },
           approvalPolicy: { type: "string" },
           sandbox: { type: "string" },
@@ -448,7 +448,7 @@ function inputSchemaForOperation(
           executionMode: {
             type: "string",
             description:
-              "default, auto, or full-access. Omit to keep the target thread's mode. No more access than the calling thread's own mode; only the operator raises access.",
+              "default, auto, or full-access. Cannot exceed this thread's mode. Omit to keep the target's.",
           },
           approvalPolicy: { type: "string" },
           sandbox: { type: "string" },

@@ -254,7 +254,7 @@ function inputSchemaForOperation(
           executionMode: {
             type: "string",
             description:
-              "default, auto, or full-access. Omit to use the project's own mode. No more access than the calling thread's own mode; only the operator raises access.",
+              "default, auto, or full-access. Cannot exceed this thread's mode. Omit for the project's.",
           },
           fastMode: { type: "boolean" },
           tokenMiserEnabled: {

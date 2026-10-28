@@ -567,7 +567,7 @@ function inputSchemaForOperation(
             type: "string",
             enum: ["default", "auto", "full-access"],
             description:
-              "Thread execution/permission mode. Active turns may queue this until the next safe boundary. No more access than the calling thread's own mode; only the operator raises access.",
+              "Thread execution/permission mode. Active turns may queue this until the next safe boundary. Cannot exceed the calling thread's mode.",
           },
           projectPath: {
             type: "string",
