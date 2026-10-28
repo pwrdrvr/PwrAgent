@@ -1,11 +1,17 @@
 /**
- * Scrolls the sidebar's selected thread row toward the middle of the list,
- * for the thread title click and the jump palette.
+ * Scrolls a thread row into the sidebar list. Two callers share it:
  *
- * A row that is already in full view stays where it is. Centering it anyway
- * moved the list on every title click: the smooth center scroll starts, then
- * ThreadRow's reveal effect runs its own `block: "nearest"` scroll, which
- * stops the animation a few pixels in. Each click nudged the list 2-5px.
+ * - The thread title click and the jump palette center the selected row
+ *   (`revealSelectedSidebarThreadRow`).
+ * - ThreadRow's reveal effect brings the row to the nearest edge
+ *   (`revealThreadRowAtNearestEdge`), including after a collapsed container
+ *   opens and mounts it.
+ *
+ * Both run on one title click. The nearest-edge scroll used to stop the
+ * smooth centering a frame or two in: an in-view row nudged 2-5px on every
+ * click, and an off-screen row stopped at the edge, often under the sticky
+ * directory header. So a row that is already in full view stays put, and
+ * the nearest-edge scroll leaves a row alone while its centering runs.
  */
 const SELECTED_ROW = ".sidebar .thread-row.is-selected";
 const REGION = ".sidebar__scroll-region";
@@ -15,48 +21,108 @@ const STICKY_HEADER = ".directory-row__header";
 // Chromium snaps scroll offsets to device pixels, so a row flush with an
 // edge can measure a fraction past it.
 const EDGE_TOLERANCE_PX = 1;
+// `scrollend` ends the centering. This bounds it when no event comes, as
+// when the list is already at the offset it was asked for.
+const CENTERING_LIMIT_MS = 1000;
+
+let centering: { row: HTMLElement; finish: () => void } | undefined;
 
 export function revealSelectedSidebarThreadRow(options?: { instant?: boolean }): void {
   const row = document.querySelector<HTMLElement>(SELECTED_ROW);
-  if (!row || isRowInFullView(row)) {
+  if (!row) {
     return;
   }
+  const placement = measure(row);
+  if (placement && isInFullView(placement)) {
+    return;
+  }
+  const smooth = options?.instant !== true;
   row.scrollIntoView({
-    behavior: options?.instant === true ? "auto" : "smooth",
+    behavior: smooth ? "smooth" : "auto",
     block: "center",
     inline: "nearest",
   });
+  if (smooth && placement) {
+    trackCentering(row, placement.region);
+  }
 }
 
-function isRowInFullView(row: HTMLElement): boolean {
+export function revealThreadRowAtNearestEdge(row: HTMLElement): void {
+  if (centering?.row === row) {
+    return;
+  }
+  const placement = measure(row);
+  if (!placement) {
+    row.scrollIntoView({ block: "nearest" });
+    return;
+  }
+  if (isInFullView(placement)) {
+    return;
+  }
+  const { region, rowBox, stuckTop, view } = placement;
+  const delta = rowBox.top < placement.visibleTop
+    ? rowBox.top - stuckTop
+    // A row taller than the list keeps its top in view.
+    : Math.min(rowBox.bottom - view.bottom, rowBox.top - stuckTop);
+  region.scrollBy({ top: delta, behavior: "auto" });
+}
+
+type Placement = {
+  region: HTMLElement;
+  view: DOMRect;
+  rowBox: DOMRect;
+  // The top of what the operator can see, below the header if it covers it.
+  visibleTop: number;
+  // Where the header's bottom sits once it is stuck to the top of the list.
+  stuckTop: number;
+};
+
+function measure(row: HTMLElement): Placement | undefined {
   const region = row.closest<HTMLElement>(REGION);
   if (!region) {
-    return false;
+    return undefined;
   }
   const view = region.getBoundingClientRect();
+  const rowBox = row.getBoundingClientRect();
   // A hidden sidebar (⌘B) measures zero. Scroll as before, so the row is
   // placed when the sidebar comes back.
-  if (view.height <= 0) {
-    return false;
+  if (view.height <= 0 || rowBox.height <= 0) {
+    return undefined;
   }
-  const rowBox = row.getBoundingClientRect();
-  if (rowBox.height <= 0) {
-    return false;
-  }
-  let top = view.top;
+  let visibleTop = view.top;
+  let stuckTop = view.top;
   const header = row.closest(".directory-row, .pinned-group")
     ?.querySelector<HTMLElement>(`:scope > ${STICKY_HEADER}`);
   if (header && !header.contains(row)) {
-    top = Math.max(top, header.getBoundingClientRect().bottom);
+    const headerBox = header.getBoundingClientRect();
+    visibleTop = Math.max(visibleTop, headerBox.bottom);
+    stuckTop = view.top + headerBox.height;
   }
-  const bottom = view.bottom;
+  return { region, view, rowBox, visibleTop, stuckTop };
+}
+
+function isInFullView({ rowBox, view, visibleTop }: Placement): boolean {
   const fitsInside =
-    rowBox.top >= top - EDGE_TOLERANCE_PX
-    && rowBox.bottom <= bottom + EDGE_TOLERANCE_PX;
+    rowBox.top >= visibleTop - EDGE_TOLERANCE_PX
+    && rowBox.bottom <= view.bottom + EDGE_TOLERANCE_PX;
   // A row taller than the list can never fit. When it already covers the
-  // whole visible area, centering it would only nudge it.
+  // whole visible area, scrolling it would only nudge it.
   const coversView =
-    rowBox.top <= top + EDGE_TOLERANCE_PX
-    && rowBox.bottom >= bottom - EDGE_TOLERANCE_PX;
+    rowBox.top <= visibleTop + EDGE_TOLERANCE_PX
+    && rowBox.bottom >= view.bottom - EDGE_TOLERANCE_PX;
   return fitsInside || coversView;
+}
+
+function trackCentering(row: HTMLElement, region: HTMLElement): void {
+  centering?.finish();
+  const finish = (): void => {
+    region.removeEventListener("scrollend", finish);
+    window.clearTimeout(limit);
+    if (centering?.row === row) {
+      centering = undefined;
+    }
+  };
+  const limit = window.setTimeout(finish, CENTERING_LIMIT_MS);
+  region.addEventListener("scrollend", finish);
+  centering = { row, finish };
 }

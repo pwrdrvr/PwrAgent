@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { revealSelectedSidebarThreadRow } from "../reveal-selected-thread-row";
+import { revealSelectedSidebarThreadRow, revealThreadRowAtNearestEdge } from "../reveal-selected-thread-row";
 
 const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
 let scroll: ReturnType<typeof vi.fn>;
+let scrollBy: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   scroll = vi.fn();
@@ -10,6 +11,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // End any centering a test started, so the next test starts clean.
+  document.querySelector(".sidebar__scroll-region")?.dispatchEvent(new Event("scrollend"));
   document.body.innerHTML = "";
   if (originalScrollIntoView) {
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", originalScrollIntoView);
@@ -40,6 +43,17 @@ function mountSidebar(rowTop: number, rowHeight = 60, section = "directory-row")
   place(document.querySelector(".sidebar__scroll-region")!, 100, 400);
   place(document.querySelector(".directory-row__header")!, 100, 30);
   place(document.querySelector(".thread-row.is-selected")!, rowTop, rowHeight);
+  const region = document.querySelector<HTMLElement>(".sidebar__scroll-region")!;
+  scrollBy = vi.fn();
+  region.scrollBy = scrollBy as typeof region.scrollBy;
+}
+
+function selectedRow(): HTMLElement {
+  return document.querySelector<HTMLElement>(".thread-row.is-selected")!;
+}
+
+function endScroll(): void {
+  document.querySelector(".sidebar__scroll-region")!.dispatchEvent(new Event("scrollend"));
 }
 
 describe("revealSelectedSidebarThreadRow", () => {
@@ -100,5 +114,71 @@ describe("revealSelectedSidebarThreadRow", () => {
     revealSelectedSidebarThreadRow({ instant: true });
 
     expect(scroll).toHaveBeenCalledWith({ behavior: "auto", block: "center", inline: "nearest" });
+  });
+});
+
+describe("revealThreadRowAtNearestEdge", () => {
+  it("leaves a row that is already in full view where it is", () => {
+    mountSidebar(360);
+
+    revealThreadRowAtNearestEdge(selectedRow());
+
+    expect(scrollBy).not.toHaveBeenCalled();
+    expect(scroll).not.toHaveBeenCalled();
+  });
+
+  it("brings a row from above to just below the sticky header", () => {
+    mountSidebar(20);
+
+    revealThreadRowAtNearestEdge(selectedRow());
+
+    // Row top 20 lands at 130: the list top plus the 30px header.
+    expect(scrollBy).toHaveBeenCalledWith({ top: -110, behavior: "auto" });
+  });
+
+  it("brings a row from below to the bottom edge", () => {
+    mountSidebar(470);
+
+    revealThreadRowAtNearestEdge(selectedRow());
+
+    expect(scrollBy).toHaveBeenCalledWith({ top: 30, behavior: "auto" });
+  });
+
+  it("keeps the top of a row taller than the list in view", () => {
+    mountSidebar(450, 600);
+
+    revealThreadRowAtNearestEdge(selectedRow());
+
+    expect(scrollBy).toHaveBeenCalledWith({ top: 320, behavior: "auto" });
+  });
+
+  it("waits for a running centering to end before moving the row", () => {
+    mountSidebar(600);
+    revealSelectedSidebarThreadRow();
+
+    revealThreadRowAtNearestEdge(selectedRow());
+    expect(scrollBy).not.toHaveBeenCalled();
+
+    endScroll();
+    revealThreadRowAtNearestEdge(selectedRow());
+    expect(scrollBy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not wait on an instant reveal", () => {
+    mountSidebar(600);
+    revealSelectedSidebarThreadRow({ instant: true });
+
+    revealThreadRowAtNearestEdge(selectedRow());
+
+    expect(scrollBy).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to scrollIntoView while the sidebar is hidden", () => {
+    mountSidebar(0, 0);
+    place(document.querySelector(".sidebar__scroll-region")!, 0, 0);
+
+    revealThreadRowAtNearestEdge(selectedRow());
+
+    expect(scroll).toHaveBeenCalledWith({ block: "nearest" });
   });
 });
