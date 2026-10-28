@@ -286,6 +286,60 @@ describe("backend forge tool dispatch", () => {
     expect((await third).success).toBe(true);
   });
 
+  describe("an approval still open when the turn ends", () => {
+    let addTodo: ReturnType<typeof vi.fn>;
+    beforeEach(() => {
+      addTodo = vi.fn(async (_context: unknown, input: { title: string }) => ({ todo: { id: "todo-1", ...input }, created: true }));
+      registry.setPwrAgentThreadTodoHandler({ add: addTodo, update: vi.fn(), list: vi.fn(() => []), resolve: vi.fn() } as never);
+    });
+    const endTurn = async (status: "completed" | "interrupted") => await registry.publishLocalEvent({
+      backend: "codex",
+      notification: { method: "turn/completed", params: { threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status, output: [] } } },
+    });
+
+    it("leaves the operator a to-do saying the request was withdrawn", async () => {
+      const prompt = nextApproval();
+      const pending = internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests" }, "call-pr-ended"));
+      await prompt;
+      await endTurn("completed");
+      await pending;
+      expect(github).not.toHaveBeenCalled();
+      expect(registry.getPendingRequestForThread({ backend: "codex", threadId: "thread-1" })).toBeUndefined();
+      await vi.waitFor(() => expect(addTodo).toHaveBeenCalledTimes(1));
+      const [context, input] = addTodo.mock.calls[0]!;
+      expect(context).toEqual({ backend: "codex", threadId: "thread-1" });
+      expect(input).toMatchObject({ key: "forge-approval-withdrawn", title: "Reply to retry the withdrawn GitHub request" });
+      expect(input.detail).toContain("Allow the agent to open a pull request on GitHub?");
+      expect(input.detail).toContain("nothing ran");
+      expect(input).not.toHaveProperty("action");
+    });
+
+    it("leaves no to-do when the operator stopped the turn", async () => {
+      const prompt = nextApproval();
+      const pending = internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests" }, "call-pr-stopped"));
+      await prompt;
+      await endTurn("interrupted");
+      await pending;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(addTodo).not.toHaveBeenCalled();
+    });
+
+    it("tells the agent in get_thread_status that its call waits on the operator", async () => {
+      const prompt = nextApproval();
+      const pending = internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests" }, "call-pr-status"));
+      await prompt;
+      const status = JSON.parse(text(await internals.handleServerRequest("codex", request("get_thread_status", {}, "call-status")))) as {
+        thread: { pendingApprovals?: Array<{ serverName?: string; message?: string }>; pendingApprovalGuidance?: string };
+      };
+      expect(status.thread.pendingApprovals).toEqual([
+        { method: "mcpServer/elicitation/request", serverName: "GitHub", message: "Allow the agent to open a pull request on GitHub?" },
+      ]);
+      expect(status.thread.pendingApprovalGuidance).toContain("withdrawn");
+      await endTurn("interrupted");
+      await pending;
+    });
+  });
+
   it("hides tools the policy turned off from new turns", () => {
     policy.access.read = "off";
     policy.access.approve_merge = "off";
