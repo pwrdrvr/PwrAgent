@@ -12,10 +12,9 @@ export function keepBusyThreadTodos(
   previous: readonly ThreadTodo[] | undefined,
   fresh: ThreadTodo[],
   busyThreads: readonly TodoBusyThread[] | undefined,
-  order: (left: ThreadTodo, right: ThreadTodo) => number,
 ): ThreadTodo[] {
   if (!busyThreads?.length || !previous?.length) return fresh;
   const busyKeys = new Set(busyThreads.map((thread) => threadTodoThreadKey(thread)));
   const kept = previous.filter((todo) => busyKeys.has(threadTodoThreadKey(todo)));
-  return kept.length > 0 ? [...fresh, ...kept].sort(order) : fresh;
+  return kept.length > 0 ? [...fresh, ...kept].sort(newestResolvedFirst) : fresh;
 }

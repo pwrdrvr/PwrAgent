@@ -611,6 +611,25 @@ describe("thread to-do checklists", () => {
     expect(screen.getByRole("alert").textContent).toContain("peer: Owner store failed");
   });
 
+  it("drops the Done list's owner failure when Done is hidden", async () => {
+    const view = createView([], { listResolved: vi.fn(async () => ({ todos: [], errors: ["peer: Owner store failed"] })) });
+    render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Resolved" })); });
+    expect(screen.getByRole("alert").textContent).toContain("peer: Owner store failed");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Resolved" })); });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows the Done list's owner failure beside the queue's, once per line", async () => {
+    const view = createView([], {
+      listResolved: vi.fn(async () => ({ todos: [], errors: ["peer: Owner store failed"] })),
+      queueError: "peer: Owner store failed\nRequests failed",
+    });
+    render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Resolved" })); });
+    expect(screen.getByRole("alert").textContent).toBe("peer: Owner store failed\nRequests failed");
+  });
+
   it("keeps a busy owner's resolved queue quiet", async () => {
     const busy = Object.assign(new Error("handler_failed: [navigation_busy] Busy"), { code: "navigation_busy" });
     const view = createView([], { listResolved: vi.fn(async () => { throw busy; }) });
