@@ -394,7 +394,9 @@ export function useThreadMcpConnectionCount(params: {
   token?: number;
 }): number | undefined {
   const { backend, desktopApi, federationTarget, threadId, token } = params;
-  const [count, setCount] = useState<number>();
+  const ownerInstanceId = federationTarget?.instanceId;
+  const selectionKey = JSON.stringify([backend, ownerInstanceId, threadId]);
+  const [selection, setSelection] = useState<{ key: string; count: number }>();
   // A selection can also change from outside this window -- a peer, a
   // messaging surface, a second window -- and `thread/mcpConnections/updated`
   // is emitted for exactly that. Without a subscriber the badge only
@@ -411,35 +413,42 @@ export function useThreadMcpConnectionCount(params: {
       const eventOwner = event.federationTarget?.scope === "remote"
         ? event.federationTarget.instanceId
         : undefined;
-      if (eventOwner !== federationTarget?.instanceId) return;
+      if (eventOwner !== ownerInstanceId) return;
       setBusToken((current) => current + 1);
     });
-  }, [backend, desktopApi, federationTarget, threadId]);
+  }, [backend, desktopApi, ownerInstanceId, threadId]);
 
   useEffect(() => {
     let cancelled = false;
     const read = desktopApi?.readThreadMcpConnections;
-    setCount(undefined);
     if (!read || !threadId) return;
     void (async () => {
       try {
         const response = await read({
           backend,
           threadId,
-          ...(federationTarget ? { federationTarget } : {}),
+          ...(ownerInstanceId
+            ? { federationTarget: { scope: "remote", instanceId: ownerInstanceId } as const }
+            : {}),
         });
-        if (!cancelled) setCount(response.connectionIds.length);
+        if (!cancelled) setSelection({ key: selectionKey, count: response.connectionIds.length });
       } catch {
-        // A disconnected owner cannot supply a current selection.
-        if (!cancelled) setCount(undefined);
+        // This is the saved selection, not live connection health. Keep its
+        // last confirmed count while the same owner's next read is pending
+        // or unavailable; clearing it makes routine refreshes blink.
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [backend, busToken, desktopApi, federationTarget, threadId, token]);
+  }, [backend, busToken, desktopApi, ownerInstanceId, selectionKey, threadId, token]);
 
-  return count;
+  // Never show a previous thread/backend/owner's count, even for the render
+  // before its effect runs. Replacing a remote summary's target object alone
+  // must neither hide this selection nor trigger another remote read.
+  return desktopApi?.readThreadMcpConnections && threadId && selection?.key === selectionKey
+    ? selection.count
+    : undefined;
 }
 
 /**
