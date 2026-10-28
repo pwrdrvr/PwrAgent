@@ -1,6 +1,6 @@
 import path from "node:path";
 import { buildFederatedThreadRef, buildThreadIdentityKey, classifyDirectory, federatedThreadIdentityKey,
-  isToolManagedWorktreePath } from "@pwragent/shared";
+  orderByHomePreference } from "@pwragent/shared";
 import type { LinkedDirectorySummary, NavigationDirectorySummary, NavigationIdentity, NavigationThreadSummary } from "@pwragent/shared";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
 import type { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
@@ -65,8 +65,8 @@ export function appendViewerNavigationPins(index: NavigationQueryIndex, pins: re
  * the row made selection "jump" groups, because `selectedDirectory` resolves
  * to the first directory containing the key, which is whichever sorts first,
  * not the group the user clicked in. The owner's `projectKey` is authoritative
- * when it identifies a linked directory; fallback preference is any project
- * before a tool-managed worktree folder, then linked-directory order.
+ * when it identifies a linked directory; otherwise both sides share
+ * `orderByHomePreference`.
  *
  * Remote threads whose project has no local counterpart receive an
  * unconfigured placeholder group. That keeps Cmd+K-mounted rows discoverable
@@ -77,10 +77,9 @@ export function appendViewerNavigationPins(index: NavigationQueryIndex, pins: re
  * identity (directory label / path basename — peer paths never match viewer
  * paths). When the owner's projectKey identifies one of its linked
  * directories, that primary project wins even if a secondary @-referenced
- * directory is a local checkout. Otherwise, home preference mirrors
- * `pickHomeDirectory`: tool-managed worktree folders last, otherwise the
- * owner's linked order. A `kind: "worktree"` link names its repository
- * checkout in `path`, so it is a project, not a folder to demote.
+ * directory is a local checkout. Otherwise, home preference is the owner's
+ * own rule (`orderByHomePreference`): tool-managed worktree folders last,
+ * otherwise linked order.
  */
 export function findRemoteHomeDirectoryIndex(
   directories: ReadonlyArray<{ label: string; path?: string; kind?: NavigationDirectorySummary["kind"] }>,
@@ -88,7 +87,8 @@ export function findRemoteHomeDirectoryIndex(
 ): number | undefined {
   // Scratch folder names are per-thread identities, not project identities.
   // Match the containing workspace by kind before considering any raw names.
-  const home = remoteLinkedDirectoriesByHomePreference(thread)[0];
+  const linkedByHomePreference = remoteLinkedDirectoriesByHomePreference(thread);
+  const home = linkedByHomePreference[0];
   if (home && classifyDirectory(home).kind === "workspace") {
     const index = directories.findIndex((directory) => directory.kind === "workspace");
     return index === -1 ? undefined : index;
@@ -106,8 +106,14 @@ export function findRemoteHomeDirectoryIndex(
       }
     }
   });
-  const linkedByHomePreference = remoteLinkedDirectoriesByHomePreference(thread);
   for (const linked of linkedByHomePreference) {
+    // A secondary Workspaces link is matched by kind only when it is home.
+    // Its folder name (`projects`, a scratch hash) names no project, and a
+    // name match would file the thread under Workspaces whenever its real
+    // project has no local checkout.
+    if (classifyDirectory(linked).kind === "workspace") {
+      continue;
+    }
     const names = [linked.label, path.basename(linked.path)]
       .map((name) => (name ?? "").trim().toLowerCase())
       .filter(Boolean);
@@ -135,13 +141,7 @@ function remoteLinkedDirectoriesByHomePreference(
     return [primaryProjectDirectory];
   }
 
-  // A `worktree` link's `path` is its repository checkout, so it ranks like
-  // any other project. Only a tool-managed worktree folder ranks last; the
-  // rest keep the owner's linked order, as `pickHomeDirectory` does.
-  const isToolManaged = (directory: LinkedDirectorySummary) =>
-    isToolManagedWorktreePath(classifyDirectory(directory).path);
-  return [...linkedDirectories].sort((left, right) =>
-    Number(isToolManaged(left)) - Number(isToolManaged(right)));
+  return orderByHomePreference(linkedDirectories, (directory) => classifyDirectory(directory).path);
 }
 
 function remoteDirectoryPlaceholder(

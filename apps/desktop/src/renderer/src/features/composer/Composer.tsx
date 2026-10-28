@@ -5546,7 +5546,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     const scanned = listReferencedDirectories(text, [
       ...(props.directories ?? []),
       ...fromTokens,
-    ], { excludePaths });
+    ], {
+      excludePaths,
+      // A file chip's label can break the link syntax (`[id].tsx`); it then
+      // serializes as a bare path, so pass its target from the token state.
+      referencePaths: (tokens ?? []).flatMap((token) =>
+        token.kind === "file" && token.path ? [token.path] : []),
+    });
     const scannedPaths = new Set(scanned.map((directory) =>
       normalizeDirectoryReferencePath(directory.path!),
     ));

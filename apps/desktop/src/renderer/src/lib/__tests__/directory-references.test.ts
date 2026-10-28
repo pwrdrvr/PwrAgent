@@ -379,6 +379,27 @@ describe("listReferencedDirectories", () => {
     ).toEqual([CATALOG_PORTAL.key]);
   });
 
+  it.each([
+    ["a sibling whose name extends the path", "[@backup](~/Projects/catalog-portal.bak)"],
+    ["the same path under another root", `[@x](/Volumes/backup${HOME}/Projects/catalog-portal/x)`],
+  ])("does not attach a chip for %s", (_label, draft) => {
+    expect(listReferencedDirectories(draft, directories, { homeDir: HOME })).toEqual([]);
+  });
+
+  it("resolves chip targets the draft text cannot carry", () => {
+    // A file named `[id].tsx` breaks the link syntax, so its chip serializes
+    // as a bare path; the composer passes the target from its token state.
+    const bareChip = buildDirectoryReferenceMarkdown(
+      { label: "[id].tsx", path: `${HOME}/Projects/catalog-service/app/[id].tsx` },
+      HOME,
+    );
+    expect(listReferencedDirectories(`Read ${bareChip}`, directories, { homeDir: HOME })).toEqual([]);
+    expect(listReferencedDirectories(`Read ${bareChip}`, directories, {
+      homeDir: HOME,
+      referencePaths: [`${HOME}/Projects/catalog-service/app/[id].tsx`],
+    }).map((d) => d.key)).toEqual([CATALOG_SERVICE.key]);
+  });
+
   it("does not match a sibling directory whose name extends the path", () => {
     expect(
       listReferencedDirectories(

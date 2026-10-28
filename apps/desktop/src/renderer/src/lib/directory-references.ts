@@ -1,6 +1,6 @@
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "./navigation-loaded-rows";
 import { formatFilesystemPath, isWindowsFilesystemPath } from "@pwragent/shared";
-import { getHomeDir, tildifyPath } from "./tildify-path";
+import { expandTildePath, getHomeDir, tildifyPath } from "./tildify-path";
 import { parseSkillMentionParts } from "./skill-mentions";
 
 /**
@@ -196,37 +196,6 @@ export function buildDirectoryReferenceMarkdown(
   return `[@${reference.label}](${encodeMarkdownDestination(tilde)})`;
 }
 
-/**
- * Characters that may follow a referenced path in the list of chip
- * destinations. A separator counts so a file chip
- * (`~/dev/app/src/index.ts`) still resolves to the tracked repo root it
- * lives under.
- */
-const REFERENCE_BOUNDARY = /^[\s.,;:!?)\]}'"/]/;
-
-function draftContainsPath(draft: string, candidate: string): boolean {
-  if (!candidate) {
-    return false;
-  }
-  let searchFrom = 0;
-  while (searchFrom <= draft.length - candidate.length) {
-    const index = draft.indexOf(candidate, searchFrom);
-    if (index < 0) {
-      return false;
-    }
-    const after = draft.slice(index + candidate.length);
-    if (
-      after.length === 0
-      || REFERENCE_BOUNDARY.test(after)
-      || (isWindowsFilesystemPath(candidate) && after.startsWith("\\"))
-    ) {
-      return true;
-    }
-    searchFrom = index + 1;
-  }
-  return false;
-}
-
 /** Shared comparison key for scanned paths, restored tokens, and exclusions. */
 export function normalizeDirectoryReferencePath(value: string): string {
   return formatFilesystemPath(value)
@@ -247,15 +216,24 @@ export function listReferencedDirectories(
   options?: {
     excludePaths?: string[];
     homeDir?: string;
+    /**
+     * Chip targets the draft text cannot carry: a chip whose label breaks
+     * the link syntax serializes as a bare path, which the scan ignores.
+     */
+    referencePaths?: string[];
   },
 ): NavigationDirectorySummary[] {
-  if (!draft) {
+  const homeDir = options?.homeDir ?? getHomeDir();
+  const destinations = [
+    ...(draft ? parseSkillMentionParts(draft) : [])
+      .flatMap((part) => part.type === "directory" ? [decodeMarkdownDestination(part.path)] : []),
+    ...(options?.referencePaths ?? []),
+  ]
+    .map((path) => normalizeDirectoryReferencePath(expandTildePath(path, homeDir)))
+    .filter(Boolean);
+  if (destinations.length === 0) {
     return [];
   }
-  const homeDir = options?.homeDir ?? getHomeDir();
-  const referencePaths = parseSkillMentionParts(draft)
-    .flatMap((part) => part.type === "directory" ? [decodeMarkdownDestination(part.path)] : [])
-    .join("\n");
   const trimPath = (value: string) => value
     .replace(isWindowsFilesystemPath(value) ? /[/\\]+$/ : /\/+$/, "");
   const excluded = new Set(
@@ -265,13 +243,17 @@ export function listReferencedDirectories(
   );
   const seenPaths = new Set<string>();
   const referenced: NavigationDirectorySummary[] = [];
-  if (!referencePaths) {
-    return [];
-  }
+  // A chip references a directory when its target is that directory or a
+  // path inside it. Compare whole path segments from the start: a chip for
+  // `~/app.bak` or `/backup/Users/me/app` does not reference `~/app`.
   const containsPath = (path: string): boolean => {
-    const tilde = tildifyPath(path, homeDir);
-    return draftContainsPath(referencePaths, path)
-      || (tilde !== path && draftContainsPath(referencePaths, tilde));
+    const target = normalizeDirectoryReferencePath(expandTildePath(path, homeDir));
+    if (!target) {
+      return false;
+    }
+    const separator = isWindowsFilesystemPath(target) ? "\\" : "/";
+    return destinations.some((destination) =>
+      destination === target || destination.startsWith(`${target}${separator}`));
   };
   // Already-linked paths still participate in resolution, even when their
   // directory row is outside the loaded page. Excluding them before choosing
@@ -293,9 +275,9 @@ export function listReferencedDirectories(
     }
   }
 
-  // Nested tracked repos: `~/dev/app` in the draft also substring-matches
-  // a tracked `~/dev`. Keep only the deepest match so the reference
-  // resolves to the repo the path actually points into.
+  // Nested tracked repos: a chip for `~/dev/app` also lies inside a tracked
+  // `~/dev`. Keep only the deepest match so the reference resolves to the
+  // repo the path actually points into.
   return referenced.filter((directory) => {
     const path = normalizeDirectoryReferencePath(directory.path!);
     const separator = isWindowsFilesystemPath(path) ? "\\" : "/";

@@ -177,6 +177,24 @@ it("files a remote thread under its first linked project, not a later plain fold
   expect(exact.selectionDirectory?.key).toBe("directory:/m5/pwrdrvr/PwrAgnt");
 });
 
+it("never files a remote thread under Workspaces by a secondary `projects` link's name", () => {
+  const remote: NavigationThreadSummary = { id: "remote", source: "claude", title: "Remote", titleSource: "explicit",
+    linkedDirectories: [
+      { id: "/m2/pwrdrvr/PwrAgnt", kind: "worktree", label: "PwrAgnt", path: "/m2/pwrdrvr/PwrAgnt",
+        worktreePath: "/m2/.pwragent/worktrees/mvrhqobw/PwrAgnt" },
+      { id: "/m2/.pwragent/profiles/default/projects", kind: "local", label: "projects",
+        path: "/m2/.pwragent/profiles/default/projects" },
+    ], inbox: { inInbox: false },
+    federation: { ref: buildFederatedThreadRef({ backend: "claude", threadId: "remote", instanceId: "m2" }), instanceLabel: "M2" } };
+  // This viewer has no PwrAgnt checkout, only its own Workspaces row.
+  const viewer = appendViewerNavigationPins({ threads: [], directories: [
+    { key: "workspace:/m5/.pwragent/profiles/default/projects", kind: "workspace", label: "Workspaces",
+      path: "/m5/.pwragent/profiles/default/projects", threadKeys: [], needsAttentionCount: 0 },
+  ] }, [remote]);
+  expect(viewer.directories.filter((entry) => entry.threadKeys.length).map((entry) => entry.key))
+    .toEqual(["unconfigured-directory:pwragnt"]);
+});
+
 it("still files a remote thread under its checkout before a tool-managed worktree folder", () => {
   const remote: NavigationThreadSummary = { id: "remote", source: "codex", title: "Remote", titleSource: "explicit",
     linkedDirectories: [
