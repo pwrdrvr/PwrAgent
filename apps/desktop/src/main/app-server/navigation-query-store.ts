@@ -479,7 +479,8 @@ export class NavigationQueryStore {
       promoteOnTurnEnd,
     });
     if (previous && previous.order !== orderBeforeRead) {
-      listingDiagnostics.record("owner-page", "overtaken", { reason: "owner-invalidated" });
+      // Runs inside the pool's owner-read trace, so it is recorded on that load.
+      listingDiagnostics.record("owner-read", "overtaken", { reason: "owner-invalidated" });
       for (const member of orderBeforeRead?.members.keys() ?? []) {
         if (!previous.order.members.has(member)) order.members.delete(member);
       }

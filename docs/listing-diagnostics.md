@@ -32,7 +32,9 @@ has stopped. Its physical attempt may settle later. `overtaken` with
 `owner-invalidated` means an event arrived during the read. The page still
 went to the readers that joined it, but was not kept as the query's current
 result; readers that arrived after the event wait for one follow-up page,
-which has its own `owner-page` start. RPC fallback attempts carry
+which has its own `owner-page` start. An `owner-read` `overtaken` means an
+Attention boundary changed that view's order during the index load; the
+index was reconciled on top of it, not reread. RPC fallback attempts carry
 `provider-fallback`. Durations are wall time, not CPU time.
 
 `source` distinguishes local viewer work, remote viewer demand, and incoming
