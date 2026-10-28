@@ -26876,8 +26876,19 @@ export class DesktopBackendRegistry {
         ...fallbackLaunchpadIdentity(request.directoryKey),
       })).launchpad;
 
+    // A draft never names a provider this instance cannot start. A viewer
+    // opening a sub-thread here asks for the parent's provider, which this
+    // machine may not have signed in. Fall back the way ensure does, and
+    // resolve that provider's model settings below.
+    const requestedBackend = request.patch.backend;
+    const resolvedBackend = requestedBackend
+      ? await this.resolveLaunchpadBackend(requestedBackend)
+      : undefined;
+    const backendFellBack =
+      resolvedBackend !== undefined && resolvedBackend.kind !== requestedBackend;
     const patch = {
       ...request.patch,
+      ...(backendFellBack ? { backend: resolvedBackend.kind } : {}),
       ...("fastMode" in request.patch && !("serviceTier" in request.patch)
         ? { serviceTier: undefined } : {}),
       // An edit to the selection makes it the operator's. Re-seeding after
@@ -26902,6 +26913,7 @@ export class DesktopBackendRegistry {
     };
     let nextLaunchpad = patchedLaunchpad;
     if (
+      backendFellBack ||
       "model" in patch ||
       "reasoningEffort" in patch ||
       "serviceTier" in patch ||
@@ -26939,8 +26951,8 @@ export class DesktopBackendRegistry {
     const persisted = await this.overlayStore.upsertDirectoryLaunchpad(nextLaunchpad);
 
     const stickyPatch: Partial<NavigationLaunchpadDefaults> = {};
-    if (request.stickySettingsChanged && request.patch.backend) {
-      stickyPatch.backend = request.patch.backend;
+    if (request.stickySettingsChanged && patch.backend) {
+      stickyPatch.backend = patch.backend;
     }
     if (request.stickySettingsChanged && patch.executionMode) {
       stickyPatch.executionMode = patch.executionMode;
