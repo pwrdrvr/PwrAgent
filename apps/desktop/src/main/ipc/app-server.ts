@@ -149,6 +149,7 @@ import {
   type NavigationQueueProjectionRequest,
   type NavigationLaunchpadConfigRequest,
   type NavigationLaunchpadConfigResponse,
+  type NavigationLaunchpadDraft,
   type NavigationSelectedDetailRequest,
   type NavigationSelectedDetailResponse,
   type NavigationSnapshot,
@@ -610,6 +611,63 @@ function preferredBackendFallback(
   return preferredBackend && ownerBackend && ownerBackend !== preferredBackend
     ? { preferredBackendFallback: ownerBackend }
     : {};
+}
+
+/**
+ * The viewer's draft for a thread another instance runs, switched to a
+ * provider that instance can start.
+ *
+ * The viewer stores the draft and resolves its provider against its own
+ * providers: its sticky default, the request's `preferredBackend`, or what
+ * the draft already held. That can name one the owner lacks, such as this
+ * instance's Claude on a peer without a Claude sign-in, and the thread could
+ * not start. The owner resolves `preferredBackend` to itself whenever it can
+ * start it, so its `defaults.backend` answers the question; it is asked again
+ * only when the first answer was about another provider.
+ *
+ * A provider the owner can start stays. So does a draft whose settings the
+ * operator picked (`settingsTouchedAt`): that choice is theirs to change.
+ */
+async function resolveRemoteLaunchpadBackend(params: {
+  localResponse: EnsureDirectoryLaunchpadResponse;
+  ownerResponse: EnsureDirectoryLaunchpadResponse;
+  preferredBackend: AppServerBackendKind | undefined;
+  askOwner: (
+    preferredBackend: AppServerBackendKind,
+  ) => Promise<EnsureDirectoryLaunchpadResponse | undefined>;
+  switchDraftBackend: (
+    backend: AppServerBackendKind,
+  ) => Promise<NavigationLaunchpadDraft>;
+}): Promise<EnsureDirectoryLaunchpadResponse> {
+  const { localResponse, ownerResponse } = params;
+  const draftBackend = localResponse.launchpad.backend;
+  if (
+    localResponse.launchpad.settingsTouchedAt !== undefined
+    || ownerResponse.defaults.backend === draftBackend
+  ) {
+    return localResponse;
+  }
+  let ownerBackend: AppServerBackendKind | undefined =
+    ownerResponse.defaults.backend;
+  if (params.preferredBackend !== draftBackend) {
+    try {
+      ownerBackend = (await params.askOwner(draftBackend))?.defaults.backend;
+    } catch (error) {
+      // The draft is already stored; keep it rather than fail the open.
+      appServerLog.warn("remote_launchpad_backend_check_failed", {
+        backend: draftBackend,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return localResponse;
+    }
+  }
+  if (!ownerBackend || ownerBackend === draftBackend) {
+    return localResponse;
+  }
+  return {
+    ...localResponse,
+    launchpad: await params.switchDraftBackend(ownerBackend),
+  };
 }
 
 /**
@@ -7949,14 +8007,30 @@ class DesktopAppServerService {
           skipMcpConnectionDefaults: true,
         },
       );
+      const resolvedLocalResponse = ownerResponse
+        ? await resolveRemoteLaunchpadBackend({
+            localResponse,
+            ownerResponse,
+            preferredBackend: request.preferredBackend,
+            askOwner: (preferredBackend) =>
+              federationRuntime
+                .remoteBackend(federationTarget)
+                .ensureDirectoryLaunchpad({ ...ownerRequest, preferredBackend }),
+            switchDraftBackend: async (backend) =>
+              (await registry.updateDirectoryLaunchpad(
+                { directoryKey: request.directoryKey, patch: { backend } },
+                { skipFilesystemInspection: true },
+              )).launchpad,
+          })
+        : localResponse;
       const branchName = reconcileRemoteLaunchpadBranch(
-        localResponse.launchpad.branchName,
+        resolvedLocalResponse.launchpad.branchName,
         ownerGitStatus,
       );
       return {
-        ...localResponse,
+        ...resolvedLocalResponse,
         launchpad: {
-          ...localResponse.launchpad,
+          ...resolvedLocalResponse.launchpad,
           federationTarget,
           directoryKind:
             ownerResponse?.launchpad.directoryKind ?? request.directoryKind,

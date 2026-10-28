@@ -26866,6 +26866,10 @@ export class DesktopBackendRegistry {
 
   async updateDirectoryLaunchpad(
     request: UpdateDirectoryLaunchpadRequest,
+    options?: {
+      /** A remote viewer's draft takes no environment metadata from here. */
+      skipFilesystemInspection?: boolean;
+    },
   ): Promise<UpdateDirectoryLaunchpadResponse> {
     const current =
       (await this.overlayStore.getDirectoryLaunchpad({
@@ -26984,10 +26988,12 @@ export class DesktopBackendRegistry {
       : storedDefaults;
 
     return {
-      launchpad: withCodexEnvironmentOptions(
-        persisted,
-        await listCodexEnvironmentOptions(persisted.directoryPath),
-      ),
+      launchpad: options?.skipFilesystemInspection
+        ? persisted
+        : withCodexEnvironmentOptions(
+            persisted,
+            await listCodexEnvironmentOptions(persisted.directoryPath),
+          ),
       defaults,
     };
   }

@@ -9541,6 +9541,63 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("keeps the peer's provider for a top-level draft in a remote window", async () => {
+    const studio = { scope: "remote" as const, instanceId: "studio" };
+    (window as typeof window & {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = studio;
+    // This machine's sticky default is Claude; the peer has no Claude
+    // sign-in, so main resolved the stored draft to the peer's Codex.
+    const defaults = { backend: "claude" as const, executionMode: "auto" as const, model: "opus" };
+    const workspace = {
+      key: "workspace:/Users/fixture/.pwragent/projects", kind: "workspace" as const,
+      label: "Workspaces", path: "/Users/fixture/.pwragent/projects", threadKeys: [], needsAttentionCount: 0,
+    };
+    const project = {
+      key: "directory:/Users/fixture/src/app", kind: "directory" as const, label: "app",
+      path: "/Users/fixture/src/app", threadKeys: [], needsAttentionCount: 0,
+    };
+    const ensureDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["ensureDirectoryLaunchpad"]>>(async (request) => ({
+      launchpad: {
+        directoryKey: request.directoryKey, directoryKind: request.directoryKind,
+        directoryLabel: request.directoryLabel, directoryPath: request.directoryPath,
+        backend: "codex", executionMode: "auto", prompt: "", workMode: "local", createdAt: 1, updatedAt: 1,
+      },
+      defaults,
+    }));
+    const updateDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>();
+    const api: DesktopApi = {
+      ensureDirectoryLaunchpad, updateDirectoryLaunchpad,
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false,
+        inboxThreadKeys: [], threads: [], directories: [workspace, project], launchpadDefaults: defaults }),
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(api));
+    await waitFor(() => expect(result.current.directories).toHaveLength(2));
+
+    await act(async () => {
+      await result.current.createThread();
+    });
+    expect(ensureDirectoryLaunchpad).toHaveBeenLastCalledWith(expect.objectContaining({
+      federationTarget: studio, directoryKey: workspace.key, preferredBackend: undefined,
+    }));
+    expect(result.current.selectedLaunchpad).toMatchObject({ directoryKey: workspace.key, backend: "codex" });
+    expect(result.current.selectedLaunchpad?.model).toBeUndefined();
+
+    await act(async () => {
+      await result.current.openFederatedDirectoryLaunchpad(studio, project);
+    });
+    expect(ensureDirectoryLaunchpad).toHaveBeenLastCalledWith(expect.objectContaining({
+      federationTarget: studio, directoryKey: project.key,
+    }));
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      directoryKey: project.key, federationTarget: studio, backend: "codex",
+    });
+    expect(result.current.selectedLaunchpad?.model).toBeUndefined();
+    // Nothing puts this machine's provider back on the draft.
+    expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
+  });
+
   it("starts a new-worktree sub-thread on a peer from the peer's checkout and a branch it has", async () => {
     const parent: NavigationThreadSummary = {
       id: "worktree-parent", title: "Tighten retries", titleSource: "explicit", source: "codex", executionMode: "default",

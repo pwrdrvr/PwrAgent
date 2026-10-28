@@ -148,9 +148,14 @@ export type InProcessFederationGateway = {
   close: () => Promise<void>;
 };
 
-/** The providers this fake owner reports. Ensure resolves against them too. */
-function fakeOwnerBackends(): ListBackendsResponse {
-  return {
+/**
+ * The providers this fake owner reports, limited to `kinds` when given.
+ * Ensure resolves against them too.
+ */
+function fakeOwnerBackends(
+  kinds?: readonly AppServerBackendKind[],
+): ListBackendsResponse {
+  const response: ListBackendsResponse = {
     fetchedAt: Date.now(),
     backends: [
       {
@@ -211,6 +216,12 @@ function fakeOwnerBackends(): ListBackendsResponse {
       },
     ],
   };
+  return kinds
+    ? {
+        ...response,
+        backends: response.backends.filter((backend) => kinds.includes(backend.kind)),
+      }
+    : response;
 }
 
 /**
@@ -233,6 +244,8 @@ export async function startInProcessFederationGateway(params: {
    */
   remotePty?: { cwd: string };
   threadServices?: Array<{ threadId: string; args: AdvertiseServiceArgs }>;
+  /** The providers this owner can start. Defaults to OpenAI and Kimi Code. */
+  backendKinds?: readonly AppServerBackendKind[];
 }): Promise<InProcessFederationGateway> {
   const stateRoot = await mkdtemp(
     path.join(os.tmpdir(), "pwragent-e2e-federation-gateway-"),
@@ -475,7 +488,7 @@ export async function startInProcessFederationGateway(params: {
     },
     async listBackends(): Promise<ListBackendsResponse> {
       calls.push({ method: "listBackends", params: {} });
-      return fakeOwnerBackends();
+      return fakeOwnerBackends(params.backendKinds);
     },
     async markThreadSeen(request: { threadId: string }) {
       calls.push({ method: "markThreadSeen", params: request });
@@ -539,7 +552,7 @@ export async function startInProcessFederationGateway(params: {
         // the owner can run a parent's provider.
         defaults: {
           backend: resolveNewThreadBackend(
-            fakeOwnerBackends().backends,
+            fakeOwnerBackends(params.backendKinds).backends,
             request.preferredBackend,
           )?.kind ?? "codex",
           executionMode: "default",
