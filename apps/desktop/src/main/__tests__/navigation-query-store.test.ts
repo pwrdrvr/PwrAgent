@@ -133,23 +133,69 @@ describe("NavigationQueryStore", () => {
     expect(overlay.entries.map(({ row, attentionRank }) => [row.id, attentionRank])).toEqual(next.entries.map(({ row, attentionRank }) => [row.id, attentionRank]));
   });
 
-  it("rereads a late owner baseline after a canonical turn boundary instead of undoing its rank", async () => {
+  it("keeps a canonical turn boundary's rank when the owner read it overtook finishes, without rereading", async () => {
     const store = new NavigationQueryStore();
     const original = [{ ...thread("first"), threadStatus: "idle" as const, inbox: { inInbox: true } }];
     const view = request({ query: { kind: "lens", lens: "attention" }, attentionView: { id: "window", promoteOnTurnEnd: true } });
     await store.readPage({ scopeKey: "viewer", request: view, loadIndex: async () => snapshot(original) });
     let resolve!: (value: NavigationSnapshot) => void;
-    const pending = new Promise<NavigationSnapshot>((done) => { resolve = done; });
-    let reads = 0;
-    const read = store.readPage({ scopeKey: "viewer", request: view,
-      loadIndex: () => ++reads === 1 ? pending : Promise.resolve(snapshot([{ ...original[0]!, threadStatus: "active" }])),
-    });
+    const loadIndex = vi.fn(() => new Promise<NavigationSnapshot>((done) => { resolve = done; }));
+    const read = store.readPage({ scopeKey: "viewer", request: view, loadIndex });
     store.observeAttentionEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: "first", turnId: "new-turn" } } } as AgentEvent);
     resolve(snapshot(original));
     const result = await read;
-    expect(reads).toBe(2);
-    expect(result.counts.active).toBe(1);
+    expect(loadIndex).toHaveBeenCalledTimes(1);
     expect(result.entries[0]?.attentionRank).toBe(2);
+    // The refresh the boundary asks for sees the turn at the same rank.
+    const next = await store.readPage({ scopeKey: "viewer", request: view,
+      loadIndex: async () => snapshot([{ ...original[0]!, threadStatus: "active" }]) });
+    expect(next.counts.active).toBe(1);
+    expect(next.entries[0]?.attentionRank).toBe(2);
+  });
+
+  it("never fails an Attention read because boundaries land during every owner read", async () => {
+    const store = new NavigationQueryStore();
+    const threads = [1, 2].map((id) => ({ ...thread(`thread-${id}`), threadStatus: "idle" as const, inbox: { inInbox: true } }));
+    const view = request({ query: { kind: "lens", lens: "attention" }, attentionView: { id: "window", promoteOnTurnEnd: true } });
+    await store.readPage({ scopeKey: "viewer", request: view, loadIndex: async () => snapshot(threads) });
+    let turn = 0;
+    const loadIndex = vi.fn(async () => {
+      store.observeAttentionEvent({ backend: "codex",
+        notification: { method: "turn/started", params: { threadId: "thread-1", turnId: `turn-${++turn}` } } } as AgentEvent);
+      return snapshot(threads);
+    });
+    for (let read = 1; read <= 3; read++) {
+      const result = await store.readPage({ scopeKey: "viewer", request: view, loadIndex });
+      expect(loadIndex).toHaveBeenCalledTimes(read);
+      expect(result.entries.map(({ row, attentionRank }) => [row.id, attentionRank]))
+        .toEqual([["thread-1", read + 2], ["thread-2", 2]]);
+    }
+    // A boundary for another lens's reader does not touch this view's read.
+    const recents = await store.readPage({ scopeKey: "viewer", request: request(), loadIndex });
+    expect(recents.entries).toHaveLength(2);
+    expect(loadIndex).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not re-rank a thread that a boundary removed from Attention during the owner read", async () => {
+    const store = new NavigationQueryStore();
+    const threads = [1, 2].map((id) => ({ ...thread(`thread-${id}`), threadStatus: "idle" as const, inbox: { inInbox: true },
+      updatedAt: id }));
+    const view = request({ query: { kind: "lens", lens: "attention" }, attentionView: { id: "window", promoteOnTurnEnd: true } });
+    const initial = await store.readPage({ scopeKey: "viewer", request: view, loadIndex: async () => snapshot(threads) });
+    expect(initial.entries.map(({ row, attentionRank }) => [row.id, attentionRank])).toEqual([["thread-2", 2], ["thread-1", 1]]);
+    const loadIndex = vi.fn(async () => {
+      store.observeAttentionEvent({ backend: "codex",
+        notification: { method: "navigation/thread/seen", params: { threadId: "thread-2" } } } as AgentEvent);
+      // The listing predates the seen mark, so it still lists the thread unread.
+      return snapshot(threads);
+    });
+    const overtaken = await store.readPage({ scopeKey: "viewer", request: view, loadIndex });
+    expect(loadIndex).toHaveBeenCalledTimes(1);
+    // The overtaken listing must not admit it again as a new member at the top.
+    expect(overtaken.entries.map(({ row, attentionRank }) => [row.id, attentionRank])).toEqual([["thread-1", 1], ["thread-2", undefined]]);
+    const seen = [threads[0]!, { ...threads[1]!, inbox: { inInbox: false } }];
+    const next = await store.readPage({ scopeKey: "viewer", request: view, loadIndex: async () => snapshot(seen) });
+    expect(next.entries.map(({ row, attentionRank }) => [row.id, attentionRank])).toEqual([["thread-1", 1]]);
   });
 
   it("admits remote event ranks only for the exact viewer-owned mounted identity", async () => {
