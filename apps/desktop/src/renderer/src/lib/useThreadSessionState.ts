@@ -4749,13 +4749,26 @@ function hasCompletedAssistantMessageForTurn(
   }
 
   const normalizedText = normalizeTranscriptText(text);
-  return response.replay.entries.some(
-    (entry) =>
+  const turnMessages = response.replay.entries.filter(
+    (entry): entry is AppServerThreadMessageEntry =>
       entry.type === "message" &&
       entry.role === "assistant" &&
+      entry.turn?.id === turnId
+  );
+  if (turnMessages.some(
+    (entry) =>
       (!entry.phase || entry.phase === "final") &&
-      entry.turn?.id === turnId &&
       normalizeTranscriptText(entry.text) === normalizedText
+  )) {
+    return true;
+  }
+  // An ACP agent can report the whole turn's text as one output. It repeats
+  // the turn's messages in order, with or without separators between them.
+  const withoutWhitespace = (value: string) => value.replace(/\s+/g, "");
+  return (
+    turnMessages.length > 1
+    && withoutWhitespace(turnMessages.map((entry) => entry.text).join(""))
+      === withoutWhitespace(text)
   );
 }
 
@@ -4942,13 +4955,13 @@ function readCompletedTurnText(
 
   const turnRecord = (notification as { turn?: { output?: Array<{ type: string; text?: string }> } })
     .turn;
-  const text = turnRecord?.output
+  // Claude reports each assistant message of the turn as its own part, so
+  // the final answer is the last part. Joining them made a message no
+  // backend sent.
+  return turnRecord?.output
     ?.filter((part) => part.type === "text" && typeof part.text === "string")
     .map((part) => part.text!.trim())
-    .filter(Boolean)
-    .join("\n\n");
-
-  return text || undefined;
+    .findLast(Boolean);
 }
 
 function didHydrateCompletedTurn(
