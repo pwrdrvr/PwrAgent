@@ -22034,8 +22034,12 @@ command = "pnpm grok"
         discoverModels: async () => [{ id: "claude-opus-4-8", label: "Opus 4.8", current: true }],
       },
     });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
     await expect(registry.listBackends({ includeUnavailable: true })).resolves.toMatchObject({
-      backends: expect.arrayContaining([expect.objectContaining({ kind: "claude", available: false })]),
+      backends: expect.arrayContaining([
+        expect.objectContaining({ kind: "codex", available: true }),
+        expect.objectContaining({ kind: "claude", available: false }),
+      ]),
     });
     const directoryKey = "subthread:claude:thread-parent:new-worktree:studio";
 
