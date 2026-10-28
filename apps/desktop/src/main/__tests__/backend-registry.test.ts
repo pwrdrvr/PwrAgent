@@ -3267,6 +3267,10 @@ describe("DesktopBackendRegistry", () => {
       expect(await registry.listThreads({ backend, forceRefresh: true })).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: "claude-title-session", title: "Provider generated Claude title", titleSource: "derived" }),
       ]));
+      // This fixture owns the prompt's terminal too. Drain its normal
+      // lifecycle (including branch adoption) before close starts a deadline.
+      await emitCompletedTurn(registry, backend, "claude-title-session");
+      expect(titleService.generateTitle).not.toHaveBeenCalled();
     } finally { await registry.close(); }
     expect(acpClient.cancelSession).not.toHaveBeenCalled();
   });

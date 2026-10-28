@@ -519,7 +519,9 @@ describe("DesktopBackendRegistry usage turn ends", () => {
         });
       await runTurn(registry, "acp:grok", acpTurnId);
       const heard = vi.fn();
-      registry.onEvent(heard);
+      registry.onEvent((event) => {
+        if (event.notification.method === "turn/cancelled") heard(event);
+      });
       vi.useFakeTimers();
       try {
         let stopped = false;
