@@ -118,6 +118,28 @@ export function mergeMcpServerRegistrations(
   };
 }
 
+// Grok accepts an MCP server name only when it starts with a letter or an
+// underscore and holds only letters, digits, `_` and `-`. It connects a server
+// with any other name and then drops all of its tools. Custom connection IDs
+// always pass. The built-in `builtin:sandboxer` does not. A rewritten name
+// starts with `_`, so it cannot collide with a custom ID, which must start
+// with a letter.
+const ACP_MCP_SERVER_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]*$/u;
+
+export function acpSafeMcpServerName(name: string): string {
+  if (ACP_MCP_SERVER_NAME_PATTERN.test(name)) return name;
+  return `_${name.replace(/[^A-Za-z0-9_-]/gu, "_")}`;
+}
+
+function toAcpMcpServerWireConfigs(
+  servers: readonly AcpMcpServerConfig[],
+): ReturnType<typeof normalizeAcpMcpServerConfigs> {
+  return normalizeAcpMcpServerConfigs(servers.map((server) => {
+    const name = acpSafeMcpServerName(server.name);
+    return name === server.name ? server : { ...server, name };
+  }));
+}
+
 export type AcpPromptContentBlock =
   | { type: "text"; text: string }
   | { type: "image"; mimeType: string; data: string };
@@ -571,7 +593,7 @@ export class AcpAgentClient {
     );
     const result = await this.options.transport.request("session/new", {
       cwd,
-      mcpServers: normalizeAcpMcpServerConfigs(mcpRegistration.servers),
+      mcpServers: toAcpMcpServerWireConfigs(mcpRegistration.servers),
       ...(params.sessionMeta ? { _meta: params.sessionMeta } : {}),
     });
     const now = this.now();
@@ -1677,7 +1699,7 @@ export class AcpAgentClient {
     try {
       result = await this.options.transport.request("session/load", {
         cwd,
-        mcpServers: normalizeAcpMcpServerConfigs(mcpRegistration.servers),
+        mcpServers: toAcpMcpServerWireConfigs(mcpRegistration.servers),
         sessionId: protocolSessionId,
       });
     } finally {
