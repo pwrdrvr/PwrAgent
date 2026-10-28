@@ -42,12 +42,9 @@ import {
 import { InlineRenameInput } from "./InlineRenameInput";
 import { matchMoveHotkey } from "./thread-action-hotkeys";
 import { threadRowInstanceKey, type ThreadRowInstance } from "./thread-row-instance";
+import { formatRelativeTime } from "./thread-time";
 
 const HOVER_PREFETCH_DELAY_MS = 750;
-const absoluteDateFormatter = new Intl.DateTimeFormat(undefined, {
-  month: "short",
-  day: "numeric",
-});
 
 /**
  * Which row of a list a callback is about.
@@ -1365,34 +1362,4 @@ function defaultOpenPullRequest(url: string): void {
     return;
   }
   window.open(url, "_blank", "noopener,noreferrer");
-}
-
-function formatRelativeTime(timestamp?: number): string {
-  if (!timestamp) {
-    return "now";
-  }
-
-  const deltaMinutes = Math.max(
-    0,
-    Math.round((Date.now() - timestamp) / (1000 * 60))
-  );
-
-  if (deltaMinutes < 1) {
-    return "now";
-  }
-  if (deltaMinutes < 60) {
-    return `${deltaMinutes}m`;
-  }
-
-  const deltaHours = Math.round(deltaMinutes / 60);
-  if (deltaHours < 24) {
-    return `${deltaHours}h`;
-  }
-
-  const deltaDays = Math.round(deltaHours / 24);
-  if (deltaDays < 7) {
-    return `${deltaDays}d`;
-  }
-
-  return absoluteDateFormatter.format(timestamp);
 }
