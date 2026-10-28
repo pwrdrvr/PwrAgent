@@ -87,8 +87,6 @@ type TranscriptViewport = {
 };
 
 type TranscriptListProps = {
-  /** The thread's backend tags only its answer final (Codex). */
-  finalPhaseIsAnswer?: boolean;
   /**
    * Rewind controls: the prompts a rewind can target, the stable opener, why
    * the control is unavailable right now, and the confirmation to render
@@ -985,11 +983,9 @@ export function TranscriptList(props: TranscriptListProps) {
         activeMessageId:
           props.transientMessage?.id ?? props.pendingAssistantMessage?.id,
         alwaysVisibleEntryIds: alwaysVisibleTransientMessageIds,
-        finalPhaseIsAnswer: props.finalPhaseIsAnswer,
         now: renderNow,
       }),
     [
-      props.finalPhaseIsAnswer,
       props.activeTurnId,
       props.activeTurnStartedAt,
       props.pendingAssistantMessage?.id,

@@ -213,7 +213,6 @@ export function SubAgentTranscriptWindow() {
             desktopApi={desktopApi}
             entries={entries}
             error={state.error}
-            finalPhaseIsAnswer={target?.backend === "codex"}
             loading={state.loading}
             loadingMore={state.loadingMore}
             pagination={state.response?.replay.pagination}

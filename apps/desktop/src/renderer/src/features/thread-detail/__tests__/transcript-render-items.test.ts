@@ -452,23 +452,27 @@ describe("buildTranscriptRenderItems", () => {
     ]);
   });
 
-  it("keeps a Codex answer in view without commentary only when the backend tags just its answer final", () => {
-    // A short Codex turn: tools, then the answer alone, then the call Codex
-    // cancelled at turn end. With no commentary only the backend says which
-    // reply is the answer; ACP tags every reply final, so it still folds.
+  it("keeps an answer with no commentary in view when only a failed call follows it", () => {
+    // A short Codex turn: a tool, the answer alone, then the call Codex
+    // cancelled at turn end, which arrives as a row whose every call failed.
+    // A row with one call that ran is still work after the reply.
     const turn = completedTurn("turn-1", 70_000);
     const firstTool = tool("tool-1", turn);
     const answer = final("f1", "Fix pushed. PR creation is still pending.", turn);
-    const cancelledTool: AppServerThreadActivityEntry = { ...tool("tool-2", turn), status: "failed" };
-    const entries = [firstTool, answer, cancelledTool];
+    const failedCall = { id: "call-2", kind: "command" as const, label: "create_pull_request", status: "failed" as const };
+    const cancelledTool: AppServerThreadActivityEntry = { ...tool("tool-2", turn), status: "failed", details: [failedCall] };
 
-    expect(buildTranscriptRenderItems({ entries, finalPhaseIsAnswer: true })).toEqual([
+    expect(buildTranscriptRenderItems({ entries: [firstTool, answer, cancelledTool] })).toEqual([
       expect.objectContaining({ type: "workPhaseGroup", entries: [firstTool] }),
       { type: "entry", entry: answer },
       expect.objectContaining({ type: "workPhaseGroup", entries: [cancelledTool], label: "More work" }),
     ]);
-    expect(buildTranscriptRenderItems({ entries })).toEqual([
-      expect.objectContaining({ type: "workPhaseGroup", entries: [firstTool, answer, cancelledTool] }),
+    const partlyRan: AppServerThreadActivityEntry = {
+      ...cancelledTool,
+      details: [failedCall, { ...failedCall, id: "call-3", status: "completed" }],
+    };
+    expect(buildTranscriptRenderItems({ entries: [firstTool, answer, partlyRan] })).toEqual([
+      expect.objectContaining({ type: "workPhaseGroup", entries: [firstTool, answer, partlyRan] }),
     ]);
   });
 

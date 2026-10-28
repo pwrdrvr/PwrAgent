@@ -33,11 +33,6 @@ export function buildTranscriptRenderItems(params: {
   activeTurnStartedAt?: number;
   activeMessageId?: string;
   alwaysVisibleEntryIds?: ReadonlySet<string>;
-  /**
-   * The backend tags its answer `final` and nothing else, as Codex does. ACP
-   * agents tag every reply final and Claude tags none, so they leave it off.
-   */
-  finalPhaseIsAnswer?: boolean;
   now?: number;
 }): TranscriptRenderItem[] {
   const activeTurnId =
@@ -70,7 +65,6 @@ export function buildTranscriptRenderItems(params: {
       params.alwaysVisibleEntryIds,
       reviewTurnIds,
       activeReview,
-      params.finalPhaseIsAnswer,
     );
     const activeGroups = activeReview
       ? []
@@ -94,8 +88,6 @@ export function buildTranscriptRenderItems(params: {
     undefined,
     params.alwaysVisibleEntryIds,
     reviewTurnIds,
-    undefined,
-    params.finalPhaseIsAnswer,
   );
   if (completedGroups.length > 0) {
     return renderWithGroups(params.entries, completedGroups);
@@ -204,7 +196,6 @@ function buildCompletedGroups(
   alwaysVisibleEntryIds?: ReadonlySet<string>,
   reviewTurnIds?: ReadonlySet<string>,
   activeReview?: { startedAt?: number; turnId: string },
-  finalPhaseIsAnswer?: boolean,
 ): RenderGroup[] {
   const groups: RenderGroup[] = [];
   const groupIds = new Set<string>();
@@ -218,7 +209,7 @@ function buildCompletedGroups(
       lastReviewIndexByTurn.set(entry.turn.id, index);
     }
   });
-  const interimReplies = collectInterimReplies(entries, finalPhaseIsAnswer);
+  const interimReplies = collectInterimReplies(entries);
   let currentEntries: AppServerThreadEntry[] = [];
   let currentTurnId: string | undefined;
 
@@ -318,14 +309,14 @@ function buildCompletedGroups(
  * same turn was not the answer, whatever its phase says. A user message in
  * between ends the search: a reply the operator answered stays in view.
  *
- * A backend that tags only its answer final, or a turn that tags some replies
- * commentary, does tell its answer apart, so its final reply stays the
- * answer. Codex reports a tool call it cancelled at turn end after the
- * answer, and that call is not work done after it.
+ * A turn that tags some replies commentary does tell its answer apart, so its
+ * final reply stays the answer. Codex reports a tool call it cancelled at turn
+ * end after the answer, and that call is not work done after it. A row whose
+ * every call failed is how that arrives, with or without commentary, so it
+ * never makes the reply before it interim.
  */
 function collectInterimReplies(
   entries: AppServerThreadEntry[],
-  finalPhaseIsAnswer = false,
 ): Set<AppServerThreadEntry> {
   const phaseTaggedTurnIds = new Set<string>();
   for (const entry of entries) {
@@ -341,12 +332,12 @@ function collectInterimReplies(
     if (entry.type === "message" && entry.role === "user") {
       workFollowsInTurn = undefined;
     } else if (turnId && isConcreteWorkEntry(entry)) {
-      workFollowsInTurn = turnId;
+      if (!isAllFailedActivity(entry)) workFollowsInTurn = turnId;
     } else if (!turnId || turnId !== workFollowsInTurn) {
       workFollowsInTurn = undefined;
     } else if (
       isAssistantMessage(entry)
-      && !(entry.phase === "final" && (finalPhaseIsAnswer || phaseTaggedTurnIds.has(turnId)))
+      && !(entry.phase === "final" && phaseTaggedTurnIds.has(turnId))
     ) {
       interim.add(entry);
     }
@@ -545,6 +536,14 @@ export function isConcreteWorkEntry(
       !isFileDiffActivity(entry) &&
       !isTokenUsageActivity(entry))
   );
+}
+
+function isAllFailedActivity(
+  entry: AppServerThreadActivityEntry | AppServerThreadPlanEntry,
+): boolean {
+  return entry.type === "activity"
+    && entry.status === "failed"
+    && entry.details.every((detail) => detail.status === "failed");
 }
 
 function isTerminalTurnFailureActivity(
