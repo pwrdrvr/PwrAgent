@@ -37,6 +37,7 @@ import {
   buildAppendPinRank,
   FEDERATION_INVITE_VERSION,
   FEDERATION_PROTOCOL_VERSION,
+  resolveNewThreadBackend,
 } from "@pwragent/shared";
 import { NavigationQueryStore } from "../../src/main/app-server/navigation-query-store";
 import { StateDb } from "../../src/main/state/state-db";
@@ -146,6 +147,71 @@ export type InProcessFederationGateway = {
   restart: () => Promise<void>;
   close: () => Promise<void>;
 };
+
+/** The providers this fake owner reports. Ensure resolves against them too. */
+function fakeOwnerBackends(): ListBackendsResponse {
+  return {
+    fetchedAt: Date.now(),
+    backends: [
+      {
+        kind: "codex",
+        label: "OpenAI",
+        available: true,
+        methods: ["thread/list", "thread/read", "turn/start"],
+        capabilities: {
+          listThreads: true,
+          createThread: true,
+          resumeThread: true,
+          renameThread: true,
+          readThread: true,
+          startTurn: true,
+          interruptTurn: true,
+          steerTurn: false,
+          transcriptPagination: false,
+          toolUse: false,
+          approvalRequests: false,
+          multiDirectoryThreads: true,
+        },
+        executionModes: [
+          {
+            mode: "default",
+            label: "Default",
+            available: true,
+            isDefault: true,
+          },
+        ],
+      },
+      {
+        kind: "acp:kimi",
+        label: "Kimi Code",
+        available: true,
+        methods: ["thread/list", "thread/read", "turn/start"],
+        capabilities: {
+          listThreads: true,
+          createThread: true,
+          resumeThread: true,
+          renameThread: true,
+          readThread: true,
+          startTurn: true,
+          interruptTurn: true,
+          steerTurn: false,
+          transcriptPagination: false,
+          toolUse: false,
+          approvalRequests: false,
+          multiDirectoryThreads: true,
+        },
+        executionModes: [
+          {
+            mode: "default",
+            label: "Default",
+            available: true,
+            isDefault: true,
+          },
+        ],
+      },
+    ],
+  };
+}
 
 /**
  * A real federation gateway running inside the Playwright test process:
@@ -409,67 +475,7 @@ export async function startInProcessFederationGateway(params: {
     },
     async listBackends(): Promise<ListBackendsResponse> {
       calls.push({ method: "listBackends", params: {} });
-      return {
-        fetchedAt: Date.now(),
-        backends: [
-          {
-            kind: "codex",
-            label: "OpenAI",
-            available: true,
-            methods: ["thread/list", "thread/read", "turn/start"],
-            capabilities: {
-              listThreads: true,
-              createThread: true,
-              resumeThread: true,
-              renameThread: true,
-              readThread: true,
-              startTurn: true,
-              interruptTurn: true,
-              steerTurn: false,
-              transcriptPagination: false,
-              toolUse: false,
-              approvalRequests: false,
-              multiDirectoryThreads: true,
-            },
-            executionModes: [
-              {
-                mode: "default",
-                label: "Default",
-                available: true,
-                isDefault: true,
-              },
-            ],
-          },
-          {
-            kind: "acp:kimi",
-            label: "Kimi Code",
-            available: true,
-            methods: ["thread/list", "thread/read", "turn/start"],
-            capabilities: {
-              listThreads: true,
-              createThread: true,
-              resumeThread: true,
-              renameThread: true,
-              readThread: true,
-              startTurn: true,
-              interruptTurn: true,
-              steerTurn: false,
-              transcriptPagination: false,
-              toolUse: false,
-              approvalRequests: false,
-              multiDirectoryThreads: true,
-            },
-            executionModes: [
-              {
-                mode: "default",
-                label: "Default",
-                available: true,
-                isDefault: true,
-              },
-            ],
-          },
-        ],
-      };
+      return fakeOwnerBackends();
     },
     async markThreadSeen(request: { threadId: string }) {
       calls.push({ method: "markThreadSeen", params: request });
@@ -528,8 +534,14 @@ export async function startInProcessFederationGateway(params: {
           createdAt: now,
           updatedAt: now,
         },
+        // A real owner resolves its defaults from `preferredBackend` against
+        // the providers it can start, which is how a viewer learns whether
+        // the owner can run a parent's provider.
         defaults: {
-          backend: "codex",
+          backend: resolveNewThreadBackend(
+            fakeOwnerBackends().backends,
+            request.preferredBackend,
+          )?.kind ?? "codex",
           executionMode: "default",
         },
         gitStatus: {
