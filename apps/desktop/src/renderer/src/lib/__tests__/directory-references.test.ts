@@ -50,6 +50,11 @@ const UNLINKED = makeDirectory({
   latestUpdatedAt: 400,
 });
 
+/** The serialized `@` chip the composer sends for a path. */
+function chip(path: string): string {
+  return buildDirectoryReferenceMarkdown({ label: fileLabelFromPath(path), path });
+}
+
 describe("Windows directory reference round trips", () => {
   it.each(["C:/Projects", "C:\\Projects", "//server/share", "\\\\server\\share"])(
     "links the deepest directory after inserting a native path under %s",
@@ -58,7 +63,7 @@ describe("Windows directory reference round trips", () => {
       const child = makeDirectory({ key: "child", path: `${root}/app` });
       const sibling = makeDirectory({ key: "sibling", path: `${root}/app-other` });
       const nativePath = buildDirectoryReferenceInsertText(child);
-      const draft = `Read ${nativePath}\\src\\file.ts`;
+      const draft = `Read ${chip(`${nativePath}\\src\\file.ts`)}`;
       expect(listReferencedDirectories(draft, [parent, child, sibling])).toEqual([child]);
       expect(listReferencedDirectories(draft, [child], { excludePaths: [nativePath] })).toEqual([]);
       expect(listReferencedDirectories(draft, [parent, child], { excludePaths: [nativePath] })).toEqual([]);
@@ -72,9 +77,9 @@ describe("Windows directory reference round trips", () => {
   it("keeps POSIX backslashes as filename characters", () => {
     const parent = makeDirectory({ key: "parent", path: "/repo" });
     const sibling = makeDirectory({ key: "sibling", path: "/repo\\other" });
-    expect(listReferencedDirectories("Read /repo\\other/file.ts", [parent, sibling]))
+    expect(listReferencedDirectories(`Read ${chip("/repo\\other/file.ts")}`, [parent, sibling]))
       .toEqual([sibling]);
-    expect(listReferencedDirectories("Read /repo and /repo\\other", [parent, sibling]))
+    expect(listReferencedDirectories(`Read ${chip("/repo")} and ${chip("/repo\\other")}`, [parent, sibling]))
       .toEqual([parent, sibling]);
   });
 });
