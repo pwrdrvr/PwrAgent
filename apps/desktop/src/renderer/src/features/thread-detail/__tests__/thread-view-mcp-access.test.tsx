@@ -69,8 +69,8 @@ describe("ThreadView remote MCP access", () => {
       onOpenPluginSettings={openSettings}
     />);
     fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: /MCP access/ }));
-    await waitFor(() => expect(screen.getByRole("complementary", { name: "MCP access" })).toBeInTheDocument());
+    fireEvent.click(await screen.findByRole("menuitem", { name: /PwrAgent MCPs/ }));
+    await waitFor(() => expect(screen.getByRole("complementary", { name: "PwrAgent MCPs" })).toBeInTheDocument());
     await waitFor(() => expect(list).toHaveBeenCalledWith({ federationTarget: target }));
     expect(read).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", federationTarget: target });
     expect(await screen.findByText("Sandboxer is not set up on Studio.")).toBeInTheDocument();
@@ -89,7 +89,7 @@ describe("ThreadView remote MCP access", () => {
       desktopApi={{ readThreadMcpConnections: read }}
     />);
     fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
-    expect(screen.queryByRole("menuitem", { name: /MCP access/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /PwrAgent MCPs/ })).not.toBeInTheDocument();
     expect(read).not.toHaveBeenCalled();
   });
 });

@@ -30214,6 +30214,14 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--danger-text);
 }
 
+/* Whose servers these are, so they are not mistaken for gateway access. */
+.mcp-inventory-panel__lede {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .mcp-inventory-panel__reload-status {
   padding: 7px 8px;
   border: 1px solid var(--info-border);

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { query, type ModelInfo, type Options, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query, type McpServerStatus, type ModelInfo, type Options, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { BackendModelOption } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 
@@ -43,6 +43,36 @@ export async function discoverClaudeModels(params: {
 }
 
 /**
+ * The MCP servers Claude Code loads from its own settings, `.mcp.json` and
+ * plugins for a folder, read through a session that receives no prompt.
+ * Servers still connecting are polled until they settle or the wait ends.
+ */
+export async function readClaudeMcpServerStatus(params: {
+  executable: string;
+  env: NodeJS.ProcessEnv;
+  cwd: string;
+  query?: typeof query;
+  settleMs?: number;
+}): Promise<McpServerStatus[]> {
+  const settleMs = params.settleMs ?? 10_000;
+  return await readClaudeMetadata({
+    ...params,
+    loadMcpServers: true,
+    read: async (session) => {
+      const deadline = Date.now() + settleMs;
+      let servers = await session.mcpServerStatus();
+      while (servers.some((server) => server.status === "pending") && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        servers = await session.mcpServerStatus();
+      }
+      return servers;
+    },
+    timeoutMessage: "Claude MCP discovery timed out.",
+    timeoutMs: settleMs + 10_000,
+  });
+}
+
+/**
  * Open a Claude session that never receives a prompt, read what its
  * initialize handshake reports, and close it. No turn runs and nothing is
  * persisted.
@@ -52,6 +82,8 @@ export async function readClaudeMetadata<T>(params: {
   env: NodeJS.ProcessEnv;
   cwd?: string;
   settingSources?: Options["settingSources"];
+  /** Connect the MCP servers Claude Code's own config names. */
+  loadMcpServers?: boolean;
   query?: typeof query;
   read: (session: Query) => Promise<T>;
   timeoutMessage: string;
@@ -75,8 +107,10 @@ export async function readClaudeMetadata<T>(params: {
         ...(params.settingSources ? { settingSources: params.settingSources } : {}),
         abortController: controller,
         persistSession: false,
-        // Metadata reads need no tools or MCP connections.
-        tools: [], strictMcpConfig: true, mcpServers: {},
+        // Metadata reads need no tools, and MCP connections only when the
+        // read is about them.
+        tools: [],
+        ...(params.loadMcpServers ? {} : { strictMcpConfig: true, mcpServers: {} }),
       },
     });
     const timeout = new Promise<never>((_resolve, reject) => {

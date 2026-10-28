@@ -1171,7 +1171,12 @@ describe("Claude SDK backend", () => {
     expect(await f.backend.listMcpServers(threadId)).toEqual([{ name: "pwragent", authStatus: "unsupported", startupStatus: "ready", tools: ["search_mcp_tools"] }]);
     finish();
     await f.waitForTurn();
-    await expect(f.backend.listMcpServers(threadId)).rejects.toThrow("while Claude is running");
+    // Once the turn ends there is no session, so Claude Code's own config is
+    // read through a probe instead.
+    const readMcpServers = vi.fn().mockResolvedValue([{ name: "acme-docs", status: "pending" }]);
+    const idle = new ClaudeBackend({ ...f.backendOptions, readMcpServers });
+    expect(await idle.listMcpServers(threadId)).toEqual([{ name: "acme-docs", authStatus: "unsupported", startupStatus: "starting", tools: [] }]);
+    expect(readMcpServers).toHaveBeenCalledWith(expect.objectContaining({ cwd: f.root }));
   });
 
   it("publishes discovery immediately and retains the catalog when a later refresh fails", async () => {

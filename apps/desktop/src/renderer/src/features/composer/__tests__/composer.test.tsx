@@ -16826,8 +16826,39 @@ describe("Composer", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "MCP tools" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Codex MCPs…" }));
     expect(onShowMcpInventory).toHaveBeenLastCalledWith("toolsAndAuthOnly");
+  });
+
+  it("opens Claude's own MCPs from the menu but leaves /mcp to Claude", () => {
+    const onShowMcpInventory = vi.fn();
+    render(
+      <Composer
+        disabled={false}
+        onShowMcpInventory={onShowMcpInventory}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Claude thread",
+          titleSource: "explicit",
+          source: "claude",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/mcp" },
+    });
+    const commands = screen.queryByRole("listbox", { name: "Commands" });
+    expect(commands?.textContent ?? "").not.toContain("MCP tools");
+
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    expect(screen.queryByRole("menuitem", { name: "Codex MCPs…" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Claude MCPs…" }));
+    expect(onShowMcpInventory).toHaveBeenCalledWith("toolsAndAuthOnly");
   });
 
   it("does not advertise MCP inventory for ACP threads", async () => {
