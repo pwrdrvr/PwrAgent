@@ -447,10 +447,10 @@ for (const expected of ["lane: [1, 2]", "run: pnpm test --shard=${{ matrix.lane 
 }
 for (const expected of [
   "environment: apple-signing",
-  "working-directory: .release-signing",
+  "working-directory: release-signing",
   "Initialize isolated signing workspace",
-  "path: .release-signing/.release-input",
-  "uses: ./.release-signing/.github/actions/select-xcode-for-actool",
+  "path: release-signing/.release-input",
+  "uses: ./release-signing/.github/actions/select-xcode-for-actool",
   "Remove isolated signing workspace",
 ]) {
   assertWorkflowJobContainsText(releaseWorkflow, ".github/workflows/release.yml", "sign", expected);

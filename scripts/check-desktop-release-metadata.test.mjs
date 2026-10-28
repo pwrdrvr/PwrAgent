@@ -105,10 +105,10 @@ test("rejects a release dependency install that loses the persistent store", () 
 
 test("rejects signing without an isolated artifact workspace", () => {
   const root = fixture();
-  replace(root, ".github/workflows/release.yml", "        working-directory: .release-signing", "        working-directory: .");
+  replace(root, ".github/workflows/release.yml", "        working-directory: release-signing", "        working-directory: .");
   const result = check(root);
   expect(result.status).toBe(1);
-  expect(result.stderr).toContain("working-directory: .release-signing");
+  expect(result.stderr).toContain("working-directory: release-signing");
 });
 
 test("rejects a release test matrix that omits half the suite", () => {

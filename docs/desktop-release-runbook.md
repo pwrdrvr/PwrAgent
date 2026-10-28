@@ -295,7 +295,7 @@ persistent guests must supply macOS 26 and stable Xcode 26 or newer:
 5. `Sign, notarize, package macOS`, gated by the protected `apple-signing`
    environment, with `contents: read` and explicit `id-token: none`. It does
    not check out the repository or run dependency installation/postinstall
-   scripts. It starts with a fresh `.release-signing` directory and removes it
+   scripts. It starts with a fresh `release-signing` directory and removes it
    even on failure, so a prior runner checkout cannot supply extra signing
    files. It downloads the prepared artifact, verifies its SHA-256 digest,
    expands it, and runs `apps/desktop/scripts/release.mjs --sign-stage-only
