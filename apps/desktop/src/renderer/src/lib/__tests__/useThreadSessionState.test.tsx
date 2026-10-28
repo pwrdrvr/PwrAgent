@@ -5718,6 +5718,73 @@ describe("useThreadSessionState", () => {
     ).toEqual(texts.map((text) => `assistant:${text}`));
   });
 
+  // ACP streams replies as deltas only, so the turn's last reply is still
+  // pending when the turn completes, and a thought is a commentary message
+  // that the turn's output text leaves out.
+  it("does not repeat streamed ACP replies as a final answer", async () => {
+    let agentEventHandler: ((event: AgentEvent) => void) | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: vi.fn(async () => readThreadResponse({
+        entries: [],
+        hasPreviousPage: false,
+      })),
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries).toEqual([]);
+    });
+
+    const messages = [
+      { itemId: "thought-1", phase: "commentary", text: "Checking the layout." },
+      { itemId: "reply-1", phase: "final", text: "Putting the duration beside the headline." },
+      { itemId: "reply-2", phase: "final", text: "The duration now sits beside the headline." },
+    ];
+    act(() => {
+      for (const { itemId, phase, text } of messages) {
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "item/agentMessage/delta",
+            params: { threadId: "thread-1", turnId: "turn-1", itemId, delta: text, phase },
+          },
+        });
+      }
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [{
+                type: "text",
+                text: `${messages[1]!.text}\n\n${messages[2]!.text}`,
+              }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(
+      result.current.entries.map((entry) =>
+        entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+      )
+    ).toEqual(messages.map(({ text }) => `assistant:${text}`));
+  });
+
   it("replaces a transient message without persisting it in the transcript", async () => {
     let agentEventHandler:
       | ((event: {

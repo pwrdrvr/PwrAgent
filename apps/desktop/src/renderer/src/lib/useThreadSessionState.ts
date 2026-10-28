@@ -4742,7 +4742,8 @@ function hasReviewEntryForTurn(
 function hasCompletedAssistantMessageForTurn(
   response: AppServerReadThreadResponse | undefined,
   turnId: string | undefined,
-  text: string | undefined
+  text: string | undefined,
+  pendingAssistantMessage?: AppServerThreadMessageEntry
 ): boolean {
   if (!response || !turnId || !text) {
     return false;
@@ -4763,11 +4764,17 @@ function hasCompletedAssistantMessageForTurn(
     return true;
   }
   // An ACP agent can report the whole turn's text as one output. It repeats
-  // the turn's messages in order, with or without separators between them.
+  // the turn's replies in order, with or without separators between them.
+  // ACP sends no item/completed for a reply, so the last one is still
+  // pending here, and thoughts shown as commentary are not in the output.
+  const replies = [
+    ...turnMessages,
+    ...(pendingAssistantMessage?.turn?.id === turnId ? [pendingAssistantMessage] : []),
+  ].filter((entry) => entry.phase !== "commentary");
   const withoutWhitespace = (value: string) => value.replace(/\s+/g, "");
   return (
-    turnMessages.length > 1
-    && withoutWhitespace(turnMessages.map((entry) => entry.text).join(""))
+    replies.length > 1
+    && withoutWhitespace(replies.map((entry) => entry.text).join(""))
       === withoutWhitespace(text)
   );
 }
@@ -6941,7 +6948,8 @@ export function useThreadSessionState(params: {
               !hasCompletedAssistantMessageForTurn(
                 current.response,
                 completedTurn?.id,
-                completedText
+                completedText,
+                current.pendingAssistantMessage
               )
           );
           const unphasedAssistantCompletionPhase =
