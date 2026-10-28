@@ -14,6 +14,7 @@ import type {
 } from "@pwragent/shared";
 import { compareThreadTodosNewestFirst, ThreadTodoFeedFollower } from "@pwragent/shared";
 import { projectRemoteThreadTodo, remoteThreadTodoId } from "../federation/federation-thread-todos";
+import { expectedNavigationReadFailure } from "../../shared/navigation-ipc-result";
 
 type Mount = { target: FederationRemoteTarget; backend: AppServerBackendKind; threadId: string };
 
@@ -35,6 +36,9 @@ export type ThreadTodoViewHubOptions = {
   send: (target: FederationRemoteTarget | undefined, delta: ThreadTodoFeedDelta) => void;
   onUnavailable?: (error: unknown) => void;
 };
+
+/** How long a busy owner's view waits before it reads the owner once more. */
+export const THREAD_TODO_BUSY_RETRY_MS = 1_000;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -174,6 +178,9 @@ type RemoteView = {
   mode: "feed" | "list" | undefined;
   follower: ThreadTodoFeedFollower;
   listing: Coalesced;
+  /** The one deferred read a busy owner gets. */
+  busyRetry?: ReturnType<typeof setTimeout>;
+  busyRetrySpent: boolean;
 };
 
 type MountEntry = { mount: Mount; source: string; refresh: Coalesced };
@@ -257,7 +264,11 @@ export class ThreadTodoViewHub {
     }
     if (remote) {
       if (isReconnect) void this.resyncRemote(remote);
-      else if (isDelta && remote.mode === "feed") remote.follower.receive(params as ThreadTodoFeedDelta);
+      else if (isDelta && remote.mode === "feed") {
+        remote.follower.receive(params as ThreadTodoFeedDelta);
+        // A failed read stops the feed; the owner's next change reads it again.
+        if (!remote.follower.following) void this.resyncRemote(remote);
+      }
       else if (isMarker && remote.mode === "list") void remote.listing.run();
     }
 
@@ -297,10 +308,11 @@ export class ThreadTodoViewHub {
     if (existing) return existing;
     const view = new TodoView((delta) => this.options.send(target, delta));
     const remote: RemoteView = {
-      target, view, mode: undefined,
+      target, view, mode: undefined, busyRetrySpent: false,
       follower: new ThreadTodoFeedFollower({
         fetch: () => this.options.remote.snapshot(target),
         onSnapshot: (snapshot) => {
+          this.clearBusyRetry(remote);
           view.replaceSource("owner", snapshot.todos.map((todo) =>
             projectRemoteThreadTodo(todo, target, snapshot.mergeMethods)));
           view.setMergeMethods(snapshot.mergeMethods);
@@ -313,21 +325,18 @@ export class ThreadTodoViewHub {
           }
           view.setMergeMethods(delta.mergeMethods);
         },
-        onError: (error) => {
-          this.options.onUnavailable?.(error);
-          view.setStatus("owner", [errorMessage(error)]);
-        },
+        onError: (error) => this.remoteFailed(remote, error),
       }),
       listing: new Coalesced(async () => {
         try {
           const response = await this.options.remote.list(target, { status: "open" });
+          this.clearBusyRetry(remote);
           view.replaceSource("owner", response.todos.map((todo) =>
             projectRemoteThreadTodo(todo, target, response.mergeMethods)));
           view.setMergeMethods(response.mergeMethods);
           view.setStatus("owner", response.errors, response.unavailableInstances);
         } catch (error) {
-          this.options.onUnavailable?.(error);
-          view.setStatus("owner", [errorMessage(error)]);
+          this.remoteFailed(remote, error);
         }
       }),
     };
@@ -335,7 +344,32 @@ export class ThreadTodoViewHub {
     return remote;
   }
 
-  private async resyncRemote(remote: RemoteView): Promise<void> {
+  /**
+   * A busy owner is transient: its view keeps the last cards with no error
+   * and reads the owner once more. Any other failure shows.
+   */
+  private remoteFailed(remote: RemoteView, error: unknown): void {
+    if (expectedNavigationReadFailure(error)?.code !== "navigation_busy") {
+      this.options.onUnavailable?.(error);
+      remote.view.setStatus("owner", [errorMessage(error)]);
+      return;
+    }
+    if (remote.busyRetry || remote.busyRetrySpent) return;
+    remote.busyRetrySpent = true;
+    remote.busyRetry = setTimeout(() => {
+      remote.busyRetry = undefined;
+      if (this.remoteViews.get(remote.target.instanceId) === remote) void this.resyncRemote(remote, true);
+    }, THREAD_TODO_BUSY_RETRY_MS);
+  }
+
+  private clearBusyRetry(remote: RemoteView): void {
+    clearTimeout(remote.busyRetry);
+    remote.busyRetry = undefined;
+  }
+
+  /** Each read a window or the owner asks for earns one busy retry. */
+  private async resyncRemote(remote: RemoteView, busyRetry = false): Promise<void> {
+    if (!busyRetry) remote.busyRetrySpent = false;
     if (this.options.remote.supportsFeed(remote.target)) {
       remote.mode = "feed";
       await remote.follower.refresh();
@@ -346,6 +380,7 @@ export class ThreadTodoViewHub {
   }
 
   private dropRemote(remote: RemoteView): void {
+    this.clearBusyRetry(remote);
     remote.follower.close();
     this.remoteViews.delete(remote.target.instanceId);
   }
