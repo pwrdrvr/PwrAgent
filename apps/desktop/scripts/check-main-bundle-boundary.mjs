@@ -29,7 +29,7 @@ const forbidden = [
   {
     label: "externalized workspace bundled-dependency import",
     pattern:
-      /\b(?:from\s+|import\(|require\()["'`]@pwragent\/(?:shared|messaging-interface|messaging-provider-[^/"'`]+)["'`]/,
+      /\b(?:from\s+|import\s+|import\(|require\()["'`]@pwragent\/(?:shared|federation|agent-tools|messaging-interface|messaging-provider-[^/"'`]+)(?:\/[^"'`]*)?["'`]/,
   },
 ];
 const violations = [];
