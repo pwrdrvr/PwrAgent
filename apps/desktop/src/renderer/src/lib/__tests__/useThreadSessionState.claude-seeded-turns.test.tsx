@@ -28,7 +28,14 @@ import { useThreadSessionState } from "../useThreadSessionState";
 //   with that row's time and place.
 // - 3 and 44: two runs of one command in a turn both took one live row's
 //   place.
-const SEEDS = [3, 19, 20, 24, 40, 44];
+// - 15 and 198: a tool row matched by command text a live row for another
+//   run of that command. A compaction makes this likely: the live ledger
+//   keeps grouping tools across it while the read splits them, so a row's
+//   own live row no longer matches.
+// - 92: the same, with a read that lands before the other run's row exists.
+//   It fails once a live row is refused for a tool the read places
+//   elsewhere, until a row whose tools have their own live row is too.
+const SEEDS = [3, 15, 19, 20, 24, 40, 44, 92, 198];
 
 function rng(seed: number): () => number {
   let state = seed >>> 0 || 1;
