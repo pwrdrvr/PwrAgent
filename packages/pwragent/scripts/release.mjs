@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const registry = "https://registry.npmjs.org";
+const nativeRuntimeDependencies = { "node-pty": "1.2.0-beta.15" };
 
 export function releaseMetadata(pkg, { tag, confirmation } = {}) {
   assert.equal(pkg.name, "pwragent");
@@ -18,7 +19,8 @@ export function releaseMetadata(pkg, { tag, confirmation } = {}) {
   assert.ok(!pkg.version.startsWith("0.0.0"), "The placeholder version cannot be released");
   const distTag = pkg.version.includes("-") ? "next" : "latest";
   assert.equal(pkg.publishConfig.tag, distTag, "publishConfig.tag must match the version channel");
-  for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+  assert.deepEqual(pkg.dependencies, nativeRuntimeDependencies, "Only the reviewed, pinned native PTY dependency may remain external");
+  for (const field of ["optionalDependencies", "peerDependencies"]) {
     assert.equal(Object.keys(pkg[field] || {}).length, 0, "Runtime dependencies must remain bundled");
   }
   if (tag !== undefined) assert.equal(tag, `pwragent-v${pkg.version}`, "CLI tag must match package version");

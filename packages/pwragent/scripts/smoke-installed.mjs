@@ -1,7 +1,8 @@
 // Runs only the installed CLI and a copied provider fixture; no workspace imports.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import net from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
@@ -42,6 +43,26 @@ async function stop(daemon) { daemon.kill("SIGTERM"); assert.equal(await daemon.
 
 try {
   assert.match(await command(["--help"]), /PwrAgent Headless/);
+  const installedRequire = createRequire(realpathSync(cli));
+  const terminal = installedRequire("node-pty").spawn("/bin/sh", [], { cwd: temporary, cols: 80, rows: 24 });
+  let terminalExited = false;
+  let terminalOutput = "";
+  let terminalTimer;
+  const dataListener = terminal.onData((data) => { terminalOutput += data; });
+  try {
+    const exited = new Promise((resolve, reject) => {
+      terminalTimer = setTimeout(() => reject(new Error("Installed native PTY did not exit")), 10000);
+      terminal.onExit((event) => { terminalExited = true; resolve(event); });
+    });
+    terminal.resize(100, 30);
+    terminal.write("printf 'native-%s\\n' 'pty-ok'; exit\n");
+    assert.equal((await exited).exitCode, 0);
+    assert.ok(terminalOutput.includes("native-pty-ok"), terminalOutput);
+  } finally {
+    clearTimeout(terminalTimer);
+    dataListener.dispose();
+    if (!terminalExited) terminal.kill();
+  }
   let daemon = await start();
   assert.equal(JSON.parse(await command(["status"])).activeJob, null);
   const prompt = path.join(temporary, "prompt.txt");
@@ -64,7 +85,7 @@ try {
   const calls = readFileSync(path.join(data, "calls.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
   assert.equal(calls.filter((call) => call.method === "turn/start").length, 1);
   await stop(daemon);
-  console.log("Packed CLI smoke passed: help, mocked turn, transcript, federation, restart and duplicate submission");
+  console.log("Packed CLI smoke passed: native PTY input/resize/exit, help, mocked turn, transcript, federation, restart and duplicate submission");
 } finally {
   for (const child of children) {
     if (child.exitCode === null && child.signalCode === null) {

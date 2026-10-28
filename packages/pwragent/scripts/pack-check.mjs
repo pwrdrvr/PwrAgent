@@ -22,11 +22,12 @@ try {
   const tarball = path.join(temporary, packed.filename);
   const files = new Set(packed.files.map((file) => file.path));
   for (const required of ["package.json", "bin/pwragent.js", "src/cli.js", "src/daemon.js",
-    "dist/federation-core.js", "dist/ws-LICENSE", "LICENSE", "README.md", "examples/pwragent-headless.service"]) {
+    "dist/federation-core.js", "dist/ws-LICENSE", "dist/THIRD_PARTY_LICENSES", "licenses/xterm-LICENSE",
+    "LICENSE", "README.md", "examples/pwragent-headless.service"]) {
     assert.ok(files.has(required), `Missing packed file: ${required}`);
   }
   for (const file of files) {
-    assert.match(file, /^(package\.json|LICENSE|README\.md|bin\/[^/]+\.js|src\/[^/]+\.(js|ts)|examples\/[^/]+\.service|dist\/(federation-core\.js|ws-LICENSE))$/,
+    assert.match(file, /^(package\.json|LICENSE|README\.md|bin\/[^/]+\.js|src\/[^/]+\.(js|ts)|examples\/[^/]+\.service|licenses\/xterm-LICENSE|dist\/(federation-core\.js|ws-LICENSE|THIRD_PARTY_LICENSES))$/,
       `Unexpected packed file: ${file}`);
   }
   const unpacked = (file) => run("tar", ["-xOf", tarball, `package/${file}`]);
@@ -38,6 +39,8 @@ try {
   const wsPackage = federationRequire.resolve("ws/package.json");
   assert.equal(JSON.parse(readFileSync(wsPackage, "utf8")).license, "MIT");
   assert.equal(unpacked("dist/ws-LICENSE"), readFileSync(path.join(path.dirname(wsPackage), "LICENSE"), "utf8"));
+  assert.equal(unpacked("dist/THIRD_PARTY_LICENSES"), readFileSync(path.join(root, "dist/THIRD_PARTY_LICENSES"), "utf8"));
+  assert.equal(unpacked("licenses/xterm-LICENSE"), readFileSync(path.join(root, "licenses/xterm-LICENSE"), "utf8"));
   assert.match(unpacked("bin/pwragent.js"), /^#!\/usr\/bin\/env node\n/);
   assert.ok(packed.files.find((file) => file.path === "bin/pwragent.js").mode & 0o111, "CLI must be executable");
   const home = path.join(temporary, "home");
@@ -47,7 +50,16 @@ try {
   const prefix = path.join(temporary, "install");
   const env = { ...process.env, HOME: home, NODE_PATH: "", NODE_OPTIONS: "",
     NPM_CONFIG_USERCONFIG: npmrc, NPM_CONFIG_CACHE: path.join(temporary, "cache") };
-  // No workspace links, registry downloads, install scripts or ambient npm cache.
+  // Seed a new cache with only the declared native dependency and its npm
+  // dependencies. The installed CLI below must then work offline, without
+  // workspace links, lifecycle scripts or the operator's npm cache.
+  const dependencies = path.join(temporary, "runtime-dependencies");
+  mkdirSync(dependencies);
+  writeFileSync(path.join(dependencies, "package.json"), JSON.stringify({
+    private: true, license: "MIT", dependencies: packedPackage.dependencies,
+  }));
+  run("npm", ["install", "--prefix", dependencies, "--ignore-scripts", "--no-audit", "--no-fund", "--registry=https://registry.npmjs.org"],
+    { cwd: temporary, env });
   run("npm", ["install", "--global", "--prefix", prefix, "--offline", "--ignore-scripts", "--no-audit", "--no-fund", tarball],
     { cwd: temporary, env });
   const fixture = path.join(temporary, "codex.mjs");
