@@ -1,6 +1,7 @@
 import { buildLegacyEncodedThreadIdentityKey, parseUsageLimitObservation, validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRollup, type UsageActivityRow, type UsageLimitObservation, usageRollupStep } from "@pwragent/shared";
 import { createHash, randomUUID } from "node:crypto";
 import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
+import { usageActivityCandidates } from "./usage-activity-index";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 import { sqliteUsageLedgerVersions } from "./sqlite-usage-ledger-change-version";
@@ -2791,16 +2792,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     // contained ones are read separately and rolled up per parent thread, so
     // they cannot spend the row bound meant for turns.
     const rows = this.stateDb.raw.prepare(`
+      WITH activity_candidates AS (${usageActivityCandidates("overlap")})
       SELECT l.*, COALESCE(t.started_at, l.created_at) AS activity_started_at,
         COALESCE(t.completed_at, l.completed_at,
           CASE WHEN l.scope = 'monitor' AND l.status = 'finalized' THEN l.created_at END) AS activity_completed_at,
         t.rate_limit_snapshot AS activity_rate_limit_snapshot
-      FROM usage_activity_intervals i
-        CROSS JOIN usage_activity_keys k ON k.id = i.id
-        CROSS JOIN thread_usage_lines l ON l.usage_line_id = k.usage_line_id
+      FROM activity_candidates c
+        CROSS JOIN thread_usage_lines l ON l.usage_line_id = c.usage_line_id
         LEFT JOIN thread_usage_turns t ON t.usage_turn_id = l.usage_turn_id
        WHERE l.status != 'superseded'
-         AND i.start_min < @to AND i.end_max >= @from
          AND activity_started_at < @to
          AND CASE WHEN activity_completed_at IS NULL THEN l.updated_at >= @from
                   ELSE activity_completed_at >= @from END
@@ -2813,20 +2813,18 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     // Aggregate in SQLite. Only one representative ledger row per group
     // crosses into JS, including in a window containing thousands of helpers.
     const helperRows = this.stateDb.raw.prepare(`
-      WITH candidates AS (
-        SELECT l.*, k.id AS activity_key,
+      WITH activity_candidates AS (${usageActivityCandidates("helpers")}), candidates AS (
+        SELECT l.*,
           COALESCE(t.started_at, l.created_at) AS activity_started_at,
           COALESCE(t.completed_at, l.completed_at, l.created_at) AS activity_completed_at
-        FROM usage_activity_intervals i
-          CROSS JOIN usage_activity_keys k ON k.id = i.id
-          CROSS JOIN thread_usage_lines l ON l.usage_line_id = k.usage_line_id
+        FROM activity_candidates c
+          CROSS JOIN thread_usage_lines l ON l.usage_line_id = c.usage_line_id
           LEFT JOIN thread_usage_turns t ON t.usage_turn_id = l.usage_turn_id
-        WHERE i.start_max >= @from AND i.end_min < @to
-          AND l.scope = 'monitor' AND l.status = 'finalized'
+        WHERE l.scope = 'monitor' AND l.status = 'finalized'
           AND COALESCE(l.source_item_id, '') LIKE 'system:%'
           AND activity_started_at >= @from AND activity_completed_at < @to
       ), groups AS (
-        SELECT MIN(l.activity_key) AS representative,
+        SELECT MIN(l.usage_line_id) AS representative,
           MIN(l.activity_started_at) AS activity_started_at, MAX(l.activity_completed_at) AS activity_completed_at,
           MAX(l.updated_at) AS updated_at, COUNT(*) AS rollup_count,
           SUM(l.input_tokens) AS input_tokens, SUM(l.cached_input_tokens) AS cached_input_tokens,
@@ -2849,8 +2847,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             - (l.activity_completed_at < 0 AND l.activity_completed_at % @step != 0)
       )
       SELECT l.*, g.* FROM groups g
-        JOIN usage_activity_keys k ON k.id = g.representative
-        JOIN thread_usage_lines l ON l.usage_line_id = k.usage_line_id
+        JOIN thread_usage_lines l ON l.usage_line_id = g.representative
       ORDER BY g.representative
     `).all({ from: request.from, to: request.to, step: usageRollupStep(request.from, request.to) }) as ActivityRow[];
     const visibleRows = rows.slice(0, 5000);
