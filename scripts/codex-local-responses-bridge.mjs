@@ -21,10 +21,10 @@ async function main(args) {
   const provider = value("--provider");
   if (!/^[a-zA-Z0-9_-]+$/.test(provider)) throw new Error("Invalid provider name");
   // One value for both layers, so a long silent prefill outlasts each of them.
+  // startBridge validates it before Codex starts.
   const idleTimeoutMs = options.includes("--stream-idle-timeout-ms")
     ? Number(value("--stream-idle-timeout-ms"))
     : DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS;
-  if (!Number.isSafeInteger(idleTimeoutMs) || idleTimeoutMs <= 0) throw new Error("Invalid stream idle timeout");
   const codexArgs = args.slice(separator + 1);
   const versionOnly = codexArgs.includes("--version") || codexArgs.includes("-V");
   let server;

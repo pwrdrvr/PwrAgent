@@ -186,8 +186,9 @@ export function translateResponse(value, names) {
 
 export async function startBridge(upstream, apiKey, { idleTimeoutMs = DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS } = {}) {
   const target = loopbackUpstream(upstream);
-  if (!Number.isSafeInteger(idleTimeoutMs) || idleTimeoutMs <= 0) {
-    throw new Error("The upstream idle timeout must be a positive whole number of milliseconds");
+  // Node truncates a socket timer above 2^31 - 1 ms and warns on every request.
+  if (!Number.isInteger(idleTimeoutMs) || idleTimeoutMs <= 0 || idleTimeoutMs > 2 ** 31 - 1) {
+    throw new Error("The upstream idle timeout must be a whole number of milliseconds from 1 to 2147483647");
   }
   const server = createServer(async (req, res) => {
     const abort = new AbortController();

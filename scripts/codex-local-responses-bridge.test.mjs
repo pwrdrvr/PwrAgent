@@ -141,6 +141,27 @@ test("launcher supplies a private discovered catalog and removes it after Codex 
   await assert.rejects(stat(path.dirname(result.path)), { code: "ENOENT" });
 });
 
+test("launcher gives Codex and the bridge one configured stream idle timeout", async () => {
+  const { upstream } = await metadataServer();
+  const root = await mkdtemp(path.join(tmpdir(), "pwragent-idle-test-"));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
+  const child = path.join(root, "fixture.cjs");
+  await writeFile(child, `
+    console.log(JSON.stringify(process.argv.filter((value) => value.includes("stream_idle_timeout_ms"))));
+  `);
+  const args = (timeout) => [
+    bridgePath, "--codex", process.execPath, "--upstream", upstream, "--provider", "local",
+    "--stream-idle-timeout-ms", timeout, "--", child,
+  ];
+  const { stdout } = await execFileAsync(process.execPath, args("1200000"));
+  assert.deepEqual(JSON.parse(stdout), ["model_providers.local.stream_idle_timeout_ms=1200000"]);
+  await assert.rejects(execFileAsync(process.execPath, args("soon")), (error) => {
+    assert.match(error.stderr, /idle timeout/);
+    assert.equal(error.stdout, "");
+    return true;
+  });
+});
+
 test("version probes work without contacting the model or reading the catalog", async () => {
   const { upstream, requests } = await metadataServer({ status: 503 });
   const { stdout } = await execFileAsync(process.execPath, [
@@ -233,7 +254,7 @@ test("streams fragmented SSE and restores tool namespaces", async () => {
   assert.equal(received.input[0].role, "system");
 });
 
-/** Holds each phase of a streamed response back for `gapMs` of silence. */
+/** Stays silent for `beforeHeadersMs` before headers and `midStreamMs` after the first event. */
 async function silentUpstream({ beforeHeadersMs = 0, midStreamMs = 0 }) {
   const upstream = createServer(async (req, res) => {
     for await (const _chunk of req);
@@ -286,14 +307,15 @@ test("answers 504 when the upstream stays silent past the idle timeout before he
 });
 
 test("drops the stream when the upstream goes silent past the idle timeout mid-stream", async () => {
-  const post = await bridgeFor(await silentUpstream({ midStreamMs: 400 }), 100);
+  // The timeout covers the whole socket, so leave room for headers under load.
+  const post = await bridgeFor(await silentUpstream({ midStreamMs: 3_000 }), 1_000);
   const response = await post();
   assert.equal(response.status, 200);
   await assert.rejects(response.text());
 });
 
 test("rejects an unusable idle timeout and does not follow upstream redirects", async () => {
-  for (const idleTimeoutMs of [0, -1, 1.5, Number.NaN, Infinity]) {
+  for (const idleTimeoutMs of [0, -1, 1.5, Number.NaN, Infinity, 2 ** 31]) {
     await assert.rejects(startBridge("http://127.0.0.1:9/v1", undefined, { idleTimeoutMs }), /idle timeout/);
   }
   const destination = await metadataServer();
