@@ -151,7 +151,13 @@ class RenderingCapture {
       clearTimeout(this.timer);
       clearTimeout(this.sampleTimer);
       if (this.recording) await contentTracing.stopRecording(rawPath()).catch(() => {});
-      if (this.directory) await rm(rawPath(), { force: true }).catch(() => {});
+      if (this.directory) {
+        try {
+          await rm(rawPath(), { force: true });
+        } catch {
+          result = undefined;
+        }
+      }
     }
     if (result) this.resolve(result);
     else this.reject(new Error("Rendering capture failed; no summary is available"));
