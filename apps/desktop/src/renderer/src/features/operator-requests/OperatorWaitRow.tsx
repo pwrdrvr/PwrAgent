@@ -240,13 +240,14 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
     const answer = (choice: ApprovalChoice): void => {
       void run(choice.busyLabel, () => props.respond(wait, choice.buildResponse()));
     };
-    const decline = choices.decline ? (
+    const declineChoice = choices.decline;
+    const decline = declineChoice ? (
       <button
         type="button"
         className="thread-todos-panel__row-link thread-todos-panel__row-link--quiet"
-        onClick={() => answer(choices.decline!)}
+        onClick={() => answer(declineChoice)}
       >
-        {choices.decline.label}
+        {declineChoice.label}
       </button>
     ) : null;
     const accept = choices.accept;

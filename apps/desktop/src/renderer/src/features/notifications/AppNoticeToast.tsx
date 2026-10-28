@@ -368,7 +368,10 @@ export function AppNoticeToast(props: {
             <div className="app-notice-toast__custom-actions">
               {customActions.map((action) => action.menu && action.menu.entries.length > 0 ? (
                 <TodoSplitButton
-                  key={action.label}
+                  // Keyed by notice: the stack reuses one card as the active
+                  // notice changes, and an open menu must not carry another
+                  // notice's answers.
+                  key={`${noticeId}:${action.label}`}
                   label={action.label}
                   menuLabel={action.menu.label}
                   entries={action.menu.entries}

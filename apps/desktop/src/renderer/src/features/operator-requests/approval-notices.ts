@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { SubmitServerRequestRequest } from "@pwragent/shared";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { approvalDisplayCommand } from "../thread-detail/approval-display-command";
+import { cleanComposerErrorMessage } from "../composer/composer-error-message";
 import type { TodoSplitMenuEntry } from "../thread-todos/TodoSplitButton";
 import { approvalChoices, type ApprovalChoice } from "./approval-choices";
 import { operatorWaitLabel, type OperatorWait } from "./operator-waits";
@@ -211,7 +212,10 @@ export function useApprovalNotices(
         Promise.resolve()
           .then(() => respond(wait, choice.buildResponse()))
           .catch((cause: unknown) => {
-            const reason = cause instanceof Error ? cause.message : String(cause);
+            // Without Electron's "Error invoking remote method …" wrapper.
+            const reason = cleanComposerErrorMessage(
+              cause instanceof Error ? cause.message : String(cause),
+            );
             // Named as a failure, or it reads as the request's own text.
             setAnswer(wait.key, {
               busyLabel: choice.busyLabel,

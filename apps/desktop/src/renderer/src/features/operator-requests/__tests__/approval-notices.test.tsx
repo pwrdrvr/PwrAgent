@@ -282,7 +282,7 @@ describe("answering from an approval notice", () => {
 
   it("answers a command approval and shows a refusal on the card", async () => {
     const respond = vi.fn(async () => {
-      throw new Error("The turn already ended.");
+      throw new Error("Error invoking remote method 'agent:submitServerRequest': Error: The turn already ended.");
     });
     render(<Harness initialWaits={waitsFor([commandApproval])} respond={respond} />);
 
@@ -297,5 +297,25 @@ describe("answering from an approval notice", () => {
     expect(await screen.findByText("Could not answer: The turn already ended.")).toBeInTheDocument();
     // A refused answer can be sent again.
     expect(screen.getByRole("button", { name: "Approval options" })).toBeInTheDocument();
+  });
+
+  it("closes an open menu when another notice takes the card", () => {
+    const respond = vi.fn(() => new Promise<void>(() => {}));
+    render(
+      <Harness
+        initialWaits={waitsFor([mcpSessionApproval, commandApproval])}
+        respond={respond}
+      />,
+    );
+
+    // Approvals lead the stack, so the command's notice is on the card.
+    expect(screen.getByText("pnpm test --run checkout")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Approval options" }));
+    expect(screen.getByRole("menu", { name: "Approval options" })).toBeInTheDocument();
+    // The command is answered elsewhere; the MCP notice takes the card.
+    fireEvent.click(screen.getByRole("button", { name: "Answer first" }));
+    expect(screen.getByText("Allow the agent to open a pull request on GitHub?")).toBeInTheDocument();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(respond).not.toHaveBeenCalled();
   });
 });
