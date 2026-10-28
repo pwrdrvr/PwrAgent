@@ -27,7 +27,7 @@ import {
   formatPastedImageName,
   getImageFilesFromDataTransfer,
   hasAnyFiles,
-  isGifFile,
+  getAnimationPreservingImageType,
 } from "../composer/composer-image-files";
 
 export type IntakeDialogTarget = {
@@ -236,7 +236,8 @@ export function IntakeDialog(props: {
           type,
           imageAttachments.length + index,
         );
-        if (isGifFile(file, type)) {
+        const preservedType = await getAnimationPreservingImageType(file, type);
+        if (preservedType) {
           const bytes = new Uint8Array(await file.arrayBuffer());
           if (bytes.byteLength === 0) {
             throw new Error("The pasted image was empty.");
@@ -244,7 +245,7 @@ export function IntakeDialog(props: {
           return {
             bytes,
             key: imageFileKey(file, type),
-            mimeType: "image/gif",
+            mimeType: preservedType,
             name: file.name || fallbackName,
           };
         }
@@ -262,6 +263,7 @@ export function IntakeDialog(props: {
           throw new Error("The pasted image was empty.");
         }
         void props.desktopApi?.recordImageUploadNormalization?.({
+          timing: normalized.timing,
           fileName: file.name || fallbackName,
           original: {
             height: normalized.original.height,

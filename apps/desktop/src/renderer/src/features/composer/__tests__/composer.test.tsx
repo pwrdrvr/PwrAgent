@@ -1,3 +1,4 @@
+import { ANIMATED_GIF_BASE64, ANIMATED_WEBP_BASE64 } from "../../../test/fixtures/animated-images";
 import * as composerMentionSources from "../useComposerMentionSources";
 import { buildThreadComposerScopeKey } from "../useComposerDraftStore";
 import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
@@ -835,6 +836,7 @@ describe("Composer", () => {
       clipboardData: { files: [file], items: [{ kind: "file", type: "image/png", getAsFile: () => file }] },
     });
     await waitFor(() => expect(normalizeImageFile).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("Preparing image attachments…")).toBeInTheDocument();
     const thread: NavigationThreadSummary = {
       id: "materialized", source: "codex", title: "First message", titleSource: "explicit",
       linkedDirectories: [], inbox: { inInbox: false }, optimisticActiveTurn: { id: "first-turn" },
@@ -851,6 +853,7 @@ describe("Composer", () => {
       await normalization.promise;
     });
     expect(await screen.findByAltText("follow-up.png")).toBeInTheDocument();
+    expect(screen.queryByText("Preparing image attachments…")).not.toBeInTheDocument();
     expect(store.get(buildThreadComposerScopeKey("codex", "materialized"))?.imageAttachments).toHaveLength(1);
     expect(store.get(buildThreadComposerScopeKey("codex", "materialized"))?.draft).toBe("Follow-up image");
     expect(store.get(`launchpad:${launchpad.directoryKey}`)).toBeUndefined();
@@ -23954,14 +23957,19 @@ describe("Composer", () => {
     expect(await within(dialog).findByAltText("first.gif")).toBeInTheDocument();
   });
 
-  it("keeps dropped GIF images animated by preserving the original data URL", async () => {
+  it.each([
+    ["gif", ANIMATED_GIF_BASE64],
+    ["webp", ANIMATED_WEBP_BASE64],
+  ])("preserves dropped animated %s bytes through sending", async (extension, base64) => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-1",
       turnId: "turn-1",
     }));
-    const gifFile = new File([new Uint8Array([71, 73, 70, 56])], "demo.gif", {
-      type: "image/gif",
+    const mimeType = `image/${extension}`;
+    const url = `data:${mimeType};base64,${base64}`;
+    const image = new File([Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))], `demo.${extension}`, {
+      type: mimeType,
     });
 
     render(
@@ -23990,15 +23998,15 @@ describe("Composer", () => {
         items: [
           {
             kind: "file",
-            type: "image/gif",
-            getAsFile: () => gifFile,
+            type: mimeType,
+            getAsFile: () => image,
           },
         ],
       },
     });
 
-    const preview = await screen.findByAltText("demo.gif");
-    expect(preview).toHaveAttribute("src", expect.stringMatching(/^data:image\/gif;base64,/));
+    const preview = await screen.findByAltText(`demo.${extension}`);
+    expect(preview).toHaveAttribute("src", url);
     expect(normalizeImageFile).not.toHaveBeenCalled();
 
     await clickButton("Send");
@@ -24010,8 +24018,8 @@ describe("Composer", () => {
         input: [
           {
             type: "image",
-            name: "demo.gif",
-            url: expect.stringMatching(/^data:image\/gif;base64,/),
+            name: `demo.${extension}`,
+            url: url,
           },
         ],
       });

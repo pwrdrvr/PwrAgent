@@ -239,10 +239,9 @@ import {
 import {
   formatPastedImageAlt,
   formatPastedImageName,
-  getImageFilesFromDataTransfer,
-  getNonImageFilesFromDataTransfer,
+  getComposerFilesFromDataTransfer,
   hasAnyFiles,
-  isGifFile,
+  getAnimationPreservingImageType,
   readFileAsImageDataUrl,
   type ComposerImageFile,
 } from "./composer-image-files";
@@ -3440,6 +3439,19 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>(
     latestDraftSnapshotRef.current.snapshot.imageAttachments
   );
+  const pendingImageBatchesRef = useRef(new Map<string, number>());
+  const [pendingImageBatches, setPendingImageBatches] = useState(
+    pendingImageBatchesRef.current,
+  );
+  const preparingImages = (pendingImageBatches.get(composerScopeKey) ?? 0) > 0;
+  const updatePendingImageBatches = (scopeKey: string, delta: number): void => {
+    const next = new Map(pendingImageBatchesRef.current);
+    const count = (next.get(scopeKey) ?? 0) + delta;
+    if (count > 0) next.set(scopeKey, count);
+    else next.delete(scopeKey);
+    pendingImageBatchesRef.current = next;
+    setPendingImageBatches(next);
+  };
   const [fileAttachments, setFileAttachments] = useState<ComposerFileAttachment[]>(
     latestDraftSnapshotRef.current.snapshot.fileAttachments ?? []
   );
@@ -8862,7 +8874,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   ): Promise<void> => {
     // The status line under the tray says why: the message would reference
     // files the owner does not have yet.
-    if (remoteFileUploads.uploads.length > 0) {
+    if (
+      remoteFileUploads.uploads.length > 0
+      || (pendingImageBatchesRef.current.get(composerScopeKey) ?? 0) > 0
+    ) {
       return;
     }
     if (forkCommand) {
@@ -10088,12 +10103,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
 
-    const pastedFiles = getImageFilesFromDataTransfer(event.clipboardData);
-    // Non-image FILES only (kind === "file" items) — plain text paste
-    // must fall through to the editor untouched.
-    const pastedNonImageFiles = getNonImageFilesFromDataTransfer(
-      event.clipboardData,
-    );
+    const { images: pastedFiles, files: pastedNonImageFiles, readMs } =
+      getComposerFilesFromDataTransfer(event.clipboardData);
     if (pastedFiles.length === 0 && pastedNonImageFiles.length === 0) {
       return;
     }
@@ -10110,7 +10121,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (!accepted || accepted.length === 0) {
       return;
     }
-    void attachImages(accepted);
+    void attachImages(accepted, readMs);
   };
 
   const handleDragOver = (event: DragEvent<HTMLElement>): void => {
@@ -10123,10 +10134,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   };
 
   const handleDrop = (event: DragEvent<HTMLElement>): void => {
-    const droppedFiles = getImageFilesFromDataTransfer(event.dataTransfer);
-    const droppedNonImageFiles = getNonImageFilesFromDataTransfer(
-      event.dataTransfer,
-    );
+    const { images: droppedFiles, files: droppedNonImageFiles, readMs } =
+      getComposerFilesFromDataTransfer(event.dataTransfer);
     if (droppedFiles.length === 0 && droppedNonImageFiles.length === 0) {
       return;
     }
@@ -10143,30 +10152,32 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (!accepted || accepted.length === 0) {
       return;
     }
-    void attachImages(accepted);
+    void attachImages(accepted, readMs);
   };
 
-  const attachImages = async (files: ComposerImageFile[]): Promise<void> => {
+  const attachImages = async (files: ComposerImageFile[], transferMs: number): Promise<void> => {
     const pasteScope = pasteScopeRef.current;
     const destination = getLaunchpadComposerDestination(draftStore, pasteScope.key);
     const pasteDraft = draft;
     const pasteEditorDocument = editorDocument;
     const pasteImageAttachments = imageAttachments;
     const pasteFileAttachments = fileAttachments;
+    updatePendingImageBatches(pasteScope.key, 1);
 
     try {
       const nextAttachments = await Promise.all(
         files.map(async ({ file, type }, index) => {
           const fallbackName = formatPastedImageName(type, index);
-          if (isGifFile(file, type)) {
-            // GIFs skip normalization (to preserve animation), so they have no
+          const preservedType = await getAnimationPreservingImageType(file, type);
+          if (preservedType) {
+            // Animations skip normalization, so they have no
             // measured dimensions — the card shows only the size chip for them.
             return {
               id: `pasted-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
               name: file.name || fallbackName,
               size: file.size,
-              type: "image/gif",
-              url: await readFileAsImageDataUrl(file, "image/gif"),
+              type: preservedType,
+              url: await readFileAsImageDataUrl(file, preservedType),
             };
           }
 
@@ -10176,6 +10187,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             sourceMimeType: type,
           });
           void props.desktopApi?.recordImageUploadNormalization?.({
+            timing: normalized.timing ? { ...normalized.timing, transferMs } : undefined,
             fileName: file.name || fallbackName,
             original: {
               height: normalized.original.height,
@@ -10301,6 +10313,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       setSendError(
         error instanceof Error ? error.message : "The pasted image could not be read."
       );
+    } finally {
+      updatePendingImageBatches(pasteScope.key, -1);
     }
   };
 
@@ -11020,6 +11034,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const sendButtonDisabled =
     forking ||
     preparingSend ||
+    preparingImages ||
     props.disabled ||
     remoteFileUploads.uploads.length > 0 ||
     steering ||
@@ -12892,6 +12907,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         ref={queuedReorder.announcerRef}
       />
 
+      {preparingImages ? (
+        <p className="composer__meta" aria-live="polite">
+          Preparing image attachments…
+        </p>
+      ) : null}
       {hasVisibleAttachments ? (
         <div
           className="composer__attachments"

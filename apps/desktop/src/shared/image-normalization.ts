@@ -9,7 +9,7 @@ export type ImageUploadQualityProfileSettings = {
 
 export const DEFAULT_IMAGE_UPLOAD_QUALITY_PROFILE: ImageUploadQualityProfile =
   "medium";
-export const DEFAULT_PASTED_IMAGE_MAX_PATCHES = 1536;
+export const DEFAULT_PASTED_IMAGE_MAX_PATCHES = 4096;
 
 export const IMAGE_UPLOAD_QUALITY_PROFILES: Record<
   ImageUploadQualityProfile,
@@ -65,6 +65,7 @@ export type ImageUploadFallbackResponse = {
 };
 
 export type ImageUploadNormalizationLogRequest = {
+  timing?: ImageUploadNormalizationTiming & { transferMs?: number };
   fileName?: string;
   original: {
     height?: number;
@@ -80,4 +81,12 @@ export type ImageUploadNormalizationLogRequest = {
   };
   path: "renderer" | "heic-fallback";
   resized: boolean;
+};
+
+export type ImageUploadNormalizationTiming = {
+  decodeMs: number;
+  encodeCount: number;
+  encodeMs: number;
+  readMs: number;
+  totalMs: number;
 };

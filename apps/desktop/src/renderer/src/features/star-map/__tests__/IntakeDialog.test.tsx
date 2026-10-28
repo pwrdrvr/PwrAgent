@@ -1,3 +1,4 @@
+import { ANIMATED_GIF_BASE64, ANIMATED_WEBP_BASE64 } from "../../../test/fixtures/animated-images";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -541,6 +542,25 @@ describe("IntakeDialog", () => {
     expect(request.imageUploads?.[0]?.bytes).not.toEqual(
       expect.any(String),
     );
+  });
+
+  it.each([
+    ["gif", ANIMATED_GIF_BASE64],
+    ["webp", ANIMATED_WEBP_BASE64],
+  ])("preserves animated %s bytes through intake dispatch", async (extension, base64) => {
+    const { dispatchStarMapIntake } = setup(undefined);
+    const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+    const file = new File([bytes], `animated.${extension}`, { type: `image/${extension}` });
+    Object.defineProperty(file, "arrayBuffer", { value: async () => bytes.buffer });
+    pasteImage(file, file.type);
+    await waitFor(() => expect(screen.getByLabelText("Task images")).toBeTruthy());
+    expect(normalizeImageFileMock).not.toHaveBeenCalled();
+    submitText("Inspect this animation");
+    await waitFor(() => expect(dispatchStarMapIntake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        imageUploads: [{ bytes, mimeType: file.type, name: file.name }],
+      }),
+    ));
   });
 
   it("keeps the federation target beside binary image uploads", async () => {

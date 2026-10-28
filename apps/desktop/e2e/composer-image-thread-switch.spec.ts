@@ -1,3 +1,4 @@
+import { ANIMATED_GIF_BASE64, ANIMATED_WEBP_BASE64 } from "../src/renderer/src/test/fixtures/animated-images";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -355,3 +356,43 @@ test("keeps a pasted composer image after switching away from a newly created th
     await fixture.cleanup();
   }
 });
+
+for (const extension of ["gif", "webp"] as const) {
+  test(`preserves and plays pasted animated ${extension} frames`, async () => {
+    const fixture = await createComposerImageThreadSwitchFixture();
+    const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+    const base64 = extension === "gif" ? ANIMATED_GIF_BASE64 : ANIMATED_WEBP_BASE64;
+    try {
+      const reply = app.window.getByRole("textbox", { name: "Reply", exact: true });
+      await expect(reply).toBeVisible();
+      await reply.evaluate((element, { extension, base64 }) => {
+        const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+        const transfer = new DataTransfer();
+        transfer.items.add(new File([bytes], `animated.${extension}`, { type: `image/${extension}` }));
+        element.dispatchEvent(new ClipboardEvent("paste", {
+          bubbles: true, cancelable: true, clipboardData: transfer,
+        }));
+      }, { extension, base64 });
+      const preview = app.window.getByAltText(`animated.${extension}`, { exact: true });
+      await expect(preview).toBeVisible();
+      await expect(preview).toHaveAttribute("src", `data:image/${extension};base64,${base64}`);
+      const frames = new Set<string>();
+      await expect.poll(async () => {
+        const pixels = await preview.evaluate((element) => {
+          const image = element as HTMLImageElement;
+          if (!image.complete || image.naturalWidth !== 16) return "";
+          const canvas = document.createElement("canvas");
+          canvas.width = canvas.height = 16;
+          const context = canvas.getContext("2d")!;
+          context.drawImage(image, 0, 0);
+          return context.getImageData(0, 0, 16, 16).data.join(",");
+        });
+        if (pixels) frames.add(pixels);
+        return frames.size;
+      }, { timeout: 5_000, message: `${extension} preview must display distinct animation frames` }).toBeGreaterThan(1);
+    } finally {
+      await app.close();
+      await fixture.cleanup();
+    }
+  });
+}

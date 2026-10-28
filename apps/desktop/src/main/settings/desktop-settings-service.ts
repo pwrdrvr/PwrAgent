@@ -3733,8 +3733,13 @@ export class DesktopSettingsService {
       configValue !== undefined && Number.isFinite(configValue)
         ? Math.max(0, Math.floor(configValue))
         : undefined;
+    // Legacy 1024/1536 presets now use the 4096-patch safety limit. Keep the
+    // original TOML intact until this setting is explicitly saved.
+    const effective = normalized === 1024 || normalized === 1536
+      ? DEFAULT_PASTED_IMAGE_MAX_PATCHES
+      : normalized;
     return {
-      value: normalized ?? DEFAULT_PASTED_IMAGE_MAX_PATCHES,
+      value: effective ?? DEFAULT_PASTED_IMAGE_MAX_PATCHES,
       source: normalized === undefined ? "default" : "config",
     };
   }
