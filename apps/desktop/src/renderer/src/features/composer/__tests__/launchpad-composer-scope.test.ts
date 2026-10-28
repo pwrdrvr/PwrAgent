@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildLaunchpadComposerScopeKey,
   buildStartingLaunchpadComposerScopeKey,
@@ -43,20 +43,22 @@ describe("launchpad composer scopes", () => {
   });
 
   describe("in a window fronting a peer", () => {
-    const rendererWindow = globalThis as typeof globalThis & {
-      __pwragentFederationTarget?: unknown;
-    };
     afterEach(() => {
-      delete rendererWindow.__pwragentFederationTarget;
+      vi.unstubAllGlobals();
     });
 
-    it("names that peer by default", () => {
-      rendererWindow.__pwragentFederationTarget = { scope: "remote", instanceId: "owner_one" };
+    it("names that peer when the launchpad names no owner", () => {
+      vi.stubGlobal("window", {
+        __pwragentFederationTarget: { scope: "remote", instanceId: "owner_one" },
+      });
 
       expect(buildLaunchpadComposerScopeKey(directoryKey)).toBe(
         buildLaunchpadComposerScopeKey(directoryKey, { scope: "remote", instanceId: "owner_one" }),
       );
       expect(buildLaunchpadComposerScopeKey(directoryKey)).not.toBe(`launchpad:${directoryKey}`);
+      // A launchpad that names this machine keeps its plain scope.
+      expect(buildLaunchpadComposerScopeKey(directoryKey, { scope: "local" }))
+        .toBe(`launchpad:${directoryKey}`);
     });
   });
 

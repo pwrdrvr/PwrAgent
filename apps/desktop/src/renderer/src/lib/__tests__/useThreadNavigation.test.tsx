@@ -23,6 +23,7 @@ import type {
 } from "@pwragent/shared";
 import { useMemo } from "react";
 import { useComposerDraftStore } from "../../features/composer/useComposerDraftStore";
+import { buildLaunchpadComposerScopeKey } from "../../features/composer/launchpad-composer-scope";
 import { navigationOwnerApiFixture, type NavigationOwnerFixtureApi as DesktopApi } from "../../test/navigation-owner-api-fixture";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -36,7 +37,8 @@ function useThreadNavigation(api?: DesktopApi, options?: Parameters<typeof useRe
   const composerDraftStore = options?.composerDraftStore ?? localStore;
   const ownerApi = useMemo(() => api ? navigationOwnerApiFixture(api, (launchpads) => {
     for (const launchpad of launchpads) {
-      const scope = `launchpad:${launchpad.directoryKey}`;
+      // Where main's draft index keeps it: a peer's draft names its owner.
+      const scope = buildLaunchpadComposerScopeKey(launchpad.directoryKey);
       if (!composerDraftStore.get(scope)) composerDraftStore.set(scope, { draft: launchpad.prompt,
         imageAttachments: launchpad.imageAttachments ?? [], fileAttachments: launchpad.fileAttachments ?? [], skillTokens: [] });
     }

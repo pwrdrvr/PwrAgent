@@ -4155,12 +4155,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       || snapshot.imageAttachments.length > 0
       || (snapshot.fileAttachments?.length ?? 0) > 0,
     );
-  const prepareDraftRetarget = (directoryKey: string): void => {
-    // A retarget stays with the owner of the launchpad it leaves.
-    const targetScopeKey = buildLaunchpadComposerScopeKey(
-      directoryKey,
-      props.launchpad?.federationTarget ?? rendererFederationTarget,
-    );
+  /**
+   * `owner` is the destination launchpad's owner. Undefined means this
+   * window's own owner, as for a Composer whose launchpad names none.
+   */
+  const prepareDraftRetarget = (
+    directoryKey: string,
+    owner: FederationTarget | undefined,
+  ): void => {
+    const targetScopeKey = buildLaunchpadComposerScopeKey(directoryKey, owner);
     const latest = latestDraftSnapshotRef.current;
     if (
       latest.scopeKey === targetScopeKey
@@ -13939,7 +13942,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     if (!plan || latestDraftSnapshotRef.current.scopeKey !== sourceScopeKey) {
                       return;
                     }
-                    prepareDraftRetarget(plan.directoryKey);
+                    // The draft moves to the picked machine's launchpad.
+                    prepareDraftRetarget(
+                      plan.directoryKey,
+                      instanceId ? { scope: "remote", instanceId } : undefined,
+                    );
                     await plan.open();
                   })();
                 }}
@@ -14091,7 +14098,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               picking={props.pickingDirectory}
               onSelect={(directory) => {
                 props.onClearPickDirectoryError?.();
-                prepareDraftRetarget(directory.key);
+                prepareDraftRetarget(
+                  directory.key,
+                  props.launchpad?.federationTarget,
+                );
                 props.onSelectDirectoryFromPicker?.(directory);
               }}
               onSelectNoDirectory={

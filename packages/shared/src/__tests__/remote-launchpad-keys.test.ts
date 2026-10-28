@@ -19,6 +19,7 @@ function draft(directoryKey: string, prompt: string): DirectoryLaunchpadOverlayS
     backend: "codex",
     executionMode: "default",
     prompt,
+    workMode: "local",
     createdAt: 1,
     updatedAt: 1,
   };

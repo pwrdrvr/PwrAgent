@@ -29,14 +29,16 @@ const LAUNCHPAD_SCOPE_PREFIX = "launchpad:";
 const STARTING_LAUNCHPAD_SCOPE_PREFIX = "launchpad:starting:";
 
 /**
- * The editable draft scope for a directory. `owner` defaults to the peer this
- * window fronts, so a remote window's drafts always name their owner.
+ * The editable draft scope for a directory. With no `owner`, the owner is the
+ * peer this window fronts, so a remote window's drafts always name it.
  */
 export function buildLaunchpadComposerScopeKey(
   directoryKey: string,
-  owner: FederationTarget | undefined = readRendererFederationTarget(),
+  owner?: FederationTarget,
 ): string {
-  return `${LAUNCHPAD_SCOPE_PREFIX}${launchpadStorageKey(directoryKey, owner)}`;
+  const resolvedOwner = owner
+    ?? (typeof window === "undefined" ? undefined : readRendererFederationTarget());
+  return `${LAUNCHPAD_SCOPE_PREFIX}${launchpadStorageKey(directoryKey, resolvedOwner)}`;
 }
 
 export function buildStartingLaunchpadComposerScopeKey(
