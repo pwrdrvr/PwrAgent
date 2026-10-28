@@ -18,6 +18,7 @@ import {
   Suspense,
   type ComponentProps,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
 } from "react";
 import type {
   MoveThreadToMainCheckoutResponse,
@@ -1948,20 +1949,27 @@ export function ThreadView(props: ThreadViewProps) {
   // The move flies the card list into the rail's first tab slot, then the
   // tab replays its arrival ring (`connectionsLanding` counts moves).
   const launchpadConnectionsRef = useRef<HTMLDivElement>(null);
-  const [connectionsDeparting, setConnectionsDeparting] = useState(false);
+  const contextRailSpineRef = useRef<HTMLDivElement>(null);
+  const connectionsDockButtonRef = useRef<HTMLButtonElement>(null);
+  // A keyboard move or return sends focus after the cards, since the control
+  // it was on unmounts. A pointer move leaves focus alone: focusing the rail
+  // tab would reveal an unpinned rail the operator did not ask to open.
+  const connectionsFocusAfterDockRef = useRef<LaunchpadConnectionsDock>();
+  const connectionsDepartingRef = useRef(false);
   const [connectionsArriving, setConnectionsArriving] = useState(false);
   const [connectionsLanding, setConnectionsLanding] = useState(0);
-  const moveConnectionsToSidebar = useCallback(() => {
+  const moveConnectionsToSidebar = useCallback((event: ReactMouseEvent<HTMLButtonElement>) => {
+    if (connectionsDepartingRef.current) return;
+    // A button activated from the keyboard reports a click with detail 0.
+    if (event.detail === 0) connectionsFocusAfterDockRef.current = "sidebar";
     const commit = (): void => {
-      setConnectionsDeparting(false);
+      connectionsDepartingRef.current = false;
       setConnectionsArriving(false);
       setConnectionsLanding((count) => count + 1);
       onLaunchpadConnectionsDockChange("sidebar");
     };
     const list = launchpadConnectionsRef.current;
-    const spine = list
-      ?.closest(".thread-view__layout")
-      ?.querySelector<HTMLElement>(".context-rail__spine");
+    const spine = contextRailSpineRef.current;
     if (
       !list
       || !spine
@@ -1973,10 +1981,12 @@ export function ThreadView(props: ThreadViewProps) {
     }
     const from = list.getBoundingClientRect();
     const to = spine.getBoundingClientRect();
-    // The first tab's centre: the spine's 8px padding plus half a 34px tab.
+    // Aim at the slot the Connections tab takes: the spine's first tab.
+    const tabHeight = spine.querySelector<HTMLElement>('[role="tab"]')?.offsetHeight ?? 34;
+    const slotTop = to.top + (Number.parseFloat(getComputedStyle(spine).paddingTop) || 0);
     const dx = to.left + to.width / 2 - (from.left + from.width / 2);
-    const dy = to.top + 25 - (from.top + from.height / 2);
-    setConnectionsDeparting(true);
+    const dy = slotTop + tabHeight / 2 - (from.top + from.height / 2);
+    connectionsDepartingRef.current = true;
     list
       .animate(
         [
@@ -1987,10 +1997,20 @@ export function ThreadView(props: ThreadViewProps) {
       )
       .finished.then(commit, commit);
   }, [onLaunchpadConnectionsDockChange]);
-  const showConnectionsOnLaunchpad = useCallback(() => {
+  const showConnectionsOnLaunchpad = useCallback((keyboard: boolean) => {
+    if (keyboard) connectionsFocusAfterDockRef.current = "launchpad";
     setConnectionsArriving(true);
     onLaunchpadConnectionsDockChange("launchpad");
   }, [onLaunchpadConnectionsDockChange]);
+  useEffect(() => {
+    if (connectionsFocusAfterDockRef.current !== launchpadConnectionsDock) return;
+    connectionsFocusAfterDockRef.current = undefined;
+    if (launchpadConnectionsDock === "sidebar") {
+      document.getElementById("context-rail-tab-connections")?.focus();
+    } else {
+      connectionsDockButtonRef.current?.focus();
+    }
+  }, [launchpadConnectionsDock]);
   const [threadMcpAccessOpen, setThreadMcpAccessOpen] = useState(false);
   // Closing the panel is the cheap, reliable signal that the selection may
   // have changed; re-reading then keeps the composer badge honest without
@@ -4532,9 +4552,9 @@ export function ThreadView(props: ThreadViewProps) {
           {props.onLaunchpadConnectionsDockChange ? (
           <div className="thread-view__connections-bar">
             <button
+              ref={connectionsDockButtonRef}
               className="thread-view__connections-dock tooltip-target"
               data-tooltip="Move the connection cards to the sidebar"
-              disabled={connectionsDeparting}
               type="button"
               onClick={moveConnectionsToSidebar}
             >
@@ -4929,6 +4949,7 @@ export function ThreadView(props: ThreadViewProps) {
             onWidthChange={setContextRailWidth}
             width={contextRailWidth}
             pinned={contextRailPinned}
+            spineRef={contextRailSpineRef}
             launchpadConnections={
               launchpadConnectionTiles && launchpadConnectionsDock === "sidebar"
                 ? {

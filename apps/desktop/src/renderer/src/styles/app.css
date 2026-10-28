@@ -23465,7 +23465,7 @@ a.button {
   cursor: pointer;
 }
 
-.thread-view__connections-dock:hover:not([disabled]),
+.thread-view__connections-dock:hover,
 .thread-view__connections-dock:focus-visible {
   border-color: var(--border-subtle);
   background: var(--bg-row-active);

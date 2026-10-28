@@ -10,7 +10,8 @@ export const SHOW_CONNECTIONS_ON_LAUNCHPAD_LABEL = "Show on new thread";
  */
 export function ConnectionsPanel(props: {
   children: ReactNode;
-  onShowOnLaunchpad: () => void;
+  /** `keyboard` is true when the button was activated from the keyboard. */
+  onShowOnLaunchpad: (keyboard: boolean) => void;
 }) {
   return (
     <section className="context-panel__section connections-panel">
@@ -21,7 +22,8 @@ export function ConnectionsPanel(props: {
           className="edits-panel__dock-toggle tooltip-target"
           data-tooltip={SHOW_CONNECTIONS_ON_LAUNCHPAD_LABEL}
           type="button"
-          onClick={props.onShowOnLaunchpad}
+          // A button activated from the keyboard reports a click with detail 0.
+          onClick={(event) => props.onShowOnLaunchpad(event.detail === 0)}
         >
           <ArrowLeftToLineIcon size={14} aria-hidden="true" />
         </button>

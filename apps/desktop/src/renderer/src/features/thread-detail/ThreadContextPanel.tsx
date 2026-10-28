@@ -13,6 +13,7 @@ import {
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
+  type Ref,
 } from "react";
 import type {
   BackendSummary,
@@ -118,8 +119,11 @@ type ThreadContextPanelProps = {
   launchpadConnections?: {
     content: ReactNode;
     landing: number;
-    onShowOnLaunchpad: () => void;
+    /** `keyboard` is true when the button was activated from the keyboard. */
+    onShowOnLaunchpad: (keyboard: boolean) => void;
   };
+  /** The always-visible tab spine, which the launchpad cards fly into. */
+  spineRef?: Ref<HTMLDivElement>;
   /** To-dos for the thread on screen. */
   todos?: {
     view: ThreadTodosView;
@@ -294,6 +298,9 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     "connections",
   );
   const connectionsLanding = props.launchpadConnections?.landing ?? 0;
+  // The last move whose ring has played. Without it the tab would replay
+  // the ring on every remount, i.e. every return to a launchpad.
+  const [landedRingPlayed, setLandedRingPlayed] = useState(0);
   useEffect(() => {
     if (connectionsLanding > 0) setLaunchpadTab("connections");
   }, [connectionsLanding]);
@@ -697,7 +704,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         </div>
       ) : null}
 
-      <div className="context-rail__spine">
+      <div ref={props.spineRef} className="context-rail__spine">
         <div
           className="context-rail__tablist"
           role="tablist"
@@ -731,11 +738,10 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         : todoBadge
           ? `${tab.label} · ${todoBadge.count} open for this thread`
           : tab.label;
-    const landing = tab.id === "connections" && connectionsLanding > 0;
+    const landing = tab.id === "connections" && connectionsLanding > landedRingPlayed;
     return (
       <button
-        // A new key per move restarts the arrival ring.
-        key={landing ? `${tab.id}:${connectionsLanding}` : tab.id}
+        key={tab.id}
         id={`context-rail-tab-${tab.id}`}
         aria-label={label}
         aria-selected={isActive && open}
@@ -748,6 +754,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         title={label}
         type="button"
         onClick={() => selectTab(tab.id)}
+        onAnimationEnd={landing ? () => setLandedRingPlayed(connectionsLanding) : undefined}
       >
         <TabIcon size={18} aria-hidden="true" />
         {commandCount > 0 ? <span className="context-rail__activity status-dot status-dot--active" aria-hidden="true" /> : null}

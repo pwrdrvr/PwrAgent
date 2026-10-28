@@ -54,8 +54,8 @@ const desktopApi: DesktopApi = {
   }),
 };
 
-function renderLaunchpad(props: Partial<ThreadViewProps>) {
-  return render(
+function launchpadView(props: Partial<ThreadViewProps>): ReactElement {
+  return (
     <ThreadView
       addOptimisticUserMessage={() => "optimistic-1"}
       backends={[]}
@@ -73,8 +73,12 @@ function renderLaunchpad(props: Partial<ThreadViewProps>) {
       onLoadOlder={async () => undefined}
       removeOptimisticMessage={() => undefined}
       {...props}
-    />,
+    />
   );
+}
+
+function renderLaunchpad(props: Partial<ThreadViewProps>) {
+  return render(launchpadView(props));
 }
 
 describe("ThreadView launchpad connections dock", () => {
@@ -92,35 +96,24 @@ describe("ThreadView launchpad connections dock", () => {
     expect(screen.queryByRole("tab", { name: "Connections" })).not.toBeInTheDocument();
 
     // jsdom has no Element.animate, so the move commits without the flight.
-    fireEvent.click(within(group).getByRole("button", { name: "Move to sidebar" }));
+    // `detail: 1` is a pointer click.
+    fireEvent.click(within(group).getByRole("button", { name: "Move to sidebar" }), { detail: 1 });
     expect(onDockChange).toHaveBeenCalledExactlyOnceWith("sidebar");
 
-    view.rerender(
-      <ThreadView
-        addOptimisticUserMessage={() => "optimistic-1"}
-        backends={[]}
-        clearPendingRequest={() => undefined}
-        composerDisabled={false}
-        contextRailPinned
-        desktopApi={desktopApi}
-        launchpadConnectionsDock="sidebar"
-        loading={false}
-        loadingMore={false}
-        messageCount={0}
-        selectedDirectory={directory}
-        selectedLaunchpad={launchpad}
-        skills={[]}
-        transcriptEntries={[]}
-        onLaunchpadConnectionsDockChange={onDockChange}
-        onLoadOlder={async () => undefined}
-        removeOptimisticMessage={() => undefined}
-      />,
-    );
+    view.rerender(launchpadView({
+      launchpadConnectionsDock: "sidebar",
+      onLaunchpadConnectionsDockChange: onDockChange,
+    }));
     expect(screen.queryByRole("group", { name: "Connections" })).not.toBeInTheDocument();
     const tab = screen.getByRole("tab", { name: "Connections" });
     // The move selects the tab it landed in and replays its arrival ring.
     expect(tab).toHaveAttribute("aria-selected", "true");
     expect(tab).toHaveClass("is-landing");
+    // A pointer move leaves focus alone, so an unpinned rail is not revealed.
+    expect(tab).not.toHaveFocus();
+    // The ring plays once per move, not on every remount of the tab.
+    fireEvent.animationEnd(tab);
+    expect(tab).not.toHaveClass("is-landing");
     const rail = screen.getByRole("complementary", { name: "New thread context" });
     await waitFor(() => {
       expect(within(rail).getByLabelText("PwrSnap connection")).toBeInTheDocument();
@@ -132,6 +125,33 @@ describe("ThreadView launchpad connections dock", () => {
 
     fireEvent.click(within(rail).getByRole("button", { name: "Show on new thread" }));
     expect(onDockChange).toHaveBeenLastCalledWith("launchpad");
+  });
+
+  it("hands keyboard focus to wherever the cards went", async () => {
+    const onDockChange = vi.fn();
+    const view = renderLaunchpad({
+      launchpadConnectionsDock: "launchpad",
+      onLaunchpadConnectionsDockChange: onDockChange,
+    });
+    const group = screen.getByRole("group", { name: "Connections" });
+    await within(group).findByRole("button", { name: "Connect to PwrSnap" });
+    // A button activated from the keyboard reports a click with detail 0.
+    fireEvent.click(within(group).getByRole("button", { name: "Move to sidebar" }), { detail: 0 });
+    view.rerender(launchpadView({
+      launchpadConnectionsDock: "sidebar",
+      onLaunchpadConnectionsDockChange: onDockChange,
+    }));
+    expect(screen.getByRole("tab", { name: "Connections" })).toHaveFocus();
+
+    const rail = screen.getByRole("complementary", { name: "New thread context" });
+    await within(rail).findByRole("button", { name: "Connect to PwrSnap" });
+    fireEvent.click(within(rail).getByRole("button", { name: "Show on new thread" }), { detail: 0 });
+    view.rerender(launchpadView({
+      launchpadConnectionsDock: "launchpad",
+      onLaunchpadConnectionsDockChange: onDockChange,
+    }));
+    expect(screen.getByRole("button", { name: "Move to sidebar" })).toHaveFocus();
+    await screen.findByRole("button", { name: "Connect to PwrSnap" });
   });
 
   it("keeps the cards in the rail when the stored choice is the sidebar", async () => {

@@ -3888,7 +3888,12 @@ function DesktopAppShell(props: {
     onEditedFilesDockChange: setEditedFilesDockPersisted,
     actionRunsDock,
     onActionRunsDockChange: setActionRunsDockPersisted,
-    launchpadConnectionsDock,
+    // A settings read that failed never delivers the stored choice; show the
+    // cards where they live by default rather than nowhere.
+    launchpadConnectionsDock:
+      launchpadConnectionsDock === "pending" && settings.error
+        ? "launchpad"
+        : launchpadConnectionsDock,
     onLaunchpadConnectionsDockChange: setLaunchpadConnectionsDockPersisted,
     sidebarHidden,
     onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
