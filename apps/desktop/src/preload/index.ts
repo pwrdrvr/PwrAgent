@@ -2352,7 +2352,7 @@ const desktopApi = Object.freeze({
   listThreadTodos: async (
     request?: ListThreadTodosRequest,
   ): Promise<ListThreadTodosResponse> =>
-    await ipcRenderer.invoke(THREAD_TODOS_LIST_CHANNEL, request ?? {}),
+    unwrapNavigationRead(await ipcRenderer.invoke(THREAD_TODOS_LIST_CHANNEL, request ?? {})),
   listThreadReviews: async (request?: ListThreadReviewsRequest): Promise<{ reviews: ThreadReview[] }> =>
     await ipcRenderer.invoke(THREAD_REVIEWS_LIST_CHANNEL, request ?? {}),
   updateThreadReview: async (request: UpdateThreadReviewRequest): Promise<{ review: ThreadReview }> =>

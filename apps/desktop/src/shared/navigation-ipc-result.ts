@@ -27,3 +27,8 @@ export function unwrapNavigationRead<T>(result: T | NavigationReadFailure): T {
   }
   return result as T;
 }
+
+/** True for the rejection `unwrapNavigationRead` restores for a busy owner, which a later read can satisfy. */
+export function isNavigationBusy(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "navigation_busy";
+}

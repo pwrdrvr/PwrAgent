@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { expectedNavigationReadFailure, unwrapNavigationRead } from "../navigation-ipc-result";
+import { expectedNavigationReadFailure, isNavigationBusy, unwrapNavigationRead } from "../navigation-ipc-result";
 
 it("transports an offline peer without a stack and restores the renderer rejection", () => {
   const error = Object.assign(new Error("Federation peer peer-1 is not connected."), {
@@ -45,4 +45,13 @@ it.each([
   ["transport_failed", "handler_failed: [navigation_busy] Busy"],
 ])("keeps unexpected wrapped failures actionable: %s / %s", (code, message) => {
   expect(expectedNavigationReadFailure(Object.assign(new Error(message), { code }))).toBeUndefined();
+});
+
+it("recognizes only the restored busy rejection as owner contention", () => {
+  const busy = () => unwrapNavigationRead({ navigationReadFailure: true, code: "navigation_busy", message: "Busy" });
+  expect(busy).toThrow();
+  try { busy(); } catch (error) { expect(isNavigationBusy(error)).toBe(true); }
+  expect(isNavigationBusy(Object.assign(new Error("Offline"), { code: "FEDERATION_PEER_UNAVAILABLE" }))).toBe(false);
+  expect(isNavigationBusy(new Error("[navigation_busy] Busy"))).toBe(false);
+  expect(isNavigationBusy({ code: "navigation_busy" })).toBe(false);
 });

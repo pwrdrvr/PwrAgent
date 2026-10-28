@@ -24,6 +24,7 @@ import {
   THREAD_REVIEWS_LIST_CHANNEL,
   THREAD_REVIEWS_UPDATE_CHANNEL,
 } from "../../shared/ipc";
+import { expectedNavigationReadFailure } from "../../shared/navigation-ipc-result";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
@@ -157,8 +158,16 @@ export function registerThreadTodoIpcHandlers(options: {
   // The feed snapshot has its own per-window channel above.
   for (const operation of Object.keys(channels) as Array<keyof typeof channels & ThreadTodoOperation>) {
     ipcMain.removeHandler(channels[operation]);
-    ipcMain.handle(channels[operation], (event, request = {}) => service.request(
-      operation, request, federationTargetForChannelSubscriber(event.sender),
-    ));
+    ipcMain.handle(channels[operation], async (event, request = {}) => {
+      try {
+        return await service.request(operation, request, federationTargetForChannelSubscriber(event.sender));
+      } catch (error) {
+        // A busy owner is expected contention. The listing crosses as data,
+        // and the preload restores a coded rejection the panel can retry.
+        const busy = operation === "listTodos" ? expectedNavigationReadFailure(error) : undefined;
+        if (busy) return busy;
+        throw error;
+      }
+    });
   }
 }
