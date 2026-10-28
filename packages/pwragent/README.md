@@ -262,7 +262,8 @@ pnpm --filter pwragent pack:check
 ```
 
 The tests spawn the actual daemon and CLI with a fake Codex executable in
-checkout-local temporary directories. They cover disconnect survival,
+short temporary directories under /tmp, so the daemon socket path stays
+under its 100-byte limit wherever the checkout lives. They cover disconnect survival,
 idempotency, continuation, single-owner admission, early terminal events,
 failures, denied interactive requests, shutdown and process-group cleanup.
 They also use the actual encrypted federation stack to cover one-time invite
