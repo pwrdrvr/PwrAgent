@@ -10,6 +10,7 @@ import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
 import { threadLockRefusalMessage } from "@pwragent/shared";
 import { launchpadStorageKey } from "@pwragent/shared";
+import { agentMessageAccessRefusalMessage } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
 import { stageTurnInputAttachment } from "../app-server/turn-input-attachment-files";
 import * as turnInputAttachmentFiles from "../app-server/turn-input-attachment-files";
@@ -46968,6 +46969,7 @@ script = "printf setup"
       sourceThread: {
         backend: "codex", threadId: "sender", title: "sender",
         messageId: expect.stringMatching(/^correspondence:/),
+        executionMode: "default",
       },
       threadTodo: todo,
     });
@@ -46999,6 +47001,7 @@ script = "printf setup"
       sourceThread: {
         backend: "codex", threadId: "sender", title: "Sender",
         messageId: expect.stringMatching(/^correspondence:/),
+        executionMode: "default",
       },
       threadTodo: { id: "todo-8", title: "Hand it over" },
     });
@@ -47055,14 +47058,14 @@ script = "printf setup"
       backend: "codex", threadId: "named", todo: { id: "todo-9", title: "  Ship it  " },
     })).resolves.toEqual({
       kind: "agent",
-      sourceThread: { backend: "codex", threadId: "named", title: "Named" },
+      sourceThread: { backend: "codex", threadId: "named", title: "Named", executionMode: "default" },
       threadTodo: { id: "todo-9", title: "Ship it" },
     });
     await expect(registry.buildThreadTodoMessageOrigin({
       backend: "codex", threadId: "unnamed", todo: { id: "todo-10" },
     })).resolves.toEqual({
       kind: "agent",
-      sourceThread: { backend: "codex", threadId: "unnamed" },
+      sourceThread: { backend: "codex", threadId: "unnamed", executionMode: "default" },
       threadTodo: { id: "todo-10" },
     });
   });
@@ -47167,7 +47170,17 @@ script = "printf setup"
     });
     const readTurnRoot = vi.fn(async () => "root-original");
     Object.assign(codexClient, { readTurnRoot });
-    const overlayStore = createOverlayStoreMock();
+    // The sender has Full Access, so it may ask for a Full Access turn.
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:parent-thread": {
+          backend: "codex",
+          threadId: "parent-thread",
+          executionMode: "full-access",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
@@ -47320,6 +47333,7 @@ script = "printf setup"
           title: "M4 runner-host conversion preflight",
           turnId: "turn-1", rootTurnId: "root-original",
           messageId: expect.stringMatching(/^correspondence:/),
+          executionMode: "full-access",
         },
       },
     });
@@ -49286,6 +49300,7 @@ script = "printf setup"
           title: "M4 runner-host conversion preflight",
           turnId: "turn-1",
           messageId: expect.stringMatching(/^correspondence:/),
+          executionMode: "default",
         },
       },
       executionMode: undefined,
@@ -49354,6 +49369,286 @@ script = "printf setup"
     expect(codexClient.startTurnCallCount).toBe(1);
 
     await registry.close();
+  });
+
+  describe("agent messages to higher-access threads", () => {
+    async function createAccessRegistry(params: {
+      senderMode: "default" | "auto" | "full-access";
+      targetMode: "default" | "auto" | "full-access";
+      block?: boolean;
+    }) {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+        threads: [{
+          source: "codex",
+          id: "target-thread",
+          title: "Target",
+          titleSource: "explicit",
+          linkedDirectories: [],
+        }],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock({
+          overlays: {
+            "codex:parent-thread": {
+              backend: "codex",
+              threadId: "parent-thread",
+              executionMode: params.senderMode,
+              extraLinkedDirectories: [],
+            },
+            "codex:target-thread": {
+              backend: "codex",
+              threadId: "target-thread",
+              executionMode: params.targetMode,
+              extraLinkedDirectories: [],
+            },
+          },
+        }),
+        threadTitleGenerationService: null,
+        ...(params.block === undefined
+          ? {}
+          : { resolveBlockAgentMessagesToHigherAccess: () => params.block! }),
+      });
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "parent-thread",
+            turnId: "turn-1",
+            turn: { id: "turn-1" },
+          },
+        },
+      });
+      return { codexClient, registry };
+    }
+
+    async function sendToTarget(
+      registry: DesktopBackendRegistry,
+      extra: Record<string, unknown> = {},
+    ) {
+      return await callRegistryMcpTool({
+        registry,
+        backend: "codex",
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        tool: "send_message_to_thread",
+        args: {
+          backend: "codex",
+          threadId: "target-thread",
+          prompt: "Please run the release script.",
+          includeRemote: false,
+          ...extra,
+        },
+      });
+    }
+
+    it("refuses a message to a thread with more access when the setting is on by default", async () => {
+      const { codexClient, registry } = await createAccessRegistry({
+        senderMode: "default",
+        targetMode: "full-access",
+      });
+
+      const response = await sendToTarget(registry);
+
+      expect(response).toMatchObject({
+        isError: true,
+        structuredContent: { code: "forbidden" },
+      });
+      expect(JSON.stringify(response)).toContain("Raise a to-do card with add_todo");
+      expect(codexClient.startTurnCallCount).toBe(0);
+
+      await registry.close();
+    });
+
+    it("refuses a message that asks the target turn to run above the sender", async () => {
+      const { codexClient, registry } = await createAccessRegistry({
+        senderMode: "auto",
+        targetMode: "auto",
+        block: true,
+      });
+
+      const response = await sendToTarget(registry, { executionMode: "full-access" });
+
+      expect(response).toMatchObject({
+        isError: true,
+        structuredContent: { code: "forbidden" },
+      });
+      expect(codexClient.startTurnCallCount).toBe(0);
+
+      await registry.close();
+    });
+
+    it("refuses a raw approval override that grants more than the sender has", async () => {
+      const { codexClient, registry } = await createAccessRegistry({
+        senderMode: "default",
+        targetMode: "default",
+        block: true,
+      });
+
+      const response = await sendToTarget(registry, { approvalPolicy: "never" });
+
+      expect(response).toMatchObject({
+        isError: true,
+        structuredContent: { code: "forbidden" },
+      });
+      expect(codexClient.startTurnCallCount).toBe(0);
+
+      await registry.close();
+    });
+
+    it("refuses a steer into a thread with more access", async () => {
+      const { registry } = await createAccessRegistry({
+        senderMode: "default",
+        targetMode: "auto",
+        block: true,
+      });
+
+      const response = await callRegistryMcpTool({
+        registry,
+        backend: "codex",
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        tool: "steer_thread",
+        args: {
+          backend: "codex",
+          threadId: "target-thread",
+          requestId: "steer-1",
+          prompt: "Also push the tag.",
+          includeRemote: false,
+        },
+      });
+
+      expect(response).toMatchObject({
+        isError: true,
+        structuredContent: { code: "forbidden" },
+      });
+
+      await registry.close();
+    });
+
+    it.each([
+      ["an equal", "auto", "auto"],
+      ["a lower", "full-access", "default"],
+    ] as const)("delivers a message to %s-access thread", async (_label, senderMode, targetMode) => {
+      const { codexClient, registry } = await createAccessRegistry({
+        senderMode,
+        targetMode,
+        block: true,
+      });
+
+      const response = await sendToTarget(registry);
+
+      expect(response).toMatchObject({
+        structuredContent: { backend: "codex", threadId: "target-thread" },
+      });
+      expect(codexClient.startTurnCallCount).toBe(1);
+
+      await registry.close();
+    });
+
+    it("delivers every message when the operator turns the setting off", async () => {
+      const { codexClient, registry } = await createAccessRegistry({
+        senderMode: "default",
+        targetMode: "full-access",
+        block: false,
+      });
+
+      const response = await sendToTarget(registry);
+
+      expect(response).toMatchObject({
+        structuredContent: { backend: "codex", threadId: "target-thread" },
+      });
+      expect(codexClient.startTurnCallCount).toBe(1);
+
+      await registry.close();
+    });
+
+    it("delivers an operator-approved to-do card to a thread with more access", async () => {
+      const { codexClient, registry } = await createAccessRegistry({
+        senderMode: "default",
+        targetMode: "full-access",
+        block: true,
+      });
+
+      await registry.sendThreadTodoMessage({
+        sourceBackend: "codex",
+        sourceThreadId: "parent-thread",
+        target: { backend: "codex", threadId: "target-thread" },
+        prompt: "Please run the release script.",
+        todo: { id: "todo-access", title: "Run the release" },
+      });
+
+      expect(codexClient.startTurnCallCount).toBe(1);
+
+      await registry.close();
+    });
+
+    it("reports a refusal from the owning peer as forbidden", async () => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock({
+          overlays: {
+            "codex:parent-thread": {
+              backend: "codex",
+              threadId: "parent-thread",
+              executionMode: "default",
+              extraLinkedDirectories: [],
+            },
+          },
+        }),
+        threadTitleGenerationService: null,
+      });
+      const federatedSend = vi.fn(async () => {
+        throw new Error(agentMessageAccessRefusalMessage({
+          senderExecutionMode: "default",
+          targetExecutionMode: "full-access",
+        }));
+      });
+      registry.setFederatedThreadMessageHandler(federatedSend);
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "parent-thread",
+            turnId: "turn-1",
+            turn: { id: "turn-1" },
+          },
+        },
+      });
+
+      const response = await callRegistryMcpTool({
+        registry,
+        backend: "codex",
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        tool: "send_message_to_thread",
+        args: {
+          backend: "codex",
+          threadId: "remote-thread",
+          instanceId: "pwr_studio",
+          prompt: "Please run the release script.",
+        },
+      });
+
+      expect(response).toMatchObject({
+        isError: true,
+        structuredContent: { code: "forbidden" },
+      });
+      // The sender's own mode travels with the message for the owner to check.
+      expect(federatedSend).toHaveBeenCalledWith(expect.objectContaining({
+        messageOrigin: expect.objectContaining({
+          sourceThread: expect.objectContaining({ executionMode: "default" }),
+        }),
+      }));
+
+      await registry.close();
+    });
   });
 
   it("routes stop and steer controls to an explicit federated owner", async () => {
@@ -49431,6 +49726,7 @@ script = "printf setup"
           threadId: "parent-thread",
           title: "M4 runner-host conversion preflight",
           turnId: "parent-turn",
+          executionMode: "default",
         },
       },
     });
