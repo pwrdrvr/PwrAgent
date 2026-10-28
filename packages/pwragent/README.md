@@ -12,6 +12,84 @@ desktop navigation, thread creation, continuation, transcript reads, subscribed
 streaming events, steering, interruption, naming and model/execution settings.
 The daemon owns its execution lifetime; an SSH forward only provides access.
 
+## Install and update
+
+The first headless npm release is prepared as `0.1.0-alpha.1`; these commands
+become available after an operator publishes it. The existing npm `0.0.0`
+placeholder does not provide this implementation. Use the explicit prerelease
+channel rather than a bare `npm install pwragent` while `latest` is still the
+placeholder:
+
+```sh
+npm install --global pwragent@next
+pwragent --help
+# Update to the newest headless prerelease:
+npm install --global pwragent@next
+# Or choose a reproducible version:
+npm install --global pwragent@0.1.0-alpha.1
+```
+
+Provide **Node >=22 and npm separately**, on Linux (macOS is also supported for
+development). The npm package includes the JavaScript federation bundle and its
+license notice; it does not need Electron, pnpm, a compiler or workspace packages
+on the destination machine. It supports **Codex only**. Install the Codex CLI
+separately and authenticate a dedicated Codex home as the eventual service user.
+The adapter follows the Codex **0.159.2** App Server contract; compatibility with
+other versions is not guaranteed. PwrAgent neither installs nor authenticates
+Codex and does not bundle Node or provider credentials.
+
+Start the installed CLI with the same `serve` options shown below, replacing
+`node packages/pwragent/bin/pwragent.js` with `pwragent`. Upgrading package files
+does not upgrade an already running process: finish or interrupt active work,
+stop the daemon, install the selected version, and start it again. Do not remove
+the PwrAgent root, Codex home or workspace during updates. There is no automatic
+CLI updater or automatic systemd enablement.
+
+## systemd installation example
+
+On a Linux host with systemd, an administrator must first create the dedicated
+unprivileged `pwragent` user/group and provision these non-overlapping directories:
+
+| Directory | Owner / purpose |
+| --- | --- |
+| `/srv/pwragent/workspace` | `pwragent`, existing task workspace |
+| `/var/lib/pwragent` | `pwragent`, private PwrAgent root |
+| `/var/lib/codex-outpost` | `pwragent`, private Codex home authenticated separately |
+| `/opt/pwragent` | root, npm installation prefix |
+
+Keep both state homes private (0700). Verify the service user can execute Node
+>=22 at `/usr/bin/node` and its separately installed Codex at
+`/usr/local/bin/codex`; edit the template if either absolute path differs. A
+shell's Node version-manager initialization does not run under systemd.
+
+After publication, install a pinned version into the service prefix:
+
+```sh
+sudo npm install --prefix /opt/pwragent --omit=dev --ignore-scripts pwragent@0.1.0-alpha.1
+sudo install -m 0644 /opt/pwragent/node_modules/pwragent/examples/pwragent-headless.service /etc/systemd/system/pwragent-headless.service
+# Review the account, paths, profile and Codex configuration before enabling:
+sudo systemctl daemon-reload
+sudo systemctl enable --now pwragent-headless.service
+sudo systemctl status pwragent-headless.service
+sudo journalctl -u pwragent-headless.service
+```
+
+The service runs as `pwragent`, with `PWRAGENT_HOME=/var/lib/pwragent` and
+`PWRAGENT_PROFILE=outpost`. Local client commands must use that same account,
+root and profile, for example:
+
+```sh
+sudo -u pwragent env PWRAGENT_HOME=/var/lib/pwragent PWRAGENT_PROFILE=outpost \
+  /usr/bin/node /opt/pwragent/node_modules/pwragent/bin/pwragent.js status
+```
+
+For a service update, finish or interrupt active work, run
+`sudo systemctl stop pwragent-headless.service`, repeat the prefix installation
+with the chosen new version (or `pwragent@next`), then run
+`sudo systemctl start pwragent-headless.service`. Compare the new example unit
+with the installed one before deliberately updating it; npm does not overwrite
+`/etc/systemd/system`. Stopping during a turn can leave its outcome `unknown`.
+
 ## Run from a checkout
 
 Use Node 22 or newer on Linux (macOS is also supported for development). Provide
