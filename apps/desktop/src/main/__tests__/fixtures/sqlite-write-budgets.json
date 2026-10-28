@@ -1356,6 +1356,13 @@
     "rowsChanged": 26,
     "statements": 27
   },
+  "usage-activity-index-helper-write": {
+    "commits": 1,
+    "note": "One real finalized helper line with parent summaries; interval admission shares the existing ledger transaction, no separate commit; 86,520 bytes per helper (~43.3 MB/day at 500/day, ~10.3 MB/day added by the new indexes)",
+    "observedWalBytes": 86520,
+    "rowsChanged": 3,
+    "statements": 3
+  },
   "usage-activity-index-minute-boundaries": {
     "commits": 100,
     "note": "100 existing live-row commits, one minute apart; 1,648,000 bytes WAL (~23.7 MB/day at 1/minute; ~17.8 MB/day above the same 100 row writes without tree changes), no added commits or idle writes",
@@ -1372,22 +1379,22 @@
   },
   "usage-line-account-attribution": {
     "commits": 1,
-    "note": "Identity rides the existing line transaction: zero additional commits and observed WAL bytes versus the baseline; ~6.6 MB/day existing ledger cost at 100 new lines/day, 0 MB/day measured attribution overhead",
-    "observedWalBytes": 65920,
+    "note": "Identity rides the existing line transaction; interval indexes add ~20.6 KB/line versus the former 65.9 KB, with no new commit (~8.7 MB/day at 100 lines/day, ~2.1 MB/day added by interval admission)",
+    "observedWalBytes": 86520,
     "rowsChanged": 3,
     "statements": 3
   },
   "usage-line-without-account-attribution": {
     "commits": 1,
     "note": "Baseline line write: one existing commit; compare usage-line-account-attribution for account overhead",
-    "observedWalBytes": 65920,
+    "observedWalBytes": 86520,
     "rowsChanged": 3,
     "statements": 3
   },
   "usage-turn-shutdown-completion": {
     "commits": 1,
     "note": "Two turns still running at shutdown: one commit per shutdown, only when a running turn has a ledger row",
-    "observedWalBytes": 4120,
+    "observedWalBytes": 16480,
     "rowsChanged": 2,
     "statements": 2
   },
@@ -1401,14 +1408,14 @@
   "usage-turn-time-repair": {
     "commits": 1,
     "note": "One-time repair of seven recovered ledger turn times plus a sweep clearing two implausible starts: one transaction however many turns, run once per profile",
-    "observedWalBytes": 4120,
+    "observedWalBytes": 24720,
     "rowsChanged": 10,
     "statements": 9
   },
   "usage-turn-startup-repair": {
     "commits": 1,
     "note": "Startup repair of two unfinished ledger turns: one transaction however many turns; zero commits when none qualify",
-    "observedWalBytes": 4120,
+    "observedWalBytes": 16480,
     "rowsChanged": 2,
     "statements": 2
   },

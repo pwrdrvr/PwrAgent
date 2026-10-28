@@ -85,7 +85,7 @@ describe("Usage Activity read budgets", () => {
         uncachedInputCostMicros: 0, cachedInputCostMicros: 0, outputCostMicros: 0, totalCostMicros: 0,
       } }));
       expectSqliteWriteBudget({ scenario: "usage-activity-index-helper-write", writes,
-        note: "One real finalized helper line with parent summaries; interval admission shares the existing ledger transaction, no separate commit" });
+        note: "One real finalized helper line with parent summaries; interval admission shares the existing ledger transaction, no separate commit; 86,520 bytes per helper (~43.3 MB/day at 500/day, ~10.3 MB/day added by the new indexes)" });
     } finally { db.close(); removeTempStateDbDir(temp.tempDir); }
   });
 
@@ -165,6 +165,10 @@ describe("Usage Activity read budgets", () => {
     try {
       db.raw.pragma("wal_autocheckpoint = 0");
       add("live-budget", { created: start, completed: null, updated: start });
+      let indexUpdates = 0;
+      db.raw.function("usage_test_index_update", () => { indexUpdates++; return null; });
+      db.raw.exec(`CREATE TEMP TRIGGER usage_test_index_update AFTER UPDATE ON usage_activity_keys
+        BEGIN SELECT usage_test_index_update(); END`);
       const update = db.raw.prepare("UPDATE thread_usage_lines SET updated_at = ?, output_tokens = ? WHERE usage_line_id = 'live-budget'");
       const { writes } = await measureSqliteWrites(() => {
         for (let index = 1; index <= 100; index++) {
@@ -175,6 +179,7 @@ describe("Usage Activity read budgets", () => {
         note: scenario === "within-minute"
           ? "100 existing live-row commits within ten seconds; 412,000 bytes WAL, no interval-tree changes within the minute and no added commits"
           : "100 existing live-row commits, one minute apart; 1,648,000 bytes WAL (~23.7 MB/day at 1/minute; ~17.8 MB/day above the same 100 row writes without tree changes), no added commits or idle writes" });
+      expect(indexUpdates).toBe(budgets.maintenance[scenario]);
       const read = await measureSqliteWrites(async () => {
         await store.readUsageActivity(window);
         await store.readUsageActivity(window);
