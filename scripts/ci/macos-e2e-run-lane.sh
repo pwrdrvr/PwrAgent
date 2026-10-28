@@ -111,23 +111,26 @@ kill_lane_electron() {
 }
 
 group_alive() {
-  kill -0 -- "-$child" 2>/dev/null
+  [[ -n "$child" ]] && kill -0 -- "-$child" 2>/dev/null
 }
 
+# Set before the traps, so a signal that lands before the command starts
+# still runs its handler under `set -u`.
+child=""
 interrupted=0
 terminated=0
 
 on_interrupt() {
   interrupted=1
   echo "$LOG: SIGINT; letting Playwright finish the interrupted test"
-  kill -INT -- "-$child" 2>/dev/null || true
+  [[ -n "$child" ]] && kill -INT -- "-$child" 2>/dev/null || true
 }
 
 on_terminate() {
   terminated=1
   echo "$LOG: SIGTERM; stopping this lane's Electron before the runner reaps it"
   kill_lane_electron
-  kill -KILL -- "-$child" 2>/dev/null || true
+  [[ -n "$child" ]] && kill -KILL -- "-$child" 2>/dev/null || true
 }
 
 trap on_interrupt INT
@@ -139,6 +142,10 @@ trap on_terminate TERM
 # cannot trap a signal that was ignored when it started, so restore both.
 perl -e '$SIG{INT} = $SIG{QUIT} = "DEFAULT"; setpgrp(0, 0); exec @ARGV or die "exec $ARGV[0]: $!\n"' -- "$@" &
 child=$!
+# SIGTERM before the command existed: do not let it run on regardless.
+if [[ "$terminated" -eq 1 ]]; then
+  kill -KILL "$child" 2>/dev/null || true
+fi
 
 # A trapped signal interrupts `wait`, so wait again until the child is gone.
 status=0
