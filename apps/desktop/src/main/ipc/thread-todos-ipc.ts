@@ -162,10 +162,11 @@ export function registerThreadTodoIpcHandlers(options: {
       try {
         return await service.request(operation, request, federationTargetForChannelSubscriber(event.sender));
       } catch (error) {
-        // A busy owner is expected contention. The listing crosses as data,
-        // and the preload restores a coded rejection the panel can retry.
-        const busy = operation === "listTodos" ? expectedNavigationReadFailure(error) : undefined;
-        if (busy) return busy;
+        // A busy or offline owner is expected, not a handler fault. The
+        // listing crosses as data, and the preload restores a coded rejection
+        // the panel can recognize and retry.
+        const expected = operation === "listTodos" ? expectedNavigationReadFailure(error) : undefined;
+        if (expected) return expected;
         throw error;
       }
     });
