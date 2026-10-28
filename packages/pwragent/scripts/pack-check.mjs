@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { releaseMetadata } from "./release.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const temporary = mkdtempSync(path.join(tmpdir(), "pa-pack-"));
+// macOS TMPDIR can leave too few bytes for the daemon's Unix socket path.
+const temporary = mkdtempSync(path.join(realpathSync("/tmp"), "pa-pack-"));
 const output = path.resolve(process.argv[2] || path.join(root, "../../.local/headless-package"));
 const run = (command, args, options = {}) => execFileSync(command, args, {
   encoding: "utf8", timeout: 120000, maxBuffer: 4 * 1024 * 1024, ...options,

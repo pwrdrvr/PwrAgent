@@ -77,7 +77,11 @@ jobs:
       - name: Mocked CLI and release guard tests
         run: pnpm --filter pwragent test
       - name: Pack, validate and smoke-test a clean offline installation
-        run: node packages/pwragent/scripts/pack-check.mjs .local/headless-package
+        env:
+          TMPDIR: ${{ runner.temp }}/headless-package-long-temp-path-for-socket-regression
+        run: |
+          mkdir -p "$TMPDIR"
+          node packages/pwragent/scripts/pack-check.mjs .local/headless-package
       - name: Check npm ownership, unused version and channel
         if: github.event_name == 'workflow_dispatch'
         env:

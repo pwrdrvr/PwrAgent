@@ -19,7 +19,11 @@ test("CLI releases have an independent tag, version and explicit confirmation", 
   }
   assert.throws(() => releaseMetadata(pkg, { tag: `v${pkg.version}` }));
   assert.throws(() => releaseMetadata(pkg, { confirmation: "yes" }));
-  assert.throws(() => releaseMetadata({ ...pkg, publishConfig: { ...pkg.publishConfig, tag: "latest" } }));
+  for (const version of ["0.1.0-alpha.1", "0.1.0"]) {
+    const valid = candidate(version);
+    const wrongTag = valid.publishConfig.tag === "next" ? "latest" : "next";
+    assert.throws(() => releaseMetadata({ ...valid, publishConfig: { ...valid.publishConfig, tag: wrongTag } }));
+  }
 });
 
 test("publishing requires an existing reviewed environment restricted to main", () => {
