@@ -15,19 +15,20 @@ test("names an approval outside the loaded page and updates it on rename", async
       source: "codex", executionMode: "default", linkedDirectories: [],
       inbox: { inInbox: true }, updatedAt: 1_760_000_000_000,
     };
+    const threads = [
+      ...Array.from({ length: 100 }, (_, index) => ({
+        ...waitingThread, id: `recent-${index}`, title: `Recent fixture ${index}`,
+        updatedAt: waitingThread.updatedAt + 100 - index,
+      })),
+      waitingThread,
+    ];
     const fixture: ReplayFixture = {
       metadata: { backend: "codex", scenario: "approval-notice-title" },
       steps: [
         { id: "initialize", kind: "response", method: "initialize", result: {
           serverInfo: { name: "Replay Codex", version: "1.0.0" }, methods: ["thread/list"],
         } },
-        { id: "threads", kind: "response", method: "thread/list", result: [
-          ...Array.from({ length: 100 }, (_, index) => ({
-            ...waitingThread, id: `recent-${index}`, title: `Recent fixture ${index}`,
-            updatedAt: waitingThread.updatedAt + 100 - index,
-          })),
-          waitingThread,
-        ] },
+        { id: "threads", kind: "response", method: "thread/list", result: threads },
         { id: "approval", kind: "request", request: {
           method: "mcpServer/elicitation/request", params: {
             threadId: waitingThread.id, requestId: "approval-1", serverName: "GitHub",
@@ -36,6 +37,10 @@ test("names an approval outside the loaded page and updates it on rename", async
             requestedSchema: { type: "object", properties: {} },
           },
         } },
+        { id: "rename", kind: "response", method: "thread/name/set", result: {} },
+        { id: "threads-renamed", kind: "response", method: "thread/list", afterResponseId: "rename",
+          result: threads.map((thread) => thread.id === waitingThread.id
+            ? { ...thread, title: "Fix CI install hangs" } : thread) },
       ],
     };
     const fixturePath = path.join(root, "replay.fixture.json");
