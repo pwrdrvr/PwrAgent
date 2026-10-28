@@ -62,6 +62,7 @@ import type { ProjectRevealRequest } from "./features/navigation/DirectoriesList
 import { isSubthreadLaunchpadDraft } from "./features/navigation/StartingThreadRow";
 import { SidebarResizeHandle } from "./features/navigation/SidebarResizeHandle";
 import { useThreadJump } from "./features/navigation/useThreadJump";
+import { revealSelectedSidebarThreadRow } from "./features/navigation/reveal-selected-thread-row";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
 import { buildFederationThreadTargets } from "./features/chrome/federation-thread-targets";
 import { FederationDisplayLabelsProvider, federationLocalDisplayLabel } from "./lib/federation-display-label";
@@ -1687,17 +1688,10 @@ function DesktopAppShell(props: {
       // Directory threads divider, overflow cap, or parent-thread group. The
       // request nonce lets the active sidebar lens open those containers
       // before ThreadRow's mount effect performs the final nearest-edge
-      // scroll. Keep the direct query for the common already-visible case so
-      // title clicks retain their centered smooth-scroll behavior.
+      // scroll. A mounted row that is off screen is centered right away; one
+      // already in full view does not move.
       setRevealSelectedThreadRequest((current) => current + 1);
-      const selectedRow = document.querySelector<HTMLElement>(
-        ".sidebar .thread-row.is-selected",
-      );
-      selectedRow?.scrollIntoView({
-        behavior: options?.instant === true ? "auto" : "smooth",
-        block: "center",
-        inline: "nearest",
-      });
+      revealSelectedSidebarThreadRow(options);
     },
     [],
   );

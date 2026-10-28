@@ -41,6 +41,7 @@ import {
 } from "./ThreadRowStatus";
 import { InlineRenameInput } from "./InlineRenameInput";
 import { matchMoveHotkey } from "./thread-action-hotkeys";
+import { revealThreadRowAtNearestEdge } from "./reveal-selected-thread-row";
 import { threadRowInstanceKey, type ThreadRowInstance } from "./thread-row-instance";
 import { formatRelativeTime } from "./thread-time";
 
@@ -358,15 +359,15 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       return;
     }
 
-    rowRef.current.scrollIntoView({
-      block: "nearest",
-    });
+    revealThreadRowAtNearestEdge(rowRef.current);
     // Parent effects open directory/subthread disclosures for an explicit
     // reveal. Keep a temporary sidebar peek visible until that layout has
     // committed and the selected row has actually been scrolled into view.
     if (revealSelectedThreadRequest > 0) {
       const frame = window.requestAnimationFrame(() => {
-        rowRef.current?.scrollIntoView({ block: "nearest" });
+        if (rowRef.current) {
+          revealThreadRowAtNearestEdge(rowRef.current);
+        }
         if (
           revealSelectedThreadRequest > completedRevealRequestRef.current
           && onRevealSelectedThreadComplete
