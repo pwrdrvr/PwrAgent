@@ -2976,29 +2976,81 @@ describe("color theme contract", () => {
     expect(activeRow).toContain("background: var(--accent-soft);");
     expect(activeRow).toContain("color: var(--accent-bright);");
 
-    const inks = { text: new Set<string>(), mark: new Set<string>() };
-    for (const rule of collectAppCssRules()) {
-      if (!/\.(?:composer__autocomplete|skill-origin-chip)\b/.test(rule.selector)) continue;
+    // Each ink is measured on every surface it can reach. Everything meets
+    // the panel. Everything also meets the active row, except two cases:
+    // the section divider and remote-loading line sit between rows, and an
+    // element that the hovered AND the keyboard-active row both repaint
+    // shows its base ink only on the panel.
+    const HIGHLIGHT = /\.composer__autocomplete-option(:hover:not\(:disabled\)|\.is-active) /;
+    const BETWEEN_ROWS = /\.composer__autocomplete-(?:section-divider|remote-loading)$/;
+    const popupSelectors = collectAppCssRules()
+      .filter((rule) => /\.(?:composer__autocomplete|skill-origin-chip)\b/.test(rule.selector))
+      .flatMap((rule) => rule.selector.split(/,\s*/).map((selector) => ({ selector, rule })));
+    const repaintedBy = new Map<string, Set<string>>();
+    for (const { selector } of popupSelectors) {
+      const state = selector.match(HIGHLIGHT);
+      if (!state) continue;
+      const base = selector.replace(state[0], "");
+      repaintedBy.set(base, (repaintedBy.get(base) ?? new Set()).add(state[1]));
+    }
+    // The `@` picker's path, and Move to Project's, which reuses its classes.
+    expect([
+      ...repaintedBy.get(".composer__autocomplete--directories .composer__autocomplete-meta") ?? [],
+    ].sort()).toEqual([".is-active", ":hover:not(:disabled)"]);
+
+    const inks = {
+      text: { panel: new Set<string>(), "active row": new Set<string>() },
+      mark: { panel: new Set<string>(), "active row": new Set<string>() },
+    };
+    for (const { selector, rule } of popupSelectors) {
       for (const [, token] of rule.body.matchAll(/(?:^|[;\s])color:\s*var\(--([a-z0-9-]+)\)/g)) {
         // An icon is a non-text mark; everything else in a row is text.
-        inks[/>\s*svg$/.test(rule.selector) ? "mark" : "text"].add(token);
+        const kind = inks[/>\s*svg$/.test(selector) ? "mark" : "text"];
+        kind.panel.add(token);
+        if (!BETWEEN_ROWS.test(selector) && repaintedBy.get(selector)?.size !== 2) {
+          kind["active row"].add(token);
+        }
       }
     }
-    expect([...inks.text].sort()).toEqual(
+    expect([...inks.text.panel].sort()).toEqual(
       ["accent-bright", "text-muted", "text-primary", "text-secondary"],
     );
-    expect([...inks.mark]).toEqual(["text-muted"]);
+    expect([...inks.text["active row"]].sort()).toEqual(
+      ["accent-bright", "text-primary", "text-secondary"],
+    );
+    expect([...inks.mark.panel]).toEqual(["text-muted"]);
+    expect([...inks.mark["active row"]]).toEqual(["text-muted"]);
 
-    // Tangerine is held to plain AA, as its own blocks are, and carries one
-    // known miss: the `@` picker's `--text-muted` path on an active row,
-    // 4.37:1 dark and 4.38:1 light. The `+` reference and project pickers
-    // draw their paths the same way. Fixing it removes the entry.
+    // The `+` reference picker and the project pickers share the raised
+    // panel and the accent tint, and draw a path the same way: muted at rest,
+    // `--text-secondary` on a highlighted row. Their inks are the ones
+    // measured above, on the same two surfaces.
+    expect(extractRuleBody(
+      css,
+      ".messaging-surface-picker__panel,\n.project-picker__pop,\n.branch-picker__menu,\n.reference-picker__pop",
+    )).toContain("background: var(--bg-panel-elevated);");
+    const pickerRules = collectAppCssRules();
+    const pickerRule = (selector: string): string =>
+      pickerRules.find((rule) => rule.selector.split(/,\s*/).includes(selector))?.body ?? "";
+    for (const row of [
+      ".project-picker__row:hover:not(:disabled)",
+      ".project-picker__row:focus-visible:not(:disabled)",
+      ".messaging-surface-picker__list .project-picker__row.is-cursor",
+      ".reference-picker__row:hover:not(:disabled)",
+      ".reference-picker__row:focus-visible:not(:disabled)",
+    ]) {
+      const path = row.includes("reference-picker")
+        ? ".reference-picker__row-path"
+        : ".project-picker__row-path";
+      expect(pickerRule(row), row).toContain("background: var(--accent-soft);");
+      expect(pickerRule(path), path).toContain("color: var(--text-muted);");
+      expect(pickerRule(`${row} ${path}`), `${row} ${path}`)
+        .toContain("color: var(--text-secondary);");
+    }
+
+    // Tangerine is held to plain AA, as its own blocks are.
     const TANGERINE_TEXT_FLOOR = 4.5;
     const TANGERINE_MARK_FLOOR = 3;
-    const KNOWN_MISSES: Record<string, string[]> = {
-      "tangerine-dark": ["text-muted on the active row"],
-      "tangerine-light": ["text-muted on the active row"],
-    };
     const root = extractRootTokens(css);
     const appearances = {
       "tangerine-dark": root,
@@ -3016,19 +3068,19 @@ describe("color theme contract", () => {
         "active row": paint(theme, theme["accent-soft"], panel),
       };
       const misses: string[] = [];
-      for (const [kind, tokens] of Object.entries(inks)) {
+      for (const [kind, reach] of Object.entries(inks)) {
         const floor = kind === "text"
           ? (tangerine ? TANGERINE_TEXT_FLOOR : TEXT_FLOOR)
           : (tangerine ? TANGERINE_MARK_FLOOR : MARK_FLOOR);
-        for (const token of tokens) {
-          for (const [surface, background] of Object.entries(surfaces)) {
+        for (const [surface, background] of Object.entries(surfaces)) {
+          for (const token of reach[surface as keyof typeof reach]) {
             if (contrastRatio(paint(theme, theme[token], background), background) < floor) {
               misses.push(`${token} on the ${surface}`);
             }
           }
         }
       }
-      expect(misses, name).toEqual(KNOWN_MISSES[name] ?? []);
+      expect(misses, name).toEqual([]);
     }
   });
 

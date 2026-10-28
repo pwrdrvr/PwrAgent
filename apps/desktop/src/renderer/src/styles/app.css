@@ -42574,6 +42574,18 @@ button.composer__subthread-source-parent:hover {
   text-align: right;
 }
 
+/* A highlighted row lays the accent tint under the path, and `--text-muted`
+   on it falls to 4.37:1 in Tangerine. The path stays neutral metadata, one
+   step up the text ladder: the name already carries the row's one accent.
+   The `@` picker's path does the same, so the pickers stay one family. */
+.project-picker__row:hover:not(:disabled) .project-picker__row-path,
+.project-picker__row:focus-visible:not(:disabled) .project-picker__row-path,
+.messaging-surface-picker__list .project-picker__row.is-cursor .project-picker__row-path,
+.reference-picker__row:hover:not(:disabled) .reference-picker__row-path,
+.reference-picker__row:focus-visible:not(:disabled) .reference-picker__row-path {
+  color: var(--text-secondary);
+}
+
 .project-picker__row--action,
 .reference-picker__row--action {
   flex: 0 0 auto;
@@ -43722,6 +43734,14 @@ button.composer__subthread-source-parent:hover {
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* On the accent tint the muted path misses AA in Tangerine (4.37:1), so a
+   highlighted row lifts it to `--text-secondary`, as `.project-picker__row-path`
+   does. Move to Project draws its list with these classes too. */
+.composer__autocomplete--directories .composer__autocomplete-option:hover:not(:disabled) .composer__autocomplete-meta,
+.composer__autocomplete--directories .composer__autocomplete-option.is-active .composer__autocomplete-meta {
+  color: var(--text-secondary);
 }
 
 .composer__autocomplete--directories
