@@ -6885,6 +6885,17 @@ describe("App", () => {
               },
               updatedAt: 2_000,
             },
+            // Control names are also valid thread titles. Keep queries in
+            // their owning surface instead of scanning every shell button.
+            ...["Back", "Forward", "Search"].map((title, index) => ({
+              id: `control-title-${index}`,
+              title,
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              linkedDirectories: [],
+              inbox: { inInbox: false },
+              updatedAt: 1_000 - index,
+            })),
           ],
         }),
         markThreadSeen: async ({
