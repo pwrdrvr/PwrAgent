@@ -227,6 +227,24 @@ describe("NavigationQueryStore", () => {
     expect(next.counts.active).toBe(0);
   });
 
+  it("does not let an older listing admit a thread a newer complete listing left out", async () => {
+    const store = new NavigationQueryStore();
+    const view = request({ query: { kind: "lens", lens: "attention" }, attentionView: { id: "window", promoteOnTurnEnd: true } });
+    const rows = (unread: boolean) => [
+      { ...thread("thread-1"), threadStatus: "idle" as const, inbox: { inInbox: true }, updatedAt: 1 },
+      { ...thread("thread-2"), threadStatus: "idle" as const, inbox: { inInbox: unread }, updatedAt: 2 },
+    ];
+    let resolveOlder!: (value: NavigationSnapshot & { observedAt: number }) => void;
+    const older = store.readPage({ scopeKey: "viewer", request: view,
+      loadIndex: () => new Promise((resolve) => { resolveOlder = resolve; }) });
+    // The view's first two reads overlap, and the newer one settles first.
+    await store.readPage({ scopeKey: "viewer", request: view,
+      loadIndex: async () => ({ ...snapshot(rows(false)), observedAt: 3 }) });
+    resolveOlder({ ...snapshot(rows(true)), observedAt: 2 });
+    const olderPage = await older;
+    expect(olderPage.entries.map(({ row, attentionRank }) => [row.id, attentionRank])).toEqual([["thread-1", 1], ["thread-2", undefined]]);
+  });
+
   it("does not let a listing that began before a boundary undo it when the read starts after the boundary", async () => {
     const store = new NavigationQueryStore();
     const threads = [1, 2].map((id) => ({ ...thread(`thread-${id}`), threadStatus: "idle" as const, inbox: { inInbox: true },
