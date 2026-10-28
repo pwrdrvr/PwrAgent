@@ -173,6 +173,7 @@ import {
   resolveMainLogProfileName,
 } from "./log";
 import { StartupCpuProfiler } from "./diagnostics/startup-cpu-profiler";
+import { stopRenderingDiagnostics } from "./diagnostics/rendering-capture";
 import { recordStartupProfileEvent } from "./diagnostics/startup-profile-events";
 import {
   disposeDesktopMessagingRuntime,
@@ -876,6 +877,7 @@ const flushDiagnostics = createShutdownBarrier({
       const results = await Promise.allSettled([
         Promise.resolve().then(() => startupCpuProfilerForNewWindows?.stop("app-quit")),
         Promise.resolve().then(() => stopWindowDiagnostics("app-quit")),
+        Promise.resolve().then(() => stopRenderingDiagnostics("shutdown")),
       ]);
       const failure = results.find((result) => result.status === "rejected");
       if (failure?.status === "rejected") throw failure.reason;

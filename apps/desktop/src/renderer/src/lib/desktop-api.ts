@@ -1444,6 +1444,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   onIntegratedTerminalError?: (
     callback: (event: IntegratedTerminalErrorEvent) => void,
   ) => () => void;
+  captureRenderingDiagnostics?: (seconds?: number) => Promise<import("../../../shared/rendering-diagnostics").RenderingCaptureResult>;
+  stopRenderingDiagnostics?: () => Promise<import("../../../shared/rendering-diagnostics").RenderingCaptureResult | undefined>;
   captureHeapSnapshot?: (
     request: CaptureHeapSnapshotRequest,
   ) => Promise<{ delayMs: number }>;
