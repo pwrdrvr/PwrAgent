@@ -444,7 +444,7 @@ export function MessagingSurfacePicker(props: {
               onKeyDown={(event) => {
                 if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                   event.preventDefault();
-                  setActive(Math.max(0, Math.min(visible.length - 1, activeIndex + (event.key === "ArrowDown" ? 1 : -1))));
+                  if (visible.length) setActive((activeIndex + (event.key === "ArrowDown" ? 1 : -1) + visible.length) % visible.length);
                 } else if (event.key === "Enter" && visible[activeIndex]) {
                   event.preventDefault();
                   choose(visible[activeIndex].value);
