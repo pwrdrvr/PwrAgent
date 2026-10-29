@@ -53,6 +53,17 @@ unresolved or fixture teardown exceeds its 20-second deadline. The process-tree
 snapshot cannot follow an orphan once its tracked launcher and intermediate
 parents have exited.
 
+Chromium's native shutdown runs after the application's reported quit phases.
+The E2E bootstrap gives each process its own `userData` and `sessionData`
+directory under the fixture's temporary root before importing the app. Detached
+profile helpers inherit that root and select a separate process directory.
+`HOME` and `PWRAGENT_HOME` alone do not redirect Chromium's default storage on
+Windows. Sharing it can leave native shutdown waiting in
+`leveldb_env::ChromiumEnv::LockFile` → `leveldb::DestroyDB` while another instance
+holds `Local Storage/leveldb/LOCK`; the Electron main process then keeps the
+launcher alive after `quit`. The fixture removes the Chromium directories only
+after closing the app and cleaning up its profile helpers.
+
 The Windows reproduction left a suspended no-op `cmd.exe` from the startup
 Job-wrapper prewarm alive after the app exited. The app no longer starts this
 fire-and-forget prewarm. Vitest's separate prewarm setup still awaits its
