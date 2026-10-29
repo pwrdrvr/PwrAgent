@@ -12363,7 +12363,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   </p>
                   <p className="workspace-handoff-dialog__note">
                     {fromWorktreeToNew
-                      ? "The current worktree stays on disk with its branch and its uncommitted changes."
+                      ? "The current worktree stays on disk with its branch and its uncommitted changes. Archiving this thread later checkpoints and removes it, unless it was created outside PwrAgent."
                       : "This checkout keeps its branch and its uncommitted changes."}
                   </p>
                 </>

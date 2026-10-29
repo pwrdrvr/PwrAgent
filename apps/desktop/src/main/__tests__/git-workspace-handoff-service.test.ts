@@ -3,9 +3,10 @@ import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { classifyDirectory } from "@pwragent/shared";
 import { GitWorkspaceHandoffService } from "../app-server/git-workspace-handoff-service";
+import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 
 const execFileAsync = promisify(execFile);
 const cleanupPaths: string[] = [];
@@ -622,6 +623,8 @@ describe("GitWorkspaceHandoffService", () => {
       expect(result.sourceStash).toBeUndefined();
       expect(result.warnings[0]).toBe("The new worktree starts at main.");
       expect(result.warnings[1]).toMatch(/^Uncommitted changes stayed in .+PwrAgent\.$/);
+      // Local is not a worktree: nothing is said about archiving it.
+      expect(result.warnings).toHaveLength(2);
       // Local kept its branch and its changes.
       expect(await git(repoPath, ["branch", "--show-current"])).toBe("feature/handoff");
       await expect(readFile(path.join(repoPath, "README.md"), "utf8")).resolves.toBe("dirty local\n");
@@ -634,7 +637,11 @@ describe("GitWorkspaceHandoffService", () => {
       await git(repoPath, ["worktree", "add", worktreePath, "feature/handoff"]);
       await writeFile(path.join(worktreePath, "worktree-note.txt"), "untracked\n", "utf8");
       const mainSha = await git(repoPath, ["rev-parse", "main"]);
-      const service = new GitWorkspaceHandoffService({ resolveWorktreeStorage: () => "in-repo" });
+      const archive = vi.fn();
+      const service = new GitWorkspaceHandoffService({
+        resolveWorktreeStorage: () => "in-repo",
+        worktreeArchiveService: { archive } as unknown as WorktreeArchiveService,
+      });
       const result = await service.handoff({
         backend: "codex", threadId: "thread-1", direction: "worktree-to-worktree", strategy: "new-branch",
         newBranchName: "feature/fresh", baseRef: "main", repositoryPath: repoPath, sourcePath: worktreePath, now: 4100,
@@ -643,10 +650,36 @@ describe("GitWorkspaceHandoffService", () => {
       expect(result).toMatchObject({ direction: "worktree-to-worktree", strategy: "new-branch", branch: "feature/fresh", baseSha: mainSha });
       expect(await git(result.targetPath, ["branch", "--show-current"])).toBe("feature/fresh");
       expect(await pathExists(path.join(result.targetPath, "worktree-note.txt"))).toBe(false);
+      expect(archive).not.toHaveBeenCalled();
       expect(result.archivedSourceWorktree).toBeUndefined();
+      // The thread owns this worktree, so archiving the thread cleans it up later.
+      expect(result.warnings.at(-1)).toBe("The previous worktree stays on disk. Archiving this thread checkpoints and removes it.");
       expect(await pathExists(worktreePath)).toBe(true);
       expect(await git(worktreePath, ["branch", "--show-current"])).toBe("feature/handoff");
       await expect(readFile(path.join(worktreePath, "worktree-note.txt"), "utf8")).resolves.toBe("untracked\n");
+    });
+
+    it("says an adopted worktree is left on disk and never archives it", async () => {
+      const repoPath = await createRepo();
+      await git(repoPath, ["switch", "main"]);
+      const worktreePath = path.join(path.dirname(repoPath), "worktree-adopted");
+      await git(repoPath, ["worktree", "add", worktreePath, "feature/handoff"]);
+      await writeFile(path.join(worktreePath, "README.md"), "another agent's edit\n", "utf8");
+      const archive = vi.fn();
+      const service = new GitWorkspaceHandoffService({
+        resolveWorktreeStorage: () => "in-repo",
+        worktreeArchiveService: { archive } as unknown as WorktreeArchiveService,
+      });
+      const result = await service.handoff({
+        backend: "codex", threadId: "thread-1", direction: "worktree-to-worktree", baseRef: "main",
+        repositoryPath: repoPath, sourcePath: worktreePath, keepSourceWorktree: true, now: 4150,
+      });
+
+      expect(archive).not.toHaveBeenCalled();
+      expect(result.warnings).toContain("The previous worktree was created outside PwrAgent, so it was left on disk.");
+      expect(result.warnings.join("\n")).not.toMatch(/Archiving this thread/);
+      await expect(readFile(path.join(worktreePath, "README.md"), "utf8")).resolves.toBe("another agent's edit\n");
+      expect(await git(worktreePath, ["branch", "--show-current"])).toBe("feature/handoff");
     });
 
     it("rejects a base ref that does not resolve and creates nothing", async () => {

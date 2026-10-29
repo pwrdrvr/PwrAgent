@@ -1180,7 +1180,8 @@ export type HandoffThreadWorkspaceRequest = {
   /**
    * For a handoff into a new worktree: start it at this ref (such as
    * `origin/main`) instead of the current commit. Uncommitted changes stay in
-   * the source, which is left as it is.
+   * the source, which is left as it is. A source worktree the thread created
+   * stays on disk until the thread is archived.
    */
   baseRef?: string;
 };

@@ -2208,6 +2208,27 @@ function normalizeWorktreePathForComparison(worktreePath: string): string {
   return path.normalize(worktreePath.trim());
 }
 
+/**
+ * Archive cleanup's view of a thread's directories: its workspace links plus
+ * the worktrees it left on disk with a fresh-start move. Those are still the
+ * thread's own, so archive checkpoints and removes them like any other.
+ */
+function withRetainedWorktrees(
+  directories: LinkedDirectorySummary[],
+  overlay: ThreadOverlayState | undefined,
+): LinkedDirectorySummary[] {
+  const retained = overlay?.retainedWorktrees ?? [];
+  if (retained.length === 0) return directories;
+  const linked = new Set(directories.flatMap((directory) => {
+    const worktreePath = linkedDirectoryWorktreePath(directory);
+    return worktreePath ? [normalizeWorktreePathForComparison(worktreePath)] : [];
+  }));
+  return [...directories, ...retained.filter((directory) => {
+    const worktreePath = linkedDirectoryWorktreePath(directory);
+    return worktreePath && !linked.has(normalizeWorktreePathForComparison(worktreePath));
+  })];
+}
+
 const BACKEND_LABELS: Record<AppServerBackendKind, string> = {
   codex: "OpenAI",
   claude: "Claude",
@@ -15947,9 +15968,9 @@ export class DesktopBackendRegistry {
           const readOverlays = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
           await context.checkpoint();
           const overlays = await readOverlays.call(this.overlayStore, { backend, threadIds: [result.threadId] });
-          targetThread = { ...targetThread, linkedDirectories: mergeThreadLinkedDirectories([
+          targetThread = { ...targetThread, linkedDirectories: withRetainedWorktrees(mergeThreadLinkedDirectories([
             ...targetThread.linkedDirectories, ...(overlays[result.threadId]?.extraLinkedDirectories ?? []),
-          ]) };
+          ]), overlays[result.threadId]) };
         } else if (isAcpBackendId(backend)) {
           const session = this.acpBackend.getSession(backend, result.threadId);
           if (session?.archivedAt) targetThread = this.acpBackend.sessionToThreadSummary(session);
@@ -16366,12 +16387,12 @@ export class DesktopBackendRegistry {
         .map((directory) => directory.worktreePath ?? directory.path),
       ...(projectMoveOverlay?.prs ?? []).flatMap((pr) => pr.linkedDirectoryPaths ?? []),
     ] : undefined;
+    const sourcePath = request.sourcePath ?? candidate.sourcePath;
+    const sourceWorktreeIsExternal = request.direction === "worktree-to-worktree"
+      && await this.threadWorktreeIsExternal(request, thread, sourcePath);
     const result = await this.gitWorkspaceHandoffService.handoff({
       ...request,
-      ...(request.direction === "worktree-to-worktree"
-        && await this.threadWorktreeIsExternal(request, thread, request.sourcePath ?? candidate.sourcePath)
-        ? { keepSourceWorktree: true }
-        : {}),
+      ...(sourceWorktreeIsExternal ? { keepSourceWorktree: true } : {}),
       ...(workspacePaths ? {
         workspacePaths,
         sourceWorkMode,
@@ -16383,9 +16404,25 @@ export class DesktopBackendRegistry {
         ],
       } : {}),
       repositoryPath: request.repositoryPath ?? candidate.repositoryPath,
-      sourcePath: request.sourcePath ?? candidate.sourcePath,
+      sourcePath,
       sourceBranch: request.sourceBranch ?? candidate.sourceBranch,
     });
+    // A fresh start leaves the previous worktree on disk, and its changes may
+    // not be this thread's. Keep a worktree this thread owns tracked, so
+    // archiving the thread still checkpoints and removes it.
+    const retainWorktree: LinkedDirectorySummary | undefined =
+      request.baseRef?.trim()
+      && request.direction === "worktree-to-worktree"
+      && !sourceWorktreeIsExternal
+      && sourcePath
+        ? {
+            id: `pwragent-retained-worktree:${request.backend}:${request.threadId}:${sourcePath}`,
+            kind: "worktree",
+            label: result.linkedDirectory.label,
+            path: result.repositoryPath,
+            worktreePath: sourcePath,
+          }
+        : undefined;
     const resultBranch =
       result.strategy === "detached-changes"
         ? (result.workMode === "local"
@@ -16399,6 +16436,7 @@ export class DesktopBackendRegistry {
       directory: result.linkedDirectory,
       gitBranch: resultBranch,
       ...(request.direction === "to-project" ? { resetProjectState: true } : {}),
+      ...(retainWorktree ? { retainWorktree } : {}),
     });
     const workspaceCwd =
       result.linkedDirectory.worktreePath ?? result.targetPath;
@@ -30561,6 +30599,7 @@ export class DesktopBackendRegistry {
     directory: LinkedDirectorySummary;
     gitBranch?: string;
     threadId: string;
+    retainWorktree?: LinkedDirectorySummary;
   }): Promise<ThreadOverlayState> {
     const overlay =
       await this.overlayStore.replaceWorkspaceLinkedDirectory(params);
@@ -36188,12 +36227,13 @@ export class DesktopBackendRegistry {
       }
     }));
     const withWorkspaceOverlay = (thread: AppServerThreadSummary): AppServerThreadSummary => {
-      const directories = overlaysByThreadKey.get(buildThreadIdentityKey(thread.source, thread.id))?.extraLinkedDirectories ?? [];
-      if (!directories.some((directory) => directory.worktreeOwnership === "external")) return thread;
-      return {
-        ...thread,
-        linkedDirectories: mergeThreadLinkedDirectories([...thread.linkedDirectories, ...directories]),
-      };
+      const overlay = overlaysByThreadKey.get(buildThreadIdentityKey(thread.source, thread.id));
+      const directories = overlay?.extraLinkedDirectories ?? [];
+      const linkedDirectories = directories.some((directory) => directory.worktreeOwnership === "external")
+        ? mergeThreadLinkedDirectories([...thread.linkedDirectories, ...directories])
+        : thread.linkedDirectories;
+      const withRetained = withRetainedWorktrees(linkedDirectories, overlay);
+      return withRetained === thread.linkedDirectories ? thread : { ...thread, linkedDirectories: withRetained };
     };
     activeThreads = activeThreads.map(withWorkspaceOverlay);
     archivedThreads = archivedThreads.map(withWorkspaceOverlay);
@@ -36481,7 +36521,10 @@ export class DesktopBackendRegistry {
               if (directory) directories = [directory];
             }
           }
-          directories = mergeThreadLinkedDirectories([...directories, ...(overlay?.extraLinkedDirectories ?? [])]);
+          directories = withRetainedWorktrees(
+            mergeThreadLinkedDirectories([...directories, ...(overlay?.extraLinkedDirectories ?? [])]),
+            overlay,
+          );
           const thread: AppServerThreadSummary = {
             id: row.id, source: backend, title: "", titleSource: "explicit", linkedDirectories: directories,
             projectKey: row.projectKey, gitBranch: row.gitBranch, observedGitBranch: row.observedGitBranch,

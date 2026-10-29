@@ -19355,7 +19355,9 @@ describe("Composer", () => {
     fireEvent.click(within(dialog).getByRole("radio", { name: /^Start Fresh from a Branch/ }));
     // The remote copy of the default branch is picked first.
     expect(within(dialog).getByLabelText(/^Base branch:/)).toHaveAttribute("data-value", "origin/main");
-    expect(within(dialog).getByText(/current worktree stays on disk/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/current worktree stays on disk/)).toHaveTextContent(
+      "Archiving this thread later checkpoints and removes it, unless it was created outside PwrAgent.",
+    );
     expect(within(dialog).queryByText(/archived with a checkpoint/)).toBeNull();
     fireEvent.click(within(dialog).getByRole("button", { name: "Handoff" }));
 
