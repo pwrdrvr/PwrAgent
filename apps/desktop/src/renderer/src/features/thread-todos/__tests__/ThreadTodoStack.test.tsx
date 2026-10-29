@@ -13,6 +13,7 @@ import {
 import { copyTextWithHtml } from "../../../lib/copy-text";
 import { ThreadMetaChips } from "../../navigation/ThreadMetaChips";
 import { ThreadTodoStack } from "../ThreadTodoStack";
+import { TodoDispatchProvider } from "../TodoDispatchProvider";
 import { ThreadTodosPanel } from "../ThreadTodosPanel";
 import { ThreadTodoCountsContext } from "../useThreadTodos";
 import { unwrapNavigationRead } from "../../../../../shared/navigation-ipc-result";
@@ -391,14 +392,17 @@ describe("ThreadTodoStack", () => {
       instances: [{ instanceId: "peer-1", label: "Studio Mac" }],
     });
     const onDoHere = vi.fn(async () => true);
+    // The app keeps a card's dispatch choices in this window's provider.
     render(
-      <ThreadTodoStack
-        threadKey="codex:thread-a"
-        todos={[handoff]}
-        view={view}
-        onStartReview={vi.fn()}
-        onDoHere={onDoHere}
-      />,
+      <TodoDispatchProvider backends={[]} todos={[handoff]}>
+        <ThreadTodoStack
+          threadKey="codex:thread-a"
+          todos={[handoff]}
+          view={view}
+          onStartReview={vi.fn()}
+          onDoHere={onDoHere}
+        />
+      </TodoDispatchProvider>,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));

@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   BackendSummary,
+  ListBackendsRequest,
   ListThreadTodoDispatchEnvironmentsRequest,
   ListThreadTodoDispatchEnvironmentsResponse,
   ThreadTodo,
@@ -59,9 +60,11 @@ function setup(options: {
   const todo = options.todo ?? card;
   const onRun = vi.fn();
   const api = {
-    listBackends: vi.fn(async (request?: { federationTarget?: { instanceId: string } }) => ({
+    listBackends: vi.fn(async (request?: ListBackendsRequest) => ({
       fetchedAt: 0,
-      backends: request?.federationTarget?.instanceId === "win" ? options.win ?? [codex()] : options.local ?? [claude, codex()],
+      backends: request?.federationTarget?.scope === "remote" && request.federationTarget.instanceId === "win"
+        ? options.win ?? [codex()]
+        : options.local ?? [claude, codex()],
     })),
     listModelSettingsRecents: vi.fn(async () => ({ recents: [] })),
     listThreadTodoDispatchEnvironments: vi.fn(async (request: ListThreadTodoDispatchEnvironmentsRequest) =>
