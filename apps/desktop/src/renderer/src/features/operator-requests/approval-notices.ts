@@ -61,6 +61,7 @@ export function buildApprovalNotices(input: ApprovalNoticeInput): AppNoticeToast
     if (!isApprovalNoticeWait(wait)) continue;
     if (wait.threadKey === input.selectedThreadKey) continue;
     if (input.hiddenKeys.has(wait.key)) continue;
+    const threadTitle = input.threadTitleForKey(wait.threadKey);
     const answer = input.answers?.get(wait.key);
     const sending = answer !== undefined && answer.error === undefined;
     const onAnswer = input.onAnswer;
@@ -88,7 +89,9 @@ export function buildApprovalNotices(input: ApprovalNoticeInput): AppNoticeToast
       threadLink: {
         backend: wait.backend,
         threadId: wait.threadId,
-        title: input.threadTitleForKey(wait.threadKey),
+        title: threadTitle,
+        ...(wait.threadTitle?.trim() && threadTitle === wait.threadTitle
+          ? { titleOrigin: "owner" as const } : {}),
         ...(wait.federationTarget ? { instanceId: wait.federationTarget.instanceId } : {}),
       },
       // Review stays the default: the card shows the whole request. The

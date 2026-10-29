@@ -2567,8 +2567,10 @@ function DesktopAppShell(props: {
   // it only closes the card; the request stays in its thread and To-dos.
   // One lookup for every surface that names a wait's thread.
   const waitThreadTitle = useCallback(
-    (threadKey: string) => localThreadTitles.get(threadKey) ?? "Untitled thread",
-    [localThreadTitles],
+    (threadKey: string) => localThreadTitles.get(threadKey)
+      ?? operatorRequests.waitsByThreadKey.get(threadKey)?.[0]?.threadTitle
+      ?? "Untitled thread",
+    [localThreadTitles, operatorRequests.waitsByThreadKey],
   );
   const reviewApprovalNotice = useCallback((wait: OperatorWait): void => {
     showThreadFromLink({

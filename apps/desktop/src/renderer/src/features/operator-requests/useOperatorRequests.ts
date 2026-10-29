@@ -201,10 +201,11 @@ export function useOperatorRequests(
   );
 }
 
-/** Same waits, in the same order. A key names one immutable request or question. */
+/** Request contents are immutable, but their owner-cached thread title can change. */
 function sameWaits(left: readonly OperatorWait[], right: readonly OperatorWait[]): boolean {
   return left.length === right.length
-    && left.every((wait, index) => wait.key === right[index]!.key);
+    && left.every((wait, index) => wait.key === right[index]!.key
+      && wait.threadTitle === right[index]!.threadTitle);
 }
 
 export type OperatorWaitsContextValue = {

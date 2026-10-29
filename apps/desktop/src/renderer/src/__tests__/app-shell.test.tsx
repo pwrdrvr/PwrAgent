@@ -402,6 +402,44 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Independent render" })).toBeInTheDocument();
   });
 
+  it("names approval notices for threads outside the loaded navigation page and refreshes late titles", async () => {
+    let title: string | undefined;
+    let changed: ((event: import("@pwragent/shared").OperatorRequestsChangedEvent) => void) | undefined;
+    const listOperatorRequests = vi.fn(async () => ({
+      serverRequests: [{ backend: "codex" as const, createdAt: 1_000, threadTitle: title,
+        notification: { method: "item/commandExecution/requestApproval" as const,
+          params: { threadId: "off-page", requestId: "approval-1", command: "pnpm test" } } }],
+      questions: [], seenKeys: [],
+    }));
+    const getNavigationSnapshot = vi.fn(async (): Promise<NavigationSnapshot> => ({
+      backend: "all", fetchedAt: Date.now(), unchanged: false,
+      threads: [], directories: [], inboxThreadKeys: [],
+      launchpadDefaults: { backend: "codex", executionMode: "default" },
+    }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        platform: "darwin",
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        getNavigationSnapshot,
+        listOperatorRequests,
+        onOperatorRequestsChanged: (listener: NonNullable<typeof changed>) => { changed = listener; return () => {}; },
+      }),
+    });
+    await renderApp();
+    await screen.findByRole("button", { name: "Review" });
+    expect(screen.getByText("#Untitled thread")).toBeInTheDocument();
+    for (title of ["Warm CI dependencies", "Fix CI install hangs"]) {
+      await act(async () => { changed!({ reason: "requests", backend: "codex", threadId: "off-page" }); });
+      await waitFor(() => expect(screen.getByText(`#${title}`)).toBeInTheDocument());
+      expect(screen.queryByText("#Untitled thread")).not.toBeInTheDocument();
+    }
+    expect(getNavigationSnapshot).toHaveBeenCalled();
+    // Neither opening the thread nor loading another navigation page is
+    // needed to replace the placeholder or reflect the rename.
+    expect(listOperatorRequests).toHaveBeenCalledTimes(3);
+  });
+
   it("keeps a selected document intact while another thread queues and refunds a CI repair", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const reader = {

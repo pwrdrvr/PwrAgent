@@ -25,6 +25,8 @@ import type {
 export type OperatorServerRequest = {
   federationTarget?: FederationRemoteTarget;
   backend: AppServerBackendKind;
+  /** Owner-cached title, independent of the viewer's loaded navigation rows. */
+  threadTitle?: string;
   notification: AppServerPendingRequestNotification;
   /** When this process first saw the request, epoch ms. */
   createdAt: number;
@@ -34,6 +36,8 @@ export type OperatorServerRequest = {
 export type OperatorAsyncQuestion = {
   federationTarget?: FederationRemoteTarget;
   backend: AppServerBackendKind;
+  /** Owner-cached title, independent of the viewer's loaded navigation rows. */
+  threadTitle?: string;
   threadId: string;
   /** The assistant message's item id. */
   messageId: string;
