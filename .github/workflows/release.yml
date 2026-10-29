@@ -93,8 +93,12 @@ jobs:
           GH_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
         run: |
           set -euo pipefail
-          pnpm --silent release:channels --audit > "$RUNNER_TEMP/package-manager-preflight.json"
-          cat "$RUNNER_TEMP/package-manager-preflight.json" >> "$GITHUB_STEP_SUMMARY"
+          audit_status=0
+          pnpm --silent release:channels --audit > "$RUNNER_TEMP/package-manager-preflight.json" || audit_status=$?
+          report_status=0
+          node scripts/release/report-channel-audit.mjs "$RUNNER_TEMP/package-manager-preflight.json" "$audit_status" || report_status=$?
+          if [ "$audit_status" -ne 0 ]; then exit "$audit_status"; fi
+          exit "$report_status"
 
       - name: Lint and typecheck
         env:
