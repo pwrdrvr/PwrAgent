@@ -133,10 +133,18 @@ cleanup. A CLI `exit` without `close`, together with a pipe that has not ended,
 identifies a pipe-lifetime wait; it does not identify the retaining descendant.
 No exit event means the CLI itself has not been observed to exit.
 
-These observations add no startup deadline, retry or cleanup policy. The
-20-second outer deadlines and Playwright's generated five-second deadlines
-remain unchanged. The retained data contains generated test fixtures, not the
-environment or an unfiltered Node diagnostic report.
+Each probe has two named budgets. Cold start, from spawn to the worker's
+`worker-start` record, has 30 seconds: it is two Node processes loading
+Playwright and the generated config. On macOS that measured 0.5 seconds idle,
+up to 3.6 seconds beside a full unit shard and 12.6 seconds at a load average
+of 36 on ten cores. Shutdown has the original 20 seconds, measured from the
+worker's own readiness record to CLI close. Playwright's generated five-second
+teardown deadline measured 5.0-5.1 seconds under every load, so a hang there
+still fails as before. Either expired budget names its phase in the error and
+freezes `before-cleanup.json` first. The `--list` probe starts no worker and has
+the cold-start budget alone. There is no retry, and cleanup is unchanged. The
+retained data contains generated test fixtures, not the environment or an
+unfiltered Node diagnostic report.
 
 ## Limits
 

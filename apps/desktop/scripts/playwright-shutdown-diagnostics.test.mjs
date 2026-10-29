@@ -14,6 +14,17 @@ const core = fromPlaywright.resolve("playwright-core/lib/coreBundle");
 const diagnostics = new URL("./playwright-shutdown-diagnostics.mjs", import.meta.url).href;
 const roots = [];
 const activeProbes = new Set();
+// A probe starts two cold Node processes, the Playwright CLI and its worker,
+// and each loads Playwright and the generated config before the worker is
+// ready. On macOS that took 0.5s idle, up to 3.6s beside a full unit shard and
+// 12.6s at a load average of 36 on ten cores. The shutdown these tests exercise
+// did not vary: Playwright's five-second teardown deadline measured 5.0-5.1s
+// throughout. Cold start therefore has its own budget, and the shutdown budget
+// starts from the worker's recorded readiness.
+const COLD_START_BUDGET_MS = 30_000;
+const SHUTDOWN_BUDGET_MS = 20_000;
+// Vitest's deadline is a backstop behind the two named budgets.
+const PROBE_TEST_TIMEOUT_MS = COLD_START_BUDGET_MS + SHUTDOWN_BUDGET_MS + 5_000;
 
 afterEach(async () => {
   // Preserve the state at the outer deadline, before abort changes the evidence.
@@ -26,12 +37,37 @@ afterAll(async () => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
-function workerStarted(output) {
+// The worker's own readiness time, in epoch milliseconds, or undefined.
+function workerStartedAt(output) {
   const directory = path.join(output, "worker-shutdown");
-  if (!existsSync(directory)) return false;
-  return readdirSync(directory, { recursive: true })
-    .filter((file) => path.basename(file) === "timeline.jsonl")
-    .some((file) => readFileSync(path.join(directory, file), "utf8").includes('"kind":"worker-start"'));
+  if (!existsSync(directory)) return undefined;
+  for (const file of readdirSync(directory, { recursive: true })) {
+    if (path.basename(file) !== "timeline.jsonl") continue;
+    // Only newline-terminated lines are complete; the worker may be appending.
+    const start = readFileSync(path.join(directory, file), "utf8").split("\n").slice(0, -1)
+      .find((line) => line.includes('"kind":"worker-start"'));
+    if (start) return Date.parse(JSON.parse(start).time);
+  }
+  return undefined;
+}
+
+function workerStarted(output) {
+  return workerStartedAt(output) !== undefined;
+}
+
+// Rejects with the named budget if the work outlives it. The probe's state is
+// captured first, so abort and cleanup cannot replace the evidence.
+function withinBudget(probe, promise, ms, message) {
+  let timer;
+  // The losing promise can still reject during cleanup; that is not a new failure.
+  promise.catch(() => {});
+  const expired = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      probe.capture("before-cleanup");
+      reject(new Error(message));
+    }, Math.max(0, ms));
+  });
+  return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
 }
 
 function waitForWorkerStart(root, output) {
@@ -110,8 +146,11 @@ function startProbe(args, options, root = createProbeRoot()) {
     })),
   });
   const capture = (boundary) => {
+    const file = path.join(root, `${boundary}.json`);
     // Late close events may follow afterAll's temporary-directory removal.
-    if (existsSync(root)) writeFileSync(path.join(root, `${boundary}.json`), JSON.stringify(snapshot(), null, 2));
+    // The first observation of a boundary wins; later cleanup passes reach
+    // the same boundary after abort has changed the state.
+    if (existsSync(root) && !existsSync(file)) writeFileSync(file, JSON.stringify(snapshot(), null, 2));
   };
   const probe = { child, controller, result, root, note, snapshot, capture };
   onTestFailed(() => {
@@ -197,18 +236,21 @@ async function probe(mode, { captureAfterMs = 100 } = {}) {
   const readiness = waitForWorkerStart(root, output);
   let result;
   try {
-    // Startup is governed by the test's own deadline and afterEach owns the
-    // child if it fails. Worker config evaluation precedes the test and
-    // cleanup lifecycle, so worker-start is not a cleanup deadline.
-    await Promise.race([
+    // Cold start ends at worker readiness; the finally block owns the child if
+    // either budget expires.
+    await withinBudget(started, Promise.race([
       readiness.promise,
       started.result.then((completed) => {
         if (workerStarted(output)) return completed;
         throw new Error(`Playwright exited before the worker shutdown recorder became ready.\n${completed.stdout}${completed.stderr}`);
       }),
-    ]);
+    ]), COLD_START_BUDGET_MS, `Playwright did not reach worker readiness within the ${COLD_START_BUDGET_MS}ms cold-start budget.`);
     started.note("worker-ready-observed");
-    result = await started.result;
+    // Measured from the worker's record, so a late file notification cannot
+    // extend the shutdown budget.
+    const readyAt = workerStartedAt(output) ?? Date.now();
+    result = await withinBudget(started, started.result, SHUTDOWN_BUDGET_MS - (Date.now() - readyAt),
+      `Playwright did not finish within ${SHUTDOWN_BUDGET_MS}ms of worker readiness.`);
   } finally {
     readiness.close();
     await stopProbe(started);
@@ -245,10 +287,12 @@ describe("real Playwright worker shutdown diagnostics", () => {
       env: { ...process.env, TEST_WORKER_INDEX: "7", PWRAGENT_E2E_WORKER_DIAGNOSTICS: "1" },
       maxBuffer: 1024 * 1024,
     }, root);
-    const result = await started.result;
+    // Listing starts no worker, so the whole run is cold start.
+    const result = await withinBudget(started, started.result, COLD_START_BUDGET_MS,
+      `Playwright did not list tests within the ${COLD_START_BUDGET_MS}ms cold-start budget.`);
     expect(result.code, result.stdout + result.stderr).toBe(0);
     expect(existsSync(path.join(output, "worker-shutdown"))).toBe(false);
-  });
+  }, COLD_START_BUDGET_MS + 5_000);
 
   it("terminates a probe that stalls before worker readiness", async () => {
     const started = startProbe(["-e", "setInterval(() => {}, 1_000)"], {
@@ -302,14 +346,14 @@ describe("real Playwright worker shutdown diagnostics", () => {
       expect(tree.error, record).toBeUndefined();
       expect(tree.processes.some(({ pid }) => pid === pending.pid)).toBe(true);
     }
-  }, 20_000);
+  }, PROBE_TEST_TIMEOUT_MS);
 
   it("distinguishes a worker fixture hang from process cleanup", async () => {
     const result = await probe("fixture");
     expect(result.code, result.stdout + result.stderr).toBe(1);
     expect(result.stdout).toContain("1 passed");
     expect(result.snapshots.find(({ reason }) => reason === "slow-worker-cleanup").phase).toBe("worker-fixtures");
-  }, 20_000);
+  }, PROBE_TEST_TIMEOUT_MS);
 
   it("records an interrupted query when capture starts at the worker exit boundary", async () => {
     // Trigger capture only from workerEnd after the existing teardown deadline.
@@ -335,7 +379,7 @@ describe("real Playwright worker shutdown diagnostics", () => {
         return true;
       }
     }).toBe(true);
-  }, 20_000);
+  }, PROBE_TEST_TIMEOUT_MS);
 
   // This fixture relies on POSIX inherited-fd lifetime: the grandchild keeps
   // the worker's pipe open after its parent exits. Windows CI closes it and
@@ -352,7 +396,7 @@ describe("real Playwright worker shutdown diagnostics", () => {
     expect(pending.exitCode).toBe(0);
     expect(pending.stage).toBe("wait-for-process-close-and-cleanup");
     expect(pending.stdio.some(({ fd, destroyed }) => fd === 1 && !destroyed)).toBe(true);
-  }, 20_000);
+  }, PROBE_TEST_TIMEOUT_MS);
 
   it("leaves healthy cleanup green without expensive snapshots", async () => {
     const result = await probe("healthy");
@@ -364,5 +408,5 @@ describe("real Playwright worker shutdown diagnostics", () => {
     expect(result.parent.stdio.every(({ destroyed, readableEnded }) => destroyed && readableEnded)).toBe(true);
     const timeline = result.artifacts.find(({ file }) => file.endsWith("timeline.jsonl")).text;
     expect(timeline).toContain('"kind":"worker-end","failed":false');
-  }, 20_000);
+  }, PROBE_TEST_TIMEOUT_MS);
 });
