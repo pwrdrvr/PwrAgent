@@ -859,6 +859,71 @@ describe("Composer", () => {
     expect(store.get(`launchpad:${launchpad.directoryKey}`)).toBeUndefined();
   });
 
+  it("attaches the images in text pasted from Linear", async () => {
+    const pasted = `<issue identifier="PWR-5"><linear-image>${JSON.stringify({
+      type: "image",
+      attrs: { src: "https://uploads.linear.app/org/issue/file?signature=old", alt: "shot.png" },
+    })}</linear-image></issue>`;
+    const fetchLinearPastedImages = vi.fn(async () => ({
+      status: "fetched" as const,
+      failed: 0,
+      images: [{ name: "shot.png", mimeType: "image/png", dataBase64: "AQID" }],
+    }));
+    render(<Composer desktopApi={{ fetchLinearPastedImages }} skills={[]} thread={{
+      id: "thread-1", title: "Linear paste", titleSource: "explicit", source: "codex",
+      linkedDirectories: [], inbox: { inInbox: false },
+    }} />);
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [],
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+      },
+    });
+
+    expect(await screen.findByAltText("shot.png")).toBeInTheDocument();
+    expect(fetchLinearPastedImages).toHaveBeenCalledWith({ text: pasted });
+  });
+
+  it("drops Linear images that arrive after the thread changes", async () => {
+    const pasted = `<linear-image>${JSON.stringify({
+      type: "image",
+      attrs: { src: "https://uploads.linear.app/org/issue/file", alt: "late.png" },
+    })}</linear-image>`;
+    const response = createDeferred<{
+      status: "fetched"; failed: number;
+      images: Array<{ name: string; mimeType: string; dataBase64: string }>;
+    }>();
+    const desktopApi = { fetchLinearPastedImages: vi.fn(() => response.promise) };
+    const thread = (id: string): NavigationThreadSummary => ({
+      id, title: id, titleSource: "explicit", source: "codex",
+      linkedDirectories: [], inbox: { inInbox: false },
+    });
+    const view = render(<Composer desktopApi={desktopApi} skills={[]} thread={thread("first")} />);
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [],
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+      },
+    });
+    await waitFor(() => expect(desktopApi.fetchLinearPastedImages).toHaveBeenCalledTimes(1));
+
+    view.rerender(<Composer desktopApi={desktopApi} skills={[]} thread={thread("second")} />);
+    await act(async () => {
+      response.resolve({
+        status: "fetched",
+        failed: 0,
+        images: [{ name: "late.png", mimeType: "image/png", dataBase64: "AQID" }],
+      });
+      await response.promise;
+    });
+
+    expect(screen.queryByAltText("late.png")).not.toBeInTheDocument();
+    expect(normalizeImageFile).not.toHaveBeenCalled();
+  });
+
   it("keeps follow-ups and steering intent when a starting launchpad is remounted", async () => {
     const draftStore = createComposerDraftStore();
     const backend = backendSummary("codex");

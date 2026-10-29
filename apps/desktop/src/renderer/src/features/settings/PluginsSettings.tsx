@@ -99,6 +99,7 @@ type ConnectionPendingAction = {
     | "disconnect"
     | "newThreadDefault"
     | "probe"
+    | "linearPasteImages"
     | "remove"
     | "sandboxerCleanup"
     | "testLocal"
@@ -1277,6 +1278,34 @@ export function PluginsSettings(props: {
     }
   };
 
+  const setLinearPasteImages = async (
+    connection: McpConnectionStatus,
+    enabled: boolean,
+  ) => {
+    if (connectionPending || !props.desktopApi?.setLinearPasteImages) return;
+    setConnectionPending({
+      kind: "linearPasteImages",
+      connectionId: connection.id,
+    });
+    try {
+      await props.desktopApi.setLinearPasteImages({ enabled });
+      await loadConnections();
+      setConnectionNotice({
+        kind: "success",
+        text: enabled
+          ? "Images in text pasted from Linear are attached to the message."
+          : "Text pasted from Linear is left as it is.",
+      });
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setConnectionPending(undefined);
+    }
+  };
+
   const setConnectionToolApproval = async (
     connection: McpConnectionStatus,
     toolApproval: McpConnectionToolApproval,
@@ -1467,6 +1496,13 @@ export function PluginsSettings(props: {
                     && props.desktopApi?.setSandboxerCleanupOnPrClose
                       ? (enabled) =>
                           void setSandboxerCleanupOnPrClose(connection, enabled)
+                      : undefined
+                  }
+                  onLinearPasteImagesChange={
+                    connection.linearPasteImages !== undefined
+                    && props.desktopApi?.setLinearPasteImages
+                      ? (enabled) =>
+                          void setLinearPasteImages(connection, enabled)
                       : undefined
                   }
                   onChanged={() => void loadConnections()}
@@ -2229,6 +2265,8 @@ function ManagedMcpConnectionRow(props: {
   onToolApprovalChange?: (toolApproval: McpConnectionToolApproval) => void;
   /** Sandboxer only. */
   onSandboxerCleanupOnPrCloseChange?: (enabled: boolean) => void;
+  /** Linear only. */
+  onLinearPasteImagesChange?: (enabled: boolean) => void;
   onChanged: () => void;
   onDisconnect: () => void;
   onEdit: () => void;
@@ -2740,6 +2778,27 @@ function ManagedMcpConnectionRow(props: {
                 <span className="settings-mcp-row__policy-hint">
                   Delete each sandbox a thread created once all of its PRs
                   merge or close. Without a delete tool, PwrAgent stops it.
+                </span>
+              </span>
+            </div>
+          ) : null}
+          {props.onLinearPasteImagesChange ? (
+            <div className="settings-mcp-row__policy-item">
+              <SettingsSwitch
+                // One profile-wide setting; absent reads as on.
+                checked={connection.linearPasteImages !== false}
+                disabled={disabled}
+                label="Attach images in text pasted from Linear"
+                onChange={props.onLinearPasteImagesChange}
+              />
+              <span className="settings-mcp-row__policy-text">
+                <span className="settings-mcp-row__policy-label">
+                  Attach pasted Linear images
+                </span>
+                <span className="settings-mcp-row__policy-hint">
+                  {connection.enabled
+                    ? "When you paste an issue or description from Linear, its images are downloaded through this connection and attached to the message."
+                    : "Offer it to threads first. Pasted images are downloaded through this connection."}
                 </span>
               </span>
             </div>

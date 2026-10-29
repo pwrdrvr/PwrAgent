@@ -1,5 +1,6 @@
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
 import { codexProviderIdOfModel, formatModelOptionLabel } from "@pwragent/shared";
+import { findLinearPastedImages, mayContainLinearPastedImages } from "@pwragent/shared";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
 import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-update-diagnostics";
@@ -237,6 +238,7 @@ import {
   serializeDraftWithSkillTokens,
 } from "./composer-mention-tokens";
 import {
+  composerImageFileFromBase64,
   formatPastedImageAlt,
   formatPastedImageName,
   getComposerFilesFromDataTransfer,
@@ -10106,6 +10108,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       applyThreadReference(pastedThread);
       return;
     }
+    if (mayContainLinearPastedImages(pastedText)) {
+      // The text pastes as usual; its images follow once they download.
+      void attachLinearPastedImages(pastedText);
+    }
 
     const { images: pastedFiles, files: pastedNonImageFiles, readMs } =
       getComposerFilesFromDataTransfer(event.clipboardData);
@@ -10126,6 +10132,52 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
     void attachImages(accepted, readMs);
+  };
+
+  /**
+   * Text copied from Linear names its images by a link that expires five
+   * minutes after the copy. Main reads them through the Linear connection
+   * instead, and they join the tray of the composer the text was pasted
+   * into. A thread switch before they arrive drops them.
+   */
+  const attachLinearPastedImages = async (text: string): Promise<void> => {
+    const fetchImages = props.desktopApi?.fetchLinearPastedImages;
+    if (!fetchImages || !imagesSupported) return;
+    if (findLinearPastedImages(text).length === 0) return;
+    const pasteScope = pasteScopeRef.current;
+    let response: Awaited<ReturnType<typeof fetchImages>>;
+    try {
+      response = await fetchImages({ text });
+    } catch (error) {
+      response = {
+        status: "failed",
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+    if (pasteScopeRef.current.key !== pasteScope.key) return;
+    // Off, or no Linear connection: the paste is plain text, as before.
+    if (response.status === "disabled" || response.status === "unavailable") return;
+    if (response.status === "failed") {
+      showComposerNotice({
+        title: "Linear images not attached",
+        message: response.message,
+      });
+      return;
+    }
+    if (response.failed > 0) {
+      showComposerNotice({
+        title: "Some Linear images not attached",
+        message: response.failed === 1
+          ? "One image could not be downloaded from Linear."
+          : `${response.failed} images could not be downloaded from Linear.`,
+      });
+    }
+    if (response.images.length === 0) return;
+    const accepted = gateImageFilesForAttachment(
+      response.images.map(composerImageFileFromBase64),
+    );
+    if (!accepted || accepted.length === 0) return;
+    await attachImages(accepted);
   };
 
   const handleDragOver = (event: DragEvent<HTMLElement>): void => {

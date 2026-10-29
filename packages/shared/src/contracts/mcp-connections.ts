@@ -244,6 +244,16 @@ export type McpConnectionRecord = {
    * absent reads as `true`.
    */
   sandboxerCleanupOnPrClose?: boolean;
+  /**
+   * Present only on a connection to Linear's hosted MCP server. When true,
+   * images in text pasted from Linear are fetched through the connection and
+   * attached to the message. One profile-wide setting, so every Linear
+   * connection reports the same value.
+   *
+   * Absent on any other connection, and on an older owner broker's answer,
+   * which reads as `true` for a Linear connection.
+   */
+  linearPasteImages?: boolean;
   createdAt: number;
   updatedAt: number;
 };
@@ -394,6 +404,31 @@ export type SetMcpConnectionSelectForNewThreadsRequest = {
 export type SetSandboxerCleanupOnPrCloseRequest = {
   enabled: boolean;
 };
+
+/** See `McpConnectionRecord.linearPasteImages`. */
+export type SetLinearPasteImagesRequest = {
+  enabled: boolean;
+};
+
+/** Fetch the images in text pasted from Linear. */
+export type FetchLinearPastedImagesRequest = {
+  /** The pasted text. Only its `uploads.linear.app` images are read. */
+  text: string;
+};
+
+export type LinearPastedImageData = {
+  name: string;
+  mimeType: string;
+  dataBase64: string;
+};
+
+export type FetchLinearPastedImagesResponse =
+  | { status: "fetched"; images: LinearPastedImageData[]; failed: number }
+  /** The Linear paste setting is off. */
+  | { status: "disabled" }
+  /** No signed-in Linear connection is offered to threads. */
+  | { status: "unavailable" }
+  | { status: "failed"; message: string };
 
 /** See `McpConnectionRecord.toolApproval`. */
 export type SetMcpConnectionToolApprovalRequest = {

@@ -11,6 +11,7 @@ import {
   type SandboxerTransport,
   isBuiltInMcpConnectionId,
   isMcpConnectionToolApproval,
+  isLinearMcpServerUrl,
   MCP_STDIO_ENV_NAME_PATTERN,
   type McpConnectionRecord,
   type McpConnectionToolApproval,
@@ -176,6 +177,19 @@ export class McpConnectionRegistry {
       enabled,
     );
     return this.sandboxerConnection();
+  }
+
+  /**
+   * Choose whether images in text pasted from Linear are fetched through a
+   * Linear connection and attached to the message.
+   *
+   * One profile-wide scalar rather than a field on each row: a person with
+   * two Linear workspaces wants one answer, and a scalar survives removing
+   * and re-adding the connection. The default is on, so absence reads as
+   * `true`.
+   */
+  setLinearPasteImages(enabled: boolean): void {
+    this.writeScalar(["mcp_connections", "linear_paste_images"], enabled);
   }
 
   /**
@@ -468,11 +482,16 @@ export class McpConnectionRegistry {
   ): McpConnectionRecord[] {
     const connections: McpConnectionRecord[] = [];
     const ids = new Set<string>(MCP_CONNECTION_IDS);
+    const linearPasteImages = table?.linear_paste_images !== false;
     for (const row of this.readStoredRows(table)) {
       const connection = connectionFromRow(row);
       if (!connection || ids.has(connection.id)) continue;
       ids.add(connection.id);
-      connections.push(connection);
+      connections.push(
+        connection.kind === "remote" && isLinearMcpServerUrl(connection.serverUrl)
+          ? { ...connection, linearPasteImages }
+          : connection,
+      );
     }
     return connections;
   }

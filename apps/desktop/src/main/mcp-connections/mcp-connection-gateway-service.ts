@@ -1367,6 +1367,45 @@ export class McpConnectionGatewayService {
     return this.announced(await this.connectionStatus(connection));
   }
 
+  /**
+   * Choose whether images in text pasted from Linear are fetched through a
+   * Linear connection. Nothing live changes: the next paste reads it.
+   */
+  async setLinearPasteImages(enabled: boolean): Promise<void> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      await this.requestOwnerBroker<null>(
+        ownership.holder,
+        "broker/set-linear-paste-images",
+        { enabled },
+      );
+      return;
+    }
+    this.registry.setLinearPasteImages(enabled);
+    this.announceChanged(
+      this.registry.list()
+        .filter((connection) => connection.linearPasteImages !== undefined)
+        .map((connection) => connection.id),
+    );
+  }
+
+  /**
+   * The Linear connections a paste may fetch images through, or `undefined`
+   * when the setting is off. Reads the local registry, like
+   * `isSandboxerCleanupOnPrCloseEnabled`: config.toml is profile-local.
+   * Signed-in state is checked when the session opens.
+   */
+  linearPasteConnectionIds(): string[] | undefined {
+    const linear = this.registry.list()
+      .filter((connection) => connection.linearPasteImages !== undefined);
+    if (linear.some((connection) => connection.linearPasteImages === false)) {
+      return undefined;
+    }
+    return linear
+      .filter((connection) => connection.enabled)
+      .map((connection) => connection.id);
+  }
+
   async setSandboxerTransport(transport: SandboxerTransport): Promise<McpConnectionStatus> {
     if (!isSandboxerTransport(transport)) throw new Error("Choose a Sandboxer transport.");
     const ownership = await this.ensureOwnerBroker();
@@ -2939,6 +2978,13 @@ export class McpConnectionGatewayService {
         throw new Error("Invalid Sandboxer cleanup on PR close request.");
       }
       return await this.setSandboxerCleanupOnPrClose(values.enabled);
+    }
+    if (operation === "broker/set-linear-paste-images") {
+      if (typeof values.enabled !== "boolean") {
+        throw new Error("Invalid Linear paste images request.");
+      }
+      await this.setLinearPasteImages(values.enabled);
+      return null;
     }
     if (operation === "broker/set-tool-approval") {
       if (

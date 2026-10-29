@@ -385,6 +385,9 @@ import type {
   SetMcpConnectionSelectForNewThreadsRequest,
   SetMcpConnectionToolApprovalRequest,
   SetSandboxerCleanupOnPrCloseRequest,
+  SetLinearPasteImagesRequest,
+  FetchLinearPastedImagesRequest,
+  FetchLinearPastedImagesResponse,
   SetSandboxerTransportRequest,
   ReadThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsRequest,
@@ -687,6 +690,11 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setSandboxerCleanupOnPrClose?: (
     request: SetSandboxerCleanupOnPrCloseRequest,
   ) => Promise<MutateMcpConnectionResponse>;
+  setLinearPasteImages?: (request: SetLinearPasteImagesRequest) => Promise<void>;
+  /** Images in text pasted from Linear, read through a Linear connection. */
+  fetchLinearPastedImages?: (
+    request: FetchLinearPastedImagesRequest,
+  ) => Promise<FetchLinearPastedImagesResponse>;
   listMcpConnectionTools?: (
     request: ListMcpConnectionToolsRequest,
   ) => Promise<ListMcpConnectionToolsResponse>;

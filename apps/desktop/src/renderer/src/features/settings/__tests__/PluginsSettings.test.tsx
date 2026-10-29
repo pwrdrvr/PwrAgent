@@ -1429,6 +1429,32 @@ describe("PluginsSettings", () => {
       expect(api.setMcpConnectionSelectForNewThreads).not.toHaveBeenCalled();
     });
 
+    it("offers attaching pasted Linear images on a Linear connection only", async () => {
+      const linear = managed({
+        id: "linear", displayName: "Linear", serverUrl: "https://mcp.linear.app/mcp",
+        linearPasteImages: true,
+      });
+      const api = managedApi([managed(), linear]);
+      api.setLinearPasteImages = vi.fn(async () => undefined);
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+      const datadog = within(await findRow("Datadog"));
+      expect(datadog.queryByText("Attach pasted Linear images")).toBeNull();
+      const row = within((await screen.findByText("Linear")).closest("article")!);
+      const toggle = row.getByRole("switch", {
+        name: "Attach images in text pasted from Linear",
+      });
+      expect(toggle).toBeChecked();
+
+      fireEvent.click(toggle);
+      await waitFor(() => {
+        expect(api.setLinearPasteImages).toHaveBeenCalledWith({ enabled: false });
+      });
+      expect(
+        await screen.findByText("Text pasted from Linear is left as it is."),
+      ).toBeInTheDocument();
+    });
+
     /**
      * Reauthorizing a working connection can switch accounts while its URL and
      * its `configured` flag stay the same, which is all the row watched. The

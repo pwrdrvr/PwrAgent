@@ -321,6 +321,10 @@ export const MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL =
   "mcp-connection:set-sandboxer-transport";
 export const MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL =
   "mcp-connection:set-sandboxer-cleanup-on-pr-close";
+export const MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL =
+  "mcp-connection:set-linear-paste-images";
+export const MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL =
+  "mcp-connection:fetch-linear-pasted-images";
 export const MCP_CONNECTION_LIST_TOOLS_CHANNEL = "mcp-connection:list-tools";
 export const MCP_CONNECTION_SET_THREAD_CHANNEL =
   "mcp-connection:set-thread";
