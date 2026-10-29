@@ -1074,6 +1074,7 @@ export class MessagingController {
   private readonly terminalPrivateResponseTurnKeys = new Set<string>();
   private readonly privateResponseFallbackTurnKeys = new Set<string>();
   private readonly attemptedPrivateResponseFallbackTurnKeys = new Set<string>();
+  private readonly heldPrivateResponseFallbackTextByTurnKey = new Map<string, string>();
   private readonly queuedAgentMessagingOriginsByQueueKey = new Map<
     string,
     ActiveAgentMessagingOrigin
@@ -2134,7 +2135,17 @@ export class MessagingController {
         && !isNonFinalAssistantTextForBackendEvent(event)
       ) {
         const fallbackTurnId = eventTurnId ?? activeTurn?.turnId;
-        if (fallbackTurnId) {
+        if (fallbackTurnId && isUnphasedAssistantMessageEvent(event)) {
+          // Only the first fallback is sent, and an unphased message can be a
+          // progress note: Claude reports every message this way. Hold the
+          // latest one until the turn ends.
+          rememberBoundedMap(
+            this.heldPrivateResponseFallbackTextByTurnKey,
+            agentMessagingTurnKey(event.backend, binding.threadId, fallbackTurnId),
+            assistantText,
+            MAX_TRACKED_TURN_PROSE,
+          );
+        } else if (fallbackTurnId) {
           await this.deliverPrivateResponseFallback({
             binding,
             event,
@@ -2154,11 +2165,16 @@ export class MessagingController {
           binding,
         );
         const fallbackTurnId = eventTurnId ?? activeTurn?.turnId;
-        if (bufferedText && fallbackTurnId) {
+        const fallbackText = fallbackTurnId
+          ? this.heldPrivateResponseFallbackTextByTurnKey.get(
+              agentMessagingTurnKey(event.backend, binding.threadId, fallbackTurnId),
+            ) ?? bufferedText
+          : undefined;
+        if (fallbackText && fallbackTurnId) {
           await this.deliverPrivateResponseFallback({
             binding,
             event,
-            text: bufferedText,
+            text: fallbackText,
             turnId: fallbackTurnId,
           });
         }
@@ -8495,6 +8511,7 @@ export class MessagingController {
     this.terminalPrivateResponseTurnKeys.clear();
     this.privateResponseFallbackTurnKeys.clear();
     this.attemptedPrivateResponseFallbackTurnKeys.clear();
+    this.heldPrivateResponseFallbackTextByTurnKey.clear();
     this.assistantStreamCancellationFailures.clear();
     for (const cancellation of this.assistantStreamCancellationSignals.values()) {
       cancellation.cancel();
@@ -18238,6 +18255,7 @@ export class MessagingController {
       params.binding.threadId,
       params.turnId,
     );
+    this.heldPrivateResponseFallbackTextByTurnKey.delete(turnKey);
     if (this.attemptedPrivateResponseFallbackTurnKeys.has(turnKey)) {
       return;
     }
@@ -18847,6 +18865,7 @@ export class MessagingController {
       request.context.turnId,
     );
     this.privateResponseFallbackTurnKeys.delete(turnKey);
+    this.heldPrivateResponseFallbackTextByTurnKey.delete(turnKey);
     rememberBoundedKey(this.attemptedPrivateResponseFallbackTurnKeys, turnKey);
     const origin = await this.resolveAgentMessagingOrigin(request.context);
     if (!origin.ok) {
@@ -22804,6 +22823,17 @@ function isNonFinalAssistantTextForBackendEvent(event: AgentEvent): boolean {
   }
   const phase = typeof params.item.phase === "string" ? params.item.phase : undefined;
   return Boolean(phase && phase !== "final" && phase !== "final_answer");
+}
+
+/** An `agentMessage` completion with no phase, which may be a progress note. */
+function isUnphasedAssistantMessageEvent(event: AgentEvent): boolean {
+  if (event.notification.method !== "item/completed") {
+    return false;
+  }
+  const item = (event.notification.params as {
+    item?: { phase?: unknown; type?: unknown };
+  }).item;
+  return item?.type === "agentMessage" && typeof item.phase !== "string";
 }
 
 function isFinalAssistantImageResolutionEvent(event: AgentEvent): boolean {

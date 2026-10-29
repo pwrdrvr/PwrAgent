@@ -4209,6 +4209,60 @@ describe("MessagingController", () => {
     ]);
   });
 
+  it.each([
+    ["every message in the turn output", true],
+    ["an empty turn output", false],
+  ])("privately delivers the last unphased message, given %s", async (_label, withOutput) => {
+    const { harness } = await createSlackPrivateResponseHarness();
+    const note = "Now looking up the AWS SSO session.";
+    const answer = "Open the AWS SSO URL and enter `LAST-CODE`.";
+
+    // Claude reports every assistant message without a phase, so the first
+    // one is a progress note, not the answer.
+    for (const [id, text] of [["message-1", note], ["message-2", answer]]) {
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: { id, type: "agentMessage", text },
+          },
+        },
+      } satisfies AgentEvent);
+    }
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: withOutput
+              ? [{ type: "text", text: note }, { type: "text", text: answer }]
+              : [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const messages = harness.delivered.filter((intent) => intent.kind === "message");
+    expect(messages).toEqual([
+      expect.objectContaining({
+        parts: [expect.objectContaining({ text: answer })],
+      }),
+    ]);
+    expect(
+      messages.filter(
+        (intent) => intent.audit?.channel.conversation.id === "C012SIGNALS",
+      ),
+    ).toEqual([]);
+  });
+
   it("honors explicit negation when detecting private response requests", async () => {
     const { harness } = await createSlackPrivateResponseHarness({
       inboundText: "I don't want you to DM me; reply here publicly.",
