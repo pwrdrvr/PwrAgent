@@ -624,7 +624,7 @@ export class ClaudeBackend {
    * Continue the thread in another folder. The next turn resumes the same
    * Claude session there: the conversation carries over, and Claude's tools
    * and environment use the new folder. Claude keeps the session file under
-   * the folder that first wrote it; session reads fall back to every folder.
+   * the folder that created it, which `sdkSessionDir` records.
    */
   async moveWorkspace(params: {
     threadId: string; cwd: string; linkedDirectory: LinkedDirectorySummary;
@@ -640,6 +640,8 @@ export class ClaudeBackend {
       const activePath = directory.kind === "worktree" ? directory.worktreePath ?? directory.path : directory.path;
       return !activePath || path.resolve(activePath) !== previous;
     });
+    // The session file stays under the folder that created it.
+    if (session.sdkSessionId && !session.sdkSessionDir) session.sdkSessionDir = session.cwd;
     session.cwd = params.cwd;
     session.thread.linkedDirectories = [params.linkedDirectory, ...others];
     session.thread.updatedAt = Date.now();
@@ -1077,15 +1079,19 @@ export class ClaudeBackend {
           const firstInit = !live.initialized;
           live.initialized = true;
           if (firstInit || session.sdkSessionId !== message.session_id) {
+            // A new session's file is written under this query's cwd.
+            const newSession = session.sdkSessionId !== message.session_id;
             session.sdkSessionId = message.session_id;
             // The query resumed at a rewind's point; later resumes follow
             // the branch it now writes.
             session.resumeSessionAt = undefined;
             session.forkFromSdkSessionId = undefined;
+            if (newSession) session.sdkSessionDir = undefined;
             const current = await this.store.read(threadId);
             current.sdkSessionId = message.session_id;
             delete current.resumeSessionAt;
             delete current.forkFromSdkSessionId;
+            if (newSession) delete current.sdkSessionDir;
             await this.store.save(current);
             // A new turn ends every rewind's undo; drop the files kept for one.
             if (current.rewinds?.some((rewind) => rewind.fileBackup)) {
@@ -1571,11 +1577,9 @@ export class ClaudeBackend {
       let title: string | undefined;
       if (live.titleEnv?.CLAUDE_CONFIG_DIR === process.env.CLAUDE_CONFIG_DIR) {
         try {
-          const read = this.options.getSessionInfo ?? getSessionInfo;
-          // A moved thread's session file stays under the folder that wrote
-          // it; search every project folder when the current one lacks it.
-          const info = await read(session.sdkSessionId, { dir: session.cwd })
-            ?? await read(session.sdkSessionId);
+          const info = await (this.options.getSessionInfo ?? getSessionInfo)(session.sdkSessionId, {
+            dir: session.sdkSessionDir ?? session.cwd,
+          });
           title = normalizeClaudeTitle(info?.customTitle);
         } catch {
           // Missing/unreadable metadata must not disable the query's native
@@ -2385,9 +2389,9 @@ export class ClaudeBackend {
     if (!session.sdkSessionId) throw new Error("Claude has no conversation to rewind yet.");
     const promptUuid = target.messageId.startsWith("user:") ? target.messageId.slice("user:".length) : undefined;
     const read = this.options.getSessionMessages ?? getSessionMessages;
-    // A moved thread's session file stays under the folder that wrote it;
-    // search every project folder when the current one lacks it.
-    const local = await read(session.sdkSessionId, { dir: session.cwd });
+    const local = await read(session.sdkSessionId, { dir: session.sdkSessionDir ?? session.cwd });
+    // An undone rewind can return to a session written before an earlier
+    // move, so search every project folder when the expected one lacks it.
     const messages = (local.length > 0 ? local : await read(session.sdkSessionId))
       .filter((message) => message.parent_tool_use_id === null);
     const index = promptUuid ? messages.findIndex((message) => message.uuid === promptUuid && message.type === "user") : -1;

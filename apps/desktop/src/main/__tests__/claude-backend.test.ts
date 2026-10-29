@@ -113,6 +113,7 @@ describe("Claude SDK backend", () => {
     const moved = await f.store.read(threadId);
     expect(moved.cwd).toBe(worktree);
     expect(moved.sdkSessionId).toBe("5a85c1ad-85c1-4930-ae19-50f721ad13dd");
+    expect(moved.sdkSessionDir).toBe(previous);
     expect(moved.thread.linkedDirectories).toEqual([
       linkedDirectory,
       { id: secondary, kind: "local", label: "other-repo", path: secondary },
