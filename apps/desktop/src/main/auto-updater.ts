@@ -2039,6 +2039,10 @@ export async function installDownloadedAppUpdate(options?: {
             // committed. Arm relaunch only after teardown is complete.
             app.relaunch();
             app.quit();
+          } else if (process.platform === "win32") {
+            // NSIS defaults to its visible wizard. Install silently and
+            // have the installer relaunch the updated app when it finishes.
+            autoUpdater.quitAndInstall(true, true);
           } else {
             autoUpdater.quitAndInstall();
           }
