@@ -93,6 +93,20 @@ describe("buildApprovalNotices", () => {
     });
   });
 
+  it.each([
+    { ownerTitle: undefined, displayTitle: "Untitled thread", expectedOrigin: undefined },
+    { ownerTitle: "Owner title", displayTitle: "Owner title", expectedOrigin: "owner" },
+    { ownerTitle: "Older owner title", displayTitle: "New navigation title", expectedOrigin: undefined },
+  ])("marks only the exact owner-supplied title ($displayTitle)", ({ ownerTitle, displayTitle, expectedOrigin }) => {
+    const [notice] = buildApprovalNotices({
+      waits: waitsFor([{ ...commandApproval, threadTitle: ownerTitle }]),
+      hiddenKeys: new Set(), threadTitleForKey: () => displayTitle,
+      onReview: vi.fn(), onHide: vi.fn(), onHideAll: vi.fn(),
+    });
+    expect(notice?.threadLink?.title).toBe(displayTitle);
+    expect(notice?.threadLink?.titleOrigin).toBe(expectedOrigin);
+  });
+
   it("leaves out the thread on screen and the cards the operator hid", () => {
     const waits = waitsFor([commandApproval, mcpApproval, fileApproval]);
     const notices = buildApprovalNotices({

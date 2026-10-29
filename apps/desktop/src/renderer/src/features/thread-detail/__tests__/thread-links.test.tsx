@@ -520,7 +520,7 @@ describe("thread links in transcript markdown", () => {
   it.each([false, true])("accepts updated owner titles on off-page chips (previously loaded=%s)", (previouslyLoaded) => {
     const onShowThread = vi.fn();
     const chip = (title: string) => <ThreadChip
-      link={{ backend: "codex", threadId: CHILD_THREAD_ID, title }} onOpen={onShowThread}
+      link={{ backend: "codex", threadId: CHILD_THREAD_ID, title, titleOrigin: "owner" }} onOpen={onShowThread}
     />;
     const { rerender } = render(
       <ThreadLinkProvider onShowThread={onShowThread} threads={previouslyLoaded ? [threadSummary()] : []}>
@@ -528,6 +528,9 @@ describe("thread links in transcript markdown", () => {
         {chip("Warm CI dependencies")}
       </ThreadLinkProvider>,
     );
+    if (previouslyLoaded) {
+      expect(screen.getAllByRole("button", { name: "Open thread RELATED query deranking issue" })).toHaveLength(2);
+    }
     rerender(
       <ThreadLinkProvider onShowThread={onShowThread} threads={[]}>
         {chip("Fix CI install hangs")}

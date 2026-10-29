@@ -30,6 +30,8 @@ export type ResolvedThreadLink = {
   messageId?: string;
   threadId: string;
   title: string;
+  /** This exact title came from an owner-backed snapshot, rather than a fallback label. */
+  titleOrigin?: "owner";
   titleSource?: AppServerThreadTitleSource;
   gitBranch?: string;
   linkedDirectories?: LinkedDirectorySummary[];
@@ -246,7 +248,8 @@ class ThreadLinkMetadataStore {
     const key = threadLinkKey(fallback);
     // An owner-backed surface can supply a newer title while this thread is
     // off-page. Retained navigation metadata must not freeze that label.
-    if (!this.admittedKeys.has(key) && !fallback.inThreadList && fallback.title.trim()) {
+    if (fallback.titleOrigin === "owner"
+      && !this.admittedKeys.has(key) && !fallback.inThreadList && fallback.title.trim()) {
       return fallback;
     }
     return this.links.get(key) ?? fallback;
