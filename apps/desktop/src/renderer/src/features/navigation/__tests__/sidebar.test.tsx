@@ -10673,60 +10673,55 @@ describe("Sidebar thread shortcuts", () => {
     }
   });
 
+  // Binds Mark Unread / Read to the macOS default and renders a focused reply
+  // field. jsdom has no platform, so ProseMirror's Mod is Ctrl here; the
+  // chord pressed with Ctrl meets the same Underline keymap ⌘ does on macOS.
+  async function withMarkReadInComposer(
+    sidebarProps: Partial<ComponentProps<typeof Sidebar>>,
+    run: (field: HTMLElement) => Promise<void> | void,
+  ): Promise<void> {
+    const { _resetKeybindingsStoreForTests } = await import("../../../lib/keybindings-store");
+    _resetKeybindingsStoreForTests({
+      overrides: { "threads.toggle_unread": ["CmdOrCtrl+Shift+U"] },
+      filePath: "/tmp/keybindings.toml",
+    });
+    try {
+      renderShortcutSidebar(sidebarProps);
+      render(<form className="composer">
+        <ComposerTiptapInput id="reply" label="Reply" value="Draft" skillTokens={[]}
+          placeholder="Ask anything" onChange={() => undefined} />
+      </form>);
+      const field = screen.getByRole("textbox", { name: "Reply" });
+      Object.defineProperty(field, "isContentEditable", { value: true });
+      field.focus();
+      await run(field);
+    } finally {
+      act(() => _resetKeybindingsStoreForTests());
+    }
+  }
+  const markReadChord = { key: "U", code: "KeyU", keyCode: 85, ctrlKey: true, shiftKey: true };
+
   it("marks the open thread read from the composer, where Underline also binds the chord", async () => {
     // Attention keeps an opened thread unread, so Mark Read is pressed with
     // focus in the reply. Tiptap's Underline binds Mod-U, and ProseMirror
     // retries a shifted letter without Shift, so the editor took ⇧⌘U first.
-    // jsdom has no platform, so ProseMirror's Mod is Ctrl here; the macOS
-    // default chord, pressed with Ctrl, meets the same keymap.
-    const { _resetKeybindingsStoreForTests } = await import("../../../lib/keybindings-store");
-    _resetKeybindingsStoreForTests({
-      overrides: { "threads.toggle_unread": ["CmdOrCtrl+Shift+U"] },
-      filePath: "/tmp/keybindings.toml",
+    const onMarkThreadsSeen = vi.fn(async () => undefined);
+    await withMarkReadInComposer({ browseMode: "attention", onMarkThreadsSeen }, async (field) => {
+      await pressAndSettle(field, markReadChord);
     });
-    try {
-      const onMarkThreadsSeen = vi.fn(async () => undefined);
-      renderShortcutSidebar({ browseMode: "attention", onMarkThreadsSeen });
-      render(<form className="composer">
-        <ComposerTiptapInput id="reply" label="Reply" value="Draft" skillTokens={[]}
-          placeholder="Ask anything" onChange={() => undefined} />
-      </form>);
-      const field = screen.getByRole("textbox", { name: "Reply" });
-      Object.defineProperty(field, "isContentEditable", { value: true });
-      field.focus();
-      await pressAndSettle(field, { key: "U", code: "KeyU", keyCode: 85, ctrlKey: true, shiftKey: true });
-      expect(onMarkThreadsSeen).toHaveBeenCalledTimes(1);
-      expect(onMarkThreadsSeen).toHaveBeenCalledWith([sharedThread]);
-    } finally {
-      act(() => _resetKeybindingsStoreForTests());
-    }
+    expect(onMarkThreadsSeen).toHaveBeenCalledTimes(1);
+    expect(onMarkThreadsSeen).toHaveBeenCalledWith([sharedThread]);
   });
 
   it("leaves the editor its chord when there is no thread to act on", async () => {
-    const { _resetKeybindingsStoreForTests } = await import("../../../lib/keybindings-store");
-    _resetKeybindingsStoreForTests({
-      overrides: { "threads.toggle_unread": ["CmdOrCtrl+Shift+U"] },
-      filePath: "/tmp/keybindings.toml",
-    });
-    try {
-      const onMarkThreadsSeen = vi.fn(async () => undefined);
-      renderShortcutSidebar({ selectedItemKey: undefined, onMarkThreadsSeen });
-      render(<form className="composer">
-        <ComposerTiptapInput id="reply" label="Reply" value="Draft" skillTokens={[]}
-          placeholder="Ask anything" onChange={() => undefined} />
-      </form>);
-      const field = screen.getByRole("textbox", { name: "Reply" });
-      Object.defineProperty(field, "isContentEditable", { value: true });
-      field.focus();
-      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true,
-        key: "U", code: "KeyU", keyCode: 85, ctrlKey: true, shiftKey: true });
+    const onMarkThreadsSeen = vi.fn(async () => undefined);
+    await withMarkReadInComposer({ selectedItemKey: undefined, onMarkThreadsSeen }, (field) => {
+      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...markReadChord });
       act(() => { field.dispatchEvent(event); });
-      expect(onMarkThreadsSeen).not.toHaveBeenCalled();
       // Unhandled, the chord stays with editing: Underline still claims it.
       expect(event.defaultPrevented).toBe(true);
-    } finally {
-      act(() => _resetKeybindingsStoreForTests());
-    }
+    });
+    expect(onMarkThreadsSeen).not.toHaveBeenCalled();
   });
 
   it("marks the focused unread row read in Attention", async () => {
