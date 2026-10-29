@@ -9087,6 +9087,36 @@ describe("Sidebar directory pinning", () => {
     ], { key: pinnedB.key, anchorKey: pinnedA.key, placement: "before" });
   });
 
+  it("drops a folder drop's release-click suppression when the list unmounts", async () => {
+    const pinnedA: NavigationDirectorySummary = { ...projectADirectory, pinnedRank: "1024" };
+    const pinnedB: NavigationDirectorySummary = { ...projectBDirectory, pinnedRank: "2048" };
+    renderSidebar([pinnedA, pinnedB], {
+      onSetDirectoryPin: async () => undefined,
+      onReorderDirectoryPins: async () => undefined,
+    });
+    layoutDirectoryHeaders([[/ProjectA/i, 0], [/ProjectB/i, 30]], 60);
+    const list = document.querySelector<HTMLElement>(".directory-list")!;
+
+    startThreadPinPointerDrag(directoryHeader(/ProjectB/i), { x: 50, y: 40 });
+    moveThreadPinPointer({ x: 50, y: 5 });
+    await waitFor(() => expect(getDirectorySummary(/ProjectA/i).closest(".directory-row"))
+      .toHaveClass("is-drop-target-before"));
+    // Fake only the release timer, so it cannot expire before the unmount.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await act(async () => {
+        releaseThreadPinPointer({ x: 50, y: 5 });
+      });
+      cleanup();
+
+      const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+      list.dispatchEvent(click);
+      expect(click.defaultPrevented).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("folds the lens to project headers while a folder is held, then restores it", async () => {
     const pinnedA: NavigationDirectorySummary = { ...projectADirectory, pinnedRank: "1024" };
     renderSidebar([pinnedA, projectBDirectory], {
