@@ -639,6 +639,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_mcp_connections",
   "thread_todos",
   "thread_todo_feed",
+  "thread_todo_dispatch_target",
   "operator_questions",
   "operator_requests",
   "thread_display_bulk_reads",

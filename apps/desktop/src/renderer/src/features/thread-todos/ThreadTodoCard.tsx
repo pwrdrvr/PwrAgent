@@ -1,4 +1,4 @@
-import { TodoModelPicker, TodoModelProvenance } from "./TodoModelPicker";
+import { TodoDispatchFacts, useTodoDispatchTarget } from "./TodoDispatchFacts";
 import { todoDispatchPickKey, useTodoDispatchContext } from "./TodoDispatchProvider";
 import {
   useEffect,
@@ -58,6 +58,7 @@ import { TodoSplitButton, type TodoSplitMenuEntry } from "./TodoSplitButton";
 import type {
   ThreadTodoDoHereOptions,
   ThreadTodoInstance,
+  ThreadTodoLocalMachine,
   ThreadTodoProjectMenu,
   ThreadTodoResolveOptions,
   ThreadTodoRunOptions,
@@ -131,6 +132,8 @@ export type ThreadTodoCardProps = ThreadTodoCardHandlers & {
   threadRunning?: boolean;
   mergeMethods?: ThreadTodoMergeMethodPreferences;
   instances?: ThreadTodoInstance[];
+  /** This window's own machine, which a peer's card can start on. */
+  localMachine?: ThreadTodoLocalMachine;
   /** Changes the project the card's action runs in. */
   projectMenu?: ThreadTodoProjectMenu;
   pager?: {
@@ -581,6 +584,13 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     dispatch.pick(todo, settings);
     setLocalPick(settings);
   };
+  const target = useTodoDispatchTarget({
+    todo,
+    ...(props.instances ? { instances: props.instances } : {}),
+    ...(props.localMachine ? { localMachine: props.localMachine } : {}),
+    ownerSelection: selection,
+    pickOwnerModel: pickModel,
+  });
   const [confirmingMerge, setConfirmingMerge] = useState<MergeConfirmation>();
   const [confirmingSteps, setConfirmingSteps] = useState<OpenStepsConfirmation>();
   const confirmCancelRef = useRef<HTMLButtonElement>(null);
@@ -664,10 +674,10 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       (allowOpenItems) => {
         // Freeze the attempted settings too: a failed start's Retry uses them
         // even if another card changes the thread's memory in the meantime.
-        if (!options?.startOnInstanceId) pickModel(selection.settings);
+        if (target.onOwner) pickModel(selection.settings);
         props.onRun(todo, {
+          ...(action?.type === "start_thread" ? target.runOptions() : {}),
           ...options,
-          ...(!options?.startOnInstanceId ? { modelSettings: selection.settings } : {}),
           ...(allowOpenItems ? { allowOpenItems } : {}),
         });
       },
@@ -824,20 +834,6 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
             ),
           });
         }
-        const instances = props.instances ?? [];
-        if (instances.length > 0) {
-          entries.push({
-            kind: "submenu",
-            id: "instances",
-            label: "Start thread on",
-            entries: instances.map((instance) => ({
-              kind: "item",
-              id: instance.instanceId,
-              label: instance.label,
-              onSelect: () => runAction({ startOnInstanceId: instance.instanceId }),
-            })),
-          });
-        }
         if (entries.length > 0) {
           entries.push({ kind: "separator", id: "separator" });
         }
@@ -891,7 +887,8 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
         )}
       />
 
-      {todo.detail || progress || prerequisites.length > 0 || facts.length > 0 || prompt || todo.error ? (
+      {todo.detail || progress || prerequisites.length > 0 || facts.length > 0 || prompt || todo.error
+        || action?.type === "start_thread" ? (
         <div
           id={resting.bodyId}
           className={`thread-todo-card__body${resting.expanded ? " is-expanded" : ""}`}
@@ -937,14 +934,15 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
               />
             </>
           ) : null}
-          {facts.length > 0 ? (
+          {action?.type === "start_thread" ? (
+            <TodoDispatchFacts
+              todo={todo}
+              target={target}
+              {...(action.executionMode ? { access: formatExecutionModeLabel(action.executionMode) } : {})}
+              disabled={props.running}
+            />
+          ) : facts.length > 0 ? (
             <dl className="thread-todo-card__facts">
-              {action?.type === "start_thread" ? (
-                <div className="thread-todo-card__fact thread-todo-card__fact--model">
-                  <dt>Model</dt>
-                  <dd><TodoModelPicker todo={todo} selection={selection} onPick={pickModel} disabled={props.running} /></dd>
-                </div>
-              ) : null}
               {facts.map(([label, value]) => (
                 <div key={label} className="thread-todo-card__fact">
                   <dt>{label}</dt>
@@ -953,7 +951,6 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
               ))}
             </dl>
           ) : null}
-          {action?.type === "start_thread" ? <TodoModelProvenance todo={todo} selection={selection} onPick={pickModel} disabled={props.running} /> : null}
           {prompt ? (
             <div className="thread-todo-card__prompt-block">
               <div
@@ -1284,17 +1281,7 @@ function buildFacts(todo: ThreadTodo): Array<[string, string]> {
   if (action?.type === "merge_pull_request") {
     return [["PR", /^\d+$/.test(action.pullRequest) ? `#${action.pullRequest}` : action.pullRequest]];
   }
-  if (action?.type === "start_thread") {
-    const facts: Array<[string, string]> = [];
-    if (action.executionMode) {
-      facts.push(["Access", formatExecutionModeLabel(action.executionMode)]);
-    }
-    const directory = todo.targetProject
-      ? `${todo.targetProject.label}'s directory`
-      : "This thread's directory";
-    facts.push(["Where", action.workMode === "worktree" ? "New worktree" : directory]);
-    return facts;
-  }
+  // A start-thread card's facts are its dispatch chips (TodoDispatchFacts).
   return [];
 }
 

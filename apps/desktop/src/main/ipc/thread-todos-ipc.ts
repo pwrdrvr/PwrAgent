@@ -21,6 +21,7 @@ import {
   THREAD_TODOS_RUN_ACTION_CHANNEL,
   THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL,
   THREAD_TODOS_SET_PROJECT_CHANNEL,
+  THREAD_TODOS_LIST_DISPATCH_ENVIRONMENTS_CHANNEL,
   THREAD_REVIEWS_LIST_CHANNEL,
   THREAD_REVIEWS_UPDATE_CHANNEL,
 } from "../../shared/ipc";
@@ -155,6 +156,7 @@ export function registerThreadTodoIpcHandlers(options: {
     listTodos: THREAD_TODOS_LIST_CHANNEL, resolveTodo: THREAD_TODOS_RESOLVE_CHANNEL,
     runAction: THREAD_TODOS_RUN_ACTION_CHANNEL, listProjects: THREAD_TODOS_LIST_PROJECTS_CHANNEL,
     setItemChecked: THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL, setProject: THREAD_TODOS_SET_PROJECT_CHANNEL,
+    listDispatchEnvironments: THREAD_TODOS_LIST_DISPATCH_ENVIRONMENTS_CHANNEL,
   } as const;
   // The feed snapshot has its own per-window channel above.
   for (const operation of Object.keys(channels) as Array<keyof typeof channels & ThreadTodoOperation>) {

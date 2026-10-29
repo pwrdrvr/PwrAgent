@@ -402,6 +402,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                           threadRunning={props.threadRunning}
                           mergeMethods={view.mergeMethods}
                           instances={view.instances}
+                          localMachine={view.localMachine}
                           projectMenu={view.projectMenu}
                           onResolve={(target, status, resolution, options) => {
                             setActionError(undefined);

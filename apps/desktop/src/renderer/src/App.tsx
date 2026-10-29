@@ -2665,13 +2665,27 @@ function DesktopAppShell(props: {
     [listThreadTodoProjects, setThreadTodoProject],
   );
   const configuredMergeMethod = props.settings.snapshot?.git?.defaultMergeMethod?.value;
-  // Peers that can host a handoff thread, the same list the new-thread
-  // machine chip offers.
+  // Every machine a handoff card can name: the new-thread machine chip's
+  // peers with their state, the window's owner included so a card it owns
+  // can name it. An offline peer is listed and cannot be picked.
   const todoHandoffInstances = useMemo(
-    () => newThreadFederationTargets
-      .filter((target) => target.availability === "available")
-      .map((target) => ({ instanceId: target.instanceId, label: target.label })),
-    [newThreadFederationTargets],
+    () => federationMachines.map((target) => ({
+      instanceId: target.instanceId,
+      label: target.shortLabel ?? target.label,
+      availability: target.availability,
+      dispatchTarget: liveFederationHealth?.peers.find((peer) => peer.id === target.instanceId)
+        ?.capabilities.includes("thread_todo_dispatch_target") === true,
+    })),
+    [federationMachines, liveFederationHealth],
+  );
+  // A remote viewer window routes every to-do request to the instance it
+  // shows, so it cannot start a card on this machine.
+  const todoLocalMachine = useMemo(
+    () => ({
+      ...(readRendererFederationTarget() ? {} : liveFederationHealth?.instanceId ? { instanceId: liveFederationHealth.instanceId } : {}),
+      label: federationLocalDisplayLabel(liveFederationHealth),
+    }),
+    [liveFederationHealth],
   );
   // A handoff card asking for Full Access passes the same confirmation as
   // every other escalation: the agent proposed the mode, the operator has
@@ -2757,6 +2771,7 @@ function DesktopAppShell(props: {
       runningIds: threadTodoController.runningIds,
       mergeMethods,
       instances: todoHandoffInstances,
+      localMachine: todoLocalMachine,
       ...(todoProjectMenu ? { projectMenu: todoProjectMenu } : {}),
       threadTitle: (todo) =>
         localThreadTitles.get(threadTodoThreadKey(todo))
@@ -2832,6 +2847,7 @@ function DesktopAppShell(props: {
     threadTodoController,
     todoProjectMenu,
     todoHandoffInstances,
+    todoLocalMachine,
     waitThreadTitle,
   ]);
   // Fetch the boot info once at mount. Stable for the renderer's
@@ -4110,7 +4126,12 @@ function DesktopAppShell(props: {
   return (
     <FederationDisplayLabelsProvider health={liveFederationHealth}>
     <ThreadTodoCountsContext.Provider value={threadTodoController.openByThreadKey}>
-    <TodoDispatchProvider api={desktopApi} backends={backendSummaries.backends} todos={threadTodoController.openTodos}>
+    <TodoDispatchProvider
+      api={desktopApi}
+      backends={backendSummaries.backends}
+      todos={threadTodoController.openTodos}
+      localCodexFastAllowed={props.settings.snapshot?.models?.codex.allowFast?.value ?? true}
+    >
     <OperatorWaitsContext.Provider value={operatorWaitsContext}>
     <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
     <ThreadProvidersContext.Provider value={threadProviders}>

@@ -13,6 +13,7 @@ import {
 import { copyTextWithHtml } from "../../../lib/copy-text";
 import { ThreadMetaChips } from "../../navigation/ThreadMetaChips";
 import { ThreadTodoStack } from "../ThreadTodoStack";
+import { TodoDispatchProvider } from "../TodoDispatchProvider";
 import { ThreadTodosPanel } from "../ThreadTodosPanel";
 import { ThreadTodoCountsContext } from "../useThreadTodos";
 import { unwrapNavigationRead } from "../../../../../shared/navigation-ipc-result";
@@ -384,31 +385,38 @@ describe("ThreadTodoStack", () => {
     const handoff = todo({
       id: "h2",
       kind: "handoff",
+      sourceProject: AGENT,
       action: { type: "start_thread", prompt: "Build it" },
     });
     const view = createView([handoff], {
       instances: [{ instanceId: "peer-1", label: "Studio Mac" }],
     });
     const onDoHere = vi.fn(async () => true);
+    // The app keeps a card's dispatch choices in this window's provider.
     render(
-      <ThreadTodoStack
-        threadKey="codex:thread-a"
-        todos={[handoff]}
-        view={view}
-        onStartReview={vi.fn()}
-        onDoHere={onDoHere}
-      />,
+      <TodoDispatchProvider backends={[]} todos={[handoff]}>
+        <ThreadTodoStack
+          threadKey="codex:thread-a"
+          todos={[handoff]}
+          view={view}
+          onStartReview={vi.fn()}
+          onDoHere={onDoHere}
+        />
+      </TodoDispatchProvider>,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Do it here" }));
     expect(onDoHere).toHaveBeenCalledWith(handoff, undefined);
 
+    // The peer is the card's Machine now, not a submenu of the split.
     fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Start thread on" }));
-    expect(screen.getByRole("menu", { name: "Start thread on" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Studio Mac" }));
-    expect(view.run).toHaveBeenCalledWith(handoff, { startOnInstanceId: "peer-1" });
+    expect(screen.queryByRole("menuitem", { name: "Start thread on" })).toBeNull();
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Machine for the new thread: This machine" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Studio Mac" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    expect(view.run).toHaveBeenCalledWith(handoff, { startOnInstanceId: "peer-1", workMode: "local" });
 
     fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
     await act(async () => {

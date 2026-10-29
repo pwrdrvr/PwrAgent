@@ -8353,6 +8353,8 @@ export type HandoffSourceSettings = {
   reasoningEffort?: string;
   serviceTier?: string;
   fastMode?: boolean;
+  /** The thread's environment, when it runs one locally. */
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
 };
 
 /** See `DesktopBackendRegistry.setAgentThreadActions`. */
@@ -11852,6 +11854,10 @@ export class DesktopBackendRegistry {
         : {}),
       ...(overlay?.serviceTier ? { serviceTier: overlay.serviceTier } : {}),
       ...(overlay?.fastMode !== undefined ? { fastMode: overlay.fastMode } : {}),
+      ...(overlay?.codexEnvironmentRuntime?.environmentId
+        && overlay.codexEnvironmentRuntime.executionTarget === "local"
+        ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
+        : {}),
     };
   }
 

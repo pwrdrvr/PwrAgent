@@ -19,6 +19,8 @@ export const FEDERATION_THREAD_TODO_METHODS = {
   listTodos: "threadTodos.list", listReviews: "threadReviews.list", updateReview: "threadReviews.update",
   resolveTodo: "threadTodos.resolve", runAction: "threadTodos.runAction", listProjects: "threadTodos.listProjects",
   setItemChecked: "threadTodos.setItemChecked", setProject: "threadTodos.setProject",
+  // Older owners do not answer it; the card then cannot list environments there.
+  listDispatchEnvironments: "threadTodos.listDispatchEnvironments",
   // Needs `thread_todo_feed` on the owner; viewers fall back to `threadTodos.list`.
   snapshotFeed: "threadTodos.snapshot",
 } as const;
@@ -27,6 +29,7 @@ export const FEDERATION_THREAD_TODO_CAPABILITIES: Record<string, FederationCapab
   [FEDERATION_THREAD_TODO_METHODS.listTodos]: "thread_detail",
   [FEDERATION_THREAD_TODO_METHODS.listReviews]: "thread_detail",
   [FEDERATION_THREAD_TODO_METHODS.listProjects]: "thread_detail",
+  [FEDERATION_THREAD_TODO_METHODS.listDispatchEnvironments]: "thread_detail",
   [FEDERATION_THREAD_TODO_METHODS.snapshotFeed]: "thread_detail",
   [FEDERATION_THREAD_TODO_METHODS.updateReview]: "turn_control",
   [FEDERATION_THREAD_TODO_METHODS.resolveTodo]: "turn_control",

@@ -21,6 +21,9 @@ function operations() {
     setItemChecked: vi.fn((_request?: unknown) => ({ todo: card })),
     setProject: vi.fn(async (_request?: unknown) => ({ todo: card })),
     snapshotFeed: vi.fn(async (_request?: unknown) => ({ epoch: "owner", revision: 0, todos: [card] })),
+    listDispatchEnvironments: vi.fn(async (_request?: unknown) => ({
+      projectFound: true, environments: [], defaultSource: "none" as const,
+    })),
   };
 }
 
