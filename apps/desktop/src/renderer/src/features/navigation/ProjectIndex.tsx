@@ -79,6 +79,10 @@ export function ProjectIndex(props: {
   const [spy, setSpy] = useState<ProjectSpy>(NO_PROJECT_SPY);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
   const pointerInside = useRef(false);
+  // The last project jumped to. One near the end of the list cannot scroll
+  // to the top, so while the list rests at its end with that project on
+  // screen, it is the current one. The operator's own scrolling ends it.
+  const jumpedKey = useRef<string | null>(null);
   const typed = useRef<{ query: string; at: number }>({ query: "", at: 0 });
 
   // ---- Width: natural until dragged ----
@@ -169,7 +173,15 @@ export function ProjectIndex(props: {
     }
     const list = scrollRegionRef.current?.querySelector<HTMLElement>(".directory-list");
     if (!list) return;
-    const next = spyProjects(measureBlocks(list), list.clientHeight);
+    let next = spyProjects(measureBlocks(list), list.clientHeight);
+    const jumped = jumpedKey.current;
+    if (
+      jumped !== null
+      && next.inView.includes(jumped)
+      && list.scrollTop + list.clientHeight >= list.scrollHeight - 1
+    ) {
+      next = { ...next, current: jumped };
+    }
     setSpy((prev) => (sameProjectSpy(prev, next) ? prev : next));
   }, [scrollRegionRef, spyEnabled]);
 
@@ -189,6 +201,13 @@ export function ProjectIndex(props: {
       });
     };
     region.addEventListener("scroll", schedule, { capture: true, passive: true });
+    const endJump = (): void => {
+      jumpedKey.current = null;
+    };
+    const userScrolls = ["wheel", "touchmove", "keydown", "pointerdown"] as const;
+    for (const type of userScrolls) {
+      region.addEventListener(type, endJump, { capture: true, passive: true });
+    }
     const resize = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
     resize?.observe(region);
     const list = region.querySelector(".directory-list");
@@ -199,6 +218,9 @@ export function ProjectIndex(props: {
     return () => {
       window.cancelAnimationFrame(frame);
       region.removeEventListener("scroll", schedule, { capture: true });
+      for (const type of userScrolls) {
+        region.removeEventListener(type, endJump, { capture: true });
+      }
       resize?.disconnect();
     };
   }, [measure, scrollRegionRef, spyEnabled, keysKey]);
@@ -324,6 +346,7 @@ export function ProjectIndex(props: {
                       : undefined}
                   onClick={() => {
                     tooltip.hide();
+                    jumpedKey.current = project.key;
                     props.onJump(project.key);
                   }}
                   onMouseEnter={(event) => showIfCut(event.currentTarget)}
