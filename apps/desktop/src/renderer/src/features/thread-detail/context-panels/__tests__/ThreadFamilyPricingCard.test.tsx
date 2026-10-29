@@ -155,7 +155,9 @@ describe("ThreadFamilyPricingCard", () => {
 
   it("keeps the owner on refresh and child navigation", async () => {
     const onShowThread = vi.fn();
-    const readThreadFamilyPricing = vi.fn(async (_request: ReadThreadFamilyPricingRequest) => family);
+    // Main stamps every member of a remote family with the owner that keeps it.
+    const owned = { ...family, members: family.members.map((entry) => ({ ...entry, ownerInstanceId: "owner" })) };
+    const readThreadFamilyPricing = vi.fn(async (_request: ReadThreadFamilyPricingRequest) => owned);
     render(
       <ThreadLinkProvider onShowThread={onShowThread} threads={[]}>
         <ThreadFamilyPricingCard desktopApi={{ readThreadFamilyPricing }} backend="codex" threadId="parent"
@@ -168,6 +170,93 @@ describe("ThreadFamilyPricingCard", () => {
     await waitFor(() => expect(readThreadFamilyPricing).toHaveBeenCalledTimes(2));
     for (const [request] of readThreadFamilyPricing.mock.calls) {
       expect(request).toEqual({ backend: "codex", threadId: "parent", federationTarget: { scope: "remote", instanceId: "owner" } });
+    }
+  });
+
+  it("counts sub-threads on other machines and names the machine on each row", async () => {
+    const onShowThread = vi.fn();
+    const spread: ReadThreadFamilyPricingResponse = {
+      readAt: family.readAt,
+      members: [
+        member("parent", 14_160_000, { self: true, title: "Restore runner Xcode 26 readiness" }),
+        member("m5", 3_200_000, { backend: "claude", title: "Xcode 26 actool runner readiness",
+          ownerInstanceId: "pwr_m5", instanceLabel: "M5 Max / default", active: true }),
+        member("pin", 1_480_000, { title: "Pin gh in macOS runner readiness" }),
+        member("m2", 900_000, { title: "Investigate Xcode 26 readiness on M2",
+          ownerInstanceId: "pwr_m2", instanceLabel: "M2 Max / default" }),
+      ],
+    };
+    render(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={[]}>
+        <ThreadFamilyPricingCard desktopApi={{ readThreadFamilyPricing: async () => spread }} backend="codex" threadId="parent" subThreadCount={3} />
+      </ThreadLinkProvider>,
+    );
+
+    expect(await screen.findByText("$19.74")).toBeInTheDocument();
+    expect(screen.getByText("sub-threads $5.58")).toBeInTheDocument();
+    const m5 = screen.getByRole("button", { name: /Xcode 26 actool runner readiness/ });
+    expect(m5).toHaveTextContent("M5 Max / default");
+    expect(m5).toHaveAttribute("title", "Open Xcode 26 actool runner readiness on M5 Max / default");
+    // A row on this thread's own machine needs no machine name.
+    expect(screen.getByRole("button", { name: /Pin gh in macOS runner readiness/ }).querySelector(".thread-family-pricing__machine")).toBeNull();
+    expect(screen.getByText("1 thread running")).toBeInTheDocument();
+
+    fireEvent.click(m5);
+    expect(onShowThread).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "claude", threadId: "m5", instanceId: "pwr_m5", instanceLabel: "M5 Max / default",
+    }));
+  });
+
+  it("lists a sub-thread on an unreachable machine without counting it", async () => {
+    const partial: ReadThreadFamilyPricingResponse = {
+      readAt: family.readAt,
+      members: [
+        member("parent", 1_840_000, { self: true }),
+        member("csv", 920_000),
+        member("m2", 0, { title: "Load test", ownerInstanceId: "pwr_m2", instanceLabel: "M2 Max", unavailable: true,
+          usageLineCount: 0 }),
+      ],
+    };
+    render(
+      <ThreadLinkProvider onShowThread={vi.fn()} threads={[]}>
+        <ThreadFamilyPricingCard desktopApi={{ readThreadFamilyPricing: async () => partial }} backend="codex" threadId="parent" subThreadCount={2} />
+      </ThreadLinkProvider>,
+    );
+
+    // The total is a floor while a machine is missing.
+    expect(await screen.findByText("$2.76+")).toBeInTheDocument();
+    expect(screen.getByText("1 sub-thread on M2 Max could not be reached")).toBeInTheDocument();
+    const row = screen.getByText("Load test").closest(".thread-family-pricing__row");
+    expect(row).toHaveClass("thread-family-pricing__row--off");
+    expect(row).toHaveTextContent("Load testM2 Maxnot included");
+    expect(screen.queryByRole("button", { name: /Load test/ })).toBeNull();
+    expect(document.querySelectorAll(".thread-family-pricing__segment")).toHaveLength(2);
+  });
+
+  it("names this machine on a remote thread's family and does not link it from a remote window", async () => {
+    (window as typeof window & { __pwragentFederationTarget?: unknown }).__pwragentFederationTarget = { scope: "remote", instanceId: "owner" };
+    try {
+      const remote: ReadThreadFamilyPricingResponse = {
+        readAt: family.readAt,
+        members: [
+          member("parent", 1_000_000, { self: true, ownerInstanceId: "owner" }),
+          member("sibling", 500_000, { title: "On the owner", ownerInstanceId: "owner" }),
+          member("here", 250_000, { title: "Handed back here" }),
+        ],
+      };
+      render(
+        <ThreadLinkProvider onShowThread={vi.fn()} threads={[]}>
+          <ThreadFamilyPricingCard desktopApi={{ readThreadFamilyPricing: async () => remote }} backend="codex" threadId="parent"
+            federationTarget={{ scope: "remote", instanceId: "owner" }} subThreadCount={2} />
+        </ThreadLinkProvider>,
+      );
+      expect(await screen.findByText("$1.75")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /On the owner/ })).not.toHaveTextContent("This machine");
+      const here = screen.getByText("Handed back here").closest(".thread-family-pricing__row");
+      expect(here).toHaveTextContent("Handed back hereThis machine$0.25");
+      expect(here?.tagName).toBe("DIV");
+    } finally {
+      delete (window as typeof window & { __pwragentFederationTarget?: unknown }).__pwragentFederationTarget;
     }
   });
 });

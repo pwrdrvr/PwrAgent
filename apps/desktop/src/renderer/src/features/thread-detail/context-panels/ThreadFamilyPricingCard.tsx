@@ -7,6 +7,8 @@ import {
 } from "@pwragent/shared";
 import { memo, useEffect, useState } from "react";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { useFederationInstanceNameLookup } from "../../../lib/federation-display-label";
+import { readRendererFederationTarget } from "../../../lib/federation-window";
 import { useThreadLinks } from "../../../lib/thread-links";
 
 type ThreadFamilyPricingCardProps = {
@@ -28,7 +30,10 @@ type FamilyRead =
 
 /**
  * What a thread and every sub-thread under it cost, from each thread's stored
- * running total. It is read when the Pricing tab opens, when the sub-thread
+ * running total. Sub-threads on other machines count too: main asks each
+ * owner for its own threads' totals. A row names its machine when that
+ * differs from this thread's, and a machine that cannot be reached leaves
+ * its rows listed but out of the total. It is read when the Pricing tab opens, when the sub-thread
  * count changes, and on Refresh, never per streamed event: a running
  * sub-thread keeps spending after the read, and the card says so rather than
  * re-reading underneath the operator.
@@ -43,6 +48,7 @@ export const ThreadFamilyPricingCard = memo(function ThreadFamilyPricingCard(pro
   const [refreshes, setRefreshes] = useState(0);
   const [expanded, setExpanded] = useState(false);
   const threadLinks = useThreadLinks();
+  const instanceNames = useFederationInstanceNameLookup();
   const ownerInstanceId = props.federationTarget?.instanceId;
 
   useEffect(() => {
@@ -99,6 +105,15 @@ export const ThreadFamilyPricingCard = memo(function ThreadFamilyPricingCard(pro
   const subThreadMicros = totalMicros - self.totalCostMicros;
   const unpriced = members.filter((member) => member.unpricedUsageLineCount > 0);
   const unpricedRows = unpriced.reduce((sum, member) => sum + member.unpricedUsageLineCount, 0);
+  const unreachable = members.filter((member) => member.unavailable);
+  // Either gap makes the total a floor, not the whole bill.
+  const partial = unpricedRows > 0 || unreachable.length > 0;
+  const machineName = (member: ThreadFamilyPricingMember): string | undefined => member.ownerInstanceId
+    ? instanceNames(member.ownerInstanceId, member.instanceLabel ?? "Another machine").label
+    : "This machine";
+  // Rows on this thread's own machine go unlabeled.
+  const machineLabel = (member: ThreadFamilyPricingMember): string | undefined =>
+    member.ownerInstanceId === self.ownerInstanceId ? undefined : machineName(member);
   const running = members.filter((member) => member.active).length;
   const named = subThreads.slice(0, NAMED_SUB_THREADS);
   const folded = subThreads.slice(NAMED_SUB_THREADS);
@@ -106,14 +121,20 @@ export const ThreadFamilyPricingCard = memo(function ThreadFamilyPricingCard(pro
   const listed = expanded ? subThreads : named;
   const share = (micros: number) => (totalMicros > 0 ? micros / totalMicros : 0);
 
+  // A window bound to another instance shows only that instance's threads,
+  // so a thread on this machine cannot open there.
+  const windowOwner = readRendererFederationTarget()?.instanceId;
   const openThread = threadLinks
     ? (member: ThreadFamilyPricingMember) => threadLinks.show({
         backend: member.backend,
         threadId: member.threadId,
         title: member.title,
-        ...(ownerInstanceId ? { instanceId: ownerInstanceId } : {}),
+        ...(member.ownerInstanceId ? { instanceId: member.ownerInstanceId } : {}),
+        ...(member.ownerInstanceId && member.instanceLabel ? { instanceLabel: member.instanceLabel } : {}),
       })
     : undefined;
+  const opener = (member: ThreadFamilyPricingMember) =>
+    member.unavailable || (windowOwner && !member.ownerInstanceId) ? undefined : openThread;
 
   return (
     <div className="rail-summary-card thread-family-pricing">
@@ -122,7 +143,9 @@ export const ThreadFamilyPricingCard = memo(function ThreadFamilyPricingCard(pro
         <span className="rail-summary-card__meta">as of {formatReadTime(result.family.readAt)}</span>
       </div>
       <div className="rail-summary-card__headline">
-        <span className="rail-summary-card__primary">{formatTokenUsageMicrosAsUsd(totalMicros)}</span>
+        <span className="rail-summary-card__primary">
+          {formatTokenUsageMicrosAsUsd(totalMicros)}{partial ? "+" : ""}
+        </span>
         <span className="rail-summary-card__secondary">
           sub-threads {formatTokenUsageMicrosAsUsd(subThreadMicros)}
         </span>
@@ -135,7 +158,7 @@ export const ThreadFamilyPricingCard = memo(function ThreadFamilyPricingCard(pro
         >
           {members.map((member, index) => member.totalCostMicros > 0 ? (
             <i
-              key={`${member.backend}:${member.threadId}`}
+              key={`${member.ownerInstanceId ?? ""}:${member.backend}:${member.threadId}`}
               className={`thread-family-pricing__segment ${swatchClass(index)}`}
               style={{ flexGrow: member.totalCostMicros }}
             />
@@ -148,15 +171,19 @@ export const ThreadFamilyPricingCard = memo(function ThreadFamilyPricingCard(pro
           thread{unpriced.length === 1 ? "" : "s"} could not be priced
         </div>
       ) : null}
+      {unreachable.length > 0 ? (
+        <div className="thread-family-pricing__warning">{unreachableWarning(unreachable.map(machineName))}</div>
+      ) : null}
       <div className="rail-summary-card__section thread-family-pricing__members">
         <FamilyMemberRow member={self} label="This thread" swatch={swatchClass(0)} />
         {listed.map((member) => (
           <FamilyMemberRow
-            key={`${member.backend}:${member.threadId}`}
+            key={`${member.ownerInstanceId ?? ""}:${member.backend}:${member.threadId}`}
             member={member}
             label={member.title}
+            machine={machineLabel(member)}
             swatch={swatchClass(members.indexOf(member))}
-            onOpen={openThread}
+            onOpen={opener(member)}
           />
         ))}
         {folded.length > 0 ? (
@@ -193,30 +220,58 @@ export const ThreadFamilyPricingCard = memo(function ThreadFamilyPricingCard(pro
 function FamilyMemberRow(props: {
   member: ThreadFamilyPricingMember;
   label: string;
+  /** The machine that keeps the thread, when it is not this thread's. */
+  machine?: string;
   swatch: string;
   onOpen?: (member: ThreadFamilyPricingMember) => void;
 }) {
+  const unavailable = Boolean(props.member.unavailable);
   const content = (
     <>
-      <i className={`thread-family-pricing__swatch ${props.swatch}`} aria-hidden="true" />
-      <span className="thread-family-pricing__title">{props.label}</span>
+      <i className={`thread-family-pricing__swatch ${unavailable ? "" : props.swatch}`} aria-hidden="true" />
+      <span className="thread-family-pricing__name">
+        <span className="thread-family-pricing__title">{props.label}</span>
+        {props.machine ? <span className="thread-family-pricing__machine">{props.machine}</span> : null}
+      </span>
       {props.member.active ? <span className="thread-family-pricing__live" role="img" aria-label="Running" /> : null}
-      <span className="thread-family-pricing__cost">{formatTokenUsageMicrosAsUsd(props.member.totalCostMicros)}</span>
+      <span className="thread-family-pricing__cost">
+        {unavailable ? "not included" : formatTokenUsageMicrosAsUsd(props.member.totalCostMicros)}
+      </span>
     </>
   );
+  const name = props.machine ? `${props.label} on ${props.machine}` : props.label;
   if (!props.onOpen) {
-    return <div className={`thread-family-pricing__row${props.member.self ? " thread-family-pricing__row--self" : ""}`}>{content}</div>;
+    const modifier = props.member.self ? " thread-family-pricing__row--self"
+      : unavailable ? " thread-family-pricing__row--off" : "";
+    return (
+      <div
+        className={`thread-family-pricing__row${modifier}`}
+        {...(unavailable ? { title: `${name} could not be reached` } : {})}
+      >
+        {content}
+      </div>
+    );
   }
   return (
     <button
       className="thread-family-pricing__row thread-family-pricing__row--link"
       type="button"
-      title={`Open ${props.label}`}
+      title={`Open ${name}`}
       onClick={() => props.onOpen?.(props.member)}
     >
       {content}
     </button>
   );
+}
+
+/** "1 sub-thread on M2 Max could not be reached", naming up to two machines. */
+function unreachableWarning(machines: Array<string | undefined>): string {
+  const names = [...new Set(machines.filter((name): name is string => Boolean(name)))];
+  const count = machines.length;
+  const where = names.length === 0 ? ""
+    : names.length <= 2 ? ` on ${names.join(" and ")}`
+    : ` on ${names.length.toLocaleString()} machines`;
+  return `${count.toLocaleString()} sub-thread${count === 1 ? "" : "s"}${where} could not be reached`;
 }
 
 /** The thread itself takes the accent; the four costliest sub-threads take the chart series. */

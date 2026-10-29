@@ -37050,6 +37050,45 @@ div.composer-error-row__toggle {
   text-overflow: ellipsis;
 }
 
+/* Title and machine share the row's flexible column. A long title gives way
+   before the machine name, which is what tells two same-named rows apart. */
+.thread-family-pricing__name {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.thread-family-pricing__machine {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* A sub-thread whose machine could not be reached: listed, not counted. */
+.thread-family-pricing__row--off {
+  color: var(--text-muted);
+}
+
+.thread-family-pricing__row--off .thread-family-pricing__swatch {
+  box-sizing: border-box;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+}
+
+.thread-family-pricing__row--off .thread-family-pricing__cost {
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+}
+
 .thread-family-pricing__fold-label {
   grid-column: 2 / 4;
   font-family: var(--font-mono);
