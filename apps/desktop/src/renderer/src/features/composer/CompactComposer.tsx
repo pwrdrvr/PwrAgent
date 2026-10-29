@@ -1,4 +1,4 @@
-import { CODEX_SPEED_LABELS, type CodexSpeed } from "@pwragent/shared";
+import { CODEX_SPEED_LABELS, mayContainLinearPastedImages, type CodexSpeed } from "@pwragent/shared";
 import {
   useCallback,
   useEffect,
@@ -43,6 +43,12 @@ import {
   type ComposerMentionSources,
 } from "./useComposerMentions";
 import { isSteerShortcut, useQueueSteerTooltip } from "./steer-shortcut";
+import {
+  hasLinearPastedImages,
+  readLinearPastedImagesResponse,
+  requestLinearPastedImages,
+  type FetchLinearPastedImages,
+} from "./linear-pasted-images";
 import type { ComposerDraftStore } from "./useComposerDraftStore";
 
 export type CompactComposerAction = {
@@ -121,6 +127,11 @@ export type CompactComposerProps = {
   executionMode?: ThreadExecutionMode;
   /** Thread's current fast-mode state, shown on the chip menu's toggle. */
   fastMode?: boolean;
+  /**
+   * Downloads the images in text pasted from Linear. Without it, such a
+   * paste stays plain text.
+   */
+  fetchLinearPastedImages?: FetchLinearPastedImages;
   /**
    * Whether the active model/runtime accepts image input. `undefined` keeps
    * the backward-compatible assumption that images are supported; only an
@@ -261,6 +272,17 @@ export function CompactComposer(props: CompactComposerProps) {
   latestMentionSnapshotRef.current = mentions.snapshot;
   latestImageAttachmentsRef.current = imageAttachments;
   latestFileAttachmentsRef.current = fileAttachments;
+  // A Linear download outlives the render that started it; the result
+  // belongs only to the thread it was pasted into.
+  const draftScopeKeyRef = useRef(props.draftScopeKey);
+  draftScopeKeyRef.current = props.draftScopeKey;
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   // Click-away and Escape close the menu, same hook as the composer
   // dropdowns. Without it the menu survives a click on the transcript
   // behind it and covers the conversation.
@@ -608,13 +630,50 @@ export function CompactComposer(props: CompactComposerProps) {
     [attachImages, attachLocalFiles, onAttachmentError],
   );
 
+  // Read at the end of a download, which a re-render may have outlived.
+  const attachImagesRef = useRef(attachImages);
+  attachImagesRef.current = attachImages;
+  const fetchLinearPastedImages = props.fetchLinearPastedImages;
+  const attachLinearPastedImages = useCallback(
+    async (text: string): Promise<void> => {
+      if (!fetchLinearPastedImages || !imagesSupported || !hasLinearPastedImages(text)) {
+        return;
+      }
+      const scopeKey = draftScopeKeyRef.current;
+      // Hold Send while they download, as a pasted screenshot does while it
+      // resizes; `attachImages` takes over the hold before this releases it.
+      setNormalizingImageBatches((current) => current + 1);
+      try {
+        const response = await requestLinearPastedImages(fetchLinearPastedImages, text);
+        if (!mountedRef.current || draftScopeKeyRef.current !== scopeKey) return;
+        const outcome = readLinearPastedImagesResponse(response);
+        if (!outcome) return;
+        if (outcome.notice) {
+          onAttachmentError?.(`${outcome.notice.title}. ${outcome.notice.message}`);
+        }
+        attachImagesRef.current(outcome.files);
+      } finally {
+        if (mountedRef.current) {
+          setNormalizingImageBatches((current) => Math.max(0, current - 1));
+        }
+      }
+    },
+    [fetchLinearPastedImages, imagesSupported, onAttachmentError],
+  );
+
   const onPaste = useCallback(
     (event: ClipboardEvent<HTMLElement>) => {
       if (attachTransferredFiles(event.clipboardData)) {
         event.preventDefault();
+        return;
+      }
+      const text = event.clipboardData.getData("text/plain");
+      if (mayContainLinearPastedImages(text)) {
+        // The text pastes as usual; its images follow once they download.
+        void attachLinearPastedImages(text);
       }
     },
-    [attachTransferredFiles],
+    [attachLinearPastedImages, attachTransferredFiles],
   );
 
   const onDragOver = useCallback((event: DragEvent<HTMLElement>) => {

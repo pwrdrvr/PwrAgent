@@ -1,7 +1,13 @@
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
 import { codexProviderIdOfModel, formatModelOptionLabel } from "@pwragent/shared";
+import { mayContainLinearPastedImages } from "@pwragent/shared";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
+import {
+  hasLinearPastedImages,
+  readLinearPastedImagesResponse,
+  requestLinearPastedImages,
+} from "./linear-pasted-images";
 import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-update-diagnostics";
 import {
   EXPLICIT_REVIEW_PULL_REQUEST_URL,
@@ -10106,6 +10112,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       applyThreadReference(pastedThread);
       return;
     }
+    if (mayContainLinearPastedImages(pastedText)) {
+      // The text pastes as usual; its images follow once they download.
+      void attachLinearPastedImages(pastedText);
+    }
 
     const { images: pastedFiles, files: pastedNonImageFiles, readMs } =
       getComposerFilesFromDataTransfer(event.clipboardData);
@@ -10126,6 +10136,38 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
     void attachImages(accepted, readMs);
+  };
+
+  /**
+   * Text copied from Linear names its images by a link that expires five
+   * minutes after the copy. Main fetches a link that is still valid and reads
+   * an expired one through the Linear connection, and the images join the
+   * tray of the composer the text was pasted into. A thread switch before
+   * they arrive drops them.
+   */
+  const attachLinearPastedImages = async (text: string): Promise<void> => {
+    const fetchImages = props.desktopApi?.fetchLinearPastedImages;
+    if (!fetchImages || !imagesSupported || !hasLinearPastedImages(text)) return;
+    const pasteScope = pasteScopeRef.current;
+    // Hold Send while they download, as a pasted screenshot does while it
+    // resizes; otherwise a quick Enter sends the text without them.
+    // `attachImages` takes over the hold synchronously once they arrive.
+    const destination = getLaunchpadComposerDestination(draftStore, pasteScope.key);
+    updatePendingImageBatches(destination, 1);
+    let response: Awaited<ReturnType<typeof fetchImages>>;
+    try {
+      response = await requestLinearPastedImages(fetchImages, text);
+    } finally {
+      updatePendingImageBatches(destination, -1);
+    }
+    if (pasteScopeRef.current.key !== pasteScope.key) return;
+    const outcome = readLinearPastedImagesResponse(response);
+    if (!outcome) return;
+    if (outcome.notice) showComposerNotice(outcome.notice);
+    if (outcome.files.length === 0) return;
+    const accepted = gateImageFilesForAttachment(outcome.files);
+    if (!accepted || accepted.length === 0) return;
+    await attachImages(accepted, outcome.decodeMs);
   };
 
   const handleDragOver = (event: DragEvent<HTMLElement>): void => {

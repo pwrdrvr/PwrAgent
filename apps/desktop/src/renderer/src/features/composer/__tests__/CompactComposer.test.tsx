@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Editor } from "@tiptap/react";
 import type {
+  FetchLinearPastedImagesResponse,
   NavigationDirectorySummary,
   NavigationThreadSummary,
 } from "@pwragent/shared";
@@ -1386,5 +1387,115 @@ describe("CompactComposer markdown", () => {
         ).toBe("$deploy");
       });
     });
+  });
+});
+
+describe("CompactComposer Linear pastes", () => {
+  const LINEAR_TEXT = `<issue identifier="PWR-5"><description>${
+    '<linear-image>{"type":"image","attrs":{"src":"https://uploads.linear.app/o/i/f","alt":"shot.png"}}</linear-image>'
+  }</description></issue>`;
+  const FETCHED: FetchLinearPastedImagesResponse = {
+    status: "fetched",
+    failed: 0,
+    images: [{ name: "shot.png", mimeType: "image/png", dataBase64: btoa("png-bytes") }],
+  };
+
+  beforeEach(() => {
+    vi.mocked(normalizeImageFile).mockImplementation(async (file) =>
+      normalizedImage(file),
+    );
+  });
+
+  it("attaches the images and holds Send while they download", async () => {
+    const download = deferred<FetchLinearPastedImagesResponse>();
+    const fetchLinearPastedImages = vi.fn(() => download.promise);
+    const { onSend } = renderComposer({ fetchLinearPastedImages });
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+
+    pasteMarkdown(input, LINEAR_TEXT);
+    fireEvent.change(input, { target: { value: "Look at this" } });
+    expect(fetchLinearPastedImages).toHaveBeenCalledWith({ text: LINEAR_TEXT });
+    const send = screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+
+    await act(async () => download.resolve(FETCHED));
+    await screen.findByRole("img", { name: "shot.png" });
+    await waitFor(() => expect(send.disabled).toBe(false));
+    await act(async () => {
+      fireEvent.click(send);
+    });
+    expect(onSend).toHaveBeenCalledWith(
+      "Look at this",
+      [expect.objectContaining({ name: "shot.png" })],
+      [],
+    );
+  });
+
+  it("says why when the links expired and there is no Linear connection", async () => {
+    const onAttachmentError = vi.fn();
+    renderComposer({
+      fetchLinearPastedImages: vi.fn(async () => ({ status: "unavailable" as const })),
+      onAttachmentError,
+    });
+
+    pasteMarkdown(screen.getByRole("textbox", { name: "Message Thread t1" }), LINEAR_TEXT);
+
+    await waitFor(() => {
+      expect(onAttachmentError).toHaveBeenCalledWith(
+        expect.stringMatching(/^Linear images not attached\. Linear image links expire/),
+      );
+    });
+  });
+
+  it("names a partial download and still attaches what arrived", async () => {
+    const onAttachmentError = vi.fn();
+    renderComposer({
+      fetchLinearPastedImages: vi.fn(async () => ({ ...FETCHED, failed: 2 })),
+      onAttachmentError,
+    });
+
+    pasteMarkdown(screen.getByRole("textbox", { name: "Message Thread t1" }), LINEAR_TEXT);
+
+    await screen.findByRole("img", { name: "shot.png" });
+    expect(onAttachmentError).toHaveBeenCalledWith(
+      "Some Linear images not attached. 2 images could not be downloaded from Linear.",
+    );
+  });
+
+  it("drops images that arrive after the composer moved to another thread", async () => {
+    const download = deferred<FetchLinearPastedImagesResponse>();
+    const fetchLinearPastedImages = vi.fn(() => download.promise);
+    const { rerender } = renderComposer({ draftScopeKey: "t1", fetchLinearPastedImages });
+    const normalizedBefore = vi.mocked(normalizeImageFile).mock.calls.length;
+
+    pasteMarkdown(screen.getByRole("textbox", { name: "Message Thread t1" }), LINEAR_TEXT);
+    rerender(
+      <CompactComposer
+        draftScopeKey="t2"
+        fetchLinearPastedImages={fetchLinearPastedImages}
+        onSend={vi.fn()}
+        threadTitle="Thread t1"
+      />,
+    );
+    await act(async () => download.resolve(FETCHED));
+
+    expect(screen.queryByRole("img", { name: "shot.png" })).toBeNull();
+    expect(vi.mocked(normalizeImageFile).mock.calls.length).toBe(normalizedBefore);
+  });
+
+  it("leaves the paste as text when the setting is off or the text names no image", async () => {
+    const onAttachmentError = vi.fn();
+    const fetchLinearPastedImages = vi.fn(async () => ({ status: "disabled" as const }));
+    renderComposer({ fetchLinearPastedImages, onAttachmentError });
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+
+    pasteMarkdown(input, "plain words");
+    expect(fetchLinearPastedImages).not.toHaveBeenCalled();
+    pasteMarkdown(input, LINEAR_TEXT);
+    await waitFor(() => expect(fetchLinearPastedImages).toHaveBeenCalledOnce());
+    const send = screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+    fireEvent.change(input, { target: { value: "hi" } });
+    await waitFor(() => expect(send.disabled).toBe(false));
+    expect(onAttachmentError).not.toHaveBeenCalledWith(expect.any(String));
   });
 });

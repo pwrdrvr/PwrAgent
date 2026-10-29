@@ -178,6 +178,9 @@ import type {
   SetMcpConnectionSelectForNewThreadsRequest,
   SetMcpConnectionToolApprovalRequest,
   SetSandboxerCleanupOnPrCloseRequest,
+  SetLinearPasteImagesRequest,
+  FetchLinearPastedImagesRequest,
+  FetchLinearPastedImagesResponse,
   SetSandboxerTransportRequest,
   ReadThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsRequest,
@@ -930,6 +933,8 @@ import {
   MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
   MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL,
   MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
+  MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL,
+  MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL,
   MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL,
   MCP_CONNECTION_LIST_TOOLS_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
@@ -1329,6 +1334,12 @@ const desktopApi = Object.freeze({
       MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
       request,
     ),
+  setLinearPasteImages: async (request: SetLinearPasteImagesRequest): Promise<void> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL, request),
+  fetchLinearPastedImages: async (
+    request: FetchLinearPastedImagesRequest,
+  ): Promise<FetchLinearPastedImagesResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL, request),
   listMcpConnectionTools: async (
     request: ListMcpConnectionToolsRequest,
   ): Promise<ListMcpConnectionToolsResponse> =>

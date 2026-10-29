@@ -96,6 +96,7 @@ describe("MCP connection IPC", () => {
       };
     }),
     listConnections: vi.fn(async () => [managedConnection]),
+    isLinearPasteImagesEnabled: vi.fn(() => false),
     createConnection: vi.fn(async () => managedConnection),
     authorizeConnection: vi.fn(async () => ({
       ...managedConnection,
@@ -389,7 +390,7 @@ describe("MCP connection IPC", () => {
 
     await expect(
       mocks.handlers.get(MCP_CONNECTION_LIST_CHANNEL)?.(localEvent),
-    ).resolves.toEqual({ connections: [managedConnection] });
+    ).resolves.toEqual({ connections: [managedConnection], linearPasteImages: false });
     await mocks.handlers.get(MCP_CONNECTION_CREATE_CHANNEL)?.(localEvent, {
       displayName: "Datadog",
       serverUrl: "https://mcp.datadoghq.com/mcp",

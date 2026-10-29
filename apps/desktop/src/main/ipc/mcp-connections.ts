@@ -29,6 +29,9 @@ import {
   type SetMcpConnectionSelectForNewThreadsRequest,
   type SetMcpConnectionToolApprovalRequest,
   type SetSandboxerCleanupOnPrCloseRequest,
+  type SetLinearPasteImagesRequest,
+  type FetchLinearPastedImagesRequest,
+  type FetchLinearPastedImagesResponse,
   type SetSandboxerTransportRequest,
   type ReadThreadMcpConnectionsRequest,
   type SetThreadMcpConnectionsRequest,
@@ -64,6 +67,8 @@ import {
   MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL,
   MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
   MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL,
+  MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL,
+  MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL,
   MCP_CONNECTION_LIST_TOOLS_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
   MCP_CONNECTION_READ_THREAD_CHANNEL,
@@ -153,6 +158,7 @@ export function registerMcpConnectionIpcHandlers(
             ? { sandboxerStatusMaxAgeMs: Math.max(maxAge, MIN_SANDBOXER_STATUS_AGE_MS) }
             : {},
         ),
+        linearPasteImages: service.isLinearPasteImagesEnabled(),
       };
     },
   );
@@ -313,6 +319,39 @@ export function registerMcpConnectionIpcHandlers(
       const connection: McpConnectionStatus =
         await service.setSandboxerCleanupOnPrClose(request.enabled);
       return { connectionId: connection.id, connection };
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL,
+    async (event, request: SetLinearPasteImagesRequest): Promise<void> => {
+      requireLocalOwner(event);
+      if (typeof request?.enabled !== "boolean") {
+        throw new Error("Choose whether images pasted from Linear are attached.");
+      }
+      await service.setLinearPasteImages(request.enabled);
+    },
+  );
+  // Any window may ask: the paste is this operator's, and the fetch uses this
+  // machine's Linear sign-in whichever instance the window fronts.
+  ipcMain.removeHandler(MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL,
+    async (
+      _event,
+      request: FetchLinearPastedImagesRequest,
+    ): Promise<FetchLinearPastedImagesResponse> => {
+      if (typeof request?.text !== "string") {
+        throw new Error("Invalid Linear pasted images request.");
+      }
+      // Loaded on the first Linear paste, not at startup.
+      const { fetchLinearPastedImages } = await import(
+        "../mcp-connections/linear-pasted-images"
+      );
+      return await fetchLinearPastedImages(request.text.slice(0, 1_000_000), {
+        connectionIds: service.linearPasteConnectionIds(),
+        openSession: async (params) => await service.openPwrAgentToolSession(params),
+      });
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_LIST_TOOLS_CHANNEL);
@@ -616,6 +655,8 @@ export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_CREATE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_AUTHORIZE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL);
