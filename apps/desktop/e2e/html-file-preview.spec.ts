@@ -1,3 +1,4 @@
+import { createSocket, type Socket } from "node:dgram";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -24,7 +25,66 @@ async function startProbeServer(): Promise<{ server: Server; origin: string; hit
   return { server, origin: `http://127.0.0.1:${port}`, hits };
 }
 
-async function createFixture(probeOrigin: string): Promise<{
+/** A loopback UDP socket that counts STUN packets. WebRTC from the page must send none. */
+async function startStunProbe(): Promise<{ socket: Socket; port: number; packets: () => number }> {
+  let packets = 0;
+  const socket = createSocket("udp4");
+  socket.on("message", () => {
+    packets += 1;
+  });
+  await new Promise<void>((resolve) => socket.bind(0, "127.0.0.1", resolve));
+  return { socket, port: socket.address().port, packets: () => packets };
+}
+
+/**
+ * Run in any window the page makes: report whether that window has WebRTC,
+ * and if it does, send STUN to the probe.
+ */
+function rtcProbeScript(stunPort: number, tag: string, report: string): string {
+  return `(function () {
+  var Peer = window.RTCPeerConnection;
+  ${report}.postMessage({ rtcProbe: ${JSON.stringify(tag)}, rtc: typeof Peer }, "*");
+  if (!Peer) return;
+  var peer = new Peer({ iceServers: [{ urls: "stun:127.0.0.1:${stunPort}" }] });
+  peer.createDataChannel("probe");
+  peer.createOffer().then(function (offer) { return peer.setLocalDescription(offer); });
+})();`;
+}
+
+const inlineScript = (source: string) => `<script>${source}</script>`;
+const htmlAttribute = (value: string) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+const jsString = (value: string) => JSON.stringify(value).replace(/</g, "\\u003c");
+
+/**
+ * Every way the page can get a window of its own: its own, a srcdoc child it
+ * makes, a srcdoc grandchild, a srcdoc frame in its markup, and a frame
+ * navigated to a `javascript:` URL. The last one must never report at all.
+ */
+function rtcProbePage(stunPort: number): string {
+  const probe = (tag: string, report: string) => inlineScript(rtcProbeScript(stunPort, tag, report));
+  const grandchild = `<iframe srcdoc="${htmlAttribute(probe("srcdoc grandchild", "parent.parent"))}"></iframe>`;
+  return `<script>
+window.rtcProbeReports = [];
+addEventListener("message", function (event) {
+  if (event.data && event.data.rtcProbe) {
+    rtcProbeReports.push({ tag: event.data.rtcProbe, rtc: event.data.rtc });
+  }
+});
+${rtcProbeScript(stunPort, "page", "window")}
+var child = document.createElement("iframe");
+child.srcdoc = ${jsString(probe("srcdoc child", "parent"))};
+document.body.appendChild(child);
+var nesting = document.createElement("iframe");
+nesting.srcdoc = ${jsString(grandchild)};
+document.body.appendChild(nesting);
+var scripted = document.createElement("iframe");
+scripted.src = "javascript:" + ${jsString(JSON.stringify(probe("javascript: child", "parent")))};
+document.body.appendChild(scripted);
+</script>
+<iframe srcdoc="${htmlAttribute(probe("markup srcdoc", "parent"))}"></iframe>`;
+}
+
+async function createFixture(probeOrigin: string, stunPort: number): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
   homeRoot: string;
@@ -51,6 +111,7 @@ async function createFixture(probeOrigin: string): Promise<{
 <div style="height: 2000px"></div>
 <p id="end">End</p>
 <script>document.body.setAttribute("data-ran", "yes");</script>
+${rtcProbePage(stunPort)}
 </body></html>`);
   await writeFile(path.join(siteDir, "appendix.html"), "<h1 id=\"appendix\">Appendix</h1>");
 
@@ -108,7 +169,9 @@ async function createFixture(probeOrigin: string): Promise<{
 
 test("previews an HTML file offline, with scripts off until asked, and asks before following links", async () => {
   const probe = await startProbeServer();
-  const fixture = await createFixture(probe.origin);
+  const stun = await startStunProbe();
+  const controlStun = await startStunProbe();
+  const fixture = await createFixture(probe.origin, stun.port);
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
     homeRoot: fixture.homeRoot,
@@ -189,6 +252,33 @@ test("previews an HTML file offline, with scripts off until asked, and asks befo
       localImage: true,
     });
 
+    // WebRTC is gone from every window the page made, nested ones included.
+    // CSP cannot block it, and ICE would carry data out as STUN and DNS.
+    await expect.poll(() => frame.locator("body").evaluate(
+      () => (window as unknown as { rtcProbeReports: unknown[] }).rtcProbeReports.length,
+    )).toBeGreaterThanOrEqual(4);
+    // The app's own window keeps WebRTC (native voice uses it), and its STUN
+    // reaches a probe like this one. The page's attempts started earlier, so
+    // any of them would have landed by the time this one does.
+    const controlRtc = await app.window.evaluate((port) => {
+      const peer = new RTCPeerConnection({ iceServers: [{ urls: `stun:127.0.0.1:${port}` }] });
+      peer.createDataChannel("control");
+      void peer.createOffer().then((offer) => peer.setLocalDescription(offer));
+      return typeof RTCPeerConnection;
+    }, controlStun.port);
+    expect(controlRtc).toBe("function");
+    await expect.poll(() => controlStun.packets()).toBeGreaterThan(0);
+    const rtcReports = await frame.locator("body").evaluate(
+      () => (window as unknown as { rtcProbeReports: { tag: string; rtc: string }[] }).rtcProbeReports,
+    );
+    expect([...rtcReports].sort((a, b) => a.tag.localeCompare(b.tag))).toEqual([
+      { tag: "markup srcdoc", rtc: "undefined" },
+      { tag: "page", rtc: "undefined" },
+      { tag: "srcdoc child", rtc: "undefined" },
+      { tag: "srcdoc grandchild", rtc: "undefined" },
+    ]);
+    expect(stun.packets()).toBe(0);
+
     // A link to another previewable file opens it in the viewer.
     await frame.locator("#next").click();
     await expect(dialog.getByText("Open appendix.html here?")).toBeVisible();
@@ -204,5 +294,7 @@ test("previews an HTML file offline, with scripts off until asked, and asks befo
     await app.close();
     await fixture.cleanup();
     await new Promise<void>((resolve) => probe.server.close(() => resolve()));
+    stun.socket.close();
+    controlStun.socket.close();
   }
 });
