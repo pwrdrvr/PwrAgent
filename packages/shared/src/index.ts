@@ -5,6 +5,7 @@ export * from "./codex-environment-action-runs";
 export * from "./codex-turn-error";
 export * from "./codex-speed";
 export * from "./codex-version";
+export * from "./federation-project-match";
 export * from "./codex-git-action-directives";
 export * from "./codex-async-questions";
 export * from "./contracts/backend";

@@ -1127,6 +1127,8 @@ export type ArchiveWorktreeResponse = {
 export const THREAD_WORKSPACE_HANDOFF_DIRECTIONS = [
   "local-to-worktree",
   "worktree-to-local",
+  /** From a worktree into a new worktree of the same repository. */
+  "worktree-to-worktree",
   "to-project",
 ] as const;
 
@@ -1141,6 +1143,13 @@ export const THREAD_WORKSPACE_HANDOFF_STRATEGIES = [
 
 export type ThreadWorkspaceHandoffStrategy =
   (typeof THREAD_WORKSPACE_HANDOFF_STRATEGIES)[number];
+
+/**
+ * What a viewer hears when the owning instance predates moves into a new
+ * worktree from a worktree or from a base branch. Nothing moved.
+ */
+export const HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE =
+  "The PwrAgent that owns this thread is too old for this move. Update PwrAgent there. Nothing moved.";
 
 export type ThreadWorkspaceHandoffStashSummary = {
   ref?: string;
@@ -1168,6 +1177,12 @@ export type HandoffThreadWorkspaceRequest = {
   sourceBranch?: string;
   leaveLocalBranch?: string;
   newBranchName?: string;
+  /**
+   * For a handoff into a new worktree: start it at this ref (such as
+   * `origin/main`) instead of the current commit. Uncommitted changes stay in
+   * the source, which is left as it is.
+   */
+  baseRef?: string;
 };
 
 export type HandoffThreadWorkspaceResponse = {

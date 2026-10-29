@@ -1398,6 +1398,36 @@ describe("buildBindingStatusIntent", () => {
     expect(overview.fallbackText).toContain("Reply with 1 or 2, Back, Refresh, or Cancel.");
   });
 
+  it("offers a new worktree from a worktree and keeps that direction through confirmation", () => {
+    const binding = buildBinding();
+    const context = {
+      ...buildHandoffContext(),
+      workspaceKind: "worktree" as const,
+      workingDirectoryPath: "/repo/pwragent/.worktrees/feature",
+    };
+    const overview = buildHandoffOverviewIntent({ id: "overview", binding, context, createdAt: 1000 });
+    expect(overview.choices.map((choice) => [choice.id, choice.fallbackText])).toEqual([
+      ["handoff:worktree-to-local", "1"],
+      ["handoff:worktree-to-worktree", "2"],
+      ["handoff:projects", "3"],
+      ...overview.choices.slice(3).map((choice) => [choice.id, choice.fallbackText]),
+    ]);
+    const request = handoffRequestFromValue(
+      overview.choices.find((choice) => choice.id === "handoff:worktree-to-worktree")!.value,
+    )!;
+    expect(request).toMatchObject({ direction: "worktree-to-worktree", strategy: "detached-changes" });
+
+    const confirmation = buildHandoffConfirmationIntent({
+      id: "confirm", binding, context, createdAt: 1000,
+      direction: request.direction, strategy: request.strategy,
+    });
+    expect(confirmation.body).toContain("Confirm moving this thread to a new worktree.");
+    expect(handoffRequestFromValue(confirmation.actions![0]!.value)).toMatchObject({
+      direction: "worktree-to-worktree",
+      strategy: "detached-changes",
+    });
+  });
+
   it("paginates handoff branch picker choices", () => {
     const binding = buildBinding();
     const context = {

@@ -13,6 +13,12 @@ export type ClaudeSession = {
   /** Set only after the SDK confirms initialization; used by query({ resume }). */
   sdkSessionId?: string;
   /**
+   * The folder whose Claude project holds `sdkSessionId`'s file, when the
+   * thread has since moved to another cwd. Claude keeps a resumed session's
+   * file where it was created. Absent means `cwd`.
+   */
+  sdkSessionDir?: string;
+  /**
    * A fork's source session. Its first query resumes there with
    * `forkSession`, and the session Claude creates becomes `sdkSessionId`.
    */

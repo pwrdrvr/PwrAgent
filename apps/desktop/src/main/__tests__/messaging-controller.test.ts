@@ -26188,6 +26188,47 @@ describe("MessagingController", () => {
     expect(finalStatus.text).not.toContain("Worktree:");
   });
 
+  it("runs a worktree-to-worktree handoff from the status menu", async () => {
+    const harness = await createHarness();
+    harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeHandoffNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildWorktreeHandoffNavigationSnapshot(), false);
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:handoff" }),
+    );
+
+    const overview = harness.delivered.at(-1);
+    // Local keeps its number for text replies.
+    expect(findChoice(overview, "handoff:worktree-to-local")).toMatchObject({ fallbackText: "1" });
+    const toNew = findChoice(overview, "handoff:worktree-to-worktree");
+    expect(toNew).toMatchObject({ label: "Handoff to New Worktree", fallbackText: "2" });
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: toNew.id, value: toNew.value }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("Confirm moving this thread to a new worktree."),
+    });
+
+    const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: confirm.id, value: confirm.value }),
+    );
+
+    expect(harness.handoffThreadWorkspace).toHaveBeenCalledWith({
+      backend: "codex",
+      direction: "worktree-to-worktree",
+      strategy: "detached-changes",
+      repositoryPath: "/repo/pwragent",
+      sourceBranch: "feature/handoff",
+      sourcePath: "/repo/pwragent/.worktrees/pwragent-feature-handoff",
+      threadId: "thread-1",
+    });
+  });
+
   it("rejects a project move confirmation after the source directory changes", async () => {
     const navigation = buildLocalHandoffNavigationSnapshot();
     const harness = await createHarness({ navigation });

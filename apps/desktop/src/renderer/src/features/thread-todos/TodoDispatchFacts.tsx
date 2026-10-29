@@ -234,14 +234,23 @@ function useDispatchEnvironments(params: {
     }
     let cancelled = false;
     setState({ key, value: { status: "loading" } });
-    void list(onOwner
-      ? { id: todo.id }
-      : {
-          project: cardProject!,
-          federationTarget: machine.key === LOCAL_DISPATCH_MACHINE
-            ? { scope: "local" }
-            : { scope: "remote", instanceId: machine.key },
-        })
+    const read = async (): Promise<ListThreadTodoDispatchEnvironmentsResponse> => {
+      if (onOwner) return await list({ id: todo.id });
+      // The owner knows which repository the card's project clones; the
+      // other machine may file its copy under another name.
+      const owner = await list({ id: todo.id, repositoryOnly: true }).catch(() => undefined);
+      return await list({
+        project: {
+          ...cardProject!,
+          ...(owner?.repositoryKey ? { repositoryKey: owner.repositoryKey } : {}),
+          ...(owner?.repositoryKeys?.length ? { repositoryKeys: owner.repositoryKeys } : {}),
+        },
+        federationTarget: machine.key === LOCAL_DISPATCH_MACHINE
+          ? { scope: "local" }
+          : { scope: "remote", instanceId: machine.key },
+      });
+    };
+    void read()
       .then((response) => {
         if (!cancelled) setState({ key, value: { status: "ready", response } });
       })

@@ -11,6 +11,7 @@ import {
   setThreadTodoProject,
   type ThreadTodoRunnerRegistry,
 } from "../thread-todos/thread-todo-runtime";
+import type { ThreadTodoProjectCandidate } from "../thread-todos/thread-todo-projects";
 
 const FULL_ACCESS_SOL: HandoffSourceSettings = {
   executionMode: "full-access",
@@ -183,6 +184,75 @@ describe("thread to-do Start thread", () => {
     expect(created?.args).toMatchObject({ executionMode: "full-access" });
     expect(created?.args).not.toHaveProperty("model");
     expect(created?.args).not.toHaveProperty("reasoningEffort");
+  });
+});
+
+describe("thread to-do Start thread on a peer that names the project differently", () => {
+  const ORIGIN = "github.com/pwrdrvr/pwragent";
+  const card = { key: "directory:/Users/fixture/src/PwrAgnt", label: "PwrAgnt", path: "/Users/fixture/src/PwrAgnt" };
+  const local = [{ ...card, kind: "directory" as const, repositoryKey: ORIGIN }];
+  const peerProjects = [
+    { key: "directory:C:/scratch/PwrAgnt", label: "PwrAgnt", path: "C:\\scratch\\PwrAgnt", kind: "directory" as const,
+      hasLaunchpad: false, repositoryKey: "github.com/fixture-user/pwragnt-notes" },
+    { key: "directory:C:/src/PwrAgent", label: "PwrAgent", path: "C:\\src\\PwrAgent", kind: "directory" as const,
+      hasLaunchpad: true, repositoryKey: ORIGIN },
+  ];
+
+  function setup(params: {
+    listProjects?: () => Promise<ThreadTodoProjectCandidate[]>;
+    peer?: ListInstanceProjectsResult["projects"];
+  }) {
+    const { registry } = fakeRegistry(FULL_ACCESS_SOL);
+    const federation = vi.fn<PwrAgentFederationHandler>(async (request) => {
+      if (request.operation === "list_instance_projects") {
+        return { ok: true, data: {
+          instanceId: "win", instanceLabel: "DESKTOP-FIXTURE / dev", isLocal: false,
+          projects: params.peer ?? peerProjects, complete: true,
+        } as ListInstanceProjectsResult };
+      }
+      return { ok: true, data: {
+        backend: "codex", threadId: "peer-thread", isLocal: false, instanceId: "win", instanceLabel: "DESKTOP-FIXTURE / dev",
+      } as CreateInstanceThreadResult };
+    });
+    const runners = createThreadTodoRunners({
+      registry: registry as unknown as ThreadTodoRunnerRegistry,
+      federation,
+      ...(params.listProjects ? { listProjects: params.listProjects } : {}),
+    });
+    const run = () => runners.startThreadOnInstance!({
+      instanceId: "win", sourceBackend: "codex", sourceThreadId: "source-thread", project: card,
+      crossProject: false, action: { type: "start_thread", prompt: "Go" },
+    });
+    const created = () => federation.mock.calls
+      .map(([request]) => request)
+      .find((request) => request.operation === "create_instance_thread");
+    return { run, created };
+  }
+
+  it("starts in the peer's checkout of the same origin, not its same-named folder", async () => {
+    const { run, created } = setup({ listProjects: async () => local });
+    await expect(run()).resolves.toMatchObject({ threadId: "peer-thread" });
+    expect(created()?.args).toMatchObject({ projectKey: "directory:C:/src/PwrAgent" });
+  });
+
+  it("names the repository when the peer has no checkout of it", async () => {
+    const { run, created } = setup({ listProjects: async () => local, peer: [peerProjects[0]!] });
+    await expect(run()).rejects.toThrow(
+      "DESKTOP-FIXTURE / dev has no checkout of github.com/pwrdrvr/pwragent (PwrAgnt here).",
+    );
+    expect(created()).toBeUndefined();
+  });
+
+  it("names a fetch remote when the checkout has no origin", async () => {
+    const remoteOnly = [{ ...card, kind: "directory" as const, repositoryKeys: [ORIGIN] }];
+    const { run } = setup({ listProjects: async () => remoteOnly, peer: [peerProjects[0]!] });
+    await expect(run()).rejects.toThrow(`has no checkout of ${ORIGIN} (PwrAgnt here).`);
+  });
+
+  it("falls back to the name when this machine's projects cannot be listed", async () => {
+    const { run, created } = setup({ listProjects: async () => { throw new Error("index unavailable"); } });
+    await expect(run()).resolves.toMatchObject({ threadId: "peer-thread" });
+    expect(created()?.args).toMatchObject({ projectKey: "directory:C:/scratch/PwrAgnt" });
   });
 });
 
