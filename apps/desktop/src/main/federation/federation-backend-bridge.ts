@@ -624,6 +624,9 @@ export const FEDERATION_BACKEND_METHODS = {
   getWorktreeUnpublishedCommitDiff: "backend.getWorktreeUnpublishedCommitDiff",
   materializeDirectoryLaunchpad: "backend.materializeDirectoryLaunchpad",
   handoffThreadWorkspace: "backend.handoffThreadWorkspace",
+  // Separate so an owner that predates these moves answers method_not_found.
+  // It would read an unknown direction as Handoff to Local and ignore baseRef.
+  handoffThreadWorkspaceToNewWorktree: "backend.handoffThreadWorkspaceToNewWorktree",
   recreateThreadWorktree: "backend.recreateThreadWorktree",
   moveThreadToMainCheckout: "backend.moveThreadToMainCheckout",
   renameThread: "backend.renameThread",
@@ -781,6 +784,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.getWorktreeUnpublishedCommitDiff]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.handoffThreadWorkspace]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.handoffThreadWorkspaceToNewWorktree]: "turn_control",
   [FEDERATION_BACKEND_METHODS.recreateThreadWorktree]: "turn_control",
   [FEDERATION_BACKEND_METHODS.moveThreadToMainCheckout]: "turn_control",
   [FEDERATION_BACKEND_METHODS.renameThread]: "turn_control",
@@ -2141,6 +2145,16 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as HandoffThreadWorkspaceRequest,
       ),
   );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.handoffThreadWorkspaceToNewWorktree,
+    async (envelope) => {
+      const request = envelope.params as HandoffThreadWorkspaceRequest;
+      if (request.direction !== "local-to-worktree" && request.direction !== "worktree-to-worktree") {
+        throw new Error("This handoff only moves a thread into a new worktree.");
+      }
+      return await params.backend.handoffThreadWorkspace(request);
+    },
+  );
   if (params.backend.recreateThreadWorktree) {
     params.router.registerHandler(
       FEDERATION_BACKEND_METHODS.recreateThreadWorktree,
@@ -3360,8 +3374,12 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> {
+    // Older owners know only the original method and must refuse these moves.
+    const toNewWorktree = request.direction === "worktree-to-worktree" || Boolean(request.baseRef);
     return await this.rpc.request<HandoffThreadWorkspaceResponse>({
-      method: FEDERATION_BACKEND_METHODS.handoffThreadWorkspace,
+      method: toNewWorktree
+        ? FEDERATION_BACKEND_METHODS.handoffThreadWorkspaceToNewWorktree
+        : FEDERATION_BACKEND_METHODS.handoffThreadWorkspace,
       params: request,
     });
   }
