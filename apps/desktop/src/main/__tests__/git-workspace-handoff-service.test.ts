@@ -602,6 +602,77 @@ describe("GitWorkspaceHandoffService", () => {
     });
   });
 
+  describe("fresh worktree from a base ref", () => {
+    it("starts a detached worktree at the base and leaves the dirty local checkout alone", async () => {
+      const repoPath = await createRepo();
+      await writeFile(path.join(repoPath, "README.md"), "dirty local\n", "utf8");
+      const mainSha = await git(repoPath, ["rev-parse", "main"]);
+      const service = new GitWorkspaceHandoffService({ resolveWorktreeStorage: () => "in-repo" });
+      const result = await service.handoff({
+        backend: "claude", threadId: "thread-1", direction: "local-to-worktree", baseRef: "main",
+        repositoryPath: repoPath, sourcePath: repoPath, now: 4000,
+      });
+
+      expect(result).toMatchObject({ direction: "local-to-worktree", strategy: "detached-changes", workMode: "worktree", baseSha: mainSha });
+      expect(result.branch).toBeUndefined();
+      expect(await git(result.targetPath, ["rev-parse", "HEAD"])).toBe(mainSha);
+      expect(await git(result.targetPath, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
+      expect(await git(result.targetPath, ["status", "--porcelain", "--untracked-files=normal"])).toBe("");
+      expect(await pathExists(path.join(result.targetPath, "feature.txt"))).toBe(false);
+      expect(result.sourceStash).toBeUndefined();
+      expect(result.warnings[0]).toBe("The new worktree starts at main.");
+      expect(result.warnings[1]).toMatch(/^Uncommitted changes stayed in .+PwrAgent\.$/);
+      // Local kept its branch and its changes.
+      expect(await git(repoPath, ["branch", "--show-current"])).toBe("feature/handoff");
+      await expect(readFile(path.join(repoPath, "README.md"), "utf8")).resolves.toBe("dirty local\n");
+    });
+
+    it("starts a new branch at the base and leaves the old worktree on disk", async () => {
+      const repoPath = await createRepo();
+      await git(repoPath, ["switch", "main"]);
+      const worktreePath = path.join(path.dirname(repoPath), "worktree-feature");
+      await git(repoPath, ["worktree", "add", worktreePath, "feature/handoff"]);
+      await writeFile(path.join(worktreePath, "worktree-note.txt"), "untracked\n", "utf8");
+      const mainSha = await git(repoPath, ["rev-parse", "main"]);
+      const service = new GitWorkspaceHandoffService({ resolveWorktreeStorage: () => "in-repo" });
+      const result = await service.handoff({
+        backend: "codex", threadId: "thread-1", direction: "worktree-to-worktree", strategy: "new-branch",
+        newBranchName: "feature/fresh", baseRef: "main", repositoryPath: repoPath, sourcePath: worktreePath, now: 4100,
+      });
+
+      expect(result).toMatchObject({ direction: "worktree-to-worktree", strategy: "new-branch", branch: "feature/fresh", baseSha: mainSha });
+      expect(await git(result.targetPath, ["branch", "--show-current"])).toBe("feature/fresh");
+      expect(await pathExists(path.join(result.targetPath, "worktree-note.txt"))).toBe(false);
+      expect(result.archivedSourceWorktree).toBeUndefined();
+      expect(await pathExists(worktreePath)).toBe(true);
+      expect(await git(worktreePath, ["branch", "--show-current"])).toBe("feature/handoff");
+      await expect(readFile(path.join(worktreePath, "worktree-note.txt"), "utf8")).resolves.toBe("untracked\n");
+    });
+
+    it("rejects a base ref that does not resolve and creates nothing", async () => {
+      const repoPath = await createRepo();
+      const service = new GitWorkspaceHandoffService({ resolveWorktreeStorage: () => "in-repo" });
+      await expect(service.handoff({
+        backend: "claude", threadId: "thread-1", direction: "local-to-worktree", baseRef: "origin/missing",
+        repositoryPath: repoPath, sourcePath: repoPath, now: 4200,
+      })).rejects.toThrow("Base branch origin/missing was not found in this repository.");
+      expect(await git(repoPath, ["worktree", "list", "--porcelain"])).not.toContain(".worktrees");
+    });
+
+    it("rejects moving the current branch or returning to local", async () => {
+      const repoPath = await createRepo();
+      const service = new GitWorkspaceHandoffService({ resolveWorktreeStorage: () => "in-repo" });
+      await expect(service.handoff({
+        backend: "claude", threadId: "thread-1", direction: "local-to-worktree", strategy: "move-branch",
+        baseRef: "main", repositoryPath: repoPath, sourcePath: repoPath,
+      })).rejects.toThrow("Moving the current branch cannot start from a base branch.");
+      await expect(service.handoff({
+        backend: "claude", threadId: "thread-1", direction: "worktree-to-local",
+        baseRef: "main", repositoryPath: repoPath, sourcePath: repoPath,
+      })).rejects.toThrow("A base branch applies only to a handoff into a new worktree.");
+    });
+  });
+
   it("moves a detached worktree head back to local without treating stale branch metadata as truth", async () => {
     const repoPath = await createRepo();
     await writeFile(path.join(repoPath, "README.md"), "dirty detached\n", "utf8");

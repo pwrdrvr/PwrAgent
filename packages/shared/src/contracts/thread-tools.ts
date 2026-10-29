@@ -549,6 +549,7 @@ export type PendingThreadWorkspaceMoveSummary = {
   sourceBranch?: string;
   leaveLocalBranch?: string;
   newBranchName?: string;
+  baseRef?: string;
   targetPath?: string;
   branch?: string;
   linkedDirectory?: LinkedDirectorySummary;

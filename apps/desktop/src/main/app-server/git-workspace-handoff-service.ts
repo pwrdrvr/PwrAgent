@@ -95,6 +95,8 @@ type HandoffParams = {
   sourceBranch?: string;
   leaveLocalBranch?: string;
   newBranchName?: string;
+  /** Start the new worktree here and leave the source untouched. */
+  baseRef?: string;
   /**
    * worktree-to-worktree only: leave the previous worktree on disk instead of
    * archiving it, because this thread does not own it.
@@ -360,7 +362,9 @@ export class GitWorkspaceHandoffService {
 
   async handoff(params: HandoffParams): Promise<HandoffThreadWorkspaceResponse> {
     const response =
-      params.direction === "to-project"
+      params.baseRef?.trim()
+        ? await this.handoffToFreshWorktree(params)
+        : params.direction === "to-project"
         ? await this.handoffToProject(params)
         : params.direction === "local-to-worktree"
           ? await this.handoffLocalToWorktree(params)
@@ -815,6 +819,91 @@ export class GitWorkspaceHandoffService {
         warnings: [...moved.warnings, `The previous worktree was left on disk: ${detail}`],
       };
     }
+  }
+
+  /**
+   * Starts a new worktree at `baseRef` and moves only the thread. The source
+   * checkout or worktree keeps its branch and its uncommitted changes, and
+   * nothing is archived: they may belong to someone else.
+   */
+  private async handoffToFreshWorktree(
+    params: HandoffParams,
+  ): Promise<HandoffThreadWorkspaceResponse> {
+    if (params.direction !== "local-to-worktree" && params.direction !== "worktree-to-worktree") {
+      throw new Error("A base branch applies only to a handoff into a new worktree.");
+    }
+    const strategy = params.strategy ?? "detached-changes";
+    if (strategy === "move-branch") {
+      throw new Error("Moving the current branch cannot start from a base branch. Choose a detached or new-branch handoff.");
+    }
+    const context = await this.buildContext(params);
+    const fromWorktree = path.resolve(context.repositoryPath) !== path.resolve(context.sourcePath);
+    if (fromWorktree !== (params.direction === "worktree-to-worktree")) {
+      throw new Error(fromWorktree
+        ? "Local-to-worktree handoff must start from the local checkout."
+        : "Worktree-to-worktree handoff must start from a worktree.");
+    }
+    const baseRef = params.baseRef!.trim();
+    let baseSha: string;
+    try {
+      baseSha = trim((await runGit(
+        context.repositoryPath,
+        ["rev-parse", "--verify", "--quiet", "--end-of-options", `${baseRef}^{commit}`],
+        this.gitEnv,
+      )).stdout);
+    } catch {
+      throw new Error(`Base branch ${baseRef} was not found in this repository.`);
+    }
+    if (!baseSha) throw new Error(`Base branch ${baseRef} was not found in this repository.`);
+    const newBranchName = strategy === "new-branch" ? (params.newBranchName ?? "").trim() : "";
+    if (strategy === "new-branch") {
+      if (!newBranchName) throw new Error("Choose a new branch name for handoff.");
+      await validateBranchName(context.repositoryPath, newBranchName, this.gitEnv);
+      if (await branchExists(context.repositoryPath, newBranchName, this.gitEnv)) {
+        throw new Error(`Branch ${newBranchName} already exists.`);
+      }
+    }
+
+    const targetPath = await computeWorktreePath({
+      backend: context.backend,
+      repoRoot: context.repositoryPath,
+      storage: await this.resolveStorage(),
+      homeDir: this.homeDir,
+      timestamp: context.now,
+    });
+    const sourceDirty = await getDirtyStatus(context.sourcePath, this.gitEnv)
+      .catch((error) => releaseReservationAndRethrow(targetPath, error));
+    await mkdir(path.dirname(targetPath), { recursive: true });
+    try {
+      await runGit(
+        context.repositoryPath,
+        newBranchName
+          ? ["worktree", "add", "-b", newBranchName, targetPath, baseSha]
+          : ["worktree", "add", "--detach", targetPath, baseSha],
+        this.gitEnv,
+      );
+    } catch (error) {
+      await releaseWorktreePathReservation(targetPath);
+      throw error;
+    }
+
+    return {
+      backend: context.backend,
+      threadId: context.threadId,
+      direction: params.direction,
+      strategy,
+      workMode: "worktree",
+      ...(newBranchName ? { branch: newBranchName } : {}),
+      baseSha,
+      repositoryPath: context.repositoryPath,
+      targetPath,
+      linkedDirectory: this.buildLinkedDirectory({ context, kind: "worktree", targetPath }),
+      warnings: [
+        `The new worktree starts at ${baseRef}.`,
+        ...(sourceDirty ? [`Uncommitted changes stayed in ${context.sourcePath}.`] : []),
+      ],
+      completedAt: context.now,
+    };
   }
 
   /** Checks the worktree's branch out in a new worktree and detaches the old one. */

@@ -40803,6 +40803,7 @@ export class DesktopBackendRegistry {
       ...(move.sourceBranch ? { sourceBranch: move.sourceBranch } : {}),
       ...(move.leaveLocalBranch ? { leaveLocalBranch: move.leaveLocalBranch } : {}),
       ...(move.newBranchName ? { newBranchName: move.newBranchName } : {}),
+      ...(move.baseRef ? { baseRef: move.baseRef } : {}),
       ...(move.targetPath ? { targetPath: move.targetPath } : {}),
       ...(move.branch ? { branch: move.branch } : {}),
       ...(move.linkedDirectory ? { linkedDirectory: move.linkedDirectory } : {}),
@@ -41257,6 +41258,7 @@ export class DesktopBackendRegistry {
             (request.args.leaveLocalBranch ?? "") &&
           (duplicateMove.newBranchName ?? "") ===
             (request.args.newBranchName ?? "") &&
+          (duplicateMove.baseRef ?? "") === (request.args.baseRef ?? "") &&
           path.resolve(duplicateMove.sourcePath ?? "") ===
             path.resolve(candidate.sourcePath ?? "") &&
           path.resolve(duplicateMove.repositoryPath ?? "") ===
@@ -41327,6 +41329,7 @@ export class DesktopBackendRegistry {
       ...(request.args.newBranchName
         ? { newBranchName: request.args.newBranchName }
         : {}),
+      ...(request.args.baseRef ? { baseRef: request.args.baseRef } : {}),
       createdAt: now,
       updatedAt: now,
       message:
@@ -41526,6 +41529,7 @@ export class DesktopBackendRegistry {
         ...(move.sourceBranch ? { sourceBranch: move.sourceBranch } : {}),
         ...(move.leaveLocalBranch ? { leaveLocalBranch: move.leaveLocalBranch } : {}),
         ...(move.newBranchName ? { newBranchName: move.newBranchName } : {}),
+        ...(move.baseRef ? { baseRef: move.baseRef } : {}),
       });
       this.updatePendingThreadWorkspaceMove(workspaceMoveId, {
         phase: "updating_metadata",
@@ -49372,6 +49376,7 @@ function pendingThreadWorkspaceMoveMatchesQuery(
     move.sourceBranch,
     move.leaveLocalBranch,
     move.newBranchName,
+    move.baseRef,
     move.targetPath,
     move.branch,
     move.linkedDirectory?.label,

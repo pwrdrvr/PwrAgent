@@ -195,7 +195,7 @@ function descriptionForOperation(
     case "detach_thread_directory":
       return "Detach a secondary directory from the current PwrAgent thread. Use this only when the user requests cleanup. You cannot detach the primary provider/runtime cwd. Pass directoryId when known. Otherwise, pass path or worktreePath from get_thread_status.";
     case "move_thread_workspace":
-      return "Move the current thread workspace after this turn ends. Use direction=to-project with targetPath to adopt an existing Git checkout or worktree, including one managed by another agent. Files and branches stay in place, and adopted worktrees are preserved on thread archive. Default Access requires confirmation for an untrusted destination. Omit direction to create an isolated new worktree from the current checkout or worktree. Dirty non-ignored changes move with the thread. A previous worktree this thread owns is archived with a checkpoint. Pass sourcePath if that source is unclear. Do not create a child thread. After success, stop work and end the turn. PwrAgent updates cwd, reconnects ACP when necessary, and starts a continuation. Check pendingWorkspaceMoves only after the turn.";
+      return "Move the current thread workspace after this turn ends. Use direction=to-project with targetPath to adopt an existing Git checkout or worktree, including one managed by another agent. Files and branches stay in place, and adopted worktrees are preserved on thread archive. Default Access requires confirmation for an untrusted destination. Omit direction to create an isolated new worktree from the current checkout or worktree. Dirty non-ignored changes move with the thread. A previous worktree this thread owns is archived with a checkpoint. Pass baseRef, such as origin/main, to start fresh instead. A fresh move takes no changes and leaves the old workspace untouched. Pass sourcePath if that source is unclear. Do not create a child thread. After success, stop work and end the turn. PwrAgent updates cwd, reconnects ACP when necessary, and starts a continuation. Check pendingWorkspaceMoves only after the turn.";
     case "send_message_to_thread":
       return "Send guidance to another PwrAgent thread. Prefer steer_thread for cross-thread communication. Default delivery groups pending messages from all senders into one queued steer. Each message retains its sender and time context. Supported active turns receive steering. Idle targets receive one grouped follow-up. A batch already dispatching is immutable. Later messages form the next batch. Set delivery=new_turn only when a distinct new turn is required. To replace your pending contribution, pass its queueEntryId as replaceQueueEntryId. Supply your complete consolidated prompt. Other senders' messages and queue position are preserved. A replacement fails if already dispatched. Use stop_thread for urgent interruption. Find unknown targets with search_threads or read_thread. Pass instanceId for remote targets when known. Set includeRemote=false for local resolution. Reply normally to the current thread. Return threadLink verbatim.";
     case "steer_thread":
@@ -396,6 +396,11 @@ function inputSchemaForOperation(
             description:
               "Optional new branch name for the workspace handoff when strategy=new-branch.",
           },
+          baseRef: {
+            type: "string",
+            description:
+              "Existing ref, such as origin/main, where a fresh new worktree starts. Uncommitted changes stay in the source. Not valid with move-branch or to-project.",
+          },
         },
       };
     case "send_message_to_thread":
@@ -539,7 +544,7 @@ function invalidArgumentsMessageForOperation(
     case "handoff_task":
       return "handoff_task requires a non-empty task string.";
     case "move_thread_workspace":
-      return "move_thread_workspace accepts known direction/strategy values and non-empty strings. direction=to-project requires targetPath and cannot include source/repository fields or branch strategies; other directions cannot include targetPath.";
+      return "move_thread_workspace accepts known direction/strategy values and non-empty strings. direction=to-project requires targetPath and cannot include source/repository fields, branch strategies, or baseRef; other directions cannot include targetPath. baseRef cannot be combined with worktree-to-local, strategy=move-branch, or leaveLocalBranch.";
     case "send_message_to_thread":
       return "send_message_to_thread requires non-empty backend, threadId, and prompt strings.";
     case "steer_thread":
@@ -983,6 +988,7 @@ function normalizeMoveThreadWorkspaceArgs(
     "sourceBranch",
     "leaveLocalBranch",
     "newBranchName",
+    "baseRef",
   ] as const;
   for (const field of optionalStringFields) {
     if (Object.hasOwn(args, field) && !readTrimmedString(args[field])) {
@@ -993,7 +999,7 @@ function normalizeMoveThreadWorkspaceArgs(
   const targetPath = readTrimmedString(args.targetPath);
   if (direction === "to-project") {
     if (!targetPath || [
-      "strategy", "repositoryPath", "sourcePath", "sourceBranch", "leaveLocalBranch", "newBranchName",
+      "strategy", "repositoryPath", "sourcePath", "sourceBranch", "leaveLocalBranch", "newBranchName", "baseRef",
     ].some((field) => Object.hasOwn(args, field))) {
       return undefined;
     }
@@ -1005,6 +1011,14 @@ function normalizeMoveThreadWorkspaceArgs(
   const sourceBranch = readTrimmedString(args.sourceBranch);
   const leaveLocalBranch = readTrimmedString(args.leaveLocalBranch);
   const newBranchName = readTrimmedString(args.newBranchName);
+  const baseRef = readTrimmedString(args.baseRef);
+  // A fresh worktree leaves the source on its branch, so nothing can move.
+  if (
+    baseRef
+    && (direction === "worktree-to-local" || strategy === "move-branch" || leaveLocalBranch)
+  ) {
+    return undefined;
+  }
 
   return {
     ...(direction ? { direction } : {}),
@@ -1016,6 +1030,7 @@ function normalizeMoveThreadWorkspaceArgs(
     ...(sourceBranch ? { sourceBranch } : {}),
     ...(leaveLocalBranch ? { leaveLocalBranch } : {}),
     ...(newBranchName ? { newBranchName } : {}),
+    ...(baseRef ? { baseRef } : {}),
   };
 }
 

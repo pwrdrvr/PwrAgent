@@ -19328,6 +19328,117 @@ describe("Composer", () => {
     });
   });
 
+  it("starts a fresh worktree from a base branch and moves nothing", async () => {
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backends={[backendSummary("claude")]}
+        directory={{
+          key: "directory:/repo", kind: "directory", label: "PwrAgent", path: "/repo",
+          gitStatus: { currentBranch: "main", defaultBranch: "main", branches: ["main", "feature/handoff"], baseBranches: ["feature/handoff", "main", "origin/main"] },
+        }}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Worktree thread", titleSource: "explicit", source: "claude",
+          executionMode: "default", gitBranch: "feature/handoff",
+          linkedDirectories: [{ id: "dir-1", label: "PwrAgent", path: "/repo", worktreePath: "/repo/.worktrees/pwragent-feature", kind: "worktree" }],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
+    fireEvent.click(within(dialog).getByRole("radio", { name: /^Start Fresh from a Branch/ }));
+    // The remote copy of the default branch is picked first.
+    expect(within(dialog).getByLabelText(/^Base branch:/)).toHaveAttribute("data-value", "origin/main");
+    expect(within(dialog).getByText(/current worktree stays on disk/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/archived with a checkpoint/)).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Handoff" }));
+
+    await waitFor(() => {
+      expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+        direction: "worktree-to-worktree",
+        strategy: "detached-changes",
+        repositoryPath: "/repo",
+        sourcePath: "/repo/.worktrees/pwragent-feature",
+        sourceBranch: "feature/handoff",
+        baseRef: "origin/main",
+      });
+    });
+  });
+
+  it("names a branch for a fresh worktree from Local", async () => {
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo", kind: "directory", label: "PwrAgent", path: "/repo",
+          gitStatus: { currentBranch: "feature/handoff", defaultBranch: "main", branches: ["main", "feature/handoff"], baseBranches: ["main", "feature/handoff"] },
+        }}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Local thread", titleSource: "explicit", source: "codex",
+          executionMode: "default", gitBranch: "feature/handoff",
+          linkedDirectories: [{ id: "dir-1", label: "PwrAgent", path: "/repo", kind: "local" }],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
+    fireEvent.click(within(dialog).getByRole("radio", { name: /^Start Fresh from a Branch/ }));
+    expect(within(dialog).getByLabelText(/^Base branch:/)).toHaveAttribute("data-value", "main");
+    fireEvent.change(within(dialog).getByLabelText("New branch name"), { target: { value: " fix/clean " } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Handoff" }));
+
+    await waitFor(() => {
+      expect(onHandoffThreadWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+        direction: "local-to-worktree",
+        strategy: "new-branch",
+        newBranchName: "fix/clean",
+        baseRef: "main",
+      }));
+    });
+  });
+
+  it("offers a new worktree on a peer's thread and names an owner too old for it", async () => {
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{ key: "directory:/repo", kind: "directory", label: "PwrAgent", path: "/repo", gitStatus: { currentBranch: "main", branches: ["main"] } }}
+        onHandoffThreadWorkspace={async () => {
+          throw new Error("Error invoking remote method: Error: method_not_found: No federation handler registered for backend.handoffThreadWorkspaceToNewWorktree");
+        }}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Worktree thread", titleSource: "explicit", source: "codex",
+          executionMode: "default", gitBranch: "feature/handoff",
+          linkedDirectories: [{ id: "dir-1", label: "PwrAgent", path: "/repo", worktreePath: "/repo/.worktrees/pwragent-feature", kind: "worktree" }],
+          inbox: { inInbox: false },
+          federation: {
+            ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "studio" } },
+            instanceLabel: "studio-mac",
+            peerStatus: "connected",
+          },
+        } as ComponentProps<typeof Composer>["thread"]}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
+
+    expect(await screen.findByText("studio-mac runs an older PwrAgent that cannot make this move. Update PwrAgent on studio-mac. Nothing moved."))
+      .toBeInTheDocument();
+  });
+
   it("names the machine to update when its owner cannot keep Local's branch", async () => {
     render(
       <Composer

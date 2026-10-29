@@ -1170,6 +1170,12 @@ export type HandoffThreadWorkspaceRequest = {
   sourceBranch?: string;
   leaveLocalBranch?: string;
   newBranchName?: string;
+  /**
+   * For a handoff into a new worktree: start it at this ref (such as
+   * `origin/main`) instead of the current commit. Uncommitted changes stay in
+   * the source, which is left as it is.
+   */
+  baseRef?: string;
 };
 
 export type HandoffThreadWorkspaceResponse = {
