@@ -19,7 +19,7 @@ import type {
   SubthreadLaunchpadDraft,
 } from "../../lib/useThreadNavigation";
 import type { PendingSidebarRow } from "./StartingThreadRow";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   ComponentType,
   KeyboardEvent as ReactKeyboardEvent,
@@ -48,6 +48,7 @@ import {
   isRemoteFederationTarget,
   moveDirectoryKey,
   moveThreadKey,
+  isSubthreadLaunchpadKey,
   resolveThreadParentKey,
 } from "@pwragent/shared";
 import {
@@ -118,7 +119,13 @@ import {
   formatRateLimitLine,
   selectVisibleRateLimits,
 } from "../../lib/backend-status-format";
-import { DirectoriesList, type ProjectRevealRequest } from "./DirectoriesList";
+import {
+  buildLaunchpadSelectionKey,
+  DirectoriesList,
+  type ProjectRevealRequest,
+} from "./DirectoriesList";
+import { ProjectIndex, type ProjectIndexEntry } from "./ProjectIndex";
+import { ProjectIndexToggle } from "./ProjectIndexToggle";
 import type { ThreadRowRef } from "./ThreadRow";
 import {
   findThreadRowElement,
@@ -290,6 +297,15 @@ type SidebarProps = {
    * Directories lens to show that project. The caller switches the lens.
    */
   projectRevealRequest?: ProjectRevealRequest;
+  /**
+   * The project index column beside the list (`[ui] project_index_hidden`).
+   * Absent handlers leave the column out, toggle and all.
+   */
+  projectIndexHidden?: boolean;
+  onProjectIndexHiddenChange?: (hidden: boolean) => void;
+  /** A dragged index width (`[ui] project_index_width`); `null` is natural. */
+  projectIndexWidth?: number | null;
+  onProjectIndexWidthChange?: (width: number | null) => void;
   selectedItemKey?: string;
   pendingLaunchpadCreations?: PendingLaunchpadCreation[];
   /** Sub-thread launchpads being written in this window. */
@@ -921,6 +937,60 @@ export function Sidebar(props: SidebarProps) {
         && (props.browseMode !== "directories"
           || (state.page?.directories?.every((directory) => renderedDirectoryKeys.has(directory.key)) ?? true))))),
   );
+  // The project index: every project in the order Directories draws them,
+  // pinned first. It stays in every lens, so the list keeps one width when
+  // the lens changes; only Directories is in project order to follow.
+  const scrollRegionId = useId();
+  const projectIndexEnabled = Boolean(
+    props.onProjectIndexHiddenChange && props.onProjectIndexWidthChange,
+  );
+  const selectedThreadDirectoryKeys = props.selectedThreadDirectoryKeys;
+  const indexSelectedItemKey = props.selectedItemKey;
+  const projectIndexEntries = useMemo((): ProjectIndexEntry[] => {
+    if (!projectIndexEnabled) return [];
+    const projects = renderedDirectories.filter(
+      (directory) => !isSubthreadLaunchpadKey(directory.key),
+    );
+    const pinned = projects.filter(isPinnedDirectory).sort(comparePinnedDirectories);
+    const unpinned = projects.filter((directory) => !isPinnedDirectory(directory));
+    return [...pinned, ...unpinned].map((directory) => ({
+      key: directory.key,
+      label: directory.label,
+      containsSelection:
+        indexSelectedItemKey === buildLaunchpadSelectionKey(directory.key)
+        || (selectedThreadDirectoryKeys?.includes(directory.key) ?? false),
+      active: (directory.counts?.active ?? 0) > 0,
+      review: (directory.counts?.review ?? 0) > 0,
+    }));
+  }, [indexSelectedItemKey, projectIndexEnabled, renderedDirectories, selectedThreadDirectoryKeys]);
+  // One project needs no map.
+  const projectIndexShown = projectIndexEnabled
+    && !props.projectIndexHidden
+    && projectIndexEntries.length >= 2;
+  const onProjectIndexWidthChange = props.onProjectIndexWidthChange;
+  // Asked when the toggle's tooltip opens. The narrow-sidebar case is the
+  // container query's call (app.css, `sidebar-lanes`), so it is read off the
+  // column's computed display rather than re-derived from a width in JS.
+  const threadBrowserRef = useRef<HTMLElement | null>(null);
+  const projectIndexEntryCount = projectIndexEntries.length;
+  const projectIndexUnavailableReason = useCallback((): string | undefined => {
+    if (projectIndexEntryCount < 2) return "Shown with two or more projects";
+    const pane = threadBrowserRef.current?.querySelector(".project-index-pane");
+    if (pane && getComputedStyle(pane).display === "none") {
+      return "Widen the sidebar to show it";
+    }
+    return undefined;
+  }, [projectIndexEntryCount]);
+  const onBrowseModeChange = props.onBrowseModeChange;
+  // An index click moves the list; it does not change the selection. From a
+  // flat lens it opens Directories at that project, as ⌘K does without
+  // opening the project's launchpad.
+  const releaseHoverStableForJump = hoverStableSnapshot.release;
+  const jumpToProject = useCallback((key: string) => {
+    releaseHoverStableForJump();
+    if (props.browseMode !== "directories") onBrowseModeChange("directories");
+    setProjectReveal({ key, jump: true });
+  }, [onBrowseModeChange, props.browseMode, releaseHoverStableForJump]);
   /**
    * Hover stability protects a target from background list churn. A command
    * the operator chose must instead reveal its resulting snapshot immediately.
@@ -3052,47 +3122,75 @@ export function Sidebar(props: SidebarProps) {
           directory-picker and launchpad failures render at their own
           controls in the composer, which stay on screen. */}
 
-      <section className="sidebar__section sidebar__section--fill" aria-label="Thread browser">
-        <div className="lens-switch" role="tablist" aria-label="Thread lenses">
-          {BROWSE_MODES.map((mode) =>
-            mode === "attention" ? (
-              <AttentionLensTab
-                key={mode}
-                active={props.browseMode === mode}
-                countsReady={Boolean(ownerCounts)}
-                activeThreadCount={attentionCounts.activeLocal}
-                remoteActiveThreadCount={
-                  remoteSignalVisible ? attentionCounts.activeRemote : undefined
-                }
-                reviewThreadCount={attentionCounts.review}
-                disabled={props.threadLensesEmpty}
-                onSelect={() => props.onBrowseModeChange(mode)}
-              />
-            ) : (
-              <LensTab
-                key={mode}
-                mode={mode}
-                active={props.browseMode === mode}
-                // Counted off the very list the lens renders, so the badge and
-                // the rows can't disagree. Only Drafts counts: Updated and
-                // Created hold every thread, and Directories is a different
-                // unit — numbers there would say nothing you'd act on.
-                count={mode === "drafts" ? Object.values(props.draftThreadKeys ?? {}).filter(Boolean).length : undefined}
-                countLabel={
-                  mode === "drafts"
-                    ? formatDraftThreadCount(Object.values(props.draftThreadKeys ?? {}).filter(Boolean).length)
-                    : undefined
-                }
-                tooltipText={browseModeTooltips[mode]}
-                disabled={props.threadLensesEmpty && mode !== "directories"}
-                onSelect={() => props.onBrowseModeChange(mode)}
-              />
-            ),
-          )}
+      <section
+        className={`sidebar__section sidebar__section--fill${
+          projectIndexShown ? " sidebar__section--with-project-index" : ""
+        }`}
+        aria-label="Thread browser"
+        ref={threadBrowserRef}
+      >
+        <div className="sidebar__lens-row">
+          <div className="lens-switch" role="tablist" aria-label="Thread lenses">
+            {BROWSE_MODES.map((mode) =>
+              mode === "attention" ? (
+                <AttentionLensTab
+                  key={mode}
+                  active={props.browseMode === mode}
+                  countsReady={Boolean(ownerCounts)}
+                  activeThreadCount={attentionCounts.activeLocal}
+                  remoteActiveThreadCount={
+                    remoteSignalVisible ? attentionCounts.activeRemote : undefined
+                  }
+                  reviewThreadCount={attentionCounts.review}
+                  disabled={props.threadLensesEmpty}
+                  onSelect={() => props.onBrowseModeChange(mode)}
+                />
+              ) : (
+                <LensTab
+                  key={mode}
+                  mode={mode}
+                  active={props.browseMode === mode}
+                  // Counted off the very list the lens renders, so the badge and
+                  // the rows can't disagree. Only Drafts counts: Updated and
+                  // Created hold every thread, and Directories is a different
+                  // unit — numbers there would say nothing you'd act on.
+                  count={mode === "drafts" ? Object.values(props.draftThreadKeys ?? {}).filter(Boolean).length : undefined}
+                  countLabel={
+                    mode === "drafts"
+                      ? formatDraftThreadCount(Object.values(props.draftThreadKeys ?? {}).filter(Boolean).length)
+                      : undefined
+                  }
+                  tooltipText={browseModeTooltips[mode]}
+                  disabled={props.threadLensesEmpty && mode !== "directories"}
+                  onSelect={() => props.onBrowseModeChange(mode)}
+                />
+              ),
+            )}
+          </div>
+          {projectIndexEnabled ? (
+            <ProjectIndexToggle
+              hidden={props.projectIndexHidden ?? false}
+              unavailableReason={projectIndexUnavailableReason}
+              onToggle={() =>
+                props.onProjectIndexHiddenChange?.(!props.projectIndexHidden)}
+            />
+          ) : null}
         </div>
 
+        {projectIndexShown && onProjectIndexWidthChange ? (
+          <ProjectIndex
+            projects={projectIndexEntries}
+            scrollRegionRef={lensScroll.ref}
+            scrollRegionId={scrollRegionId}
+            spy={props.browseMode === "directories" && !listStatus}
+            width={props.projectIndexWidth ?? null}
+            onWidthChange={onProjectIndexWidthChange}
+            onJump={jumpToProject}
+          />
+        ) : null}
         <div
           ref={lensScroll.ref}
+          id={scrollRegionId}
           className="sidebar__scroll-region"
           onScroll={lensScroll.onScroll}
           onClickCapture={hoverStableSnapshot.onClickCapture}

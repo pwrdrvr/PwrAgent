@@ -311,13 +311,20 @@ export type DesktopAppearanceTheme = (typeof DESKTOP_APPEARANCE_THEMES)[number];
  * way the preload already imports `DEFAULT_NAVIGATION_BROWSE_MODE`.
  *
  * The rail defaults to pinned-open so a fresh operator discovers it exists.
+ * The sidebar's project index defaults to shown, as PwrGit's repo index does.
+ * Its width is `null` until the operator drags it: the column then sizes to
+ * its longest project name.
  */
 export const DESKTOP_UI_LAYOUT_DEFAULTS: {
   readonly contextRailPinned: boolean;
   readonly sidebarHidden: boolean;
+  readonly projectIndexHidden: boolean;
+  readonly projectIndexWidth: number | null;
 } = {
   contextRailPinned: true,
   sidebarHidden: false,
+  projectIndexHidden: false,
+  projectIndexWidth: null,
 };
 
 /** Help → Logs: what a search does to the lines it does not match. */
@@ -1369,6 +1376,10 @@ export type DesktopSettingsSnapshot = {
   ui: {
     sidebarHidden: DesktopSettingsValue<boolean>;
     contextRailPinned: DesktopSettingsValue<boolean>;
+    /** The sidebar's project index column, beside the thread list. */
+    projectIndexHidden: DesktopSettingsValue<boolean>;
+    /** A dragged index width in px; `null` sizes it to the longest name. */
+    projectIndexWidth: DesktopSettingsValue<number | null>;
     activeContextTab: DesktopSettingsValue<string>;
     editedFilesDock: DesktopSettingsValue<string>;
     actionRunsDock: DesktopSettingsValue<string>;
@@ -1699,6 +1710,9 @@ export type DesktopSettingsConfigPatch = {
   ui?: {
     sidebarHidden?: boolean;
     contextRailPinned?: boolean;
+    projectIndexHidden?: boolean;
+    /** `null` removes a dragged width, returning to the natural width. */
+    projectIndexWidth?: number | null;
     activeContextTab?: string;
     editedFilesDock?: string;
     actionRunsDock?: string;

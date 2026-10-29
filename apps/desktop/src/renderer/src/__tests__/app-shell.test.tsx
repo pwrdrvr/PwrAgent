@@ -2563,6 +2563,8 @@ describe("App", () => {
       ui: {
         sidebarHidden: { value: false, source: "default" },
         contextRailPinned: { value: false, source: "default" },
+        projectIndexHidden: { value: false, source: "default" },
+        projectIndexWidth: { value: null, source: "default" },
         activeContextTab: { value: "info", source: "default" },
         editedFilesDock: { value: "above", source: "default" },
         actionRunsDock: { value: "above", source: "default" },
@@ -3001,6 +3003,8 @@ describe("App", () => {
           ui: {
             sidebarHidden: { value: false, source: "default" },
             contextRailPinned: { value: true, source: "default" },
+            projectIndexHidden: { value: false, source: "default" },
+            projectIndexWidth: { value: null, source: "default" },
             activeContextTab: { value: "info", source: "default" },
             editedFilesDock: { value: "above", source: "default" },
             actionRunsDock: { value: "above", source: "default" },

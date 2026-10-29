@@ -1227,6 +1227,15 @@ export class DesktopSettingsService {
           config.ui?.contextRailPinned,
           DESKTOP_UI_LAYOUT_DEFAULTS.contextRailPinned,
         ),
+        projectIndexHidden: this.resolveConfigBoolean(
+          config.ui?.projectIndexHidden,
+          DESKTOP_UI_LAYOUT_DEFAULTS.projectIndexHidden,
+        ),
+        projectIndexWidth: {
+          value: config.ui?.projectIndexWidth
+            ?? DESKTOP_UI_LAYOUT_DEFAULTS.projectIndexWidth,
+          source: config.ui?.projectIndexWidth === undefined ? "default" : "config",
+        },
         activeContextTab: {
           value: config.ui?.activeContextTab ?? "info",
           source: config.ui?.activeContextTab === undefined ? "default" : "config",

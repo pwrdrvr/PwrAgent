@@ -178,6 +178,8 @@ describe("desktop settings contracts", () => {
       ui: {
         sidebarHidden: { value: false, source: "default" },
         contextRailPinned: { value: false, source: "default" },
+        projectIndexHidden: { value: false, source: "default" },
+        projectIndexWidth: { value: null, source: "default" },
         activeContextTab: { value: "info", source: "default" },
         editedFilesDock: { value: "above", source: "default" },
         actionRunsDock: { value: "above", source: "default" },

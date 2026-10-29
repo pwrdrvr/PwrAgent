@@ -471,6 +471,14 @@ function DesktopAppShell(props: {
   const [contextRailPinned, setContextRailPinned] = useState(
     () => readBootstrapLayoutPreferences().contextRailPinned,
   );
+  // The sidebar's project index splits the sidebar's width, so it moves the
+  // list's width and is seeded before first paint like the two above.
+  const [projectIndexHidden, setProjectIndexHidden] = useState(
+    () => readBootstrapLayoutPreferences().projectIndexHidden,
+  );
+  const [projectIndexWidth, setProjectIndexWidth] = useState(
+    () => readBootstrapLayoutPreferences().projectIndexWidth,
+  );
   const [activeContextTab, setActiveContextTab] =
     useState<ContextTabId>(DEFAULT_CONTEXT_TAB);
   const [editedFilesDock, setEditedFilesDock] = useState<EditedFilesDock>(
@@ -1756,13 +1764,32 @@ function DesktopAppShell(props: {
     [writeConfig],
   );
 
+  const setProjectIndexHiddenPersisted = useCallback(
+    (next: boolean) => {
+      layoutPrefsChosenRef.current.add("projectIndexHidden");
+      setProjectIndexHidden(next);
+      void writeConfig({ ui: { projectIndexHidden: next } });
+    },
+    [writeConfig],
+  );
   // Single owner of the window-layout keyboard chords (⌘B/⌃B sidebar,
-  // ⌘⌥B/⌃⌥B rail). Bound once here — never per PanelToggleButtons chip — so
-  // it fires exactly once regardless of how many chips are mounted.
+  // ⌘⌥B/⌃⌥B rail, ⇧⌘B/⇧⌃B project index). Bound once here — never per
+  // PanelToggleButtons chip — so it fires exactly once regardless of how many
+  // chips are mounted.
   useLayoutChordHotkeys({
     onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
     onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+    onToggleProjectIndex: () => setProjectIndexHiddenPersisted(!projectIndexHidden),
   });
+  // Called once per drag and once per arrow-key run, on release.
+  const setProjectIndexWidthPersisted = useCallback(
+    (next: number | null) => {
+      layoutPrefsChosenRef.current.add("projectIndexWidth");
+      setProjectIndexWidth(next);
+      void writeConfig({ ui: { projectIndexWidth: next } });
+    },
+    [writeConfig],
+  );
   const setActiveContextTabPersisted = useCallback(
     (tab: ContextTabId) => {
       layoutPrefsChosenRef.current.add("activeContextTab");
@@ -1821,6 +1848,12 @@ function DesktopAppShell(props: {
     }
     if (!chosen.has("contextRailPinned")) {
       setContextRailPinned(uiPrefs.contextRailPinned.value);
+    }
+    if (!chosen.has("projectIndexHidden") && uiPrefs.projectIndexHidden) {
+      setProjectIndexHidden(uiPrefs.projectIndexHidden.value);
+    }
+    if (!chosen.has("projectIndexWidth") && uiPrefs.projectIndexWidth) {
+      setProjectIndexWidth(uiPrefs.projectIndexWidth.value);
     }
     if (
       !chosen.has("activeContextTab")
@@ -4187,6 +4220,10 @@ function DesktopAppShell(props: {
           revealSelectedThreadRequest={revealSelectedThreadRequest}
           onRevealSelectedThreadComplete={threadJump.completePeekRestore}
           projectRevealRequest={projectRevealRequest}
+          projectIndexHidden={projectIndexHidden}
+          onProjectIndexHiddenChange={setProjectIndexHiddenPersisted}
+          projectIndexWidth={projectIndexWidth}
+          onProjectIndexWidthChange={setProjectIndexWidthPersisted}
           selectedItemKey={navigation.selectedItemKey}
           thinkingThreadKeys={session.thinkingThreadKeys}
           agentCommandThreadKeys={session.agentCommandThreadKeys}

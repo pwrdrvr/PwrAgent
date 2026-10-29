@@ -199,6 +199,8 @@ export type DesktopSettingsConfig = {
   ui?: {
     sidebarHidden?: boolean;
     contextRailPinned?: boolean;
+    projectIndexHidden?: boolean;
+    projectIndexWidth?: number;
     activeContextTab?: string;
     editedFilesDock?: string;
     actionRunsDock?: string;
@@ -1153,6 +1155,24 @@ export function desktopSettingsPatchToEdits(
       edits.push({ op: "delete", path: ["ui", "context_rail_pinned"] });
     } else {
       set(["ui", "context_rail_pinned"], false);
+    }
+  }
+  // The project index defaults to shown, so only an explicit hide persists.
+  if (patch.ui?.projectIndexHidden !== undefined) {
+    if (patch.ui.projectIndexHidden) {
+      set(["ui", "project_index_hidden"], true);
+    } else {
+      edits.push({ op: "delete", path: ["ui", "project_index_hidden"] });
+    }
+  }
+  // `null` (a double-click on the grip) returns the column to the width of
+  // its longest name, which is the absence of the key.
+  if (patch.ui?.projectIndexWidth !== undefined) {
+    const width = patch.ui.projectIndexWidth;
+    if (width === null || !Number.isFinite(width) || width <= 0) {
+      edits.push({ op: "delete", path: ["ui", "project_index_width"] });
+    } else {
+      set(["ui", "project_index_width"], Math.round(width));
     }
   }
   if (patch.ui?.activeContextTab !== undefined) {
@@ -2289,6 +2309,8 @@ function normalizeDesktopConfig(
     ui: {
       sidebarHidden: readBoolean(ui?.sidebar_hidden),
       contextRailPinned: readBoolean(ui?.context_rail_pinned),
+      projectIndexHidden: readBoolean(ui?.project_index_hidden),
+      projectIndexWidth: readPositiveWidth(ui?.project_index_width),
       activeContextTab: readString(ui?.active_context_tab),
       editedFilesDock: readString(ui?.edited_files_dock),
       actionRunsDock: readString(ui?.action_runs_dock),
@@ -3798,6 +3820,12 @@ function legacyTokenMiserGeneralComment(): string {
 
 function readNumber(value: TomlScalar | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/** A remembered pane width: a positive whole number of px, or nothing. */
+function readPositiveWidth(value: TomlScalar | undefined): number | undefined {
+  const width = readNumber(value);
+  return width !== undefined && width > 0 ? Math.round(width) : undefined;
 }
 
 function readImageProfile(
