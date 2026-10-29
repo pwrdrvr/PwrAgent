@@ -60409,7 +60409,8 @@ script = "printf setup"
       expect(moved.warnings).toContain("The previous worktree stays on disk. Archiving this thread checkpoints and removes it.");
       // Nothing was moved or discarded from the old worktree.
       await expect(readFile(path.join(oldWorktree, "README.md"), "utf8")).resolves.toBe("uncommitted\n");
-      await expect(readFile(path.join(moved.targetPath, "README.md"), "utf8")).resolves.toBe("base\n");
+      // Git for Windows checks the committed file out with CRLF.
+      await expect(readFile(path.join(moved.targetPath, "README.md"), "utf8")).resolves.toMatch(/^base\r?\n$/);
       const overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId: thread.id });
       // The new worktree is the thread's only workspace; the old one is kept aside.
       expect(overlay?.extraLinkedDirectories).toEqual([moved.linkedDirectory]);
@@ -60419,15 +60420,16 @@ script = "printf setup"
 
       const archived = await registry.archiveThread({ backend: "codex", threadId: thread.id });
 
-      expect(archived.cleanup).toContainEqual(expect.objectContaining({ worktreePath: oldWorktree, removedWorktree: true }));
+      // The provider reports no directory, so the retained worktree is the
+      // only candidate. Paths are not compared: Windows can spell them differently.
+      expect(archived.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
       expect(await pathExists(oldWorktree)).toBe(false);
       expect(await git(repoPath, ["worktree", "list", "--porcelain"])).not.toContain(oldWorktree);
       // The old worktree's uncommitted change survives in its checkpoint.
       const snapshots = (await overlayStore.getThreadOverlayState({ backend: "codex", threadId: thread.id }))
         ?.worktreeSnapshots ?? [];
-      const oldSnapshot = snapshots.find((snapshot) => snapshot.worktreePath === oldWorktree);
-      expect(oldSnapshot).toBeDefined();
-      expect(await git(repoPath, ["show", `${oldSnapshot!.snapshotCommit}:README.md`])).toBe("uncommitted");
+      expect(snapshots).toHaveLength(1);
+      expect(await git(repoPath, ["show", `${snapshots[0]!.snapshotCommit}:README.md`])).toBe("uncommitted");
     } finally {
       await registry?.close();
       await rm(root, { recursive: true, force: true });
