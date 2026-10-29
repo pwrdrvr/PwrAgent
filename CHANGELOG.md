@@ -4,6 +4,8 @@
 
 - Offline HTML and File Previews - Open HTML files with local images and styles in an offline sandbox. Scripts are off by default; external links require confirmation. Add compact file-viewer headers and file chips in transcripts.
 - Project Navigation - Add a project index beside the sidebar's thread list for quick project jumps. Move launchpad connection cards into an optional sidebar tab, show result ages in the jump palette, and improve keyboard navigation.
+- Windows Updates - Install downloaded updates silently and automatically relaunch PwrAgent when installation finishes.
+- Federation Labels - Use instance short names consistently in menus, remote windows, search, and usage displays so connected machines are easier to identify.
 - Image Paste - Preserve image quality and animated GIF/WebP attachments while avoiding repeated resize and recompression passes. Show preparation progress before sending.
 - Approval Shortcuts - Answer approvals from a notice's Review menu without switching threads. Show correct thread titles outside the loaded sidebar page, with clearer delivery and retry status.
 - Messaging and Final Answers - Preserve the originating Slack or Telegram destination through handoffs, completions, monitors, and continuations. Keep progress in Working Updates and use only the turn's last assistant message as final text across transcripts, automations, and messaging.
