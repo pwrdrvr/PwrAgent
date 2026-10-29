@@ -864,6 +864,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       className="thread-todo-card__more"
       aria-expanded={resting.expanded}
       aria-controls={resting.bodyId}
+      ref={resting.toggleRef}
       onClick={resting.toggle}
     >
       {resting.expanded ? <ChevronUpIcon size={11} /> : <ChevronDownIcon size={11} />}
@@ -905,6 +906,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       {todo.detail || progress || prerequisites.length > 0 || facts.length > 0 || prompt || todo.error
         || action?.type === "start_thread" ? (
         <div
+          ref={resting.bodyRef}
           id={resting.bodyId}
           className={`thread-todo-card__body${resting.expanded ? " is-expanded" : ""}`}
         >
@@ -1182,6 +1184,9 @@ function useRestingCard(todo: ThreadTodo) {
   const [anchor, setAnchor] = useState(() => restingStepStart(items));
   const [detailCut, setDetailCut] = useState(false);
   const detailRef = useRef<HTMLParagraphElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const revealToggleRef = useRef(false);
   const bodyId = useId();
 
   let start = Math.max(0, Math.min(anchor, items.length - RESTING_STEP_ROWS));
@@ -1205,6 +1210,24 @@ function useRestingCard(todo: ThreadTodo) {
     return () => observer.disconnect();
   }, [expanded, todo.detail]);
 
+  // Opening grows the text above the toggle, and the body starts at its
+  // top. A keyboard user's focus stays on the toggle, so scroll the body
+  // just enough to keep it in view. A click keeps the top in view instead.
+  useLayoutEffect(() => {
+    if (!revealToggleRef.current) return;
+    revealToggleRef.current = false;
+    const body = bodyRef.current;
+    const toggle = toggleRef.current;
+    if (!body || !toggle) return;
+    const bodyRect = body.getBoundingClientRect();
+    const toggleRect = toggle.getBoundingClientRect();
+    if (toggleRect.bottom > bodyRect.bottom) {
+      body.scrollTop += toggleRect.bottom - bodyRect.bottom;
+    } else if (toggleRect.top < bodyRect.top) {
+      body.scrollTop -= bodyRect.top - toggleRect.top;
+    }
+  }, [expanded]);
+
   const toggleLabel = expanded
     ? "Show less"
     : hiddenSteps > 0
@@ -1221,7 +1244,13 @@ function useRestingCard(todo: ThreadTodo) {
     steps: expanded ? items : items.slice(start, start + RESTING_STEP_ROWS),
     toggleLabel,
     toggleAfter,
-    toggle: () => setExpanded((current) => !current),
+    bodyRef,
+    toggleRef,
+    toggle: (event: ReactMouseEvent<HTMLButtonElement>) => {
+      // Enter and Space dispatch a click with no pointer presses.
+      revealToggleRef.current = event.detail === 0;
+      setExpanded((current) => !current);
+    },
   };
 }
 

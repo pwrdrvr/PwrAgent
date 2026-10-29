@@ -72,6 +72,15 @@ function reportClampedDetailAsCut(): void {
   });
 }
 
+function stubOpenedLayout(): void {
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    const scrolled = this.closest<HTMLElement>(".thread-todo-card__body")?.scrollTop ?? 0;
+    if (this.classList.contains("thread-todo-card__body")) return new DOMRect(0, 0, 340, 440);
+    if (this.classList.contains("thread-todo-card__more")) return new DOMRect(0, 600 - scrolled, 80, 24);
+    return new DOMRect(0, 0, 0, 0);
+  });
+}
+
 function precedes(first: Node, second: Node): boolean {
   return (first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
 }
@@ -189,6 +198,30 @@ describe("to-do card resting height", () => {
     const more = screen.getByRole("button", { name: "Show more" });
     expect(precedes(detail, more)).toBe(true);
     expect(precedes(more, prerequisites)).toBe(true);
+  });
+
+  it("keeps a keyboard-opened toggle in view inside the scrolling body", () => {
+    // jsdom has no layout: the opened body shows 0-440px, and the full
+    // description and eight steps push Show less down to 600-624px.
+    stubOpenedLayout();
+    render(<ThreadTodoCard {...props(card())} />);
+    const toggle = screen.getByRole("button", { name: "Show all 8 steps" });
+    const body = document.getElementById(toggle.getAttribute("aria-controls") ?? "")!;
+
+    // Enter and Space dispatch a click with detail 0.
+    fireEvent.click(toggle, { detail: 0 });
+    expect(screen.getByRole("button", { name: "Show less" })).toBe(toggle);
+    expect(body.scrollTop).toBe(184);
+  });
+
+  it("leaves a clicked-open body at its top", () => {
+    stubOpenedLayout();
+    render(<ThreadTodoCard {...props(card())} />);
+    const toggle = screen.getByRole("button", { name: "Show all 8 steps" });
+    const body = document.getElementById(toggle.getAttribute("aria-controls") ?? "")!;
+
+    fireEvent.click(toggle, { detail: 1 });
+    expect(body.scrollTop).toBe(0);
   });
 
   it("scrolls the opened body instead of growing the card", () => {
