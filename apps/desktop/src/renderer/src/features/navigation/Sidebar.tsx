@@ -2317,9 +2317,10 @@ export function Sidebar(props: SidebarProps) {
     const captureComposerThreadHotkey = (event: KeyboardEvent): void => {
       // The editor's keymap sees a keydown before the window's bubble
       // listener. ProseMirror consumes native Backspace at a block boundary,
-      // and Underline's Mod-U also takes ⇧⌘U, because ProseMirror retries a
-      // shifted letter without Shift. Claim every thread chord permitted in
-      // the composer here, through the same action/lifecycle owner.
+      // and the composer's no-op Mod-U also takes ⇧⌘U, because ProseMirror
+      // retries a shifted letter without Shift. Claim every thread chord
+      // permitted in the composer here, through the same action/lifecycle
+      // owner.
       if (threadHotkeyFocusContext(event) !== "field"
         || matchThreadHotkey(event) === null) return;
       runThreadHotkey(event);
