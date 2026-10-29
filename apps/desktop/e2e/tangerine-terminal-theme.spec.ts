@@ -268,7 +268,7 @@ test("keeps workflow states, scanner phases, and narrow desktop layout stable", 
       "Get-ChildItem -Force | Select-Object Name,Mode; Get-ChildItem -Recurse -Filter AGENTS.md -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName"
     );
     const allowPrefix = approval.getByRole("button", {
-      name: /Always Allow Prefix: C:\\Program Files\\WindowsApps\\Microsoft\.PowerShell_.*\\pwsh\.exe -Command Get-ChildItem/,
+      name: /Always allow prefix: C:\\Program Files\\WindowsApps\\Microsoft\.PowerShell_.*\\pwsh\.exe -Command Get-ChildItem/,
     });
     await expect(allowPrefix).toBeVisible();
     await expect(allowPrefix).toHaveClass(/button--ghost/);

@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { codexAsyncQuestionItemId, parseCodexAsyncQuestionReply } from "@pwragent/shared";
 import { OperatorWaitRow } from "../OperatorWaitRow";
+import { APPROVAL_STILL_OPEN_MESSAGE } from "../approval-choices";
 import { buildOperatorWaits } from "../operator-waits";
 
 afterEach(cleanup);
@@ -198,5 +199,40 @@ describe("OperatorWaitRow questions", () => {
     expect((await within(form).findByRole("alert")).textContent)
       .toBe(`The answer was not sent. ${refusal}`);
     expect(within(form).getByLabelText<HTMLTextAreaElement>("Your answer").value).toBe("staging");
+  });
+});
+
+describe("OperatorWaitRow approvals", () => {
+  const commandWait = () => buildOperatorWaits({ serverRequests: [{
+    backend: "codex", createdAt: Date.now(), notification: {
+      method: "item/commandExecution/requestApproval", params: {
+        threadId: "thread-1", turnId: "turn-1", requestId: "88",
+        command: "/bin/zsh -lc 'pnpm test'",
+      },
+    },
+  }], questions: [], seenKeys: [] })[0]!;
+
+  it("stays busy while the answer is in flight", () => {
+    const respond = vi.fn(() => new Promise<void>(() => {}));
+    render(<OperatorWaitRow wait={commandWait()} current={false} unread={false} respond={respond}
+      dismissQuestion={vi.fn()} openWait={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve once" }));
+    expect(screen.getByRole("status").textContent).toContain("Approving…");
+    expect(screen.queryByRole("button", { name: "Decline" })).toBeNull();
+  });
+
+  it("gives the answers back when the owner still lists the request", async () => {
+    // `respond` re-reads the queue before resolving; a row still mounted
+    // after that is a request the owner kept.
+    const respond = vi.fn(async () => undefined);
+    render(<OperatorWaitRow wait={commandWait()} current={false} unread={false} respond={respond}
+      dismissQuestion={vi.fn()} openWait={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve once" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(APPROVAL_STILL_OPEN_MESSAGE);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeTruthy();
+    expect(respond).toHaveBeenCalledTimes(1);
   });
 });

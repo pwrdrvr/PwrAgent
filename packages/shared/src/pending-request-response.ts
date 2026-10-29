@@ -421,7 +421,7 @@ export function buildPendingRequestActions(
         decision: "cancel",
         fallbackText: String(acpActions.length + 1),
         id: "approval:acp:cancel",
-        label: "Cancel Turn",
+        label: "Cancel turn",
         responseDecision: "cancel",
         style: "secondary",
       }),
@@ -585,21 +585,21 @@ function acpPermissionLabel(
   decision: PendingRequestActionDecision,
 ): string {
   if (normalizeAcpPermissionKind(kind) === "rejectalways") {
-    return "Always Reject";
+    return "Always reject";
   }
   switch (decision) {
     case "accept":
-      return "Approve Once";
+      return "Approve once";
     case "accept_for_session":
-      return "Always Allow";
+      return "Always allow";
     case "accept_with_execpolicy_amendment":
-      return "Always Allow Command Prefix";
+      return "Always allow command prefix";
     case "decline":
       return "Decline";
     case "apply_network_policy_amendment":
-      return "Apply Network Rule";
+      return "Apply network rule";
     case "cancel":
-      return "Cancel Turn";
+      return "Cancel turn";
   }
 }
 
@@ -698,7 +698,7 @@ function defaultPendingRequestActions(
         decision: "accept",
         fallbackText: "1",
         id: "approval:accept",
-        label: "Approve Once",
+        label: "Approve once",
         responseDecision: "accept",
         style: "primary",
       }),
@@ -706,7 +706,7 @@ function defaultPendingRequestActions(
         decision: "accept_for_session",
         fallbackText: "2",
         id: "approval:accept_for_session",
-        label: "Approve for Session",
+        label: "Approve for session",
         responseDecision: "accept_for_session",
         style: "secondary",
       }),
@@ -722,7 +722,7 @@ function defaultPendingRequestActions(
         decision: "cancel",
         fallbackText: "4",
         id: "approval:cancel",
-        label: "Cancel Turn",
+        label: "Cancel turn",
         responseDecision: "cancel",
         style: "secondary",
       }),
@@ -735,7 +735,7 @@ function defaultPendingRequestActions(
         decision: "accept",
         fallbackText: "1",
         id: "approval:accept",
-        label: "Approve Once",
+        label: "Approve once",
         responseDecision: "accept",
         style: "primary",
       }),
@@ -751,7 +751,7 @@ function defaultPendingRequestActions(
         decision: "cancel",
         fallbackText: "3",
         id: "approval:cancel",
-        label: "Cancel Turn",
+        label: "Cancel turn",
         responseDecision: "cancel",
         style: "secondary",
       }),
@@ -763,7 +763,7 @@ function defaultPendingRequestActions(
       decision: "accept",
       fallbackText: "1",
       id: "approval:accept",
-      label: "Approve Once",
+      label: "Approve once",
       responseDecision: "approve",
       style: "primary",
     }),
@@ -779,7 +779,7 @@ function defaultPendingRequestActions(
       decision: "cancel",
       fallbackText: "3",
       id: "approval:cancel",
-      label: "Cancel Turn",
+      label: "Cancel turn",
       responseDecision: "cancel",
       style: "secondary",
     }),
@@ -863,19 +863,19 @@ function defaultLabel(
 ): string {
   switch (decision) {
     case "accept":
-      return "Approve Once";
+      return "Approve once";
     case "accept_for_session":
       return hasNetworkApprovalContext(request)
-        ? "Allow for Conversation"
-        : "Approve for Session";
+        ? "Allow for conversation"
+        : "Approve for session";
     case "accept_with_execpolicy_amendment":
-      return "Approve Command Prefix";
+      return "Approve command prefix";
     case "apply_network_policy_amendment":
-      return "Apply Network Rule";
+      return "Apply network rule";
     case "decline":
       return "Decline";
     case "cancel":
-      return "Cancel Turn";
+      return "Cancel turn";
   }
 }
 
@@ -900,7 +900,7 @@ function execpolicyLabel(payload: object): string {
     ? prefix.filter((part): part is string => typeof part === "string")
     : undefined;
   const rendered = command?.join(" ").trim();
-  return rendered ? `Always Allow Prefix: ${rendered}` : "Always Allow Command Prefix";
+  return rendered ? `Always allow prefix: ${rendered}` : "Always allow command prefix";
 }
 
 function networkPolicyLabel(payload: object): string {
@@ -912,9 +912,9 @@ function networkPolicyLabel(payload: object): string {
   const action = readString(record?.action)?.toLowerCase();
   const host = readString(record?.host);
   if (action === "deny") {
-    return host ? `Block ${host}` : "Block Host";
+    return host ? `Block ${host}` : "Block host";
   }
-  return host ? `Allow ${host}` : "Allow Host";
+  return host ? `Allow ${host}` : "Allow host";
 }
 
 function hasNetworkApprovalContext(

@@ -1,6 +1,14 @@
 import { useCallback, useMemo, useState } from "react";
+import type { SubmitServerRequestRequest } from "@pwragent/shared";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { approvalDisplayCommand } from "../thread-detail/approval-display-command";
+import { cleanComposerErrorMessage } from "../composer/composer-error-message";
+import type { TodoSplitMenuEntry } from "../thread-todos/TodoSplitButton";
+import {
+  APPROVAL_STILL_OPEN_MESSAGE,
+  approvalChoices,
+  type ApprovalChoice,
+} from "./approval-choices";
 import { operatorWaitLabel, type OperatorWait } from "./operator-waits";
 
 const APPROVAL_NOTICE_PREFIX = "operator-approval:";
@@ -18,6 +26,9 @@ export function approvalNoticeId(waitKey: string): string {
   return `${APPROVAL_NOTICE_PREFIX}${waitKey}`;
 }
 
+/** An answer sent from a notice: in flight, or refused with its reason. */
+export type ApprovalNoticeAnswer = { busyLabel: string; error?: string };
+
 export type ApprovalNoticeInput = {
   /** Most urgent first, as the owner queue sorts them. */
   waits: readonly OperatorWait[];
@@ -27,6 +38,13 @@ export type ApprovalNoticeInput = {
   hiddenKeys: ReadonlySet<string>;
   threadTitleForKey: (threadKey: string) => string;
   onReview: (wait: OperatorWait) => void;
+  /**
+   * Answers from the notice. Without it the notice offers Review alone, and
+   * the operator answers on the thread's card.
+   */
+  onAnswer?: (wait: OperatorWait, choice: ApprovalChoice) => void;
+  /** Answers sent from a notice, by wait key. */
+  answers?: ReadonlyMap<string, ApprovalNoticeAnswer>;
   onHide: (wait: OperatorWait) => void;
   /** Hides every approval card, including the thread on screen's. */
   onHideAll: () => void;
@@ -43,11 +61,22 @@ export function buildApprovalNotices(input: ApprovalNoticeInput): AppNoticeToast
     if (!isApprovalNoticeWait(wait)) continue;
     if (wait.threadKey === input.selectedThreadKey) continue;
     if (input.hiddenKeys.has(wait.key)) continue;
+    const answer = input.answers?.get(wait.key);
+    const sending = answer !== undefined && answer.error === undefined;
+    const onAnswer = input.onAnswer;
+    const entries = onAnswer && !sending ? approvalMenuEntries(wait, onAnswer) : [];
     notices.push({
       id: approvalNoticeId(wait.key),
       title: `${wait.kind === "mcp-approval" ? operatorWaitLabel(wait) : "Approval"} needed`,
       ...approvalNoticeText(wait),
       tone: "warning",
+      ...(answer
+        ? {
+            status: answer.error === undefined
+              ? { label: answer.busyLabel, state: "progress" as const }
+              : { label: answer.error, state: "error" as const },
+          }
+        : {}),
       autoDismiss: false,
       dismissLabel: APPROVAL_NOTICE_HIDE_LABEL,
       dismissGroup: {
@@ -62,15 +91,48 @@ export function buildApprovalNotices(input: ApprovalNoticeInput): AppNoticeToast
         title: input.threadTitleForKey(wait.threadKey),
         ...(wait.federationTarget ? { instanceId: wait.federationTarget.instanceId } : {}),
       },
+      // Review stays the default: the card shows the whole request. The
+      // chevron answers from here for a request the notice already names.
       actions: [{
         label: "Review",
         tone: "primary",
         onClick: () => input.onReview(wait),
+        ...(entries.length > 0
+          ? { menu: { label: "Approval options", entries } }
+          : {}),
       }],
       onDismiss: () => input.onHide(wait),
     });
   }
   return notices;
+}
+
+/** Allow answers first, then Decline and Cancel turn below a rule. */
+function approvalMenuEntries(
+  wait: OperatorWait,
+  onAnswer: (wait: OperatorWait, choice: ApprovalChoice) => void,
+): TodoSplitMenuEntry[] {
+  const choices = approvalChoices(wait);
+  if (!choices) return [];
+  const all = [
+    ...(choices.accept ? [choices.accept] : []),
+    ...(choices.decline ? [choices.decline] : []),
+    ...choices.alternatives,
+  ];
+  const item = (choice: ApprovalChoice): TodoSplitMenuEntry => ({
+    kind: "item",
+    id: choice.id,
+    label: choice.label,
+    onSelect: () => onAnswer(wait, choice),
+  });
+  const allows = all.filter((choice) => choice.effect === "allow").map(item);
+  const stops = [
+    ...all.filter((choice) => choice.effect === "decline"),
+    ...all.filter((choice) => choice.effect === "cancel"),
+  ].map(item);
+  return allows.length > 0 && stops.length > 0
+    ? [...allows, { kind: "separator", id: "approval-stops" }, ...stops]
+    : [...allows, ...stops];
 }
 
 function approvalNoticeText(
@@ -107,10 +169,25 @@ function approvalNoticeText(
  * window's life; nothing is saved, so a reload shows a pending request again.
  */
 export function useApprovalNotices(
-  input: Omit<ApprovalNoticeInput, "hiddenKeys" | "onHide" | "onHideAll">,
+  input: Omit<
+    ApprovalNoticeInput,
+    "hiddenKeys" | "onHide" | "onHideAll" | "onAnswer" | "answers"
+  > & {
+    /**
+     * Sends an answer, then re-reads the owner queue before it resolves.
+     * Without it the notices offer Review alone.
+     */
+    respond?: (
+      wait: OperatorWait,
+      response: SubmitServerRequestRequest["response"],
+    ) => Promise<void>;
+  },
 ): AppNoticeToastNotice[] {
-  const { waits, selectedThreadKey, threadTitleForKey, onReview } = input;
+  const { waits, selectedThreadKey, threadTitleForKey, onReview, respond } = input;
   const [hiddenKeys, setHiddenKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const [answers, setAnswers] = useState<ReadonlyMap<string, ApprovalNoticeAnswer>>(
+    () => new Map(),
+  );
   // Each hide also drops keys for requests that are gone, so the set holds
   // only pending requests.
   const hide = useCallback((keys: readonly string[]): void => {
@@ -126,10 +203,51 @@ export function useApprovalNotices(
   const onHideAll = useCallback((): void => {
     hide(waits.filter(isApprovalNoticeWait).map((wait) => wait.key));
   }, [hide, waits]);
+  // A sent answer keeps its notice busy until `respond` settles. Each change
+  // drops keys for requests that are gone.
+  const setAnswer = useCallback((key: string, answer: ApprovalNoticeAnswer): void => {
+    setAnswers((current) => {
+      const pending = new Set(waits.map((wait) => wait.key));
+      const next = new Map([...current].filter(([entryKey]) => pending.has(entryKey)));
+      next.set(key, answer);
+      return next;
+    });
+  }, [waits]);
+  const onAnswer = useMemo(() => respond
+    ? (wait: OperatorWait, choice: ApprovalChoice): void => {
+        setAnswer(wait.key, { busyLabel: choice.busyLabel });
+        Promise.resolve()
+          .then(() => respond(wait, choice.buildResponse()))
+          .then(() => {
+            // `respond` re-reads the queue, so a request that is gone has
+            // already taken its card with it. One still listed gets its
+            // answers back rather than a busy card that never clears.
+            setAnswer(wait.key, {
+              busyLabel: choice.busyLabel,
+              error: APPROVAL_STILL_OPEN_MESSAGE,
+            });
+          })
+          .catch((cause: unknown) => {
+            // Without Electron's "Error invoking remote method …" wrapper.
+            const reason = cleanComposerErrorMessage(
+              cause instanceof Error ? cause.message : String(cause),
+            );
+            // Named as a failure, or it reads as the request's own text.
+            setAnswer(wait.key, {
+              busyLabel: choice.busyLabel,
+              error: `Could not answer: ${reason}`,
+            });
+          });
+      }
+    : undefined, [respond, setAnswer]);
   return useMemo(
     () => buildApprovalNotices({
       waits, selectedThreadKey, hiddenKeys, threadTitleForKey, onReview, onHide, onHideAll,
+      ...(onAnswer ? { onAnswer, answers } : {}),
     }),
-    [waits, selectedThreadKey, hiddenKeys, threadTitleForKey, onReview, onHide, onHideAll],
+    [
+      waits, selectedThreadKey, hiddenKeys, threadTitleForKey, onReview, onHide, onHideAll,
+      onAnswer, answers,
+    ],
   );
 }
