@@ -1351,17 +1351,17 @@ function installWindowMenuRefreshHandlers(): void {
     });
     window.on("page-title-updated", refresh);
   });
-  // Keep Profiles → Remote Instances in sync with peer connectivity.
-  getDesktopFederationRuntime().onPeerStatusChanged(() => {
-    installApplicationMenu();
-  });
-  // Both the menu and remote window titles draw short names.
-  getDesktopFederationRuntime().onShortNamesChanged(() => {
+  // Profiles → Remote Instances and remote window titles both draw peer
+  // labels, which change with connectivity (a reconnect, or a sibling
+  // profile that adds a "/ <profile>" suffix) and with short names.
+  const refreshPeerLabels = (): void => {
     refreshFederationWindowTitles(
       getDesktopFederationRuntime().connectedPeerTargets(),
     );
     installApplicationMenu();
-  });
+  };
+  getDesktopFederationRuntime().onPeerStatusChanged(refreshPeerLabels);
+  getDesktopFederationRuntime().onShortNamesChanged(refreshPeerLabels);
 }
 
 /**

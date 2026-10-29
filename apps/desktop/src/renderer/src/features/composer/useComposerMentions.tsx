@@ -826,7 +826,9 @@ export function useComposerMentions(params: {
           </>,
           // The meta line draws the short name; the row's tooltip names the
           // machine in full.
-          { title: instance ? `${tooltip}\nOn ${instance.fullLabel}` : tooltip },
+          { title: instance && instance.label !== instance.fullLabel
+            ? `${tooltip}\nOn ${instance.fullLabel}`
+            : tooltip },
         );
       }
       const pullRequest = option.pullRequest;
