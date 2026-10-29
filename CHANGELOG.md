@@ -1,23 +1,19 @@
 # Changelog
 
-## v1.3.6 - 2026-10-29
+## v1.3.5 - 2026-10-29
 
-- Offline HTML Previews - Open HTML files directly in the file viewer, including local images and styles. Previews block network access, disable scripts by default, and require confirmation before opening external links.
+- Offline HTML and File Previews - Open HTML files with local images and styles in an offline sandbox. Scripts are off by default; external links require confirmation. Add compact file-viewer headers and file chips in transcripts.
+- Project Navigation - Add a project index beside the sidebar's thread list for quick project jumps. Move launchpad connection cards into an optional sidebar tab, show result ages in the jump palette, and improve keyboard navigation.
 - Image Paste - Preserve image quality and animated GIF/WebP attachments while avoiding repeated resize and recompression passes. Show preparation progress before sending.
-- Approval Shortcuts - Answer approvals directly from a notice's Review menu without switching threads. Show correct thread titles even outside the loaded sidebar page, with clearer delivery and retry status.
-- Final Answer Clarity - Use only the turn's last assistant message as its final text across transcripts, automations, and messaging, preventing progress messages from being repeated as another answer.
-- Security Hardening - Deny renderer permissions by default, block permission access from embedded previews, and restrict application-window navigation to the intended renderer. Voice retains explicit microphone and camera opt-in.
-- Navigation Polish - Keep the sidebar steady when opening threads, preserve MCP counts during remote refreshes, and let the mark-read shortcut work from the composer.
-
-## v1.3.5 - 2026-10-28
-
-- Messaging Continuity - Preserve the originating Slack or Telegram destination through handoffs, completions, monitors, and continuations. Keep Codex partial answers in Working Updates rather than treating them as final replies.
+- Approval Shortcuts - Answer approvals from a notice's Review menu without switching threads. Show correct thread titles outside the loaded sidebar page, with clearer delivery and retry status.
+- Messaging and Final Answers - Preserve the originating Slack or Telegram destination through handoffs, completions, monitors, and continuations. Keep progress in Working Updates and use only the turn's last assistant message as final text across transcripts, automations, and messaging.
 - Live To-dos - Stream card changes instead of repeatedly listing everything, including through compatible gateways. Keep cards visible while owners are busy. New To-do worktrees start from the repository's default branch rather than inheriting unrelated feature commits.
 - Provider Reliability - Run supported Bonsai models in isolated Codex runtimes, preserve Codex availability after provider imports, and choose a provider the remote owner can actually run when starting drafts or sub-threads.
 - MCP Visibility and Compatibility - Clearly separate PwrAgent-managed connections from Codex and Claude's own MCP servers. Fix Grok's rejection of Sandboxer MCP tools, and make the bundled Claude CLI available in integrated terminals when no existing installation is on PATH.
 - Agent Controls and Attribution - Preserve delegation ancestry and show resolved worker model settings. Honor forge-tool Auto policies in Codex Auto turns, and report excessive approval-denial stops as failures rather than unexplained interruptions.
-- Navigation and Layout - Move launchpad connection cards into an optional sidebar tab. Show result ages in the jump palette, improve keyboard navigation, and prevent stale reads from undoing newer Attention state.
 - Transcript Performance - Read deferred tool details directly with bounded command-output reads. Keep transcript rows associated with their original turns during refreshes.
+- Security Hardening - Deny renderer permissions by default, block permission access from embedded previews, and restrict application-window navigation to the intended renderer. Voice retains explicit microphone and camera opt-in.
+- Navigation Polish - Keep the sidebar steady when opening threads, preserve MCP counts during remote refreshes, prevent stale reads from undoing newer Attention state, and let the mark-read shortcut work from the composer.
 
 ## v1.3.4 - 2026-10-26
 
