@@ -48,7 +48,7 @@ it.each([
       const result = spawnSync(process.execPath, [join(root, "scripts/release/report-channel-audit.mjs"), file, "23"], {
         encoding: "utf8", env: {},
       });
-      expect(result.status, result.stderr).toBe(0);
+      expect(result.status, result.stderr).toBe(1);
       expect(result.stdout.length).toBeLessThan(1024);
       expect(JSON.parse(result.stdout)).toMatchObject({ auditExitCode: 23, status: "incomplete" });
     } finally {

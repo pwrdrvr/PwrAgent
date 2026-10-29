@@ -23,6 +23,7 @@ try {
   report = JSON.stringify({ auditExitCode: Number(status), audit: parsed }, null, 2);
   if (Buffer.byteLength(report) > limit) throw new Error("oversized");
 } catch {
+  process.exitCode = 1;
   report = JSON.stringify({
     auditExitCode: Number(status), status: "incomplete",
     error: "Audit report missing, invalid or exceeds 32 KiB; inspect the retained package-manager-preflight.json",

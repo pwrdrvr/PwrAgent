@@ -24,7 +24,7 @@ function diagnosticTail() {
       tail = Buffer.from(Buffer.concat([tail, chunk]).subarray(-limit));
     },
     describe(name) {
-      return bytes ? `${name}: ${bytes} bytes${bytes > limit ? " (last 16384 bytes)" : ""}\n${tail.toString("utf8")}` : "";
+      return bytes ? `${name}: ${bytes} bytes${bytes > limit ? " (last 16384 bytes)" : ""}\n${JSON.stringify(tail.toString("utf8"))}` : "";
     },
   };
 }
@@ -39,6 +39,8 @@ async function expandArchive(platform, archive, extractionRoot, spawnTar) {
   );
   let failure;
   child.on("error", (error) => { failure = error; });
+  child.stdout.on("error", (error) => { failure = error; });
+  child.stderr.on("error", (error) => { failure = error; });
   child.stdout.on("data", (chunk) => stdout.append(chunk));
   child.stderr.on("data", (chunk) => stderr.append(chunk));
   // 'close' owns completion: 'exit' can precede the final diagnostic bytes.
