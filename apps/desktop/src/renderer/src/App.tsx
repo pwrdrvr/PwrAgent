@@ -2678,11 +2678,11 @@ function DesktopAppShell(props: {
     })),
     [federationMachines, liveFederationHealth],
   );
-  // A remote viewer window routes every to-do request to the instance it
-  // shows, so it cannot start a card on this machine.
+  // The gateway stays a destination even when this window views a peer.
+  // The card's owner, carried by its id, remains the default start target.
   const todoLocalMachine = useMemo(
     () => ({
-      ...(readRendererFederationTarget() ? {} : liveFederationHealth?.instanceId ? { instanceId: liveFederationHealth.instanceId } : {}),
+      ...(liveFederationHealth?.instanceId ? { instanceId: liveFederationHealth.instanceId } : {}),
       label: federationLocalDisplayLabel(liveFederationHealth),
     }),
     [liveFederationHealth],
@@ -4129,6 +4129,7 @@ function DesktopAppShell(props: {
     <TodoDispatchProvider
       api={desktopApi}
       backends={backendSummaries.backends}
+      backendsTarget={activeFederationTarget}
       todos={threadTodoController.openTodos}
       localCodexFastAllowed={props.settings.snapshot?.models?.codex.allowFast?.value ?? true}
     >

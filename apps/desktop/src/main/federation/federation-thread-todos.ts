@@ -1,5 +1,5 @@
 import type {
-  FederationCapability, FederationRemoteTarget, ThreadTodo, ListThreadTodosRequest, ThreadTodoMergeMethodPreferences,
+  FederationCapability, FederationRemoteTarget, FederationTarget, ThreadTodo, ListThreadTodosRequest, ThreadTodoMergeMethodPreferences,
   TodoBusyThread, TodoUnavailableInstance,
 } from "@pwragent/shared";
 import { normalizeThreadReview, resolveThreadTodoMergeMethod } from "@pwragent/shared";
@@ -80,7 +80,9 @@ export class FederatedThreadTodoService {
     operation: K, input: ThreadTodoOperationRequest<K>, windowTarget?: FederationRemoteTarget,
   ): Promise<ThreadTodoOperationResponse<K>> {
     const request = { ...input } as Record<string, unknown>;
-    let target = request.federationTarget as FederationRemoteTarget | undefined;
+    const explicitTarget = request.federationTarget as FederationTarget | undefined;
+    const explicitlyLocal = operation === "listDispatchEnvironments" && explicitTarget?.scope === "local";
+    let target = explicitTarget?.scope === "remote" ? explicitTarget : undefined;
     delete request.federationTarget;
     if (typeof request.id === "string" && request.id.startsWith("remote-todo:")) {
       const match = /^remote-todo:([^:]+):(.+)$/.exec(request.id);
@@ -90,7 +92,7 @@ export class FederatedThreadTodoService {
       target = { scope: "remote", instanceId: owner };
       request.id = decodeURIComponent(match[2]!);
     }
-    target ??= windowTarget;
+    target ??= explicitlyLocal ? undefined : windowTarget;
     if (target) {
       // An owner that predates `declined` accepts only `dismissed` for a
       // finding, and every owner still takes that name, so it crosses as that.

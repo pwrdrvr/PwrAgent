@@ -238,7 +238,9 @@ function useDispatchEnvironments(params: {
       ? { id: todo.id }
       : {
           project: cardProject!,
-          ...(machine.key === LOCAL_DISPATCH_MACHINE ? {} : { federationTarget: { scope: "remote", instanceId: machine.key } }),
+          federationTarget: machine.key === LOCAL_DISPATCH_MACHINE
+            ? { scope: "local" }
+            : { scope: "remote", instanceId: machine.key },
         })
       .then((response) => {
         if (!cancelled) setState({ key, value: { status: "ready", response } });

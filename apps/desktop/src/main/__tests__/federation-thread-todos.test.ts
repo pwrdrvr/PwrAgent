@@ -80,6 +80,20 @@ describe("federated To-do ownership", () => {
     expect(local.runAction).not.toHaveBeenCalled();
   });
 
+  it("reads gateway environments explicitly without changing the remote viewer's card owner", async () => {
+    const { service, local, remote } = setup();
+    const project = { key: "directory:/atlas", label: "Atlas", path: "/atlas" };
+    await service.request("listDispatchEnvironments", { project }, target);
+    expect(remote).toHaveBeenLastCalledWith(target, "listDispatchEnvironments", { project });
+    await service.request("listDispatchEnvironments", { project, federationTarget: { scope: "local" } }, target);
+    expect(local.listDispatchEnvironments).toHaveBeenCalledExactlyOnceWith({ project });
+    await service.request("runAction", { id: "remote-todo:peer:same-card" }, target);
+    expect(remote).toHaveBeenLastCalledWith(target, "runAction", { id: card.id });
+    await service.request("runAction", { id: "remote-todo:peer:same-card", startOnInstanceId: "gateway" }, target);
+    expect(remote).toHaveBeenLastCalledWith(target, "runAction", { id: card.id, startOnInstanceId: "gateway" });
+    expect(local.runAction).not.toHaveBeenCalled();
+  });
+
   it.each(["addressed", "dismissed", "open", "handled"] as const)("routes review status %s and its evidence to the original owner", async (status) => {
     const { service, local, remoteOperations } = setup();
     const request = { id: review.id, ...(status !== "handled" ? { itemId: "finding" } : {}), status,
