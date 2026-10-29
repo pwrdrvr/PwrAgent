@@ -245,7 +245,9 @@ function useDispatchEnvironments(params: {
           ...(owner?.repositoryKey ? { repositoryKey: owner.repositoryKey } : {}),
           ...(owner?.repositoryKeys?.length ? { repositoryKeys: owner.repositoryKeys } : {}),
         },
-        ...(machine.key === LOCAL_DISPATCH_MACHINE ? {} : { federationTarget: { scope: "remote", instanceId: machine.key } }),
+        federationTarget: machine.key === LOCAL_DISPATCH_MACHINE
+          ? { scope: "local" }
+          : { scope: "remote", instanceId: machine.key },
       });
     };
     void read()

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type {
-  BackendSummary, CodexSpeed, FederationRemoteTarget, ThreadTodo, ThreadTodoModelSettings, ThreadTodoWorkMode,
+  BackendSummary, CodexSpeed, FederationTarget, ThreadTodo, ThreadTodoModelSettings, ThreadTodoWorkMode,
 } from "@pwragent/shared";
 import { threadTodoThreadKey } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -27,8 +27,9 @@ type DispatchContext = {
   choices: ReadonlyMap<string, TodoDispatchChoices>;
   choose: (todo: ThreadTodo, update: (current: TodoDispatchChoices) => TodoDispatchChoices) => void;
   backends: BackendSummary[];
+  backendsTarget?: FederationTarget;
   ownerBackends: ReadonlyMap<string, BackendSummary[]>;
-  loadOwnerBackends: (target: FederationRemoteTarget, refresh?: boolean) => void;
+  loadOwnerBackends: (target: FederationTarget, refresh?: boolean) => void;
   picks: ReadonlyMap<string, ThreadTodoModelSettings>;
   pick: (todo: ThreadTodo, settings: ThreadTodoModelSettings) => void;
 };
@@ -49,6 +50,8 @@ export function todoDispatchPickKey(todo: ThreadTodo): string {
 export function TodoDispatchProvider(props: {
   api?: DispatchContext["api"];
   backends: BackendSummary[];
+  /** The catalog supplied by App can belong to the thread selected on a peer. */
+  backendsTarget?: FederationTarget;
   todos: ThreadTodo[];
   localCodexFastAllowed?: boolean;
   children: ReactNode;
@@ -59,8 +62,8 @@ export function TodoDispatchProvider(props: {
   const catalogsRef = useRef(EMPTY_CATALOGS);
   const loadingRef = useRef(new Set<string>());
   const api = props.api;
-  const loadOwnerBackends = useCallback((target: FederationRemoteTarget, refresh = false) => {
-    const key = target.instanceId;
+  const loadOwnerBackends = useCallback((target: FederationTarget, refresh = false) => {
+    const key = target.scope === "remote" ? target.instanceId : "local";
     if (!api?.listBackends || loadingRef.current.has(key) || (!refresh && catalogsRef.current.has(key))) return;
     loadingRef.current.add(key);
     void api.listBackends({ federationTarget: target }).then((response) => {
@@ -88,11 +91,12 @@ export function TodoDispatchProvider(props: {
     choices,
     choose,
     backends: props.backends,
+    backendsTarget: props.backendsTarget,
     ownerBackends,
     loadOwnerBackends,
     picks,
     pick: (todo, settings) => setPicks((current) => new Map(current).set(todoDispatchPickKey(todo), settings)),
-  }), [props.api, localCodexFastAllowed, choices, choose, props.backends, ownerBackends, loadOwnerBackends, picks]);
+  }), [props.api, localCodexFastAllowed, choices, choose, props.backends, props.backendsTarget, ownerBackends, loadOwnerBackends, picks]);
   return <Context.Provider value={value}>{props.children}</Context.Provider>;
 }
 
@@ -108,10 +112,12 @@ export function useTodoMachineBackends(machineKey: string, refresh = false): Bac
   const context = useTodoDispatchContext();
   const load = context.loadOwnerBackends;
   const remote = machineKey !== "local";
+  const suppliedLocal = context.backendsTarget?.scope !== "remote";
   useEffect(() => {
     if (remote) load({ scope: "remote", instanceId: machineKey }, refresh);
-  }, [remote, machineKey, load, refresh]);
-  return remote ? context.ownerBackends.get(machineKey) : context.backends;
+    else if (!suppliedLocal) load({ scope: "local" }, refresh);
+  }, [remote, suppliedLocal, machineKey, load, refresh]);
+  return remote || !suppliedLocal ? context.ownerBackends.get(machineKey) : context.backends;
 }
 
 /** The chip and its provenance use the same owner catalog, including on mounted peer cards. */

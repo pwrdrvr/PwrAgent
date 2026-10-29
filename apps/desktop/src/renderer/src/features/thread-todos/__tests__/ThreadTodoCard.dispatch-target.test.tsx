@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   BackendSummary,
+  FederationTarget,
   ListBackendsRequest,
   ListThreadTodoDispatchEnvironmentsRequest,
   ListThreadTodoDispatchEnvironmentsResponse,
@@ -57,6 +58,7 @@ function setup(options: {
   win?: BackendSummary[];
   instances?: ThreadTodoInstance[];
   localCodexFastAllowed?: boolean;
+  backendsTarget?: FederationTarget;
 } = {}) {
   const todo = options.todo ?? card;
   const onRun = vi.fn();
@@ -69,10 +71,12 @@ function setup(options: {
     })),
     listModelSettingsRecents: vi.fn(async () => ({ recents: [] })),
     listThreadTodoDispatchEnvironments: vi.fn(async (request: ListThreadTodoDispatchEnvironmentsRequest) =>
-      ENVIRONMENTS[request.federationTarget?.instanceId ?? "owner"]!),
+      ENVIRONMENTS[request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : "owner"]!),
   };
   const tree = (value: ThreadTodo) => (
-    <TodoDispatchProvider api={api} backends={options.local ?? [claude, codex()]} todos={[value]}
+    <TodoDispatchProvider api={api}
+      backends={options.backendsTarget?.scope === "remote" ? options.win ?? [codex()] : options.local ?? [claude, codex()]}
+      backendsTarget={options.backendsTarget} todos={[value]}
       {...(options.localCodexFastAllowed === undefined ? {} : { localCodexFastAllowed: options.localCodexFastAllowed })}>
       <ThreadTodoCard todo={value} running={false} now={0} onRun={onRun} onResolve={vi.fn()}
         onStartReview={vi.fn()} onSetItemChecked={vi.fn()}
@@ -257,6 +261,35 @@ describe("to-do dispatch target", () => {
     expect(legacy.api.listThreadTodoDispatchEnvironments).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     expect(legacy.onRun).toHaveBeenLastCalledWith(remote, { modelSettings: { backend: "codex", model: "sol", reasoningEffort: "high" } });
+  });
+
+  it("keeps Windows as the viewer's default and explicitly reads the gateway's models and environments when picked", async () => {
+    const remote = { ...card, id: "remote-todo:win:card", backend: "codex" as const,
+      federationTarget: { scope: "remote" as const, instanceId: "win" },
+      dispatchDefaults: { thread: { backend: "codex" as const, model: "sol", reasoningEffort: "high" } } };
+    const { onRun, api } = setup({ todo: remote, local: [claude], backendsTarget: remote.federationTarget });
+    await settle();
+    expect(chip("Machine for the new thread").textContent).toBe("win-lab / dev");
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    expect(onRun).toHaveBeenLastCalledWith(remote, expect.not.objectContaining({ startOnInstanceId: expect.anything() }));
+
+    await choose("Machine for the new thread", "studio");
+    await settle();
+    expect(api.listBackends).toHaveBeenCalledWith({ federationTarget: { scope: "local" } });
+    expect(chip("Model for the new thread").getAttribute("aria-label")).toBe("Model for the new thread: Claude, Opus 5.5, high");
+    expect(api.listThreadTodoDispatchEnvironments).toHaveBeenCalledWith({ id: remote.id, repositoryOnly: true });
+    expect(api.listThreadTodoDispatchEnvironments).toHaveBeenLastCalledWith({
+      project: { ...ATLAS, repositoryKey: "github.com/fixture-org/atlas" }, federationTarget: { scope: "local" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    expect(onRun).toHaveBeenLastCalledWith(remote, expect.objectContaining({
+      startOnInstanceId: "mac", modelSettings: thread, environment: "dev",
+    }));
+
+    await choose("Machine for the new thread", "win-lab / dev");
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    expect(onRun).toHaveBeenLastCalledWith(remote, expect.not.objectContaining({ startOnInstanceId: expect.anything() }));
   });
 
   it("lists an offline peer without letting it be picked", async () => {

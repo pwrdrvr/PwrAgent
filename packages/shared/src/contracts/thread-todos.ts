@@ -1,6 +1,6 @@
 import type { CodexSpeed } from "../codex-speed";
 import type { ProjectRepositoryIdentity } from "../federation-project-match";
-import type { FederationRemoteTarget } from "./federation";
+import type { FederationRemoteTarget, FederationTarget } from "./federation";
 import { federatedThreadIdentityKey } from "./federation";
 import { buildThreadIdentityKey } from "./navigation";
 
@@ -518,7 +518,8 @@ export type RunThreadTodoActionRequest = {
  * `project`, which that instance matches to its own copy.
  */
 export type ListThreadTodoDispatchEnvironmentsRequest = {
-  federationTarget?: FederationRemoteTarget;
+  /** Explicit `local` reads the gateway even in a remote viewer window. */
+  federationTarget?: FederationTarget;
   id?: string;
   /**
    * The card's project, asked of another machine. Its repository identity,
