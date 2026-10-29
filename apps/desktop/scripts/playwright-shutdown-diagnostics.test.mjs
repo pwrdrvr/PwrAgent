@@ -16,15 +16,16 @@ const roots = [];
 const activeProbes = new Set();
 // A probe starts two cold Node processes, the Playwright CLI and its worker,
 // and each loads Playwright and the generated config before the worker is
-// ready. On macOS that took 0.5s idle, up to 3.6s beside a full unit shard and
+// ready. On macOS that took 0.5s idle, up to 3.2s beside a full unit shard and
 // 12.6s at a load average of 36 on ten cores. The shutdown these tests exercise
 // did not vary: Playwright's five-second teardown deadline measured 5.0-5.1s
 // throughout. Cold start therefore has its own budget, and the shutdown budget
 // starts from the worker's recorded readiness.
 const COLD_START_BUDGET_MS = 30_000;
 const SHUTDOWN_BUDGET_MS = 20_000;
-// Vitest's deadline is a backstop behind the two named budgets.
-const PROBE_TEST_TIMEOUT_MS = COLD_START_BUDGET_MS + SHUTDOWN_BUDGET_MS + 5_000;
+// Vitest's deadline is a backstop behind the named budgets.
+const BACKSTOP_MS = 5_000;
+const PROBE_TEST_TIMEOUT_MS = COLD_START_BUDGET_MS + SHUTDOWN_BUDGET_MS + BACKSTOP_MS;
 
 afterEach(async () => {
   // Preserve the state at the outer deadline, before abort changes the evidence.
@@ -72,7 +73,11 @@ function withinBudget(probe, promise, ms, message) {
 
 function waitForWorkerStart(root, output) {
   let watcher;
-  const close = () => watcher?.close();
+  let poll;
+  const close = () => {
+    watcher?.close();
+    clearInterval(poll);
+  };
   const promise = new Promise((resolve, reject) => {
     const check = () => {
       try {
@@ -85,6 +90,9 @@ function waitForWorkerStart(root, output) {
       }
     };
     watcher = watch(root, { recursive: true }, check);
+    // File notifications can be coalesced or dropped. Without this, a worker
+    // that became ready unobserved would fail as a cold start, not shutdown.
+    poll = setInterval(check, 1_000);
     check();
   });
   return { close, promise };
@@ -152,7 +160,8 @@ function startProbe(args, options, root = createProbeRoot()) {
     // the same boundary after abort has changed the state.
     if (existsSync(root) && !existsSync(file)) writeFileSync(file, JSON.stringify(snapshot(), null, 2));
   };
-  const probe = { child, controller, result, root, note, snapshot, capture };
+  const elapsedMs = () => performance.now() - startedAt;
+  const probe = { child, controller, result, root, note, snapshot, capture, elapsedMs };
   onTestFailed(() => {
     capture("after-cleanup");
     const destination = path.join(desktop, "test-results/unit-shutdown-probes", path.basename(root));
@@ -246,10 +255,12 @@ async function probe(mode, { captureAfterMs = 100 } = {}) {
       }),
     ]), COLD_START_BUDGET_MS, `Playwright did not reach worker readiness within the ${COLD_START_BUDGET_MS}ms cold-start budget.`);
     started.note("worker-ready-observed");
-    // Measured from the worker's record, so a late file notification cannot
-    // extend the shutdown budget.
+    // Measured from the worker's record, so a late observation cannot extend
+    // the shutdown budget. The record is wall-clock time, so the lag is bounded
+    // by the probe's monotonic age; a clock step cannot exceed that bound.
     const readyAt = workerStartedAt(output) ?? Date.now();
-    result = await withinBudget(started, started.result, SHUTDOWN_BUDGET_MS - (Date.now() - readyAt),
+    const lagMs = Math.min(Math.max(0, Date.now() - readyAt), started.elapsedMs());
+    result = await withinBudget(started, started.result, SHUTDOWN_BUDGET_MS - lagMs,
       `Playwright did not finish within ${SHUTDOWN_BUDGET_MS}ms of worker readiness.`);
   } finally {
     readiness.close();
@@ -292,7 +303,7 @@ describe("real Playwright worker shutdown diagnostics", () => {
       `Playwright did not list tests within the ${COLD_START_BUDGET_MS}ms cold-start budget.`);
     expect(result.code, result.stdout + result.stderr).toBe(0);
     expect(existsSync(path.join(output, "worker-shutdown"))).toBe(false);
-  }, COLD_START_BUDGET_MS + 5_000);
+  }, COLD_START_BUDGET_MS + BACKSTOP_MS);
 
   it("terminates a probe that stalls before worker readiness", async () => {
     const started = startProbe(["-e", "setInterval(() => {}, 1_000)"], {
