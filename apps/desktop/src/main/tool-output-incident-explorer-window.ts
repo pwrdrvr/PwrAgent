@@ -22,7 +22,7 @@ import {
 } from "./settings/appearance-bootstrap";
 import {
   applyWindowSecurityHardening,
-  getPreloadPath,
+  rendererPreloadWebPreferences,
   getRendererEntry,
 } from "./window";
 import {
@@ -88,7 +88,7 @@ export function showToolOutputIncidentExplorerWindow(
     ...auxiliaryWindowChromeOptions(),
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
-      preload: getPreloadPath(),
+      ...rendererPreloadWebPreferences(),
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,

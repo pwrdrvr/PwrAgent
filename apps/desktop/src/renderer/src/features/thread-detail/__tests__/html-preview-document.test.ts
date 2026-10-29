@@ -92,9 +92,12 @@ describe("prepareHtmlPreviewDocument", () => {
     expect(content).toContain("script-src 'unsafe-inline'");
     expect(content).toContain("connect-src data: blob:");
     expect(content).not.toMatch(/https?:/);
+    // The preload removes WebRTC from every frame; Trusted Types keep a
+    // nested frame from getting a `javascript:` document it never sees.
+    expect(content).toContain("require-trusted-types-for 'script'");
     // The guard runs before any script of the page's own.
     const guard = head.querySelector("script");
-    expect(guard?.textContent).toContain("RTCPeerConnection");
+    expect(guard?.textContent).toContain("pushState");
   });
 
   it("inlines local files, removes web loads, and counts both kinds of miss", () => {

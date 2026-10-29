@@ -2,7 +2,7 @@ import { BrowserWindow } from "electron";
 import { getMainLogger } from "./log";
 import {
   applyWindowSecurityHardening,
-  getPreloadPath,
+  rendererPreloadWebPreferences,
   getRendererEntry,
 } from "./window";
 import {
@@ -70,7 +70,7 @@ export function showUsageActivityWindow(
     ...auxiliaryWindowChromeOptions(),
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
-      preload: getPreloadPath(),
+      ...rendererPreloadWebPreferences(),
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,

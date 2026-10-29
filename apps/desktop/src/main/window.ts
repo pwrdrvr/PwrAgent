@@ -7,6 +7,7 @@ import {
   shell,
   type ContextMenuParams,
   type MenuItemConstructorOptions,
+  type WebPreferences,
 } from "electron";
 import { homedir, hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -153,6 +154,23 @@ function serializeError(error: unknown): string {
 
 export function getPreloadPath(): string {
   return join(moduleDirectory, "../preload/index.cjs");
+}
+
+/**
+ * The preload half of a renderer window's `webPreferences`. The preload runs
+ * in the window's subframes too, still sandboxed and without Node, and removes
+ * WebRTC there before the frame's first script (`preload/subframe-hardening.ts`).
+ * HTML file previews depend on it: without the flag, a page with scripts on
+ * can reach the network over WebRTC. Use this, not `getPreloadPath()` alone.
+ */
+export function rendererPreloadWebPreferences(): Pick<
+  WebPreferences,
+  "preload" | "nodeIntegrationInSubFrames"
+> {
+  return {
+    preload: getPreloadPath(),
+    nodeIntegrationInSubFrames: true,
+  };
 }
 
 export function getRendererEntry(): RendererEntry {
@@ -392,7 +410,7 @@ export function createMainWindow(options?: {
   };
 }): BrowserWindow {
   installWindowsTitleBarAppearanceSync();
-  const preloadPath = getPreloadPath();
+  const preloadPreferences = rendererPreloadWebPreferences();
   const windowTitle = mainWindowTitle(
     options?.federationTitleLabel ?? options?.federationLabel,
   );
@@ -424,7 +442,7 @@ export function createMainWindow(options?: {
     // `.sidebar__masthead` to a warm tan so gray stoplights stand out.
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
-      preload: preloadPath,
+      ...preloadPreferences,
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
@@ -483,7 +501,7 @@ export function createMainWindow(options?: {
 
   if (isDevelopment) {
     mainLog.info("creating window", {
-      preloadPath,
+      preloadPath: preloadPreferences.preload,
       rendererUrl: process.env.ELECTRON_RENDERER_URL ?? null
     });
   }

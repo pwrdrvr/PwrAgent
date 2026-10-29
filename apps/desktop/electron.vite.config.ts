@@ -201,7 +201,9 @@ export default defineConfig(({ command }) => {
         sourcemap: "hidden",
         rolldownOptions: {
           input: {
-            index: resolve(__dirname, "src/preload/index.ts"),
+            // Subframes get only the hardening in entry.ts; the bridge in
+            // index.ts loads for a window's own document.
+            index: resolve(__dirname, "src/preload/entry.ts"),
             "storage-maintenance": resolve(__dirname, "src/preload/storage-maintenance.ts"),
           },
           output: {

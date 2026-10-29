@@ -51,7 +51,11 @@ const STATIC_CSP = [
 ].join("; ");
 
 // Scripts may run, but still only from the page itself: `connect-src` keeps
-// fetch, XHR, WebSocket and beacons inside the frame.
+// fetch, XHR, WebSocket and beacons inside the frame. No directive covers
+// WebRTC. The window's preload removes it from this frame and from every frame
+// the page nests (`src/preload/subframe-hardening.ts`). Trusted Types close
+// the one way to a new document that preload never sees, a `javascript:`
+// navigation: the preload's default policy passes every other string through.
 const SCRIPT_CSP = [
   "default-src 'none'",
   "script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' data: blob:",
@@ -66,20 +70,14 @@ const SCRIPT_CSP = [
   "manifest-src 'none'",
   "form-action 'none'",
   "base-uri 'none'",
+  "require-trusted-types-for 'script'",
 ].join("; ");
 
 /**
- * Runs before the page's own scripts. A Content-Security-Policy cannot stop
- * WebRTC, whose ICE servers would carry data out, so the constructors are
- * removed from the page's window. History calls throw in an opaque-origin
- * srcdoc frame; single-page demos call them on load.
+ * Runs before the page's own scripts. History calls throw in an
+ * opaque-origin srcdoc frame; single-page demos call them on load.
  */
 const SCRIPT_GUARD = `(function () {
-  ["RTCPeerConnection", "webkitRTCPeerConnection", "RTCDataChannel"].forEach(function (name) {
-    try {
-      Object.defineProperty(window, name, { value: undefined, configurable: false, writable: false });
-    } catch (_) {}
-  });
   ["pushState", "replaceState"].forEach(function (name) {
     var original = history[name].bind(history);
     history[name] = function () {
