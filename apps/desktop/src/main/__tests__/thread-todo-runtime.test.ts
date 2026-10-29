@@ -1,3 +1,6 @@
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { HandoffSourceSettings } from "../app-server/backend-registry";
 import type { CreateInstanceThreadResult, ListInstanceProjectsResult, ThreadTodo, ThreadTodoProject } from "@pwragent/shared";
@@ -376,5 +379,134 @@ describe("dispatch access mode compatibility", () => {
       action: { type: "start_thread", prompt: "Build it" } });
     expect(registry.startThread).toHaveBeenLastCalledWith(expect.objectContaining({ executionMode: "auto" }));
     expect(registry.listBackends).not.toHaveBeenCalled();
+  });
+});
+
+describe("operator dispatch choices", () => {
+  it("applies the operator's Where, environment and speed to a local start", async () => {
+    const { registry, runners } = fakeRegistry({
+      ...FULL_ACCESS_SOL,
+      codexEnvironmentRuntime: { environmentId: "dev", environmentName: "Dev", executionTarget: "local" },
+    });
+    registry.listBackends.mockResolvedValue({ fetchedAt: 0, backends: [{
+      kind: "codex", label: "Codex", codexFastAllowed: true,
+      executionModes: [{ mode: "full-access", available: true }],
+    }] } as never);
+    await runners.startThread({
+      sourceBackend: "codex", sourceThreadId: "source", cwd: "/repo", crossProject: false,
+      action: { type: "start_thread", prompt: "Build it" },
+      workMode: "worktree",
+      speed: "fast",
+      // The checkout has no environments, so a named one is refused before anything starts.
+      environment: "none",
+    });
+    expect(registry.startThread).toHaveBeenCalledWith(expect.objectContaining({
+      workMode: "worktree", worktreeBase: "default_branch", requiredWorkMode: "worktree", fastMode: true,
+    }));
+    expect(registry.startThread.mock.calls[0]![0]).not.toHaveProperty("codexEnvironmentRuntime");
+    expect(registry.startTurn).toHaveBeenCalledWith(expect.objectContaining({ fastMode: true }));
+  });
+
+  it("runs a picked environment's setup in the new thread, and reuses the thread's own", async () => {
+    const repo = await mkdtemp(path.join(os.tmpdir(), "todo-dispatch-env-"));
+    try {
+      await mkdir(path.join(repo, ".codex", "environments"), { recursive: true });
+      await writeFile(path.join(repo, ".codex", "environments", "ci.toml"), 'name = "CI"\n');
+      await writeFile(path.join(repo, ".codex", "environments", "dev.toml"), 'name = "Dev"\n');
+      const own = { environmentId: "dev", environmentName: "Dev", executionTarget: "local" as const };
+      const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, codexEnvironmentRuntime: own });
+      const start = (environment: string, crossProject = false) => runners.startThread({
+        sourceBackend: "codex", sourceThreadId: "source", cwd: repo, crossProject,
+        action: { type: "start_thread", prompt: "Build it" }, environment,
+      });
+      await start("ci");
+      expect(registry.startThread).toHaveBeenLastCalledWith(expect.objectContaining({
+        workMode: "local",
+        codexEnvironmentRuntime: { environmentId: "ci", environmentName: "CI", executionTarget: "local" },
+        rerunCodexEnvironmentSetup: true,
+      }));
+      await start("dev");
+      expect(registry.startThread).toHaveBeenLastCalledWith(expect.objectContaining({ codexEnvironmentRuntime: own }));
+      expect(registry.startThread.mock.lastCall![0]).not.toHaveProperty("rerunCodexEnvironmentSetup");
+      // Another project's card does not reuse this thread's setup.
+      await start("dev", true);
+      expect(registry.startThread).toHaveBeenLastCalledWith(expect.objectContaining({ rerunCodexEnvironmentSetup: true }));
+      await expect(start("missing")).rejects.toThrow();
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses Fast when this machine's Settings turned it off, and starts nothing", async () => {
+    const { registry, runners } = fakeRegistry(FULL_ACCESS_SOL);
+    registry.listBackends.mockResolvedValue({ fetchedAt: 0, backends: [{
+      kind: "codex", label: "Codex", codexFastAllowed: false,
+      executionModes: [{ mode: "full-access", available: true }],
+    }] } as never);
+    await expect(runners.startThread({
+      sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      action: { type: "start_thread", prompt: "Build it" }, speed: "fast",
+    })).rejects.toThrow("Fast mode is turned off");
+    expect(registry.startThread).not.toHaveBeenCalled();
+  });
+
+  it("starts an inherited Fast thread at Standard once Settings turned Fast off", async () => {
+    const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, fastMode: true });
+    registry.listBackends.mockResolvedValue({ fetchedAt: 0, backends: [{
+      kind: "codex", label: "Codex", codexFastAllowed: false,
+      executionModes: [{ mode: "full-access", available: true }],
+    }] } as never);
+    await runners.startThread({
+      sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      action: { type: "start_thread", prompt: "Build it" },
+    });
+    expect(registry.startThread).toHaveBeenCalledWith(expect.objectContaining({ fastMode: false }));
+  });
+
+  it("sends a peer the operator's model, speed, Where and environment", async () => {
+    const registry = {
+      readThreadHandoffSettings: vi.fn(async () => FULL_ACCESS_SOL),
+      startThread: vi.fn(), renameThread: vi.fn(), startTurn: vi.fn(),
+    };
+    const federation = vi.fn(async (request: { operation: string }) =>
+      request.operation === "list_instance_projects"
+        ? { ok: true as const, data: {
+            instanceLabel: "win-lab", complete: true,
+            projects: [{ key: "peer-repo", label: "repo", path: "C:\\repo", kind: "directory" }],
+          } }
+        : { ok: true as const, data: {
+            backend: "codex", threadId: "peer-thread", isLocal: false, instanceId: "win", instanceLabel: "win-lab",
+          } });
+    const runners = createThreadTodoRunners({
+      registry: registry as unknown as ThreadTodoRunnerRegistry, federation: federation as never,
+    });
+    await runners.startThreadOnInstance!({
+      instanceId: "win", sourceBackend: "claude", sourceThreadId: "source",
+      project: { key: "local-repo", label: "repo", path: "/repo" }, crossProject: false,
+      action: { type: "start_thread", prompt: "Reproduce it", workMode: "worktree" },
+      modelSettings: { backend: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
+      speed: "fast", workMode: "local", environment: "windows-ci",
+    });
+    const created = federation.mock.calls
+      .map(([request]) => request as { operation: string; args: Record<string, unknown> })
+      .find((request) => request.operation === "create_instance_thread");
+    expect(created?.args).toMatchObject({
+      instanceId: "win", projectKey: "peer-repo", backend: "codex", model: "gpt-6.1-sol", reasoningEffort: "high",
+      fastMode: true, workMode: "local", environment: "windows-ci", executionMode: "full-access",
+    });
+  });
+
+  it("refuses Ultrafast on a peer, which create_instance_thread cannot carry", async () => {
+    const federation = vi.fn();
+    const runners = createThreadTodoRunners({
+      registry: { readThreadHandoffSettings: vi.fn(async () => FULL_ACCESS_SOL) } as unknown as ThreadTodoRunnerRegistry,
+      federation: federation as never,
+    });
+    await expect(runners.startThreadOnInstance!({
+      instanceId: "win", sourceBackend: "codex", sourceThreadId: "source",
+      project: { key: "k", label: "repo", path: "/repo" }, crossProject: false,
+      action: { type: "start_thread", prompt: "Go" }, speed: "ultrafast",
+    })).rejects.toThrow("Ultrafast");
+    expect(federation).not.toHaveBeenCalled();
   });
 });

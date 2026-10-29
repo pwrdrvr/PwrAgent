@@ -1,5 +1,6 @@
 import path from "node:path";
 import type {
+  BackendLaunchpadOptions,
   BackendSummary,
   CodexSpeed,
   CodexThreadEnvironmentRuntime,
@@ -11,7 +12,6 @@ import {
   CODEX_SPEED_LABELS,
   threadTodoActionProject,
   THREAD_ENVIRONMENT_NONE,
-  codexSpeedOptions,
   codexSpeedSettings,
   selectedCodexSpeed,
 } from "@pwragent/shared";
@@ -27,47 +27,53 @@ type SpeedSettings = { serviceTier?: string; fastMode?: boolean };
 /**
  * The speed a handoff card's local start runs at.
  *
- * A pick must be one this machine offers for the chosen model: the same
- * `codexSpeedOptions` the composer and the card use, so Allow Fast mode off
- * in Settings refuses Fast and Ultrafast. With no pick, a same-provider
- * start inherits the raising thread's speed, unless Settings no longer
- * allows it; then it starts at Standard.
+ * Allow Fast mode off in Settings refuses a Fast or Ultrafast pick, and
+ * turns an inherited one into Standard. A pick the chosen model's catalog
+ * entry says it lacks is refused too; a catalog that says nothing refutes
+ * nothing, and the registry still applies its own limits. With no pick, a
+ * same-provider start inherits the raising thread's speed.
  */
 export function resolveThreadTodoStartSpeed(params: {
-  destination?: Pick<BackendSummary, "kind" | "codexFastAllowed" | "launchpadOptions">;
+  destination?: Pick<BackendSummary, "kind" | "codexFastAllowed">;
+  catalog?: Pick<BackendLaunchpadOptions, "models">;
   model?: string;
   requested?: CodexSpeed;
   inherited?: SpeedSettings;
 }): SpeedSettings {
-  const { destination, requested, inherited } = params;
-  const inheritedSettings = inherited ? pickSpeed(inherited) : {};
-  if (destination?.kind !== "codex") {
-    if (requested && requested !== "standard") {
+  const { requested } = params;
+  const inherited = params.inherited ? pickSpeed(params.inherited) : {};
+  const codex = params.destination ? params.destination.kind === "codex" : true;
+  const fastAllowed = params.destination?.codexFastAllowed !== false;
+  if (requested && requested !== "standard") {
+    if (!codex) {
       throw new ThreadTodoError("invalid_arguments", `${CODEX_SPEED_LABELS[requested]} speed is available only for Codex threads.`);
     }
-    return inheritedSettings;
-  }
-  const models = destination.launchpadOptions?.models ?? [];
-  const model = models.find((entry) => entry.id === params.model);
-  const fastAllowed = destination.codexFastAllowed !== false;
-  const options = codexSpeedOptions(model, fastAllowed, destination.launchpadOptions?.supportsFastMode ?? false);
-  if (requested) {
-    if (!options.includes(requested)) {
-      throw new ThreadTodoError(
-        "invalid_arguments",
-        !fastAllowed
-          ? "Fast mode is turned off in Settings → Models on this PwrAgent."
-          : `${model?.label ?? params.model ?? "This model"} has no ${CODEX_SPEED_LABELS[requested]} speed.`,
-      );
+    if (!fastAllowed) {
+      throw new ThreadTodoError("invalid_arguments", "Fast mode is turned off in Settings → Models on this PwrAgent.");
     }
+    const model = params.catalog?.models?.find((entry) => entry.id === params.model);
+    const lacks = requested === "fast"
+      ? model?.supportsFast === false
+      : model !== undefined && !(model.serviceTiers ?? []).includes("ultrafast");
+    if (lacks) {
+      throw new ThreadTodoError("invalid_arguments", `${model?.label ?? params.model} has no ${CODEX_SPEED_LABELS[requested]} speed.`);
+    }
+  }
+  if (requested) {
     const settings = codexSpeedSettings(requested);
     return {
       fastMode: settings.fastMode,
       ...(settings.serviceTier ? { serviceTier: settings.serviceTier } : {}),
     };
   }
-  if (Object.keys(inheritedSettings).length === 0) return {};
-  return options.includes(selectedCodexSpeed(inheritedSettings)) ? inheritedSettings : { fastMode: false };
+  if (codex && !fastAllowed && selectedCodexSpeed(inherited) !== "standard") return { fastMode: false };
+  return inherited;
+}
+
+/** Whether resolving `speed` needs the destination's summary. */
+export function threadTodoSpeedNeedsDestination(requested: CodexSpeed | undefined, inherited: SpeedSettings | undefined): boolean {
+  return (requested !== undefined && requested !== "standard")
+    || (inherited !== undefined && selectedCodexSpeed(pickSpeed(inherited)) !== "standard");
 }
 
 function pickSpeed(settings: SpeedSettings): SpeedSettings {

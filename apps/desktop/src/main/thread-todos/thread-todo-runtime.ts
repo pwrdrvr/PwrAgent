@@ -27,7 +27,11 @@ import {
   type ThreadTodoProjectCandidate,
 } from "./thread-todo-projects.js";
 import { resolveThreadTodoModel } from "./thread-todo-models.js";
-import { resolveThreadTodoStartEnvironment, resolveThreadTodoStartSpeed } from "./thread-todo-dispatch.js";
+import {
+  resolveThreadTodoStartEnvironment,
+  resolveThreadTodoStartSpeed,
+  threadTodoSpeedNeedsDestination,
+} from "./thread-todo-dispatch.js";
 import {
   ThreadTodoError,
   ThreadTodoService,
@@ -472,8 +476,12 @@ export function createThreadTodoRunners(params: {
       const chosen = { backend: selected.backend, model: validated.model, reasoningEffort: validated.reasoningEffort };
       const sameBackend = chosen.backend === sourceBackend;
       let executionMode = action.executionMode ?? source.executionMode;
-      const { backends } = await registry.listBackends({ includeUnavailable: true });
-      const destination = backends.find((backend) => backend.kind === chosen.backend);
+      const inheritedSpeed = sameBackend ? source : undefined;
+      const destination = (!sameBackend && action.executionMode === undefined)
+        || threadTodoSpeedNeedsDestination(speed, inheritedSpeed)
+        ? (await registry.listBackends({ includeUnavailable: true })).backends
+          .find((backend) => backend.kind === chosen.backend)
+        : undefined;
       if (!sameBackend && action.executionMode === undefined) {
         if (destination && !destination.executionModes.some((mode) => mode.mode === executionMode && mode.available)) {
           // An inherited mode must never raise access to make a provider fit.
@@ -484,10 +492,11 @@ export function createThreadTodoRunners(params: {
         }
       }
       const speedSettings = resolveThreadTodoStartSpeed({
-        destination,
-        model: chosen.model ?? catalog?.models?.find((entry) => entry.current)?.id,
-        requested: speed,
-        inherited: sameBackend ? source : undefined,
+        ...(destination ? { destination } : {}),
+        ...(catalog ? { catalog } : {}),
+        ...optional("model", chosen.model ?? catalog?.models?.find((entry) => entry.current)?.id),
+        ...optional("requested", speed),
+        ...optional("inherited", inheritedSpeed),
       });
       const workMode = chosenWorkMode ?? action.workMode;
       const codexEnvironment = await resolveThreadTodoStartEnvironment({
