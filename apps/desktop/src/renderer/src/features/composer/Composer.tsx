@@ -10173,11 +10173,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       });
     }
     if (response.images.length === 0) return;
-    const accepted = gateImageFilesForAttachment(
-      response.images.map(composerImageFileFromBase64),
-    );
+    // The transfer here is decoding the downloaded bytes into files.
+    const decodeStart = performance.now();
+    const files = response.images.map(composerImageFileFromBase64);
+    const decodeMs = performance.now() - decodeStart;
+    const accepted = gateImageFilesForAttachment(files);
     if (!accepted || accepted.length === 0) return;
-    await attachImages(accepted);
+    await attachImages(accepted, decodeMs);
   };
 
   const handleDragOver = (event: DragEvent<HTMLElement>): void => {
