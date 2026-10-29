@@ -16,23 +16,40 @@ describe.skipIf(process.platform === "win32")("release channel preflight diagnos
     [1, { status: "blocked", findings: [{ message: "Published package checksum differs" }] }],
     [23, { status: "incomplete", error: "GitHub CLI: gh executable not found on PATH" }],
     [1, { status: "incomplete", error: "GitHub API: HTTP 401" }],
-  ])("logs the structured report and summary before returning audit exit %s", (exitCode, audit) => {
+    [0, { status: "blocked", findings: [{ message: "Contradictory audit exit" }] }],
+    [23, { status: "incomplete", error: "GitHub API: HTTP 403" }, true],
+    [0, { status: "complete" }, true],
+  ])("logs audit exit %s and preserves failure even if summary writing fails", (exitCode, audit, summaryFails = false) => {
     const temp = mkdtempSync(join(tmpdir(), "release-channel-audit-"));
     try {
       const bin = join(temp, "bin");
       mkdirSync(bin);
       writeFileSync(join(bin, "pnpm"), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify(audit)}'\nexit ${exitCode}\n`, { mode: 0o755 });
-      const summary = join(temp, "summary.md");
+      const summary = summaryFails ? temp : join(temp, "summary.md");
       const result = spawnSync("bash", ["-e", "-c", command], { cwd: root, encoding: "utf8",
         env: { PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`, RUNNER_TEMP: temp, GITHUB_STEP_SUMMARY: summary } });
-      expect(result.status, result.stderr).toBe(exitCode);
+      expect(result.status, result.stderr).toBe(exitCode || (summaryFails || audit.status !== "complete" ? 1 : 0));
       expect(JSON.parse(result.stdout)).toEqual({ auditExitCode: exitCode, audit });
-      expect(readFileSync(summary, "utf8")).toContain(result.stdout.trim());
+      if (!summaryFails) expect(readFileSync(summary, "utf8")).toContain(result.stdout.trim());
       expect(JSON.parse(readFileSync(join(temp, "package-manager-preflight.json"), "utf8"))).toEqual(audit);
     } finally {
       rmSync(temp, { recursive: true, force: true });
     }
   });
+});
+
+it("reports a real missing gh executable as incomplete JSON without attempting authenticated reads", () => {
+  const temp = mkdtempSync(join(tmpdir(), "release-channel-no-gh-"));
+  try {
+    const result = spawnSync(process.execPath, [join(root, "scripts/package-manager-release.mjs"), "--audit"], {
+      encoding: "utf8", env: { PATH: temp },
+    });
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({ status: "incomplete",
+      error: "GitHub CLI at repos/pwrdrvr/PwrAgent/releases/latest: gh executable not found on PATH; read incomplete, do not infer absence" });
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
 });
 
 it.each([

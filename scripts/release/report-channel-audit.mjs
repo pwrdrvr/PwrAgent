@@ -20,6 +20,7 @@ try {
   if (length > limit) throw new Error("oversized");
   const parsed = JSON.parse(buffer.subarray(0, length).toString("utf8"));
   if (!["complete", "blocked", "incomplete"].includes(parsed?.status)) throw new Error("invalid");
+  if (parsed.status !== "complete") process.exitCode = 1;
   report = JSON.stringify({ auditExitCode: Number(status), audit: parsed }, null, 2);
   if (Buffer.byteLength(report) > limit) throw new Error("oversized");
 } catch {
