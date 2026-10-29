@@ -135,7 +135,7 @@ describe("MarkdownFilesWindow", () => {
     const header = container.querySelector<HTMLElement>(".file-viewer-header")!;
     const scripts = await within(header).findByRole("switch", { name: "Scripts" });
     expect(scripts).toHaveAttribute("aria-checked", "false");
-    expect(within(header).getByText("1 blocked")).toBeInTheDocument();
+    expect(await within(header).findByText("1 blocked")).toBeInTheDocument();
     expect(container.querySelector(".html-preview__bar")).toBeNull();
   });
 });
