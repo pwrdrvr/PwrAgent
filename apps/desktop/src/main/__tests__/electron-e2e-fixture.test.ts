@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertOnboardingSeedTook,
   closeElectronApplication,
+  closeElectronWithSessionDrain,
   configureElectronE2eSecretStorageEnv,
   configureElectronE2eReleaseEnv,
   nextRendererViewportRequest,
@@ -72,6 +73,82 @@ describe("Electron E2E fixture teardown", () => {
       classification: "healthy",
       forceExitOutcome: "not-needed",
     });
+  });
+
+  it("keeps Electron alive until each owned session has closed connections and flushed cookies", async () => {
+    let connectionStarted!: () => void;
+    const connectionStart = new Promise<void>((resolve) => { connectionStarted = resolve; });
+    let releaseConnections!: () => void;
+    const connectionsClosed = new Promise<void>((resolve) => { releaseConnections = resolve; });
+    let flushStarted!: () => void;
+    const flushStart = new Promise<void>((resolve) => { flushStarted = resolve; });
+    let releaseFlush!: () => void;
+    const cookiesFlushed = new Promise<void>((resolve) => { releaseFlush = resolve; });
+    const ownedSession = {
+      closeAllConnections: vi.fn(async () => {
+        connectionStarted();
+        await connectionsClosed;
+      }),
+      cookies: {
+        flushStore: vi.fn(async () => {
+          flushStarted();
+          await cookiesFlushed;
+        }),
+      },
+    };
+    const otherSession = {
+      closeAllConnections: vi.fn(async () => undefined),
+      cookies: { flushStore: vi.fn(async () => undefined) },
+    };
+    const electron = {
+      session: { defaultSession: ownedSession },
+      webContents: {
+        getAllWebContents: () => [
+          { session: ownedSession },
+          { session: otherSession },
+          { session: ownedSession },
+        ],
+      },
+    };
+    const close = vi.fn(async () => undefined);
+    const closing = closeElectronWithSessionDrain({
+      evaluate: (callback: (module: typeof electron) => Promise<void>) => callback(electron),
+      close,
+    } as never);
+
+    await connectionStart;
+    expect(ownedSession.cookies.flushStore).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+    releaseConnections();
+    await flushStart;
+    expect(close).not.toHaveBeenCalled();
+    releaseFlush();
+    await closing;
+    expect(ownedSession.closeAllConnections).toHaveBeenCalledTimes(1);
+    expect(ownedSession.cookies.flushStore).toHaveBeenCalledTimes(1);
+    expect(otherSession.closeAllConnections).toHaveBeenCalledTimes(1);
+    expect(otherSession.cookies.flushStore).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not request quit when a native session drain fails", async () => {
+    const failure = new Error("cookie store failed to flush");
+    const electron = {
+      session: {
+        defaultSession: {
+          closeAllConnections: async () => undefined,
+          cookies: { flushStore: async () => { throw failure; } },
+        },
+      },
+      webContents: { getAllWebContents: () => [] },
+    };
+    const close = vi.fn(async () => undefined);
+
+    await expect(closeElectronWithSessionDrain({
+      evaluate: (callback: (module: typeof electron) => Promise<void>) => callback(electron),
+      close,
+    } as never)).rejects.toBe(failure);
+    expect(close).not.toHaveBeenCalled();
   });
 
   it("keeps keychain access disabled while enabling writable screenshot storage", () => {

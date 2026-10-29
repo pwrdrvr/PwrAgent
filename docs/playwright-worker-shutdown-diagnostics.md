@@ -64,6 +64,15 @@ holds `Local Storage/leveldb/LOCK`; the Electron main process then keeps the
 launcher alive after `quit`. The fixture removes the Chromium directories only
 after closing the app and cleaning up its profile helpers.
 
+On Windows, fixture close also drains each live Electron session before asking
+Playwright to quit: it closes connections and awaits the cookie store flush.
+This preparation shares the existing six-second graceful-close deadline.
+Chromium's native `BrowserProcessIOThread::ProcessHostCleanUp` otherwise waits
+for the network service to flush cookies and cache after JavaScript quit has
+finished. That service can retain the launcher's pipes while native storage
+work is still pending. The fixture must await that work while the sessions
+are still reachable over RPC; storage isolation alone does not drain it.
+
 The Windows reproduction left a suspended no-op `cmd.exe` from the startup
 Job-wrapper prewarm alive after the app exited. The app no longer starts this
 fire-and-forget prewarm. Vitest's separate prewarm setup still awaits its
