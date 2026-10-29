@@ -55341,7 +55341,7 @@ script = "printf setup"
       };
     };
     vi.spyOn(internals.claudeBackend, "listThreads").mockResolvedValue([{
-      id: "claude-1", title: "Claude", source: "claude", updatedAt: 1,
+      id: "claude-1", title: "Claude", titleSource: "explicit", source: "claude", updatedAt: 1,
       // Adopted from another agent, so this thread must not archive it.
       linkedDirectories: [{ id: worktreePath, label: "app", path: "/repo/app", worktreePath, kind: "worktree", worktreeOwnership: "external" }],
     }]);
