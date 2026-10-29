@@ -37,7 +37,7 @@ vi.mock("../log", () => ({
 }));
 vi.mock("../window", () => ({
   applyWindowSecurityHardening: vi.fn(),
-  getPreloadPath: () => "/preload.js",
+  rendererPreloadWebPreferences: () => ({ preload: "/preload.js", nodeIntegrationInSubFrames: true }),
   getRendererEntry: () => ({ kind: "file", value: "/renderer.html" }),
 }));
 vi.mock("../window-channels", () => ({

@@ -356,6 +356,13 @@ describe("createMainWindow", () => {
       true
     );
     expect(browserWindowState.options?.webPreferences?.sandbox).toBe(true);
+    // The preload removes WebRTC from HTML previews, which are subframes.
+    expect(
+      browserWindowState.options?.webPreferences?.nodeIntegrationInSubFrames
+    ).toBe(true);
+    expect(browserWindowState.options?.webPreferences?.nodeIntegration).toBe(
+      false
+    );
     expect(browserWindowState.loadURL).toHaveBeenCalledWith(
       "http://127.0.0.1:5173"
     );

@@ -1,3 +1,7 @@
+// SVG scripts run here, so WebRTC must not. The window's preload removes it
+// from this frame and from any frame the SVG nests; Trusted Types refuse the
+// `javascript:` navigation that would give a nested frame a document the
+// preload never sees (`src/preload/subframe-hardening.ts`).
 const INTERACTIVE_SVG_CSP = [
   "default-src 'none'",
   "script-src 'unsafe-inline'",
@@ -6,6 +10,7 @@ const INTERACTIVE_SVG_CSP = [
   "base-uri 'none'",
   "form-action 'none'",
   "frame-src 'none'",
+  "require-trusted-types-for 'script'",
 ].join("; ");
 
 /** Return a sandbox document only when the SVG has user-facing interactions.
