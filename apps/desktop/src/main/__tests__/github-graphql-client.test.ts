@@ -5,6 +5,7 @@ import {
   buildBatchedPrQuery,
   buildBatchedStatusContextQuery,
   buildBranchPrQuery,
+  buildCommitPrQuery,
   mapGraphqlPrNode,
   parsePrRefFromUrl,
   readGithubDotComAuthToken,
@@ -180,6 +181,21 @@ describe("buildBranchPrQuery", () => {
     ]);
     expect(variables.b0).toBe('evil") { x } #');
     expect(query).not.toContain("evil");
+  });
+});
+
+describe("buildCommitPrQuery", () => {
+  it("asks each repository for the PRs associated with a commit, by variable", () => {
+    const sha = "a".repeat(40);
+    const { query, variables } = buildCommitPrQuery([
+      { owner: "pwrdrvr", repo: "PwrAgent", sha },
+    ]);
+
+    expect(query).toContain("$s0: GitObjectID!");
+    expect(query).toContain("r0: repository(owner: $o0, name: $n0) { object(oid: $s0)");
+    expect(query).toContain("associatedPullRequests(first: 5");
+    expect(query).not.toContain(sha);
+    expect(variables).toEqual({ o0: "pwrdrvr", n0: "PwrAgent", s0: sha });
   });
 });
 
@@ -741,6 +757,31 @@ describe("GithubGraphqlPrClient", () => {
     await expect(client(request).fetchPullRequests(refs)).resolves.toEqual([]);
     // 401 is not retryable — exactly one attempt.
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("looks up the PRs associated with a commit", async () => {
+    const sha = "a".repeat(40);
+    const request = vi.fn(async () => ({
+      r0: { object: { associatedPullRequests: { nodes: [node({ number: 116 })] } } },
+    }));
+    const result = await client(request).fetchPullRequestsForCommits([
+      { owner: "PwrDrvr", repo: "PwrAgent", sha },
+    ]);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(result.get(`pwrdrvr/pwragent@${sha}`)?.map((pr) => pr.number)).toEqual([116]);
+  });
+
+  it("records no PRs for a commit GitHub has never seen, and nothing for a failed repo", async () => {
+    const unknown = "b".repeat(40);
+    const request = vi.fn(async () => ({ r0: { object: null }, r1: null }));
+    const result = await client(request).fetchPullRequestsForCommits([
+      { owner: "pwrdrvr", repo: "PwrAgent", sha: unknown },
+      { owner: "gone", repo: "missing", sha: unknown },
+    ]);
+
+    expect(result.get(`pwrdrvr/pwragent@${unknown}`)).toEqual([]);
+    expect(result.has(`gone/missing@${unknown}`)).toBe(false);
   });
 
   it("looks up branches across repos in one request", async () => {

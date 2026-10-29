@@ -14,6 +14,7 @@ import { resolveGitHubReposForDirectory } from "./git-remote";
 import { prMatchesSourceRepository } from "./pr-source-repository";
 import {
   branchRefKey,
+  commitRefKey,
   GithubGraphqlPrClient,
   parsePrRefFromUrl,
 } from "./github-graphql-client";
@@ -80,7 +81,7 @@ export type GithubPrFetcherOptions = {
   graphqlClient?: Pick<
     GithubGraphqlPrClient,
     "fetchPullRequests" | "fetchPullRequestsForBranches"
-  >;
+  > & Partial<Pick<GithubGraphqlPrClient, "fetchPullRequestsForCommits">>;
   /** Override configured-remote resolution — used by tests. */
   resolveGitHubRepos?: typeof resolveGitHubReposForDirectory;
   /** Override `gh --version` probe — used by tests. */
@@ -330,6 +331,51 @@ export class GithubPrFetcher {
       fetcherLog.debug("in-process branch PR lookup failed", {
         cwd: params.cwd,
         branch: params.branch,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  }
+
+  /**
+   * Fetch the PRs GitHub associates with one commit, in every configured
+   * repository. Callers decide which of them belong to the branch; this only
+   * reports what GitHub answered. Never primed: discovery batches branches.
+   */
+  async fetchPullRequestsForCommit(params: {
+    cwd: string;
+    sha: string;
+    onProviderFailure?: () => void;
+  }): Promise<PrSummary[]> {
+    const fetchForCommits = this.graphqlClient.fetchPullRequestsForCommits?.bind(this.graphqlClient);
+    const sha = params.sha.trim().toLowerCase();
+    if (!fetchForCommits || !/^[0-9a-f]{40}$/.test(sha)) return [];
+    const repos = await this.resolveGitHubRepos(params.cwd);
+    if (repos.length === 0) return [];
+    if (!(await this.isGhAvailable())) {
+      params.onProviderFailure?.();
+      return [];
+    }
+    try {
+      const refs = repos.map((repo) => ({ owner: repo.owner, repo: repo.repo, sha }));
+      const byCommit = await fetchForCommits(refs);
+      const byUrl = new Map<string, PrSummary>();
+      for (const ref of refs) {
+        const prs = byCommit.get(commitRefKey(ref));
+        if (!prs) {
+          params.onProviderFailure?.();
+          continue;
+        }
+        for (const pr of prs) {
+          if (prMatchesSourceRepository(pr, repos)) byUrl.set(pr.url, pr);
+        }
+      }
+      return [...byUrl.values()];
+    } catch (error) {
+      params.onProviderFailure?.();
+      fetcherLog.debug("in-process commit PR lookup failed", {
+        cwd: params.cwd,
+        sha,
         error: error instanceof Error ? error.message : String(error),
       });
       return [];

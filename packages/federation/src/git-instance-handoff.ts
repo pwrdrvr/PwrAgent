@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import type { ThreadHandoffGitReference } from "@pwragent/shared";
-import { normalizeGitOriginUrl } from "@pwragent/shared";
+import { normalizeGitOriginUrl, readStatusWithoutNestedWorktrees } from "@pwragent/shared";
 import { validateGitHandoffReference } from "./thread-handoff-package";
 
 export type HandoffGitRunner = (cwd: string, args: string[], options?: { maxBuffer?: number }) => Promise<{ stdout: string; stderr: string }>;
@@ -29,7 +29,14 @@ export function createGitHandoffService(runGitCommand: HandoffGitRunner) {
   }
 
   async function assertClean(cwd: string): Promise<void> {
-    const status = (await git(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"])).stdout;
+    // A linked worktree of this repository nested in the checkout is another
+    // checkout, not workspace content, so it does not block a handoff.
+    const status = await readStatusWithoutNestedWorktrees({
+      cwd,
+      git: async (args) => (await git(cwd, args)).stdout,
+      statusArgs: ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"],
+      realpath: (value) => realpath(value),
+    });
     if (status) throw new Error("Commit or stash your non-ignored workspace changes before handing off this thread, then push the commit.");
   }
 

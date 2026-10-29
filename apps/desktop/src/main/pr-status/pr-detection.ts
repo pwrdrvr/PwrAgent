@@ -43,7 +43,8 @@ const MAX_STORED_DISCOVERY_CONTEXTS = 256;
  * short-circuits future refreshes once any PR reaches a terminal state.
  */
 export async function detectPullRequestsForThread(params: {
-  fetcher: Pick<GithubPrFetcher, "fetchAllPullRequestsForBranch">;
+  fetcher: Pick<GithubPrFetcher, "fetchAllPullRequestsForBranch">
+    & Partial<Pick<GithubPrFetcher, "fetchPullRequestsForCommit">>;
   branch: string;
   directoryPaths: string[];
   allowPrimedBranchLookup?: boolean;
@@ -65,9 +66,9 @@ export async function detectPullRequestsForThread(params: {
       if (repos.length === 0) {
         return [];
       }
-      const branches = await resolvePrLookupBranches({ branch, cwd });
+      const plan = await resolvePrLookupPlan({ branch, cwd });
       const prsByBranch = await Promise.all(
-        branches.map((lookupBranch) =>
+        plan.branches.map((lookupBranch) =>
           params.fetcher
             .fetchAllPullRequestsForBranch({
               cwd,
@@ -79,7 +80,22 @@ export async function detectPullRequestsForThread(params: {
             }),
         ),
       );
-      return prsByBranch.flat().filter((pr) => prMatchesSourceRepository(pr, repos)).map((pr) => ({
+      let found = prsByBranch.flat().filter((pr) => prMatchesSourceRepository(pr, repos));
+      // A branch with no remote upstream may have been pushed under another
+      // name, and that remote branch may be gone after a merge. Its PR is
+      // then found only by the tip commit. Accept only a PR whose head IS the
+      // tip: a PR that merely contains the commit can be someone else's work.
+      if (found.length === 0 && plan.tipCommit && params.fetcher.fetchPullRequestsForCommit) {
+        const tipCommit = plan.tipCommit;
+        found = (await params.fetcher.fetchPullRequestsForCommit({
+          cwd,
+          sha: tipCommit,
+          ...(params.onProviderFailure ? { onProviderFailure: params.onProviderFailure } : {}),
+        })).filter((pr) =>
+          pr.headSha?.trim().toLowerCase() === tipCommit
+          && prMatchesSourceRepository(pr, repos));
+      }
+      return found.map((pr) => ({
         ...pr,
         linkedDirectoryPaths: uniqueNonEmpty([
           ...(pr.linkedDirectoryPaths ?? []),
@@ -111,12 +127,25 @@ export async function resolvePrLookupBranches(params: {
   branch: string;
   cwd: string;
 }): Promise<string[]> {
+  return (await resolvePrLookupPlan(params)).branches;
+}
+
+type PrLookupPlan = {
+  branches: string[];
+  /** Lowercase tip SHA to look up by commit when the branch names find no PR. */
+  tipCommit?: string;
+};
+
+async function resolvePrLookupPlan(params: {
+  branch: string;
+  cwd: string;
+}): Promise<PrLookupPlan> {
   const defaultBranchInfo = await readDefaultBranchInfo(params.cwd);
   // A timed-out/failed git probe must not turn a default branch into an
   // eligible head-name lookup against every contributor's fork.
-  if (defaultBranchInfo.remotes.size === 0) return [];
+  if (defaultBranchInfo.remotes.size === 0) return { branches: [] };
   if (defaultBranchInfo.names.size === 0
-    && FALLBACK_DEFAULT_BRANCHES.some((branch) => branch === params.branch)) return [];
+    && FALLBACK_DEFAULT_BRANCHES.some((branch) => branch === params.branch)) return { branches: [] };
 
   if (params.branch !== "HEAD") {
     const trackedRemoteBranch = await readTrackedRemoteBranch({
@@ -125,23 +154,65 @@ export async function resolvePrLookupBranches(params: {
       remotes: defaultBranchInfo.remotes,
     });
     if (defaultBranchInfo.names.has(params.branch)) {
-      return [];
+      return { branches: [] };
     }
     // A local feature branch may track the remote default branch for pulls.
     // Only substitute a tracked branch after verifying that remote's default.
     const trackedRemoteDefault = trackedRemoteBranch
       ? defaultBranchInfo.defaultsByRemote.get(trackedRemoteBranch.remote)
       : undefined;
-    return [
+    const branches = [
       trackedRemoteBranch
       && trackedRemoteDefault
       && trackedRemoteBranch.name !== trackedRemoteDefault
         ? trackedRemoteBranch.name
         : params.branch,
     ];
+    if (trackedRemoteBranch) return { branches };
+    const tipCommit = await readUnmergedBranchTip({
+      cwd: params.cwd,
+      localBranch: params.branch,
+      defaults: defaultBranchInfo,
+    });
+    return tipCommit ? { branches, tipCommit } : { branches };
   }
 
-  return [];
+  return { branches: [] };
+}
+
+/**
+ * The branch tip, when it has commits that no default branch contains. A tip
+ * that a default branch already holds would find the PR that landed it there,
+ * which belongs to another thread (`resolvePrLookupBranches` refuses default
+ * branches for the same reason). With no known default ref there is nothing
+ * to check against, so no tip is offered.
+ */
+async function readUnmergedBranchTip(params: {
+  cwd: string;
+  localBranch: string;
+  defaults: DefaultBranchInfo;
+}): Promise<string | undefined> {
+  const tip = (await readGitLine(params.cwd, [
+    "rev-parse",
+    "--verify",
+    "--quiet",
+    `refs/heads/${params.localBranch}^{commit}`,
+  ]))?.toLowerCase();
+  if (!tip || !/^[0-9a-f]{40}$/.test(tip)) return undefined;
+  const defaultRefs = [
+    ...[...params.defaults.defaultsByRemote].map(([remote, name]) => `refs/remotes/${remote}/${name}`),
+    ...[...params.defaults.names].map((name) => `refs/heads/${name}`),
+  ];
+  if (defaultRefs.length === 0) return undefined;
+  const unmerged = await readGitLine(params.cwd, [
+    "rev-list",
+    "--ignore-missing",
+    "--count",
+    tip,
+    "--not",
+    ...defaultRefs,
+  ]);
+  return Number(unmerged) > 0 ? tip : undefined;
 }
 
 /**
