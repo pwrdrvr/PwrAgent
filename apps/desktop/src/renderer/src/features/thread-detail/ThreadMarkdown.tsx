@@ -69,7 +69,7 @@ import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
 import { HtmlFilePreview } from "./HtmlFilePreview";
-import { useHtmlPreviewRunScripts } from "../../lib/html-preview-preferences";
+import { isLoopbackHost } from "../../lib/loopback-host";
 import {
   TranscriptFileRegistrationContext,
   useTranscriptFileReference,
@@ -91,6 +91,7 @@ type ThreadMarkdownProps = {
     | "openApplication"
     | "openMarkdownFileViewer"
     | "onHtmlPreviewNavigation"
+    | "readConfigBootstrap"
     | "readHtmlPreviewAssets"
     | "readMarkdownFile"
     | "resolveTranscriptFiles"
@@ -1006,6 +1007,7 @@ function MarkdownDocumentModal(props: {
     | "openApplication"
     | "openMarkdownFileViewer"
     | "onHtmlPreviewNavigation"
+    | "readConfigBootstrap"
     | "readHtmlPreviewAssets"
     | "readMarkdownFile"
   >;
@@ -1029,7 +1031,6 @@ function MarkdownDocumentModal(props: {
   >({ status: "loading" });
   const readMarkdownFile = props.desktopApi?.readMarkdownFile;
   const { thread, federationTarget } = useMarkdownFileSource(props.fileViewerContext);
-  const htmlRunScripts = useHtmlPreviewRunScripts();
   const onOpenTarget = props.onOpenTarget;
   const openLinkedFile = useCallback((path: string) => {
     onOpenTarget({ path, label: fileNameFromPath(path) });
@@ -1211,7 +1212,6 @@ function MarkdownDocumentModal(props: {
               federationTarget={federationTarget}
               label={props.target.label}
               path={props.target.path}
-              runScriptsByDefault={htmlRunScripts}
               onOpenLocalFile={openLinkedFile}
             />
           ) : previewKind !== "markdown" ? (
@@ -1281,16 +1281,6 @@ function isSafeMarkdownUrl(url: string): boolean {
   }
 
   return parsed.protocol === "http:" && isLoopbackHost(parsed.hostname);
-}
-
-function isLoopbackHost(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-  return (
-    normalized === "localhost" ||
-    normalized === "127.0.0.1" ||
-    normalized === "::1" ||
-    normalized.endsWith(".localhost")
-  );
 }
 
 function isImplicitBareAutolink(params: {

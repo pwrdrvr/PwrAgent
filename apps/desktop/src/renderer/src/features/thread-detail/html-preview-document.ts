@@ -25,8 +25,9 @@ export type HtmlPreviewResources = {
   unavailable?: string;
 };
 
-export type HtmlPreviewDocument = {
-  srcdoc: string;
+export type PreparedHtmlPreview = {
+  /** The page behind the policy for one mode, without parsing it again. */
+  srcdoc: (scripts: boolean) => string;
   /** Distinct web URLs the page asked for and did not get. */
   blockedRemote: number;
   /** Distinct local files the page asked for and did not get. */
@@ -207,11 +208,11 @@ export async function resolveHtmlPreviewResources(
  * against. Leave it out for a page that lives on another machine: its
  * relative links name files this machine does not have.
  */
-export function buildHtmlPreviewDocument(
+export function prepareHtmlPreviewDocument(
   html: string,
   resources: HtmlPreviewResources,
-  options: { scripts: boolean; fileUrl?: string },
-): HtmlPreviewDocument {
+  options: { fileUrl?: string },
+): PreparedHtmlPreview {
   const doc = parseHtml(html);
   const blocked = new Set<string>();
   const missing = new Set<string>();
@@ -277,15 +278,30 @@ export function buildHtmlPreviewDocument(
     const style = element.getAttribute("style");
     if (style) element.setAttribute("style", rewriteCss(style));
     if (name === "style") element.textContent = rewriteCss(element.textContent ?? "");
+    if (name === "a" && element.namespaceURI === SVG_NAMESPACE) {
+      // SVG 1.1 links use xlink:href, which rewriteLink would leave pointing
+      // at the app's own URL. SVG 2 reads plain href, so move it there.
+      const legacy = element.getAttributeNS(XLINK_NAMESPACE, "href");
+      element.removeAttributeNS(XLINK_NAMESPACE, "href");
+      if (legacy !== null && !element.hasAttribute("href")) element.setAttribute("href", legacy);
+    }
     if (name === "a" || name === "area") {
       rewriteLink(element, options.fileUrl);
     }
     if (name === "form") element.removeAttribute("target");
   }
 
-  insertHead(doc, options.scripts);
+  // A marker no page can predict holds the policy's place at the top of the
+  // head, so each mode is one string splice.
+  const marker = `pwragent-policy-${crypto.randomUUID()}`;
+  const head = doc.head ?? doc.documentElement.insertBefore(doc.createElement("head"), doc.body);
+  head.prepend(doc.createComment(marker));
+  const serialized = serialize(doc);
+  const at = serialized.indexOf(`<!--${marker}-->`);
+  const before = serialized.slice(0, at);
+  const after = serialized.slice(at + marker.length + 7);
   return {
-    srcdoc: serialize(doc),
+    srcdoc: (scripts) => `${before}${policyHead(scripts)}${after}`,
     blockedRemote: blocked.size,
     missingLocal: missing.size,
   };
@@ -412,26 +428,13 @@ function pathForFileUrl(url: URL): string {
   return /^\/[a-z]:\//i.test(decoded) ? decoded.slice(1) : decoded;
 }
 
-function insertHead(doc: Document, scripts: boolean): void {
-  const head = doc.head ?? doc.documentElement.insertBefore(
-    doc.createElement("head"),
-    doc.body,
-  );
-  const nodes: Element[] = [];
-  const meta = (attributes: Record<string, string>) => {
-    const element = doc.createElement("meta");
-    for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, value);
-    nodes.push(element);
-  };
-  meta({ "http-equiv": "Content-Security-Policy", content: scripts ? SCRIPT_CSP : STATIC_CSP });
-  meta({ name: "referrer", content: "no-referrer" });
-  meta({ "http-equiv": "x-dns-prefetch-control", content: "off" });
-  if (scripts) {
-    const guard = doc.createElement("script");
-    guard.textContent = SCRIPT_GUARD;
-    nodes.push(guard);
-  }
-  head.prepend(...nodes);
+function policyHead(scripts: boolean): string {
+  const policy = scripts ? SCRIPT_CSP : STATIC_CSP;
+  const guard = scripts ? `<script>${SCRIPT_GUARD}</script>` : "";
+  return `<meta http-equiv="Content-Security-Policy" content="${policy}">`
+    + '<meta name="referrer" content="no-referrer">'
+    + '<meta http-equiv="x-dns-prefetch-control" content="off">'
+    + guard;
 }
 
 function serialize(doc: Document): string {

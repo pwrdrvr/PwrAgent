@@ -2,6 +2,8 @@ import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HtmlPreviewNavigationEvent } from "../../../../../shared/html-preview";
+import type { ReadDesktopConfigBootstrapResponse } from "@pwragent/shared";
+import { HtmlPreviewPreferencesProvider } from "../../../lib/html-preview-preferences";
 import { HtmlFilePreview } from "../HtmlFilePreview";
 import { HTML_PREVIEW_LOCAL_LINK_ORIGIN } from "../html-preview-document";
 
@@ -43,7 +45,6 @@ describe("HtmlFilePreview", () => {
         desktopApi={api}
         label="Brief"
         path="/work/brief/index.html"
-        runScriptsByDefault={false}
       />,
     );
 
@@ -69,7 +70,6 @@ describe("HtmlFilePreview", () => {
         desktopApi={api}
         label="Brief"
         path="/work/brief/index.html"
-        runScriptsByDefault={false}
       />,
     );
 
@@ -82,19 +82,69 @@ describe("HtmlFilePreview", () => {
     expect(screen.getByText("Scripts on")).toBeInTheDocument();
   });
 
-  it("starts with scripts on when the operator's setting says so", async () => {
+  it("starts with scripts on when the window's setting says so", async () => {
+    const { api } = previewApi();
+    render(
+      <HtmlPreviewPreferencesProvider runScripts>
+        <HtmlFilePreview
+          content="<p>Hi</p>"
+          desktopApi={api}
+          label="Brief"
+          path="/work/brief/index.html"
+        />
+      </HtmlPreviewPreferencesProvider>,
+    );
+
+    expect((await frame()).getAttribute("sandbox")).toBe("allow-scripts");
+  });
+
+  it("reads the setting itself in a window without one, and keeps the operator's choice", async () => {
+    const { api } = previewApi();
+    let resolveBootstrap: (runScripts: boolean) => void = () => undefined;
+    const readConfigBootstrap = vi.fn(() => new Promise<ReadDesktopConfigBootstrapResponse>((resolve) => {
+      resolveBootstrap = (runScripts) => resolve({
+        snapshot: { htmlPreviewRunScripts: runScripts } as ReadDesktopConfigBootstrapResponse["snapshot"],
+      });
+    }));
+    render(
+      <HtmlFilePreview
+        content="<p>Hi</p>"
+        desktopApi={{ ...api, readConfigBootstrap }}
+        label="Brief"
+        path="/work/brief/index.html"
+      />,
+    );
+
+    expect((await frame()).getAttribute("sandbox")).toBe("");
+    // The operator chooses before the setting arrives; the setting must not undo it.
+    fireEvent.click(screen.getByRole("button", { name: "Run Scripts" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop Scripts" }));
+    await act(async () => resolveBootstrap(true));
+
+    expect(readConfigBootstrap).toHaveBeenCalledOnce();
+    expect((await frame()).getAttribute("sandbox")).toBe("");
+    expect(screen.getByRole("button", { name: "Run Scripts" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("opens with the setting a window without a provider reads", async () => {
     const { api } = previewApi();
     render(
       <HtmlFilePreview
         content="<p>Hi</p>"
-        desktopApi={api}
+        desktopApi={{
+          ...api,
+          readConfigBootstrap: async () => ({
+            snapshot: { htmlPreviewRunScripts: true } as ReadDesktopConfigBootstrapResponse["snapshot"],
+          }),
+        }}
         label="Brief"
         path="/work/brief/index.html"
-        runScriptsByDefault
       />,
     );
 
-    expect((await frame()).getAttribute("sandbox")).toBe("allow-scripts");
+    await waitFor(async () => {
+      expect((await frame()).getAttribute("sandbox")).toBe("allow-scripts");
+    });
   });
 
   it("asks before opening a link the page tried to follow", async () => {
@@ -106,7 +156,6 @@ describe("HtmlFilePreview", () => {
         desktopApi={api}
         label="Brief"
         path="/work/brief/index.html"
-        runScriptsByDefault={false}
       />,
     );
     await frame();
@@ -132,7 +181,6 @@ describe("HtmlFilePreview", () => {
         desktopApi={api}
         label="Brief"
         path="/work/brief/index.html"
-        runScriptsByDefault={false}
         onOpenLocalFile={onOpenLocalFile}
       />,
     );
@@ -167,7 +215,6 @@ describe("HtmlFilePreview", () => {
         federationTarget={{ scope: "remote", instanceId: "peer" }}
         label="Brief"
         path="/work/brief/index.html"
-        runScriptsByDefault={false}
       />,
     );
 

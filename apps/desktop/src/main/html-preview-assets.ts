@@ -61,8 +61,9 @@ export function htmlPreviewAssetMime(filePath: string): string | undefined {
  *
  * A relative ref resolves against the folder of the HTML file it came from.
  * An absolute path or a `file:` URL is taken as written. Either way the file,
- * after symlinks, must sit inside that folder, so a page cannot pull an
- * arbitrary file off the disk into its frame.
+ * after symlinks, must sit inside that folder and outside any hidden
+ * directory, so a page cannot pull an arbitrary file off the disk into its
+ * frame.
  */
 export async function readHtmlPreviewAssets(
   request: ReadHtmlPreviewAssetsRequest,
@@ -89,30 +90,39 @@ export async function readHtmlPreviewAssets(
   const refs = [...new Set(Array.isArray(request.refs) ? request.refs : [])]
     .filter((ref): ref is string => typeof ref === "string" && ref.length > 0)
     .slice(0, MAX_HTML_PREVIEW_ASSET_REFS);
+
+  // Find every file first, then spend the byte budget in page order, then
+  // read what fits. Only the finding and the reading touch the disk, and
+  // both run a few files at a time.
+  const found = await mapConcurrently(refs, (ref) => findAsset(folder, ref));
+  let budget = MAX_HTML_PREVIEW_TOTAL_ASSET_BYTES;
+  const planned = found.map((asset) => {
+    if ("reason" in asset) return asset;
+    if (asset.size > MAX_HTML_PREVIEW_ASSET_BYTES || asset.size > budget) {
+      return { reason: "too-large" as const };
+    }
+    budget -= asset.size;
+    return asset;
+  });
+  const read = await mapConcurrently(planned, async (asset) =>
+    "reason" in asset ? asset : await readFoundAsset(asset));
+
   const assets: HtmlPreviewAsset[] = [];
   const skipped: HtmlPreviewSkippedAsset[] = [];
-  let totalBytes = 0;
-
-  for (const ref of refs) {
-    const result = await readAsset(folder, ref, MAX_HTML_PREVIEW_TOTAL_ASSET_BYTES - totalBytes);
-    if ("reason" in result) {
-      skipped.push({ ref, reason: result.reason });
-      continue;
-    }
-    totalBytes += result.bytes;
-    assets.push({ ref, dataUrl: result.dataUrl });
-  }
-
+  read.forEach((result, index) => {
+    const ref = refs[index]!;
+    if ("reason" in result) skipped.push({ ref, reason: result.reason });
+    else assets.push({ ref, dataUrl: result.dataUrl });
+  });
   return { assets, skipped };
 }
 
-async function readAsset(
-  folder: string,
-  ref: string,
-  remainingBytes: number,
-): Promise<{ dataUrl: string; bytes: number } | { reason: HtmlPreviewSkippedAsset["reason"] }> {
+type SkipReason = { reason: HtmlPreviewSkippedAsset["reason"] };
+type FoundAsset = { resolved: string; mime: string; size: number };
+
+async function findAsset(folder: string, ref: string): Promise<FoundAsset | SkipReason> {
   const candidate = htmlPreviewAssetPath(folder, ref);
-  if (candidate === undefined || !isInside(folder, candidate)) {
+  if (candidate === undefined || !isServedFrom(folder, candidate)) {
     return { reason: "outside-folder" };
   }
 
@@ -123,30 +133,50 @@ async function readAsset(
     return { reason: "missing" };
   }
   // A symlink inside the folder must not lead out of it.
-  if (!isInside(folder, resolved)) {
+  if (!isServedFrom(folder, resolved)) {
     return { reason: "outside-folder" };
   }
   const mime = htmlPreviewAssetMime(resolved);
   if (!mime) {
     return { reason: "unsupported-type" };
   }
-
   try {
     const fileStat = await stat(resolved);
-    if (!fileStat.isFile()) {
-      return { reason: "missing" };
-    }
-    if (fileStat.size > MAX_HTML_PREVIEW_ASSET_BYTES || fileStat.size > remainingBytes) {
-      return { reason: "too-large" };
-    }
-    const bytes = await readFile(resolved);
-    if (bytes.byteLength > MAX_HTML_PREVIEW_ASSET_BYTES || bytes.byteLength > remainingBytes) {
-      return { reason: "too-large" };
-    }
-    return { dataUrl: `data:${mime};base64,${bytes.toString("base64")}`, bytes: bytes.byteLength };
+    return fileStat.isFile()
+      ? { resolved, mime, size: fileStat.size }
+      : { reason: "missing" };
   } catch {
     return { reason: "missing" };
   }
+}
+
+async function readFoundAsset(asset: FoundAsset): Promise<{ dataUrl: string } | SkipReason> {
+  try {
+    const bytes = await readFile(asset.resolved);
+    // The file grew after it was measured: it no longer fits the budget.
+    if (bytes.byteLength > asset.size) {
+      return { reason: "too-large" };
+    }
+    return { dataUrl: `data:${asset.mime};base64,${bytes.toString("base64")}` };
+  } catch {
+    return { reason: "missing" };
+  }
+}
+
+const ASSET_IO_CONCURRENCY = 8;
+
+async function mapConcurrently<T, R>(items: T[], map: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await map(items[index]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(ASSET_IO_CONCURRENCY, items.length) }, worker));
+  return results;
 }
 
 /**
@@ -186,10 +216,20 @@ export function htmlPreviewAssetPath(folder: string, ref: string): string | unde
   return path.resolve(folder, decoded);
 }
 
-function isInside(folder: string, candidate: string): boolean {
+/**
+ * Inside the page's folder and not under a hidden directory or file. A page
+ * saved at the top of a home folder would otherwise reach `.config`, `.aws`
+ * and the like, where tools keep credentials in `.js` and `.json` files.
+ */
+function isServedFrom(folder: string, candidate: string): boolean {
   const relative = path.relative(folder, candidate);
-  return relative !== ""
-    && relative !== ".."
-    && !relative.startsWith(`..${path.sep}`)
-    && !path.isAbsolute(relative);
+  if (
+    relative === ""
+    || relative === ".."
+    || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative)
+  ) {
+    return false;
+  }
+  return !relative.split(path.sep).some((segment) => segment.startsWith("."));
 }

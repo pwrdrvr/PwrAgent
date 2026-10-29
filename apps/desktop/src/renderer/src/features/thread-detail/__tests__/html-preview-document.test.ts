@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  buildHtmlPreviewDocument,
   collectHtmlPreviewRefs,
   fileUrlForPath,
   HTML_PREVIEW_LOCAL_LINK_ORIGIN,
   htmlPreviewLocalLinkPath,
+  prepareHtmlPreviewDocument,
   resolveHtmlPreviewResources,
   type HtmlPreviewResources,
 } from "../html-preview-document";
@@ -14,6 +14,20 @@ const NO_RESOURCES: HtmlPreviewResources = { assets: new Map(), stylesheets: new
 
 function parse(srcdoc: string): Document {
   return new DOMParser().parseFromString(srcdoc, "text/html");
+}
+
+/** One mode of a prepared page, the way the viewer shows it. */
+function buildHtmlPreviewDocument(
+  html: string,
+  resources: HtmlPreviewResources,
+  options: { scripts: boolean; fileUrl?: string },
+) {
+  const prepared = prepareHtmlPreviewDocument(html, resources, { fileUrl: options.fileUrl });
+  return {
+    srcdoc: prepared.srcdoc(options.scripts),
+    blockedRemote: prepared.blockedRemote,
+    missingLocal: prepared.missingLocal,
+  };
 }
 
 function cssDataUrl(css: string): string {
@@ -48,7 +62,7 @@ describe("collectHtmlPreviewRefs", () => {
   });
 });
 
-describe("buildHtmlPreviewDocument", () => {
+describe("prepareHtmlPreviewDocument", () => {
   it("puts a no-network, no-script policy ahead of everything in the page", () => {
     const { srcdoc } = buildHtmlPreviewDocument(
       "<!doctype html><html><head><title>Brief</title><script>alert(1)</script></head><body>Hi</body></html>",
@@ -146,6 +160,35 @@ describe("buildHtmlPreviewDocument", () => {
     expect(htmlPreviewLocalLinkPath(doc.getElementById("absolute")?.getAttribute("href") ?? ""))
       .toBe("/work/other/notes.md");
     expect(doc.getElementById("script")?.hasAttribute("href")).toBe(false);
+  });
+
+  it("serves both modes from one rewrite, differing only in the policy", () => {
+    const prepared = prepareHtmlPreviewDocument(
+      '<!doctype html><html lang="en"><head><title>T</title></head><body><p id="p">Hi</p></body></html>',
+      NO_RESOURCES,
+      {},
+    );
+    const page = (srcdoc: string) => {
+      const doc = parse(srcdoc);
+      doc.head.querySelectorAll('meta, script').forEach((node) => node.remove());
+      return doc.documentElement.outerHTML;
+    };
+
+    expect(page(prepared.srcdoc(true))).toBe(page(prepared.srcdoc(false)));
+    expect(prepared.srcdoc(false)).not.toContain("pwragent-policy-");
+    expect(parse(prepared.srcdoc(false)).documentElement.getAttribute("lang")).toBe("en");
+  });
+
+  it("points an SVG 1.1 link at the page's own folder", () => {
+    const { srcdoc } = buildHtmlPreviewDocument(
+      '<svg xmlns:xlink="http://www.w3.org/1999/xlink"><a id="chart" xlink:href="appendix.html"><text>x</text></a></svg>',
+      NO_RESOURCES,
+      { scripts: false, fileUrl: fileUrlForPath("/work/brief/index.html") },
+    );
+    const link = parse(srcdoc).getElementById("chart");
+
+    expect(link?.hasAttributeNS("http://www.w3.org/1999/xlink", "href")).toBe(false);
+    expect(htmlPreviewLocalLinkPath(link?.getAttribute("href") ?? "")).toBe("/work/brief/appendix.html");
   });
 
   it("drops relative links from a page on another machine", () => {

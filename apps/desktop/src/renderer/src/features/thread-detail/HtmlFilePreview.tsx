@@ -6,11 +6,13 @@ import {
 } from "@pwragent/shared";
 import { HTML_PREVIEW_FRAME_NAME } from "../../../../shared/html-preview";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { useHtmlPreviewRunScripts } from "../../lib/html-preview-preferences";
+import { isLoopbackHost } from "../../lib/loopback-host";
 import { openExternalUrl } from "../../lib/open-external-url";
 import {
-  buildHtmlPreviewDocument,
   fileUrlForPath,
   htmlPreviewLocalLinkPath,
+  prepareHtmlPreviewDocument,
   resolveHtmlPreviewResources,
   type HtmlPreviewAssetReader,
   type HtmlPreviewResources,
@@ -27,21 +29,28 @@ type ResourceState =
 
 /**
  * An HTML file, shown in an opaque-origin frame that cannot reach the
- * network. Scripts start off unless the operator's setting says otherwise,
- * and the toolbar turns them on or off for this page. A link the page tries
+ * network. Scripts start off unless the operator's setting says otherwise
+ * (`useHtmlPreviewRunScripts`), and the toolbar turns them on or off for
+ * this page. A link the page tries
  * to follow is offered here, with its URL, instead of opening on its own.
  */
 export function HtmlFilePreview(props: {
   content: string;
-  desktopApi?: Pick<DesktopApi, "readHtmlPreviewAssets" | "onHtmlPreviewNavigation">;
+  desktopApi?: Pick<
+    DesktopApi,
+    "readConfigBootstrap" | "readHtmlPreviewAssets" | "onHtmlPreviewNavigation"
+  >;
   federationTarget?: FederationTarget;
   label: string;
   path: string;
-  runScriptsByDefault: boolean;
   /** Opens another previewable file the page links to. */
   onOpenLocalFile?: (path: string) => void;
 }) {
-  const [scripts, setScripts] = useState(props.runScriptsByDefault);
+  const runScriptsByDefault = useHtmlPreviewRunScripts(props.desktopApi);
+  // The operator's choice for this page, once made, outlasts the default
+  // arriving or changing.
+  const [chosenScripts, setChosenScripts] = useState<boolean>();
+  const scripts = chosenScripts ?? runScriptsByDefault;
   const [resourceState, setResourceState] = useState<ResourceState>({ status: "loading" });
   const [pendingLink, setPendingLink] = useState<PendingLink>();
   const remote = Boolean(
@@ -50,10 +59,6 @@ export function HtmlFilePreview(props: {
   const readHtmlPreviewAssets = props.desktopApi?.readHtmlPreviewAssets;
   const onHtmlPreviewNavigation = props.desktopApi?.onHtmlPreviewNavigation;
   const onOpenLocalFile = props.onOpenLocalFile;
-
-  useEffect(() => {
-    setScripts(props.runScriptsByDefault);
-  }, [props.runScriptsByDefault]);
 
   const readAssets = useCallback<HtmlPreviewAssetReader>(async (refs) => {
     if (!readHtmlPreviewAssets) {
@@ -86,9 +91,12 @@ export function HtmlFilePreview(props: {
   }, [props.content, readAssets, readHtmlPreviewAssets, remote]);
 
   const fileUrl = remote ? undefined : fileUrlForPath(props.path);
-  const document = useMemo(() => resourceState.status === "ready"
-    ? buildHtmlPreviewDocument(props.content, resourceState.resources, { scripts, fileUrl })
-    : undefined, [fileUrl, props.content, resourceState, scripts]);
+  // The page is parsed and rewritten once; the scripts toggle only swaps the
+  // policy in front of it.
+  const prepared = useMemo(() => resourceState.status === "ready"
+    ? prepareHtmlPreviewDocument(props.content, resourceState.resources, { fileUrl })
+    : undefined, [fileUrl, props.content, resourceState]);
+  const srcdoc = useMemo(() => prepared?.srcdoc(scripts), [prepared, scripts]);
 
   useEffect(() => {
     if (!onHtmlPreviewNavigation) return undefined;
@@ -101,12 +109,12 @@ export function HtmlFilePreview(props: {
     ? resourceState.resources.unavailable
     : undefined;
   const notices = [
-    document && document.blockedRemote > 0
-      ? `Blocked ${countLabel(document.blockedRemote, "web resource")}`
+    prepared && prepared.blockedRemote > 0
+      ? `Blocked ${countLabel(prepared.blockedRemote, "web resource")}`
       : undefined,
     unavailable,
-    !unavailable && document && document.missingLocal > 0
-      ? `${countLabel(document.missingLocal, "local file")} not loaded`
+    !unavailable && prepared && prepared.missingLocal > 0
+      ? `${countLabel(prepared.missingLocal, "local file")} not loaded`
       : undefined,
   ].filter((notice): notice is string => Boolean(notice));
 
@@ -126,7 +134,7 @@ export function HtmlFilePreview(props: {
           aria-pressed={scripts}
           onClick={() => {
             setPendingLink(undefined);
-            setScripts((current) => !current);
+            setChosenScripts(!scripts);
           }}
         >
           {scripts ? "Stop Scripts" : "Run Scripts"}
@@ -143,7 +151,7 @@ export function HtmlFilePreview(props: {
           }}
         />
       ) : null}
-      {document ? (
+      {srcdoc !== undefined ? (
         <iframe
           // A new frame per mode: the sandbox attribute only applies to the
           // next document a frame loads.
@@ -153,7 +161,7 @@ export function HtmlFilePreview(props: {
           title={`HTML preview: ${props.label}`}
           sandbox={scripts ? "allow-scripts" : ""}
           referrerPolicy="no-referrer"
-          srcDoc={document.srcdoc}
+          srcDoc={srcdoc}
         />
       ) : (
         <p className="html-preview__loading">Loading page…</p>
@@ -212,7 +220,7 @@ function classifyLink(url: string, canOpenFiles: boolean): PendingLink {
   }
   try {
     const parsed = new URL(url);
-    // The app opens plain http only on this machine (external-url-policy.ts).
+    // The app opens plain http only on this machine (main's external-url-policy.ts).
     if (
       parsed.protocol === "https:"
       || parsed.protocol === "mailto:"
@@ -224,14 +232,6 @@ function classifyLink(url: string, canOpenFiles: boolean): PendingLink {
     // Not a URL at all: show it as written.
   }
   return { kind: "unsupported", target: url };
-}
-
-function isLoopbackHost(hostname: string): boolean {
-  const host = hostname.toLowerCase();
-  return host === "localhost"
-    || host.endsWith(".localhost")
-    || host === "127.0.0.1"
-    || host === "::1";
 }
 
 function baseName(filePath: string): string {

@@ -27443,6 +27443,7 @@ a.transcript-message__messaging-origin:focus-visible {
 .markdown-document-modal__content--html {
   width: min(100%, 1200px);
   height: min(100vh - 72px, 900px);
+  max-height: none;
 }
 
 .markdown-document-modal__body--html {

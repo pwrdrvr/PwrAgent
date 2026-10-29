@@ -79,6 +79,33 @@ describe("readHtmlPreviewAssets", () => {
     ]);
   });
 
+  it("refuses files under hidden directories, even inside the folder", async () => {
+    await mkdir(path.join(root, "site", ".config", "tool"), { recursive: true });
+    await writeFile(path.join(root, "site", ".config", "tool", "config.js"), "export const token = 1;");
+    await writeFile(path.join(root, "site", ".hidden.png"), PNG);
+
+    const response = await readHtmlPreviewAssets({
+      path: page,
+      refs: [".config/tool/config.js", ".hidden.png", "img/logo.png"],
+    });
+
+    expect(response.assets.map((asset) => asset.ref)).toEqual(["img/logo.png"]);
+    expect(response.skipped).toEqual([
+      { ref: ".config/tool/config.js", reason: "outside-folder" },
+      { ref: ".hidden.png", reason: "outside-folder" },
+    ]);
+  });
+
+  it("keeps the page order when many files load at once", async () => {
+    const refs = Array.from({ length: 20 }, (_, index) => `img/${index}.png`);
+    await Promise.all(refs.map((ref) => writeFile(path.join(root, "site", ref), PNG)));
+
+    const response = await readHtmlPreviewAssets({ path: page, refs: [...refs, "img/missing.png"] });
+
+    expect(response.assets.map((asset) => asset.ref)).toEqual(refs);
+    expect(response.skipped).toEqual([{ ref: "img/missing.png", reason: "missing" }]);
+  });
+
   it("refuses files a page has no reason to load, and says which are missing", async () => {
     const response = await readHtmlPreviewAssets({
       path: page,

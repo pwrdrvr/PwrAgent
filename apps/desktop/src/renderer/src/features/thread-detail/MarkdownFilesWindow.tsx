@@ -53,7 +53,6 @@ export function MarkdownFilesWindow() {
     : rawLoadState;
   const readMarkdownFile = viewerApi?.readMarkdownFile;
   const remoteSource = Boolean(federationTarget && isRemoteFederationTarget(federationTarget));
-  const htmlRunScripts = useHtmlPreviewRunScriptsSetting(desktopApi);
 
   useEffect(() => {
     if (!snapshot?.context.title) {
@@ -322,7 +321,6 @@ export function MarkdownFilesWindow() {
                   federationTarget={federationTarget}
                   label={selectedFile.label}
                   path={selectedFile.path}
-                  runScriptsByDefault={htmlRunScripts}
                   onOpenLocalFile={remoteSource ? undefined : openLinkedFile}
                 />
               ) : previewKind !== "markdown" && previewKind !== "html" ? (
@@ -347,33 +345,6 @@ export function MarkdownFilesWindow() {
       </section>
     </div>
   );
-}
-
-/**
- * The operator's HTML scripts setting. This window has no settings provider,
- * so it reads the cheap config projection once; until that arrives, pages
- * open without scripts.
- */
-function useHtmlPreviewRunScriptsSetting(
-  desktopApi: ReturnType<typeof useDesktopApi>,
-): boolean {
-  const [runScripts, setRunScripts] = useState(false);
-  const readConfigBootstrap = desktopApi?.readConfigBootstrap;
-  useEffect(() => {
-    if (!readConfigBootstrap) return undefined;
-    let cancelled = false;
-    void readConfigBootstrap()
-      .then((response) => {
-        if (!cancelled) setRunScripts(response.snapshot.htmlPreviewRunScripts);
-      })
-      .catch(() => {
-        // Keep the safe default.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [readConfigBootstrap]);
-  return runScripts;
 }
 
 function markdownFilesContextKeyFromHash(): string | undefined {
