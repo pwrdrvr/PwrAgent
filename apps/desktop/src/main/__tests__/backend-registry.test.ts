@@ -60545,49 +60545,6 @@ script = "printf setup"
     }
   });
 
-  it("archives a Claude thread's retained worktree after it moved back to a local folder", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-retained-"));
-    const claudeId = "3c2b1a0f-9e8d-4c7b-a6f5-e4d3c2b1a0f9";
-    const oldWorktree = "/repo/app/.worktrees/old";
-    const store = new ClaudeSessionStore(path.join(root, "sessions"));
-    // The session reports only its current, local folder.
-    await store.save({ cwd: root, thread: {
-      id: claudeId, title: "Claude", titleSource: "explicit", source: "claude", updatedAt: 1,
-      linkedDirectories: [{ id: root, kind: "local", label: "root", path: root }],
-    } });
-    const archiveWorktree = vi.fn();
-    const codexClient = Object.assign(new MockBackendClient({
-      initializeResult: { methods: ["thread/list", "thread/archive"] }, threads: [],
-    }), {
-      listArchiveCleanupThreadsPage: vi.fn(async () => ({ threads: [] })),
-    });
-    const registry = new DesktopBackendRegistry({
-      codexClient,
-      overlayStore: createOverlayStoreMock({ overlays: { [`claude:${claudeId}`]: {
-        backend: "claude", threadId: claudeId, executionMode: "default", extraLinkedDirectories: [],
-        retainedWorktrees: [{
-          id: `pwragent-retained-worktree:claude:${claudeId}:${oldWorktree}`, label: "app", path: "/repo/app",
-          kind: "worktree", worktreePath: oldWorktree,
-        }],
-      } } }),
-      pdfToolMcpServer: null,
-      worktreeArchiveService: { archive: archiveWorktree } as unknown as WorktreeArchiveService,
-      acpWorktreeRepositoryResolver: vi.fn(async () => undefined),
-      claudeBackendOptions: {
-        store,
-        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
-        discoverModels: async () => [],
-      },
-    });
-    try {
-      await registry.archiveThread({ backend: "claude", threadId: claudeId });
-      expect(archiveWorktree).toHaveBeenCalledWith(expect.objectContaining({ worktreePath: oldWorktree }));
-    } finally {
-      await registry.close();
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
   it.each(["directory", "pr", "relinked-pr", "overlay"])("passes existing worktrees and source isolation to a project move: %s", async (provenance) => {
     const directories: LinkedDirectorySummary[] = [{
       id: "source", label: "Workspaces", path: "/repo/Workspaces", kind: "worktree", worktreePath: "/worktrees/Workspaces",

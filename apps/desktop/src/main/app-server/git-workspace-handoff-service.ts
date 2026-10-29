@@ -905,7 +905,10 @@ export class GitWorkspaceHandoffService {
         ...(!fromWorktree ? []
           : params.keepSourceWorktree
             ? ["The previous worktree was created outside PwrAgent, so it was left on disk."]
-            : ["The previous worktree stays on disk. Archiving this thread checkpoints and removes it."]),
+            // Claude and ACP thread archive keeps every worktree.
+            : context.backend !== "codex"
+              ? ["The previous worktree stays on disk."]
+              : ["The previous worktree stays on disk. Archiving this thread checkpoints and removes it."]),
       ],
       completedAt: context.now,
     };

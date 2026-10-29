@@ -15978,17 +15978,6 @@ export class DesktopBackendRegistry {
           targetThread = (await this.claudeBackend.listThreads({ archived: true }))
             .find((thread) => thread.id === result.threadId);
         }
-        if (targetThread && backend !== "codex") {
-          // Claude and ACP report only the session's folder. A worktree left
-          // by a fresh-start move must still send cleanup to full discovery.
-          const readOverlays = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
-          await context.checkpoint();
-          const overlays = await readOverlays.call(this.overlayStore, { backend, threadIds: [result.threadId] });
-          targetThread = {
-            ...targetThread,
-            linkedDirectories: withRetainedWorktrees(targetThread.linkedDirectories, overlays[result.threadId]),
-          };
-        }
         const needsWorktreeOwnership = !params.preserveWorktrees && (!targetThread
           || targetThread.linkedDirectories.some((directory) => Boolean(linkedDirectoryWorktreePath(directory))));
         return await this.findThreadForArchiveCleanup({

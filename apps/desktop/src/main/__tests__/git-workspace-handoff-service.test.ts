@@ -659,6 +659,21 @@ describe("GitWorkspaceHandoffService", () => {
       await expect(readFile(path.join(worktreePath, "worktree-note.txt"), "utf8")).resolves.toBe("untracked\n");
     });
 
+    it("promises no archive cleanup for a Claude thread, whose archive keeps worktrees", async () => {
+      const repoPath = await createRepo();
+      await git(repoPath, ["switch", "main"]);
+      const worktreePath = path.join(path.dirname(repoPath), "worktree-claude");
+      await git(repoPath, ["worktree", "add", worktreePath, "feature/handoff"]);
+      const service = new GitWorkspaceHandoffService({ resolveWorktreeStorage: () => "in-repo" });
+      const result = await service.handoff({
+        backend: "claude", threadId: "thread-1", direction: "worktree-to-worktree", baseRef: "main",
+        repositoryPath: repoPath, sourcePath: worktreePath, now: 4120,
+      });
+
+      expect(result.warnings.at(-1)).toBe("The previous worktree stays on disk.");
+      expect(await pathExists(worktreePath)).toBe(true);
+    });
+
     it("says an adopted worktree is left on disk and never archives it", async () => {
       const repoPath = await createRepo();
       await git(repoPath, ["switch", "main"]);
