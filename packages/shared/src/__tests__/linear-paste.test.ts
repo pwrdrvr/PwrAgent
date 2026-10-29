@@ -166,6 +166,12 @@ describe("parseLinearPaste", () => {
     });
   });
 
+  it("reads an attribute by its own name, not a hyphenated one", () => {
+    expect(parseLinearPaste(
+      '<issue identifier="PWR-7"><title>T</title><project display-name="Old" name="New"/></issue>',
+    )?.issue?.project).toBe("New");
+  });
+
   it("keeps anything else inside the wrapper visible", () => {
     const layout = parseLinearPaste(
       '<issue identifier="PWR-6"><title>T</title><comments><comment>Hi</comment></comments></issue>',
@@ -191,5 +197,6 @@ describe("parseLinearPaste", () => {
   it("leaves tags quoted as code alone", () => {
     expect(parseLinearPaste(`Linear writes:\n\n\`\`\`\n${ISSUE}\n\`\`\``)).toBeUndefined();
     expect(parseLinearPaste(`It is \`${tag(FILE)}\` here`)).toBeUndefined();
+    expect(parseLinearPaste(`It is \`see ${tag(FILE)}\` here`)).toBeUndefined();
   });
 });

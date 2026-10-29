@@ -1439,8 +1439,14 @@ export function PluginsSettings(props: {
             <SettingsField
               label="Attach pasted Linear images"
               sub={
-                connections.some(
-                  (connection) => connection.linearPasteImages !== undefined && connection.enabled,
+                // Older links need a signed-in Linear connection offered to
+                // threads, behind a gateway that is on.
+                gatewayEnabled
+                && connections.some(
+                  (connection) =>
+                    connection.linearPasteImages !== undefined
+                    && connection.enabled
+                    && connection.configured,
                 )
                   ? "When you paste an issue or description from Linear, its images are attached to the message. Links older than five minutes are downloaded through your Linear connection."
                   : "When you paste an issue or description from Linear, its images are attached while their links are fresh, for five minutes after the copy. Connect Linear below and offer it to threads to attach older ones."
@@ -2282,7 +2288,6 @@ function ManagedMcpConnectionRow(props: {
   onToolApprovalChange?: (toolApproval: McpConnectionToolApproval) => void;
   /** Sandboxer only. */
   onSandboxerCleanupOnPrCloseChange?: (enabled: boolean) => void;
-  /** Linear only. */
   onChanged: () => void;
   onDisconnect: () => void;
   onEdit: () => void;

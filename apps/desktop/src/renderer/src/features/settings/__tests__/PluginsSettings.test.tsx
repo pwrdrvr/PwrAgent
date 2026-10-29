@@ -1482,6 +1482,24 @@ describe("PluginsSettings", () => {
       })).toHaveLength(1);
     });
 
+    it("does not promise older Linear links through a signed-out connection", async () => {
+      const linear = managed({
+        id: "linear", displayName: "Linear", serverUrl: "https://mcp.linear.app/mcp",
+        linearPasteImages: true, configured: false, state: "disconnected",
+      });
+      const api = managedApi([linear]);
+      api.listMcpConnections = vi.fn(async () => ({
+        connections: [linear],
+        linearPasteImages: true,
+      }));
+      api.setLinearPasteImages = vi.fn(async () => undefined);
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+      expect(
+        await screen.findByText(/attached while their links are fresh/),
+      ).toBeInTheDocument();
+    });
+
     it("does not offer the Linear setting when the list omits it, as a peer's does", async () => {
       const api = managedApi([managed()]);
       api.setLinearPasteImages = vi.fn(async () => undefined);

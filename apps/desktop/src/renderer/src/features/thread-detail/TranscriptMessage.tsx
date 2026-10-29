@@ -26,6 +26,7 @@ import type {
   AppServerThreadMessageEntry,
   AppServerThreadMessageOrigin,
   AppServerThreadMessagePart,
+  LinearPasteLayout,
   MarkdownFileViewerContext,
   ThreadCorrespondenceState,
   ThreadSubAgentSummary,
@@ -188,12 +189,13 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
   // are laid out as an issue.
   const linearPaste = props.message.role === "user";
   const messageSegments = useMemo(
-    () => groupMessageParts(contentParts).flatMap((segment) =>
+    () => groupMessageParts(contentParts).flatMap((segment): MessagePartSegment[] => {
       // An issue renders as one piece; a table split would cut its wrapper.
-      linearPaste && segment.type === "text" && parseLinearPaste(segment.part.text)
-        ? [segment]
-        : splitMarkdownTableSegment(segment)
-    ),
+      const layout = linearPaste && segment.type === "text"
+        ? parseLinearPaste(segment.part.text)
+        : undefined;
+      return layout ? [{ type: "linear", layout }] : splitMarkdownTableSegment(segment);
+    }),
     [contentParts, linearPaste],
   );
   const [monitorExpanded, setMonitorExpanded] = useState(false);
@@ -691,7 +693,6 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
             {renderMessageSegment({
               segment,
               index,
-              linearPaste,
               applications: props.applications,
               desktopApi: props.desktopApi,
               fileViewerContext: props.fileViewerContext,
@@ -710,6 +711,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
 TranscriptMessage.displayName = "TranscriptMessage";
 
 type MessagePartSegment =
+  | { type: "linear"; layout: LinearPasteLayout }
   | { type: "text"; part: AppServerThreadTextPart }
   | { type: "table"; text: string; wide: boolean }
   | { type: "files"; parts: AppServerThreadFilePart[]; startIndex: number }
@@ -993,8 +995,6 @@ function renderMessageSegment(params: {
   imageParts?: AppServerThreadImagePart[];
   segment: MessagePartSegment;
   index: number;
-  /** Lay out text pasted from Linear as its issue. */
-  linearPaste?: boolean;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
   skills: AppServerSkillSummary[];
   threadLinkSource?: ThreadLinkSource;
@@ -1053,17 +1053,14 @@ function renderMessageSegment(params: {
       threadLinkSource={params.threadLinkSource}
     />
   );
-  if (params.segment.type === "text" && params.linearPaste) {
-    const layout = parseLinearPaste(params.segment.part.text);
-    if (layout) {
-      return (
-        <LinearPasteMessage
-          key={`linear:${params.index}`}
-          layout={layout}
-          renderMarkdown={renderMarkdown}
-        />
-      );
-    }
+  if (params.segment.type === "linear") {
+    return (
+      <LinearPasteMessage
+        key={`linear:${params.index}`}
+        layout={params.segment.layout}
+        renderMarkdown={renderMarkdown}
+      />
+    );
   }
   return renderMarkdown(
     params.segment.type === "table" ? params.segment.text : params.segment.part.text,

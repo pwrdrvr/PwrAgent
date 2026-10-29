@@ -231,9 +231,11 @@ export function parseLinearPaste(text: string): LinearPasteLayout | undefined {
   };
 }
 
-/** Whether `index` falls in a fenced code block, or right after a backtick. */
+/** Whether `index` falls in a fenced code block or an inline code span. */
 function isQuotedAsCode(text: string, index: number): boolean {
-  if (text[index - 1] === "`") return true;
+  // An odd count of backticks earlier on the line opens a code span.
+  const line = text.slice(text.lastIndexOf("\n", index - 1) + 1, index);
+  if ((line.match(/`/g)?.length ?? 0) % 2 === 1) return true;
   const fences = text.slice(0, index).match(CODE_FENCE_LINE)?.length ?? 0;
   return fences % 2 === 1;
 }
@@ -269,7 +271,8 @@ function elementText(element: ElementMatch): string {
 }
 
 function readAttribute(attributes: string, name: string): string | undefined {
-  const match = new RegExp(`\\b${name}="([^"]*)"`).exec(attributes);
+  // Whitespace-led, so `display-name` does not answer for `name`.
+  const match = new RegExp(`(?:^|\\s)${name}="([^"]*)"`).exec(attributes);
   const value = match ? decodeXmlEntities(match[1] ?? "").trim() : "";
   return value || undefined;
 }

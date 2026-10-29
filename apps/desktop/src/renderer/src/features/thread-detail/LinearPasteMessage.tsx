@@ -62,9 +62,12 @@ function renderPiece(
 ): ReactNode {
   if (piece.type === "markdown") return renderMarkdown(piece.text, `piece:${index}`);
   return (
-    <span className="linear-paste__image" key={`piece:${index}`}>
-      <span aria-hidden="true" className="linear-paste__image-badge">IMG</span>
-      <span className="linear-paste__image-name">{piece.name ?? "Linear image"}</span>
+    // The transcript's file chip, so attachments and Linear images match.
+    <span className="transcript-message__file-chip" key={`piece:${index}`}>
+      <span aria-hidden="true" className="transcript-message__file-badge">IMG</span>
+      <span className="transcript-message__file-copy">
+        <span className="transcript-message__file-name">{piece.name ?? "Linear image"}</span>
+      </span>
     </span>
   );
 }
