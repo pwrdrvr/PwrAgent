@@ -67,13 +67,20 @@ export async function detectPullRequestsForThread(params: {
         return [];
       }
       const plan = await resolvePrLookupPlan({ branch, cwd });
+      let branchLookupFailed = false;
+      const onBranchLookupFailure = params.onProviderFailure
+        ? () => {
+            branchLookupFailed = true;
+            params.onProviderFailure?.();
+          }
+        : undefined;
       const prsByBranch = await Promise.all(
         plan.branches.map((lookupBranch) =>
           params.fetcher
             .fetchAllPullRequestsForBranch({
               cwd,
               branch: lookupBranch,
-              ...(params.onProviderFailure ? { onProviderFailure: params.onProviderFailure } : {}),
+              ...(onBranchLookupFailure ? { onProviderFailure: onBranchLookupFailure } : {}),
               ...(params.allowPrimedBranchLookup === undefined
                 ? {}
                 : { allowPrimed: params.allowPrimedBranchLookup }),
@@ -85,8 +92,15 @@ export async function detectPullRequestsForThread(params: {
       // name, and that remote branch may be gone after a merge. Its PR is
       // then found only by the tip commit. Accept only a PR whose head IS the
       // tip: a PR that merely contains the commit can be someone else's work.
-      if (found.length === 0 && plan.tipCommit && params.fetcher.fetchPullRequestsForCommit) {
-        const tipCommit = plan.tipCommit;
+      // A failed name lookup is already incomplete; a second request cannot
+      // make it authoritative.
+      const tipCommit = found.length === 0
+        && !branchLookupFailed
+        && plan.commitFallback
+        && params.fetcher.fetchPullRequestsForCommit
+        ? await readUnmergedBranchTip({ cwd, ...plan.commitFallback })
+        : undefined;
+      if (tipCommit && params.fetcher.fetchPullRequestsForCommit) {
         found = (await params.fetcher.fetchPullRequestsForCommit({
           cwd,
           sha: tipCommit,
@@ -132,8 +146,12 @@ export async function resolvePrLookupBranches(params: {
 
 type PrLookupPlan = {
   branches: string[];
-  /** Lowercase tip SHA to look up by commit when the branch names find no PR. */
-  tipCommit?: string;
+  /**
+   * Present for a branch with no remote upstream: when its name finds no PR,
+   * look up the tip commit. The tip is read only then, so callers that need
+   * only the branch names pay nothing for it.
+   */
+  commitFallback?: { localBranch: string; defaults: DefaultBranchInfo };
 };
 
 async function resolvePrLookupPlan(params: {
@@ -169,12 +187,10 @@ async function resolvePrLookupPlan(params: {
         : params.branch,
     ];
     if (trackedRemoteBranch) return { branches };
-    const tipCommit = await readUnmergedBranchTip({
-      cwd: params.cwd,
-      localBranch: params.branch,
-      defaults: defaultBranchInfo,
-    });
-    return tipCommit ? { branches, tipCommit } : { branches };
+    return {
+      branches,
+      commitFallback: { localBranch: params.branch, defaults: defaultBranchInfo },
+    };
   }
 
   return { branches: [] };

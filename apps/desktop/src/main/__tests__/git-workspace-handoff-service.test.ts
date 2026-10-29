@@ -740,6 +740,35 @@ describe("GitWorkspaceHandoffService", () => {
     );
   });
 
+  it("moves a Claude worktree nested in local back to local without calling local dirty", async () => {
+    const repoPath = await createRepo();
+    await git(repoPath, ["switch", "main"]);
+    // Claude Code nests its worktrees inside the primary checkout, where Git
+    // reports them as untracked `.claude/`.
+    const worktreePath = path.join(repoPath, ".claude", "worktrees", "agent-a14a89e0");
+    await git(repoPath, ["worktree", "add", worktreePath, "feature/handoff"]);
+    await writeFile(path.join(worktreePath, "agent-note.txt"), "agent work\n", "utf8");
+    expect(await git(repoPath, ["status", "--porcelain"])).toBe("?? .claude/");
+
+    const service = new GitWorkspaceHandoffService();
+    const result = await service.handoff({
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "worktree-to-local",
+      repositoryPath: repoPath,
+      sourcePath: worktreePath,
+      sourceBranch: "feature/handoff",
+      now: 2800,
+    });
+
+    expect(result.workMode).toBe("local");
+    expect(await git(repoPath, ["branch", "--show-current"])).toBe("feature/handoff");
+    await expect(readFile(path.join(repoPath, "agent-note.txt"), "utf8")).resolves.toBe(
+      "agent work\n",
+    );
+    expect(await git(repoPath, ["stash", "list"])).toBe("");
+  });
+
   it("rejects moving a worktree branch to local when local has dirty changes", async () => {
     const repoPath = await createRepo();
     await git(repoPath, ["switch", "main"]);

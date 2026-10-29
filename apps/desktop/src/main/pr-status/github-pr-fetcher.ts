@@ -74,6 +74,32 @@ function primedBranchLookupKey(cwd: string, branch: string): string {
  * Parsed result of `gh auth status --hostname github.com`. Re-exports the
  * shared `GhStatus` type so tests and the IPC layer can refer to either name.
  */
+/**
+ * Merge the PRs a keyed GraphQL lookup returned for each repository, deduped
+ * by URL. A missing entry means the provider could not answer (auth, retry
+ * exhaustion or backoff); only an explicit [] confirms no PRs.
+ */
+function collectAnsweredPullRequests<R>(params: {
+  refs: R[];
+  answers: Map<string, PrSummary[]>;
+  keyFor: (ref: R) => string;
+  repos: Parameters<typeof prMatchesSourceRepository>[1];
+  onProviderFailure?: () => void;
+}): PrSummary[] {
+  const byUrl = new Map<string, PrSummary>();
+  for (const ref of params.refs) {
+    const prs = params.answers.get(params.keyFor(ref));
+    if (!prs) {
+      params.onProviderFailure?.();
+      continue;
+    }
+    for (const pr of prs) {
+      if (prMatchesSourceRepository(pr, params.repos)) byUrl.set(pr.url, pr);
+    }
+  }
+  return [...byUrl.values()];
+}
+
 export type GhAuthStatus = GhStatus;
 
 export type GithubPrFetcherOptions = {
@@ -311,21 +337,13 @@ export class GithubPrFetcher {
         repo: repo.repo,
         branch: params.branch,
       }));
-      const byBranch = await this.graphqlClient.fetchPullRequestsForBranches(refs);
-      const byUrl = new Map<string, PrSummary>();
-      for (const ref of refs) {
-        const prs = byBranch.get(branchRefKey(ref));
-        if (!prs) {
-          // Missing entries mean the provider could not answer (auth, retry
-          // exhaustion or backoff). Only an explicit [] confirms no PRs.
-          params.onProviderFailure?.();
-          continue;
-        }
-        for (const pr of prs) {
-          if (prMatchesSourceRepository(pr, repos)) byUrl.set(pr.url, pr);
-        }
-      }
-      return [...byUrl.values()];
+      return collectAnsweredPullRequests({
+        refs,
+        answers: await this.graphqlClient.fetchPullRequestsForBranches(refs),
+        keyFor: branchRefKey,
+        repos,
+        onProviderFailure: params.onProviderFailure,
+      });
     } catch (error) {
       params.onProviderFailure?.();
       fetcherLog.debug("in-process branch PR lookup failed", {
@@ -358,19 +376,13 @@ export class GithubPrFetcher {
     }
     try {
       const refs = repos.map((repo) => ({ owner: repo.owner, repo: repo.repo, sha }));
-      const byCommit = await fetchForCommits(refs);
-      const byUrl = new Map<string, PrSummary>();
-      for (const ref of refs) {
-        const prs = byCommit.get(commitRefKey(ref));
-        if (!prs) {
-          params.onProviderFailure?.();
-          continue;
-        }
-        for (const pr of prs) {
-          if (prMatchesSourceRepository(pr, repos)) byUrl.set(pr.url, pr);
-        }
-      }
-      return [...byUrl.values()];
+      return collectAnsweredPullRequests({
+        refs,
+        answers: await fetchForCommits(refs),
+        keyFor: commitRefKey,
+        repos,
+        onProviderFailure: params.onProviderFailure,
+      });
     } catch (error) {
       params.onProviderFailure?.();
       fetcherLog.debug("in-process commit PR lookup failed", {

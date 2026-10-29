@@ -109,7 +109,7 @@ type GitTextRunner = (args: string[]) => Promise<string>;
  * sides alike when the caller can reach a filesystem; Git already reports
  * real paths for its worktrees.
  */
-export async function readNestedWorktreeExcludes(options: {
+async function readNestedWorktreeExcludes(options: {
   cwd: string;
   git: GitTextRunner;
   realpath?: (value: string) => Promise<string>;

@@ -10,7 +10,7 @@ import { parseGithubTerminalDetails, parseGitLabTerminalDetails } from "./pr-ter
 export { parseForgePrRefFromUrl, type ForgePrRef } from "./forge-pr-ref";
 
 type BranchLookup = { providers?: ForgeKind[]; cwd: string; branch: string; allowPrimed?: boolean; onProviderFailure?: () => void };
-type CommitLookup = { providers?: ForgeKind[]; cwd: string; sha: string; onProviderFailure?: () => void };
+type CommitLookup = { cwd: string; sha: string; onProviderFailure?: () => void };
 type UrlLookup = { cwd: string; url: string; onProviderFailure?: () => void };
 type PollOptions = { reconnect?: boolean; requestTokenTaken?: boolean };
 
@@ -136,7 +136,7 @@ export class ForgePrFetcher {
   async fetchPullRequestsForCommit(params: CommitLookup): Promise<PrSummary[]> {
     const results: PrSummary[] = [];
     for (const kind of FORGE_KINDS) {
-      if (!this.isProviderEnabled(kind) || (params.providers && !params.providers.includes(kind))) continue;
+      if (!this.isProviderEnabled(kind)) continue;
       const fetchForCommit = this.providers[kind].fetchForCommit;
       if (!fetchForCommit) continue;
       try {

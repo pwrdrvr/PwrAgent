@@ -179,6 +179,14 @@ describe("GitLab MR routing and status", () => {
     const unknown = new GitLabPrFetcher({ run: missing, discover: async () => discovery, resolveRepos: async () => [ref] });
     expect(await unknown.fetchForCommit("/fixture", tip)).toEqual([]);
     expect(unknown.getLastError("gitlab.com")).toBeUndefined();
+
+    // A project 404 looks the same, so it must not clear an error the branch
+    // lookup just recorded for the host.
+    await expect(unknown.fetchForBranch("/fixture", "feature/a+b")).rejects.toThrow();
+    const recorded = unknown.getLastError("gitlab.com");
+    expect(recorded).toBeDefined();
+    expect(await unknown.fetchForCommit("/fixture", tip)).toEqual([]);
+    expect(unknown.getLastError("gitlab.com")).toBe(recorded);
   });
 
   it.each(["opened", "locked", "merged", "closed"])("maps %s lifecycle without treating locked as terminal", (state) => {

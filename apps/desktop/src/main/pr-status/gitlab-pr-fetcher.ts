@@ -473,6 +473,9 @@ export class GitLabPrFetcher {
     if (!/^[0-9a-f]{40}$/.test(commit)) return [];
     const repos = await this.resolveRepos(cwd);
     const prs: PrSummary[] = [];
+    // A 404 is also what an inaccessible project returns, so it proves
+    // nothing about the host: only a 2xx answer may clear its failure.
+    const answeredHosts = new Set<string>();
     for (const repo of repos) {
       let rows: GitLabMrPayload[];
       try {
@@ -483,6 +486,7 @@ export class GitLabPrFetcher {
         if (error instanceof GitLabReadError && error.status === 404) continue;
         throw error;
       }
+      answeredHosts.add(repo.host);
       if (!Array.isArray(rows)) throw new Error("GitLab returned an invalid merge request list.");
       const heads = rows.filter((row) => row.sha?.toLowerCase() === commit);
       for (let index = 0; index < heads.length; index += API_CONCURRENCY) {
@@ -492,7 +496,7 @@ export class GitLabPrFetcher {
         ));
       }
     }
-    for (const repo of repos) this.failures.delete(repo.host);
+    for (const host of answeredHosts) this.failures.delete(host);
     return prs;
   }
 }

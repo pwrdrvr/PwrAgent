@@ -480,6 +480,31 @@ describe("detectPullRequestsForThread", () => {
     expect(fetcher.fetchPullRequestsForCommit).toHaveBeenCalledWith({ cwd: repo, sha: tip });
   });
 
+  it("does not look up by commit when the branch name lookup failed", async () => {
+    const { repo } = await createRepoPushedUnderAnotherName({
+      localBranch: "fix/provider-down",
+      pushedBranch: "fix/provider-down-pushed",
+    });
+    const fetcher = {
+      fetchAllPullRequestsForBranch: vi.fn(async ({ onProviderFailure }: { onProviderFailure?: () => void }) => {
+        onProviderFailure?.();
+        return [];
+      }),
+      fetchPullRequestsForCommit: vi.fn(async () => []),
+    } as unknown as GithubPrFetcher;
+    const onProviderFailure = vi.fn();
+
+    await detectPullRequestsForThread({
+      fetcher,
+      branch: "fix/provider-down",
+      directoryPaths: [repo],
+      onProviderFailure,
+    });
+
+    expect(onProviderFailure).toHaveBeenCalledOnce();
+    expect(fetcher.fetchPullRequestsForCommit).not.toHaveBeenCalled();
+  });
+
   it("does not look up by commit when the branch name already found a PR", async () => {
     const { repo } = await createRepoPushedUnderAnotherName({
       localBranch: "fix/named-pr",
