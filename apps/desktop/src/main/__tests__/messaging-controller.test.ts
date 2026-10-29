@@ -4263,6 +4263,37 @@ describe("MessagingController", () => {
     ).toEqual([]);
   });
 
+  it("privately delivers a final-phase message before the turn ends", async () => {
+    const { harness } = await createSlackPrivateResponseHarness();
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "message-1",
+            type: "agentMessage",
+            phase: "final_answer",
+            text: "Open the AWS SSO URL and enter `FINAL-CODE`.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(
+      harness.delivered.filter((intent) => intent.kind === "message"),
+    ).toEqual([
+      expect.objectContaining({
+        parts: [expect.objectContaining({
+          text: "Open the AWS SSO URL and enter `FINAL-CODE`.",
+        })],
+      }),
+    ]);
+  });
+
   it("honors explicit negation when detecting private response requests", async () => {
     const { harness } = await createSlackPrivateResponseHarness({
       inboundText: "I don't want you to DM me; reply here publicly.",
