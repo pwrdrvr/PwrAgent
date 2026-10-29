@@ -100,6 +100,33 @@ describe("pin drag click suppression", () => {
     expect(clickIsSuppressed(row)).toBe(false);
   });
 
+  it("drops the last drop's click suppression when the next drag starts", () => {
+    const view = renderPinOrdering();
+    const row = mountRow();
+    startDrag(view, row);
+    fireEvent.pointerUp(window, {
+      button: 0, clientX: 50, clientY: 100, pointerId: 7,
+    });
+    expect(vi.getTimerCount()).toBe(1);
+
+    view.result.current.beginPointerDrag(
+      {
+        button: 0,
+        clientX: 50,
+        clientY: 150,
+        currentTarget: row,
+        pointerId: 8,
+      } as unknown as ReactPointerEvent<HTMLDivElement>,
+      SCOPE,
+      "codex:thread-1",
+      false,
+    );
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(clickIsSuppressed(row)).toBe(false);
+    view.unmount();
+  });
+
   it("still swallows the release click while mounted", () => {
     const view = renderPinOrdering();
     const row = mountRow();

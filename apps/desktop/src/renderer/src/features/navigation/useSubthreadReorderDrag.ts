@@ -28,8 +28,8 @@ export function useSubthreadReorderDrag(params: {
   ) => Promise<void>;
 }) {
   const dropIndicator = useDropIndicatorController();
-  const cancelRef = useRef<(() => void) | undefined>(undefined);
-  useEffect(() => () => cancelRef.current?.(), []);
+  const disposeDragRef = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => () => disposeDragRef.current?.(), []);
 
   return useEventCallback((event: ReactPointerEvent<HTMLDivElement>, row: ThreadRowRef) => {
     const update = params.onUpdateSubthreadOrder;
@@ -38,7 +38,7 @@ export function useSubthreadReorderDrag(params: {
     const parent = tray?.dataset.subthreadTray ? params.threadByKey.get(tray.dataset.subthreadTray) : undefined;
     const child = params.threadByKey.get(row.threadKey);
     if (event.button !== 0 || !update || !tray || !parent || !child) return;
-    cancelRef.current?.();
+    disposeDragRef.current?.();
 
     const siblings = (): HTMLElement[] =>
       Array.from(tray.querySelectorAll<HTMLElement>(".thread-row-shell[data-nested-depth=\"1\"]"));
@@ -71,7 +71,7 @@ export function useSubthreadReorderDrag(params: {
         value: { anchorKey: keys[keys.length - 1], placement: "after" } };
     };
 
-    cancelRef.current = beginPointerReorderDrag({
+    disposeDragRef.current = beginPointerReorderDrag({
       event,
       sourceElement: source,
       previewSource: source,

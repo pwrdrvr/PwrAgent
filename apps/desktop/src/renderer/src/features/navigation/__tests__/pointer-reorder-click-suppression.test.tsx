@@ -131,4 +131,36 @@ describe("sub-thread reorder drag", () => {
     expect(vi.getTimerCount()).toBe(0);
     expect(clickIsSuppressed(row)).toBe(false);
   });
+
+  it("drops the last drop's click suppression when the next drag starts", () => {
+    const view = renderHook(() =>
+      useSubthreadReorderDrag({
+        threadByKey: new Map([["codex:parent", parent], ["codex:child", child]]),
+        onUpdateSubthreadOrder: async () => undefined,
+      }));
+    const tray = document.createElement("div");
+    tray.dataset.subthreadTray = "codex:parent";
+    const row = document.createElement("div");
+    tray.append(row);
+    document.body.append(tray);
+    const startDrag = (): void => {
+      view.result.current(pointerDown(row), {
+        threadKey: "codex:child",
+        pinned: false,
+      });
+    };
+
+    startDrag();
+    liftPointer();
+    releasePointer();
+    expect(vi.getTimerCount()).toBe(1);
+
+    // The release click already fired; a press is a new gesture whose click
+    // must not be eaten by the last drop's leftover suppression.
+    startDrag();
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(clickIsSuppressed(row)).toBe(false);
+    view.unmount();
+  });
 });

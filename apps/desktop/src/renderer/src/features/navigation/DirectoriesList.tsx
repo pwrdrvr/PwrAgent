@@ -428,8 +428,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const directoryDropIndicator = useDropIndicatorController();
   const directoryListRef = useRef<HTMLDivElement>(null);
   const directoryDividerRef = useRef<HTMLDivElement>(null);
-  const directoryDragCancelRef = useRef<(() => void) | undefined>(undefined);
-  useEffect(() => () => directoryDragCancelRef.current?.(), []);
+  const directoryDragDisposeRef = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => () => directoryDragDisposeRef.current?.(), []);
   // The Directory threads disclosure is also a thread-pin drop target.
   // Suppress the click browsers synthesize immediately after a drop so
   // pinning a thread never also minimizes the section.
@@ -702,7 +702,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const header = event.currentTarget;
     const section = header.closest<HTMLElement>(".directory-row");
     if (event.button !== 0 || !list || !section || !props.onReorderDirectoryPins) return;
-    directoryDragCancelRef.current?.();
+    directoryDragDisposeRef.current?.();
     const scrollElement = header.closest<HTMLElement>(".sidebar-list--dense") ?? undefined;
     const sourcePinned = pinnedDirectoryKeys.includes(directory.key);
     const orderBeforeDrag = pinnedDirectoryKeys;
@@ -746,7 +746,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
         value: { kind: "move", anchorKey: keys[index], placement } };
     };
 
-    directoryDragCancelRef.current = beginPointerReorderDrag({
+    directoryDragDisposeRef.current = beginPointerReorderDrag({
       event,
       sourceElement: section,
       previewSource: header,

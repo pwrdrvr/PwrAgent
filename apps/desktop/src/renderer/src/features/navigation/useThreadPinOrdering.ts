@@ -224,11 +224,10 @@ export function useThreadPinOrdering(params: {
   const threadPinDragSessionRef = useRef<ThreadPinDragSession | undefined>(
     undefined,
   );
-  const threadPinDragCleanupRef = useRef<(() => void) | undefined>(undefined);
-  // A finished drag keeps swallowing its release click for a moment after the
-  // session ends, so the session cleanup above no longer reaches it. Unmount
-  // tears these down, or the timer outlives the component.
-  const clickSuppressionTeardownsRef = useRef(new Set<() => void>());
+  // Ends the latest drag: cancels it if still live and drops the release-click
+  // suppression a finished one keeps for a moment. Held past the drag's end,
+  // until the next drag or unmount, as `beginPointerReorderDrag`'s owners do.
+  const threadPinDragDisposeRef = useRef<(() => void) | undefined>(undefined);
   const threadsByKey = useMemo(
     () =>
       new Map(
@@ -364,9 +363,6 @@ export function useThreadPinOrdering(params: {
     if (threadPinDragSessionRef.current === session) {
       threadPinDragSessionRef.current = undefined;
     }
-    if (threadPinDragCleanupRef.current) {
-      threadPinDragCleanupRef.current = undefined;
-    }
   };
 
   const updateThreadPinPointerTarget = (
@@ -417,7 +413,7 @@ export function useThreadPinOrdering(params: {
     sourceWasPinned: boolean,
   ): void => {
     if (event.button !== 0 || !params.onReorderThreadPins) return;
-    threadPinDragCleanupRef.current?.();
+    threadPinDragDisposeRef.current?.();
 
     const sourceElement = event.currentTarget;
     const scopeElement = sourceElement.closest("[data-thread-pin-scope]");
@@ -452,7 +448,6 @@ export function useThreadPinOrdering(params: {
 
     let suppressClickTimer: number | undefined;
     const removeClickSuppression = (): void => {
-      clickSuppressionTeardownsRef.current.delete(removeClickSuppression);
       session.scopeElement.removeEventListener(
         "click",
         suppressReleaseClick,
@@ -474,7 +469,6 @@ export function useThreadPinOrdering(params: {
         suppressReleaseClick,
         true,
       );
-      clickSuppressionTeardownsRef.current.add(removeClickSuppression);
       session.releaseClickSuppression = () => {
         suppressClickTimer = window.setTimeout(
           removeClickSuppression,
@@ -580,7 +574,12 @@ export function useThreadPinOrdering(params: {
       session.scrollElement?.removeEventListener("scroll", onScroll);
     };
     session.removeListeners = removeListeners;
-    threadPinDragCleanupRef.current = cancel;
+    threadPinDragDisposeRef.current = () => {
+      // Cancelling a live drag arms the suppression, so drop it after. A
+      // finished session has nothing left to cancel.
+      if (threadPinDragSessionRef.current === session) cancel();
+      removeClickSuppression();
+    };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop);
     window.addEventListener("pointercancel", cancelOnPointer);
@@ -588,14 +587,10 @@ export function useThreadPinOrdering(params: {
     window.addEventListener("keydown", cancelOnEscape);
   };
 
-  useEffect(() => {
-    const clickSuppressionTeardowns = clickSuppressionTeardownsRef.current;
-    return () => {
-      // Cancelling a live drag arms its release timer, so tear down after.
-      threadPinDragCleanupRef.current?.();
-      for (const teardown of [...clickSuppressionTeardowns]) teardown();
-    };
-  }, []);
+  useEffect(
+    () => () => threadPinDragDisposeRef.current?.(),
+    [],
+  );
 
   return {
     threadsByKey,
