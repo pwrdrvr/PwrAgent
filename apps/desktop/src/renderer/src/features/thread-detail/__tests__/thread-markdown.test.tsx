@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { MarkdownRenderingOptionsProvider } from "../../../lib/markdown-rendering-options";
 import { scopeDesktopApiToFederationTarget } from "../../../lib/federation-desktop-api";
 import { ThreadMarkdown } from "../ThreadMarkdown";
+import { HtmlPreviewPreferencesProvider } from "../../../lib/html-preview-preferences";
 import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-references";
 import { pressEscape, pressTab, walkTab } from "../../../test/tab-walk";
 
@@ -490,6 +491,53 @@ describe("ThreadMarkdown", () => {
     else expect(await screen.findByRole("heading", { name: "Remote report" })).toBeInTheDocument();
     expect(readMarkdownFile).toHaveBeenCalledWith({ path: "/remote/report.md", thread, federationTarget });
     expect(openApplication).not.toHaveBeenCalled();
+  });
+
+  it("opens HTML file links in a sandboxed preview, honoring the scripts setting", async () => {
+    let navigate: ((event: { url: string }) => void) | undefined;
+    const readMarkdownFile = vi.fn(async (request: { path: string }) => ({
+      path: request.path,
+      content: request.path.endsWith("appendix.html")
+        ? "<h1>Appendix</h1>"
+        : '<h1>Brief</h1><a href="appendix.html">Appendix</a>',
+    }));
+
+    render(
+      <HtmlPreviewPreferencesProvider runScripts>
+        <ThreadMarkdown
+          desktopApi={{
+            readMarkdownFile,
+            readHtmlPreviewAssets: vi.fn(async () => ({ assets: [], skipped: [] })),
+            onHtmlPreviewNavigation: (callback) => {
+              navigate = callback;
+              return () => undefined;
+            },
+          }}
+          text="The brief is at [brief.html](/work/brief/brief.html)."
+        />
+      </HtmlPreviewPreferencesProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "brief.html" }));
+
+    expect(await screen.findByRole("dialog", { name: "HTML document: brief.html" }))
+      .toBeInTheDocument();
+    const frame = await screen.findByTitle("HTML preview: brief.html");
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.getAttribute("srcdoc")).toContain("<h1>Brief</h1>");
+    expect(screen.getByRole("button", { name: "Copy HTML" })).toBeInTheDocument();
+
+    const link = new URL("https://local-file.pwragent.invalid");
+    link.searchParams.set("path", "/work/brief/appendix.html");
+    act(() => navigate?.({ url: link.href }));
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+
+    expect(await screen.findByRole("dialog", { name: "HTML document: appendix.html" }))
+      .toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTitle("HTML preview: appendix.html").getAttribute("srcdoc"))
+        .toContain("<h1>Appendix</h1>");
+    });
   });
 
   it.each(["Markdown", "JSON"])("opens %s file links in a document modal and keeps the editor icon separate", async (kind) => {

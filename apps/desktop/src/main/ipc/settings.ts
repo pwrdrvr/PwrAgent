@@ -1751,6 +1751,8 @@ export function registerSettingsIpcHandlers(
           appearance: store.read("general").appearance,
           onboarding: store.read("onboarding"),
           logs: resolveDesktopLogsViewerPreferences(store.read("ui").logs),
+          htmlPreviewRunScripts:
+            store.read("general").settings.htmlPreviewRunScripts ?? false,
         },
       };
     },

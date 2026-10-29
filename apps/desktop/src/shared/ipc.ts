@@ -799,6 +799,7 @@ export const APPLICATION_OPEN_CHANNEL = "application:open";
 export const PATH_OPEN_CHANNEL = "path:open";
 export const PATH_REVEAL_CHANNEL = "path:reveal";
 export const MARKDOWN_FILE_READ_CHANNEL = "markdown-file:read";
+export const HTML_PREVIEW_ASSETS_READ_CHANNEL = "html-preview:assets:read";
 export const TRANSCRIPT_FILES_RESOLVE_CHANNEL = "transcript-files:resolve";
 export const MARKDOWN_FILE_VIEWER_OPEN_CHANNEL = "markdown-file-viewer:open";
 export const MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL =

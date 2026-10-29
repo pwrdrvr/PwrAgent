@@ -980,6 +980,12 @@ export class DesktopSettingsService {
           config.general?.interactiveSvgAutoOpen,
           false,
         ),
+        // Default off for the same reason. The page has no network access
+        // either way; this only decides whether its scripts start on open.
+        htmlPreviewRunScripts: this.resolveConfigBoolean(
+          config.general?.htmlPreviewRunScripts,
+          false,
+        ),
         // Default on: the gateway only does work for connections the
         // operator explicitly added and authorized, so an empty registry
         // costs nothing. The switch exists to revoke thread access

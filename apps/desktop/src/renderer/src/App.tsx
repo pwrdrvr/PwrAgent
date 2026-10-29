@@ -156,6 +156,7 @@ import {
   type InteractiveSvgPreferences,
 } from "./lib/interactive-svg-preferences";
 import { TerminalPreferencesProvider } from "./lib/terminal-preferences";
+import { HtmlPreviewPreferencesProvider } from "./lib/html-preview-preferences";
 import {
   useThreadNavigation,
   type ArchivedThreadRef,
@@ -4482,14 +4483,20 @@ function DesktopAppShell(props: {
               }
             >
               <InteractiveSvgPreferencesProvider value={interactiveSvgPreferences}>
-                <TerminalPreferencesProvider
-                  minimumContrast={
-                    settings.snapshot?.general.appearance.terminalMinimumContrast
-                      ?.value ?? false
+                <HtmlPreviewPreferencesProvider
+                  runScripts={
+                    settings.snapshot?.general.htmlPreviewRunScripts?.value ?? false
                   }
                 >
-                  <ThreadViewComponent {...threadViewProps} />
-                </TerminalPreferencesProvider>
+                  <TerminalPreferencesProvider
+                    minimumContrast={
+                      settings.snapshot?.general.appearance.terminalMinimumContrast
+                        ?.value ?? false
+                    }
+                  >
+                    <ThreadViewComponent {...threadViewProps} />
+                  </TerminalPreferencesProvider>
+                </HtmlPreviewPreferencesProvider>
               </InteractiveSvgPreferencesProvider>
             </MarkdownRenderingOptionsProvider>
           ) : null}

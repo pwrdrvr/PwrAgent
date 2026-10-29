@@ -1,5 +1,6 @@
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import type { NativeVoiceApi } from "../../../shared/native-voice";
+import type { HtmlPreviewNavigationEvent } from "../../../shared/html-preview";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -546,6 +547,8 @@ import type {
   OpenPathResponse,
   ReadMarkdownFileRequest,
   ReadMarkdownFileResponse,
+  ReadHtmlPreviewAssetsRequest,
+  ReadHtmlPreviewAssetsResponse,
   ResolveTranscriptFilesRequest,
   ResolveTranscriptFilesResponse,
   ReadMarkdownFileViewerSnapshotRequest,
@@ -1398,6 +1401,12 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   readMarkdownFile?: (
     request: ReadMarkdownFileRequest
   ) => Promise<ReadMarkdownFileResponse>;
+  readHtmlPreviewAssets?: (
+    request: ReadHtmlPreviewAssetsRequest
+  ) => Promise<ReadHtmlPreviewAssetsResponse>;
+  onHtmlPreviewNavigation?: (
+    callback: (event: HtmlPreviewNavigationEvent) => void
+  ) => () => void;
   openMarkdownFileViewer?: (
     request: OpenMarkdownFileViewerRequest
   ) => Promise<OpenMarkdownFileViewerResponse>;

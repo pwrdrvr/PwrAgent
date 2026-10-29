@@ -176,6 +176,12 @@ describe("application IPC", () => {
       expect(await read(directory)).toMatchObject({ error: expect.stringContaining("not a file") });
       await writeFile(filePath, Buffer.alloc(2 * 1024 * 1024 + 1));
       expect(await read(filePath)).toMatchObject({ error: "File is too large to preview." });
+      // A self-contained HTML export carries its media inline, so it gets more room.
+      const htmlPath = path.join(root, "brief.html");
+      await writeFile(htmlPath, Buffer.alloc(2 * 1024 * 1024 + 1, "a"));
+      expect(await read(htmlPath)).toMatchObject({ path: htmlPath, content: expect.any(String) });
+      await writeFile(htmlPath, Buffer.alloc(24 * 1024 * 1024 + 1, "a"));
+      expect(await read(htmlPath)).toMatchObject({ error: "File is too large to preview." });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

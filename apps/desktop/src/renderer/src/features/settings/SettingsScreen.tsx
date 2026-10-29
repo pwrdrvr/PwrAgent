@@ -995,6 +995,11 @@ function SettingsSectionBody(props: {
         onInteractiveSvgChange={async (patch) => {
           await props.settings.writeConfig({ general: patch });
         }}
+        onHtmlPreviewRunScriptsChange={async (htmlPreviewRunScripts) => {
+          await props.settings.writeConfig({
+            general: { htmlPreviewRunScripts },
+          });
+        }}
         onPdfAnalysisEnabledChange={async (pdfAnalysisEnabled) => {
           await props.settings.writeConfig({
             general: { pdfAnalysisEnabled },

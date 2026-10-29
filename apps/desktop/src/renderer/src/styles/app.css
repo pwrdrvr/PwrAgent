@@ -27438,6 +27438,26 @@ a.transcript-message__messaging-origin:focus-visible {
   padding: 0 20px;
 }
 
+/* An HTML page needs room and a fixed height: its frame has no intrinsic
+   size to grow the dialog to. */
+.markdown-document-modal__content--html {
+  width: min(100%, 1200px);
+  height: min(100vh - 72px, 900px);
+}
+
+.markdown-document-modal__body--html {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.markdown-document-modal__body--html > .markdown-document-modal__status {
+  padding: 14px 20px;
+}
+
 .markdown-document-modal__markdown {
   max-width: 78ch;
 }
@@ -27781,6 +27801,105 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .markdown-files-window__markdown-scroll--file > .markdown-files-window__status {
   padding: 0 26px;
+}
+
+.markdown-files-window__markdown-scroll--html {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.markdown-files-window__markdown-scroll--html > .markdown-files-window__status {
+  padding: 16px 26px;
+}
+
+/* HTML file preview: the page in a sandboxed frame under a one-line bar that
+   says what the page may do. */
+.html-preview {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.html-preview__bar,
+.html-preview__link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel-elevated);
+}
+
+.html-preview__status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.html-preview__notice {
+  color: var(--text-muted);
+}
+
+.html-preview__button {
+  flex: none;
+  min-height: 28px;
+  font-size: 12px;
+}
+
+.html-preview__link-text {
+  min-width: 0;
+}
+
+.html-preview__link-question {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.html-preview__link-target {
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.html-preview__link-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
+/* A page that sets no background expects a browser's white canvas, in any
+   app theme. */
+.html-preview__frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  color-scheme: light;
+  background: Canvas;
+}
+
+.html-preview__loading {
+  margin: 0;
+  padding: 14px 20px;
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 
 .markdown-files-window__markdown {

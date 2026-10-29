@@ -7,6 +7,9 @@
  * files stay out: they hold secrets that a federated peer could pull. Codex
  * session logs stay out too: PwrAgent reads Codex data only through the App
  * Server protocol, so a link to a rollout opens the editor instead.
+ *
+ * HTML renders in a sandboxed frame with no network access and, unless the
+ * operator turns them on, no scripts.
  */
 export type FilePreviewKind =
   | "markdown"
@@ -16,7 +19,8 @@ export type FilePreviewKind =
   | "toml"
   | "csv"
   | "tsv"
-  | "text";
+  | "text"
+  | "html";
 
 const FILE_PREVIEW_KINDS_BY_EXTENSION: Record<string, FilePreviewKind> = {
   md: "markdown",
@@ -32,6 +36,8 @@ const FILE_PREVIEW_KINDS_BY_EXTENSION: Record<string, FilePreviewKind> = {
   tsv: "tsv",
   txt: "text",
   log: "text",
+  html: "html",
+  htm: "html",
 };
 
 const FILE_PREVIEW_KIND_LABELS: Record<FilePreviewKind, string> = {
@@ -43,6 +49,7 @@ const FILE_PREVIEW_KIND_LABELS: Record<FilePreviewKind, string> = {
   csv: "CSV",
   tsv: "TSV",
   text: "text",
+  html: "HTML",
 };
 
 export function filePreviewKind(filePath: string): FilePreviewKind | undefined {

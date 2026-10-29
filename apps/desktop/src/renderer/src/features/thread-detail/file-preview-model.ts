@@ -44,7 +44,7 @@ const MAX_FORMATTED_JSON_LENGTH = 4 * 1024 * 1024;
 
 export function buildFilePreviewText(
   content: string,
-  kind: Exclude<FilePreviewKind, "markdown" | "csv" | "tsv">,
+  kind: Exclude<FilePreviewKind, "markdown" | "csv" | "tsv" | "html">,
 ): FilePreviewText {
   switch (kind) {
     case "json":

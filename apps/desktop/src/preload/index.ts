@@ -1,5 +1,9 @@
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import { FEDERATION_SERVICES_CHANNEL } from "../shared/ipc";
+import {
+  HTML_PREVIEW_NAVIGATION_CHANNEL,
+  type HtmlPreviewNavigationEvent,
+} from "../shared/html-preview";
 import { DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL, DIAGNOSTICS_STOP_RENDERING_CHANNEL, type RenderingCaptureResult } from "../shared/rendering-diagnostics";
 import {
   NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL, NATIVE_VOICE_CAMERA_CUE_CHANNEL, NATIVE_VOICE_CAMERA_REPEAT_CHANNEL,
@@ -506,6 +510,8 @@ import type {
   OpenPathResponse,
   ReadMarkdownFileRequest,
   ReadMarkdownFileResponse,
+  ReadHtmlPreviewAssetsRequest,
+  ReadHtmlPreviewAssetsResponse,
   ResolveTranscriptFilesRequest,
   ResolveTranscriptFilesResponse,
   ReadMarkdownFileViewerSnapshotRequest,
@@ -818,6 +824,7 @@ import {
   APPLICATIONS_READ_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
   MARKDOWN_FILE_READ_CHANNEL,
+  HTML_PREVIEW_ASSETS_READ_CHANNEL,
   TRANSCRIPT_FILES_RESOLVE_CHANNEL,
   MARKDOWN_FILE_VIEWER_OPEN_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL,
@@ -1997,6 +2004,21 @@ const desktopApi = Object.freeze({
     request: ReadMarkdownFileRequest,
   ): Promise<ReadMarkdownFileResponse> =>
     await ipcRenderer.invoke(MARKDOWN_FILE_READ_CHANNEL, request),
+  readHtmlPreviewAssets: async (
+    request: ReadHtmlPreviewAssetsRequest,
+  ): Promise<ReadHtmlPreviewAssetsResponse> =>
+    await ipcRenderer.invoke(HTML_PREVIEW_ASSETS_READ_CHANNEL, request),
+  onHtmlPreviewNavigation: (
+    callback: (event: HtmlPreviewNavigationEvent) => void,
+  ): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: HtmlPreviewNavigationEvent) => {
+      callback(payload);
+    };
+    ipcRenderer.on(HTML_PREVIEW_NAVIGATION_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(HTML_PREVIEW_NAVIGATION_CHANNEL, listener);
+    };
+  },
   openMarkdownFileViewer: async (
     request: OpenMarkdownFileViewerRequest,
   ): Promise<OpenMarkdownFileViewerResponse> =>
