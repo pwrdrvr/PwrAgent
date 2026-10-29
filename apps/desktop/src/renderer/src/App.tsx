@@ -1763,13 +1763,6 @@ function DesktopAppShell(props: {
     [writeConfig],
   );
 
-  // Single owner of the window-layout keyboard chords (⌘B/⌃B sidebar,
-  // ⌘⌥B/⌃⌥B rail). Bound once here — never per PanelToggleButtons chip — so
-  // it fires exactly once regardless of how many chips are mounted.
-  useLayoutChordHotkeys({
-    onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
-    onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
-  });
   const setProjectIndexHiddenPersisted = useCallback(
     (next: boolean) => {
       layoutPrefsChosenRef.current.add("projectIndexHidden");
@@ -1778,7 +1771,16 @@ function DesktopAppShell(props: {
     },
     [writeConfig],
   );
-  // Called once per drag, on release, and once per arrow-key step.
+  // Single owner of the window-layout keyboard chords (⌘B/⌃B sidebar,
+  // ⌘⌥B/⌃⌥B rail, ⇧⌘B/⇧⌃B project index). Bound once here — never per
+  // PanelToggleButtons chip — so it fires exactly once regardless of how many
+  // chips are mounted.
+  useLayoutChordHotkeys({
+    onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
+    onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+    onToggleProjectIndex: () => setProjectIndexHiddenPersisted(!projectIndexHidden),
+  });
+  // Called once per drag and once per arrow-key run, on release.
   const setProjectIndexWidthPersisted = useCallback(
     (next: number | null) => {
       layoutPrefsChosenRef.current.add("projectIndexWidth");

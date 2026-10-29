@@ -8,6 +8,8 @@ import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation
 import { ProjectIndex, type ProjectIndexEntry } from "../ProjectIndex";
 import {
   clampProjectIndexWidth,
+  jumpScrollPlan,
+  jumpTailIsOffscreen,
   projectTypeaheadIndex,
   spyProjects,
 } from "../project-index";
@@ -50,6 +52,27 @@ describe("project index rules", () => {
     expect(clampProjectIndexWidth(101.4, 76, 160)).toBe(101);
     // A sidebar too narrow for the column still answers its floor.
     expect(clampProjectIndexWidth(90, 76, 20)).toBe(76);
+  });
+
+  it("scrolls a jump's project to the top, growing the tail by what the list is short", () => {
+    // Room to spare: no tail.
+    expect(jumpScrollPlan({
+      scrollTop: 100, blockTop: 300, scrollHeight: 2000, clientHeight: 500, tailHeight: 0,
+    })).toEqual({ scrollTop: 400, tailHeight: 0 });
+    // The last project: the list can scroll to 1500, the project starts at 1700.
+    expect(jumpScrollPlan({
+      scrollTop: 1200, blockTop: 500, scrollHeight: 2000, clientHeight: 500, tailHeight: 0,
+    })).toEqual({ scrollTop: 1700, tailHeight: 200 });
+    // A tail already drawn grows by the remainder only.
+    expect(jumpScrollPlan({
+      scrollTop: 1500, blockTop: 300, scrollHeight: 2100, clientHeight: 500, tailHeight: 100,
+    })).toEqual({ scrollTop: 1800, tailHeight: 300 });
+  });
+
+  it("drops the tail only once none of it is on screen", () => {
+    expect(jumpTailIsOffscreen(600, 560)).toBe(true);
+    expect(jumpTailIsOffscreen(560, 560)).toBe(true);
+    expect(jumpTailIsOffscreen(400, 560)).toBe(false);
   });
 });
 
@@ -125,6 +148,12 @@ describe("ProjectIndex", () => {
     expect(onWidthChange).toHaveBeenCalledWith(null);
   });
 
+  it("saves nothing for a double-click at the natural width", () => {
+    const { onWidthChange } = renderIndex();
+    fireEvent.doubleClick(screen.getByRole("separator", { name: "Resize project index" }));
+    expect(onWidthChange).not.toHaveBeenCalled();
+  });
+
   it("saves a drag once, on release, and never for a press that did not move", () => {
     const { onWidthChange } = renderIndex();
     const grip = screen.getByRole("separator", { name: "Resize project index" });
@@ -140,11 +169,19 @@ describe("ProjectIndex", () => {
     expect(onWidthChange).toHaveBeenCalledTimes(1);
   });
 
-  it("steps the width with the arrow keys", () => {
-    const { onWidthChange } = renderIndex();
+  it("steps the width with the arrow keys and saves once, on release", () => {
+    const { onWidthChange } = renderIndex({ width: 120 });
     const grip = screen.getByRole("separator", { name: "Resize project index" });
+    // A held key repeats; each repeat moves the column, none saves.
     fireEvent.keyDown(grip, { key: "ArrowRight" });
+    fireEvent.keyDown(grip, { key: "ArrowRight", repeat: true });
+    fireEvent.keyDown(grip, { key: "ArrowRight", repeat: true });
+    expect(onWidthChange).not.toHaveBeenCalled();
+    fireEvent.keyUp(grip, { key: "ArrowRight" });
+    expect(onWidthChange).toHaveBeenCalledTimes(1);
+    // Focus leaving mid-run saves too.
     fireEvent.keyDown(grip, { key: "ArrowLeft" });
+    fireEvent.blur(grip);
     expect(onWidthChange).toHaveBeenCalledTimes(2);
   });
 });
@@ -245,9 +282,46 @@ describe("Sidebar project index", () => {
     expect(onSelectThread).not.toHaveBeenCalled();
   });
 
+  it("lands a jump to the last project at the top, growing a tail that scrolls away", async () => {
+    renderSidebar({ browseMode: "directories" });
+    const list = document.querySelector<HTMLElement>(".directory-list")!;
+    const tail = list.querySelector<HTMLElement>(".directory-list__jump-tail")!;
+    const relay = list.querySelector<HTMLElement>('section.directory-row[data-directory-key="directory:/fixture/relay"]')!;
+    // jsdom has no layout: a 500px list that can scroll to 1500, with relay
+    // starting 1700px down, where the list cannot reach.
+    let scrollTop = 0;
+    Object.defineProperty(list, "scrollTop", { get: () => scrollTop, set: (value: number) => { scrollTop = value; } });
+    Object.defineProperty(list, "scrollHeight", { get: () => 2000 + (parseFloat(tail.style.height) || 0) });
+    Object.defineProperty(list, "clientHeight", { get: () => 500 });
+    Object.defineProperty(tail, "offsetHeight", { get: () => parseFloat(tail.style.height) || 0 });
+    const rect = (top: number, height: number) => ({ top, bottom: top + height, height, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) });
+    vi.spyOn(list, "getBoundingClientRect").mockImplementation(() => rect(0, 500));
+    vi.spyOn(relay, "getBoundingClientRect").mockImplementation(() => rect(1700 - scrollTop, 300));
+    vi.spyOn(tail, "getBoundingClientRect").mockImplementation(() => rect(2000 - scrollTop, parseFloat(tail.style.height) || 0));
+
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Project index" })).getByRole("button", { name: /^Jump to relay/ }));
+    await act(async () => {
+      for (let frame = 0; frame < 3; frame += 1) {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+    });
+    expect(scrollTop).toBe(1700);
+    expect(tail.style.height).toBe("200px");
+
+    // Scrolling back up until the tail is off screen drops it.
+    scrollTop = 1600;
+    fireEvent.scroll(list);
+    expect(tail.style.height).toBe("200px");
+    scrollTop = 1400;
+    fireEvent.scroll(list);
+    expect(tail.style.height).toBe("");
+  });
+
   it("hides and shows from the toggle beside the lens switch", () => {
     const { onProjectIndexHiddenChange, rerender } = renderSidebar();
-    fireEvent.click(screen.getByRole("button", { name: "Hide project index" }));
+    const toggle = screen.getByRole("button", { name: "Project index" });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(toggle);
     expect(onProjectIndexHiddenChange).toHaveBeenCalledWith(true);
 
     const threads = [thread("t-quill", "quill"), thread("t-relay", "relay")];
@@ -271,7 +345,17 @@ describe("Sidebar project index", () => {
       />,
     );
     expect(screen.queryByRole("navigation", { name: "Project index" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Show project index" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "Project index" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("says why the index is missing when the sidebar is too narrow for it", () => {
+    renderSidebar();
+    // The container query hides the column below a 356px sidebar; jsdom has
+    // no container queries, so hide it the way that rule does.
+    const pane = screen.getByRole("navigation", { name: "Project index" }).parentElement!;
+    pane.style.display = "none";
+    fireEvent.focus(screen.getByRole("button", { name: "Project index" }));
+    expect(screen.getByText("Hide project index · Widen the sidebar to show it")).toBeInTheDocument();
   });
 
   it("steps aside for a single project, keeping the toggle", () => {
@@ -282,6 +366,7 @@ describe("Sidebar project index", () => {
       threads,
     });
     expect(screen.queryByRole("navigation", { name: "Project index" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Hide project index" })).toBeInTheDocument();
+    fireEvent.focus(screen.getByRole("button", { name: "Project index" }));
+    expect(screen.getByText("Hide project index · Shown with two or more projects")).toBeInTheDocument();
   });
 });

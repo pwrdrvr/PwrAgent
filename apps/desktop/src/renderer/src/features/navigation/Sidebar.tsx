@@ -119,7 +119,11 @@ import {
   formatRateLimitLine,
   selectVisibleRateLimits,
 } from "../../lib/backend-status-format";
-import { DirectoriesList, type ProjectRevealRequest } from "./DirectoriesList";
+import {
+  buildLaunchpadSelectionKey,
+  DirectoriesList,
+  type ProjectRevealRequest,
+} from "./DirectoriesList";
 import { ProjectIndex, type ProjectIndexEntry } from "./ProjectIndex";
 import { ProjectIndexToggle } from "./ProjectIndexToggle";
 import type { ThreadRowRef } from "./ThreadRow";
@@ -953,7 +957,7 @@ export function Sidebar(props: SidebarProps) {
       key: directory.key,
       label: directory.label,
       containsSelection:
-        indexSelectedItemKey === `launchpad:${directory.key}`
+        indexSelectedItemKey === buildLaunchpadSelectionKey(directory.key)
         || (selectedThreadDirectoryKeys?.includes(directory.key) ?? false),
       active: (directory.counts?.active ?? 0) > 0,
       review: (directory.counts?.review ?? 0) > 0,
@@ -963,6 +967,20 @@ export function Sidebar(props: SidebarProps) {
   const projectIndexShown = projectIndexEnabled
     && !props.projectIndexHidden
     && projectIndexEntries.length >= 2;
+  const onProjectIndexWidthChange = props.onProjectIndexWidthChange;
+  // Asked when the toggle's tooltip opens. The narrow-sidebar case is the
+  // container query's call (app.css, `sidebar-lanes`), so it is read off the
+  // column's computed display rather than re-derived from a width in JS.
+  const threadBrowserRef = useRef<HTMLElement | null>(null);
+  const projectIndexEntryCount = projectIndexEntries.length;
+  const projectIndexUnavailableReason = useCallback((): string | undefined => {
+    if (projectIndexEntryCount < 2) return "Shown with two or more projects";
+    const pane = threadBrowserRef.current?.querySelector(".project-index-pane");
+    if (pane && getComputedStyle(pane).display === "none") {
+      return "Widen the sidebar to show it";
+    }
+    return undefined;
+  }, [projectIndexEntryCount]);
   const onBrowseModeChange = props.onBrowseModeChange;
   // An index click moves the list; it does not change the selection. From a
   // flat lens it opens Directories at that project, as ⌘K does without
@@ -3109,6 +3127,7 @@ export function Sidebar(props: SidebarProps) {
           projectIndexShown ? " sidebar__section--with-project-index" : ""
         }`}
         aria-label="Thread browser"
+        ref={threadBrowserRef}
       >
         <div className="sidebar__lens-row">
           <div className="lens-switch" role="tablist" aria-label="Thread lenses">
@@ -3151,25 +3170,21 @@ export function Sidebar(props: SidebarProps) {
           {projectIndexEnabled ? (
             <ProjectIndexToggle
               hidden={props.projectIndexHidden ?? false}
-              unavailableReason={
-                projectIndexEntries.length < 2
-                  ? "Shown with two or more projects"
-                  : undefined
-              }
+              unavailableReason={projectIndexUnavailableReason}
               onToggle={() =>
                 props.onProjectIndexHiddenChange?.(!props.projectIndexHidden)}
             />
           ) : null}
         </div>
 
-        {projectIndexShown ? (
+        {projectIndexShown && onProjectIndexWidthChange ? (
           <ProjectIndex
             projects={projectIndexEntries}
             scrollRegionRef={lensScroll.ref}
             scrollRegionId={scrollRegionId}
             spy={props.browseMode === "directories" && !listStatus}
             width={props.projectIndexWidth ?? null}
-            onWidthChange={(width) => props.onProjectIndexWidthChange?.(width)}
+            onWidthChange={onProjectIndexWidthChange}
             onJump={jumpToProject}
           />
         ) : null}

@@ -5632,6 +5632,14 @@ body.is-project-index-resizing {
   cursor: col-resize;
 }
 
+/* Blank space a project index jump grows at the end of the Directories list,
+   so a project near the end can still land at the top. DirectoriesList sets
+   its height and clears it once it scrolls off screen. It must not shrink in
+   the list's flex column, or the jump falls short. */
+.directory-list__jump-tail {
+  flex: none;
+}
+
 .context-panel h3 {
   margin: 0;
   font-size: 14px;

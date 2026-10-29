@@ -79,10 +79,11 @@ export function isAccelLetter(event: KeyboardEvent, letter: string): boolean {
 }
 
 /**
- * Classify a keydown as one of the two window-layout chords, or `null`:
- *   "sidebar" toggles the left sidebar (⌘B / Ctrl+B by default)
- *   "rail"    toggles the right context rail (⌥⌘B / Ctrl+Alt+B)
- * Both never fire while typing in a field. The chords are the operator's
+ * Classify a keydown as one of the window-layout chords, or `null`:
+ *   "sidebar"       toggles the left sidebar (⌘B / Ctrl+B by default)
+ *   "rail"          toggles the right context rail (⌥⌘B / Ctrl+Alt+B)
+ *   "project-index" toggles the sidebar's project index (⇧⌘B / Ctrl+Shift+B)
+ * None fires while typing in a field. The chords are the operator's
  * current bindings from `keybindings.toml`.
  *
  * Pure + side-effect-free so a SINGLE owner can wire one window listener to it
@@ -93,13 +94,16 @@ export function isAccelLetter(event: KeyboardEvent, letter: string): boolean {
  */
 export function matchLayoutChord(
   event: KeyboardEvent,
-): "sidebar" | "rail" | null {
+): "sidebar" | "rail" | "project-index" | null {
   const inField = isEditableTarget(event);
   if (keydownMatchesAction(event, "layout.toggle_sidebar", inField)) {
     return "sidebar";
   }
   if (keydownMatchesAction(event, "layout.toggle_context_rail", inField)) {
     return "rail";
+  }
+  if (keydownMatchesAction(event, "layout.toggle_project_index", inField)) {
+    return "project-index";
   }
   return null;
 }

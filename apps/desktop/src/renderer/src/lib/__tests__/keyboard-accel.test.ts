@@ -102,6 +102,19 @@ describe("matchLayoutChord", () => {
     ).toBe("rail");
   });
 
+  it("classifies ⇧⌘B as the project index chord", () => {
+    expect(
+      matchLayoutChord(
+        keydown({ metaKey: true, shiftKey: true, code: "KeyB", key: "B" }),
+      ),
+    ).toBe("project-index");
+    expect(
+      matchLayoutChord(
+        keydown({ ctrlKey: true, shiftKey: true, code: "KeyB", key: "B" }),
+      ),
+    ).toBe("project-index");
+  });
+
   it("returns null without the primary modifier or for other keys", () => {
     expect(matchLayoutChord(keydown({ code: "KeyB", key: "b" }))).toBe(null);
     // Both Cmd and Ctrl held → not a single primary accelerator.

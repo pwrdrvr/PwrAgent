@@ -89,6 +89,7 @@ import {
 } from "./StartingThreadRow";
 import { PendingThreadRow } from "./SubthreadDraftRow";
 import type { SubthreadLaunchpadDraft } from "../../lib/useThreadNavigation";
+import { jumpScrollPlan, jumpTailIsOffscreen } from "./project-index";
 
 /**
  * Scroll a project's section to the top of the lens, expanding it first.
@@ -261,7 +262,8 @@ type DirectoryDrop =
   | { kind: "move"; anchorKey: string; placement: "before" | "after" }
   | { kind: "unpin" };
 
-function buildLaunchpadSelectionKey(directoryKey: string): string {
+/** The selection key of a project's launchpad. */
+export function buildLaunchpadSelectionKey(directoryKey: string): string {
   return `launchpad:${directoryKey}`;
 }
 
@@ -498,6 +500,19 @@ export function DirectoriesList(props: DirectoriesListProps) {
     );
     return () => window.clearTimeout(timeout);
   }, [flashedProjectKey]);
+  // The blank tail a jump grows so a project near the end can reach the top.
+  // Written to the DOM directly, not through state: the jump scrolls in the
+  // same frame it grows the tail, and a re-render must not reset it.
+  const jumpTailRef = useRef<HTMLDivElement>(null);
+  const dropJumpTailOffscreen = (): void => {
+    const list = directoryListRef.current;
+    const tail = jumpTailRef.current;
+    if (!list || !tail || tail.offsetHeight === 0) return;
+    const viewportBottom = list.getBoundingClientRect().bottom;
+    if (jumpTailIsOffscreen(tail.getBoundingClientRect().top, viewportBottom)) {
+      tail.style.height = "";
+    }
+  };
 
   const pinnedDirectories = useMemo(
     () =>
@@ -592,7 +607,23 @@ export function DirectoriesList(props: DirectoriesListProps) {
       // edge while the project's threads are scrolled out above it. Reveal the
       // section's normal-flow start.
       const section = header.closest(".directory-row");
-      section?.scrollIntoView?.({ block: "start" });
+      const list = directoryListRef.current;
+      const tail = jumpTailRef.current;
+      if (request.jump && section && list && tail) {
+        // A jump lands the section at the top even near the end of the list,
+        // growing the tail by what the list is short.
+        const plan = jumpScrollPlan({
+          scrollTop: list.scrollTop,
+          blockTop: section.getBoundingClientRect().top - list.getBoundingClientRect().top,
+          scrollHeight: list.scrollHeight,
+          clientHeight: list.clientHeight,
+          tailHeight: tail.offsetHeight,
+        });
+        if (plan.tailHeight !== tail.offsetHeight) tail.style.height = `${plan.tailHeight}px`;
+        list.scrollTop = plan.scrollTop;
+      } else {
+        section?.scrollIntoView?.({ block: "start" });
+      }
       if (request.selectedThreadKey) {
         // Then bring the thread the reveal came from to the nearest edge.
         // The header is sticky, so it stays on screen wherever the section
@@ -1791,7 +1822,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
       };
 
   return (
-    <div ref={directoryListRef} className="directory-list sidebar-list sidebar-list--dense">
+    <div
+      ref={directoryListRef}
+      className="directory-list sidebar-list sidebar-list--dense"
+      onScroll={dropJumpTailOffscreen}
+    >
       {unplacedStartingThreads.length > 0 ? (
         // No project or parent row this lens has loaded will take these, so
         // they wait at the top, the one place every lens can show them.
@@ -1823,6 +1858,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       ) : null}
       {unpinnedDirectories.map(renderDirectoryRow)}
       {props.footer}
+      <div ref={jumpTailRef} className="directory-list__jump-tail" aria-hidden="true" />
       {unavailableDirectoryTooltip.tooltipNode}
     </div>
   );

@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -60,7 +61,7 @@ function measureBlocks(list: HTMLElement): ProjectBlockBox[] {
  * the sidebar. A jump is the sidebar's job (the list owns open state); this
  * only says which project was asked for.
  */
-export function ProjectIndex(props: {
+export const ProjectIndex = memo(function ProjectIndex(props: {
   projects: readonly ProjectIndexEntry[];
   /** The sidebar's lane region. The Directories list scrolls inside it. */
   scrollRegionRef: RefObject<HTMLDivElement | null>;
@@ -79,10 +80,6 @@ export function ProjectIndex(props: {
   const [spy, setSpy] = useState<ProjectSpy>(NO_PROJECT_SPY);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
   const pointerInside = useRef(false);
-  // The last project jumped to. One near the end of the list cannot scroll
-  // to the top, so while the list rests at its end with that project on
-  // screen, it is the current one. The operator's own scrolling ends it.
-  const jumpedKey = useRef<string | null>(null);
   const typed = useRef<{ query: string; at: number }>({ query: "", at: 0 });
 
   // ---- Width: natural until dragged ----
@@ -123,9 +120,32 @@ export function ProjectIndex(props: {
   }, [syncBox]);
 
   const onWidthChange = props.onWidthChange;
+  // Arrow keys move the column at once and save once, when the key is
+  // released (or focus leaves): a held key repeats about 30 times a second,
+  // and each save rewrites config.toml.
+  const pendingKeyWidth = useRef<number | null>(null);
   const nudgeWidth = (delta: number): void => {
+    const nav = navRef.current;
+    if (nav === null) return;
     const { width, min, max } = readBox();
-    onWidthChange(clampProjectIndexWidth(width + delta, min, max));
+    const next = clampProjectIndexWidth(width + delta, min, max);
+    nav.style.width = `${next}px`;
+    pendingKeyWidth.current = next;
+    syncBox();
+  };
+  const commitKeyWidth = (): void => {
+    const next = pendingKeyWidth.current;
+    if (next === null) return;
+    pendingKeyWidth.current = null;
+    if (next !== props.width) onWidthChange(next);
+  };
+  const resetWidth = (): void => {
+    pendingKeyWidth.current = null;
+    if (props.width !== null) {
+      onWidthChange(null);
+    } else if (navRef.current) {
+      navRef.current.style.width = "";
+    }
   };
   const startResize = (event: ReactPointerEvent<HTMLElement>): void => {
     if (event.button !== 0) return;
@@ -173,15 +193,7 @@ export function ProjectIndex(props: {
     }
     const list = scrollRegionRef.current?.querySelector<HTMLElement>(".directory-list");
     if (!list) return;
-    let next = spyProjects(measureBlocks(list), list.clientHeight);
-    const jumped = jumpedKey.current;
-    if (
-      jumped !== null
-      && next.inView.includes(jumped)
-      && list.scrollTop + list.clientHeight >= list.scrollHeight - 1
-    ) {
-      next = { ...next, current: jumped };
-    }
+    const next = spyProjects(measureBlocks(list), list.clientHeight);
     setSpy((prev) => (sameProjectSpy(prev, next) ? prev : next));
   }, [scrollRegionRef, spyEnabled]);
 
@@ -201,13 +213,6 @@ export function ProjectIndex(props: {
       });
     };
     region.addEventListener("scroll", schedule, { capture: true, passive: true });
-    const endJump = (): void => {
-      jumpedKey.current = null;
-    };
-    const userScrolls = ["wheel", "touchmove", "keydown", "pointerdown"] as const;
-    for (const type of userScrolls) {
-      region.addEventListener(type, endJump, { capture: true, passive: true });
-    }
     const resize = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
     resize?.observe(region);
     const list = region.querySelector(".directory-list");
@@ -218,9 +223,6 @@ export function ProjectIndex(props: {
     return () => {
       window.cancelAnimationFrame(frame);
       region.removeEventListener("scroll", schedule, { capture: true });
-      for (const type of userScrolls) {
-        region.removeEventListener(type, endJump, { capture: true });
-      }
       resize?.disconnect();
     };
   }, [measure, scrollRegionRef, spyEnabled, keysKey]);
@@ -346,7 +348,6 @@ export function ProjectIndex(props: {
                   }`}
                   onClick={() => {
                     tooltip.hide();
-                    jumpedKey.current = project.key;
                     props.onJump(project.key);
                   }}
                   onMouseEnter={(event) => showIfCut(event.currentTarget)}
@@ -382,7 +383,11 @@ export function ProjectIndex(props: {
         className="project-index__grip"
         role="separator"
         tabIndex={0}
-        onDoubleClick={() => onWidthChange(null)}
+        onDoubleClick={resetWidth}
+        onBlur={commitKeyWidth}
+        onKeyUp={(event) => {
+          if (event.key === "ArrowLeft" || event.key === "ArrowRight") commitKeyWidth();
+        }}
         onKeyDown={(event) => {
           if (event.key === "ArrowLeft") {
             event.preventDefault();
@@ -397,7 +402,7 @@ export function ProjectIndex(props: {
       {tooltip.tooltipNode}
     </div>
   );
-}
+});
 
 /** Compared, never interpolated into a selector: keys carry whatever a path
  *  does. */

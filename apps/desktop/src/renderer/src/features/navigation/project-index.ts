@@ -54,6 +54,37 @@ export function sameProjectSpy(a: ProjectSpy, b: ProjectSpy): boolean {
 }
 
 /**
+ * Where a jump scrolls the Directories list so the project's section starts
+ * at the top, and how much blank tail the list needs for that to be possible.
+ * A project near the end has too little list below it to reach the top; the
+ * tail supplies exactly the missing height. It is dropped once it scrolls out
+ * of view (`jumpTailIsOffscreen`). A port of PwrGit's `jumpScrollPlan`.
+ */
+export function jumpScrollPlan(input: {
+  scrollTop: number;
+  /** The section's top, relative to the list's top edge. */
+  blockTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+  /** The tail already drawn, in px. */
+  tailHeight: number;
+}): { scrollTop: number; tailHeight: number } {
+  const target = Math.max(0, Math.round(input.scrollTop + input.blockTop));
+  const maxScroll = Math.max(0, input.scrollHeight - input.clientHeight);
+  const missing = target - maxScroll;
+  return {
+    scrollTop: target,
+    tailHeight: missing > 0 ? input.tailHeight + missing : input.tailHeight,
+  };
+}
+
+/** The tail can go when none of it is on screen: removing it then moves
+ *  nothing the reader can see. */
+export function jumpTailIsOffscreen(tailTop: number, viewportBottom: number): boolean {
+  return tailTop >= viewportBottom;
+}
+
+/**
  * Typeahead: the next name after `from` (wrapping) that starts with `query`,
  * case-insensitively. A query of one repeated letter cycles through the names
  * starting with it, the way a native list does. -1 when nothing matches.
