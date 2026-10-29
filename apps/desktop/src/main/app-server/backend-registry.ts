@@ -15978,6 +15978,17 @@ export class DesktopBackendRegistry {
           targetThread = (await this.claudeBackend.listThreads({ archived: true }))
             .find((thread) => thread.id === result.threadId);
         }
+        if (targetThread && backend !== "codex") {
+          // Claude and ACP report only the session's folder. A worktree left
+          // by a fresh-start move must still send cleanup to full discovery.
+          const readOverlays = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
+          await context.checkpoint();
+          const overlays = await readOverlays.call(this.overlayStore, { backend, threadIds: [result.threadId] });
+          targetThread = {
+            ...targetThread,
+            linkedDirectories: withRetainedWorktrees(targetThread.linkedDirectories, overlays[result.threadId]),
+          };
+        }
         const needsWorktreeOwnership = !params.preserveWorktrees && (!targetThread
           || targetThread.linkedDirectories.some((directory) => Boolean(linkedDirectoryWorktreePath(directory))));
         return await this.findThreadForArchiveCleanup({
@@ -16410,19 +16421,23 @@ export class DesktopBackendRegistry {
     // A fresh start leaves the previous worktree on disk, and its changes may
     // not be this thread's. Keep a worktree this thread owns tracked, so
     // archiving the thread still checkpoints and removes it.
-    const retainWorktree: LinkedDirectorySummary | undefined =
-      request.baseRef?.trim()
+    // Spell it the way the handoff service spells worktree paths, so a later
+    // move back into it matches and drops it.
+    const retainedPath = request.baseRef?.trim()
       && request.direction === "worktree-to-worktree"
       && !sourceWorktreeIsExternal
       && sourcePath
-        ? {
-            id: `pwragent-retained-worktree:${request.backend}:${request.threadId}:${sourcePath}`,
-            kind: "worktree",
-            label: result.linkedDirectory.label,
-            path: result.repositoryPath,
-            worktreePath: sourcePath,
-          }
-        : undefined;
+      ? toForwardSlashes(await realpath(sourcePath).catch(() => sourcePath))
+      : undefined;
+    const retainWorktree: LinkedDirectorySummary | undefined = retainedPath
+      ? {
+          id: `pwragent-retained-worktree:${request.backend}:${request.threadId}:${retainedPath}`,
+          kind: "worktree",
+          label: result.linkedDirectory.label,
+          path: result.repositoryPath,
+          worktreePath: retainedPath,
+        }
+      : undefined;
     const resultBranch =
       result.strategy === "detached-changes"
         ? (result.workMode === "local"
