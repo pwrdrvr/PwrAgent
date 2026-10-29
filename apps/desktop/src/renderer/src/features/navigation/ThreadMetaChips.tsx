@@ -164,6 +164,11 @@ export function ThreadMetaChips({
     todoTooltip.hide();
     revealTodos(thread);
   } : undefined;
+  const todoTooltipText = (): string => formatTodoTooltip(
+    [...waits.map((wait) => wait.title), ...openTodos.map((todo) => todo.title)],
+    openItemNoun,
+    unreadItemCount,
+  ) + (openTodoCards ? "\nClick to show" : "");
   const branchDrifted = isBranchDrifted(thread.gitBranch, thread.observedGitBranch);
   const branchChip = thread.gitBranch ?? thread.observedGitBranch;
   const gitWorking = thread.gitWorkingState;
@@ -424,20 +429,12 @@ export function ThreadMetaChips({
           data-unread={unreadItemCount > 0 ? unreadItemCount : undefined}
           onBlur={todoTooltip.hide}
           onClick={openTodoCards}
+          onFocus={openTodoCards ? (event) => todoTooltip.show(event.currentTarget, todoTooltipText()) : undefined}
           onKeyDown={openTodoCards ? (event) => {
             if (event.key !== "Enter" && event.key !== " ") return;
             openTodoCards(event);
           } : undefined}
-          onMouseEnter={(event) =>
-            todoTooltip.show(
-              event.currentTarget,
-              formatTodoTooltip(
-                [...waits.map((wait) => wait.title), ...openTodos.map((todo) => todo.title)],
-                openItemNoun,
-                unreadItemCount,
-              ) + (openTodoCards ? "\nClick to show" : ""),
-            )
-          }
+          onMouseEnter={(event) => todoTooltip.show(event.currentTarget, todoTooltipText())}
           onMouseLeave={todoTooltip.hide}
         >
           <span aria-hidden="true" className="thread-row__chip-icon">

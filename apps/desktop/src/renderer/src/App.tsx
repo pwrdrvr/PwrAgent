@@ -2729,6 +2729,13 @@ function DesktopAppShell(props: {
     // and clear its errors for nothing.
     if (threadKey !== selectedThreadKeyRef.current) selectThreadNavigation(thread);
   }, [selectThreadNavigation, setMainView]);
+  // A request whose thread never came on screen must not fire when the
+  // operator opens that thread some other way later.
+  useEffect(() => {
+    const selected = navigation.selectedThreadKey;
+    setThreadTodoRevealRequest((current) =>
+      current && selected && current.threadKey !== selected ? undefined : current);
+  }, [navigation.selectedThreadKey]);
   // The To-dos panel's rows and the sidebar's Question chip both open here.
   const openOperatorWait = useCallback((wait: OperatorWait) => {
     // A question opens on its card, as a message link does.

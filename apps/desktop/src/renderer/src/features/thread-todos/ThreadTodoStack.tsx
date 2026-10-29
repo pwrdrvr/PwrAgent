@@ -64,7 +64,8 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
     setNotice(undefined);
     setSelectedId(undefined);
   }, [threadKey]);
-  // After the thread-change reset above, so the reveal is not undone.
+  // Collapse state is per thread, so a request waits until its thread is
+  // the one on screen.
   const revealRequest = props.revealRequest;
   useEffect(() => {
     if (!consumeThreadTodoReveal(revealRequest, threadKey)) return;
