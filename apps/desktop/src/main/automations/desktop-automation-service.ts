@@ -40,6 +40,7 @@ import type {
 } from "@pwragent/messaging-interface";
 import {
   automationSuppressesBindingBroadcast,
+  finalTurnOutputText,
   validateAutomationScheduleDefinition,
 } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
@@ -1627,12 +1628,7 @@ function finalTextFromTerminalTurnNotification(
   notification: TerminalTurnNotification,
 ): string | undefined {
   if (notification.method !== "turn/completed") return undefined;
-  // Claude reports each assistant message of the turn as its own part, so
-  // the final answer is the last part, not its progress notes before it.
-  return notification.params.turn.output
-    .filter((item) => item.type === "text")
-    .map((item) => item.text.trim())
-    .findLast(Boolean);
+  return finalTurnOutputText(notification.params.turn.output);
 }
 
 function errorMessageFromTerminalTurnNotification(
