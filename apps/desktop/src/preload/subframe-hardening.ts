@@ -31,6 +31,17 @@ export function hardenSubframe(): void {
   }
 }
 
+// TypeScript's DOM library has no Trusted Types yet; this is the part used here.
+type TrustedTypesWindow = Window & {
+  trustedTypes?: {
+    createPolicy(name: string, rules: {
+      createHTML(value: string): string;
+      createScriptURL(value: string): string;
+      createScript(value: string, type: unknown, sink: unknown): string | null;
+    }): unknown;
+  };
+};
+
 // Electron serializes this function into the frame: it must not refer to
 // anything outside its own body.
 function hardenMainWorld(): void {
@@ -42,7 +53,7 @@ function hardenMainWorld(): void {
     }
   }
   try {
-    window.trustedTypes?.createPolicy("default", {
+    (window as TrustedTypesWindow).trustedTypes?.createPolicy("default", {
       createHTML: (value: string) => value,
       createScriptURL: (value: string) => value,
       createScript: (value: string, _type: unknown, sink: unknown) =>
