@@ -125,6 +125,7 @@ const RENDERER_DOM_TS_TESTS = [
   "apps/desktop/src/renderer/src/features/star-map/__tests__/star-map-orbit.test.ts",
   "apps/desktop/src/renderer/src/features/star-map/__tests__/star-map-preferences.test.ts",
   "apps/desktop/src/renderer/src/features/thread-detail/__tests__/composer-slot.test.ts",
+  "apps/desktop/src/renderer/src/features/thread-detail/__tests__/html-preview-document.test.ts",
   "apps/desktop/src/renderer/src/features/thread-detail/__tests__/interactive-svg-document.test.ts",
   "apps/desktop/src/renderer/src/features/thread-detail/__tests__/token-miser-savings-layout.test.ts",
   "apps/desktop/src/renderer/src/lib/__tests__/appearance.test.ts",
