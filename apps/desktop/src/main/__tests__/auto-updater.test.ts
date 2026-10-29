@@ -1765,7 +1765,13 @@ describe("auto updater", () => {
     });
   });
 
-  it("routes downloaded update installs through requestQuit", async () => {
+  it.each([
+    { platform: "darwin" as const, expectedCalls: [[]] },
+    // The assisted NSIS installer would otherwise open its setup wizard.
+    { platform: "win32" as const, expectedCalls: [[true, true]] },
+  ])("routes downloaded update installs through requestQuit on $platform", async ({ platform, expectedCalls }) => {
+    // afterEach restores the original process.platform.
+    setPlatform(platform);
     const updater = await importAutoUpdater();
     const requestQuit = vi.fn(async (performQuit: () => void) => {
       performQuit();
@@ -1779,7 +1785,7 @@ describe("auto updater", () => {
 
     await expect(install?.()).resolves.toEqual({ status: "restarting" });
     expect(requestQuit).toHaveBeenCalledTimes(1);
-    expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+    expect(autoUpdaterMock.quitAndInstall.mock.calls).toEqual(expectedCalls);
   });
 
   it("latches update-install-in-progress before handing off to quitAndInstall", async () => {
