@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import type { Editor } from "@tiptap/react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -49,10 +49,18 @@ function watermarkMarkup(icon: CelestialIconId): string {
 
 let mountedEditor: Editor | undefined;
 
-afterEach(() => {
-  cleanup();
+afterEach(async () => {
   const editor = mountedEditor;
   mountedEditor = undefined;
+  // useEditor defers destruction to survive StrictMode remounts. Own that
+  // lifecycle through completion before Vitest disposes jsdom's window.
+  const destroyed = editor && !editor.isDestroyed
+    ? new Promise<void>((resolve) => { editor.on("destroy", () => resolve()); })
+    : Promise.resolve();
+  await act(async () => {
+    cleanup();
+    await destroyed;
+  });
   if (editor) expect(editor.isDestroyed).toBe(true);
 });
 
@@ -87,6 +95,7 @@ describe("ThreadView launchpad watermark", () => {
       />,
     );
     mountedEditor = (view.getByRole("textbox", { name: "New thread" }) as HTMLElement & { editor: Editor }).editor;
+    expect(mountedEditor).toBeDefined();
 
     await waitFor(() => {
       const watermark = view.container.querySelector(
