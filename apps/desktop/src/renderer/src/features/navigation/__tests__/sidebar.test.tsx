@@ -10675,7 +10675,7 @@ describe("Sidebar thread shortcuts", () => {
 
   // Binds Mark Unread / Read to the macOS default and renders a focused reply
   // field. jsdom has no platform, so ProseMirror's Mod is Ctrl here; the
-  // chord pressed with Ctrl meets the same Underline keymap ⌘ does on macOS.
+  // chord pressed with Ctrl meets the same Mod-U binding ⌘ does on macOS.
   async function withMarkReadInComposer(
     sidebarProps: Partial<ComponentProps<typeof Sidebar>>,
     run: (field: HTMLElement) => Promise<void> | void,
@@ -10701,10 +10701,11 @@ describe("Sidebar thread shortcuts", () => {
   }
   const markReadChord = { key: "U", code: "KeyU", keyCode: 85, ctrlKey: true, shiftKey: true };
 
-  it("marks the open thread read from the composer, where Underline also binds the chord", async () => {
+  it("marks the open thread read from the composer, where the editor also binds the chord", async () => {
     // Attention keeps an opened thread unread, so Mark Read is pressed with
-    // focus in the reply. Tiptap's Underline binds Mod-U, and ProseMirror
-    // retries a shifted letter without Shift, so the editor took ⇧⌘U first.
+    // focus in the reply. The composer binds Mod-U to block native underline,
+    // and ProseMirror retries a shifted letter without Shift, so the editor
+    // took ⇧⌘U first.
     const onMarkThreadsSeen = vi.fn(async () => undefined);
     await withMarkReadInComposer({ browseMode: "attention", onMarkThreadsSeen }, async (field) => {
       await pressAndSettle(field, markReadChord);
@@ -10718,7 +10719,7 @@ describe("Sidebar thread shortcuts", () => {
     await withMarkReadInComposer({ selectedItemKey: undefined, onMarkThreadsSeen }, (field) => {
       const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...markReadChord });
       act(() => { field.dispatchEvent(event); });
-      // Unhandled, the chord stays with editing: Underline still claims it.
+      // Unhandled, the chord stays with editing: the composer's Mod-U claims it.
       expect(event.defaultPrevented).toBe(true);
     });
     expect(onMarkThreadsSeen).not.toHaveBeenCalled();
