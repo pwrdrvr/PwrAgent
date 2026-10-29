@@ -4,9 +4,9 @@ import type {
   BackendSummary,
   CodexSpeed,
   CodexThreadEnvironmentRuntime,
+  ListThreadTodoDispatchEnvironmentsRequest,
   ListThreadTodoDispatchEnvironmentsResponse,
   ThreadTodo,
-  ThreadTodoProject,
 } from "@pwragent/shared";
 import {
   CODEX_SPEED_LABELS,
@@ -133,7 +133,7 @@ export async function resolveThreadTodoStartEnvironment(params: {
  * the default is that copy's preset.
  */
 export async function listThreadTodoDispatchEnvironments(
-  request: { id?: string; project?: ThreadTodoProject },
+  request: Pick<ListThreadTodoDispatchEnvironmentsRequest, "id" | "project">,
   deps: {
     getTodo: (id: string) => ThreadTodo;
     listProjects: () => Promise<ThreadTodoProjectCandidate[]>;
