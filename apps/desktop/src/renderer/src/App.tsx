@@ -180,6 +180,10 @@ import {
   useThreadTodos,
 } from "./features/thread-todos/useThreadTodos";
 import { newestResolvedFirst } from "./features/thread-todos/busy-thread-todos";
+import {
+  ThreadTodoRevealContext,
+  type ThreadTodoRevealRequest,
+} from "./features/thread-todos/thread-todo-reveal";
 import type {
   ThreadTodoProjectMenu,
   ThreadTodosView,
@@ -2712,6 +2716,19 @@ function DesktopAppShell(props: {
   useEffect(() => {
     selectedThreadKeyRef.current = navigation.selectedThreadKey;
   }, [navigation.selectedThreadKey]);
+  // A thread row's to-do chip: open the thread as its row would, then show
+  // its cards, in the rail's To-dos panel when that is open, else as the
+  // transcript's stack, expanded.
+  const [threadTodoRevealRequest, setThreadTodoRevealRequest] = useState<ThreadTodoRevealRequest>();
+  const selectThreadNavigation = navigation.selectThread;
+  const revealThreadTodos = useCallback((thread: NavigationThreadSummary) => {
+    const threadKey = threadSummaryIdentityKey(thread);
+    setThreadTodoRevealRequest({ threadKey });
+    setMainView("thread");
+    // Already selected: selecting it again would refresh its git status
+    // and clear its errors for nothing.
+    if (threadKey !== selectedThreadKeyRef.current) selectThreadNavigation(thread);
+  }, [selectThreadNavigation, setMainView]);
   // The To-dos panel's rows and the sidebar's Question chip both open here.
   const openOperatorWait = useCallback((wait: OperatorWait) => {
     // A question opens on its card, as a message link does.
@@ -3959,6 +3976,7 @@ function DesktopAppShell(props: {
     historyNav,
     starMap: starMapControls,
     threadTodos: threadTodosView,
+    threadTodoRevealRequest,
     findOpen: threadFindOpen,
     findInitialQuery: threadFindInitialQuery,
     findTurnId: threadFindTurnId,
@@ -4126,6 +4144,7 @@ function DesktopAppShell(props: {
   return (
     <FederationDisplayLabelsProvider health={liveFederationHealth}>
     <ThreadTodoCountsContext.Provider value={threadTodoController.openByThreadKey}>
+    <ThreadTodoRevealContext.Provider value={threadTodosView ? revealThreadTodos : undefined}>
     <TodoDispatchProvider
       api={desktopApi}
       backends={backendSummaries.backends}
@@ -4773,6 +4792,7 @@ function DesktopAppShell(props: {
     </ThreadDependencyIndicatorsContext.Provider>
     </OperatorWaitsContext.Provider>
     </TodoDispatchProvider>
+    </ThreadTodoRevealContext.Provider>
     </ThreadTodoCountsContext.Provider>
     </FederationDisplayLabelsProvider>
   );

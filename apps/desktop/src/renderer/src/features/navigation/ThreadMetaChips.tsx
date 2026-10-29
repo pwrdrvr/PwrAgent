@@ -17,6 +17,7 @@ import { copyText } from "../../lib/copy-text";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { useThreadTodosForKey } from "../thread-todos/useThreadTodos";
+import { useThreadTodoReveal } from "../thread-todos/thread-todo-reveal";
 import {
   isBlockingWait,
   leadingOperatorWait,
@@ -115,6 +116,7 @@ export function ThreadMetaChips({
   const todoTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const itemThreadKey = threadSummaryIdentityKey(thread);
   const openTodos = useThreadTodosForKey(itemThreadKey);
+  const revealTodos = useThreadTodoReveal();
   const waitTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   // Queue entries carry the same owner identity as navigation. The session's
   // own approval and input flags still show when the queue has no matching wait.
@@ -154,6 +156,14 @@ export function ThreadMetaChips({
     ? waits.filter((wait) => !waitsContext.seenKeys.has(wait.key)).length
       + openTodos.filter((todo) => !waitsContext.seenKeys.has(operatorTodoItemKey(todo.id))).length
     : 0;
+  // The row would open the thread as it was left; the chip also brings its
+  // cards into view, as a collapsed stack or another rail lens would hide them.
+  const openTodoCards = revealTodos ? (event: SyntheticEvent): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    todoTooltip.hide();
+    revealTodos(thread);
+  } : undefined;
   const branchDrifted = isBranchDrifted(thread.gitBranch, thread.observedGitBranch);
   const branchChip = thread.gitBranch ?? thread.observedGitBranch;
   const gitWorking = thread.gitWorkingState;
@@ -405,12 +415,19 @@ export function ThreadMetaChips({
           aria-label={`${openItemCount} open ${openItemNoun}${openItemCount === 1 ? "" : "s"}${
             unreadItemCount > 0 ? `, ${unreadItemCount} unread` : ""
           }`}
-          role="img"
+          role={openTodoCards ? "button" : "img"}
+          tabIndex={openTodoCards ? 0 : undefined}
           className={`thread-row__chip thread-row__chip--todos thread-row__chip--persistent${
             unreadItemCount > 0 ? " is-unread" : ""
           }`}
           data-thread-todos={openItemCount}
           data-unread={unreadItemCount > 0 ? unreadItemCount : undefined}
+          onBlur={todoTooltip.hide}
+          onClick={openTodoCards}
+          onKeyDown={openTodoCards ? (event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            openTodoCards(event);
+          } : undefined}
           onMouseEnter={(event) =>
             todoTooltip.show(
               event.currentTarget,
@@ -418,7 +435,7 @@ export function ThreadMetaChips({
                 [...waits.map((wait) => wait.title), ...openTodos.map((todo) => todo.title)],
                 openItemNoun,
                 unreadItemCount,
-              ),
+              ) + (openTodoCards ? "\nClick to show" : ""),
             )
           }
           onMouseLeave={todoTooltip.hide}

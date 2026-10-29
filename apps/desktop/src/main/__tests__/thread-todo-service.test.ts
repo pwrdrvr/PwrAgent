@@ -396,6 +396,13 @@ describe("ThreadTodoService", () => {
       .toBe("done");
   });
 
+  it("records a card the thread claimed to do here", () => {
+    const service = createService();
+    service.add({ ...THREAD, input: { key: "k", title: "Mine" } });
+    expect(service.resolveFromThread({ ...THREAD, key: "k", status: "done", resolution: "sent_here" }))
+      .toMatchObject({ status: "done", result: "Sent to this thread" });
+  });
+
   it("marks a merge done with its result and keeps a failed handoff open with the error", async () => {
     const runners: ThreadTodoActionRunners = {
       mergePullRequest: vi.fn(async () => ({ summary: "Squash-merged #42" })),

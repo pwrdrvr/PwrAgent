@@ -56,6 +56,7 @@ import { resolveThreadWorkingStatePath } from "../../lib/thread-working-state-pa
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThreadAutomationsPanel } from "../automations/ThreadAutomationsPanel";
 import { ThreadTodosPanel } from "../thread-todos/ThreadTodosPanel";
+import type { ThreadTodoRevealRequest } from "../thread-todos/thread-todo-reveal";
 import type {
   ThreadTodoDoHereOptions,
   ThreadTodoResolveOptions,
@@ -136,6 +137,8 @@ type ThreadContextPanelProps = {
     onAnswerQuestion?: (text: string) => Promise<boolean>;
     /** This thread's answers the composer took, by question item id. */
     sentQuestionAnswers?: ReadonlyMap<string, string>;
+    /** A thread row's to-do chip asked to show this thread's cards. */
+    revealRequest?: ThreadTodoRevealRequest;
   };
   activeTurnId?: string;
   backendError?: string;
@@ -849,6 +852,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             onDoHere={props.todos.onDoHere}
             onAnswerQuestion={props.todos.onAnswerQuestion}
             sentQuestionAnswers={props.todos.sentQuestionAnswers}
+            revealRequest={props.todos.revealRequest}
           />
         );
       case "edits":

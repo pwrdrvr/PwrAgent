@@ -3,6 +3,7 @@ import type { ThreadTodo, ThreadTodoResolution } from "@pwragent/shared";
 import { threadTodoItemProgress } from "@pwragent/shared";
 import { TodoIcon } from "../../icons";
 import { ThreadTodoCard } from "./ThreadTodoCard";
+import { consumeThreadTodoReveal, type ThreadTodoRevealRequest } from "./thread-todo-reveal";
 import type {
   ThreadTodoDoHereOptions,
   ThreadTodoResolveOptions,
@@ -41,6 +42,8 @@ export type ThreadTodoStackProps = {
   onDoHere?: (todo: ThreadTodo, options?: ThreadTodoDoHereOptions) => Promise<boolean>;
   /** Moves the stack below the find bar while it is open. */
   findOpen?: boolean;
+  /** A thread row's to-do chip asked to show this thread's cards. */
+  revealRequest?: ThreadTodoRevealRequest;
 };
 
 /**
@@ -61,6 +64,14 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
     setNotice(undefined);
     setSelectedId(undefined);
   }, [threadKey]);
+  // After the thread-change reset above, so the reveal is not undone.
+  const revealRequest = props.revealRequest;
+  useEffect(() => {
+    if (!consumeThreadTodoReveal(revealRequest, threadKey)) return;
+    if (collapsedIdsByThreadKey.delete(threadKey)) {
+      setCollapseVersion((current) => current + 1);
+    }
+  }, [revealRequest, threadKey]);
 
   const collapsedIds = collapsedIdsByThreadKey.get(threadKey);
   const collapsed = collapsedIds !== undefined

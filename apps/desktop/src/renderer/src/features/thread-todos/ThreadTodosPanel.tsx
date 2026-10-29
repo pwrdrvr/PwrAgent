@@ -25,6 +25,7 @@ import { isBlockingWait, type OperatorWait } from "../operator-requests/operator
 import { ThreadTodoCard, formatTodoAge } from "./ThreadTodoCard";
 import type { ThreadTodoDoHereOptions, ThreadTodoResolveOptions, ThreadTodosView } from "./thread-todos-view";
 import { keepBusyThreadTodos } from "./busy-thread-todos";
+import { consumeThreadTodoReveal, type ThreadTodoRevealRequest } from "./thread-todo-reveal";
 import { operatorWaitMatchesFilter, threadTodoMatchesFilter, type ThreadTodoFilter } from "./thread-todo-filters";
 import { tooltipHandlers, useViewportTooltip } from "../../lib/useViewportTooltip";
 import { isNavigationBusy } from "../../../../shared/navigation-ipc-result";
@@ -93,6 +94,8 @@ export type ThreadTodosPanelProps = {
   onAnswerQuestion?: (text: string) => Promise<boolean>;
   /** Answers the composer took in that thread, by question item id. */
   sentQuestionAnswers?: ReadonlyMap<string, string>;
+  /** A thread row's to-do chip asked to show this thread's cards. */
+  revealRequest?: ThreadTodoRevealRequest;
 };
 
 /**
@@ -127,6 +130,13 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
     rememberedScope = next;
     setScopeState(next);
   };
+  // The chip names one thread, so its cards show under the Thread lens.
+  const revealRequest = props.revealRequest;
+  useEffect(() => {
+    if (!consumeThreadTodoReveal(revealRequest, threadKey)) return;
+    rememberedScope = "thread";
+    setScopeState("thread");
+  }, [revealRequest, threadKey]);
 
   useEffect(() => {
     if (!showResolved || !listResolved) {
