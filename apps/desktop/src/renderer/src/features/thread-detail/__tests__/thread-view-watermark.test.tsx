@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
+import type { Editor } from "@tiptap/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CelestialIconId, FederationRemoteTarget } from "@pwragent/shared";
@@ -46,8 +47,13 @@ function watermarkMarkup(icon: CelestialIconId): string {
   return renderToStaticMarkup(<CelestialWatermark icon={icon} />);
 }
 
+let mountedEditor: Editor | undefined;
+
 afterEach(() => {
   cleanup();
+  const editor = mountedEditor;
+  mountedEditor = undefined;
+  if (editor) expect(editor.isDestroyed).toBe(true);
 });
 
 describe("ThreadView launchpad watermark", () => {
@@ -80,6 +86,7 @@ describe("ThreadView launchpad watermark", () => {
         removeOptimisticMessage={() => undefined}
       />,
     );
+    mountedEditor = (view.getByRole("textbox", { name: "New thread" }) as HTMLElement & { editor: Editor }).editor;
 
     await waitFor(() => {
       const watermark = view.container.querySelector(
