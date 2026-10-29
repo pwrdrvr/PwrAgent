@@ -12,6 +12,7 @@ import {
   hasDurableSubAgentTranscript,
   isCodexNativeSubAgent,
   parseCodexAsyncQuestionReply,
+  parseLinearPaste,
   parseThreadCorrespondenceMessage,
   stripCodexGitActionDirectives,
   summarizeThreadDependencyPrompt,
@@ -45,6 +46,7 @@ import {
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { AsyncQuestionCard } from "./AsyncQuestionCard";
+import { LinearPasteMessage } from "./LinearPasteMessage";
 import { ThreadChip } from "./ThreadChip";
 import { TranscriptImage } from "./TranscriptImage";
 import { renderMarkdownToClipboardHtml } from "./markdown-clipboard-html";
@@ -182,9 +184,17 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
     );
     return parts.length > 0 ? parts : EMPTY_IMAGE_PARTS;
   }, [contentParts]);
+  // Text pasted from Linear is the operator's own, so only user messages
+  // are laid out as an issue.
+  const linearPaste = props.message.role === "user";
   const messageSegments = useMemo(
-    () => groupMessageParts(contentParts).flatMap(splitMarkdownTableSegment),
-    [contentParts],
+    () => groupMessageParts(contentParts).flatMap((segment) =>
+      // An issue renders as one piece; a table split would cut its wrapper.
+      linearPaste && segment.type === "text" && parseLinearPaste(segment.part.text)
+        ? [segment]
+        : splitMarkdownTableSegment(segment)
+    ),
+    [contentParts, linearPaste],
   );
   const [monitorExpanded, setMonitorExpanded] = useState(false);
   const [voiceContextExpanded, setVoiceContextExpanded] = useState(false);
@@ -681,6 +691,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
             {renderMessageSegment({
               segment,
               index,
+              linearPaste,
               applications: props.applications,
               desktopApi: props.desktopApi,
               fileViewerContext: props.fileViewerContext,
@@ -982,6 +993,8 @@ function renderMessageSegment(params: {
   imageParts?: AppServerThreadImagePart[];
   segment: MessagePartSegment;
   index: number;
+  /** Lay out text pasted from Linear as its issue. */
+  linearPaste?: boolean;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
   skills: AppServerSkillSummary[];
   threadLinkSource?: ThreadLinkSource;
@@ -1026,9 +1039,9 @@ function renderMessageSegment(params: {
     );
   }
 
-  return (
+  const renderMarkdown = (text: string, key: string): ReactNode => (
     <ThreadMarkdown
-      key={`text:${params.index}`}
+      key={key}
       applications={params.applications}
       className="transcript-message__text-block"
       desktopApi={params.desktopApi}
@@ -1036,9 +1049,25 @@ function renderMessageSegment(params: {
       imageParts={params.imageParts}
       onOpenImage={params.onOpenImage}
       skills={params.skills}
-      text={params.segment.type === "table" ? params.segment.text : params.segment.part.text}
+      text={text}
       threadLinkSource={params.threadLinkSource}
     />
+  );
+  if (params.segment.type === "text" && params.linearPaste) {
+    const layout = parseLinearPaste(params.segment.part.text);
+    if (layout) {
+      return (
+        <LinearPasteMessage
+          key={`linear:${params.index}`}
+          layout={layout}
+          renderMarkdown={renderMarkdown}
+        />
+      );
+    }
+  }
+  return renderMarkdown(
+    params.segment.type === "table" ? params.segment.text : params.segment.part.text,
+    `text:${params.index}`,
   );
 }
 

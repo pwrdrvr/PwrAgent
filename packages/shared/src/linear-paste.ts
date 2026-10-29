@@ -128,3 +128,189 @@ function normalizeAlt(value: unknown): string | undefined {
   const text = value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
   return text ? text.slice(0, 120) : undefined;
 }
+
+/** One run of a pasted Linear description: Markdown, or an image Linear named. */
+export type LinearPastePiece =
+  | { type: "markdown"; text: string }
+  | { type: "image"; name?: string };
+
+/** What Linear's copy-as-prompt `<issue>` wrapper says about the issue. */
+export type LinearPastedIssue = {
+  identifier?: string;
+  title?: string;
+  team?: string;
+  project?: string;
+  labels: string[];
+};
+
+/**
+ * A message holding text copied from Linear, laid out for display: the
+ * issue's header when the text carries Linear's `<issue>` wrapper, and the
+ * description with each `<linear-image>` as its own piece. `before` and
+ * `after` are whatever the operator typed around the paste.
+ */
+export type LinearPasteLayout = {
+  before: string;
+  issue?: LinearPastedIssue;
+  body: LinearPastePiece[];
+  after: string;
+};
+
+const ISSUE_OPEN_TAG = /<issue[\s>]/;
+const ISSUE_ELEMENT = /<issue(\s[^>]*)?>([\s\S]*?)<\/issue>/;
+const CODE_FENCE_LINE = /^ {0,3}(?:```|~~~)/gm;
+const EMPTY_ELEMENT = /<([a-z][\w-]*)\b[^>]*>\s*<\/\1>/gi;
+const XML_ENTITIES: Record<string, string> = {
+  amp: "&",
+  apos: "'",
+  gt: ">",
+  lt: "<",
+  quot: '"',
+};
+
+/**
+ * The display layout of text pasted from Linear, or `undefined` for text
+ * that is not one or whose wrapper is malformed. Those render as they are.
+ * Nothing here is HTML: each value is plain text or Markdown for the
+ * renderer's own Markdown pipeline.
+ */
+export function parseLinearPaste(text: string): LinearPasteLayout | undefined {
+  const hasIssue = ISSUE_OPEN_TAG.test(text);
+  if (!hasIssue && !text.includes("<linear-image")) return undefined;
+  if (!hasIssue) {
+    // Tags quoted as code are about Linear, not from it.
+    for (const tag of text.matchAll(LINEAR_IMAGE_TAG)) {
+      if (isQuotedAsCode(text, tag.index ?? 0)) return undefined;
+    }
+    const body = splitLinearDescription(text);
+    return body.some((piece) => piece.type === "image")
+      ? { before: "", body, after: "" }
+      : undefined;
+  }
+  const match = ISSUE_ELEMENT.exec(text);
+  if (!match || isQuotedAsCode(text, match.index)) return undefined;
+  const start = match.index;
+  const end = start + match[0].length;
+  // A second wrapper is more than one issue; leave it as it is.
+  if (ISSUE_OPEN_TAG.test(text.slice(end))) return undefined;
+
+  let inner = match[2] ?? "";
+  const take = (name: string): ElementMatch | undefined => {
+    const element = findElement(inner, name);
+    if (element) inner = inner.slice(0, element.start) + inner.slice(element.end);
+    return element;
+  };
+  const title = take("title");
+  const description = take("description");
+  const team = take("team");
+  const project = take("project");
+  const labels: string[] = [];
+  for (let label = take("label"); label; label = take("label")) {
+    const name = elementText(label);
+    if (name) labels.push(name);
+  }
+  const identifier = readAttribute(match[1] ?? "", "identifier");
+  const issue: LinearPastedIssue = {
+    ...(identifier ? { identifier } : {}),
+    ...(title && elementText(title) ? { title: elementText(title) } : {}),
+    ...(team && elementText(team) ? { team: elementText(team) } : {}),
+    ...(project && elementText(project) ? { project: elementText(project) } : {}),
+    labels,
+  };
+  if (!issue.identifier && !issue.title) return undefined;
+
+  const body = description ? splitLinearDescription(description.content) : [];
+  // Anything else Linear wrote (comments, a status) stays visible as it is.
+  const rest = inner.replace(EMPTY_ELEMENT, "").trim();
+  if (rest) body.push({ type: "markdown", text: rest });
+  return {
+    before: text.slice(0, start).trim(),
+    issue,
+    body,
+    after: text.slice(end).trim(),
+  };
+}
+
+/** Whether `index` falls in a fenced code block, or right after a backtick. */
+function isQuotedAsCode(text: string, index: number): boolean {
+  if (text[index - 1] === "`") return true;
+  const fences = text.slice(0, index).match(CODE_FENCE_LINE)?.length ?? 0;
+  return fences % 2 === 1;
+}
+
+type ElementMatch = { attributes: string; content: string; start: number; end: number };
+
+/**
+ * The first `<name ...>content</name>` or `<name ... />`. Plain string
+ * scanning: these are the few fixed tags Linear writes, not general XML.
+ */
+function findElement(source: string, name: string): ElementMatch | undefined {
+  const open = new RegExp(`<${name}\\b([^>]*?)(/?)>`).exec(source);
+  if (!open) return undefined;
+  const start = open.index;
+  const afterOpen = start + open[0].length;
+  if (open[2] === "/") {
+    return { attributes: open[1] ?? "", content: "", start, end: afterOpen };
+  }
+  const close = source.indexOf(`</${name}>`, afterOpen);
+  if (close < 0) return undefined;
+  return {
+    attributes: open[1] ?? "",
+    content: source.slice(afterOpen, close),
+    start,
+    end: close + name.length + 3,
+  };
+}
+
+/** An element's `name` attribute, else its text, on one line. */
+function elementText(element: ElementMatch): string {
+  const value = readAttribute(element.attributes, "name") ?? decodeXmlEntities(element.content);
+  return value.replace(/\s+/g, " ").trim().slice(0, 300);
+}
+
+function readAttribute(attributes: string, name: string): string | undefined {
+  const match = new RegExp(`\\b${name}="([^"]*)"`).exec(attributes);
+  const value = match ? decodeXmlEntities(match[1] ?? "").trim() : "";
+  return value || undefined;
+}
+
+function decodeXmlEntities(value: string): string {
+  return value.replace(/&(amp|apos|gt|lt|quot|#\d{1,6}|#x[\da-f]{1,6});/gi, (entity, name: string) => {
+    const lower = name.toLowerCase();
+    if (lower.startsWith("#")) {
+      const code = lower.startsWith("#x")
+        ? Number.parseInt(lower.slice(2), 16)
+        : Number.parseInt(lower.slice(1), 10);
+      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : entity;
+    }
+    return XML_ENTITIES[lower] ?? entity;
+  });
+}
+
+/** A description split around its `<linear-image>` tags. */
+function splitLinearDescription(source: string): LinearPastePiece[] {
+  const pieces: LinearPastePiece[] = [];
+  const pushMarkdown = (value: string) => {
+    const trimmed = value.replace(/^\s*\n/, "").trimEnd();
+    if (trimmed.trim()) pieces.push({ type: "markdown", text: trimmed });
+  };
+  let cursor = 0;
+  for (const match of source.matchAll(LINEAR_IMAGE_TAG)) {
+    const index = match.index ?? 0;
+    pushMarkdown(source.slice(cursor, index));
+    const name = readLinearImageName(match[1] ?? "");
+    pieces.push(name ? { type: "image", name } : { type: "image" });
+    cursor = index + match[0].length;
+  }
+  pushMarkdown(source.slice(cursor));
+  return pieces;
+}
+
+function readLinearImageName(json: string): string | undefined {
+  try {
+    const node = JSON.parse(json) as { attrs?: { alt?: unknown } } | null;
+    return normalizeAlt(node?.attrs?.alt);
+  } catch {
+    return undefined;
+  }
+}

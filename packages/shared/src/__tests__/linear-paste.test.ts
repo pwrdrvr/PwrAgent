@@ -5,6 +5,7 @@ import {
   isLinearMcpServerUrl,
   mayContainLinearPastedImages,
   normalizeLinearUploadUrl,
+  parseLinearPaste,
 } from "../linear-paste";
 
 const FILE = "https://uploads.linear.app/org-1/issue-2/file-3";
@@ -113,5 +114,82 @@ describe("Linear URL predicates", () => {
   it("skips the parse for text with no Linear content", () => {
     expect(mayContainLinearPastedImages("hello")).toBe(false);
     expect(mayContainLinearPastedImages("<linear-image>")).toBe(true);
+  });
+});
+
+describe("parseLinearPaste", () => {
+  const ISSUE = [
+    '<issue identifier="PWR-5">',
+    "<title>Mark Read hotkey in &quot;Attention&quot; lens</title>",
+    "<description>",
+    "## Report",
+    "",
+    "The hotkey does nothing.",
+    tag(`${FILE}?signature=x`, "attention-lens.png"),
+    "Expected it to clear the cookie.",
+    "</description>",
+    '<team name="PwrDrvr"/>',
+    "<label>Bug</label>",
+    '<label name="Desktop"/>',
+    '<project name="PwrAgent &amp; friends"></project>',
+    "</issue>",
+  ].join("\n");
+
+  it("lays out a full copied issue: header, description, and named images", () => {
+    expect(parseLinearPaste(`Please fix this.\n\n${ISSUE}\n\nThanks`)).toEqual({
+      before: "Please fix this.",
+      issue: {
+        identifier: "PWR-5",
+        title: 'Mark Read hotkey in "Attention" lens',
+        team: "PwrDrvr",
+        project: "PwrAgent & friends",
+        labels: ["Bug", "Desktop"],
+      },
+      body: [
+        { type: "markdown", text: "## Report\n\nThe hotkey does nothing." },
+        { type: "image", name: "attention-lens.png" },
+        { type: "markdown", text: "Expected it to clear the cookie." },
+      ],
+      after: "Thanks",
+    });
+  });
+
+  it("lays out a copied description with no issue wrapper", () => {
+    expect(parseLinearPaste(`Before\n${tag(FILE, undefined, "")}\nAfter`)).toEqual({
+      before: "",
+      body: [
+        { type: "markdown", text: "Before" },
+        { type: "image" },
+        { type: "markdown", text: "After" },
+      ],
+      after: "",
+    });
+  });
+
+  it("keeps anything else inside the wrapper visible", () => {
+    const layout = parseLinearPaste(
+      '<issue identifier="PWR-6"><title>T</title><comments><comment>Hi</comment></comments></issue>',
+    );
+
+    expect(layout?.body).toEqual([
+      { type: "markdown", text: "<comments><comment>Hi</comment></comments>" },
+    ]);
+  });
+
+  it("leaves malformed and unrelated text alone", () => {
+    for (const text of [
+      "plain words",
+      "<issues>not ours</issues>",
+      '<issue identifier="PWR-5"><title>Unclosed</title>',
+      "<issue><description>No title or identifier</description></issue>",
+      `${ISSUE}\n${ISSUE}`,
+    ]) {
+      expect(parseLinearPaste(text), text).toBeUndefined();
+    }
+  });
+
+  it("leaves tags quoted as code alone", () => {
+    expect(parseLinearPaste(`Linear writes:\n\n\`\`\`\n${ISSUE}\n\`\`\``)).toBeUndefined();
+    expect(parseLinearPaste(`It is \`${tag(FILE)}\` here`)).toBeUndefined();
   });
 });

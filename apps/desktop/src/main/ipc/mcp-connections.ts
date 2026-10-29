@@ -158,6 +158,7 @@ export function registerMcpConnectionIpcHandlers(
             ? { sandboxerStatusMaxAgeMs: Math.max(maxAge, MIN_SANDBOXER_STATUS_AGE_MS) }
             : {},
         ),
+        linearPasteImages: service.isLinearPasteImagesEnabled(),
       };
     },
   );

@@ -228,6 +228,8 @@ export function PluginsSettings(props: {
 }) {
   const [servers, setServers] = useState<CodexMcpServerSummary[]>([]);
   const [connections, setConnections] = useState<McpConnectionStatus[]>([]);
+  /** The profile's Linear paste setting; `undefined` when the owner omits it. */
+  const [linearPasteImages, setLinearPasteImagesValue] = useState<boolean>();
   const [connectionsLoading, setConnectionsLoading] = useState(true);
   const [connectionPending, setConnectionPendingState] =
     useState<ConnectionPendingAction>();
@@ -556,6 +558,7 @@ export function PluginsSettings(props: {
     try {
       const response = await props.desktopApi.listMcpConnections();
       setConnections(response.connections);
+      setLinearPasteImagesValue(response.linearPasteImages);
       return true;
     } catch (error) {
       if (options.background) return false;
@@ -1278,15 +1281,9 @@ export function PluginsSettings(props: {
     }
   };
 
-  const setLinearPasteImages = async (
-    connection: McpConnectionStatus,
-    enabled: boolean,
-  ) => {
+  const setLinearPasteImages = async (enabled: boolean) => {
     if (connectionPending || !props.desktopApi?.setLinearPasteImages) return;
-    setConnectionPending({
-      kind: "linearPasteImages",
-      connectionId: connection.id,
-    });
+    setConnectionPending({ kind: "linearPasteImages" });
     try {
       await props.desktopApi.setLinearPasteImages({ enabled });
       await loadConnections();
@@ -1433,6 +1430,33 @@ export function PluginsSettings(props: {
               />
             }
           />
+          {/*
+            * Profile-wide and independent of any connection: a paste made
+            * within five minutes of the copy needs none. Only this machine's
+            * own list reports it; a peer's window does not offer it.
+            */}
+          {linearPasteImages !== undefined && props.desktopApi?.setLinearPasteImages ? (
+            <SettingsField
+              label="Attach pasted Linear images"
+              sub={
+                connections.some(
+                  (connection) => connection.linearPasteImages !== undefined && connection.enabled,
+                )
+                  ? "When you paste an issue or description from Linear, its images are attached to the message. Links older than five minutes are downloaded through your Linear connection."
+                  : "When you paste an issue or description from Linear, its images are attached while their links are fresh, for five minutes after the copy. Connect Linear below and offer it to threads to attach older ones."
+              }
+              control={
+                <SettingsSwitch
+                  checked={linearPasteImages}
+                  disabled={Boolean(connectionPending)}
+                  label="Attach images in text pasted from Linear"
+                  onChange={(next) => {
+                    void setLinearPasteImages(next);
+                  }}
+                />
+              }
+            />
+          ) : null}
         </div>
         <div className="settings-mcp-manage">
           {connectionNotice ? (
@@ -1496,13 +1520,6 @@ export function PluginsSettings(props: {
                     && props.desktopApi?.setSandboxerCleanupOnPrClose
                       ? (enabled) =>
                           void setSandboxerCleanupOnPrClose(connection, enabled)
-                      : undefined
-                  }
-                  onLinearPasteImagesChange={
-                    connection.linearPasteImages !== undefined
-                    && props.desktopApi?.setLinearPasteImages
-                      ? (enabled) =>
-                          void setLinearPasteImages(connection, enabled)
                       : undefined
                   }
                   onChanged={() => void loadConnections()}
@@ -2266,7 +2283,6 @@ function ManagedMcpConnectionRow(props: {
   /** Sandboxer only. */
   onSandboxerCleanupOnPrCloseChange?: (enabled: boolean) => void;
   /** Linear only. */
-  onLinearPasteImagesChange?: (enabled: boolean) => void;
   onChanged: () => void;
   onDisconnect: () => void;
   onEdit: () => void;
@@ -2778,27 +2794,6 @@ function ManagedMcpConnectionRow(props: {
                 <span className="settings-mcp-row__policy-hint">
                   Delete each sandbox a thread created once all of its PRs
                   merge or close. Without a delete tool, PwrAgent stops it.
-                </span>
-              </span>
-            </div>
-          ) : null}
-          {props.onLinearPasteImagesChange ? (
-            <div className="settings-mcp-row__policy-item">
-              <SettingsSwitch
-                // One profile-wide setting; absent reads as on.
-                checked={connection.linearPasteImages !== false}
-                disabled={disabled}
-                label="Attach images in text pasted from Linear"
-                onChange={props.onLinearPasteImagesChange}
-              />
-              <span className="settings-mcp-row__policy-text">
-                <span className="settings-mcp-row__policy-label">
-                  Attach pasted Linear images
-                </span>
-                <span className="settings-mcp-row__policy-hint">
-                  {connection.enabled
-                    ? "When you paste an issue or description from Linear, its images are attached to the message. Links older than five minutes are downloaded through this connection."
-                    : "Pasted images are attached while their links are fresh. Offer it to threads to download older ones."}
                 </span>
               </span>
             </div>

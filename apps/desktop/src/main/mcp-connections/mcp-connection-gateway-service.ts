@@ -1382,11 +1382,18 @@ export class McpConnectionGatewayService {
       return;
     }
     this.registry.setLinearPasteImages(enabled);
+    // Announced even with no Linear connection, so every Settings window
+    // re-reads the switch.
     this.announceChanged(
       this.registry.list()
         .filter((connection) => connection.linearPasteImages !== undefined)
         .map((connection) => connection.id),
     );
+  }
+
+  /** Whether images in text pasted from Linear are attached. Profile-local. */
+  isLinearPasteImagesEnabled(): boolean {
+    return this.registry.isLinearPasteImagesEnabled();
   }
 
   /**

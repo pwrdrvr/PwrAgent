@@ -1,8 +1,13 @@
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
 import { codexProviderIdOfModel, formatModelOptionLabel } from "@pwragent/shared";
-import { findLinearPastedImages, mayContainLinearPastedImages } from "@pwragent/shared";
+import { mayContainLinearPastedImages } from "@pwragent/shared";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
+import {
+  hasLinearPastedImages,
+  readLinearPastedImagesResponse,
+  requestLinearPastedImages,
+} from "./linear-pasted-images";
 import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-update-diagnostics";
 import {
   EXPLICIT_REVIEW_PULL_REQUEST_URL,
@@ -238,7 +243,6 @@ import {
   serializeDraftWithSkillTokens,
 } from "./composer-mention-tokens";
 import {
-  composerImageFileFromBase64,
   formatPastedImageAlt,
   formatPastedImageName,
   getComposerFilesFromDataTransfer,
@@ -3093,9 +3097,6 @@ function ComposerApplicationButton(props: {
     </button>
   );
 }
-
-const LINEAR_EXPIRED_LINKS_MESSAGE =
-  "Linear image links expire five minutes after copying. Connect Linear in Settings → Plugins to attach older ones.";
 
 export const Composer = memo(function Composer(props: ComposerProps) {
   const nativeVoiceApi = isNativeVoiceApi(props.desktopApi) ? props.desktopApi : undefined;
@@ -10146,8 +10147,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
    */
   const attachLinearPastedImages = async (text: string): Promise<void> => {
     const fetchImages = props.desktopApi?.fetchLinearPastedImages;
-    if (!fetchImages || !imagesSupported) return;
-    if (findLinearPastedImages(text).length === 0) return;
+    if (!fetchImages || !imagesSupported || !hasLinearPastedImages(text)) return;
     const pasteScope = pasteScopeRef.current;
     // Hold Send while they download, as a pasted screenshot does while it
     // resizes; otherwise a quick Enter sends the text without them.
@@ -10156,50 +10156,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     updatePendingImageBatches(destination, 1);
     let response: Awaited<ReturnType<typeof fetchImages>>;
     try {
-      response = await fetchImages({ text });
-    } catch (error) {
-      response = {
-        status: "failed",
-        message: error instanceof Error ? error.message : String(error),
-      };
+      response = await requestLinearPastedImages(fetchImages, text);
     } finally {
       updatePendingImageBatches(destination, -1);
     }
     if (pasteScopeRef.current.key !== pasteScope.key) return;
-    // Off: the paste is plain text, as before.
-    if (response.status === "disabled") return;
-    if (response.status === "unavailable") {
-      showComposerNotice({
-        title: "Linear images not attached",
-        message: LINEAR_EXPIRED_LINKS_MESSAGE,
-      });
-      return;
-    }
-    if (response.status === "failed") {
-      showComposerNotice({
-        title: "Linear images not attached",
-        message: response.message,
-      });
-      return;
-    }
-    if (response.failed > 0) {
-      showComposerNotice({
-        title: "Some Linear images not attached",
-        message: response.needsConnection
-          ? LINEAR_EXPIRED_LINKS_MESSAGE
-          : response.failed === 1
-            ? "One image could not be downloaded from Linear."
-            : `${response.failed} images could not be downloaded from Linear.`,
-      });
-    }
-    if (response.images.length === 0) return;
-    // The transfer here is decoding the downloaded bytes into files.
-    const decodeStart = performance.now();
-    const files = response.images.map(composerImageFileFromBase64);
-    const decodeMs = performance.now() - decodeStart;
-    const accepted = gateImageFilesForAttachment(files);
+    const outcome = readLinearPastedImagesResponse(response);
+    if (!outcome) return;
+    if (outcome.notice) showComposerNotice(outcome.notice);
+    if (outcome.files.length === 0) return;
+    const accepted = gateImageFilesForAttachment(outcome.files);
     if (!accepted || accepted.length === 0) return;
-    await attachImages(accepted, decodeMs);
+    await attachImages(accepted, outcome.decodeMs);
   };
 
   const handleDragOver = (event: DragEvent<HTMLElement>): void => {

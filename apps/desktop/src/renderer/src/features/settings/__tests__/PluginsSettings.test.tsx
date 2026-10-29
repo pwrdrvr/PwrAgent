@@ -1429,22 +1429,27 @@ describe("PluginsSettings", () => {
       expect(api.setMcpConnectionSelectForNewThreads).not.toHaveBeenCalled();
     });
 
-    it("offers attaching pasted Linear images on a Linear connection only", async () => {
-      const linear = managed({
-        id: "linear", displayName: "Linear", serverUrl: "https://mcp.linear.app/mcp",
-        linearPasteImages: true,
+    it("offers attaching pasted Linear images once, with no Linear connection", async () => {
+      const api = managedApi([managed()]);
+      let enabled = true;
+      api.listMcpConnections = vi.fn(async () => ({
+        connections: [managed()],
+        linearPasteImages: enabled,
+      }));
+      api.setLinearPasteImages = vi.fn(async (request: { enabled: boolean }) => {
+        enabled = request.enabled;
       });
-      const api = managedApi([managed(), linear]);
-      api.setLinearPasteImages = vi.fn(async () => undefined);
       render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
 
-      const datadog = within(await findRow("Datadog"));
-      expect(datadog.queryByText("Attach pasted Linear images")).toBeNull();
-      const row = within((await screen.findByText("Linear")).closest("article")!);
-      const toggle = row.getByRole("switch", {
+      const toggle = await screen.findByRole("switch", {
         name: "Attach images in text pasted from Linear",
       });
       expect(toggle).toBeChecked();
+      expect(screen.getByText(/attached while their links are fresh/)).toBeInTheDocument();
+      // One control: the connection rows carry none of their own.
+      expect(within(await findRow("Datadog")).queryByRole("switch", {
+        name: "Attach images in text pasted from Linear",
+      })).toBeNull();
 
       fireEvent.click(toggle);
       await waitFor(() => {
@@ -1453,6 +1458,39 @@ describe("PluginsSettings", () => {
       expect(
         await screen.findByText("Text pasted from Linear is left as it is."),
       ).toBeInTheDocument();
+      expect(toggle).not.toBeChecked();
+    });
+
+    it("says older Linear links come through an offered Linear connection", async () => {
+      const linear = managed({
+        id: "linear", displayName: "Linear", serverUrl: "https://mcp.linear.app/mcp",
+        linearPasteImages: true,
+      });
+      const api = managedApi([linear]);
+      api.listMcpConnections = vi.fn(async () => ({
+        connections: [linear],
+        linearPasteImages: true,
+      }));
+      api.setLinearPasteImages = vi.fn(async () => undefined);
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+      expect(
+        await screen.findByText(/downloaded through your Linear connection/),
+      ).toBeInTheDocument();
+      expect(screen.getAllByRole("switch", {
+        name: "Attach images in text pasted from Linear",
+      })).toHaveLength(1);
+    });
+
+    it("does not offer the Linear setting when the list omits it, as a peer's does", async () => {
+      const api = managedApi([managed()]);
+      api.setLinearPasteImages = vi.fn(async () => undefined);
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+      await findRow("Datadog");
+      expect(screen.queryByRole("switch", {
+        name: "Attach images in text pasted from Linear",
+      })).toBeNull();
     });
 
     /**

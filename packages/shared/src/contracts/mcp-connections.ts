@@ -245,10 +245,11 @@ export type McpConnectionRecord = {
    */
   sandboxerCleanupOnPrClose?: boolean;
   /**
-   * Present only on a connection to Linear's hosted MCP server. When true,
-   * images in text pasted from Linear are fetched through the connection and
-   * attached to the message. One profile-wide setting, so every Linear
-   * connection reports the same value.
+   * Present only on a connection to Linear's hosted MCP server: whether
+   * images in text pasted from Linear are attached to the message, read
+   * through this connection once their links expire. One profile-wide
+   * setting, so every Linear connection reports the same value as
+   * `ListMcpConnectionsResponse.linearPasteImages`.
    *
    * Absent on any other connection, and on an older owner broker's answer,
    * which reads as `true` for a Linear connection.
@@ -328,6 +329,15 @@ export type ListMcpConnectionsRequest = {
 
 export type ListMcpConnectionsResponse = {
   connections: McpConnectionStatus[];
+  /**
+   * Whether images in text pasted from Linear are attached to the message.
+   * One profile-wide setting that holds with or without a Linear
+   * connection: a fresh signed link needs none.
+   *
+   * Only the local profile reports it. A peer's answer and an older owner's
+   * omit it, and the setting is not offered for them.
+   */
+  linearPasteImages?: boolean;
 };
 
 /**
