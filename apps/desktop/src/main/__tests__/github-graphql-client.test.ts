@@ -762,7 +762,13 @@ describe("GithubGraphqlPrClient", () => {
   it("looks up the PRs associated with a commit", async () => {
     const sha = "a".repeat(40);
     const request = vi.fn(async () => ({
-      r0: { object: { associatedPullRequests: { nodes: [node({ number: 116 })] } } },
+      r0: {
+        object: {
+          associatedPullRequests: {
+            nodes: [node({ number: 116, url: "https://github.com/pwrdrvr/PwrAgent/pull/116" })],
+          },
+        },
+      },
     }));
     const result = await client(request).fetchPullRequestsForCommits([
       { owner: "PwrDrvr", repo: "PwrAgent", sha },

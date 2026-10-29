@@ -436,7 +436,7 @@ describe("detectPullRequestsForThread", () => {
       fetchAllPullRequestsForBranch: vi.fn(async () => []),
       fetchPullRequestsForCommit: vi.fn(async ({ sha }: { sha: string }) =>
         sha === tip ? [mergedPr] : []),
-    };
+    } as unknown as GithubPrFetcher;
 
     const prs = await detectPullRequestsForThread({
       fetcher,
@@ -470,7 +470,7 @@ describe("detectPullRequestsForThread", () => {
     const fetcher = {
       fetchAllPullRequestsForBranch: vi.fn(async () => []),
       fetchPullRequestsForCommit: vi.fn(async () => [descendantPr]),
-    };
+    } as unknown as GithubPrFetcher;
 
     await expect(detectPullRequestsForThread({
       fetcher,
@@ -495,7 +495,7 @@ describe("detectPullRequestsForThread", () => {
     const fetcher = {
       fetchAllPullRequestsForBranch: vi.fn(async () => [namedPr]),
       fetchPullRequestsForCommit: vi.fn(async () => []),
-    };
+    } as unknown as GithubPrFetcher;
 
     await detectPullRequestsForThread({ fetcher, branch: "fix/named-pr", directoryPaths: [repo] });
 
@@ -512,7 +512,7 @@ describe("detectPullRequestsForThread", () => {
     const fetcher = {
       fetchAllPullRequestsForBranch: vi.fn(async () => []),
       fetchPullRequestsForCommit: vi.fn(async () => []),
-    };
+    } as unknown as GithubPrFetcher;
 
     await detectPullRequestsForThread({ fetcher, branch, directoryPaths: [repo] });
 
@@ -529,7 +529,7 @@ describe("detectPullRequestsForThread", () => {
     const fetcher = {
       fetchAllPullRequestsForBranch: vi.fn(async () => []),
       fetchPullRequestsForCommit: vi.fn(async () => []),
-    };
+    } as unknown as GithubPrFetcher;
 
     await detectPullRequestsForThread({ fetcher, branch: "pr-13269", directoryPaths: [repo] });
 
