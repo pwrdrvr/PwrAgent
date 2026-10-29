@@ -846,3 +846,20 @@ it("reads a slice by model, and a pinned model name narrows the threads to it", 
   expect(screen.queryByRole("button", { name: "Inspect a thread" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Inspect c thread" })).toBeInTheDocument();
 });
+
+it("names each instance toggle by its short name, with the full name as its tooltip", async () => {
+  const readUsageActivity = vi.fn(async () => ({ rows: [], readAt: Date.now(), rateLimits: [], truncated: false }));
+  const readFederationActivity = vi.fn(async () => ({ health: {
+    localLabel: "Harold-MBP-M5-Max", localShortLabel: "M5 Max",
+    peers: [{ id: "win", label: "DESKTOP-17ISFOI", profileName: "dev", shortLabel: "Win-Tower", status: "connected" }],
+  } }) as ReadFederationActivityResponse);
+  render(<UsageActivity desktopApi={{ readUsageActivity, readFederationActivity }} />);
+
+  const instances = screen.getByRole("group", { name: "Instances" });
+  // The accessible name stays the full name, as for every instance chip.
+  const remote = await within(instances).findByRole("button", { name: "DESKTOP-17ISFOI (dev)" });
+  expect(remote).toHaveTextContent("Win-Tower (dev)");
+  expect(remote).toHaveAttribute("title", "DESKTOP-17ISFOI (dev)");
+  const local = within(instances).getByRole("button", { name: "Harold-MBP-M5-Max" });
+  expect(local).toHaveTextContent("M5 Max");
+});

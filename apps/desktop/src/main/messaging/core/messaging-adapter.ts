@@ -281,6 +281,7 @@ export type MessagingBackendBridge = {
     request: ScheduledThreadActionIdRequest,
   ): Promise<ScheduledThreadActionMutationResponse>;
   supportsMessagingPdfTools?(request: {
+    federationTarget?: FederationTarget;
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<boolean>;

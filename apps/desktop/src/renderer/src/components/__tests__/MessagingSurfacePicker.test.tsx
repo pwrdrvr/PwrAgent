@@ -342,6 +342,33 @@ describe("MessagingSurfacePicker", () => {
     expect(onChange).toHaveBeenCalledWith("channel-b");
   });
 
+  it("wraps the keyboard cursor from the first row to the last and back", () => {
+    const onChange = vi.fn();
+    render(
+      <MessagingSurfacePicker
+        fieldLabel="Surface"
+        value=""
+        filterConversations
+        allowThreads
+        onChange={onChange}
+        options={[
+          { value: "channel-a", label: "Orchard", kind: "channel" as const },
+          { value: "channel-b", label: "Meadow", kind: "channel" as const },
+          { value: "thread", label: "Harvest discussion", kind: "thread" as const },
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: CLOSED_LABEL }));
+    const input = screen.getByRole("combobox");
+    const cursorName = () =>
+      document.getElementById(input.getAttribute("aria-activedescendant") ?? "")?.textContent;
+    expect(cursorName()).toBe("#Orchard");
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(cursorName()).toBe("▸Harvest discussion");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(cursorName()).toBe("#Orchard");
+  });
+
   it("names the search row from searchLabel when the field name is not a noun", () => {
     render(
       <MessagingSurfacePicker fieldLabel="Add a channel or thread" searchLabel="Find a channel or thread" value="" options={options} filterConversations onChange={vi.fn()} />,

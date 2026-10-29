@@ -1,4 +1,5 @@
 import { probe } from "../test/phase-probes";
+import { settleFakeTimers } from "../test/settle-fake-timers";
 import "@testing-library/jest-dom/vitest";
 import { navigationOwnerApiFixture } from "../test/navigation-owner-api-fixture";
 import type { DesktopApi } from "../lib/desktop-api";
@@ -133,14 +134,18 @@ async function renderApp(): Promise<ReturnType<typeof render>> {
   return view;
 }
 
-async function clickButton(name: string | RegExp): Promise<void> {
+async function clickButton(name: string | RegExp, getContainer?: () => HTMLElement): Promise<void> {
+  const getButton = () => {
+    const scope = getContainer ? within(getContainer()) : screen;
+    return scope.getByRole("button", { name });
+  };
   const button = await waitFor(() => {
-    const button = screen.getByRole("button", { name });
+    const button = getButton();
     expect(button).toBeEnabled();
     return button;
   });
   await act(async () => {
-    fireEvent.click(button.isConnected ? button : screen.getByRole("button", { name }));
+    fireEvent.click(button.isConnected ? button : getButton());
     await Promise.resolve();
     await Promise.resolve();
     await probe("timer", () => new Promise((resolve) => setTimeout(resolve, 0)));
@@ -398,6 +403,44 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Independent render" })).toBeInTheDocument();
   });
 
+  it("names approval notices for threads outside the loaded navigation page and refreshes late titles", async () => {
+    let title: string | undefined;
+    let changed: ((event: import("@pwragent/shared").OperatorRequestsChangedEvent) => void) | undefined;
+    const listOperatorRequests = vi.fn(async () => ({
+      serverRequests: [{ backend: "codex" as const, createdAt: 1_000, threadTitle: title,
+        notification: { method: "item/commandExecution/requestApproval" as const,
+          params: { threadId: "off-page", requestId: "approval-1", command: "pnpm test" } } }],
+      questions: [], seenKeys: [],
+    }));
+    const getNavigationSnapshot = vi.fn(async (): Promise<NavigationSnapshot> => ({
+      backend: "all", fetchedAt: Date.now(), unchanged: false,
+      threads: [], directories: [], inboxThreadKeys: [],
+      launchpadDefaults: { backend: "codex", executionMode: "default" },
+    }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        platform: "darwin",
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        getNavigationSnapshot,
+        listOperatorRequests,
+        onOperatorRequestsChanged: (listener: NonNullable<typeof changed>) => { changed = listener; return () => {}; },
+      }),
+    });
+    await renderApp();
+    await screen.findByRole("button", { name: "Review" });
+    expect(screen.getByText("#Untitled thread")).toBeInTheDocument();
+    for (title of ["Warm CI dependencies", "Fix CI install hangs"]) {
+      await act(async () => { changed!({ reason: "requests", backend: "codex", threadId: "off-page" }); });
+      await waitFor(() => expect(screen.getByText(`#${title}`)).toBeInTheDocument());
+      expect(screen.queryByText("#Untitled thread")).not.toBeInTheDocument();
+    }
+    expect(getNavigationSnapshot).toHaveBeenCalled();
+    // Neither opening the thread nor loading another navigation page is
+    // needed to replace the placeholder or reflect the rename.
+    expect(listOperatorRequests).toHaveBeenCalledTimes(3);
+  });
+
   it("keeps a selected document intact while another thread queues and refunds a CI repair", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const reader = {
@@ -449,8 +492,8 @@ describe("App", () => {
       }),
     });
     await renderThreadApp();
-    fireEvent.click(await screen.findByRole("link", { name: "report" }));
-    await screen.findByRole("heading", { name: "Stable report" });
+    await act(async () => { fireEvent.click(screen.getByRole("link", { name: "report" })); });
+    expect(screen.getByRole("heading", { name: "Stable report" })).toBeInTheDocument();
     const dialog = screen.getByRole("dialog", { name: "Markdown document: report" });
     const paragraph = within(dialog).getByText("Keep this paragraph selected.");
     const text = paragraph.firstChild!;
@@ -462,33 +505,41 @@ describe("App", () => {
     const scroll = dialog.querySelector<HTMLElement>(".markdown-document-modal__body")!;
     scroll.scrollTop = 640;
 
-    for (const status of ["queued", "cancelled", "queued", "cancelled"] as const) {
-      const readsBefore = getNavigationSnapshot.mock.calls.length;
-      await act(async () => {
-        for (const listener of listeners) listener({
-          backend: "codex",
-          notification: {
-            method: "thread/turnQueue/updated",
-            params: {
-              threadId: repair.id,
-              queueEntryId: "ci-auto-fix",
-              origin: "automation",
-              status,
-              displayText: "Repair CI checks",
+    vi.useFakeTimers();
+    try {
+      for (const status of ["queued", "cancelled", "queued", "cancelled"] as const) {
+        const readsBefore = getNavigationSnapshot.mock.calls.length;
+        await act(async () => {
+          for (const listener of listeners) listener({
+            backend: "codex",
+            notification: {
+              method: "thread/turnQueue/updated",
+              params: {
+                threadId: repair.id,
+                queueEntryId: "ci-auto-fix",
+                origin: "automation",
+                status,
+                displayText: "Repair CI checks",
+              },
             },
-          },
+          });
         });
-      });
-      await waitFor(() => expect(getNavigationSnapshot.mock.calls.length).toBeGreaterThan(readsBefore));
-      await flushReactUpdates();
-      expect(paragraph).toBeInTheDocument();
-      expect(selection.anchorNode).toBe(text);
-      expect(selection.toString()).toBe("Keep this paragraph selected.");
-      expect(scroll.scrollTop).toBe(640);
-      expect(readMarkdownFile).toHaveBeenCalledTimes(1);
-      expect(screen.queryByText("Loading file…")).not.toBeInTheDocument();
+        // Own the navigation event's 250ms coalescing timer and its fixture IPC
+        // completion before inspecting the retained document and selection.
+        await settleFakeTimers(250);
+        expect(getNavigationSnapshot.mock.calls.length).toBeGreaterThan(readsBefore);
+        expect(paragraph).toBeInTheDocument();
+        expect(selection.anchorNode).toBe(text);
+        expect(selection.toString()).toBe("Keep this paragraph selected.");
+        expect(scroll.scrollTop).toBe(640);
+        expect(readMarkdownFile).toHaveBeenCalledTimes(1);
+        expect(screen.queryByText("Loading file…")).not.toBeInTheDocument();
+      }
+    } finally {
+      selection.removeAllRanges();
+      cleanup();
+      vi.useRealTimers();
     }
-    selection.removeAllRanges();
   });
 
   it("shows the thread shell without starting backends while the startup settings read is pending", async () => {
@@ -2472,6 +2523,7 @@ describe("App", () => {
         messagingAcknowledgment: { value: null, source: "default" },
         interactiveSvgSkipNotice: { value: false, source: "default" },
         interactiveSvgAutoOpen: { value: false, source: "default" },
+        htmlPreviewRunScripts: { value: false, source: "default" },
       },
       onboarding: {
         completed: { value: true, source: "default" },
@@ -2520,9 +2572,12 @@ describe("App", () => {
       ui: {
         sidebarHidden: { value: false, source: "default" },
         contextRailPinned: { value: false, source: "default" },
+        projectIndexHidden: { value: false, source: "default" },
+        projectIndexWidth: { value: null, source: "default" },
         activeContextTab: { value: "info", source: "default" },
         editedFilesDock: { value: "above", source: "default" },
         actionRunsDock: { value: "above", source: "default" },
+        launchpadConnectionsDock: { value: "launchpad", source: "default" },
       },
       federation: {
         mode: { value: "disabled", source: "default" },
@@ -2957,9 +3012,12 @@ describe("App", () => {
           ui: {
             sidebarHidden: { value: false, source: "default" },
             contextRailPinned: { value: true, source: "default" },
+            projectIndexHidden: { value: false, source: "default" },
+            projectIndexWidth: { value: null, source: "default" },
             activeContextTab: { value: "info", source: "default" },
             editedFilesDock: { value: "above", source: "default" },
             actionRunsDock: { value: "above", source: "default" },
+            launchpadConnectionsDock: { value: "launchpad", source: "default" },
           },
         } as DesktopSettingsSnapshot,
       });
@@ -6765,7 +6823,7 @@ describe("App", () => {
     // destinations before the next action consumes or replaces their entries.
     const waitForHistory = async (back?: string, forward?: string): Promise<void> => {
       await waitFor(() => {
-        const history = within(screen.getByRole("group", { name: "History navigation" }));
+        const history = within(historyControls());
         for (const [name, destination] of [["Back", back], ["Forward", forward]] as const) {
           const button = history.getByRole("button", { name });
           if (destination === undefined) {
@@ -6883,6 +6941,17 @@ describe("App", () => {
               },
               updatedAt: 2_000,
             },
+            // Control names are also valid thread titles. Keep queries in
+            // their owning surface instead of scanning every shell button.
+            ...["Back", "Forward", "Search"].map((title, index) => ({
+              id: `control-title-${index}`,
+              title,
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              linkedDirectories: [],
+              inbox: { inInbox: false },
+              updatedAt: 1_000 - index,
+            })),
           ],
         }),
         markThreadSeen: async ({
@@ -6938,31 +7007,36 @@ describe("App", () => {
       return response;
     };
     await renderThreadApp();
+    const main = screen.getByRole("main");
+    const content = within(main);
+    const sidebar = within(screen.getByRole("complementary", { name: "Threads" }));
+    // Reacquire the controls: search and thread headers replace one another.
+    const historyControls = () => content.getByRole("group", { name: "History navigation" });
 
-    await screen.findByRole("heading", {
+    await content.findByRole("heading", {
       level: 2,
       name: "First cached thread",
     });
 
     // Nowhere to go yet — the auto-selected first thread is the only entry.
-    expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Forward" })).toBeDisabled();
+    expect(within(historyControls()).getByRole("button", { name: "Back" })).toBeDisabled();
+    expect(within(historyControls()).getByRole("button", { name: "Forward" })).toBeDisabled();
 
-    const secondRow = screen.getByRole("button", { name: /Second cached thread/i });
+    const secondRow = sidebar.getByRole("button", { name: /Second cached thread/i });
     act(() => {
       secondRow.focus();
       fireEvent.pointerDown(secondRow, { pointerType: "mouse", button: 0 });
       fireEvent.pointerUp(secondRow, { pointerType: "mouse", button: 0 });
       fireEvent.click(secondRow, { detail: 1 });
     });
-    await screen.findByRole("heading", {
+    await content.findByRole("heading", {
       level: 2,
       name: "Second cached thread",
     });
     // Moving away cancels the pending request even when the operator returns
     // to its originating row before configuration becomes ready.
     act(() => {
-      screen.getByRole("button", { name: /First cached thread/i }).focus();
+      sidebar.getByRole("button", { name: /First cached thread/i }).focus();
       secondRow.focus();
       secondThreadReady.resolve();
     });
@@ -6983,20 +7057,20 @@ describe("App", () => {
       fireEvent.pointerUp(target, { pointerType: "mouse", button: 0 });
       fireEvent.click(target, { detail: 1 });
     });
-    await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toHaveFocus());
+    await waitFor(() => expect(content.getByRole("textbox", { name: "Reply" })).toHaveFocus());
     await waitForHistory("First cached thread");
 
     // Search unmounts Composer. Keyboard history must not replay the handled
     // mouse request when it mounts again, even with a sidebar row focused.
     await clickButton("Search threads");
-    await screen.findByRole("heading", { level: 2, name: "Search" });
+    await content.findByRole("heading", { level: 2, name: "Search" });
     await waitForHistory("Second cached thread");
     act(() => {
       secondRow.focus();
       fireEvent.keyDown(window, { metaKey: true, code: "BracketLeft", key: "[" });
     });
-    await screen.findByRole("heading", { level: 2, name: "Second cached thread" });
-    await screen.findByRole("textbox", { name: "Reply" });
+    await content.findByRole("heading", { level: 2, name: "Second cached thread" });
+    await content.findByRole("textbox", { name: "Reply" });
     await act(async () => {
       await new Promise((resolve) => requestAnimationFrame(resolve));
       await new Promise((resolve) => requestAnimationFrame(resolve));
@@ -7007,43 +7081,43 @@ describe("App", () => {
     // Search, then open the result (thread 1).
     await clickButton("Search threads");
     await waitForHistory("Second cached thread");
-    fireEvent.change(screen.getByRole("combobox", { name: "Search threads" }), {
+    fireEvent.change(content.getByRole("combobox", { name: "Search threads" }), {
       target: { value: "history" },
     });
-    await clickButton("Search");
-    await screen.findByText("Opened from search.");
-    await clickButton(/Opened from search/);
-    await screen.findByRole("heading", {
+    await clickButton("Search", () => main);
+    await content.findByText("Opened from search.");
+    await clickButton(/Opened from search/, () => main);
+    await content.findByRole("heading", {
       level: 2,
       name: "First cached thread",
     });
     await waitForHistory("Search");
 
     // Back lands on search with the results still populated — no re-query.
-    await clickButton("Back");
-    await screen.findByRole("heading", { level: 2, name: "Search" });
+    await clickButton("Back", historyControls);
+    await content.findByRole("heading", { level: 2, name: "Search" });
     await waitForHistory("Second cached thread", "First cached thread");
-    expect(screen.getByText("Opened from search.")).toBeInTheDocument();
+    expect(content.getByText("Opened from search.")).toBeInTheDocument();
     expect(searchThreads).toHaveBeenCalledTimes(1);
 
     // Back again: the thread we were reading before opening search.
-    await clickButton("Back");
-    await screen.findByRole("heading", {
+    await clickButton("Back", historyControls);
+    await content.findByRole("heading", {
       level: 2,
       name: "Second cached thread",
     });
     await waitForHistory("First cached thread", "Search");
 
     // Back to the start, where the affordance bottoms out.
-    await clickButton("Back");
-    await screen.findByRole("heading", {
+    await clickButton("Back", historyControls);
+    await content.findByRole("heading", {
       level: 2,
       name: "First cached thread",
     });
     await waitForHistory(undefined, "Second cached thread");
 
-    await clickButton("Forward");
-    await screen.findByRole("heading", {
+    await clickButton("Forward", historyControls);
+    await content.findByRole("heading", {
       level: 2,
       name: "Second cached thread",
     });
@@ -7059,7 +7133,7 @@ describe("App", () => {
       });
       await Promise.resolve();
     });
-    await screen.findByRole("heading", {
+    await content.findByRole("heading", {
       level: 2,
       name: "First cached thread",
     });
@@ -7069,7 +7143,7 @@ describe("App", () => {
       fireEvent.mouseUp(window, { button: 4 });
       await Promise.resolve();
     });
-    await screen.findByRole("heading", {
+    await content.findByRole("heading", {
       level: 2,
       name: "Second cached thread",
     });

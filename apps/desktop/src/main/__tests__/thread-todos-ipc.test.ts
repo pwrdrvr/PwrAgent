@@ -1,10 +1,13 @@
 import type { BrowserWindow } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationDirectorySummary, ThreadTodo, ThreadTodosChangedEvent } from "@pwragent/shared";
+import type {
+  AgentEvent, NavigationDirectorySummary, ThreadTodo, ThreadTodoFeedDelta, ThreadTodoFeedSnapshot, ThreadTodosChangedEvent,
+} from "@pwragent/shared";
 import {
-  THREAD_TODOS_CHANGED_EVENT_CHANNEL, THREAD_TODOS_LIST_CHANNEL, THREAD_TODOS_RESOLVE_CHANNEL,
-  THREAD_REVIEWS_UPDATE_CHANNEL,
+  THREAD_TODOS_CHANGED_EVENT_CHANNEL, THREAD_TODOS_DELTA_EVENT_CHANNEL, THREAD_TODOS_LIST_CHANNEL,
+  THREAD_TODOS_RESOLVE_CHANNEL, THREAD_TODOS_SNAPSHOT_CHANNEL, THREAD_REVIEWS_UPDATE_CHANNEL,
 } from "../../shared/ipc";
+import { unwrapNavigationRead } from "../../shared/navigation-ipc-result";
 
 const fixture = vi.hoisted(() => {
   const target = { scope: "remote" as const, instanceId: "owner" };
@@ -18,6 +21,11 @@ const fixture = vi.hoisted(() => {
     handlers: new Map<string, (event: unknown, request?: unknown) => Promise<unknown>>(),
     localList: vi.fn(async () => ({ todos: [] })),
     localResolve: vi.fn(),
+    localSnapshot: vi.fn(async (): Promise<ThreadTodoFeedSnapshot> => ({ epoch: "local", revision: 0, todos: [] })),
+    supportsFeed: vi.fn(() => false),
+    watchFeeds: vi.fn(),
+    publishDelta: vi.fn(),
+    feedDelta: undefined as ((delta: ThreadTodoFeedDelta) => void) | undefined,
     remote: vi.fn(async (_target: unknown, operation: string) => operation === "listTodos" ? { todos: [card] } : { todo: card }),
     publish: vi.fn(),
     peerStatusListener: undefined as (() => void) | undefined,
@@ -34,18 +42,22 @@ vi.mock("electron", () => ({ ipcMain: {
 } }));
 vi.mock("../federation/federation-runtime", () => ({ getDesktopFederationRuntime: () => ({
   requestThreadTodoOperation: fixture.remote, publishThreadTodosChanged: fixture.publish,
+  publishThreadTodoDelta: fixture.publishDelta, remotePeerSupportsTodoFeed: fixture.supportsFeed,
+  setTodoFeedWatches: fixture.watchFeeds,
   onPeerStatusChanged: (listener: () => void) => { fixture.peerStatusListener = listener; return () => {}; },
   onRemoteBackendEvent: (listener: (event: AgentEvent) => void) => { fixture.remoteListener = listener; return () => {}; },
 }) }));
 vi.mock("../thread-todos/thread-todo-operations", () => ({ localThreadTodoOperations: {
-  listTodos: fixture.localList, resolveTodo: fixture.localResolve,
-} }));
+  listTodos: fixture.localList, resolveTodo: fixture.localResolve, snapshotFeed: fixture.localSnapshot,
+}, listLocalTodoOwnerThreads: async () => [], readManagedTodoThreadKeys: () => new Set() }));
 vi.mock("../thread-todos/thread-todo-runtime", () => ({
   installThreadTodoRuntime: (options: {
     broadcast: (event: ThreadTodosChangedEvent) => void;
     listProjects: () => Promise<unknown[]>;
+    feed: { onDelta: (delta: ThreadTodoFeedDelta) => void };
   }) => {
     fixture.broadcast = options.broadcast;
+    fixture.feedDelta = options.feed.onDelta;
     fixture.listProjects = options.listProjects;
   },
 }));
@@ -89,6 +101,24 @@ describe("owner-routed To-do IPC", () => {
     expect(fixture.remote).toHaveBeenLastCalledWith(fixture.target, "updateReview", { id: "review", itemId: "finding", status: "addressed" });
   });
 
+  // A busy owner is expected contention, not a failed handler: it crosses IPC
+  // as data, so Electron never wraps it as "Error invoking remote method".
+  it("returns a remote owner's navigation_busy listing as an expected failure", async () => {
+    const busy = Object.assign(new Error("handler_failed: [navigation_busy] Navigation changed during its owner read."), {
+      code: "handler_failed",
+    });
+    fixture.remote.mockRejectedValueOnce(busy);
+    const result = await fixture.handlers.get(THREAD_TODOS_LIST_CHANNEL)!({ sender: fixture.windows[1] }, { status: "open" });
+    expect(result).toEqual({ navigationReadFailure: true, code: "navigation_busy", message: busy.message });
+    expect(() => unwrapNavigationRead(result)).toThrow(expect.objectContaining({ code: "navigation_busy" }));
+  });
+
+  it("still rejects a remote owner's unexpected listing failure", async () => {
+    fixture.remote.mockRejectedValueOnce(Object.assign(new Error("handler_failed: Unexpected failure"), { code: "handler_failed" }));
+    await expect(fixture.handlers.get(THREAD_TODOS_LIST_CHANNEL)!({ sender: fixture.windows[1] }, { status: "open" }))
+      .rejects.toThrow("handler_failed: Unexpected failure");
+  });
+
   it("refreshes local mounted viewers and the correct remote window after owner changes and reconnect", () => {
     fixture.remoteListener!({ backend: "codex", federationTarget: fixture.target,
       notification: { method: "thread/todos/changed", params: { backend: "codex", threadId: "thread", at: 1 } } });
@@ -121,6 +151,25 @@ describe("owner-routed To-do IPC", () => {
     expect(fixture.windows[0]!.send).toHaveBeenCalledOnce();
     expect(fixture.windows[1]!.send).not.toHaveBeenCalled();
     expect(fixture.windows[2]!.send).not.toHaveBeenCalled();
+  });
+
+  it("serves each window its own view and sends local deltas only to the main window and federation", async () => {
+    const card: ThreadTodo = { ...fixture.card, id: "local-card" };
+    const main = await fixture.handlers.get(THREAD_TODOS_SNAPSHOT_CHANNEL)!({ sender: fixture.windows[0] }) as ThreadTodoFeedSnapshot;
+    expect(fixture.localSnapshot).toHaveBeenCalledOnce();
+    const remote = await fixture.handlers.get(THREAD_TODOS_SNAPSHOT_CHANNEL)!({ sender: fixture.windows[1] }) as ThreadTodoFeedSnapshot;
+    expect(fixture.remote).toHaveBeenCalledWith(fixture.target, "listTodos", { status: "open" });
+    expect(remote.todos.map((todo) => todo.id)).toEqual(["remote-todo:owner:card"]);
+    // A relayed owner's feed is followed once it acknowledges this watch.
+    expect(fixture.watchFeeds).toHaveBeenLastCalledWith(["owner"]);
+    const delta: ThreadTodoFeedDelta = { epoch: "local", revision: 1, backend: "codex", threadId: "thread", upserts: [card] };
+    fixture.feedDelta!(delta);
+    expect(fixture.publishDelta).toHaveBeenCalledWith(delta);
+    const sent = (window: (typeof fixture.windows)[number]) => window.send.mock.calls
+      .filter(([channel]) => channel === THREAD_TODOS_DELTA_EVENT_CHANNEL).map(([, payload]) => payload);
+    expect(sent(fixture.windows[0]!)).toEqual([{ epoch: main.epoch, revision: main.revision + 1, upserts: [card] }]);
+    expect(sent(fixture.windows[1]!)).toEqual([]);
+    expect(sent(fixture.windows[2]!)).toEqual([]);
   });
 
   // The Directories lens can hold more projects than one navigation page.

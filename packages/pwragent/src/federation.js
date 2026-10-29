@@ -6,12 +6,16 @@ import {
   connectFederationClient, FederationGatewayWebSocketServer, FederationRouter,
   generateFederationIdentityKeyPair, generateFederationNoiseStaticKeyPair,
   noiseKeyPairFromRawPrivate, decodeFederationInvite, encodeFederationInvite,
-  FEDERATION_PROTOCOL_VERSION, FEDERATION_INVITE_VERSION,
+  FEDERATION_PROTOCOL_VERSION, FEDERATION_INVITE_VERSION, FederationRpcEndpoint,
+  FederationReplacementReceiver, pushFederationFile, authenticateMessageOrigin, FederationPtyService, TerminalHistoryStore, FEDERATION_PTY_METHOD_CAPABILITIES, registerFederationPtyHandlers,
 } from "../dist/federation-core.js";
+import { setupHandoffs, HANDOFF_CAPABILITIES } from "./handoffs.js";
 import { atomicJson } from "./store.js";
 import { HeadlessBackend, METHOD_CAPABILITIES } from "./federation-backend.js";
 
-export const HEADLESS_CAPABILITIES = ["remote_window", "thread_navigation", "thread_detail", "turn_control", "event_subscriptions", "gateway_relay", "transport_brotli"];
+export const HEADLESS_CAPABILITIES = ["remote_window", "thread_navigation", "thread_detail", "turn_control", "event_subscriptions", "gateway_relay", "transport_brotli", "remote_pty", "messaging_route", "messaging_destinations", "messaging_files", "environment_actions", "thread_handoff", "file_push"];
+
+const RECEIVER_PERMISSIONS = Object.freeze({ remoteShells: true, portForwarding: false, filePush: true, filePull: false, filePullOutsideThreadDirectories: false });
 
 const EVENT_CAPABILITIES = new Map([
   ["navigation", "thread_navigation"], ["star_map", "thread_navigation"],
@@ -36,6 +40,10 @@ export class HeadlessFederation {
     this.profile = profile;
     this.onFailure = onFailure;
     this.connections = new Map();
+    this.endpoints = new Map();
+    this.remotePeers = new Map();
+    this.peerDirectory = new FederationReplacementReceiver();
+    this.ptyRoutes = new Map();
     this.subscriptions = new Map();
     this.retryDelay = 1000;
     this.generation = 0;
@@ -47,6 +55,23 @@ export class HeadlessFederation {
     } catch (error) { if (error.code !== "ENOENT") throw error; }
     this.backend = new HeadlessBackend(runtime, (event, eventClass) => this.publish(event, eventClass));
     runtime.onEvent = (message) => this.backend.event(message);
+    runtime.requestMessaging = (request, loadFile) => this.requestMessaging(request, loadFile);
+    this.backend.authenticateOrigin = (origin, envelope) => this.authenticateOrigin(origin, envelope);
+    this.pty = new FederationPtyService({
+      historyStore: new TerminalHistoryStore(path.join(directory, "terminal-history")),
+      resolveThreadCwd: async ({ backend, threadId }) => {
+        if (backend !== "codex") throw new Error("This outpost serves Codex only");
+        return runtime.projects.resolve(this.backend.owned(threadId).cwd || runtime.workspace);
+      },
+      spawnPty: async ({ cwd, cols, rows }) => {
+        const { spawn } = await import("node-pty");
+        if (!cwd) throw new Error("An owned thread cwd is required");
+        const shell = { file: "/bin/bash", args: ["--noprofile", "--norc"] };
+        const pty = spawn(shell.file, shell.args, { cwd, cols, rows, name: "xterm-256color", env: { ...process.env, TERM: "xterm-256color" } });
+        return { pty, cwd, shell };
+      },
+      sendNotification: (peer, method, params) => this.notify(peer, method, params),
+    });
   }
 
   save() {
@@ -65,7 +90,19 @@ export class HeadlessFederation {
 
   setupRouter() {
     this.router = new FederationRouter({ localInstanceId: this.state.instanceId,
-      trustedRelayPeerId: () => this.state.gateway?.gatewayInstanceId, methodCapabilities: METHOD_CAPABILITIES });
+      trustedRelayPeerId: () => this.state.gateway?.gatewayInstanceId, methodCapabilities: { ...METHOD_CAPABILITIES, ...FEDERATION_PTY_METHOD_CAPABILITIES, ...HANDOFF_CAPABILITIES,
+        "outpost.projects.list": "thread_navigation", "outpost.projects.create": "environment_actions",
+        "outpost.projects.add": "environment_actions", "outpost.projects.remove": "environment_actions" },
+      additionalRequiredCapabilities: (envelope) => {
+        const required = envelope.method.startsWith("thread.handoff.") ? ["turn_control", "environment_actions", "file_push"] : [];
+        if (envelope.params?.messageOrigin?.kind === "messaging" || envelope.params?.messageOrigin?.causalMessagingSource) required.push("messaging_route");
+        return required;
+      } });
+    this.handoffs = setupHandoffs(this, path.dirname(this.file));
+    registerFederationPtyHandlers({ router: this.router, service: this.pty });
+    for (const [method, command] of [["list", "project-list"], ["create", "project-create"], ["add", "project-add"], ["remove", "project-remove"]]) {
+      this.router.registerHandler(`outpost.projects.${method}`, (envelope) => this.runtime.handle(command, envelope.params));
+    }
     for (const method of Object.keys(METHOD_CAPABILITIES)) {
       this.router.registerHandler(method, (envelope) => this.backend.handle(method, envelope.params, envelope));
     }
@@ -85,7 +122,7 @@ export class HeadlessFederation {
   }
 
   status() {
-    return { enabled: Boolean(this.state), instanceId: this.state?.instanceId,
+    return { enabled: Boolean(this.state), supportedCapabilities: HEADLESS_CAPABILITIES, messagingService: "consumer-only", instanceId: this.state?.instanceId,
       label: this.state?.label, lifecycle: this.state?.lifecycle, listener: this.listenerAddress,
       gateway: this.state?.gateway ? { instanceId: this.state.gateway.gatewayInstanceId,
         endpoint: this.state.gateway.endpoint, status: this.client ? "connected" : "unreachable", error: this.connectionError } : undefined,
@@ -174,7 +211,7 @@ export class HeadlessFederation {
       noiseStatic: noiseKeyPairFromRawPrivate(Buffer.from(this.state.noise.privateKeyBase64, "base64")),
       peerInstanceId: this.state.instanceId, ...this.state.identity, capabilities: HEADLESS_CAPABILITIES,
       inviteToken: mode === "enroll" ? gateway.token : undefined, label: this.state.label,
-      role: this.listener ? "dual" : "client", profileName: this.profile,
+      role: this.listener ? "dual" : "client", profileName: this.profile, receiverPermissions: RECEIVER_PERMISSIONS,
       notes: "Headless outpost: retained identity; tunnel loss does not stop work or imply deletion.", host: this.host(),
       deferReceiving: true, connectTimeoutMs: 5000,
       onEnvelope: (envelope) => this.receive(envelope, gateway.gatewayInstanceId),
@@ -227,6 +264,7 @@ export class HeadlessFederation {
 
   register(id, capabilities, connection) {
     this.connections.set(id, connection);
+    this.pty.notifyPeerConnected(id);
     this.router.registerConnection({ peerId: id, capabilities, sendEnvelope: (envelope) => connection.sendEnvelope(envelope) });
   }
 
@@ -234,12 +272,110 @@ export class HeadlessFederation {
     if (this.connections.get(id) !== connection) return;
     this.connections.delete(id);
     this.router.unregisterConnection(id);
+    if (id === this.state.gateway?.gatewayInstanceId) { this.remotePeers.clear(); this.peerDirectory.clear(); }
+    this.pty.notifyPeerDisconnected(id);
+    for (const [origin, via] of this.ptyRoutes) {
+      if (via === id) { this.pty.notifyPeerDisconnected(origin); this.ptyRoutes.delete(origin); }
+    }
+    for (const [target, endpoint] of this.endpoints) {
+      if (target === id || id === this.state.gateway?.gatewayInstanceId) endpoint.rejectAll(new Error("Original messaging owner unavailable; send outcome may be uncertain. No automatic replay."));
+    }
     for (const [subscriber, subscription] of this.subscriptions) {
       if (subscription.via === id) this.subscriptions.delete(subscriber);
     }
   }
 
+  endpoint(target) {
+    if (!this.endpoints.has(target)) this.endpoints.set(target, new FederationRpcEndpoint({
+      localInstanceId: this.state.instanceId, remoteInstanceId: target,
+      sendEnvelope: (envelope) => {
+        const route = this.connections.get(target) || this.connections.get(this.state.gateway?.gatewayInstanceId);
+        if (!route) throw new Error("Original service owner is unavailable");
+        route.sendEnvelope(envelope);
+      },
+    }));
+    return this.endpoints.get(target);
+  }
+
+  notify(target, method, params) {
+    const route = this.connections.get(target) || this.connections.get(this.state?.gateway?.gatewayInstanceId);
+    if (!route || !this.state) return false;
+    try { route.sendEnvelope({ kind: "notification", method, params, id: randomUUID(), protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: this.state.instanceId, targetInstanceId: target, createdAt: Date.now() }); return true; } catch { return false; }
+  }
+
+  authenticateOrigin(origin, envelope) {
+    if (!origin) return undefined;
+    if (Buffer.byteLength(JSON.stringify(origin)) > 16384) throw new Error("Messaging origin exceeds its byte budget");
+    const source = origin.causalMessagingSource;
+    if (source && (typeof source.ownerId !== "string" || !source.ownerId || typeof source.requestId !== "string" || !source.requestId
+      || (origin.kind === "messaging" && source.instanceId && source.instanceId !== envelope.sourceInstanceId))) throw new Error("Messaging source must belong to the authenticated originating peer");
+    return authenticateMessageOrigin({ messageOrigin: { ...origin,
+      ...(source ? { causalMessagingSource: { ...source, instanceId: source.instanceId || envelope.sourceInstanceId } } : {}) },
+    sourceInstanceId: envelope.sourceInstanceId });
+  }
+
+  async requestMessaging(request, loadFile) {
+    const owner = request.context.causalMessagingSource?.instanceId;
+    if (!owner || request.context.causalMessagingAmbiguous) return { ok: false, error: { code: "forbidden", message: "No unambiguous original messaging destination is retained for this turn" } };
+    // Capability negotiation is necessary on the selected route, and the owner
+    // repeats admission/RBAC/route checks. Connection alone grants no service.
+    const route = this.router?.getConnection(owner) || this.router?.getConnection(this.state?.gateway?.gatewayInstanceId);
+    if (!route?.capabilities.includes("messaging_route") || !route.capabilities.includes("messaging_destinations")) return { ok: false, error: { code: "peer_unavailable", message: "The original messaging owner is unavailable or messaging_route is not granted" } };
+    const attachmentTool = request.operation === "send_messaging_file" || ["inspect_messaging_pdfs", "search_messaging_pdf_text", "render_messaging_pdf_pages"].includes(request.operation);
+    if (attachmentTool && !route.capabilities.includes("messaging_files")) return { ok: false, error: { code: "unsupported_operation", message: "The original messaging owner requires a file/PDF tools upgrade" } };
+    if (loadFile && !route.capabilities.includes("file_push")) return { ok: false, error: { code: "forbidden", message: "File transfer is not granted on the messaging route" } };
+    try {
+      const endpoint = this.endpoint(owner);
+      const check = { ...request.context, category: "messaging_context", tool: request.operation, arguments: request.args };
+      const permission = await endpoint.request({ method: "messaging.destination", params: { kind: "authorize", context: request.context, check } });
+      if (!permission.allowed) return { ok: false, error: { code: "forbidden", message: "The original messaging owner denied this operation" } };
+      let file;
+      if (loadFile) {
+        const surface = await endpoint.request({ method: "messaging.destination", params: { kind: "request", request: { ...request, operation: "get_current_messaging_surface", args: {} } } });
+        if (!surface.ok) return surface;
+        const capabilities = surface.data?.location?.outboundAttachments;
+        if (!capabilities) return { ok: false, error: { code: "unsupported_operation", message: "The messaging owner did not supply upload limits" } };
+        const outbound = await loadFile(capabilities);
+        if (!outbound.ok) return { ok: false, error: { code: outbound.code, message: outbound.message } };
+        // Transfer the validated snapshot, never reopen its original path.
+        file = await pushFederationFile(endpoint, outbound.data, "messaging-upload.bin");
+        request = { ...request, args: { ...request.args, path: "", filename: outbound.filename } };
+      }
+      return await endpoint.request({ method: "messaging.destination", params: { kind: "request", request, ...(file ? { file } : {}) } });
+    } catch {
+      return { ok: false, error: { code: "peer_unavailable", message: "The original messaging service is unavailable. A send may have an uncertain outcome; it was not replayed." } };
+    }
+  }
+
   receive(envelope, peerId) {
+    if (envelope.kind === "notification" && envelope.method === "federation.peerDirectoryPage") {
+      // Only the pinned gateway can replace routing metadata. A sibling's
+      // relayed notification must never authorize a handoff destination.
+      if (peerId !== this.state.gateway?.gatewayInstanceId || envelope.sourceInstanceId !== peerId
+        || envelope.targetInstanceId !== this.state.instanceId || !this.router.getConnection(peerId)?.capabilities.includes("gateway_relay")
+        || !this.router.authenticatesOrigin(envelope, peerId)) return;
+      try {
+        const peers = this.peerDirectory.accept(envelope.params);
+        if (peers) {
+          const replacement = new Map();
+          for (const peer of peers) {
+            if (!peer || typeof peer.id !== "string" || !peer.id || !Array.isArray(peer.capabilities)
+              || peer.capabilities.some((capability) => typeof capability !== "string")) throw new Error("Invalid peer directory entry");
+            if (peer.id !== this.state.instanceId) replacement.set(peer.id, peer);
+          }
+          this.remotePeers = replacement;
+        }
+      } catch { this.remotePeers.clear(); this.peerDirectory.clear(); }
+      return;
+    }
+    if (envelope.kind === "request" && envelope.targetInstanceId === this.state.instanceId && envelope.method.startsWith("pty.")
+      && this.router.authenticatesOrigin(envelope, peerId) && this.router.getConnection(peerId)?.capabilities.includes("remote_pty")) {
+      if (!this.ptyRoutes.has(envelope.sourceInstanceId)) this.pty.notifyPeerConnected(envelope.sourceInstanceId);
+      this.ptyRoutes.set(envelope.sourceInstanceId, peerId);
+    }
+    if (envelope.targetInstanceId === this.state.instanceId && this.router.authenticatesOrigin(envelope, peerId)
+      && this.endpoints.get(envelope.sourceInstanceId)?.receiveEnvelope(envelope)) return;
     if (envelope.kind === "notification" && envelope.method === "federation.eventSubscription") {
       if (envelope.sourceInstanceId !== peerId && (peerId !== this.state.gateway?.gatewayInstanceId || !(envelope.hopCount >= 1))) return;
       const capabilities = this.router.getConnection(peerId)?.capabilities || [];
@@ -285,6 +421,8 @@ export class HeadlessFederation {
     this.retryTimer = null;
     const gatewayId = this.state?.gateway?.gatewayInstanceId;
     const client = this.client;
+    this.remotePeers.clear();
+    this.peerDirectory.clear();
     if (this.state) { delete this.state.gateway; this.save(); }
     if (client) this.unregister(gatewayId, client);
     this.client = null;
@@ -308,6 +446,9 @@ export class HeadlessFederation {
     this.generation++;
     clearTimeout(this.retryTimer);
     this.client?.close();
+    for (const endpoint of this.endpoints.values()) endpoint.rejectAll(new Error("Outpost is stopping"));
+    await this.pty.disposeAll();
+    await this.handoffs?.stop();
     await this.listener?.stop();
   }
 }

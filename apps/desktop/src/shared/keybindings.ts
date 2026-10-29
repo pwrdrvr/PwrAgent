@@ -34,7 +34,8 @@ export type KeybindingActionId =
   | "navigation.back"
   | "navigation.forward"
   | "layout.toggle_sidebar"
-  | "layout.toggle_context_rail";
+  | "layout.toggle_context_rail"
+  | "layout.toggle_project_index";
 
 /**
  * Where an action's chord is listened for.
@@ -220,6 +221,14 @@ export const KEYBINDING_ACTIONS: readonly KeybindingActionDefinition[] = [
     scope: "global",
     firesInTextFields: false,
     defaults: { mac: ["CmdOrCtrl+Alt+B"], other: ["CmdOrCtrl+Alt+B"] },
+  },
+  {
+    id: "layout.toggle_project_index",
+    group: "layout",
+    label: "Toggle Project Index",
+    scope: "global",
+    firesInTextFields: false,
+    defaults: { mac: ["CmdOrCtrl+Shift+B"], other: ["CmdOrCtrl+Shift+B"] },
   },
 ];
 

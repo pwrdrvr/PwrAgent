@@ -1915,3 +1915,26 @@ it("routes exact messaging configuration through V2 without a legacy snapshot fa
   await expect(oldPeer.getNavigationSelectedDetail({ protocol: 2, ref })).rejects.toThrow("Upgrade");
   expect(remoteNavigationSnapshot).not.toHaveBeenCalled();
 });
+
+
+describe("outpost PDF tool support", () => {
+  it("queries the selected owner and exact persisted thread catalog, with fail-closed capability negotiation", async () => {
+    const local = vi.fn(async () => false);
+    const remote = vi.fn(async () => true);
+    const target = { scope: "remote" as const, instanceId: "pwr_outpost_pdf" };
+    const peers = [{ target, label: "Fixture outpost", capabilities: ["messaging_route", "messaging_files"] }];
+    const bridge = new DesktopMessagingBackendBridge({ supportsMessagingPdfTools: local } as unknown as DesktopBackendRegistry, {
+      connectedPeerTargets: () => peers,
+      remoteBackend: () => ({ supportsMessagingPdfTools: remote }),
+    } as unknown as DesktopMessagingFederationBridge);
+    expect(await bridge.supportsMessagingPdfTools({ backend: "codex", threadId: "thread", federationTarget: target })).toBe(true);
+    expect(remote).toHaveBeenCalledWith({ backend: "codex", threadId: "thread" });
+    remote.mockResolvedValue(false);
+    expect(await bridge.supportsMessagingPdfTools({ backend: "codex", threadId: "legacy-thread", federationTarget: target })).toBe(false);
+    peers[0]!.capabilities = ["messaging_route"];
+    expect(await bridge.supportsMessagingPdfTools({ backend: "codex", threadId: "thread", federationTarget: target })).toBe(false);
+    expect(remote).toHaveBeenCalledTimes(2);
+    expect(await bridge.supportsMessagingPdfTools({ backend: "codex", threadId: "local" })).toBe(false);
+    expect(local).toHaveBeenCalledWith({ backend: "codex", threadId: "local" });
+  });
+});

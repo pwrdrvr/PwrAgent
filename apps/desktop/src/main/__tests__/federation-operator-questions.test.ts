@@ -23,7 +23,7 @@ describe("owner question protocol", () => {
     });
     const changes: unknown[] = [];
     installOperatorRequestService(new OperatorRequestService({ store,
-      registry: { listPendingServerRequests: () => [{ backend: "codex", notification: {
+      registry: { getThreadInfo: () => ({ title: "Owner build" }), listPendingServerRequests: () => [{ backend: "codex", notification: {
         method: "item/commandExecution/requestApproval", params: { threadId: "thread", requestId: "approval" },
       } }], onEvent: () => () => {} },
       broadcast: (event) => changes.push(event),
@@ -38,7 +38,7 @@ describe("owner question protocol", () => {
     expect((await send(FEDERATION_OPERATOR_QUESTION_METHODS.dismiss, question)).status).toBe("rejected");
     expect(store.listOpenQuestions()).toHaveLength(1);
     const read = await send(FEDERATION_OPERATOR_QUESTION_METHODS.list, { backend: "codex", threadId: "thread" });
-    expect(read.status === "handled" && read.response?.result).toMatchObject({ questions: [{ messageId: "question" }], serverRequests: [] });
+    expect(read.status === "handled" && read.response?.result).toMatchObject({ questions: [{ messageId: "question", threadTitle: "Owner build" }], serverRequests: [] });
     expect((await send(FEDERATION_OPERATOR_QUESTION_METHODS.listPending, {})).status).toBe("rejected");
     expect((await send(FEDERATION_OPERATOR_QUESTION_METHODS.reply, { backend: "codex", threadId: "thread", input: [] })).status).toBe("rejected");
     expect(submitThreadReply).not.toHaveBeenCalled();

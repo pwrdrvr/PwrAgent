@@ -7,6 +7,7 @@ import type {
   ThreadTodoProject,
   ThreadTodoResolution,
   ThreadTodoStatus,
+  TodoBusyThread,
   TodoUnavailableInstance,
 } from "@pwragent/shared";
 import type { OperatorWait } from "../operator-requests/operator-waits";
@@ -78,8 +79,12 @@ export type ThreadTodosView = {
   openThread: (todo: ThreadTodo) => void;
   /** Shows a thread a handoff card started. */
   openStartedThread: (todo: ThreadTodo) => void;
-  /** Resolved cards, newest first. */
-  listResolved?: () => Promise<ThreadTodo[]>;
+  /**
+   * Resolved cards, newest first. A pinned owner that failed is reported in
+   * `errors` beside the cards that did load. A pinned thread whose owner was
+   * busy is named instead of listed, so the panel can keep its last cards.
+   */
+  listResolved?: () => Promise<{ todos: ThreadTodo[]; errors?: string[]; busyThreads?: TodoBusyThread[] }>;
   /** What threads are waiting on the operator for, most urgent first. */
   queueError?: string;
   /** Expected gaps in peer coverage, shown quietly below the queue. */

@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import type { AppServerThreadEntry, AppServerThreadMessageEntry } from "@pwragent/shared";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { TranscriptList } from "../TranscriptList";
 import { ThreadMarkdown } from "../ThreadMarkdown";
@@ -47,8 +47,16 @@ beforeAll(async () => {
   const view = render(<MarkdownRenderingOptionsProvider mathEnabled={false} incrementalEnabled>
     <Readiness />
   </MarkdownRenderingOptionsProvider>);
-  await waitFor(() => expect(view.container.textContent).toBe("ready"));
-  cleanup();
+  try {
+    // Await the cold import and its React update before measuring parser work.
+    // Polling readiness gives module loading an unrelated DOM-query deadline.
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    expect(view.container.textContent).toBe("ready");
+  } finally {
+    cleanup();
+  }
   work.parses = 0;
   work.characters = 0;
   work.nodes = 0;

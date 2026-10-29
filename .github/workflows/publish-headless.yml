@@ -1,0 +1,168 @@
+name: Headless CLI package
+
+on:
+  pull_request:
+    paths:
+      - "packages/pwragent/**"
+      - "packages/federation/**"
+      - "packages/shared/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".pnpmfile.cjs"
+      - ".github/workflows/publish-headless.yml"
+  push:
+    branches: [main]
+    paths:
+      - "packages/pwragent/**"
+      - "packages/federation/**"
+      - "packages/shared/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".pnpmfile.cjs"
+      - ".github/workflows/publish-headless.yml"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing CLI tag on the current main commit, e.g. pwragent-v0.1.0-alpha.1"
+        required: true
+        type: string
+      confirmation:
+        description: "Type publish pwragent@<version> to request environment approval"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: headless-${{ github.event.pull_request.number || inputs.tag || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate:
+    name: Headless package (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Guard explicit release request
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = pwrdrvr/PwrAgent
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$RELEASE_TAG" =~ ^pwragent-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]
+          test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor HEAD origin/main
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install pinned pnpm
+        run: corepack enable
+      - name: Install CLI build dependencies
+        run: pnpm --filter pwragent... install --frozen-lockfile --ignore-scripts
+      - name: Mocked CLI and release guard tests
+        run: pnpm --filter pwragent test
+      - name: Pack, validate and smoke-test a clean offline installation
+        env:
+          TMPDIR: ${{ runner.temp }}/headless-package-long-temp-path-for-socket-regression
+        run: |
+          mkdir -p "$TMPDIR"
+          node packages/pwragent/scripts/pack-check.mjs .local/headless-package
+      - name: Check npm ownership, unused version and channel
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
+        run: node packages/pwragent/scripts/release.mjs
+      - name: Check operator-configured environment protections
+        if: github.event_name == 'workflow_dispatch' && matrix.node == '24'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api repos/pwrdrvr/PwrAgent/environments/npm-pwragent > "$RUNNER_TEMP/npm-environment.json"
+          gh api repos/pwrdrvr/PwrAgent/environments/npm-pwragent/deployment-branch-policies > "$RUNNER_TEMP/npm-branches.json"
+          node --input-type=module <<'JS'
+          import { readFileSync } from "node:fs";
+          import { checkEnvironment } from "./packages/pwragent/scripts/release.mjs";
+          const read = (file) => JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/${file}`, "utf8"));
+          checkEnvironment(read("npm-environment.json"), read("npm-branches.json"));
+          JS
+      - name: Retain the tested tarball
+        if: matrix.node == '24'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: headless-npm-package
+          path: .local/headless-package/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish pwragent to npm
+    needs: validate
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'pwrdrvr/PwrAgent' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm-pwragent
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: headless-npm-package
+          path: .local/headless-package
+      - name: Publish the verified tarball using npm OIDC and provenance
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
+          NODE_AUTH_TOKEN: ""
+          NPM_TOKEN: ""
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$GITHUB_SHA"
+          npm --version > "$RUNNER_TEMP/npm-version.txt"
+          node --input-type=module <<'JS'
+          import assert from "node:assert/strict";
+          import { execFileSync } from "node:child_process";
+          import { createHash } from "node:crypto";
+          import { readFileSync } from "node:fs";
+          import { checkPublicRegistry, releaseMetadata } from "./packages/pwragent/scripts/release.mjs";
+          const [major, minor, patch] = readFileSync(`${process.env.RUNNER_TEMP}/npm-version.txt`, "utf8").trim().split(".").map(Number);
+          assert.ok(major > 11 || (major === 11 && (minor > 5 || (minor === 5 && patch >= 1))), "npm >=11.5.1 required for trusted publishing");
+          const root = ".local/headless-package";
+          const packed = JSON.parse(readFileSync(`${root}/pack.json`, "utf8"));
+          assert.match(packed.filename, /^pwragent-[0-9A-Za-z.-]+\.tgz$/);
+          const tarball = `${root}/${packed.filename}`;
+          const integrity = `sha512-${createHash("sha512").update(readFileSync(tarball)).digest("base64")}`;
+          assert.equal(integrity, packed.integrity, "Artifact integrity mismatch");
+          const metadata = releaseMetadata(JSON.parse(readFileSync("packages/pwragent/package.json", "utf8")), {
+            tag: process.env.RELEASE_TAG, confirmation: process.env.RELEASE_CONFIRMATION,
+          });
+          assert.equal(packed.version, metadata.version);
+          await checkPublicRegistry(metadata);
+          execFileSync("npm", ["publish", tarball, "--ignore-scripts", "--access", "public", "--provenance",
+            "--registry", "https://registry.npmjs.org", "--tag", metadata.distTag], { stdio: "inherit" });
+          JS

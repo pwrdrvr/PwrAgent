@@ -51,6 +51,14 @@ it("rejects workspace dependency imports emitted as template literals", async ()
   expect(result.stderr).toContain("externalized workspace bundled-dependency import");
 });
 
+it.each(["agent-tools/pwragent-messaging-codex-tools", "federation/git-instance-handoff"])(
+  "rejects externalized workspace source subpath %s", async (specifier) => {
+    const result = await verify({ "out/main/index.js": `import "@pwragent/${specifier}";` });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("externalized workspace bundled-dependency import");
+  },
+);
+
 it("rejects sandboxed preloads requiring a shared chunk", async () => {
   const result = await verify({ "out/preload/index.cjs": "require(`./chunks/shared.cjs`);" });
   expect(result.status).toBe(1);

@@ -1,10 +1,12 @@
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
+  existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -78,12 +80,30 @@ materializeSigningInput("windows", ${JSON.stringify(output)}, signingInputPaths.
   ], { encoding: "utf8" });
 }
 
-function verifyWindowsSigningInputArchive(archive) {
+function verifyWindowsSigningInputArchive(archive, mode = "quiet") {
+  const options = mode === "quiet" ? "{}" : `{
+  spawnTar(command, args, options) {
+    if (${JSON.stringify(mode)} === "missing") return spawn("pwragent-nonexistent-tar-fixture", args, options);
+    return spawn(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(`
+      import { spawnSync } from "node:child_process";
+      import { writeSync } from "node:fs";
+      const result = spawnSync(process.argv[1], process.argv.slice(2), { stdio: "ignore" });
+      if (result.error || result.status !== 0) process.exit(90);
+      for (const fd of [1, 2]) {
+        for (let i = 0; i < 48; i++) writeSync(fd, "x".repeat(65536));
+        writeSync(fd, "\\nfinal tar diagnostic on fd " + fd + "\\n");
+      }
+      if (${JSON.stringify(mode)} === "signaled") process.kill(process.pid, "SIGTERM");
+      else process.exit(${mode === "failed" ? 23 : 0});
+    `)}, command, ...args], options);
+  },
+}`;
   return spawnSync(process.execPath, [
     "--experimental-vm-modules", "--input-type=module", "-e",
-    `import { verifySigningInputArchive } from ${JSON.stringify(archiveVerifierModule.href)};
+    `import { spawn } from "node:child_process";
+import { verifySigningInputArchive } from ${JSON.stringify(archiveVerifierModule.href)};
 import { signingInputPaths } from ${JSON.stringify(checkerModule.href)};
-verifySigningInputArchive("windows", ${JSON.stringify(archive)}, signingInputPaths.windows);`,
+await verifySigningInputArchive("windows", ${JSON.stringify(archive)}, signingInputPaths.windows, ${options});`,
   ], { encoding: "utf8" });
 }
 
@@ -125,36 +145,54 @@ it("checks transitive re-exports without executing staged scripts or reading imp
   expect(result.stderr).not.toContain("omits comment.mjs");
 });
 
-it("materializes hard-linked Windows toolchain files before validating the extracted archive", () => {
-  const root = resolve(dirname(checker), "../..");
-  const paths = JSON.parse(readFileSync(join(root, "scripts/release/signing-input-paths.json"), "utf8")).windows;
-  const temp = mkdtempSync(join(tmpdir(), "signing-input-contract-"));
-  try {
-    const input = join(temp, "input");
-    const materialized = join(temp, "materialized");
-    copyWindowsSigningInputSources(input, paths);
-    const { cache, nestedSemver } = writeStagedToolchain(input);
-    expect(statSync(join(cache, "index.js")).ino).toBe(statSync(join(nestedSemver, "index.js")).ino);
+it.each(["quiet", "noisy", "failed", "missing", ...(process.platform === "win32" ? [] : ["signaled"]), "missing-runtime"])(
+  "materializes and validates the extracted archive with tar mode %s", (mode) => {
+    const root = resolve(dirname(checker), "../..");
+    const paths = JSON.parse(readFileSync(join(root, "scripts/release/signing-input-paths.json"), "utf8")).windows;
+    const temp = mkdtempSync(join(tmpdir(), "signing-input-contract-"));
+    try {
+      const input = join(temp, "input");
+      const materialized = join(temp, "materialized");
+      copyWindowsSigningInputSources(input, paths);
+      const { cache, nestedSemver } = writeStagedToolchain(input);
+      expect(statSync(join(cache, "index.js")).ino).toBe(statSync(join(nestedSemver, "index.js")).ino);
 
-    const copied = materializeWindowsSigningInput(input, materialized);
-    expect(copied.status, copied.stderr).toBe(0);
-    expect(statSync(join(materialized, "apps/desktop/release-stage/node_modules/app-builder-lib/node_modules/semver/index.js")).ino)
-      .not.toBe(statSync(join(cache, "index.js")).ino);
+      const copied = materializeWindowsSigningInput(input, materialized);
+      expect(copied.status, copied.stderr).toBe(0);
+      expect(statSync(join(materialized, "apps/desktop/release-stage/node_modules/app-builder-lib/node_modules/semver/index.js")).ino)
+        .not.toBe(statSync(join(cache, "index.js")).ino);
+      if (mode === "missing-runtime") {
+        rmSync(join(materialized, "apps/desktop/release-stage/node_modules/app-builder-lib/node_modules/semver/ranges/simplify.js"));
+      }
 
-    const archive = join(temp, "input.tgz");
-    // Git for Windows' tar treats an absolute C:\\ path as a remote-host
-    // archive name, so keep the test fixture's archive path relative.
-    const packed = spawnSync("tar", ["-czf", "../input.tgz", ...paths], {
-      cwd: materialized,
-      encoding: "utf8",
-    });
-    expect(packed.status, packed.stderr).toBe(0);
-    const verified = verifyWindowsSigningInputArchive(archive);
-    expect(verified.status, verified.stderr).toBe(0);
-  } finally {
-    rmSync(temp, { recursive: true, force: true });
-  }
-});
+      const archive = join(temp, "input.tgz");
+      // Git for Windows' tar treats an absolute C:\\ path as a remote-host
+      // archive name, so keep the test fixture's archive path relative.
+      const packed = spawnSync("tar", ["-czf", "../input.tgz", ...paths], {
+        cwd: materialized,
+        encoding: "utf8",
+      });
+      expect(packed.status, packed.stderr).toBe(0);
+      const verified = verifyWindowsSigningInputArchive(archive, mode);
+      expect(verified.status, verified.stderr).toBe(["quiet", "noisy"].includes(mode) ? 0 : 1);
+      expect(verified.stderr.length).toBeLessThan(40 * 1024);
+      if (!["quiet", "missing"].includes(mode)) {
+        expect(verified.stderr).toContain("tar stdout: 3145758 bytes (last 16384 bytes)");
+        expect(verified.stderr).toContain("tar stderr: 3145758 bytes (last 16384 bytes)");
+        expect(verified.stderr).toContain("final tar diagnostic on fd 2");
+      }
+      if (mode === "failed") expect(verified.stderr).toContain("tar exit 23");
+      if (mode === "missing") expect(verified.stderr).toContain("ENOENT");
+      if (mode === "signaled") expect(verified.stderr).toContain("signal SIGTERM");
+      if (mode === "missing-runtime") expect(verified.stderr).toContain("cannot load electron-builder");
+      // Cleanup happens after both completion and failure, including spawn errors.
+      expect(existsSync(join(temp, "input.tgz"))).toBe(true);
+      expect(readdirSync(temp).some((entry) => entry.startsWith("pwragent-windows-signing-input-"))).toBe(false);
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  },
+);
 
 it("rejects a staged Windows toolchain with a missing transitive dependency", () => {
   const temp = mkdtempSync(join(tmpdir(), "signing-input-runtime-"));

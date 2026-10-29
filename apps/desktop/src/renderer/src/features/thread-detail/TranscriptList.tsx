@@ -448,7 +448,7 @@ function pendingRequestActionPresentation(action: PendingRequestAction): {
   if (detail) {
     return {
       detail,
-      label: "Always Allow Prefix",
+      label: "Always allow prefix",
     };
   }
 

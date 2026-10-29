@@ -493,7 +493,12 @@ export type ThreadStatusInspectionSummary = ThreadInspectionSummary & {
   queuedExecutionModeAt?: number;
   pendingHandoffs?: PendingThreadHandoffSummary[];
   pendingWorkspaceMoves?: PendingThreadWorkspaceMoveSummary[];
+  /** Requests the operator has yet to answer. `message` only on the asker's own thread. */
+  pendingApprovals?: PendingThreadApprovalSummary[];
+  pendingApprovalGuidance?: string;
 };
+
+export type PendingThreadApprovalSummary = { method: string; serverName?: string; message?: string };
 
 export type PendingThreadHandoffStatus = "starting" | "completed" | "failed";
 

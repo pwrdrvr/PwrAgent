@@ -20,6 +20,11 @@ import {
   DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT,
 } from "@pwragent/shared";
 import type { WindowShowThreadRequest } from "../shared/window-show-thread";
+import {
+  HTML_PREVIEW_FRAME_NAME,
+  HTML_PREVIEW_NAVIGATION_CHANNEL,
+  type HtmlPreviewNavigationEvent,
+} from "../shared/html-preview";
 import { resolveHeapMonitorConfig } from "./diagnostics/heap-monitor-config";
 import { createHeapSession } from "./diagnostics/heap-session";
 import { resolveHotCpuProfileConfig } from "./diagnostics/hot-cpu-profile-config";
@@ -31,6 +36,7 @@ import { SharedHotCpuProfiler } from "./diagnostics/shared-hot-cpu-profiler";
 import { HotCpuProfiler } from "./diagnostics/hot-cpu-profiler";
 import { resolveAppBuildMetadata } from "./app-build-metadata";
 import { isSafeExternalOpenUrl } from "./external-url-policy";
+import { isAppRendererUrl, type RendererEntry } from "./renderer-entry-url";
 import { getMainLogger } from "./log";
 import { mainWindowChromeOptions } from "./main-window-chrome";
 import { lockMainWindowTitle, mainWindowTitle } from "./main-window-title";
@@ -149,7 +155,7 @@ export function getPreloadPath(): string {
   return join(moduleDirectory, "../preload/index.cjs");
 }
 
-export function getRendererEntry(): { kind: "url" | "file"; value: string } {
+export function getRendererEntry(): RendererEntry {
   if (process.env.ELECTRON_RENDERER_URL) {
     return { kind: "url", value: process.env.ELECTRON_RENDERER_URL };
   }
@@ -170,11 +176,12 @@ export function getRendererEntry(): { kind: "url" | "file"; value: string } {
  *   Safelisted external URLs (https / mailto / file / loopback http)
  *   open in the user's default browser via `shell.openExternal`.
  * - `will-navigate` prevents the existing window from being navigated
- *   away — only file:// and the dev server origin are allowed (the
- *   bundle's own assets / hot-reload), everything else is blocked.
+ *   away — only the bundled index.html and the dev server origin are
+ *   allowed (the app's own entry / hot-reload), everything else is blocked.
  * - Subframes cannot navigate away from their initial document. Interactive
- *   SVGs run in an opaque-origin iframe and must not use navigation to send
- *   local data to an external site.
+ *   SVGs and HTML previews run in an opaque-origin iframe and must not use
+ *   navigation to send local data to an external site. A blocked link in an
+ *   HTML preview goes back to its window, which asks before opening it.
  */
 export function applyWindowSecurityHardening(window: BrowserWindow): void {
   const log = getMainLogger("pwragent:window-guards");
@@ -197,10 +204,20 @@ export function applyWindowSecurityHardening(window: BrowserWindow): void {
   });
 
   window.webContents.on("will-frame-navigate", (event) => {
-    if (event.isMainFrame || event.url === "about:srcdoc") {
+    // A fragment link inside a srcdoc frame scrolls its own document.
+    if (
+      event.isMainFrame
+      || event.url === "about:srcdoc"
+      || event.url.startsWith("about:srcdoc#")
+    ) {
       return;
     }
     event.preventDefault();
+    if (frameName(event) === HTML_PREVIEW_FRAME_NAME) {
+      const payload: HtmlPreviewNavigationEvent = { url: event.url };
+      window.webContents.send(HTML_PREVIEW_NAVIGATION_CHANNEL, payload);
+      return;
+    }
     log.warn("blocked renderer subframe navigation");
   });
 
@@ -325,31 +342,23 @@ function appendSeparator(template: MenuItemConstructorOptions[]): void {
 }
 
 /**
- * Renderer navigations are only allowed back to the loaded entry
- * (file:// in production, the dev server origin in development).
+ * Renderer navigations are only allowed back to the loaded entry: the exact
+ * bundled index.html in production, the dev server origin in development.
+ * Any other `file:` document would load with the preload API exposed.
  * Hash-only navigation (e.g. `#messaging-activity` set by the spawn
- * code) is allowed because the URL origin/path matches.
+ * code) is allowed because the path matches.
  */
+function frameName(event: { frame?: { name?: string } | null }): string | undefined {
+  try {
+    return event.frame?.name;
+  } catch {
+    // A frame that has gone away throws on access.
+    return undefined;
+  }
+}
+
 function isSafeRendererNavigation(targetUrl: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(targetUrl);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol === "file:") {
-    return true;
-  }
-  const devUrl = process.env.ELECTRON_RENDERER_URL;
-  if (!devUrl) {
-    return false;
-  }
-  try {
-    const dev = new URL(devUrl);
-    return parsed.origin === dev.origin;
-  } catch {
-    return false;
-  }
+  return isAppRendererUrl(targetUrl, getRendererEntry());
 }
 
 
@@ -371,7 +380,10 @@ export function syncHotCpuProfilersFromSettings(
 
 export function createMainWindow(options?: {
   onShown?: () => void;
+  /** The peer's full display label; the renderer and diagnostics read it. */
   federationLabel?: string;
+  /** The peer's short display label for the window title, when it has one. */
+  federationTitleLabel?: string;
   federationTarget?: FederationRemoteTarget;
   initialLaunchpad?: boolean;
   initialThread?: WindowShowThreadRequest;
@@ -381,7 +393,9 @@ export function createMainWindow(options?: {
 }): BrowserWindow {
   installWindowsTitleBarAppearanceSync();
   const preloadPath = getPreloadPath();
-  const windowTitle = mainWindowTitle(options?.federationLabel);
+  const windowTitle = mainWindowTitle(
+    options?.federationTitleLabel ?? options?.federationLabel,
+  );
   const appearance = readBootstrapAppearance();
   const navigationPreferences = readBootstrapNavigationPreferences();
   const initialBounds = boundsForCursorDisplay(

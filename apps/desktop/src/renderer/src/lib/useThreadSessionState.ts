@@ -6,6 +6,7 @@ import {
   reconcileCompletedTurnUsageEntries,
   tokenUsageActivityScope,
   turnUsageEntryTurnId,
+  finalTurnOutputText,
   isTerminalTurnMetadata,
   readUuidV7Timestamp,
 } from "@pwragent/shared";
@@ -1851,19 +1852,95 @@ function findUniqueTranscriptOrderSource(
   entry: AppServerThreadEntry,
   exactSourcesById: ReadonlyMap<string, AppServerThreadEntry>,
   logicalSourceIndex: LogicalTranscriptMatchIndex,
+  readDetailOwners: DetailOwners,
+  sourceDetailOwners: DetailOwners,
 ): AppServerThreadEntry | undefined {
   const exactMatch = exactSourcesById.get(entry.id);
   if (exactMatch) {
     return exactMatch;
   }
 
+  // A row matched by content alone must come from the same turn. The same
+  // command or reply in another turn is a different row, and taking its time
+  // or place moves this row into that turn.
   return findOnlyTranscriptMatch(
     logicalTranscriptMatchCandidates(entry, logicalSourceIndex),
     (source) =>
       typeof source.createdAt === "number" &&
       source.id !== entry.id &&
+      sameTurnOrUnknown(entry, source) &&
+      !sourceToolBelongsToAnotherRow(entry, source, readDetailOwners) &&
+      !entryToolHasAnotherSource(entry, source, sourceDetailOwners) &&
       transcriptEntriesMatch(entry, source),
   );
+}
+
+function sameTurnOrUnknown(
+  entry: AppServerThreadEntry,
+  source: AppServerThreadEntry,
+): boolean {
+  const entryTurnId = entry.turn?.id;
+  const sourceTurnId = source.turn?.id;
+  return !entryTurnId || !sourceTurnId || entryTurnId === sourceTurnId;
+}
+
+// A tool is one row in the read and one in the live ledger, and the tool id
+// ties them together. A repeated command still matches other rows by its
+// text, and taking such a row's time or place moves this row to where the
+// other run happened. So a content match is refused when the live row holds
+// a tool the read places in another row, or when this row's own tools sit in
+// another live row. A read row whose tool ids the ledger never saw (Codex
+// replays parsed commands under new ids) can still match by text.
+function sourceToolBelongsToAnotherRow(
+  entry: AppServerThreadEntry,
+  source: AppServerThreadEntry,
+  readDetailOwners: DetailOwners,
+): boolean {
+  return hasDetailOwnedElsewhere(source, entry, readDetailOwners);
+}
+
+function entryToolHasAnotherSource(
+  entry: AppServerThreadEntry,
+  source: AppServerThreadEntry,
+  sourceDetailOwners: DetailOwners,
+): boolean {
+  return hasDetailOwnedElsewhere(entry, source, sourceDetailOwners);
+}
+
+type DetailOwners = ReadonlyMap<string, ReadonlySet<AppServerThreadEntry>>;
+
+/** Each activity detail id, mapped to the rows that hold it. */
+function indexDetailOwners(entries: AppServerThreadEntry[]): DetailOwners {
+  const owners = new Map<string, Set<AppServerThreadEntry>>();
+  for (const entry of entries) {
+    if (entry.type !== "activity") {
+      continue;
+    }
+    for (const detail of entry.details) {
+      const detailOwners = owners.get(detail.id);
+      if (detailOwners) {
+        detailOwners.add(entry);
+      } else {
+        owners.set(detail.id, new Set([entry]));
+      }
+    }
+  }
+  return owners;
+}
+
+/** Whether a detail of `row` is held by rows that do not include `expected`. */
+function hasDetailOwnedElsewhere(
+  row: AppServerThreadEntry,
+  expected: AppServerThreadEntry,
+  owners: DetailOwners,
+): boolean {
+  if (row.type !== "activity") {
+    return false;
+  }
+  return row.details.some((detail) => {
+    const detailOwners = owners.get(detail.id);
+    return detailOwners !== undefined && !detailOwners.has(expected);
+  });
 }
 
 type HydratedEntryOrderMatch = {
@@ -1915,30 +1992,53 @@ function reorderHydratedEntriesByKnownOrder(
     return entries;
   }
 
-  const sourceOrderAlreadyMatches = matchedEntries.every(
-    (entry, index) =>
-      index === 0
-      || matchedEntries[index - 1]!.sourceIndex <= entry.sourceIndex
-  );
-  if (sourceOrderAlreadyMatches) {
+  // The read is the authority on which turn comes first. The live ledger can
+  // only refine the order inside one turn: after a compaction drops the
+  // loaded response, it can hold a later turn's rows ahead of earlier turns'
+  // unpruned live rows, and a refill across turns then moves whole turns.
+  const matchesByTurn = new Map<string | undefined, MatchedHydratedEntry[]>();
+  for (const entry of matchedEntries) {
+    const turnId = entry.entry.turn?.id;
+    const turnMatches = matchesByTurn.get(turnId);
+    if (turnMatches) {
+      turnMatches.push(entry);
+    } else {
+      matchesByTurn.set(turnId, [entry]);
+    }
+  }
+  let changed = false;
+  for (const turnMatches of matchesByTurn.values()) {
+    const sourceOrderAlreadyMatches = turnMatches.every(
+      (entry, index) =>
+        index === 0
+        || turnMatches[index - 1]!.sourceIndex <= entry.sourceIndex
+    );
+    if (!sourceOrderAlreadyMatches) {
+      changed = true;
+      turnMatches.sort(
+        (left, right) =>
+          left.sourceIndex - right.sourceIndex
+          || left.hydrationIndex - right.hydrationIndex
+      );
+    }
+  }
+  if (!changed) {
     return entries;
   }
 
   // Do not invent positions for newly hydrated entries. Refill only the slots
-  // for entries the live ledger can identify, preserving their observed order.
-  const orderedMatches = [...matchedEntries].sort(
-    (left, right) =>
-      left.sourceIndex - right.sourceIndex || left.hydrationIndex - right.hydrationIndex
-  );
-  let orderedMatchIndex = 0;
+  // for entries the live ledger can identify, each from its own turn,
+  // preserving their observed order.
+  const nextMatchIndexByTurn = new Map<string | undefined, number>();
   return hydratedEntries.map((entry) => {
     if (entry.sourceIndex === undefined) {
       return entry.entry;
     }
 
-    const orderedEntry = orderedMatches[orderedMatchIndex]?.entry;
-    orderedMatchIndex += 1;
-    return orderedEntry ?? entry.entry;
+    const turnId = entry.entry.turn?.id;
+    const nextMatchIndex = nextMatchIndexByTurn.get(turnId) ?? 0;
+    nextMatchIndexByTurn.set(turnId, nextMatchIndex + 1);
+    return matchesByTurn.get(turnId)?.[nextMatchIndex]?.entry ?? entry.entry;
   });
 }
 
@@ -1963,18 +2063,37 @@ function carryForwardTranscriptEntryOrder(
     }
   }
   const logicalSourceIndex = createLogicalTranscriptMatchIndex(logicalSources);
+  const readDetailOwners = indexDetailOwners(response.replay.entries);
+  const sourceDetailOwners = indexDetailOwners(logicalSources);
   const sourceByHydratedEntry = new Map<
     AppServerThreadEntry,
     AppServerThreadEntry
   >();
-  let changed = false;
-  let entries = response.replay.entries.map((entry) => {
-    const source = findUniqueTranscriptOrderSource(
+  const matchedSources = response.replay.entries.map((entry) =>
+    findUniqueTranscriptOrderSource(
       entry,
       exactSourcesById,
       logicalSourceIndex,
-    );
-    if (!source) {
+      readDetailOwners,
+      sourceDetailOwners,
+    )
+  );
+  const claimsBySource = new Map<AppServerThreadEntry, number>();
+  for (const source of matchedSources) {
+    if (source) {
+      claimsBySource.set(source, (claimsBySource.get(source) ?? 0) + 1);
+    }
+  }
+  let changed = false;
+  let entries = response.replay.entries.map((entry, index) => {
+    const source = matchedSources[index];
+    // One live row stands for one read row. When a turn repeats a command,
+    // several read rows match the same live row by content; none of them
+    // can take its time or place.
+    if (
+      !source
+      || (source.id !== entry.id && (claimsBySource.get(source) ?? 0) > 1)
+    ) {
       return entry;
     }
 
@@ -4624,20 +4743,40 @@ function hasReviewEntryForTurn(
 function hasCompletedAssistantMessageForTurn(
   response: AppServerReadThreadResponse | undefined,
   turnId: string | undefined,
-  text: string | undefined
+  text: string | undefined,
+  pendingAssistantMessage?: AppServerThreadMessageEntry
 ): boolean {
   if (!response || !turnId || !text) {
     return false;
   }
 
   const normalizedText = normalizeTranscriptText(text);
-  return response.replay.entries.some(
-    (entry) =>
+  const turnMessages = response.replay.entries.filter(
+    (entry): entry is AppServerThreadMessageEntry =>
       entry.type === "message" &&
       entry.role === "assistant" &&
+      entry.turn?.id === turnId
+  );
+  if (turnMessages.some(
+    (entry) =>
       (!entry.phase || entry.phase === "final") &&
-      entry.turn?.id === turnId &&
       normalizeTranscriptText(entry.text) === normalizedText
+  )) {
+    return true;
+  }
+  // An ACP agent can report the whole turn's text as one output. It repeats
+  // the turn's replies in order, with or without separators between them.
+  // ACP sends no item/completed for a reply, so the last one is still
+  // pending here, and thoughts shown as commentary are not in the output.
+  const replies = [
+    ...turnMessages,
+    ...(pendingAssistantMessage?.turn?.id === turnId ? [pendingAssistantMessage] : []),
+  ].filter((entry) => entry.phase !== "commentary");
+  const withoutWhitespace = (value: string) => value.replace(/\s+/g, "");
+  return (
+    replies.length > 1
+    && withoutWhitespace(replies.map((entry) => entry.text).join(""))
+      === withoutWhitespace(text)
   );
 }
 
@@ -4822,15 +4961,7 @@ function readCompletedTurnText(
     return undefined;
   }
 
-  const turnRecord = (notification as { turn?: { output?: Array<{ type: string; text?: string }> } })
-    .turn;
-  const text = turnRecord?.output
-    ?.filter((part) => part.type === "text" && typeof part.text === "string")
-    .map((part) => part.text!.trim())
-    .filter(Boolean)
-    .join("\n\n");
-
-  return text || undefined;
+  return finalTurnOutputText((notification as { turn?: { output?: unknown } }).turn?.output);
 }
 
 function didHydrateCompletedTurn(
@@ -6810,7 +6941,8 @@ export function useThreadSessionState(params: {
               !hasCompletedAssistantMessageForTurn(
                 current.response,
                 completedTurn?.id,
-                completedText
+                completedText,
+                current.pendingAssistantMessage
               )
           );
           const unphasedAssistantCompletionPhase =

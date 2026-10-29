@@ -34,6 +34,7 @@ import { insertProjectMention, projectMentionAtCursor } from "../thread-search/P
 import { AgentThreadChip } from "./AgentThreadChip";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { PrChip } from "../pr-status/PrChip";
+import { formatFullTimestamp, formatRelativeTime } from "./thread-time";
 import type { NavigationDirectoryView } from "../../lib/navigation-loaded-rows";
 import { useNavigationQueryResource } from "../../lib/useNavigationQueryResource";
 import { readRendererFederationLabel, readRendererFederationTarget } from "../../lib/federation-window";
@@ -351,14 +352,13 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     ) {
       return;
     }
-    if (event.key === "ArrowDown") {
+    // The arrows wrap, so the bottom row is one ArrowUp away from the top.
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      setActiveIndex((index) => Math.min(index + 1, combinedRows.length - 1));
-      return;
-    }
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setActiveIndex((index) => Math.max(index - 1, 0));
+      const count = combinedRows.length;
+      if (count === 0) return;
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      setActiveIndex((index) => (index + step + count) % count);
       return;
     }
     if (event.key === "Enter") {
@@ -430,6 +430,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
           {description.directory ? (
             <span className="jump-palette__row-repo">{description.directory}</span>
           ) : null}
+          {thread.updatedAt ? <RowTime timestamp={thread.updatedAt} /> : null}
         </button>
       </li>
     );
@@ -474,6 +475,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
         ) : null}
         <span className="jump-palette__row-branch">{directory.path}</span>
         <span className="jump-palette__row-repo">{mention ? "Filter" : "Project"}</span>
+        {directory.latestUpdatedAt ? <RowTime timestamp={directory.latestUpdatedAt} /> : null}
       </button>
     </li>
   );
@@ -616,6 +618,21 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
       </div>
     </div>,
     document.body,
+  );
+}
+
+/**
+ * The sidebar row's age label, so a match from an hour ago and one from last
+ * spring no longer look alike. Hover gives the full date with its year.
+ */
+function RowTime(props: { timestamp: number }): ReactElement {
+  return (
+    <span
+      className="jump-palette__row-time tooltip-target"
+      data-tooltip={formatFullTimestamp(props.timestamp)}
+    >
+      {formatRelativeTime(props.timestamp)}
+    </span>
   );
 }
 

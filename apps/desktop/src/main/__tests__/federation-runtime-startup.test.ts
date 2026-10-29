@@ -11,6 +11,7 @@ import type { FederationRuntimeConfig } from "../federation/federation-runtime-c
 // federation-runtime module first resolves them) can reach these fns.
 const mocks = vi.hoisted(() => ({
   readFederationConfig: vi.fn(),
+  collectHostInfo: vi.fn(async () => undefined),
   getNoiseKeyPair: vi.fn(),
   getIdentityKeyPair: vi.fn(),
   gatewayServerStart: vi.fn(),
@@ -41,7 +42,7 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
 }));
 
 vi.mock("../federation/federation-host-info", () => ({
-  collectFederationHostInfo: vi.fn(async () => undefined),
+  collectFederationHostInfo: mocks.collectHostInfo,
 }));
 
 vi.mock("../state/app-state", () => ({
@@ -117,6 +118,8 @@ function deferred<T>(): {
 
 beforeEach(() => {
   mocks.readFederationConfig.mockReturnValue(fakeSettings);
+  mocks.collectHostInfo.mockReset();
+  mocks.collectHostInfo.mockResolvedValue(undefined);
   mocks.getNoiseKeyPair.mockReset();
   mocks.getIdentityKeyPair.mockReset();
   mocks.gatewayServerStart.mockReset();
@@ -126,6 +129,48 @@ beforeEach(() => {
 });
 
 describe("DesktopFederationRuntime startup lease fence", () => {
+  it("applies invite configuration written while disabled startup is collecting host facts", async () => {
+    const hostInfo = deferred<undefined>();
+    mocks.collectHostInfo.mockReturnValueOnce(hostInfo.promise);
+    mocks.readFederationConfig.mockReturnValue({ ...fakeSettings, mode: "disabled" });
+    const runtime = new DesktopFederationRuntime();
+    const harness = runtime as unknown as StartupHarness;
+    const start = vi.spyOn(harness, "startAfterLeaseAcquired").mockResolvedValue(undefined);
+
+    const boot = runtime.restart();
+    await vi.waitFor(() => expect(mocks.collectHostInfo).toHaveBeenCalledTimes(1));
+    // Windows' host probe can still be running when the viewer imports its
+    // invite. Its startup captured disabled; the import must await client startup.
+    mocks.readFederationConfig.mockReturnValue({ ...fakeSettings, mode: "client" });
+    const imported = runtime.restart();
+    hostInfo.resolve(undefined);
+    await Promise.all([boot, imported]);
+
+    expect(start).toHaveBeenCalledExactlyOnceWith("client", expect.objectContaining({ mode: "client" }));
+  });
+
+  it("coalesces requests during startup and awaits changes arriving during the next startup", async () => {
+    const first = deferred<undefined>();
+    const second = deferred<undefined>();
+    mocks.collectHostInfo.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const runtime = new DesktopFederationRuntime();
+    const start = vi.spyOn(runtime as unknown as StartupHarness, "startAfterLeaseAcquired").mockResolvedValue(undefined);
+    const boot = runtime.restart();
+    await vi.waitFor(() => expect(mocks.collectHostInfo).toHaveBeenCalledTimes(1));
+    mocks.readFederationConfig.mockReturnValue({ ...fakeSettings, mode: "client" });
+    const imported = runtime.restart();
+    const duplicate = runtime.restart();
+    first.resolve(undefined);
+    await vi.waitFor(() => expect(mocks.collectHostInfo).toHaveBeenCalledTimes(2));
+    mocks.readFederationConfig.mockReturnValue({ ...fakeSettings, mode: "disabled" });
+    const disabled = runtime.restart();
+    second.resolve(undefined);
+    await Promise.all([boot, imported, duplicate, disabled]);
+
+    expect(start.mock.calls.map(([mode]) => mode)).toEqual(["gateway", "client"]);
+    expect(mocks.collectHostInfo).toHaveBeenCalledTimes(3);
+  });
+
   it("advertises thread handoff in the gateway peer directory", () => {
     const runtime = new DesktopFederationRuntime() as unknown as {
       buildPeerDirectory(recipient: string): FederationPeerSummary[];

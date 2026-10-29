@@ -359,6 +359,11 @@ test.describe("federation remote window", () => {
       });
       await restoreE2eFederationIdentity({ page: owner.window, identityPrivateKeyPem: ownerIdentity.privateKeyPem,
         noiseStaticPrivateKeyBase64: ownerNoiseIdentity.privateKeyBase64, restartMode: "gateway" });
+      // An instance id exists before a gateway binds. Require the actual
+      // listener after identity restoration before minting an invite for it.
+      await expect.poll(async () => owner!.window.evaluate(async () =>
+        (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health),
+      { timeout: 30_000 }).toMatchObject({ status: "listening", listenUrl: `ws://127.0.0.1:${port}` });
       const ownerInstanceId = await owner.window.evaluate(async () =>
         (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health.instanceId);
       expect(ownerInstanceId).toBeTruthy();
@@ -373,7 +378,8 @@ test.describe("federation remote window", () => {
         await (window as unknown as { pwragent: DesktopApi }).pwragent.importFederationInvite!({ invite: encodedInvite });
       }, invite);
       await expect.poll(async () => viewer!.window.evaluate(async () =>
-        (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health.status), { timeout: 30_000 }).toBe("connected");
+        (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health),
+      { timeout: 30_000 }).toMatchObject({ status: "connected" });
       await viewer.window.evaluate(async ({ instanceId, id }) => {
         const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
         const ref = { backend: "codex" as const, threadId: id, target: { scope: "remote" as const, instanceId } };
@@ -1457,6 +1463,284 @@ test.describe("federation remote window", () => {
       await gateway?.close();
       await fixture.cleanup();
       await rm(ownerPtyCwd, { force: true, recursive: true });
+    }
+  });
+
+  test("starts drafts on the peer's provider when the peer cannot run this machine's", async () => {
+    test.setTimeout(240_000);
+
+    let gateway: InProcessFederationGateway | undefined;
+    const fixture = await createLocalControlFixture();
+    let app: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+    try {
+      // The peer runs OpenAI only. Its Kimi parent stands in for a thread
+      // whose provider the peer has since lost, as a Claude thread does on
+      // a peer whose Claude Code sign-in lapsed.
+      gateway = await startInProcessFederationGateway({
+        instanceLabel: "E2E OpenAI-only Gateway",
+        backendKinds: ["codex"],
+        directories: [
+          {
+            key: "directory:/remote/ProviderRepo",
+            label: "ProviderRepo",
+            path: "/remote/ProviderRepo",
+            threadIds: ["remote-kimi-parent"],
+          },
+        ],
+        threads: [
+          {
+            id: "remote-kimi-parent",
+            title: "Remote Kimi parent",
+            updatedAt: 1_500,
+            source: "acp:kimi",
+            executionMode: "default",
+            linkedDirectories: [
+              {
+                id: "/remote/ProviderRepo",
+                label: "ProviderRepo",
+                path: "/remote/ProviderRepo",
+                worktreePath: "/remote/ProviderRepo",
+                kind: "worktree",
+              },
+            ],
+          },
+        ],
+      });
+
+      // This machine runs Kimi Code too, and its new threads start on it.
+      app = await launchElectronApp({
+        fixturePath: fixture.fixturePath,
+        secretStorage: "memory",
+        preLaunchHook: async (homeRoot) => {
+          const { executablePath: fakeKimiPath } =
+            await seedFakeKimiExecutable(homeRoot);
+          const profile = path.join(homeRoot, ".pwragent", "profiles", "default");
+          await mkdir(path.join(profile, "state"), { recursive: true });
+          await writeFile(
+            path.join(profile, "config.toml"),
+            ["[acp_agents.kimi]", `cli_path = ${JSON.stringify(fakeKimiPath)}`, ""].join("\n"),
+            "utf8",
+          );
+          const db = StateDb.open(path.join(profile, "state", "state.db"));
+          try {
+            await new SqliteOverlayStore(db).setLaunchpadDefaults({
+              backend: "acp:kimi",
+              executionMode: "default",
+            });
+          } finally {
+            db.close();
+          }
+        },
+      });
+      const { electronApp, window } = app;
+      await expect
+        .poll(
+          async () => await window.evaluate(async () => {
+            const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+            const { backends } = await api.listBackends!({ includeUnavailable: true });
+            return backends.some(
+              (backend) => backend.kind === "acp:kimi" && backend.available,
+            );
+          }),
+          { timeout: 60_000 },
+        )
+        .toBe(true);
+
+      await window.getByRole("button", { name: "Open settings" }).click();
+      await window
+        .getByRole("navigation", { name: "Settings sections" })
+        .getByRole("button", { name: "Federation", exact: true })
+        .click();
+      await window.getByLabel("Import invite").fill(gateway.invite);
+      await window.getByRole("button", { name: "Import invite" }).click();
+      await gateway.waitForConnection(30_000);
+      await expect(
+        window
+          .getByRole("region", { name: "Connection" })
+          .getByText("Connected", { exact: true }),
+      ).toBeVisible({ timeout: 30_000 });
+
+      const remoteWindowPromise = electronApp.waitForEvent("window");
+      await window
+        .getByRole("button", { name: "Browse remote threads" })
+        .click();
+      const remote = await remoteWindowPromise;
+      await remote.waitForLoadState("domcontentloaded");
+      await expect(
+        remote.getByRole("button", { name: "Remote Kimi parent" }),
+      ).toBeVisible({ timeout: 30_000 });
+
+      const settings = remote.getByLabel("New thread settings");
+      const provider = settings.getByRole("button", {
+        name: /^Provider(?::|$)/,
+        exact: true,
+      });
+      const ensureCalls = () => gateway!.calls
+        .filter((call) => call.method === "ensureDirectoryLaunchpad")
+        .map((call) => call.params as { directoryKey: string; preferredBackend?: string });
+      // The provider the peer is told to start. The Provider control is no
+      // evidence: it lists the peer's providers only, so it reads OpenAI
+      // even over a draft that holds this machine's Kimi Code.
+      const startedBackends = () => gateway!.calls
+        .filter((call) => call.method === "materializeDirectoryLaunchpad")
+        .map((call) => (call.params as { launchpad?: { backend?: string } }).launchpad?.backend);
+
+      // A top-level draft names no provider, so this machine's Kimi Code
+      // would fill it. The peer's provider list has no Kimi Code.
+      await remote.getByRole("tab", { name: "directories" }).click();
+      await remote
+        .getByRole("button", { name: "Open new thread launchpad for ProviderRepo" })
+        .click();
+      const prompt = remote.getByRole("textbox", { name: "New thread" });
+      await expect(prompt).toBeVisible();
+      await expect(provider).toContainText("OpenAI", { timeout: 15_000 });
+      await prompt.fill("Start on a provider the peer has");
+      // Over this machine's Kimi Code the peer could not start the thread,
+      // and send stayed disabled.
+      const startThread = remote.getByRole("button", { name: "Start thread" });
+      await expect(startThread).toBeEnabled();
+      await startThread.click();
+      await expect.poll(startedBackends, { timeout: 30_000 }).toEqual(["codex"]);
+
+      // A sub-thread asks for its parent's Kimi Code and gets OpenAI too.
+      const callsBeforeChild = ensureCalls().length;
+      await rightClickThreadRow(remote, "Remote Kimi parent");
+      await remote
+        .getByRole("menuitem", { name: "Sub-thread in Same Worktree" })
+        .click();
+      await expect(provider).toContainText("OpenAI", { timeout: 15_000 });
+      expect(ensureCalls().slice(callsBeforeChild)).toContainEqual(
+        expect.objectContaining({ preferredBackend: "acp:kimi" }),
+      );
+      await prompt.fill("Start the child on a provider the peer has");
+      const startChild = remote.getByRole("button", { name: "Start sub-thread" });
+      await expect(startChild).toBeEnabled();
+      await startChild.click();
+      await expect
+        .poll(startedBackends, { timeout: 30_000 })
+        .toEqual(["codex", "codex"]);
+    } finally {
+      await app?.close();
+      await gateway?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  test("keeps a remote draft apart from this machine's draft for the same directory", async () => {
+    test.setTimeout(180_000);
+
+    let gateway: InProcessFederationGateway | undefined;
+    const fixture = await createLocalControlFixture();
+    // Two Macs with one home layout: the peer's project lives at the path
+    // this machine's project does, so both use one directory key.
+    const sharedPath = await mkdtemp(path.join(os.tmpdir(), "pwragent-shared-layout-"));
+    const directoryKey = `directory:${sharedPath}`;
+    let app: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+    try {
+      gateway = await startInProcessFederationGateway({
+        instanceLabel: "E2E Shared Layout Gateway",
+        directories: [
+          {
+            key: directoryKey,
+            label: "SharedRepo",
+            path: sharedPath,
+            threadIds: ["remote-shared-thread"],
+          },
+        ],
+        threads: [
+          {
+            id: "remote-shared-thread",
+            title: "Remote shared thread",
+            updatedAt: 1_500,
+            source: "codex",
+            executionMode: "default",
+            linkedDirectories: [
+              {
+                id: sharedPath,
+                label: "SharedRepo",
+                path: sharedPath,
+                worktreePath: sharedPath,
+                kind: "local",
+              },
+            ],
+          },
+        ],
+      });
+      app = await launchElectronApp({
+        fixturePath: fixture.fixturePath,
+        secretStorage: "memory",
+      });
+      const { electronApp, window } = app;
+
+      await window.getByRole("button", { name: "Open settings" }).click();
+      await window
+        .getByRole("navigation", { name: "Settings sections" })
+        .getByRole("button", { name: "Federation", exact: true })
+        .click();
+      await window.getByLabel("Import invite").fill(gateway.invite);
+      await window.getByRole("button", { name: "Import invite" }).click();
+      await gateway.waitForConnection(30_000);
+      await expect(
+        window
+          .getByRole("region", { name: "Connection" })
+          .getByText("Connected", { exact: true }),
+      ).toBeVisible({ timeout: 30_000 });
+
+      const remoteWindowPromise = electronApp.waitForEvent("window");
+      await window
+        .getByRole("button", { name: "Browse remote threads" })
+        .click();
+      const remote = await remoteWindowPromise;
+      await remote.waitForLoadState("domcontentloaded");
+      await expect(
+        remote.getByRole("button", { name: "Remote shared thread" }),
+      ).toBeVisible({ timeout: 30_000 });
+
+      const draftRequest = {
+        directoryKey,
+        directoryKind: "directory" as const,
+        directoryLabel: "SharedRepo",
+        directoryPath: sharedPath,
+      };
+      const remoteDraft = async () => await remote.evaluate(async ({ request, instanceId }) => {
+        const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+        const response = await api.ensureDirectoryLaunchpad!({
+          ...request,
+          federationTarget: { scope: "remote", instanceId },
+        });
+        return { directoryKey: response.launchpad.directoryKey, prompt: response.launchpad.prompt };
+      }, { request: draftRequest, instanceId: gateway!.instanceId });
+      const localDraft = async () => await window.evaluate(async (request) => {
+        const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+        return (await api.ensureDirectoryLaunchpad!(request)).launchpad.prompt;
+      }, draftRequest);
+
+      const peerText = "Draft for the peer's SharedRepo";
+      await remote.getByRole("tab", { name: "directories" }).click();
+      await remote
+        .getByRole("button", { name: "Open new thread launchpad for SharedRepo" })
+        .click();
+      await remote.getByRole("textbox", { name: "New thread" }).fill(peerText);
+      // The remote window still speaks the owner's key.
+      await expect
+        .poll(remoteDraft, { timeout: 15_000 })
+        .toEqual({ directoryKey, prompt: peerText });
+
+      // This machine's draft for the same key holds none of it.
+      expect(await localDraft()).toBe("");
+      const localText = "Draft for this machine's SharedRepo";
+      await window.evaluate(async ({ key, prompt }) => {
+        const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+        await api.updateDirectoryLaunchpad!({ directoryKey: key, patch: { prompt } });
+      }, { key: directoryKey, prompt: localText });
+
+      expect(await remoteDraft()).toEqual({ directoryKey, prompt: peerText });
+      expect(await localDraft()).toBe(localText);
+    } finally {
+      await app?.close();
+      await gateway?.close();
+      await fixture.cleanup();
+      await rm(sharedPath, { recursive: true, force: true });
     }
   });
 

@@ -1,3 +1,4 @@
+import { ANIMATED_GIF_BASE64, ANIMATED_WEBP_BASE64 } from "../../../test/fixtures/animated-images";
 import { StrictMode, type ReactElement } from "react";
 import { buildThreadComposerScopeKey } from "../../composer/useComposerDraftStore";
 import {
@@ -1028,12 +1029,17 @@ describe("StarMapChatCard federation routing", () => {
     );
   });
 
-  it("preserves an animated GIF instead of normalizing it", async () => {
+  it.each([
+    ["gif", ANIMATED_GIF_BASE64],
+    ["webp", ANIMATED_WEBP_BASE64],
+  ])("preserves pasted animated %s bytes through the compact composer", async (extension, base64) => {
+    vi.mocked(normalizeImageFile).mockClear();
+    const mimeType = `image/${extension}`;
     const desktopApi = buildApi();
     renderCard({ desktopApi, thread: localThread() });
     const input = await findReadyTextbox( { name: "Message Local work" });
-    const image = new File(["GIF89a"], "animated.gif", {
-      type: "image/gif",
+    const image = new File([Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))], `animated.${extension}`, {
+      type: mimeType,
     });
 
     fireEvent.paste(input, {
@@ -1044,13 +1050,14 @@ describe("StarMapChatCard federation routing", () => {
           {
             getAsFile: () => image,
             kind: "file",
-            type: "image/gif",
+            type: mimeType,
           },
         ],
         types: ["Files"],
       },
     });
-    await screen.findByRole("img", { name: "animated.gif" });
+    await screen.findByRole("img", { name: `animated.${extension}` });
+    expect(normalizeImageFile).not.toHaveBeenCalled();
     fireEvent.keyDown(input, { key: "Enter" });
 
     await waitFor(() => {
@@ -1059,8 +1066,8 @@ describe("StarMapChatCard federation routing", () => {
           input: [
             {
               type: "image",
-              name: "animated.gif",
-              url: "data:image/gif;base64,R0lGODlh",
+              name: `animated.${extension}`,
+              url: `data:${mimeType};base64,${base64}`,
             },
           ],
         }),

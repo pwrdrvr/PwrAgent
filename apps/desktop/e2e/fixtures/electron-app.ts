@@ -356,6 +356,9 @@ export async function launchElectronApp(
   }
   configureElectronE2eReleaseEnv(env);
   anchorWindowsPwragentRoot(env);
+  // Native Chromium storage must be owned by this fixture, including any
+  // detached profile helpers that inherit its environment.
+  env.PWRAGENT_E2E_CHROMIUM_ROOT = path.join(homeRoot, "chromium");
   env[E2E_SHUTDOWN_LAUNCH_ID_ENV] = launchId;
   if (diagnosticsFile) {
     env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV] = diagnosticsFile;

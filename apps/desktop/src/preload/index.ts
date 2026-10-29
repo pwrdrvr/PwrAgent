@@ -1,6 +1,11 @@
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import { FEDERATION_SERVICES_CHANNEL } from "../shared/ipc";
 import {
+  HTML_PREVIEW_NAVIGATION_CHANNEL,
+  type HtmlPreviewNavigationEvent,
+} from "../shared/html-preview";
+import { DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL, DIAGNOSTICS_STOP_RENDERING_CHANNEL, type RenderingCaptureResult } from "../shared/rendering-diagnostics";
+import {
   NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL, NATIVE_VOICE_CAMERA_CUE_CHANNEL, NATIVE_VOICE_CAMERA_REPEAT_CHANNEL,
   type VoiceCameraRequest, type VoiceCameraFrame, type VoiceCameraCue, type VoiceCameraRepeatCheck,
 } from "../shared/native-voice-camera";
@@ -39,6 +44,8 @@ import type {
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
+  ThreadTodoFeedDelta,
+  ThreadTodoFeedSnapshot,
   ThreadReview,
   ListThreadReviewsRequest,
   UpdateThreadReviewRequest,
@@ -171,6 +178,9 @@ import type {
   SetMcpConnectionSelectForNewThreadsRequest,
   SetMcpConnectionToolApprovalRequest,
   SetSandboxerCleanupOnPrCloseRequest,
+  SetLinearPasteImagesRequest,
+  FetchLinearPastedImagesRequest,
+  FetchLinearPastedImagesResponse,
   SetSandboxerTransportRequest,
   ReadThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsRequest,
@@ -503,6 +513,8 @@ import type {
   OpenPathResponse,
   ReadMarkdownFileRequest,
   ReadMarkdownFileResponse,
+  ReadHtmlPreviewAssetsRequest,
+  ReadHtmlPreviewAssetsResponse,
   ResolveTranscriptFilesRequest,
   ResolveTranscriptFilesResponse,
   ReadMarkdownFileViewerSnapshotRequest,
@@ -678,7 +690,9 @@ import {
   SCHEDULED_ACTIONS_SEND_NOW_CHANNEL,
   SCHEDULED_ACTIONS_UPDATE_CHANNEL,
   THREAD_TODOS_CHANGED_EVENT_CHANNEL,
+  THREAD_TODOS_DELTA_EVENT_CHANNEL,
   THREAD_TODOS_LIST_CHANNEL,
+  THREAD_TODOS_SNAPSHOT_CHANNEL,
   THREAD_REVIEWS_LIST_CHANNEL,
   THREAD_REVIEWS_UPDATE_CHANNEL,
   THREAD_TODOS_LIST_PROJECTS_CHANNEL,
@@ -813,6 +827,7 @@ import {
   APPLICATIONS_READ_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
   MARKDOWN_FILE_READ_CHANNEL,
+  HTML_PREVIEW_ASSETS_READ_CHANNEL,
   TRANSCRIPT_FILES_RESOLVE_CHANNEL,
   MARKDOWN_FILE_VIEWER_OPEN_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL,
@@ -918,6 +933,8 @@ import {
   MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
   MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL,
   MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
+  MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL,
+  MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL,
   MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL,
   MCP_CONNECTION_LIST_TOOLS_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
@@ -1317,6 +1334,12 @@ const desktopApi = Object.freeze({
       MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
       request,
     ),
+  setLinearPasteImages: async (request: SetLinearPasteImagesRequest): Promise<void> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL, request),
+  fetchLinearPastedImages: async (
+    request: FetchLinearPastedImagesRequest,
+  ): Promise<FetchLinearPastedImagesResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL, request),
   listMcpConnectionTools: async (
     request: ListMcpConnectionToolsRequest,
   ): Promise<ListMcpConnectionToolsResponse> =>
@@ -1992,6 +2015,21 @@ const desktopApi = Object.freeze({
     request: ReadMarkdownFileRequest,
   ): Promise<ReadMarkdownFileResponse> =>
     await ipcRenderer.invoke(MARKDOWN_FILE_READ_CHANNEL, request),
+  readHtmlPreviewAssets: async (
+    request: ReadHtmlPreviewAssetsRequest,
+  ): Promise<ReadHtmlPreviewAssetsResponse> =>
+    await ipcRenderer.invoke(HTML_PREVIEW_ASSETS_READ_CHANNEL, request),
+  onHtmlPreviewNavigation: (
+    callback: (event: HtmlPreviewNavigationEvent) => void,
+  ): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: HtmlPreviewNavigationEvent) => {
+      callback(payload);
+    };
+    ipcRenderer.on(HTML_PREVIEW_NAVIGATION_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(HTML_PREVIEW_NAVIGATION_CHANNEL, listener);
+    };
+  },
   openMarkdownFileViewer: async (
     request: OpenMarkdownFileViewerRequest,
   ): Promise<OpenMarkdownFileViewerResponse> =>
@@ -2113,6 +2151,10 @@ const desktopApi = Object.freeze({
       ipcRenderer.off(INTEGRATED_TERMINAL_ERROR_CHANNEL, listener);
     };
   },
+  captureRenderingDiagnostics: (seconds = 10): Promise<RenderingCaptureResult> =>
+    ipcRenderer.invoke(DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL, seconds),
+  stopRenderingDiagnostics: (): Promise<RenderingCaptureResult | undefined> =>
+    ipcRenderer.invoke(DIAGNOSTICS_STOP_RENDERING_CHANNEL),
   captureHeapSnapshot: async (
     request: CaptureHeapSnapshotRequest,
   ): Promise<{ delayMs: number }> =>
@@ -2348,7 +2390,7 @@ const desktopApi = Object.freeze({
   listThreadTodos: async (
     request?: ListThreadTodosRequest,
   ): Promise<ListThreadTodosResponse> =>
-    await ipcRenderer.invoke(THREAD_TODOS_LIST_CHANNEL, request ?? {}),
+    unwrapNavigationRead(await ipcRenderer.invoke(THREAD_TODOS_LIST_CHANNEL, request ?? {})),
   listThreadReviews: async (request?: ListThreadReviewsRequest): Promise<{ reviews: ThreadReview[] }> =>
     await ipcRenderer.invoke(THREAD_REVIEWS_LIST_CHANNEL, request ?? {}),
   updateThreadReview: async (request: UpdateThreadReviewRequest): Promise<{ review: ThreadReview }> =>
@@ -2381,6 +2423,20 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(THREAD_TODOS_CHANGED_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(THREAD_TODOS_CHANGED_EVENT_CHANNEL, listener);
+    };
+  },
+  snapshotThreadTodos: async (): Promise<ThreadTodoFeedSnapshot> =>
+    await ipcRenderer.invoke(THREAD_TODOS_SNAPSHOT_CHANNEL),
+  onThreadTodosDelta: (
+    callback: (delta: ThreadTodoFeedDelta) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: ThreadTodoFeedDelta,
+    ) => callback(payload);
+    ipcRenderer.on(THREAD_TODOS_DELTA_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(THREAD_TODOS_DELTA_EVENT_CHANNEL, listener);
     };
   },
   listOperatorRequests: async (request?: ListOperatorRequestsRequest): Promise<ListOperatorRequestsResponse> =>
@@ -3572,13 +3628,20 @@ const LAYOUT_ARG_PREFIX = "--pwragent-layout-preferences=";
 function readBootstrapLayoutPreferences(): {
   contextRailPinned: boolean;
   sidebarHidden: boolean;
+  projectIndexHidden: boolean;
+  projectIndexWidth: number | null;
 } {
   const defaults = DESKTOP_UI_LAYOUT_DEFAULTS;
   for (const arg of process.argv) {
     if (!arg.startsWith(LAYOUT_ARG_PREFIX)) continue;
     try {
       const raw = JSON.parse(arg.slice(LAYOUT_ARG_PREFIX.length)) as
-        | { contextRailPinned?: unknown; sidebarHidden?: unknown }
+        | {
+          contextRailPinned?: unknown;
+          sidebarHidden?: unknown;
+          projectIndexHidden?: unknown;
+          projectIndexWidth?: unknown;
+        }
         | null;
       return {
         contextRailPinned: typeof raw?.contextRailPinned === "boolean"
@@ -3587,6 +3650,14 @@ function readBootstrapLayoutPreferences(): {
         sidebarHidden: typeof raw?.sidebarHidden === "boolean"
           ? raw.sidebarHidden
           : defaults.sidebarHidden,
+        projectIndexHidden: typeof raw?.projectIndexHidden === "boolean"
+          ? raw.projectIndexHidden
+          : defaults.projectIndexHidden,
+        projectIndexWidth: typeof raw?.projectIndexWidth === "number"
+          && Number.isFinite(raw.projectIndexWidth)
+          && raw.projectIndexWidth > 0
+          ? Math.round(raw.projectIndexWidth)
+          : defaults.projectIndexWidth,
       };
     } catch {
       break;

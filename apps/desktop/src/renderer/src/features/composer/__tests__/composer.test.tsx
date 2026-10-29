@@ -1,3 +1,4 @@
+import { ANIMATED_GIF_BASE64, ANIMATED_WEBP_BASE64 } from "../../../test/fixtures/animated-images";
 import * as composerMentionSources from "../useComposerMentionSources";
 import { buildThreadComposerScopeKey } from "../useComposerDraftStore";
 import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
@@ -47,6 +48,7 @@ import { Composer as ProductionComposer } from "../Composer";
 import { ImageGalleryLayer } from "../../thread-detail/ImageGalleryLayer";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
+import { settleFakeTimers } from "../../../test/settle-fake-timers";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
 import { useComposerDraftStore } from "../useComposerDraftStore";
 import { useNavigationLaunchpadConfiguration } from "../../../lib/useNavigationLaunchpadConfiguration";
@@ -116,9 +118,7 @@ beforeAll(() => {
  * makes the same proof instant and exact.
  */
 async function settleFederatedSearch(): Promise<void> {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(FEDERATED_THREAD_SEARCH_DEBOUNCE_MS * 2);
-  });
+  await settleFakeTimers(FEDERATED_THREAD_SEARCH_DEBOUNCE_MS * 2);
 }
 
 async function flushReactUpdates(): Promise<void> {
@@ -835,6 +835,7 @@ describe("Composer", () => {
       clipboardData: { files: [file], items: [{ kind: "file", type: "image/png", getAsFile: () => file }] },
     });
     await waitFor(() => expect(normalizeImageFile).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("Preparing image attachments…")).toBeInTheDocument();
     const thread: NavigationThreadSummary = {
       id: "materialized", source: "codex", title: "First message", titleSource: "explicit",
       linkedDirectories: [], inbox: { inInbox: false }, optimisticActiveTurn: { id: "first-turn" },
@@ -842,6 +843,7 @@ describe("Composer", () => {
     act(() => handoffLaunchpadComposer(store, `launchpad:${launchpad.directoryKey}`, thread));
     view.rerender(<Composer backends={[backendSummary("codex")]} thread={thread}
       activeTurnId="first-turn" draftStore={store} skills={[]} />);
+    expect(screen.getByText("Preparing image attachments…")).toBeInTheDocument();
     await act(async () => {
       normalization.resolve({
         dataUrl: "data:image/png;base64,AQID", height: 24, width: 24, size: 3,
@@ -851,9 +853,135 @@ describe("Composer", () => {
       await normalization.promise;
     });
     expect(await screen.findByAltText("follow-up.png")).toBeInTheDocument();
+    expect(screen.queryByText("Preparing image attachments…")).not.toBeInTheDocument();
     expect(store.get(buildThreadComposerScopeKey("codex", "materialized"))?.imageAttachments).toHaveLength(1);
     expect(store.get(buildThreadComposerScopeKey("codex", "materialized"))?.draft).toBe("Follow-up image");
     expect(store.get(`launchpad:${launchpad.directoryKey}`)).toBeUndefined();
+  });
+
+  it("attaches the images in text pasted from Linear", async () => {
+    const pasted = `<issue identifier="PWR-5"><linear-image>${JSON.stringify({
+      type: "image",
+      attrs: { src: "https://uploads.linear.app/org/issue/file?signature=old", alt: "shot.png" },
+    })}</linear-image></issue>`;
+    const fetchLinearPastedImages = vi.fn(async () => ({
+      status: "fetched" as const,
+      failed: 0,
+      images: [{ name: "shot.png", mimeType: "image/png", dataBase64: "AQID" }],
+    }));
+    render(<Composer desktopApi={{ fetchLinearPastedImages }} skills={[]} thread={{
+      id: "thread-1", title: "Linear paste", titleSource: "explicit", source: "codex",
+      linkedDirectories: [], inbox: { inInbox: false },
+    }} />);
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [],
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+      },
+    });
+
+    expect(await screen.findByAltText("shot.png")).toBeInTheDocument();
+    expect(fetchLinearPastedImages).toHaveBeenCalledWith({ text: pasted });
+  });
+
+  it("says how to attach expired Linear images when there is no connection", async () => {
+    const pasted = `<linear-image>${JSON.stringify({
+      type: "image",
+      attrs: { src: "https://uploads.linear.app/org/issue/file", alt: "old.png" },
+    })}</linear-image>`;
+    const onShowNotice = vi.fn();
+    const fetchLinearPastedImages = vi.fn(async () => ({ status: "unavailable" as const }));
+    render(<Composer desktopApi={{ fetchLinearPastedImages }} onShowNotice={onShowNotice} skills={[]} thread={{
+      id: "thread-1", title: "Linear paste", titleSource: "explicit", source: "codex",
+      linkedDirectories: [], inbox: { inInbox: false },
+    }} />);
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [],
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+      },
+    });
+
+    await waitFor(() => expect(onShowNotice).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Linear images not attached",
+      message: expect.stringContaining("Connect Linear in Settings → Plugins"),
+    })));
+  });
+
+  it("holds Send while Linear images download", async () => {
+    const pasted = `<linear-image>${JSON.stringify({
+      type: "image",
+      attrs: { src: "https://uploads.linear.app/org/issue/file", alt: "held.png" },
+    })}</linear-image>`;
+    const response = createDeferred<{
+      status: "fetched"; failed: number;
+      images: Array<{ name: string; mimeType: string; dataBase64: string }>;
+    }>();
+    render(<Composer desktopApi={{ fetchLinearPastedImages: () => response.promise }} skills={[]} thread={{
+      id: "thread-1", title: "Linear paste", titleSource: "explicit", source: "codex",
+      linkedDirectories: [], inbox: { inInbox: false },
+    }} />);
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [],
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+      },
+    });
+
+    expect(await screen.findByText("Preparing image attachments…")).toBeInTheDocument();
+    await act(async () => {
+      response.resolve({
+        status: "fetched",
+        failed: 0,
+        images: [{ name: "held.png", mimeType: "image/png", dataBase64: "AQID" }],
+      });
+      await response.promise;
+    });
+    expect(await screen.findByAltText("held.png")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Preparing image attachments…")).toBeNull());
+  });
+
+  it("drops Linear images that arrive after the thread changes", async () => {
+    const pasted = `<linear-image>${JSON.stringify({
+      type: "image",
+      attrs: { src: "https://uploads.linear.app/org/issue/file", alt: "late.png" },
+    })}</linear-image>`;
+    const response = createDeferred<{
+      status: "fetched"; failed: number;
+      images: Array<{ name: string; mimeType: string; dataBase64: string }>;
+    }>();
+    const desktopApi = { fetchLinearPastedImages: vi.fn(() => response.promise) };
+    const thread = (id: string): NavigationThreadSummary => ({
+      id, title: id, titleSource: "explicit", source: "codex",
+      linkedDirectories: [], inbox: { inInbox: false },
+    });
+    const view = render(<Composer desktopApi={desktopApi} skills={[]} thread={thread("first")} />);
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [],
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+      },
+    });
+    await waitFor(() => expect(desktopApi.fetchLinearPastedImages).toHaveBeenCalledTimes(1));
+
+    view.rerender(<Composer desktopApi={desktopApi} skills={[]} thread={thread("second")} />);
+    await act(async () => {
+      response.resolve({
+        status: "fetched",
+        failed: 0,
+        images: [{ name: "late.png", mimeType: "image/png", dataBase64: "AQID" }],
+      });
+      await response.promise;
+    });
+
+    expect(screen.queryByAltText("late.png")).not.toBeInTheDocument();
+    expect(normalizeImageFile).not.toHaveBeenCalled();
   });
 
   it("keeps follow-ups and steering intent when a starting launchpad is remounted", async () => {
@@ -19689,6 +19817,8 @@ describe("Composer", () => {
       },
     });
 
+    await waitFor(() => expect(normalizeImageFile).toHaveBeenCalledTimes(1));
+
     rerender(
       <Composer
         backends={[backendSummary("codex")]}
@@ -19910,7 +20040,10 @@ describe("Composer", () => {
         "directory:/repo",
         expect.objectContaining({
           prompt: "Persist this launchpad before navigation",
-        })
+        }),
+        // The flush names whose draft it is, so it cannot land in a peer's
+        // draft for the same directory key.
+        { owner: { scope: "local" } },
       );
     });
   });
@@ -20530,7 +20663,18 @@ describe("Composer", () => {
     },
   );
 
-  it("links a hand-typed directory reference after sending a reply", async () => {
+  // Only an @ chip links a project. A path typed or pasted as plain text (a
+  // diagnostics block, a log line) names a project without asking for it,
+  // and linking it filed the thread under that project's group.
+  it.each([
+    ["typed path", "It might be in ~/Projects/catalog-portal."],
+    ["pasted code block", [
+      "what went wrong here?",
+      "```",
+      "Project directory/worktree path: /Users/example/Projects/catalog-portal/2026-10-27-ae1587",
+      "```",
+    ].join("\n")],
+  ])("does not link a project named only in a %s", async (_label, draft) => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
       "/Users/example";
     try {
@@ -20573,17 +20717,15 @@ describe("Composer", () => {
       );
 
       fireEvent.change(screen.getByLabelText("Reply"), {
-        target: { value: "It might be in ~/Projects/catalog-portal." },
+        target: { value: draft },
       });
+      expect(document.querySelector(".composer__directory-reference")).toBeNull();
       await clickButton("Send");
 
       await waitFor(() => {
         expect(startTurn).toHaveBeenCalled();
       });
-      expect(onAttachDirectoryReferences).toHaveBeenCalledWith(
-        ["/Users/example/Projects/catalog-portal"],
-        { backend: "codex", threadId: "thread-1" },
-      );
+      expect(onAttachDirectoryReferences).not.toHaveBeenCalled();
     } finally {
       delete (window as unknown as { __pwragentHomeDir?: string })
         .__pwragentHomeDir;
@@ -23942,14 +24084,51 @@ describe("Composer", () => {
     expect(await within(dialog).findByAltText("first.gif")).toBeInTheDocument();
   });
 
-  it("keeps dropped GIF images animated by preserving the original data URL", async () => {
+  it("shows pending image preparation and blocks both button and keyboard submission", async () => {
+    const normalization = createDeferred<Awaited<ReturnType<typeof normalizeImageFile>>>();
+    vi.mocked(normalizeImageFile).mockImplementationOnce(() => normalization.promise);
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const, threadId: "thread-1", turnId: "turn-1",
+    }));
+    render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+      disabled={false} skills={[]}
+      thread={{ id: "thread-1", title: "Test", titleSource: "explicit", source: "codex", linkedDirectories: [], inbox: { inInbox: false } }}
+    />);
+    const reply = screen.getByLabelText("Reply");
+    fireEvent.change(reply, { target: { value: "Inspect this image" } });
+    const image = new File(["png"], "pending.png", { type: "image/png" });
+    fireEvent.paste(reply, {
+      clipboardData: { files: [image], items: [{ kind: "file", type: image.type, getAsFile: () => image }] },
+    });
+    await waitFor(() => expect(normalizeImageFile).toHaveBeenCalledOnce());
+    expect(screen.getByText("Preparing image attachments…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    fireEvent.keyDown(reply, { key: "Enter", metaKey: true });
+    expect(startTurn).not.toHaveBeenCalled();
+    await act(async () => normalization.resolve({
+      dataUrl: "data:image/png;base64,AQID", height: 24, width: 24, size: 3,
+      mimeType: "image/png", conversionPath: "renderer",
+      original: { height: 24, width: 24, size: 3, mimeType: image.type, name: image.name },
+    }));
+    await screen.findByAltText("pending.png");
+    expect(screen.queryByText("Preparing image attachments…")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  });
+
+  it.each([
+    ["gif", ANIMATED_GIF_BASE64],
+    ["webp", ANIMATED_WEBP_BASE64],
+  ])("preserves dropped animated %s bytes through sending", async (extension, base64) => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-1",
       turnId: "turn-1",
     }));
-    const gifFile = new File([new Uint8Array([71, 73, 70, 56])], "demo.gif", {
-      type: "image/gif",
+    const mimeType = `image/${extension}`;
+    const url = `data:${mimeType};base64,${base64}`;
+    const image = new File([Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))], `demo.${extension}`, {
+      type: mimeType,
     });
 
     render(
@@ -23978,15 +24157,15 @@ describe("Composer", () => {
         items: [
           {
             kind: "file",
-            type: "image/gif",
-            getAsFile: () => gifFile,
+            type: mimeType,
+            getAsFile: () => image,
           },
         ],
       },
     });
 
-    const preview = await screen.findByAltText("demo.gif");
-    expect(preview).toHaveAttribute("src", expect.stringMatching(/^data:image\/gif;base64,/));
+    const preview = await screen.findByAltText(`demo.${extension}`);
+    expect(preview).toHaveAttribute("src", url);
     expect(normalizeImageFile).not.toHaveBeenCalled();
 
     await clickButton("Send");
@@ -23998,8 +24177,8 @@ describe("Composer", () => {
         input: [
           {
             type: "image",
-            name: "demo.gif",
-            url: expect.stringMatching(/^data:image\/gif;base64,/),
+            name: `demo.${extension}`,
+            url: url,
           },
         ],
       });

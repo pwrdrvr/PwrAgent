@@ -1054,9 +1054,23 @@ export type EnsureDirectoryLaunchpadResponse = {
    * branch picker independent of notification/render ordering.
    */
   gitStatus?: NavigationDirectoryGitStatus | null;
+  /**
+   * The provider the instance that runs the new thread chose instead of the
+   * request's `preferredBackend`, because it cannot start that one. Absent
+   * when it can, when no provider was preferred, or when the owner was not
+   * asked. A remote draft is stored by the viewer, whose own `defaults` say
+   * nothing about the owner's providers.
+   */
+  preferredBackendFallback?: AppServerBackendKind;
 };
 
 export type UpdateDirectoryLaunchpadRequest = {
+  /**
+   * The instance that owns `directoryKey`. A viewer stores its draft for a
+   * peer's directory apart from its own draft for the same key. A remote
+   * window's own target wins over this one.
+   */
+  federationTarget?: FederationTarget;
   directoryKey: string;
   patch: Partial<
     Pick<
@@ -1101,6 +1115,8 @@ export type UpdateDirectoryLaunchpadResponse = {
 };
 
 export type ResetDirectoryLaunchpadRequest = {
+  /** The instance that owns `directoryKey`, as on an update. */
+  federationTarget?: FederationTarget;
   directoryKey: string;
   /** Clear submitted viewer input while retaining the project's environment. */
   preserveEnvironment?: boolean;

@@ -3,7 +3,10 @@ import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ReactElement } from "react";
 import {
+  ArrowLeftToLineIcon,
+  ArrowRightToLineIcon,
   BanIcon,
+  ConnectionsIcon,
   BranchIcon,
   CalendarPlusIcon,
   ChevronLeftIcon,
@@ -15,6 +18,7 @@ import {
   DiscordIcon,
   DraftIcon,
   FileCodeIcon,
+  FileIcon,
   FolderIcon,
   FolderPlusIcon,
   GrokIcon,
@@ -53,6 +57,7 @@ const ALL_ICONS = [
   ["FolderIcon", FolderIcon],
   ["FolderPlusIcon", FolderPlusIcon],
   ["FileCodeIcon", FileCodeIcon],
+  ["FileIcon", FileIcon],
   ["BranchIcon", BranchIcon],
   ["CommitIcon", CommitIcon],
   ["WorktreeIcon", WorktreeIcon],
@@ -83,6 +88,9 @@ const ALL_ICONS = [
   ["PencilIcon", PencilIcon],
   ["TrashIcon", TrashIcon],
   ["ShieldIcon", ShieldIcon],
+  ["ConnectionsIcon", ConnectionsIcon],
+  ["ArrowRightToLineIcon", ArrowRightToLineIcon],
+  ["ArrowLeftToLineIcon", ArrowLeftToLineIcon],
 ] as const;
 
 describe("icon library", () => {

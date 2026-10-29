@@ -1,5 +1,5 @@
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
-import type { ThreadTodosChangedEvent } from "@pwragent/shared";
+import type { ThreadTodoFeedDelta, ThreadTodosChangedEvent } from "@pwragent/shared";
 import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION_METHODS,
   registerFederationOperatorQuestionHandlers, type OperatorQuestionOperation,
   type OperatorQuestionOperationRequest, type OperatorQuestionOperationResponse } from "./federation-operator-questions";
@@ -30,6 +30,9 @@ import { FEDERATION_MESSAGING_DESTINATION_METHOD, handleFederationMessagingDesti
   type FederationMessagingDestinationOperation, type FederationMessagingDestinationResult } from "./federation-messaging-tools";
 import {
   FederationFilePushReceiver,
+  FederationFilePushReceipts,
+  FILE_PUSH_MAX_BYTES,
+  type FilePushResult,
   FILE_PUSH_METHOD_CAPABILITIES,
   registerFilePushHandlers,
   pushFederationFile,
@@ -38,7 +41,7 @@ import {
 import { summarizeThreadAgentChange } from "@pwragent/shared";
 import { FederationShutdown } from "./federation-shutdown";
 import { FEDERATION_HEALTH_CHANGED_METHOD, FEDERATION_SHUTDOWN_CHANGED_METHOD } from "@pwragent/shared";
-import { NAVIGATION_DIRECTORY_SET_CHANGED_METHOD } from "@pwragent/shared";
+import { NAVIGATION_DIRECTORY_SET_CHANGED_METHOD, THREAD_TODO_FEED_ACKNOWLEDGED_METHOD } from "@pwragent/shared";
 import { mcpConnectionsForPeer } from "@pwragent/shared";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import { federationTrafficCaptureUntil, setFederationTrafficCapture, saveFederationTrafficHistory } from "./federation-traffic-capture";
@@ -175,6 +178,7 @@ import {
   isFederationEventClass,
   isAppServerBackendKind,
   formatFederationPeerDisplayLabel,
+  formatFederationPeerShortDisplayLabel,
   isRemoteFederationTarget,
   mergeCelestialIconAssignments,
   pickCelestialIcon,
@@ -611,6 +615,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "federated_search",
   "messaging_route",
   "messaging_destinations",
+  "messaging_files",
   "pwrsnap_connection",
   "gateway_relay",
   // Federation is a same-operator trust domain and turn_control already
@@ -633,6 +638,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "turn_assistant_reply",
   "thread_mcp_connections",
   "thread_todos",
+  "thread_todo_feed",
   "operator_questions",
   "operator_requests",
   "thread_display_bulk_reads",
@@ -642,6 +648,8 @@ const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
   "remote-thread-summary-cache";
 /** This viewer's `directory_set` subscriptions, one per watched peer. */
 const DIRECTORY_SET_EVENT_CONSUMER_ID = "directory-set-watch";
+/** This viewer's `todo_feed` subscriptions, one per owner a To-do view follows. */
+const TODO_FEED_EVENT_CONSUMER_ID = "todo-feed-watch";
 /**
  * How long a peer stays watched after a machine menu last asked about it.
  * The menus ask every peer as they open, so this is how long the owner keeps
@@ -787,11 +795,15 @@ export function federationEventClassForMethod(
   ) {
     return "star_map";
   }
-  if (method === "navigation/invalidated" || method === "thread/todos/changed" || method === "thread/operatorRequests/changed") {
+  if (method === "navigation/invalidated" || method === "thread/todos/changed" || method === "thread/todos/delta"
+    || method === "thread/operatorRequests/changed") {
     return "navigation";
   }
   if (method === NAVIGATION_DIRECTORY_SET_CHANGED_METHOD) {
     return "directory_set";
+  }
+  if (method === THREAD_TODO_FEED_ACKNOWLEDGED_METHOD) {
+    return "todo_feed";
   }
   // Fail closed: newly introduced notification methods do not reach
   // navigation-only or Star Map subscribers until explicitly classified.
@@ -972,8 +984,8 @@ export function eventMatchesThreadSelection(
   selection: FederationThreadSelection,
 ): boolean {
   if (selection.kind === "all") return true;
-  // A directory set belongs to the owner, never to one thread.
-  if (eventClass === "directory_set") return true;
+  // A directory set and a To-do feed belong to the owner, never to one thread.
+  if (eventClass === "directory_set" || eventClass === "todo_feed") return true;
   // Private execution threads do not appear in navigation. Failure notices
   // name their visible owner separately, so subscribers of that owner still
   // need the terminal event while unrelated sparse subscribers do not.
@@ -1034,12 +1046,21 @@ function eventClassAllowedByCapabilities(
       return capabilities.includes("scheduled_actions");
     case "directory_set":
       return capabilities.includes("thread_navigation");
+    case "todo_feed":
+      return capabilities.includes("thread_navigation") && capabilities.includes("thread_todo_feed");
   }
 }
 
 export class DesktopFederationRuntime {
   messagingSourceInstanceId(): FederationInstanceId {
     return this.ensureLocalInstanceId();
+  }
+
+  async consumeMessagingFile(sourceInstanceId: string, file: FilePushResult): Promise<Uint8Array> {
+    if (!this.receiverPermissions().filePush) throw new Error("Incoming files are disabled on the messaging owner.");
+    const bytes = await this.messagingFileReceipts.consume(sourceInstanceId, file, FILE_PUSH_MAX_BYTES);
+    if (!this.receiverPermissions().filePush) throw new Error("Incoming files were disabled during the transfer.");
+    return bytes;
   }
 
   async requestMessagingDestination(instanceId: FederationInstanceId, operation: FederationMessagingDestinationOperation): Promise<FederationMessagingDestinationResult> {
@@ -1244,6 +1265,7 @@ export class DesktopFederationRuntime {
   private releaseWorktreeTerminalOwner?: () => void;
   private filePushReceiver?: FederationFilePushReceiver;
   private threadHandoffService?: ThreadInstanceHandoffService;
+  private readonly messagingFileReceipts = new FederationFilePushReceipts();
   private readonly handoffFileReceipts = new Map<string, { peerId: string; sizeBytes: number; sha256: string }>();
   private readonly remotePtyEventListeners = new Set<
     (event: FederationPtyStreamEvent) => void
@@ -1252,6 +1274,7 @@ export class DesktopFederationRuntime {
     (event: AgentEvent) => void | Promise<void>
   >();
   private readonly peerStatusListeners = new Set<() => void>();
+  private readonly shortNameListeners = new Set<() => void>();
   private readonly desiredEventSubscriptions = new Map<
     string,
     Map<FederationInstanceId, DesiredEventSubscription>
@@ -1272,6 +1295,13 @@ export class DesktopFederationRuntime {
   >();
   /** Shared by every watch, so a watch started later never reuses a generation. */
   private directorySetGeneration = 0;
+  /**
+   * Owners whose To-do feed a view follows. `route` is the peer the owner's
+   * last `todo_feed` acknowledgement arrived through. It is cleared when the
+   * owner's status changes, and it counts only while envelopes to the owner
+   * still leave through that peer.
+   */
+  private readonly todoFeedWatches = new Map<FederationInstanceId, { route?: FederationInstanceId }>();
   private readonly sentNavigationSubscriptions = new Set<FederationInstanceId>();
   private readonly desiredEventStreamIds = new Map<FederationInstanceId, string>();
   private readonly receivedEventStreams = new Map<FederationInstanceId, {
@@ -1285,6 +1315,7 @@ export class DesktopFederationRuntime {
   >();
   private unsubscribeLocalBackendEvents?: () => void;
   private restartPromise: Promise<void> | undefined;
+  private restartRequested = false;
   private remoteThreadSummaryCache: RemoteThreadSummaryCache | undefined;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private accessRefreshTimer?: ReturnType<typeof setTimeout>;
@@ -1548,9 +1579,26 @@ export class DesktopFederationRuntime {
     };
   }
 
+  /**
+   * Fires whenever the short-name map changes, so the application menu and
+   * remote window titles can redraw with the new names.
+   */
+  onShortNamesChanged(listener: () => void): () => void {
+    this.shortNameListeners.add(listener);
+    return () => {
+      this.shortNameListeners.delete(listener);
+    };
+  }
+
   connectedPeerTargets(): Array<{
     target: FederationRemoteTarget;
     label: string;
+    /**
+     * `label` with the federation's short name for the machine, for window
+     * titles and the Remote Instances menu. Absent when the machine has no
+     * short name. `label` stays the full name for tooltips and agents.
+     */
+    shortLabel?: string;
     capabilities: FederationCapability[];
     navigationQueryProtocol?: 2;
   }> {
@@ -1561,12 +1609,23 @@ export class DesktopFederationRuntime {
     const visible = this.visiblePeers();
     return visible
       .filter((peer) => peer.status === "connected")
-      .map((peer) => ({
-        target: { scope: "remote", instanceId: peer.id },
-        label: formatFederationPeerDisplayLabel(peer, visible),
-        capabilities: [...peer.capabilities],
-        navigationQueryProtocol: peer.navigationQueryProtocol,
-      }));
+      .map((peer) => {
+        const shortLabel = this.shortNames.shortLabelFor(peer.id, peer.label);
+        return {
+          target: { scope: "remote", instanceId: peer.id },
+          label: formatFederationPeerDisplayLabel(peer, visible),
+          ...(shortLabel
+            ? {
+                shortLabel: formatFederationPeerShortDisplayLabel(
+                  { ...peer, shortLabel },
+                  visible,
+                ),
+              }
+            : {}),
+          capabilities: [...peer.capabilities],
+          navigationQueryProtocol: peer.navigationQueryProtocol,
+        };
+      });
   }
 
   assertRemoteNavigationQueryProtocol(
@@ -1608,10 +1667,23 @@ export class DesktopFederationRuntime {
   }
 
   async restart(): Promise<void> {
-    this.restartPromise ??= this.restartNow().finally(() => {
-      this.restartPromise = undefined;
-    });
+    // Startup reads config before asynchronous host/key/lease work. A later
+    // request may carry an invite or mode change that startup has not seen.
+    // Coalesce requests into another pass, and await all passes before returning.
+    this.restartRequested = true;
+    this.restartPromise ??= this.drainRestarts();
     return await this.restartPromise;
+  }
+
+  private async drainRestarts(): Promise<void> {
+    try {
+      do {
+        this.restartRequested = false;
+        await this.restartNow();
+      } while (this.restartRequested);
+    } finally {
+      this.restartPromise = undefined;
+    }
   }
 
   async stop(): Promise<void> {
@@ -1660,6 +1732,7 @@ export class DesktopFederationRuntime {
     this.filePushReceiver = undefined;
     this.threadHandoffService = undefined;
     this.handoffFileReceipts.clear();
+    this.messagingFileReceipts.clear();
     this.serviceViews.clear();
     this.serviceForwarder.dispose();
     this.services?.dispose();
@@ -1688,6 +1761,7 @@ export class DesktopFederationRuntime {
     for (const instanceId of this.directorySetWatches.keys()) {
       this.unacknowledgeDirectorySetWatch(instanceId);
     }
+    for (const watch of this.todoFeedWatches.values()) delete watch.route;
     this.desiredEventStreamIds.clear();
     this.receivedEventStreams.clear();
     this.relayedEventSubscriptions.clear();
@@ -2413,6 +2487,60 @@ export class DesktopFederationRuntime {
       notification: { method: "thread/operatorRequests/changed", params } });
     this.forwardLocalBackendEvent({ backend: params.backend ?? "codex",
       notification: { method: "thread/operatorRequestDetails/changed", params } });
+  }
+
+  /** One card change from this owner's live To-do feed. */
+  publishThreadTodoDelta(delta: ThreadTodoFeedDelta): void {
+    this.forwardLocalBackendEvent({ backend: delta.backend ?? "codex",
+      notification: { method: "thread/todos/delta", params: delta } });
+  }
+
+  /**
+   * The owner serves `threadTodos.snapshot` and sends this viewer its deltas.
+   * Over a direct connection both ends read that connection's capabilities.
+   * Through a gateway, the owner's `todo_feed` acknowledgement is the proof:
+   * a relay that predates the class drops it, so the acknowledgement arrives
+   * only when every hop relays deltas, and the owner sends deltas exactly to
+   * subscriptions that carry the class. Until it arrives, and after the
+   * owner's status or route changes, the owner is listed on its markers.
+   */
+  remotePeerSupportsTodoFeed(target: FederationRemoteTarget): boolean {
+    const instanceId = target.instanceId;
+    if (this.todoQueueUnavailableInstance(target, "thread_todos") !== undefined) return false;
+    if (this.router?.getConnection(instanceId)) {
+      return this.directPeerAdvertises(instanceId, instanceId, "thread_todo_feed");
+    }
+    const route = this.todoFeedWatches.get(instanceId)?.route;
+    return route !== undefined && route === this.gatewayInstanceId;
+  }
+
+  /**
+   * Subscribes to exactly these owners' `todo_feed` acknowledgements; see
+   * `remotePeerSupportsTodoFeed`. The class is threadless, and the empty
+   * selection leaves the merged selection of the other consumers unchanged.
+   */
+  setTodoFeedWatches(instanceIds: readonly FederationInstanceId[]): void {
+    const next = new Set(instanceIds.filter(isFederationInstanceId));
+    for (const instanceId of [...this.todoFeedWatches.keys()]) {
+      if (!next.has(instanceId)) this.todoFeedWatches.delete(instanceId);
+    }
+    for (const instanceId of next) {
+      if (!this.todoFeedWatches.has(instanceId)) this.todoFeedWatches.set(instanceId, {});
+    }
+    this.setEventSubscriptions(TODO_FEED_EVENT_CONSUMER_ID, [...next].map((sourceInstanceId) => ({
+      sourceInstanceId,
+      eventClasses: ["todo_feed" as const],
+      threadSelection: { kind: "threads" as const, threads: [] },
+    })));
+  }
+
+  private directPeerAdvertises(
+    instanceId: FederationInstanceId,
+    viaPeerId: FederationInstanceId | undefined,
+    capability: FederationCapability,
+  ): boolean {
+    if (viaPeerId !== instanceId) return false;
+    return this.router?.getConnection(instanceId)?.capabilities.includes(capability) ?? false;
   }
 
   publishThreadTodosChanged(event: ThreadTodosChangedEvent): void {
@@ -3562,7 +3690,9 @@ export class DesktopFederationRuntime {
         [FILE_RESOLVE_TRANSCRIPT_METHOD]: "file_pull",
       },
       additionalRequiredCapabilities: (envelope) => envelope.method === FEDERATION_MESSAGING_DESTINATION_METHOD
-        ? ["thread_navigation"]
+        ? ((envelope.params as FederationMessagingDestinationOperation)?.kind === "request"
+          && (envelope.params as { request?: { operation?: string } }).request?.operation === "send_messaging_file"
+          ? ["thread_navigation", "file_push"] : ["thread_navigation"])
         : envelope.method === FEDERATION_THREAD_TODO_METHODS.runAction
         ? ["environment_actions"]
         : envelope.method === THREAD_HANDOFF_METHODS.import
@@ -3604,6 +3734,7 @@ export class DesktopFederationRuntime {
       onCompleted: (peerId, result) => {
         if (this.handoffFileReceipts.size >= 128) this.handoffFileReceipts.delete(this.handoffFileReceipts.keys().next().value!);
         this.handoffFileReceipts.set(result.path, { peerId, sizeBytes: result.sizeBytes, sha256: result.sha256 });
+        this.messagingFileReceipts.record(peerId, result);
       },
     });
     registerFilePushHandlers(router, this.filePushReceiver);
@@ -5770,6 +5901,15 @@ export class DesktopFederationRuntime {
         params: {},
       },
     });
+    for (const listener of this.shortNameListeners) {
+      try {
+        listener();
+      } catch (error) {
+        log.warn("federation short name listener failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   /**
@@ -6170,6 +6310,17 @@ export class DesktopFederationRuntime {
         },
       });
     }
+    if (subscription?.eventClasses.has("todo_feed")) {
+      // Every relay on the path kept the class, so every one of them relays
+      // `thread/todos/delta`. Acknowledge each subscription that carries it.
+      this.sendBackendEventToSubscriber(subscriberInstanceId, subscription, {
+        backend: "codex",
+        notification: {
+          method: THREAD_TODO_FEED_ACKNOWLEDGED_METHOD,
+          params: { reason: "subscribed" },
+        },
+      });
+    }
     return true;
   }
 
@@ -6310,6 +6461,11 @@ export class DesktopFederationRuntime {
     }
     this.publishedPeerStatuses.set(instanceId, { status, unavailableReason });
     this.unacknowledgeDirectorySetWatch(instanceId);
+    // Only a lost connection voids the To-do feed proof. A gateway replays
+    // relayed subscriptions before it announces the owner as connected, so
+    // the owner's acknowledgement can arrive before that transition.
+    const todoFeedWatch = this.todoFeedWatches.get(instanceId);
+    if (todoFeedWatch && status !== "connected") delete todoFeedWatch.route;
     // A connection transition changes whether cached remote rows are live.
     // Drop both the snapshot and any remembered refresh failure before the
     // renderer refreshes. Otherwise a fetch that races the disconnect can
@@ -6394,6 +6550,13 @@ export class DesktopFederationRuntime {
     for (const [subscriberInstanceId, subscription] of
       this.incomingEventSubscriptions) {
       if (!subscription.eventClasses.has(eventClass)) continue;
+      // Deltas go only to a viewer that follows them: a capable one on a
+      // direct connection, or one whose `todo_feed` subscription reached us.
+      // A gateway that predates them would not relay them as navigation
+      // events, and an older viewer reads To-dos through markers.
+      if (event.notification.method === "thread/todos/delta"
+        && !subscription.eventClasses.has("todo_feed")
+        && !this.directPeerAdvertises(subscriberInstanceId, subscription.viaPeerId, "thread_todo_feed")) continue;
       if (
         eventClass !== "star_map"
         && !eventMatchesThreadSelection(
@@ -6552,6 +6715,13 @@ export class DesktopFederationRuntime {
       }
       return true;
     }
+    if (event.notification.method === THREAD_TODO_FEED_ACKNOWLEDGED_METHOD) {
+      const watch = this.todoFeedWatches.get(sourceInstanceId);
+      if (watch) watch.route = sourcePeerId;
+      // To-do views switch to the feed; windows have no use for it.
+      this.notifyRemoteBackendEventListeners(event);
+      return true;
+    }
     // Subscribed pin snapshots stay fresh through owner events, not a TTL.
     // Every navigation invalidation can change membership, counts or row metadata;
     // transcript deltas still never trigger a collection fetch.
@@ -6565,6 +6735,10 @@ export class DesktopFederationRuntime {
 
   private publishReceivedBackendEvent(event: AgentEvent): void {
     this.publishAgentEvent?.(event);
+    this.notifyRemoteBackendEventListeners(event);
+  }
+
+  private notifyRemoteBackendEventListeners(event: AgentEvent): void {
     for (const listener of this.remoteBackendEventListeners) {
       void Promise.resolve(listener(event)).catch((error) => {
         log.warn("federation remote backend event listener failed", {

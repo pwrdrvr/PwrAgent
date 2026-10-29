@@ -1,3 +1,4 @@
+import { validateMessagingFileMetadata } from "@pwragent/agent-tools/messaging-outbound-file";
 import { matchesAutomationConversation } from "@pwragent/shared";
 import { randomBytes, randomUUID } from "node:crypto";
 import { getAppStateDb } from "../state/app-state";
@@ -530,13 +531,14 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       if (operation?.kind === "authorize") {
         const context = { ...operation.context, requestingInstanceId: callerInstanceId };
         if (!context.causalMessagingSource || context.causalMessagingSource.instanceId !== getDesktopFederationRuntime().messagingSourceInstanceId()
-          || operation.check.threadId !== context.threadId || operation.check.backend !== context.backend) {
+          || operation.check.threadId !== context.threadId || operation.check.backend !== context.backend
+          || (operation.check.tool === "send_messaging_file" && !getDesktopFederationRuntime().receiverPermissions().filePush)) {
           return { allowed: false, permission: "federation.remote_control" };
         }
         return await this.authorizeRetainedTool(context, operation.check);
       }
       if (operation?.kind !== "request" || !operation.request?.context?.causalMessagingSource
-        || !["list_messaging_surfaces", "attach_thread_to_surface"].includes(operation.request.operation)
+        || !["get_current_location", "get_current_messaging_surface", "send_private_response", "rename_current_messaging_conversation", "attach_thread_here", "list_messaging_surfaces", "attach_thread_to_surface", "send_messaging_file", "inspect_messaging_pdfs", "search_messaging_pdf_text", "render_messaging_pdf_pages"].includes(operation.request.operation)
         || operation.request.context.causalMessagingSource.instanceId !== getDesktopFederationRuntime().messagingSourceInstanceId()) {
         return { ok: false, error: { code: "forbidden", message: "The destination must be resolved by its original messaging owner." } };
       }
@@ -545,6 +547,16 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         ...request.context, category: "messaging_context", tool: request.operation, arguments: request.args,
       });
       if (!permission.allowed) return { ok: false, error: { code: "forbidden", message: "The original actor no longer authorizes this federated messaging operation." } };
+      if (request.operation === "send_messaging_file") {
+        const invalid = validateMessagingFileMetadata(request.args);
+        if (invalid) return { ok: false, error: { code: invalid.code, message: invalid.message } };
+        if (!operation.file) return { ok: false, error: { code: "forbidden", message: "A received file receipt is required; remote filesystem paths cannot be read on the messaging owner." } };
+        let bytes: Uint8Array;
+        try { bytes = await getDesktopFederationRuntime().consumeMessagingFile(callerInstanceId, operation.file); }
+        catch { return { ok: false, error: { code: "forbidden", message: "No valid file receipt belongs to this source, or incoming files are disabled." } }; }
+        return await this.handlePwrAgentMessagingRequest({ ...request, args: { ...request.args, path: "" } }, bytes);
+      }
+      if (operation.file) return { ok: false, error: { code: "invalid_arguments", message: "File receipts apply only to send_messaging_file." } };
       return await this.handlePwrAgentMessagingRequest(request);
     });
   }
@@ -573,6 +585,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
 
   async handlePwrAgentMessagingRequest(
     request: PwrAgentMessagingRequest,
+    receivedFile?: Uint8Array,
   ): Promise<PwrAgentMessagingResponse> {
     const sourceOwner = request.context.causalMessagingSource?.instanceId;
     if (["list_messaging_surfaces", "attach_thread_to_surface"].includes(request.operation)
@@ -586,7 +599,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     }
     let firstNotFound: PwrAgentMessagingResponse | undefined;
     for (const controller of this.controllers) {
-      const response = await controller.handlePwrAgentMessagingRequest(request);
+      const response = await controller.handlePwrAgentMessagingRequest(request, receivedFile);
       if (response.ok) {
         return response;
       }

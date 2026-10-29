@@ -1,11 +1,12 @@
-import { registerNativeVoiceIpcHandlers } from "./ipc/native-voice";
+import { nativeVoiceMediaRules, registerNativeVoiceIpcHandlers } from "./ipc/native-voice";
+import { installPermissionPolicy } from "./permission-policy";
 import { markAgentProjectRead } from "./app-server/agent-project-read";
 import { configureBundledGit } from "./bundled-git";
 import {
   applyRememberedLinuxPasswordStore,
   relaunchForLinuxSecretStore,
 } from "./linux-password-store";
-import { app, BrowserWindow, dialog, Menu, nativeImage, safeStorage, shell } from "electron";
+import { app, BrowserWindow, dialog, Menu, nativeImage, safeStorage, session, shell } from "electron";
 import { performance } from "node:perf_hooks";
 import {
   getDesktopBackendRegistry,
@@ -95,7 +96,10 @@ import {
   disposeDesktopFederationRuntime,
   getDesktopFederationRuntime,
 } from "./federation/federation-runtime";
-import { createFederationWindow } from "./federation/federation-window";
+import {
+  createFederationWindow,
+  refreshFederationWindowTitles,
+} from "./federation/federation-window";
 import { applyFederationConfigPatch, subscribeFederationConfig } from "./federation/federation-config-subscription";
 import {
   disposeIntegratedTerminalIpcHandlers,
@@ -173,6 +177,7 @@ import {
   resolveMainLogProfileName,
 } from "./log";
 import { StartupCpuProfiler } from "./diagnostics/startup-cpu-profiler";
+import { stopRenderingDiagnostics } from "./diagnostics/rendering-capture";
 import { recordStartupProfileEvent } from "./diagnostics/startup-profile-events";
 import {
   disposeDesktopMessagingRuntime,
@@ -207,6 +212,7 @@ import {
 import type { AutoVacuumConversion } from "./state/state-db";
 import {
   createMainWindow,
+  getRendererEntry,
   isFederationWindowWebContents,
   stopWindowDiagnostics,
 } from "./window";
@@ -219,7 +225,11 @@ import { requestOpenSettings } from "./window-open-settings";
 import { PROFILES_SETTINGS_CREATE_SUBSECTION } from "../shared/settings-routes";
 import { requestReplayOnboarding } from "./window-replay-onboarding";
 import { requestCopyLocalDiagnosticsInfo } from "./window-copy-local-diagnostics-info";
-import { ACTIVE_PROFILE_MENU_ITEM_ID, buildApplicationMenuTemplate } from "./menu";
+import {
+  ACTIVE_PROFILE_MENU_ITEM_ID,
+  buildApplicationMenuTemplate,
+  type ApplicationMenuFederationPeer,
+} from "./menu";
 import { selectWindowForProfileFocus } from "./window-profile-focus";
 import { wireAppMenuBridge } from "./app-menu-bridge";
 import { wireWindowControlsBridge } from "./window-controls-bridge";
@@ -876,6 +886,7 @@ const flushDiagnostics = createShutdownBarrier({
       const results = await Promise.allSettled([
         Promise.resolve().then(() => startupCpuProfilerForNewWindows?.stop("app-quit")),
         Promise.resolve().then(() => stopWindowDiagnostics("app-quit")),
+        Promise.resolve().then(() => stopRenderingDiagnostics("shutdown")),
       ]);
       const failure = results.find((result) => result.status === "rejected");
       if (failure?.status === "rejected") throw failure.reason;
@@ -1192,7 +1203,7 @@ function installApplicationMenu(): void {
     }));
   // Peer lookup touches the profile state db; during early boot (or a
   // torn-down app state in tests) just render the menu without peers.
-  let federationPeers: Array<{ instanceId: string; label: string }>;
+  let federationPeers: ApplicationMenuFederationPeer[];
   try {
     federationPeers = getDesktopFederationRuntime()
       .connectedPeerTargets()
@@ -1200,6 +1211,7 @@ function installApplicationMenu(): void {
       .map((peer) => ({
         instanceId: peer.target.instanceId,
         label: peer.label,
+        ...(peer.shortLabel ? { shortLabel: peer.shortLabel } : {}),
       }));
   } catch {
     federationPeers = [];
@@ -1339,10 +1351,17 @@ function installWindowMenuRefreshHandlers(): void {
     });
     window.on("page-title-updated", refresh);
   });
-  // Keep Profiles → Remote Instances in sync with peer connectivity.
-  getDesktopFederationRuntime().onPeerStatusChanged(() => {
+  // Profiles → Remote Instances and remote window titles both draw peer
+  // labels, which change with connectivity (a reconnect, or a sibling
+  // profile that adds a "/ <profile>" suffix) and with short names.
+  const refreshPeerLabels = (): void => {
+    refreshFederationWindowTitles(
+      getDesktopFederationRuntime().connectedPeerTargets(),
+    );
     installApplicationMenu();
-  });
+  };
+  getDesktopFederationRuntime().onPeerStatusChanged(refreshPeerLabels);
+  getDesktopFederationRuntime().onShortNamesChanged(refreshPeerLabels);
 }
 
 /**
@@ -1493,6 +1512,12 @@ export function bootstrapApp(): void {
     // and create fresh windows or captures after diagnostics shutdown began.
     if (mainProcessShutdownPromise) return;
     recordStartupProfileEvent({ type: "app-when-ready" });
+    // Every window shares the default session. Deny by default before any
+    // window can ask.
+    installPermissionPolicy(session.defaultSession, {
+      rendererEntry: getRendererEntry(),
+      media: nativeVoiceMediaRules,
+    });
     installDevelopmentDockIcon();
     registerManagedGrokSignatureRejectionBroadcast();
     registerManagedRuntimeProgressBroadcast();

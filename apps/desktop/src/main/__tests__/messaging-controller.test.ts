@@ -4209,6 +4209,91 @@ describe("MessagingController", () => {
     ]);
   });
 
+  it.each([
+    ["every message in the turn output", true],
+    ["an empty turn output", false],
+  ])("privately delivers the last unphased message, given %s", async (_label, withOutput) => {
+    const { harness } = await createSlackPrivateResponseHarness();
+    const note = "Now looking up the AWS SSO session.";
+    const answer = "Open the AWS SSO URL and enter `LAST-CODE`.";
+
+    // Claude reports every assistant message without a phase, so the first
+    // one is a progress note, not the answer.
+    for (const [id, text] of [["message-1", note], ["message-2", answer]]) {
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: { id, type: "agentMessage", text },
+          },
+        },
+      } satisfies AgentEvent);
+    }
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: withOutput
+              ? [{ type: "text", text: note }, { type: "text", text: answer }]
+              : [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const messages = harness.delivered.filter((intent) => intent.kind === "message");
+    expect(messages).toEqual([
+      expect.objectContaining({
+        parts: [expect.objectContaining({ text: answer })],
+      }),
+    ]);
+    expect(
+      messages.filter(
+        (intent) => intent.audit?.channel.conversation.id === "C012SIGNALS",
+      ),
+    ).toEqual([]);
+  });
+
+  it("privately delivers a final-phase message before the turn ends", async () => {
+    const { harness } = await createSlackPrivateResponseHarness();
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "message-1",
+            type: "agentMessage",
+            phase: "final_answer",
+            text: "Open the AWS SSO URL and enter `FINAL-CODE`.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(
+      harness.delivered.filter((intent) => intent.kind === "message"),
+    ).toEqual([
+      expect.objectContaining({
+        parts: [expect.objectContaining({
+          text: "Open the AWS SSO URL and enter `FINAL-CODE`.",
+        })],
+      }),
+    ]);
+  });
+
   it("honors explicit negation when detecting private response requests", async () => {
     const { harness } = await createSlackPrivateResponseHarness({
       inboundText: "I don't want you to DM me; reply here publicly.",
@@ -6185,6 +6270,80 @@ describe("MessagingController", () => {
       await harness.store.revokeBinding({ bindingId: "manager-binding", revokedAt: 3000 });
       expect(await harness.controller.handlePwrAgentMessagingRequest(request)).toMatchObject({ ok: false, error: { code: "forbidden" } });
       expect(createManagedConversation).toHaveBeenCalledTimes(1);
+    } finally { db.close(); }
+  });
+
+  it("authorizes federated retained-source inspection and private replies on the provider owner", async () => {
+    const db = StateDb.open(":memory:");
+    try {
+      let authorized = true;
+      const requests = new SqliteMessagingRequestStore(db.raw);
+      const resolvePrivateConversation = vi.fn(async () => ({ channel: "telegram" as const, outcome: "resolved" as const,
+        conversation: { id: "fixture-private", kind: "dm" as const }, updatedAt: 2000 }));
+      const harness = await createHarness({ requestStore: requests, authorizeRetainedSource: () => authorized, resolvePrivateConversation });
+      const event = buildTextEvent("reply from an outpost", { channel: buildTopicChannel("100") });
+      await harness.store.upsertBinding({ id: "remote-binding", backend: "codex", threadId: "thread-1", targetKind: "thread",
+        channel: event.channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000 });
+      const source = requests.remember({ connectionId: "fixture", agent: { backend: "codex", threadId: "thread-1" }, bindingId: "remote-binding", event })!;
+      const context = { backend: "codex" as const, threadId: "thread-1", turnId: "outpost-turn", causalMessagingSource: source.ref,
+        requestingInstanceId: "pwr_outpost_fixture" };
+      expect(await harness.controller.authorizeRetainedTool(context, { ...context, category: "messaging_context", tool: "send_private_response" }))
+        .toMatchObject({ owns: true, allowed: true });
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "get_current_messaging_surface", context, args: {} }))
+        .toMatchObject({ ok: true, data: { location: { channel: "telegram" } } });
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "send_private_response", context, args: { text: "mock provider reply" } }))
+        .toMatchObject({ ok: true, data: { outcome: "delivered" } });
+      expect(resolvePrivateConversation).toHaveBeenCalledTimes(1);
+      authorized = false;
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "send_private_response", context, args: { text: "revoked" } }))
+        .toMatchObject({ ok: false, error: { code: "forbidden" } });
+      expect(resolvePrivateConversation).toHaveBeenCalledTimes(1);
+    } finally { db.close(); }
+  });
+
+  it("delivers received outpost bytes and rechecks actor, provider and route authority before upload", async () => {
+    const db = StateDb.open(":memory:");
+    try {
+      let admitted = true;
+      const permissions = new Set<MessagingPermissionId>(["message.reply", "thread.resume", "tools.thread_inspection", "federation.remote_control"]);
+      const requests = new SqliteMessagingRequestStore(db.raw);
+      const resolvePrivateConversation = vi.fn(async () => ({ channel: "telegram" as const, outcome: "resolved" as const,
+        conversation: { id: "fixture-private-file", kind: "dm" as const }, updatedAt: 2000 }));
+      const harness = await createHarness({ requestStore: requests, authorizeRetainedSource: () => admitted, resolvePrivateConversation,
+        rbacPolicy: { isEnforcing: () => true, resolve: () => ({ permissions, roleIds: ["fixture-role"], matchedSubjects: [], rejected: false }) } });
+      const event = buildTextEvent("file from outpost", { channel: buildTopicChannel("100") });
+      await harness.store.upsertBinding({ id: "remote-file-binding", backend: "codex", threadId: "thread-1", targetKind: "thread",
+        channel: event.channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000 });
+      const source = requests.remember({ connectionId: "fixture", agent: { backend: "codex", threadId: "thread-1" }, bindingId: "remote-file-binding", event })!;
+      const context = { backend: "codex" as const, threadId: "outpost-thread", turnId: "outpost-turn", causalMessagingSource: source.ref,
+        requestingInstanceId: "pwr_outpost_fixture" };
+      const request = { operation: "send_messaging_file" as const, context, args: { path: "/owner/never-read-this.pdf", filename: "report.pdf", private: true } };
+      const data = Buffer.from("%PDF-1.7\nmock authorized bytes");
+      expect(await harness.controller.handlePwrAgentMessagingRequest(request)).toMatchObject({ ok: false, error: { code: "forbidden" } });
+      expect(await harness.controller.handlePwrAgentMessagingRequest(request, data)).toMatchObject({ ok: true, data: {
+        outcome: "delivered", filename: "report.pdf", mimeType: "application/pdf", private: true, sizeBytes: data.length,
+      } });
+      const delivered = harness.delivered.filter((intent) => intent.kind === "message");
+      expect(delivered).toHaveLength(1);
+      expect(delivered[0]).toMatchObject({ parts: [expect.objectContaining({ type: "file", data })] });
+      for (const permission of ["message.reply", "federation.remote_control"] as const) {
+        permissions.delete(permission);
+        expect(await harness.controller.handlePwrAgentMessagingRequest(request, data)).toMatchObject({ ok: false, error: { code: "forbidden" } });
+        permissions.add(permission);
+      }
+      admitted = false;
+      expect(await harness.controller.handlePwrAgentMessagingRequest(request, data)).toMatchObject({ ok: false, error: { code: "forbidden" } });
+      admitted = true;
+      // A private-route await is a permission-change boundary too.
+      resolvePrivateConversation.mockImplementationOnce(async () => {
+        permissions.delete("message.reply");
+        return { channel: "telegram", outcome: "resolved", conversation: { id: "fixture-private-file", kind: "dm" }, updatedAt: 2000 };
+      });
+      expect(await harness.controller.handlePwrAgentMessagingRequest(request, data)).toMatchObject({ ok: false, error: { code: "forbidden" } });
+      permissions.add("message.reply");
+      await harness.store.revokeBinding({ bindingId: "remote-file-binding", revokedAt: 3000 });
+      expect(await harness.controller.handlePwrAgentMessagingRequest(request, data)).toMatchObject({ ok: false, error: { code: "forbidden" } });
+      expect(harness.delivered.filter((intent) => intent.kind === "message")).toHaveLength(1);
     } finally { db.close(); }
   });
 
@@ -16298,6 +16457,41 @@ describe("MessagingController", () => {
     });
   });
 
+  it("keeps single-page outpost PDFs on the provider owner and binds tools to the exact source and turn", async () => {
+    const db = StateDb.open(":memory:");
+    try {
+      const requests = new SqliteMessagingRequestStore(db.raw);
+      const navigation = buildNavigationSnapshot();
+      const target = buildFederatedThreadRef({ backend: "codex", instanceId: "pwr_pdf_outpost", threadId: "thread-1" });
+      navigation.threads[0]!.federation = { ref: target, instanceLabel: "Fixture outpost", peerStatus: "connected" };
+      const pdfData = Buffer.from("%PDF-1.7\nfixture");
+      vi.mocked(inspectPdfDocument).mockResolvedValueOnce({ pageCount: 1,
+        firstPage: { width: 612, height: 792, renderWidth: 612, renderHeight: 792 } });
+      vi.mocked(renderPdfPages).mockClear();
+      const supportsMessagingPdfTools = vi.fn(async () => true);
+      const harness = await createHarness({ navigation, requestStore: requests, authorizeRetainedSource: () => true, supportsMessagingPdfTools,
+        downloadAttachment: async ({ attachment }) => ({ data: pdfData, fileName: attachment.name, mimeType: attachment.mimeType, sizeBytes: pdfData.length }) });
+      const event = { ...buildTextEvent("inspect this outpost PDF"), kind: "media" as const, disposition: "available" as const,
+        attachments: [{ id: "fixture-pdf", kind: "file" as const, name: "fixture.pdf", disposition: "available" as const, mimeType: "application/pdf", sizeBytes: pdfData.length }] };
+      await harness.store.upsertBinding({ id: "pdf-outpost-binding", backend: "codex", threadId: "thread-1", targetKind: "thread", federatedThread: target,
+        channel: event.channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000 });
+      await harness.controller.handleInboundEvent(event);
+      expect(supportsMessagingPdfTools).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", federationTarget: target.target });
+      expect(harness.startTurn).toHaveBeenCalledWith(expect.objectContaining({ input: [expect.objectContaining({ type: "text" })] }));
+      expect(renderPdfPages).not.toHaveBeenCalled();
+      const origin = harness.startTurn.mock.calls[0]![0].messageOrigin;
+      const context = { backend: "codex" as const, threadId: "thread-1", turnId: "turn-1", causalMessagingSource: origin!.causalMessagingSource,
+        requestingInstanceId: "pwr_pdf_outpost" };
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "inspect_messaging_pdfs", context, args: {} }))
+        .toMatchObject({ ok: true, data: { attachments: [expect.objectContaining({ name: "fixture.pdf", pageCount: 1 })] } });
+      for (const wrong of [{ requestingInstanceId: "pwr_other" }, { turnId: "other-turn" },
+        { causalMessagingSource: { ...context.causalMessagingSource!, requestId: "other-request" } }]) {
+        expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "inspect_messaging_pdfs", context: { ...context, ...wrong }, args: {} }))
+          .toMatchObject({ ok: false, error: { code: "forbidden" } });
+      }
+    } finally { db.close(); }
+  });
+
   it("leaves messaging PDFs as normal file input when PDF analysis is disabled", async () => {
     const pdfData = new TextEncoder().encode("%PDF-1.7\n/pass through\n");
     const supportsMessagingPdfTools = vi.fn(async () => true);
@@ -19402,13 +19596,17 @@ describe("MessagingController", () => {
     ]);
   });
 
-  it("preserves every text fragment from a completion-only response", async () => {
-    const harness = await createHarness();
-    await bindThread(harness);
+  it("posts only a Claude turn's last message from a completion-only output", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.source = "claude";
+    const harness = await createHarness({ navigation });
+    await bindThreadToBackend(harness, "claude");
     harness.delivered.length = 0;
 
+    // Claude reports each assistant message of the turn as its own part: the
+    // progress notes first, then the answer.
     await harness.controller.handleBackendEvent({
-      backend: "codex",
+      backend: "claude",
       notification: {
         method: "turn/completed",
         params: {
@@ -19418,14 +19616,9 @@ describe("MessagingController", () => {
             id: "turn-1",
             status: "completed",
             output: [
-              {
-                type: "text",
-                text: "The build completed successfully and every signed release artifact is ready for publication.",
-              },
-              {
-                type: "text",
-                text: "The operator documentation was updated and the acceptance smoke passed from end to end.",
-              },
+              { type: "text", text: "Now re-rendering the screenshot." },
+              { type: "text", text: "Checking the result." },
+              { type: "text", text: "The screenshot now shows the new header." },
             ],
           },
         },
@@ -19440,14 +19633,78 @@ describe("MessagingController", () => {
       expect.objectContaining({
         parts: [
           expect.objectContaining({
-            text: [
-              "The build completed successfully and every signed release artifact is ready for publication.",
-              "The operator documentation was updated and the acceptance smoke passed from end to end.",
-            ].join("\n\n"),
+            text: "The screenshot now shows the new header.",
           }),
         ],
       }),
     ]);
+  });
+
+  it("keeps a Claude turn's progress notes out of its review card", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.source = "claude";
+    const harness = await createHarness({ navigation });
+    await bindThreadToBackend(harness, "claude");
+    harness.delivered.length = 0;
+    const note = "Now reading the diff.";
+    const answer = "Review found no blocking issues.";
+    const agentMessage = (id: string, text: string): AgentEvent => ({
+      backend: "claude",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "review-turn-1",
+          item: { id, type: "agentMessage", text },
+        },
+      },
+    });
+
+    await harness.controller.handleBackendEvent(agentMessage("message-1", note));
+    await harness.controller.handleBackendEvent({
+      backend: "claude",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "review-turn-1",
+          item: {
+            id: "review-1",
+            type: "exitedReviewMode",
+            review: "No findings.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent(agentMessage("message-2", answer));
+    await harness.controller.handleBackendEvent({
+      backend: "claude",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "review-turn-1",
+          turn: {
+            id: "review-turn-1",
+            status: "completed",
+            output: [
+              { type: "text", text: note },
+              { type: "text", text: answer },
+            ],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const reviewCards = harness.delivered.filter(
+      (intent) => intent.kind === "message" && "artifactDelivery" in intent,
+    );
+    expect(reviewCards).toEqual([
+      expect.objectContaining({
+        parts: [expect.objectContaining({ text: expect.stringContaining(answer) })],
+      }),
+    ]);
+    expect(JSON.stringify(reviewCards)).not.toContain(note);
   });
 
   it("keeps only the final completion fragment when terminal output nearly repeats itself", async () => {

@@ -1339,23 +1339,45 @@ function normalizePendingRequestNotification(
   };
 }
 
+// Codex's auto-review circuit breaker interrupts a turn after too many
+// denials. By default it reports that only through this guardianWarning text
+// and then a plain interrupted turn/completed. With
+// `auto_review.circuit_break_action = "strict"` the interrupted turn also
+// carries `codexErrorInfo: "tooManyDenials"`.
+const GUARDIAN_DENIAL_LIMIT_WARNING =
+  /rejected too many approval requests[\s\S]*interrupting the turn/i;
+
+function isGuardianDenialLimitWarning(message: string): boolean {
+  return GUARDIAN_DENIAL_LIMIT_WARNING.test(message);
+}
+
 /**
  * Codex signals a failed turn through `turn/completed` with `turn.status` set
  * to "failed". Translate that into the normalized `turn/failed` notification the
  * rest of the app already understands, carrying a human-readable error message.
- * Returns undefined when the notification is not a failed `turn/completed`, in
+ * A turn that Codex interrupted at the auto-review denial limit fails the same
+ * way. Returns undefined when the notification is not a failed `turn/completed`, in
  * which case the caller falls through to the generic passthrough normalizer.
  */
 function normalizeFailedTurnCompletedNotification(
   method: string,
   record: Record<string, unknown>,
   metadata: { threadId?: string; turnId?: string },
+  guardianDenialLimitMessage?: string,
 ): AppServerNotification | undefined {
   if (method !== "turn/completed") {
     return undefined;
   }
   const turn = asRecord(record.turn);
-  if (!turn || pickString(turn, ["status"]) !== "failed") {
+  if (!turn) return undefined;
+  const status = pickString(turn, ["status"]);
+  const turnError = asRecord(turn.error);
+  // Codex stopped this turn, not the operator, so report it as a failure.
+  const deniedTooOften =
+    status === "interrupted"
+    && (pickString(turnError ?? {}, ["codexErrorInfo"]) === "tooManyDenials"
+      || guardianDenialLimitMessage !== undefined);
+  if (status !== "failed" && !deniedTooOften) {
     return undefined;
   }
 
@@ -1367,7 +1389,7 @@ function normalizeFailedTurnCompletedNotification(
   }
 
   const message = parseCodexTurnErrorMessage(
-    pickStringAllowEmpty(asRecord(turn.error), ["message"]),
+    pickStringAllowEmpty(turnError, ["message"]) ?? guardianDenialLimitMessage,
   );
   const startedAt = normalizeEpochTimestamp(
     pickNumber(turn, ["startedAt", "started_at"]),
@@ -1406,6 +1428,7 @@ function normalizeServerNotification(
   method: string,
   params: unknown,
   liveMessagePhases: Map<string, LiveAgentMessagePhase>,
+  guardianDenialLimitMessage?: string,
 ): AppServerNotification {
   const autoReview = normalizeAutoReviewNotification(method, params);
   if (autoReview) return autoReview;
@@ -1456,6 +1479,7 @@ function normalizeServerNotification(
     method,
     record,
     metadata,
+    guardianDenialLimitMessage,
   );
   if (failedTurn) {
     return failedTurn;
@@ -7697,6 +7721,12 @@ export class CodexAppServerClient {
   private pendingCloses = 0;
   private serverGeneration = 0;
   private readonly runningTurnIdsByThread = new Map<string, string>();
+  // A denial-limit guardianWarning means Codex is about to interrupt the
+  // thread's running turn. That interrupted completion is a failure.
+  private readonly guardianDenialLimitsByThread = new Map<
+    string,
+    { message: string; turnId?: string }
+  >();
   private readonly turnRoots = new Map<string, string | null>();
   private readonly liveUsageSnapshots = new Map<string, {
     tokens: ThreadUsageTokenBreakdown;
@@ -7965,6 +7995,7 @@ export class CodexAppServerClient {
         method,
         params,
         this.liveMessagePhases,
+        this.takeGuardianDenialLimitMessage(method, params),
       );
       if (navigationQueryEventRequiresRefresh(method)) this.invalidateThreadListings(normalized);
       const helperThreadId = extractThreadIdFromNotification(normalized, params);
@@ -8265,6 +8296,7 @@ export class CodexAppServerClient {
     this.initialized = false;
     this.tokenMiserActivationNegotiated = false;
     this.runningTurnIdsByThread.clear();
+    this.guardianDenialLimitsByThread.clear();
     this.liveUsageSnapshots.clear();
     this.liveMessagePhases.clear();
     this.initializationPromise = null;
@@ -8292,6 +8324,41 @@ export class CodexAppServerClient {
     // Whether closed or exited, the process's turns are over; a recovery
     // waiting on them re-checks.
     this.noteLiveTurnActivity();
+  }
+
+  /**
+   * Records a denial-limit warning, and returns it when the turn it named
+   * completes. A later turn on the thread clears an unused warning.
+   */
+  private takeGuardianDenialLimitMessage(
+    method: string,
+    params: unknown,
+  ): string | undefined {
+    if (method !== "guardianWarning" && method !== "turn/started"
+      && method !== "turn/completed" && method !== "thread/closed") {
+      return undefined;
+    }
+    const record = asRecord(params) ?? {};
+    const threadId = pickString(record, ["threadId", "thread_id"]);
+    if (!threadId) return undefined;
+    if (method === "guardianWarning") {
+      if (typeof record.message === "string" && isGuardianDenialLimitWarning(record.message)) {
+        const turnId = this.runningTurnIdsByThread.get(threadId);
+        this.guardianDenialLimitsByThread.set(threadId, {
+          message: record.message,
+          ...(turnId ? { turnId } : {}),
+        });
+      }
+      return undefined;
+    }
+    const pending = this.guardianDenialLimitsByThread.get(threadId);
+    if (!pending) return undefined;
+    this.guardianDenialLimitsByThread.delete(threadId);
+    if (method !== "turn/completed") return undefined;
+    const turnId = pickString(asRecord(record.turn) ?? {}, ["id"]);
+    return !pending.turnId || !turnId || pending.turnId === turnId
+      ? pending.message
+      : undefined;
   }
 
   private noteLiveTurnActivity(): void {

@@ -27,6 +27,7 @@ import {
   totalTokenMiserGateAccountings,
   RENAME_THREAD_EXPECTED_NAME_MISMATCH,
   classifyDirectory,
+  finalTurnOutputText,
   readUuidV7Timestamp,
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepStatus,
@@ -54,6 +55,7 @@ import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
 import { createProviderRuntimeClient } from "../codex-app-server/provider-runtime-client";
 import { bonsaiNativeMcpOverrides, prepareBonsaiRuntime } from "../codex-app-server/bonsai-runtime";
 import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-structured-generation";
+import type { PendingThreadApprovalSummary } from "@pwragent/shared";
 import { USAGE_ANALYSIS_MODEL_BACKENDS, type ReadUsageActivityRequest, type ReadUsageActivityResponse, type AnalyzeUsageActivityRequest, type AnalyzeUsageActivityResponse, type UsageLimitObservation } from "@pwragent/shared";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import {
@@ -81,6 +83,12 @@ import {
 import { codexNativeSubAgentName, readCodexNativeSubAgentName } from "@pwragent/shared";
 import { isThreadLockRefusal, normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
+import {
+  isRemoteLaunchpadStorageKey,
+  launchpadStorageKey,
+  parseRemoteLaunchpadStorageKey,
+  type FederationTarget,
+} from "@pwragent/shared";
 import { validateCodexConfigOverrides } from "../settings/codex-config-overrides";
 import {
   buildPullRequestReferenceUrl,
@@ -662,6 +670,7 @@ import {
 import type {
   DirectoryGitStatusEntry,
   GitWorkspaceInspection,
+  WorktreeBaseSource,
 } from "./git-directory-service";
 import { GitWorkingStateService } from "./git-working-state-service";
 import type {
@@ -842,6 +851,13 @@ const THREAD_LIST_REUSE_WINDOW_MS = 5 * 60_000;
 const INCOMPLETE_THREAD_LIST_REUSE_WINDOW_MS = 15_000;
 const CODEX_RATE_LIMIT_BROADCAST_WINDOW_MS = 20_000;
 const THREAD_SEARCH_REUSE_WINDOW_MS = 2_000;
+/** Marks the approval cards PwrAgent's own forge tools raise. */
+const FORGE_TOOL_REQUEST_ID_PREFIX = "forge-tool:";
+const FORGE_APPROVAL_WITHDRAWN_TODO_KEY = "forge-approval-withdrawn";
+const PENDING_APPROVAL_GUIDANCE =
+  "The operator has not answered these yet. A call waiting on one stays pending until they do. "
+  + "If this turn ends first, the request is withdrawn and the waiting call is cancelled. "
+  + "Do not ask the operator to approve it after you end the turn; say it was withdrawn and that they can reply to retry.";
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 const ACTIVE_TURN_WORKSPACE_RECOVERY_ERROR =
@@ -5940,16 +5956,7 @@ function finalTextFromTerminalNotification(
     AppServerNotification,
     { method: "turn/completed" }
   >;
-  const output = Array.isArray(completed.params.turn.output)
-    ? completed.params.turn.output
-    : [];
-  const text = output
-    .filter((item) => item.type === "text")
-    .map((item) => item.text.trim())
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
-  return text || undefined;
+  return finalTurnOutputText(completed.params.turn.output);
 }
 
 function textFragmentsFromCodexNotification(
@@ -6563,11 +6570,13 @@ function defaultLaunchpadWorkMode(
 }
 
 function fallbackLaunchpadIdentity(
-  directoryKey: string,
+  storageKey: string,
 ): Pick<
   EnsureDirectoryLaunchpadRequest,
   "directoryKind" | "directoryLabel" | "directoryPath"
 > {
+  const directoryKey =
+    parseRemoteLaunchpadStorageKey(storageKey)?.directoryKey ?? storageKey;
   if (directoryKey.startsWith("directory:")) {
     const directoryPath = directoryKey.slice("directory:".length);
     if (directoryPath.length > 0) {
@@ -8653,6 +8662,7 @@ type CodexRetryableTurnStart = {
 type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
   Pick<
     SqliteOverlayStore,
+    | "adoptLegacyRemoteDirectoryLaunchpad"
     | "readThreadGitWorkingStateCache"
     | "completeThreadUsageTurn"
     | "completeThreadUsageTurns"
@@ -9673,7 +9683,7 @@ export class DesktopBackendRegistry {
     const signal = context.signal ?? new AbortController().signal;
     signal.throwIfAborted();
     const label = FORGE_AGENT_TOOL_GROUP_LABELS[group];
-    const requestId = `forge-tool:${randomUUID()}`;
+    const requestId = `${FORGE_TOOL_REQUEST_ID_PREFIX}${randomUUID()}`;
     const forge = repository?.provider === "gitlab" ? "GitLab" : "GitHub";
     // Comment-sized changes may be granted for the conversation; opening,
     // editing, approving and merging are always one call at a time.
@@ -9755,6 +9765,58 @@ export class DesktopBackendRegistry {
       grants.set(grantTarget, grantKey);
       this.forgeToolSessionApprovals.set(sessionKey, grants);
     }
+  }
+
+  /**
+   * A forge card the agent's turn outlived. Ending the turn cancels the call
+   * and withdraws the card, yet the agent's answer may still ask the operator
+   * to approve it, so the thread keeps a reminder of what was asked.
+   */
+  private async raiseWithdrawnForgeApprovalTodo(
+    backend: AppServerBackendKind,
+    threadId: string,
+    requests: AppServerPendingRequestNotification[],
+  ): Promise<void> {
+    const asked = requests.flatMap((request) => {
+      const params = readRecord(request.params);
+      const target = readRecord(params?._meta)?.connector_name;
+      return typeof params?.message === "string"
+        ? [`“${params.message}”${typeof target === "string" ? ` for ${target}` : ""}`]
+        : [];
+    });
+    if (!this.threadTodoHandler || asked.length === 0) return;
+    const serverName = readRecord(requests[0]?.params)?.serverName;
+    const forge = typeof serverName === "string" ? serverName : "forge";
+    try {
+      await this.threadTodoHandler.add({ backend, threadId }, {
+        key: FORGE_APPROVAL_WITHDRAWN_TODO_KEY,
+        title: `Reply to retry the withdrawn ${forge} request`,
+        detail: `The agent asked ${asked.join(" and ")}. Its turn ended before you answered, so the request was withdrawn and nothing ran.`,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("could not raise a withdrawn forge approval to-do", { backend, threadId, error: String(error) });
+    }
+  }
+
+  /** What the operator has yet to answer on a thread, for get_thread_status. */
+  private pendingApprovalsForInspection(
+    backend: AppServerBackendKind,
+    threadId: string,
+    includeMessages: boolean,
+  ): PendingThreadApprovalSummary[] {
+    const approvals: PendingThreadApprovalSummary[] = [];
+    for (const pending of this.pendingServerRequests.values()) {
+      const request = pending.notification;
+      if (pending.backend !== backend || request.params.threadId !== threadId) continue;
+      const params = request.method === "mcpServer/elicitation/request" ? readRecord(request.params) : undefined;
+      approvals.push({
+        method: request.method,
+        ...(typeof params?.serverName === "string" ? { serverName: params.serverName } : {}),
+        // Another thread's prompt can quote its work; only the asker sees it.
+        ...(includeMessages && typeof params?.message === "string" ? { message: params.message } : {}),
+      });
+    }
+    return approvals;
   }
 
   async readForgeForPeer(request: ForgeReadRequest, signal?: AbortSignal): Promise<unknown> {
@@ -18851,6 +18913,8 @@ export class DesktopBackendRegistry {
     acpRuntime?: BackendAcpSessionRuntimeState;
     workMode?: NavigationLaunchpadDraft["workMode"];
     branchName?: string;
+    /** Base for a new worktree when `branchName` is unset. */
+    worktreeBase?: WorktreeBaseSource;
     requiredWorkMode?: NavigationLaunchpadDraft["workMode"];
     parentThreadId?: string;
     parentThreadBackend?: AppServerBackendKind;
@@ -18873,6 +18937,7 @@ export class DesktopBackendRegistry {
       linkedDirectories,
       workMode,
       branchName,
+      worktreeBase,
       requiredWorkMode,
       parentThreadId,
       parentThreadBackend,
@@ -18911,6 +18976,7 @@ export class DesktopBackendRegistry {
           directoryLabel: path.basename(request.cwd) || request.cwd,
           directoryPath: request.cwd,
           workMode: "worktree",
+          ...(worktreeBase ? { worktreeBase } : {}),
         });
       preparedWorkspaceRollback = preparedWorkspace.rollback;
       cwd = preparedWorkspace.cwd;
@@ -26613,7 +26679,12 @@ export class DesktopBackendRegistry {
     const resolvedCwd = await realpath(cwd).catch(() => path.resolve(cwd));
     const launchpads = await this.overlayStore.listDirectoryLaunchpads();
     for (const launchpad of launchpads) {
-      if (launchpad.directoryKind !== "directory" || !launchpad.directoryPath) {
+      if (
+        launchpad.directoryKind !== "directory"
+        || !launchpad.directoryPath
+        // A draft for a peer's directory names a path on the peer.
+        || isRemoteLaunchpadStorageKey(launchpad.directoryKey)
+      ) {
         continue;
       }
       const launchpadPath = await realpath(launchpad.directoryPath).catch(() =>
@@ -26726,8 +26797,28 @@ export class DesktopBackendRegistry {
        * it for there.
        */
       skipMcpConnectionDefaults?: boolean;
+      /**
+       * The instance that owns `directoryKey`. A peer's draft is stored under
+       * a key that names the peer (`launchpadStorageKey`), so it never shares
+       * a row with this machine's draft for the same key. The response keeps
+       * the owner's key.
+       */
+      owner?: FederationTarget;
     },
   ): Promise<EnsureDirectoryLaunchpadResponse> {
+    const { owner, ...storageOptions } = options ?? {};
+    const storageKey = launchpadStorageKey(request.directoryKey, owner);
+    if (storageKey !== request.directoryKey) {
+      await this.adoptLegacyRemoteDirectoryLaunchpad(owner, request.directoryKey, storageKey);
+      const response = await this.ensureDirectoryLaunchpad(
+        { ...request, directoryKey: storageKey },
+        storageOptions,
+      );
+      return {
+        ...response,
+        launchpad: { ...response.launchpad, directoryKey: request.directoryKey },
+      };
+    }
     const codexEnvironmentOptions = options?.skipFilesystemInspection
       ? []
       : await listCodexEnvironmentOptions(request.directoryPath);
@@ -26889,17 +26980,92 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /**
+   * Seed a peer's draft with text this viewer kept under the owner's bare key
+   * before drafts named their owner (see the overlay store). A failure only
+   * costs that copy; the draft still opens.
+   */
+  private async adoptLegacyRemoteDirectoryLaunchpad(
+    owner: FederationTarget | undefined,
+    directoryKey: string,
+    storageKey: string,
+  ): Promise<void> {
+    if (owner?.scope !== "remote" || !this.overlayStore.adoptLegacyRemoteDirectoryLaunchpad) {
+      return;
+    }
+    try {
+      await this.overlayStore.adoptLegacyRemoteDirectoryLaunchpad({
+        instanceId: owner.instanceId,
+        directoryKey,
+        storageKey,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("remote_launchpad_legacy_adoption_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * The draft an update reaches before any ensure created it. For a peer's
+   * draft this is also its first open, so it takes the text kept under the
+   * shared key first, as an ensure would.
+   */
+  private async ensureLaunchpadForLateUpdate(
+    storageKey: string,
+  ): Promise<EnsureDirectoryLaunchpadResponse> {
+    const peer = parseRemoteLaunchpadStorageKey(storageKey);
+    if (peer) {
+      await this.adoptLegacyRemoteDirectoryLaunchpad(
+        { scope: "remote", instanceId: peer.instanceId },
+        peer.directoryKey,
+        storageKey,
+      );
+    }
+    return await this.ensureDirectoryLaunchpad(
+      { directoryKey: storageKey, ...fallbackLaunchpadIdentity(storageKey) },
+      // A peer's draft takes nothing from this machine's copy of its path.
+      peer ? { skipFilesystemInspection: true, skipMcpConnectionDefaults: true } : undefined,
+    );
+  }
+
   async updateDirectoryLaunchpad(
     request: UpdateDirectoryLaunchpadRequest,
+    options?: {
+      /** A remote viewer's draft takes no environment metadata from here. */
+      skipFilesystemInspection?: boolean;
+      /** Leave the stored draft as it is unless this holds for it. */
+      onlyIf?: (current: NavigationLaunchpadDraft) => boolean;
+      /** The instance that owns `directoryKey`, as on an ensure. */
+      owner?: FederationTarget;
+    },
   ): Promise<UpdateDirectoryLaunchpadResponse> {
+    const { owner, ...storageOptions } = options ?? {};
+    const storageKey = launchpadStorageKey(request.directoryKey, owner);
+    if (storageKey !== request.directoryKey) {
+      const { federationTarget: _federationTarget, ...storageRequest } = request;
+      const response = await this.updateDirectoryLaunchpad(
+        { ...storageRequest, directoryKey: storageKey },
+        // The peer's path names a folder on the peer. This machine's folder
+        // at the same path holds none of the peer's environments.
+        { ...storageOptions, skipFilesystemInspection: true },
+      );
+      return {
+        ...response,
+        launchpad: { ...response.launchpad, directoryKey: request.directoryKey },
+      };
+    }
     const current =
       (await this.overlayStore.getDirectoryLaunchpad({
         directoryKey: request.directoryKey,
       })) ??
-      (await this.ensureDirectoryLaunchpad({
-        directoryKey: request.directoryKey,
-        ...fallbackLaunchpadIdentity(request.directoryKey),
-      })).launchpad;
+      (await this.ensureLaunchpadForLateUpdate(request.directoryKey)).launchpad;
+    if (options?.onlyIf && !options.onlyIf(current)) {
+      return {
+        launchpad: current,
+        defaults: await this.overlayStore.getLaunchpadDefaults(),
+      };
+    }
 
     const patch = {
       ...request.patch,
@@ -27009,24 +27175,31 @@ export class DesktopBackendRegistry {
       : storedDefaults;
 
     return {
-      launchpad: withCodexEnvironmentOptions(
-        persisted,
-        await listCodexEnvironmentOptions(persisted.directoryPath),
-      ),
+      launchpad: options?.skipFilesystemInspection
+        ? persisted
+        : withCodexEnvironmentOptions(
+            persisted,
+            await listCodexEnvironmentOptions(persisted.directoryPath),
+          ),
       defaults,
     };
   }
 
   async resetDirectoryLaunchpad(
     request: ResetDirectoryLaunchpadRequest,
+    options?: {
+      /** The instance that owns `directoryKey`, as on an ensure. */
+      owner?: FederationTarget;
+    },
   ): Promise<ResetDirectoryLaunchpadResponse> {
+    const storageKey = launchpadStorageKey(request.directoryKey, options?.owner);
     const launchpad = request.preserveEnvironment
-      ? await this.overlayStore.getDirectoryLaunchpad({ directoryKey: request.directoryKey })
+      ? await this.overlayStore.getDirectoryLaunchpad({ directoryKey: storageKey })
       : undefined;
     if (launchpad) {
       await this.resetLaunchpadDraft(launchpad);
     } else {
-      await this.overlayStore.resetDirectoryLaunchpad({ directoryKey: request.directoryKey });
+      await this.overlayStore.resetDirectoryLaunchpad({ directoryKey: storageKey });
     }
     return {
       directoryKey: request.directoryKey,
@@ -45441,6 +45614,11 @@ export class DesktopBackendRegistry {
               },
               context,
             );
+          const pendingApprovals = this.pendingApprovalsForInspection(
+            args.backend,
+            threadId,
+            context.backend === args.backend && context.threadId === threadId,
+          );
           return {
             ok: true,
             data: {
@@ -45450,6 +45628,9 @@ export class DesktopBackendRegistry {
                 queuedExecutionMode: queued?.mode,
                 queuedExecutionModeAt: queued?.queuedAt,
                 ...(prAutomation ? { prAutomation } : {}),
+                ...(pendingApprovals.length
+                  ? { pendingApprovals, pendingApprovalGuidance: PENDING_APPROVAL_GUIDANCE }
+                  : {}),
                 ...(pendingHandoffs.length ? { pendingHandoffs } : {}),
                 ...(pendingWorkspaceMoves.length
                   ? { pendingWorkspaceMoves }
@@ -48041,6 +48222,12 @@ export class DesktopBackendRegistry {
         }
         // An MCP elicitation cannot keep its provider turn alive after that
         // turn ends. Retaining it lets a later read resurrect the ended turn.
+        // A turn the operator did not stop ended on the agent's own word, so
+        // they may still be looking for a card the agent pointed them at.
+        const endedWithoutOperator = event.notification.method === "turn/failed"
+          || (event.notification.method === "turn/completed"
+            && readRecord(readRecord(event.notification.params)?.turn)?.status === "completed");
+        const withdrawnForgeApprovals: AppServerPendingRequestNotification[] = [];
         for (const [key, pending] of this.pendingServerRequests) {
           const request = pending.notification;
           if (pending.backend !== event.backend
@@ -48048,6 +48235,9 @@ export class DesktopBackendRegistry {
             || request.params.turnId !== completedTurnId
             || request.method !== "mcpServer/elicitation/request") {
             continue;
+          }
+          if (endedWithoutOperator && String(request.params.requestId).startsWith(FORGE_TOOL_REQUEST_ID_PREFIX)) {
+            withdrawnForgeApprovals.push(request);
           }
           this.pendingServerRequests.delete(key);
           pending.resolve({ action: "cancel", content: null, _meta: null });
@@ -48057,6 +48247,14 @@ export class DesktopBackendRegistry {
               requestId: request.params.requestId,
             },
           } });
+        }
+        if (withdrawnForgeApprovals.length > 0) {
+          // Off the terminal path: the card is a notice, not turn state.
+          void this.raiseWithdrawnForgeApprovalTodo(
+            event.backend,
+            event.notification.params.threadId,
+            withdrawnForgeApprovals,
+          );
         }
       }
       if (completedTurnId) {

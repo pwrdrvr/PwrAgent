@@ -84,7 +84,7 @@ export class Codex {
   async initialize() {
     await this.request("initialize", {
       clientInfo: { name: "pwragent-headless", title: "PwrAgent Headless", version: "0.0.0" },
-      capabilities: { experimentalApi: false },
+      capabilities: { experimentalApi: true },
     });
     this.send({ method: "initialized", params: {} });
   }

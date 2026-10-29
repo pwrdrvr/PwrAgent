@@ -19,11 +19,14 @@ import {
 } from "./navigation-query-projection";
 import {
   navigationAttentionOrderBytes,
+  navigationAttentionOrderFollows,
   navigationAttentionIdentity,
   observeNavigationAttentionTurn,
   reconcileNavigationAttentionOrder,
+  removeNavigationAttentionMember,
   type NavigationAttentionOrder,
 } from "./navigation-attention-order";
+import { currentNavigationObservation, nextNavigationObservation } from "./navigation-observation-clock";
 
 const NAVIGATION_QUERY_CURSOR_IDLE_MS = 60_000;
 const NAVIGATION_QUERY_MAX_GENERATIONS = 8;
@@ -269,7 +272,6 @@ function pageBase(params: {
 }
 
 export class NavigationQueryStore {
-  private attentionEventVersion = 0;
   private readonly ownerEpoch = randomUUID();
   private readonly attentionLifetimes = new Map<string, { closedAt?: number }>();
   private readonly generations = new Map<string, NavigationQueryGeneration>();
@@ -341,17 +343,13 @@ export class NavigationQueryStore {
       generation = retained;
       offset = cursor.offset;
     } else {
-      let eventVersion = this.attentionEventVersion;
-      let index = await params.loadIndex();
-      if (eventVersion !== this.attentionEventVersion) {
-        listingDiagnostics.record("owner-page", "retry", { reason: "owner-invalidated" });
-        eventVersion = this.attentionEventVersion;
-        index = await params.loadIndex();
-        if (eventVersion !== this.attentionEventVersion) throw new NavigationQueryError("navigation_busy", "Navigation changed during its owner read. Refresh the retained range.");
-      }
+      // An index that does not say when its listing began is taken to have
+      // begun with this read.
+      const readStartedAt = currentNavigationObservation();
+      const index = await params.loadIndex();
       if (lifetime?.closedAt !== undefined) throw new NavigationQueryError("navigation_invalid_request", "This Attention view closed during its owner read.");
       anchorIndex = index;
-      const attentionOrder = this.reconcileAttentionView(params.scopeKey, params.request, index);
+      const attentionOrder = this.reconcileAttentionView(params.scopeKey, params.request, index, index.observedAt ?? readStartedAt);
       const materialization = projectNavigationQuery({
         index,
         request: params.request,
@@ -458,10 +456,17 @@ export class NavigationQueryStore {
     this.attentionViews.delete(JSON.stringify([scopeKey, viewId]));
   }
 
+  /**
+   * Reads for one view overlap, and a read can be served an index whose
+   * listing began before a boundary the store already applied. The index is
+   * served and reconciled, never reread: the reducer leaves alone whatever
+   * the order observed after that listing began (see the observation clock).
+   */
   private reconcileAttentionView(
     scopeKey: string,
     request: NavigationQueryRequest,
     index: NavigationQueryIndex,
+    observedAt: number,
   ): NavigationAttentionOrder | undefined {
     if (!request.attentionView) return undefined;
     const { id, promoteOnTurnEnd } = request.attentionView;
@@ -476,7 +481,12 @@ export class NavigationQueryStore {
       threads: index.threads,
       complete: !index.coverage || index.coverage.state === "complete",
       promoteOnTurnEnd,
+      observedAt,
     });
+    if (previous && navigationAttentionOrderFollows(previous.order, observedAt)) {
+      // Runs inside the pool's owner-read trace, so it is recorded on that load.
+      listingDiagnostics.record("owner-read", "overtaken", { reason: "owner-invalidated" });
+    }
     const remoteMembers = index.coverage && index.coverage.state !== "complete" ? new Set(previous?.remoteMembers) : new Set<string>();
     for (const thread of index.threads) if (thread.federation?.ref.target.scope === "remote") remoteMembers.add(navigationAttentionIdentity(thread));
     const bytes = navigationAttentionOrderBytes(order) + serializedBytes([...remoteMembers]);
@@ -506,20 +516,20 @@ export class NavigationQueryStore {
     const owner = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : null;
     const key = JSON.stringify([owner, event.backend, params.threadId]);
     if (owner && ![...this.attentionViews.values()].some((view) => view.remoteMembers.has(key))) return;
-    this.attentionEventVersion += 1;
+    const observedAt = nextNavigationObservation();
     let retainedBytes = [...this.attentionViews.values()].reduce((sum, view) => sum + view.bytes, 0);
     for (const view of this.attentionViews.values()) {
       if (view.failed || (view.backend && view.backend !== "all" && view.backend !== event.backend)
         || (owner && !view.remoteMembers.has(key))) continue;
       const member = view.order.members.get(key);
       let order = view.order;
-      if (remove || (seen && member && !member.active)) {
-        if (!member) continue;
-        order = { ...order, members: new Map(order.members) };
-        order.members.delete(key);
+      if (remove || (seen && !member?.active)) {
+        // Recorded for a non-member too: a listing older than this boundary
+        // may still list the thread as eligible.
+        order = removeNavigationAttentionMember({ previous: order, key, observedAt });
       } else if (active !== undefined) {
         order = observeNavigationAttentionTurn({ previous: order, key, active,
-          turnId: params.turnId ?? params.turn?.id, promoteOnTurnEnd: view.promoteOnTurnEnd });
+          turnId: params.turnId ?? params.turn?.id, promoteOnTurnEnd: view.promoteOnTurnEnd, observedAt });
       }
       if (order === view.order) continue;
       const bytes = navigationAttentionOrderBytes(order) + serializedBytes([...view.remoteMembers]);

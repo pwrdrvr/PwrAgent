@@ -516,6 +516,51 @@ describe("createMainWindow", () => {
     expect(preventDefault).not.toHaveBeenCalled();
   });
 
+  it("hands a blocked HTML preview link back to its window", async () => {
+    const { createMainWindow } = await import("../window");
+    const { HTML_PREVIEW_FRAME_NAME, HTML_PREVIEW_NAVIGATION_CHANNEL } =
+      await import("../../shared/html-preview");
+    createMainWindow();
+
+    const preventDefault = vi.fn();
+    emitWebContentsEvent("will-frame-navigate", {
+      isMainFrame: false,
+      url: "https://example.com/next",
+      frame: { name: HTML_PREVIEW_FRAME_NAME },
+      preventDefault,
+    });
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(browserWindowState.send).toHaveBeenCalledWith(
+      HTML_PREVIEW_NAVIGATION_CHANNEL,
+      { url: "https://example.com/next" },
+    );
+
+    // Another frame's navigation is blocked without telling the preview.
+    preventDefault.mockClear();
+    browserWindowState.send?.mockClear();
+    emitWebContentsEvent("will-frame-navigate", {
+      isMainFrame: false,
+      url: "https://example.com/collect",
+      frame: { name: "" },
+      preventDefault,
+    });
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(browserWindowState.send).not.toHaveBeenCalledWith(
+      HTML_PREVIEW_NAVIGATION_CHANNEL,
+      expect.anything(),
+    );
+
+    // A fragment link scrolls the srcdoc page itself.
+    preventDefault.mockClear();
+    emitWebContentsEvent("will-frame-navigate", {
+      isMainFrame: false,
+      url: "about:srcdoc#section-2",
+      frame: { name: HTML_PREVIEW_FRAME_NAME },
+      preventDefault,
+    });
+    expect(preventDefault).not.toHaveBeenCalled();
+  });
+
   it("shows a native copy action when a renderer link is right-clicked", async () => {
     const { createMainWindow } = await import("../window");
     createMainWindow();

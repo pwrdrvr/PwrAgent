@@ -2227,6 +2227,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           draftStore={ownedComposerDraftStore}
           executionMode={threadExecutionMode}
           fastMode={threadFastMode}
+          fetchLinearPastedImages={desktopApi?.fetchLinearPastedImages}
           getPathForFile={desktopApi?.getPathForFile}
           imagesSupported={imagesSupported}
           imagesUnsupportedLabel={imagesUnsupportedLabel}

@@ -20,6 +20,7 @@ function operations() {
     listProjects: vi.fn(async (_request?: unknown) => ({ projects: [] })),
     setItemChecked: vi.fn((_request?: unknown) => ({ todo: card })),
     setProject: vi.fn(async (_request?: unknown) => ({ todo: card })),
+    snapshotFeed: vi.fn(async (_request?: unknown) => ({ epoch: "owner", revision: 0, todos: [card] })),
   };
 }
 
@@ -126,6 +127,32 @@ describe("federated To-do ownership", () => {
     const response = await service.request("listTodos", {});
     expect(response.todos).toEqual([card]);
     expect(response.errors).toEqual(["peer: Peer offline"]);
+    expect(onUnavailable).toHaveBeenCalledOnce();
+  });
+
+  // A busy owner is expected contention, not a failure. The listing names the
+  // thread so the panel can keep its last cards, and local cards stay fresh.
+  it("marks a busy mounted owner's thread instead of reporting raw text, and still reports real failures", async () => {
+    const busyTarget: FederationRemoteTarget = { scope: "remote", instanceId: "busy" };
+    const onUnavailable = vi.fn();
+    const service = new FederatedThreadTodoService({ local: operations(), onUnavailable,
+      remote: vi.fn(async (owner) => {
+        if (owner.instanceId === "busy") {
+          throw Object.assign(new Error("handler_failed: [navigation_busy] Navigation read deadline expired."), {
+            code: "handler_failed",
+          });
+        }
+        throw new Error("Owner store failed");
+      }) as ThreadTodoRemoteRequest,
+      mountedThreads: async () => [
+        { target: busyTarget, backend: "codex", threadId: "busy-thread" },
+        { target, backend: "codex", threadId: "broken-thread" },
+      ],
+    });
+    const response = await service.request("listTodos", { status: "open" });
+    expect(response.todos).toEqual([card]);
+    expect(response.errors).toEqual(["peer: Owner store failed"]);
+    expect(response.busyThreads).toEqual([{ federationTarget: busyTarget, backend: "codex", threadId: "busy-thread" }]);
     expect(onUnavailable).toHaveBeenCalledOnce();
   });
 

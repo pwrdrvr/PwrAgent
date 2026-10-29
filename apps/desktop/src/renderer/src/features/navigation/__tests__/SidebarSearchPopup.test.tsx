@@ -132,6 +132,35 @@ describe("SidebarSearchPopup", () => {
     expect(releaseNavigationQuery).toHaveBeenCalled();
   });
 
+  it("prints each result's age as the sidebar does, with the full date on hover", async () => {
+    const now = new Date(2026, 9, 28, 12, 0).getTime();
+    vi.setSystemTime(now);
+    const older = now - 40 * 24 * 60 * 60 * 1000;
+    const project = { key: "directory:/repos/focus-lab", kind: "directory" as const, label: "focus-lab",
+      path: "/repos/focus-lab", latestUpdatedAt: now - 2 * 24 * 60 * 60 * 1000 };
+    render(<SidebarSearchPopup
+      projects={[project]}
+      threads={[
+        localThread({ id: "recent", title: "Focus ring fix", updatedAt: now - 60 * 60 * 1000 }),
+        localThread({ id: "older", title: "Focus trap audit", updatedAt: older }),
+      ]}
+      onJumpToProject={vi.fn()} onJumpToThread={vi.fn()} onClose={vi.fn()}
+    />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "focus" } });
+    await settleRemoteSearch();
+    const timeOf = (text: string) =>
+      screen.getAllByRole("option").find((row) => row.textContent?.includes(text))
+        ?.querySelector(".jump-palette__row-time");
+    expect(timeOf("Focus ring fix")).toHaveTextContent(/^1h$/);
+    const olderTime = timeOf("Focus trap audit");
+    expect(olderTime).toHaveTextContent(
+      new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(older),
+    );
+    // "Sep 18" leaves out the year; the tooltip carries it.
+    expect(olderTime).toHaveAttribute("data-tooltip", expect.stringContaining("2026"));
+    expect(timeOf("/repos/focus-lab")).toHaveTextContent(/^2d$/);
+  });
+
   it("finds Agent threads by role and marks the result", async () => {
     const threads: NavigationThreadSummary[] = [
       localThread({
@@ -442,6 +471,43 @@ describe("SidebarSearchPopup", () => {
     expect(onJumpToThread).not.toHaveBeenCalled();
     expect(onJumpToRemoteThread).toHaveBeenCalledTimes(1);
     expect(onJumpToRemoteThread.mock.calls[0][0].id).toBe("r1");
+  });
+
+  it("wraps the arrow keys from the first row to the last and back", async () => {
+    const onJumpToThread = vi.fn();
+    render(
+      <SidebarSearchPopup
+        threads={[
+          localThread({ id: "a", title: "Fix alpha" }),
+          localThread({ id: "b", title: "Fix bravo" }),
+          localThread({ id: "c", title: "Fix charlie" }),
+        ]}
+        onJumpToThread={onJumpToThread}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const input = screen.getByRole("textbox", { name: "Jump to thread" });
+    fireEvent.change(input, { target: { value: "fix" } });
+    await settleRemoteSearch();
+
+    const selectedIndex = () =>
+      screen
+        .getAllByRole("option")
+        .findIndex((option) => option.getAttribute("aria-selected") === "true");
+    const rowCount = screen.getAllByRole("option").length;
+    expect(rowCount).toBe(3);
+    expect(selectedIndex()).toBe(0);
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(selectedIndex()).toBe(rowCount - 1);
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(selectedIndex()).toBe(0);
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onJumpToThread.mock.calls[0][0].id).toBe("c");
   });
 
   it("keeps a remote result when its backend and id collide locally", async () => {

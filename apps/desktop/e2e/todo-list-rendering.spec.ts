@@ -68,7 +68,7 @@ test("renders live plan updates from turn/plan/updated notifications", async () 
       .fill("Create a three-step task list before you inspect the renderer.");
     await app.window.getByRole("button", { name: "Send" }).click();
     await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
-    await expect(app.window.getByRole("status")).toContainText("Thinking");
+    await expect(app.window.locator(".transcript-list__pending")).toContainText("Thinking");
 
     // After issue #495 the live plan renders in the LiveWorkRail
     // above the composer (role="complementary"), not inline in the

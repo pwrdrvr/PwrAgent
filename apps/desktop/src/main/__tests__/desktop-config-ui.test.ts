@@ -189,6 +189,7 @@ describe("desktop config [ui] section", () => {
       "sidebar_hidden = true",
       'active_context_tab = "providers"',
       'edited_files_dock = "sidebar"',
+      'launchpad_connections_dock = "sidebar"',
       "",
     ].join("\n");
 
@@ -199,6 +200,7 @@ describe("desktop config [ui] section", () => {
       sidebarHidden: true,
       activeContextTab: "providers",
       editedFilesDock: "sidebar",
+      launchpadConnectionsDock: "sidebar",
     });
   });
 
@@ -216,6 +218,7 @@ describe("desktop config [ui] section", () => {
         contextRailPinned: false,
         activeContextTab: "providers",
         editedFilesDock: "sidebar",
+        launchpadConnectionsDock: "sidebar",
       },
     });
     const written = applyTomlEdits("", edits);
@@ -226,7 +229,42 @@ describe("desktop config [ui] section", () => {
       contextRailPinned: false,
       activeContextTab: "providers",
       editedFilesDock: "sidebar",
+      launchpadConnectionsDock: "sidebar",
     });
+  });
+
+  it("persists the project index's hide and dragged width, and drops both at their defaults", () => {
+    const written = applyTomlEdits(
+      "",
+      desktopSettingsPatchToEdits({
+        ui: { projectIndexHidden: true, projectIndexWidth: 131.6 },
+      }),
+    );
+    expect(written).toContain("project_index_hidden = true");
+    expect(written).toContain("project_index_width = 132");
+    expect(parseDesktopSettingsToml(written, "test.toml").ui).toEqual({
+      projectIndexHidden: true,
+      projectIndexWidth: 132,
+    });
+
+    // Shown is the default, and a null width (double-click on the grip)
+    // returns the column to its longest name, so neither key remains.
+    const reverted = applyTomlEdits(
+      written,
+      desktopSettingsPatchToEdits(
+        { ui: { projectIndexHidden: false, projectIndexWidth: null } },
+        parseTomlTables(written, "test.toml"),
+      ),
+    );
+    expect(parseDesktopSettingsToml(reverted, "test.toml").ui).toBeUndefined();
+  });
+
+  it("ignores a project index width that is not a positive number", () => {
+    const config = parseDesktopSettingsToml(
+      "[ui]\nproject_index_width = -12\n",
+      "test.toml",
+    );
+    expect(config.ui?.projectIndexWidth).toBeUndefined();
   });
 
   it("deletes default-valued [ui] keys on write (off/pinned/info/above are absent on disk)", () => {
@@ -236,16 +274,19 @@ describe("desktop config [ui] section", () => {
       "context_rail_pinned = false",
       'active_context_tab = "providers"',
       'edited_files_dock = "sidebar"',
+      'launchpad_connections_dock = "sidebar"',
       "",
     ].join("\n");
     const edits = desktopSettingsPatchToEdits(
       {
         ui: {
-          // Defaults: sidebar shown, rail pinned-open, info tab, dock above.
+          // Defaults: sidebar shown, rail pinned-open, info tab, dock above,
+          // connection cards on the launchpad.
           sidebarHidden: false,
           contextRailPinned: true,
           activeContextTab: "info",
           editedFilesDock: "above",
+          launchpadConnectionsDock: "launchpad",
         },
       },
       parseTomlTables(existing, "test.toml"),
@@ -253,7 +294,7 @@ describe("desktop config [ui] section", () => {
     const written = applyTomlEdits(existing, edits);
     const config = parseDesktopSettingsToml(written, "test.toml");
 
-    // All four reverted to defaults → the section carries no values.
+    // All five reverted to defaults → the section carries no values.
     expect(config.ui).toBeUndefined();
   });
 });

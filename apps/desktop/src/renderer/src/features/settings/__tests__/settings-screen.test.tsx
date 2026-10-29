@@ -183,6 +183,7 @@ function createSnapshot(
       messagingAcknowledgment: { value: null, source: "default" },
       interactiveSvgSkipNotice: { value: false, source: "default" },
       interactiveSvgAutoOpen: { value: false, source: "default" },
+      htmlPreviewRunScripts: { value: false, source: "default" },
     },
     onboarding: {
       completed: { value: true, source: "default" },
@@ -242,7 +243,7 @@ function createSnapshot(
       },
     },
     imageUploads: {
-      pastedImageMaxPatches: { value: 1536, source: "default" },
+      pastedImageMaxPatches: { value: 4096, source: "default" },
     },
     updates: {
       channel: { value: "latest", source: "default" },
@@ -255,9 +256,12 @@ function createSnapshot(
     ui: {
       sidebarHidden: { value: false, source: "default" },
       contextRailPinned: { value: false, source: "default" },
+      projectIndexHidden: { value: false, source: "default" },
+      projectIndexWidth: { value: null, source: "default" },
       activeContextTab: { value: "info", source: "default" },
       editedFilesDock: { value: "above", source: "default" },
       actionRunsDock: { value: "above", source: "default" },
+      launchpadConnectionsDock: { value: "launchpad", source: "default" },
     },
     federation: {
       mode: { value: "disabled", source: "default" },
@@ -1553,6 +1557,26 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("saves the HTML preview scripts setting", async () => {
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        initialSection="general"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const toggle = screen.getByRole("switch", { name: "Run scripts in HTML previews" });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { htmlPreviewRunScripts: true },
+      });
+    });
+  });
+
   it("turns opening SVGs interactive off with trust in their scripts", async () => {
     const base = createSnapshot();
     const settings = createSettingsState(createSnapshot({
@@ -1996,15 +2020,17 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(within(sections).getByRole("button", { name: "General" }));
     expect(screen.getByRole("heading", { name: "Pasted images" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "1536 patches" })).toHaveAttribute(
+    expect(screen.getByRole("radio", { name: "4096 patches" })).toHaveAttribute(
       "aria-checked",
       "true",
     );
-    fireEvent.click(screen.getByRole("radio", { name: "4096 patches" }));
+    expect(screen.queryByRole("radio", { name: "1024 patches" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "1536 patches" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "Actual size" }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         imageUploads: {
-          pastedImageMaxPatches: 4096,
+          pastedImageMaxPatches: 0,
         },
       });
     });

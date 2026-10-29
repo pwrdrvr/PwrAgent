@@ -2579,10 +2579,13 @@ textarea,
   top: var(--win-titlebar-h);
 }
 
+/* Grows with the window, from 640px to 800px at 60vw. Each row carries
+   chips, branch, project and age on one line, and a fixed 640px left a wide
+   window's titles clipped beside empty scrim. */
 .jump-palette__panel {
   display: flex;
   flex-direction: column;
-  width: min(640px, 100%);
+  width: min(100%, clamp(640px, 60vw, 800px));
   max-height: 66vh;
   overflow: hidden;
   border: 1px solid var(--border-strong);
@@ -2788,6 +2791,21 @@ textarea,
   font-family: var(--font-mono);
   font-size: 9.5px;
   font-weight: 600;
+}
+
+/* The sidebar row's time column, in its type. It never shrinks, so the title
+   and branch give way first. Its minimum fits the widest date label ("May 28",
+   41.7px in Geist at 12px), so the project chips beside it line up down the
+   list whatever age each row prints. */
+.jump-palette__row-time {
+  flex: none;
+  min-width: 3.5em;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .jump-palette__row .chip--agent,
@@ -5378,6 +5396,250 @@ textarea,
 .sidebar__scroll-region > .sidebar-show-more,
 .sidebar__scroll-region > .sidebar-start-actions {
   margin-inline: var(--sidebar-rail-inset);
+}
+
+/* The lens switch and the project index toggle share one row. The row takes
+   the pull to the lane inset that `.lens-switch` carries on its own, so the
+   switch gives up its explicit width and fills what the toggle leaves. At the
+   280px sidebar the switch is then 224px: the arithmetic on `.lens-switch`
+   leaves each icon tab ~35px, still above its 28px floor. */
+.sidebar__lens-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  margin-inline: var(--sidebar-masthead-pull);
+}
+
+.sidebar__lens-row > .lens-switch {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  margin-inline: 0;
+}
+
+.sidebar__project-index-toggle {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.sidebar__project-index-toggle.is-on {
+  color: var(--accent-bright);
+}
+
+.sidebar__project-index-toggle:hover {
+  background: var(--bg-panel-hover);
+}
+
+.sidebar__project-index-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* Project index (ProjectIndex.tsx): a column of project names beside the
+   list, ported from PwrGit's repo index. The section becomes a grid so the
+   index and the lane region sit side by side without another wrapper.
+
+   The fit is CSS. The column takes its longest name's width, never less
+   than 76px (`calc(7ch + 19px)` in its 12px font, the shortest cut that
+   still tells a family of names apart) and never more than the sidebar
+   past the list's 280px floor. The section is the sidebar minus its 2 × 16px
+   rail padding, so that budget is `100cqi + 32px − 280px`, and below a
+   324px section (a 356px sidebar) the column steps aside.
+
+   Each track is named explicitly: with the column hidden, auto-placement
+   would otherwise drop the lane region into the 0-width first track. */
+.sidebar__section--with-project-index {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  container: sidebar-lanes / inline-size;
+}
+
+.sidebar__section--with-project-index > .sidebar__lens-row {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+
+.sidebar__section--with-project-index > .project-index-pane {
+  grid-column: 1;
+  grid-row: 2;
+  margin-left: calc(-1 * var(--sidebar-rail-inset));
+}
+
+.sidebar__section--with-project-index > .sidebar__scroll-region {
+  grid-column: 2;
+  grid-row: 2;
+  margin-left: 0;
+}
+
+@container sidebar-lanes (max-width: 323.98px) {
+  .sidebar__section--with-project-index > .project-index-pane {
+    display: none;
+  }
+
+  .sidebar__section--with-project-index > .sidebar__scroll-region {
+    margin-left: calc(-1 * var(--sidebar-rail-inset));
+  }
+}
+
+.project-index-pane {
+  display: flex;
+  position: relative;
+  min-height: 0;
+}
+
+.project-index {
+  width: max-content;
+  min-width: 76px;
+  max-width: max(76px, calc(100cqi + 2 * var(--sidebar-rail-inset) - 280px));
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  padding: 2px 0 16px;
+  border-right: 1px solid var(--border-subtle);
+  font: 500 calc(var(--sidebar-title-size) - 1px) / 1.25 var(--font-sans);
+}
+
+.project-index__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.project-index__item {
+  display: flex;
+  position: relative;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px 4px 11px;
+  border: 0;
+  border-radius: 0 6px 6px 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  scroll-margin-block: 4px;
+}
+
+/* Scroll position is a 2px rail, never a tint: grey for a project on
+   screen, the accent for the project at the top of the list. Only the
+   selection tints, so the two never read as two selections. Each item's
+   rail runs its full height, so the on-screen run joins into one solid bar,
+   as in PwrGit's repo index. An inset rail broke it into dashes, one per
+   project, which read as unrelated marks. */
+.project-index__item::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+}
+
+.project-index__item.is-in-view::before {
+  background: var(--border-strong);
+}
+
+.project-index__item.is-current {
+  color: var(--text-primary);
+}
+
+.project-index__item.is-current::before {
+  background: var(--accent);
+}
+
+.project-index__item:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.project-index__item.is-selected {
+  background: var(--bg-row-active);
+  color: var(--accent-bright);
+}
+
+.project-index__item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.project-index__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-index__mark {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+/* The seam between the index and the list, drawn like the sidebar's own:
+   an 11px hit area centred on the border, lit 1px on hover or focus. */
+.project-index__grip {
+  position: absolute;
+  top: 0;
+  right: -6px;
+  bottom: 0;
+  z-index: 11;
+  width: 11px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.project-index__grip::after {
+  content: "";
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 5px;
+  width: 1px;
+  background: transparent;
+  transition:
+    background 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.project-index__grip:hover::after,
+.project-index__grip:focus-visible::after,
+.is-project-index-resizing .project-index__grip::after {
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-bg-medium);
+}
+
+.project-index__grip:hover:not(:focus-visible)::after {
+  transition-delay: 120ms;
+}
+
+.project-index__grip:focus-visible {
+  outline: none;
+}
+
+body.is-project-index-resizing {
+  cursor: col-resize;
+}
+
+/* Blank space a project index jump grows at the end of the Directories list,
+   so a project near the end can still land at the top. DirectoriesList sets
+   its height and clears it once it scrolls off screen. It must not shrink in
+   the list's flex column, or the jump falls short. */
+.directory-list__jump-tail {
+  flex: none;
 }
 
 .context-panel h3 {
@@ -10705,6 +10967,26 @@ a.button {
 .app-notice-toast__dismiss-all:hover {
   background: var(--bg-panel-hover);
   color: var(--text-primary);
+}
+
+/* A split action takes the card's own `.button` corners. The composer's
+   pill radius beside a card of 6px controls read as a different control,
+   and changed shape when an answer replaced it with the plain button. */
+.app-notice-toast .todo-split__pill {
+  border-radius: 6px;
+}
+
+/* A split action's menu leaves the card, which clips to its rounded edge
+   otherwise. The content keeps its own scroller. */
+.app-notice-toast:has(.todo-split--open) {
+  overflow: visible;
+}
+
+/* The stack sits on the window's bottom edge unless focus moved it to the
+   top, so its menus open upward there. */
+.app-toast-stack:not([data-placement="top"]) .todo-split__menu {
+  top: auto;
+  bottom: calc(100% + 6px);
 }
 
 /* Borderless. 24px keeps WCAG 2.5.8's target size, which the a11y gate
@@ -23431,10 +23713,122 @@ a.button {
   }
 }
 
+/* The "Move to sidebar" row above the tiles. Its 30px (24px button plus
+   6px gap) comes out of the list's top air, so the composer below sits
+   where it did before the row existed. */
+.thread-view__connections:has(> .thread-view__connections-bar) {
+  padding-top: clamp(4px, calc(5vh - 30px), 26px);
+}
+
+.thread-view__connections-bar {
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  width: calc(100% - 32px);
+  max-width: var(--chat-column-max);
+  margin-bottom: 6px;
+}
+
+/* Quiet until wanted: it belongs to the whole group, so it must not
+   compete with the tiles' own actions. Hover and focus take the rail tab's
+   paint, since that is where the cards go. */
+.thread-view__connections-dock {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.thread-view__connections-dock:hover,
+.thread-view__connections-dock:focus-visible {
+  border-color: var(--border-subtle);
+  background: var(--bg-row-active);
+  color: var(--text-primary);
+}
+
+.thread-view__connections-dock:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* Back from the rail: the list slides in from the side it left by. */
+.thread-view__connections.is-arriving {
+  animation: thread-view-connections-arrive 260ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes thread-view-connections-arrive {
+  from {
+    opacity: 0;
+    transform: translateX(48px) scale(0.96);
+  }
+}
+
 /* Short windows: the list already scrolls; give its air back first. */
 @media (max-height: 780px) {
   .thread-view__connections {
     padding-top: 12px;
+  }
+
+  .thread-view__connections:has(> .thread-view__connections-bar) {
+    padding-top: 4px;
+  }
+}
+
+/* The same cards in the rail's Connections tab. The rail is 300-560px, too
+   narrow for the launchpad's one-line tile, so the action drops under the
+   copy and the pitch wraps instead of truncating. */
+.connections-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.pwrsuite-tiles.connections-panel__tiles {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  width: auto;
+  max-width: none;
+}
+
+.connections-panel__tiles > .mcp-connection {
+  grid-template-columns: 32px minmax(0, 1fr);
+  row-gap: 10px;
+  min-height: 0;
+  padding: 10px 12px;
+}
+
+.connections-panel__tiles .mcp-connection__icon {
+  width: 32px;
+  height: 32px;
+}
+
+.connections-panel__tiles .mcp-connection__action {
+  grid-column: 2;
+  justify-content: flex-start;
+}
+
+.connections-panel__tiles .pwrsuite-tile__line {
+  white-space: normal;
+}
+
+.connections-panel__tiles:has(.mcp-connection) + .connections-panel__empty {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-view__connections.is-arriving,
+  .context-rail__tab.is-landing {
+    animation: none;
   }
 }
 
@@ -26753,6 +27147,79 @@ a.transcript-message__messaging-origin:focus-visible {
   line-height: 1.25;
 }
 
+/* Text pasted from Linear (LinearPasteMessage): the issue's header over
+   its description. Each Linear image reuses .transcript-message__file-chip. */
+.linear-paste {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.linear-paste__issue {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+}
+
+.linear-paste__header {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.linear-paste__identifier {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.linear-paste__title {
+  min-width: 0;
+  color: var(--text-primary);
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.linear-paste__details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.linear-paste__detail {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 1px 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.linear-paste__description {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
 .transcript-message__text-block > * {
   margin: 0;
 }
@@ -27011,6 +27478,49 @@ a.transcript-message__messaging-origin:focus-visible {
   display: inline;
 }
 
+/* A previewable file named in inline code. The glyph and accent set it apart
+   from plain inline code, which copies on click. */
+/* Inline, not inline-block: a long path wraps with the sentence, and each
+   line fragment keeps the chip's border and padding. */
+.thread-markdown__file-chip {
+  padding: 1px 7px 1px 5px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  text-decoration: none;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.thread-markdown__file-chip:hover {
+  border-color: var(--accent-bright);
+}
+
+.thread-markdown__file-chip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.thread-markdown__file-chip-icon {
+  display: inline-block;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+
+.thread-markdown__file-chip-code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* A Markdown link to a previewable file carries the same glyph. */
+.thread-markdown__file-link-icon {
+  display: inline-block;
+  margin-right: 4px;
+  vertical-align: -1px;
+}
+
 .thread-markdown__editor-link {
   display: inline-flex;
   align-items: center;
@@ -27167,101 +27677,154 @@ a.transcript-message__messaging-origin:focus-visible {
   overflow: hidden;
 }
 
-.markdown-document-modal__head {
+/* One row names a previewed file in the dialog and the Files window: kind,
+   name, the folder (which copies the full path), the preview's own controls,
+   then the actions. */
+.file-viewer-header {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 16px;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 8px 0 14px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-panel-elevated);
 }
 
-.markdown-document-modal__title-wrap {
-  min-width: 0;
+.file-viewer-header__kind {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
-.markdown-document-modal__title {
+.file-viewer-header__name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
   margin: 0;
+  overflow: hidden;
   color: var(--text-primary);
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 650;
   line-height: 1.3;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.markdown-document-modal__path {
-  margin: 3px 0 0;
-  min-width: 0;
+.file-viewer-header__folder {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 26px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 11px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.markdown-document-modal__path-row,
-.markdown-files-window__path-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
-}
-
-.markdown-document-modal__path-copy,
-.markdown-files-window__path-copy {
-  display: inline-flex;
-  width: 24px;
-  height: 24px;
-  flex: 0 0 24px;
-  align-items: center;
-  justify-content: center;
-  margin-top: 2px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-muted);
+  line-height: 1.2;
   cursor: pointer;
 }
 
-.markdown-document-modal__path-copy:hover,
-.markdown-document-modal__path-copy:focus-visible,
-.markdown-files-window__path-copy:hover,
-.markdown-files-window__path-copy:focus-visible {
-  background: var(--bg-row-active);
-  color: var(--text-primary);
+/* Cut from the left so the end of the path stays visible. The left-to-right
+   mark keeps a leading "~" or "/" at the start of the right-to-left run. */
+.file-viewer-header__folder-text {
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.markdown-document-modal__path-copy:focus-visible,
-.markdown-files-window__path-copy:focus-visible {
+.file-viewer-header__folder-text::before {
+  content: "\200E";
+}
+
+.file-viewer-header__folder > svg {
+  flex: none;
+  opacity: 0;
+}
+
+/* With no folder to show, the glyph is the whole control. */
+.file-viewer-header__folder--bare > svg {
+  opacity: 1;
+}
+
+/* Keeps the controls and actions at the right edge, with or without a file. */
+.file-viewer-header__spring {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.file-viewer-header__folder:hover,
+.file-viewer-header__folder:focus-visible {
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+}
+
+.file-viewer-header__folder:hover > svg,
+.file-viewer-header__folder:focus-visible > svg,
+.file-viewer-header__folder[data-copied="true"] > svg {
+  opacity: 1;
+}
+
+.file-viewer-header__folder:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
-.markdown-document-modal__actions {
-  display: inline-flex;
+.file-viewer-header__controls {
+  display: flex;
+  flex: none;
   align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
 }
 
-.markdown-document-modal__icon-button {
+.file-viewer-header__controls:empty {
+  display: none;
+}
+
+.file-viewer-header__actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.file-viewer-header__controls:not(:empty) + .file-viewer-header__actions {
+  padding-left: 8px;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.markdown-document-modal__icon-button,
+.markdown-files-window__icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   padding: 0;
-  border: 1px solid var(--border-subtle);
+  border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
 }
 
-.markdown-document-modal__icon-button:hover {
-  border-color: var(--accent-border);
-  color: var(--accent-bright);
+.markdown-document-modal__icon-button:hover,
+.markdown-files-window__icon-button:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
 }
 
 .markdown-document-modal__icon-button:focus-visible {
@@ -27286,6 +27849,27 @@ a.transcript-message__messaging-origin:focus-visible {
 /* The code view runs its gutter to the edge, so status lines keep the inset. */
 .markdown-document-modal__body--file > .markdown-document-modal__status {
   padding: 0 20px;
+}
+
+/* An HTML page needs room and a fixed height: its frame has no intrinsic
+   size to grow the dialog to. */
+.markdown-document-modal__content--html {
+  width: min(100%, 1200px);
+  height: min(100vh - 72px, 900px);
+  max-height: none;
+}
+
+.markdown-document-modal__body--html {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.markdown-document-modal__body--html > .markdown-document-modal__status {
+  padding: 14px 20px;
 }
 
 .markdown-document-modal__markdown {
@@ -27453,11 +28037,12 @@ a.transcript-message__messaging-origin:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
-/* Copy sits beside the outline icon buttons in both preview headers, so it
-   drops the transcript chip's fill and takes their size and glyph. */
+/* Copy sits beside the borderless icon buttons in both preview headers, so it
+   drops the transcript chip's border and fill and takes their size and glyph. */
 .transcript-copy-button.file-preview__copy {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
+  border-color: transparent;
   background: transparent;
   opacity: 1;
 }
@@ -27467,9 +28052,14 @@ a.transcript-message__messaging-origin:focus-visible {
   height: 16px;
 }
 
-.transcript-copy-button.file-preview__copy:hover,
+.transcript-copy-button.file-preview__copy:hover {
+  border-color: transparent;
+  background: var(--bg-panel-hover);
+}
+
 .transcript-copy-button.file-preview__copy:focus-visible,
 .transcript-copy-button.file-preview__copy[data-copied="true"] {
+  border-color: transparent;
   background: transparent;
 }
 
@@ -27551,65 +28141,6 @@ a.transcript-message__messaging-origin:focus-visible {
   background: var(--bg-app);
 }
 
-.markdown-files-window__file-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg-panel-elevated);
-}
-
-.markdown-files-window__file-title-wrap {
-  min-width: 0;
-}
-
-.markdown-files-window__file-title {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 16px;
-  font-weight: 650;
-  line-height: 1.3;
-  overflow-wrap: anywhere;
-}
-
-.markdown-files-window__file-path,
-.markdown-files-window__project {
-  margin: 3px 0 0;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.markdown-files-window__file-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-}
-
-.markdown-files-window__icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.markdown-files-window__icon-button:hover {
-  border-color: var(--accent-border);
-  color: var(--accent-bright);
-}
-
 .markdown-files-window__icon-button:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
@@ -27631,6 +28162,160 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .markdown-files-window__markdown-scroll--file > .markdown-files-window__status {
   padding: 0 26px;
+}
+
+.markdown-files-window__markdown-scroll--html {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.markdown-files-window__markdown-scroll--html > .markdown-files-window__status {
+  padding: 16px 26px;
+}
+
+/* HTML file preview: the page in a sandboxed frame under a one-line bar that
+   says what the page may do. */
+.html-preview {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.html-preview__bar,
+.html-preview__link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel-elevated);
+}
+
+/* The page's permissions: one bordered group with a status and the Scripts
+   switch. It sits in the viewer's header row, or in a bar of its own. */
+.html-preview-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 26px;
+  padding: 0 2px 0 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.html-preview-controls__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-right: 6px;
+}
+
+/* Each notice, named for a screen reader; the label beside it is for sight. */
+.html-preview-controls__notice {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.html-preview-controls__divider {
+  width: 1px;
+  height: 14px;
+  background: var(--border-subtle);
+}
+
+.html-preview-controls__scripts {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.html-preview-controls__scripts:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.html-preview-controls__scripts[aria-checked="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.html-preview-controls__scripts:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.html-preview__button {
+  flex: none;
+  min-height: 28px;
+  font-size: 12px;
+}
+
+.html-preview__link-text {
+  min-width: 0;
+}
+
+.html-preview__link-question {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.html-preview__link-target {
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.html-preview__link-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
+/* A page that sets no background expects a browser's white canvas, in any
+   app theme. */
+.html-preview__frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  color-scheme: light;
+  background: Canvas;
+}
+
+.html-preview__loading {
+  margin: 0;
+  padding: 14px 20px;
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 
 .markdown-files-window__markdown {
@@ -33769,6 +34454,23 @@ div.composer-error-row__toggle {
 .context-rail__tab.is-active {
   color: var(--accent-bright);
   background: var(--bg-row-active);
+}
+
+/* The Connections tab as the launchpad's cards land in it: one accent ring
+   that fades, so the eye follows the cards to their new home. */
+.context-rail__tab.is-landing {
+  animation: context-rail-tab-landing 900ms ease-out;
+}
+
+@keyframes context-rail-tab-landing {
+  0%,
+  30% {
+    border-color: var(--accent-border);
+    box-shadow:
+      0 0 0 2px var(--accent-border),
+      0 0 16px 4px var(--accent-shadow);
+    color: var(--accent-bright);
+  }
 }
 
 .context-rail__tab.is-active::after {

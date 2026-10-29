@@ -24,6 +24,7 @@ import type {
   PrSummary,
   PullRequestTerminalDetails,
   RefreshThreadPullRequestsRequest,
+  RefreshThreadPullRequestsResponse,
   RenameThreadRequest,
   RestoreWorktreeRequest,
   RestoreThreadRequest,
@@ -111,6 +112,7 @@ const federationMock = vi.hoisted(() => {
     refreshDirectoryGitStatuses: vi.fn(async () => ({ scheduledCount: 1 })),
     refreshThreadGitWorkingState: vi.fn(async () => ({ scheduled: true })),
     ensureDirectoryLaunchpad: vi.fn(),
+    listBackends: vi.fn(),
     listRecentFileReferences: vi.fn(async () => ({
       files: [] as Array<{ label: string; path: string }>,
     })),
@@ -780,6 +782,13 @@ const updateDirectoryLaunchpad = vi.fn(async (request: {
     executionMode: "default" as const,
   },
 }));
+const resetDirectoryLaunchpad = vi.fn(async (request: { directoryKey: string }) => ({
+  directoryKey: request.directoryKey,
+  defaults: {
+    backend: "codex" as const,
+    executionMode: "default" as const,
+  },
+}));
 const markThreadSeen = vi.fn(async (request: MarkThreadSeenRequest) => ({
   backend: request.backend ?? "codex",
   threadId: request.threadId,
@@ -1054,6 +1063,11 @@ vi.mock("../window", () => ({
   isFederationWindowWebContents: (
     webContents: { id?: number } | undefined,
   ) => webContents?.id === 999,
+  federationWindowTargetForWebContents: (
+    webContents: { id?: number } | undefined,
+  ) => webContents?.id === 999
+    ? { scope: "remote", instanceId: "window_owner" }
+    : undefined,
 }));
 
 vi.mock("../log", () => ({
@@ -1194,6 +1208,7 @@ vi.mock("../app-server/backend-registry", () => {
     setThreadPrAutoDispatchBatch,
     ensureDirectoryLaunchpad,
     updateDirectoryLaunchpad,
+    resetDirectoryLaunchpad,
     getQueuedExecutionModesSnapshot: () => ({}),
     getQueuedTurnsSnapshot: () => ({}),
     getQueuedTurnsForThread: () => [],
@@ -1387,6 +1402,7 @@ describe("app server ipc", () => {
     federationMock.remoteBackend.refreshThreadPullRequests.mockClear();
     federationMock.remoteBackend.refreshDirectoryGitStatuses.mockClear();
     federationMock.remoteBackend.ensureDirectoryLaunchpad.mockReset();
+    federationMock.remoteBackend.listBackends.mockReset();
     federationMock.remoteBackend.listRecentFileReferences.mockReset();
     federationMock.remoteBackend.recordRecentFileReferences.mockReset();
     federationMock.remoteBackend.attachDirectoryToThread.mockReset();
@@ -1457,6 +1473,7 @@ describe("app server ipc", () => {
     setThreadPrAutoDispatchBatch.mockClear();
     ensureDirectoryLaunchpad.mockClear();
     updateDirectoryLaunchpad.mockClear();
+    resetDirectoryLaunchpad.mockClear();
     markThreadSeen.mockClear();
     setThreadReactionOverlay.mockClear();
     setDirectoryThreadsCollapsedOverlay.mockClear();
@@ -4076,23 +4093,23 @@ describe("app server ipc", () => {
           id: "remote-multi",
           title: "MCP registration",
           titleSource: "derived" as const,
-          // Home directory on the owner prefers the repo checkout over the
-          // worktree entry, then linked order — so PwrAgent, even though the
-          // worktree link for agent-kit comes first. The extra links must not
-          // duplicate the row into other local groups — one row per thread,
-          // like local threads.
+          // Home directory on the owner is the first linked project; only a
+          // tool-managed worktree folder ranks last. A `worktree` link's path
+          // is its repo checkout, so PwrAgent wins over the later plain
+          // agent-kit folder. The extra links must not duplicate the row into
+          // other local groups — one row per thread, like local threads.
           linkedDirectories: [
-            {
-              id: "dir-b",
-              label: "agent-kit",
-              path: "/peer/dev/agent-kit",
-              kind: "worktree" as const,
-              worktreePath: "/peer/worktrees/x/agent-kit",
-            },
             {
               id: "dir-a",
               label: "PwrAgent",
               path: "/peer/dev/PwrAgent",
+              kind: "worktree" as const,
+              worktreePath: "/peer/.pwragent/worktrees/x/PwrAgent",
+            },
+            {
+              id: "dir-b",
+              label: "agent-kit",
+              path: "/peer/dev/agent-kit",
               kind: "local" as const,
             },
           ],
@@ -6735,6 +6752,80 @@ describe("app server ipc", () => {
       prs: [passingPr],
     });
     expect(detectPullRequestsForThread).toHaveBeenCalledOnce();
+  });
+
+  it("never shares one thread's PR history with another thread on the same branch and checkout", async () => {
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    // An older thread worked on a feature branch in the primary checkout,
+    // kept that PR as history, and the checkout is now back on main.
+    const historyPr = githubPr({
+      number: 81,
+      org: "pwrdrvr",
+      repo: "PwrSuiteLab",
+      state: "merged",
+      headRefName: "fix/control-admission-guidance-build-identity",
+      url: "https://github.com/pwrdrvr/PwrSuiteLab/pull/81",
+    });
+    const baseRequest = {
+      backend: "codex",
+      trigger: "scheduled",
+      branch: "main",
+      directoryPaths: ["/repo"],
+    } satisfies Omit<RefreshThreadPullRequestsRequest, "threadId">;
+    const olderRequest = {
+      ...baseRequest,
+      threadId: "older-thread",
+    } satisfies RefreshThreadPullRequestsRequest;
+    const newRequest = {
+      ...baseRequest,
+      threadId: "new-thread",
+    } satisfies RefreshThreadPullRequestsRequest;
+    getThreadOverlayState.mockImplementation(async (request: { threadId: string }) =>
+      request.threadId === olderRequest.threadId
+        ? {
+            backend: "codex",
+            threadId: olderRequest.threadId,
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            prs: [historyPr],
+            prsFetchedAt: Date.now(),
+            prsRefreshKey: buildThreadPrRequestKey({
+              backend: "codex",
+              threadId: olderRequest.threadId,
+              branch: "main",
+              directoryPaths: ["/repo"],
+            }),
+          }
+        : undefined);
+    // A default-branch lookup attaches nothing.
+    detectPullRequestsForThread.mockResolvedValue([]);
+
+    registerAppServerIpcHandlers();
+
+    const olderResponse = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      {},
+      olderRequest,
+    ) as RefreshThreadPullRequestsResponse;
+    expect(olderResponse.prs.map((pr) => pr.number)).toEqual([81]);
+
+    const newResponse = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      {},
+      newRequest,
+    ) as RefreshThreadPullRequestsResponse;
+    // Let the new thread's own background lookup answer and persist.
+    await vi.waitFor(() => {
+      expect(setThreadPullRequests).toHaveBeenCalledWith(
+        expect.objectContaining({ threadId: newRequest.threadId }),
+      );
+    });
+
+    expect(newResponse.prs).toEqual([]);
+    expect(setThreadPullRequests).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: newRequest.threadId,
+        prs: expect.arrayContaining([expect.objectContaining({ number: 81 })]),
+      }),
+    );
   });
 
   it("hydrates canonical PR state from persisted cache without scheduled GitHub refresh", async () => {
@@ -10669,8 +10760,13 @@ describe("app server ipc", () => {
         currentBranch: undefined,
       }),
       // A viewer's draft takes neither this machine's filesystem metadata
-      // nor its MCP defaults: connection ids are per machine.
-      { skipFilesystemInspection: true, skipMcpConnectionDefaults: true },
+      // nor its MCP defaults: connection ids are per machine. It is stored
+      // under its owner, apart from this machine's draft for the same key.
+      {
+        skipFilesystemInspection: true,
+        skipMcpConnectionDefaults: true,
+        owner: federationTarget,
+      },
     );
     expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
     expect(response).toEqual(
@@ -10682,6 +10778,236 @@ describe("app server ipc", () => {
         }),
       }),
     );
+  });
+
+  it("reports the owner's provider when the owner cannot start the preferred one", async () => {
+    const { NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "owner_one" };
+    const draft = (backend: "claude" | "codex") => ({
+      launchpad: {
+        directoryKey: "subthread:claude:parent:new-worktree:owner_one",
+        directoryKind: "directory",
+        directoryLabel: "PwrAgent",
+        directoryPath: "/repo/PwrAgent",
+        backend,
+        executionMode: "auto",
+        prompt: "",
+        branchName: undefined,
+        createdAt: 100,
+        updatedAt: 100,
+      },
+      defaults: { backend, executionMode: "auto" },
+    });
+    const request = {
+      federationTarget,
+      directoryKey: "subthread:claude:parent:new-worktree:owner_one",
+      directoryKind: "directory",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/repo/PwrAgent",
+      preferredBackend: "claude",
+    };
+    registerAppServerIpcHandlers();
+    const ensure = handlers.get(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL)!;
+
+    // The owner has no Claude sign-in. This viewer, which stores the draft,
+    // does, so its own defaults cannot say so. The stored draft switches to
+    // the owner's provider; the owner was already asked about Claude.
+    federationMock.remoteBackend.ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("codex"));
+    ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("claude"));
+    await expect(ensure({}, request)).resolves.toMatchObject({
+      launchpad: { backend: "codex" },
+      preferredBackendFallback: "codex",
+    });
+    expect(federationMock.remoteBackend.ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
+    expect(federationMock.remoteBackend.listBackends).not.toHaveBeenCalled();
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith(
+      { directoryKey: request.directoryKey, patch: { backend: "codex" } },
+      expect.objectContaining({ skipFilesystemInspection: true }),
+    );
+
+    updateDirectoryLaunchpad.mockClear();
+    federationMock.remoteBackend.ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("claude"));
+    ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("claude"));
+    const kept = await ensure({}, request);
+    expect(kept).not.toHaveProperty("preferredBackendFallback");
+    expect(kept).toMatchObject({ launchpad: { backend: "claude" } });
+    expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
+
+    // A local draft answers from this instance's own providers.
+    ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("codex"));
+    await expect(ensure({}, { ...request, federationTarget: undefined })).resolves.toMatchObject({
+      preferredBackendFallback: "codex",
+    });
+  });
+
+  it("resolves a remote draft's provider against the owner's providers", async () => {
+    const { NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "owner_one" };
+    const directoryKey = "workspace:/Users/fixture/.pwragent/projects";
+    const draft = (
+      backend: "claude" | "codex",
+      extra: { settingsTouchedAt?: number } = {},
+    ) => ({
+      launchpad: {
+        directoryKey,
+        directoryKind: "workspace",
+        directoryLabel: "Workspaces",
+        directoryPath: "/Users/fixture/.pwragent/projects",
+        backend,
+        executionMode: "auto",
+        prompt: "",
+        branchName: undefined,
+        createdAt: 100,
+        updatedAt: 100,
+        ...extra,
+      },
+      defaults: { backend, executionMode: "auto" },
+    });
+    const backend = (kind: "claude" | "codex", available = true) => ({
+      kind,
+      label: kind,
+      available,
+      capabilities: { createThread: true },
+      executionModes: [{ mode: "default", label: "Default", available: true }],
+    });
+    // A new top-level draft names no provider: each side takes its own
+    // sticky default, Claude on this viewer and Codex on the owner.
+    const request = {
+      federationTarget,
+      directoryKey,
+      directoryKind: "workspace",
+      directoryLabel: "Workspaces",
+      directoryPath: "/Users/fixture/.pwragent/projects",
+    };
+    const ownerEnsure = federationMock.remoteBackend.ensureDirectoryLaunchpad;
+    const ownerBackends = federationMock.remoteBackend.listBackends;
+    registerAppServerIpcHandlers();
+    const ensure = handlers.get(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL)!;
+
+    // The owner's default says nothing about Claude, so its provider list
+    // is read, not a second ensure. Without a Claude sign-in it has Codex.
+    ownerEnsure.mockResolvedValueOnce(draft("codex"));
+    ownerBackends.mockResolvedValueOnce({
+      fetchedAt: 1,
+      backends: [backend("codex"), backend("claude", false)],
+    });
+    ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("claude"));
+    const switched = await ensure({}, request);
+    expect(ownerEnsure).toHaveBeenCalledTimes(1);
+    expect(ownerBackends).toHaveBeenCalledWith({ includeUnavailable: true });
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith(
+      { directoryKey, patch: { backend: "codex" } },
+      expect.objectContaining({ skipFilesystemInspection: true }),
+    );
+    expect(switched).toMatchObject({
+      launchpad: { backend: "codex", federationTarget },
+    });
+    // Nothing was preferred, so nothing fell back from a preference.
+    expect(switched).not.toHaveProperty("preferredBackendFallback");
+    // The switch waits for no operator pick made while the owner answered.
+    const onlyIf = (updateDirectoryLaunchpad.mock.calls[0] as unknown as [
+      unknown,
+      { onlyIf: (current: object) => boolean },
+    ])[1].onlyIf;
+    expect(onlyIf(draft("claude").launchpad)).toBe(true);
+    expect(onlyIf(draft("codex").launchpad)).toBe(false);
+    expect(onlyIf(draft("claude", { settingsTouchedAt: 60 }).launchpad)).toBe(false);
+
+    // An owner that can start Claude keeps it, whatever its own default.
+    ownerEnsure.mockReset();
+    ownerBackends.mockReset();
+    updateDirectoryLaunchpad.mockClear();
+    ownerEnsure.mockResolvedValueOnce(draft("codex"));
+    ownerBackends.mockResolvedValueOnce({
+      fetchedAt: 1,
+      backends: [backend("codex"), backend("claude")],
+    });
+    ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("claude"));
+    await expect(ensure({}, request)).resolves.toMatchObject({
+      launchpad: { backend: "claude" },
+    });
+    expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
+
+    // An owner that can start nothing yet (discovery still running) is
+    // no reason to replace the draft's provider.
+    ownerEnsure.mockReset();
+    ownerBackends.mockReset();
+    ownerEnsure.mockResolvedValueOnce(draft("codex"));
+    ownerBackends.mockResolvedValueOnce({
+      fetchedAt: 1,
+      backends: [backend("codex", false), backend("claude", false)],
+    });
+    ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("claude"));
+    await expect(ensure({}, request)).resolves.toMatchObject({
+      launchpad: { backend: "claude" },
+    });
+    expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
+
+    // A provider the owner already resolved to needs no second question.
+    ownerEnsure.mockReset();
+    ownerBackends.mockReset();
+    ownerEnsure.mockResolvedValueOnce(draft("codex"));
+    ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("codex"));
+    await ensure({}, request);
+    expect(ownerBackends).not.toHaveBeenCalled();
+    expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
+
+    // Settings the operator picked in this draft are theirs to change.
+    ownerEnsure.mockReset();
+    ownerEnsure.mockResolvedValueOnce(draft("codex"));
+    ensureDirectoryLaunchpad.mockResolvedValueOnce(
+      draft("claude", { settingsTouchedAt: 50 }),
+    );
+    await expect(ensure({}, request)).resolves.toMatchObject({
+      launchpad: { backend: "claude" },
+    });
+    expect(ownerBackends).not.toHaveBeenCalled();
+    expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
+
+    // If the owner cannot be asked, the stored draft still opens.
+    ownerEnsure.mockReset();
+    ownerBackends.mockReset();
+    ownerEnsure.mockResolvedValueOnce(draft("codex"));
+    ownerBackends.mockRejectedValueOnce(new Error("peer went away"));
+    ensureDirectoryLaunchpad.mockResolvedValueOnce(draft("claude"));
+    await expect(ensure({}, request)).resolves.toMatchObject({
+      launchpad: { backend: "claude" },
+    });
+    expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
+  });
+
+  it("stores a peer's draft edits under that peer, whichever window sends them", async () => {
+    const {
+      NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
+      NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
+    } = await import("../../shared/ipc");
+    const directoryKey = "directory:/Users/fixture/src/app";
+    const pinnedPeer = { scope: "remote" as const, instanceId: "owner_one" };
+    registerAppServerIpcHandlers();
+    const update = handlers.get(NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL)!;
+    const reset = handlers.get(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL)!;
+    const remoteWindow = { sender: { id: 999 } };
+
+    // This machine's own draft.
+    await update({}, { directoryKey, patch: { prompt: "local" } });
+    await reset({}, { directoryKey });
+    // A pinned peer's draft in the main window names its peer.
+    await update({}, { federationTarget: pinnedPeer, directoryKey, patch: { prompt: "pinned" } });
+    await reset({}, { federationTarget: pinnedPeer, directoryKey, preserveEnvironment: true });
+    // A remote window's drafts are its peer's, never this machine's.
+    await update(remoteWindow, { directoryKey, patch: { prompt: "remote" } });
+    await reset(remoteWindow, { federationTarget: { scope: "local" }, directoryKey });
+    // A draft it moved to another peer with the Machine chip stays that peer's.
+    await update(remoteWindow, { federationTarget: pinnedPeer, directoryKey, patch: { prompt: "moved" } });
+    await reset(remoteWindow, { federationTarget: pinnedPeer, directoryKey });
+
+    const windowOwner = { scope: "remote", instanceId: "window_owner" };
+    const owners = [{ owner: undefined }, { owner: pinnedPeer }, { owner: windowOwner }, { owner: pinnedPeer }];
+    expect(updateDirectoryLaunchpad.mock.calls.map((call) => (call as unknown[])[1])).toEqual(owners);
+    expect(resetDirectoryLaunchpad.mock.calls.map((call) => (call as unknown[])[1])).toEqual(owners);
+    // The owner's key reaches the registry unchanged; it picks the row.
+    expect(updateDirectoryLaunchpad.mock.calls.map(([request]) => request.directoryKey))
+      .toEqual([directoryKey, directoryKey, directoryKey, directoryKey]);
   });
 
   it("falls back to owner snapshot metadata when the peer lacks launchpad metadata RPC support", async () => {
@@ -10740,8 +11066,13 @@ describe("app server ipc", () => {
         currentBranch: undefined,
       }),
       // A viewer's draft takes neither this machine's filesystem metadata
-      // nor its MCP defaults: connection ids are per machine.
-      { skipFilesystemInspection: true, skipMcpConnectionDefaults: true },
+      // nor its MCP defaults: connection ids are per machine. It is stored
+      // under its owner, apart from this machine's draft for the same key.
+      {
+        skipFilesystemInspection: true,
+        skipMcpConnectionDefaults: true,
+        owner: federationTarget,
+      },
     );
     expect(response).toEqual(
       expect.objectContaining({

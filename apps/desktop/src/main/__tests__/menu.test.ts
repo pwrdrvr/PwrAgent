@@ -11,7 +11,7 @@ function buildTemplate(
   options?: {
     isMac?: boolean;
     actions?: Partial<ApplicationMenuActions>;
-    federationPeers?: Array<{ instanceId: string; label: string }>;
+    federationPeers?: Array<{ instanceId: string; label: string; shortLabel?: string }>;
     focusedRemoteWindow?: boolean;
     keybindings?: Record<string, string[]>;
     openFederationWindow?: (peer: {
@@ -665,6 +665,29 @@ describe("buildApplicationMenuTemplate", () => {
         "Studio-Mac-2 / default",
         "Studio-Mac-2 / default",
         "Studio-Mac-3 / dev",
+      ]);
+    });
+
+    it("shows each peer's short name with the full name as hover text", () => {
+      const items = submenuItems(
+        buildTemplate(false, {
+          federationPeers: [
+            { instanceId: "pwr_win", label: "DESKTOP-17ISFOI / dev", shortLabel: "Win-Tower / dev" },
+            { instanceId: "pwr_mbp", label: "Harold-MBP-2018" },
+          ],
+          openFederationWindow: vi.fn(),
+        }),
+        "Profiles",
+      );
+      const headingIndex = items.findIndex(
+        (item) => item.label === "Remote Instances",
+      );
+      const rows = items.slice(headingIndex + 1, headingIndex + 3);
+
+      // Sorted by what the row shows, so "Harold…" precedes "Win-Tower".
+      expect(rows.map((item) => [item.label, item.toolTip])).toEqual([
+        ["Harold-MBP-2018", undefined],
+        ["Win-Tower / dev", "DESKTOP-17ISFOI / dev"],
       ]);
     });
 

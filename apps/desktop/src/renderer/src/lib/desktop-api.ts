@@ -1,5 +1,6 @@
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import type { NativeVoiceApi } from "../../../shared/native-voice";
+import type { HtmlPreviewNavigationEvent } from "../../../shared/html-preview";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -17,6 +18,8 @@ import type {
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
+  ThreadTodoFeedDelta,
+  ThreadTodoFeedSnapshot,
   ThreadReview,
   ListThreadReviewsRequest,
   UpdateThreadReviewRequest,
@@ -382,6 +385,9 @@ import type {
   SetMcpConnectionSelectForNewThreadsRequest,
   SetMcpConnectionToolApprovalRequest,
   SetSandboxerCleanupOnPrCloseRequest,
+  SetLinearPasteImagesRequest,
+  FetchLinearPastedImagesRequest,
+  FetchLinearPastedImagesResponse,
   SetSandboxerTransportRequest,
   ReadThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsRequest,
@@ -544,6 +550,8 @@ import type {
   OpenPathResponse,
   ReadMarkdownFileRequest,
   ReadMarkdownFileResponse,
+  ReadHtmlPreviewAssetsRequest,
+  ReadHtmlPreviewAssetsResponse,
   ResolveTranscriptFilesRequest,
   ResolveTranscriptFilesResponse,
   ReadMarkdownFileViewerSnapshotRequest,
@@ -682,6 +690,11 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setSandboxerCleanupOnPrClose?: (
     request: SetSandboxerCleanupOnPrCloseRequest,
   ) => Promise<MutateMcpConnectionResponse>;
+  setLinearPasteImages?: (request: SetLinearPasteImagesRequest) => Promise<void>;
+  /** Images in text pasted from Linear, read through a Linear connection. */
+  fetchLinearPastedImages?: (
+    request: FetchLinearPastedImagesRequest,
+  ) => Promise<FetchLinearPastedImagesResponse>;
   listMcpConnectionTools?: (
     request: ListMcpConnectionToolsRequest,
   ) => Promise<ListMcpConnectionToolsResponse>;
@@ -1118,9 +1131,14 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setThreadTodoItemChecked?: (
     request: SetThreadTodoItemCheckedRequest,
   ) => Promise<ThreadTodoMutationResponse>;
-  /** Marker event; refetch owner-routed cards with `listThreadTodos`. */
+  /** Marker event for review details; the To-do queue follows deltas instead. */
   onThreadTodosChanged?: (
     callback: (event: ThreadTodosChangedEvent) => void,
+  ) => () => void;
+  /** This window's open cards at a revision; `onThreadTodosDelta` follows it. */
+  snapshotThreadTodos?: () => Promise<ThreadTodoFeedSnapshot>;
+  onThreadTodosDelta?: (
+    callback: (delta: ThreadTodoFeedDelta) => void,
   ) => () => void;
   /** Every local thread's pending requests and open async questions. */
   listOperatorRequests?: (request?: ListOperatorRequestsRequest) => Promise<ListOperatorRequestsResponse>;
@@ -1391,6 +1409,12 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   readMarkdownFile?: (
     request: ReadMarkdownFileRequest
   ) => Promise<ReadMarkdownFileResponse>;
+  readHtmlPreviewAssets?: (
+    request: ReadHtmlPreviewAssetsRequest
+  ) => Promise<ReadHtmlPreviewAssetsResponse>;
+  onHtmlPreviewNavigation?: (
+    callback: (event: HtmlPreviewNavigationEvent) => void
+  ) => () => void;
   openMarkdownFileViewer?: (
     request: OpenMarkdownFileViewerRequest
   ) => Promise<OpenMarkdownFileViewerResponse>;
@@ -1437,6 +1461,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   onIntegratedTerminalError?: (
     callback: (event: IntegratedTerminalErrorEvent) => void,
   ) => () => void;
+  captureRenderingDiagnostics?: (seconds?: number) => Promise<import("../../../shared/rendering-diagnostics").RenderingCaptureResult>;
+  stopRenderingDiagnostics?: () => Promise<import("../../../shared/rendering-diagnostics").RenderingCaptureResult | undefined>;
   captureHeapSnapshot?: (
     request: CaptureHeapSnapshotRequest,
   ) => Promise<{ delayMs: number }>;

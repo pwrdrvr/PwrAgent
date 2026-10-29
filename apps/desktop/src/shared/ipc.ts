@@ -191,11 +191,14 @@ export const THREAD_TODOS_LIST_PROJECTS_CHANNEL = "thread-todos:list-projects";
 export const THREAD_TODOS_SET_PROJECT_CHANNEL = "thread-todos:set-project";
 export const THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL = "thread-todos:set-item-checked";
 /**
- * Marker event: a thread's to-do cards changed. Listeners refetch with
- * `thread-todos:list`. Sent to local windows only; a peer's cards stay on
- * the peer.
+ * Marker event: a thread's to-do cards changed. Review details refetch with
+ * `thread-reviews:list`. A window hears only its own owner's markers.
  */
 export const THREAD_TODOS_CHANGED_EVENT_CHANNEL = "thread-todos:changed";
+/** The window's open cards at a revision; `thread-todos:delta` follows it. */
+export const THREAD_TODOS_SNAPSHOT_CHANNEL = "thread-todos:snapshot";
+/** One revision of change to the window's open cards. */
+export const THREAD_TODOS_DELTA_EVENT_CHANNEL = "thread-todos:delta";
 export const OPERATOR_REQUESTS_LIST_CHANNEL = "operator-requests:list";
 export const OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL = "operator-requests:list-dismissed-questions";
 export const OPERATOR_REQUESTS_MARK_SEEN_CHANNEL = "operator-requests:mark-seen";
@@ -318,6 +321,10 @@ export const MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL =
   "mcp-connection:set-sandboxer-transport";
 export const MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL =
   "mcp-connection:set-sandboxer-cleanup-on-pr-close";
+export const MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL =
+  "mcp-connection:set-linear-paste-images";
+export const MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL =
+  "mcp-connection:fetch-linear-pasted-images";
 export const MCP_CONNECTION_LIST_TOOLS_CHANNEL = "mcp-connection:list-tools";
 export const MCP_CONNECTION_SET_THREAD_CHANNEL =
   "mcp-connection:set-thread";
@@ -796,6 +803,7 @@ export const APPLICATION_OPEN_CHANNEL = "application:open";
 export const PATH_OPEN_CHANNEL = "path:open";
 export const PATH_REVEAL_CHANNEL = "path:reveal";
 export const MARKDOWN_FILE_READ_CHANNEL = "markdown-file:read";
+export const HTML_PREVIEW_ASSETS_READ_CHANNEL = "html-preview:assets:read";
 export const TRANSCRIPT_FILES_RESOLVE_CHANNEL = "transcript-files:resolve";
 export const MARKDOWN_FILE_VIEWER_OPEN_CHANNEL = "markdown-file-viewer:open";
 export const MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL =

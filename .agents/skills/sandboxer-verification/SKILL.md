@@ -67,22 +67,38 @@ do not create a sandbox through an older schema; report the blocker and ask
 for a compatible connection or an explicitly authorized verification alternative.
 Check available allowance without deleting existing account resources.
 
-Otherwise call `create_sandbox` with `noEnv: true`, `from: "pwragent-base"`,
-`type: "large"`, the name, and `ttlSeconds: 3600`. The `pwragent-base`
-snapshot already holds Node, pnpm, the E2E packages, the Electron download, a
-warm pnpm store, and a clone at `~/pwragent/repo`. A sandbox from it was ready
-3 s after the call, and a fetched commit was ready to test 4 s later. The TTL
-is a wall-clock stop timer, not an idle timer. Pass the `sandboxId` on every
-later call. The MCP default is the last sandbox this server used, which can
-be another task's.
+Otherwise call `create_sandbox` with `noEnv: true`,
+`from: "pwragent-base-us-east"`, `region: "us-east"`, `type: "large"`, the
+name, and `ttlSeconds: 3600`. Always pass `region`: without it, Sandboxer
+picks the region nearest the caller. The `pwragent-base-us-east` snapshot
+already holds Node, pnpm, the E2E packages, the Electron download, a warm
+pnpm store, and a clone at `~/pwragent/repo`. A sandbox from it was ready
+3 s after the call, and `verify.sh setup` in a new worktree took 3 s
+(2026-10-27). The TTL is a wall-clock stop timer, not an idle timer. Pass
+the `sandboxId` on every later call. The MCP default is the last sandbox
+this server used, which can be another task's.
 
-If `pwragent-base` does not exist, create the sandbox without `from` and
-clone the public repository once. A blob-less clone takes a few seconds, and
-the first `verify.sh setup` installs the rest in about 17 s:
+The older `pwragent-base` snapshot is the `eu-central` copy. Use it with
+`region: "eu-central"` only when `us-east` cannot place the sandbox.
+
+If neither snapshot exists, create the sandbox without `from` and clone the
+public repository once. A blob-less clone takes a few seconds, and the first
+`verify.sh setup` installs the rest in about 17 to 24 s:
 
 ```sh
 git clone -q --filter=blob:none https://github.com/pwrdrvr/PwrAgent.git ~/pwragent/repo
 ```
+
+### Rebuild the base snapshot
+
+Rebuild it when the clone or the pnpm store is far behind `main`. Create a
+`large` sandbox in `us-east` with `noEnv: true` and no `from`. Clone as
+above, run `scripts/sandboxer/verify.sh setup` in `~/pwragent/repo`, delete
+`.local/sandboxer`, and call `save_snapshot` with the name
+`pwragent-base-us-east` and the labels `repo: pwragent`, `role: base`,
+`region: us-east`, and `commit: <short sha>`. Create a sandbox from the
+snapshot and run `verify.sh setup` in a new worktree to confirm it, then
+delete both sandboxes. Named snapshots survive the deletion.
 
 ## 2. Send a commit
 

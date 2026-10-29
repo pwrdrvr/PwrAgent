@@ -116,7 +116,8 @@
   macOS-specific and Windows-specific changes still need CI or the PwrSuiteLab
   skills below.
 - Verify a commit, not a dirty tree. Use one sandbox per thread, started from
-  the `pwragent-base` snapshot. Stop it after each run.
+  the `pwragent-base-us-east` snapshot in the `us-east` region. Stop it after
+  each run.
 - Attach the thread's PR and watch it with `notifyOn: ["merged", "closed"]`.
   PwrAgent releases the thread's sandboxes when its PRs merge or close.
 - Use only the Sandboxer MCP tools. Do not run the `sbx` CLI.

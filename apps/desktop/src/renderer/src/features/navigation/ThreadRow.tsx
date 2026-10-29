@@ -41,13 +41,11 @@ import {
 } from "./ThreadRowStatus";
 import { InlineRenameInput } from "./InlineRenameInput";
 import { matchMoveHotkey } from "./thread-action-hotkeys";
+import { revealThreadRowAtNearestEdge } from "./reveal-selected-thread-row";
 import { threadRowInstanceKey, type ThreadRowInstance } from "./thread-row-instance";
+import { formatRelativeTime } from "./thread-time";
 
 const HOVER_PREFETCH_DELAY_MS = 750;
-const absoluteDateFormatter = new Intl.DateTimeFormat(undefined, {
-  month: "short",
-  day: "numeric",
-});
 
 /**
  * Which row of a list a callback is about.
@@ -361,15 +359,15 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       return;
     }
 
-    rowRef.current.scrollIntoView({
-      block: "nearest",
-    });
+    revealThreadRowAtNearestEdge(rowRef.current);
     // Parent effects open directory/subthread disclosures for an explicit
     // reveal. Keep a temporary sidebar peek visible until that layout has
     // committed and the selected row has actually been scrolled into view.
     if (revealSelectedThreadRequest > 0) {
       const frame = window.requestAnimationFrame(() => {
-        rowRef.current?.scrollIntoView({ block: "nearest" });
+        if (rowRef.current) {
+          revealThreadRowAtNearestEdge(rowRef.current);
+        }
         if (
           revealSelectedThreadRequest > completedRevealRequestRef.current
           && onRevealSelectedThreadComplete
@@ -1365,34 +1363,4 @@ function defaultOpenPullRequest(url: string): void {
     return;
   }
   window.open(url, "_blank", "noopener,noreferrer");
-}
-
-function formatRelativeTime(timestamp?: number): string {
-  if (!timestamp) {
-    return "now";
-  }
-
-  const deltaMinutes = Math.max(
-    0,
-    Math.round((Date.now() - timestamp) / (1000 * 60))
-  );
-
-  if (deltaMinutes < 1) {
-    return "now";
-  }
-  if (deltaMinutes < 60) {
-    return `${deltaMinutes}m`;
-  }
-
-  const deltaHours = Math.round(deltaMinutes / 60);
-  if (deltaHours < 24) {
-    return `${deltaHours}h`;
-  }
-
-  const deltaDays = Math.round(deltaHours / 24);
-  if (deltaDays < 7) {
-    return `${deltaDays}d`;
-  }
-
-  return absoluteDateFormatter.format(timestamp);
 }

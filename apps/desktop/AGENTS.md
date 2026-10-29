@@ -217,6 +217,11 @@ pnpm dev
 
 ## Renderer update diagnostics in release builds
 
+For continuous compositor/GPU work, use the opt-in, bounded
+[rendering capture](../../docs/rendering-diagnostics.md). It associates native
+Chromium frame counters with numeric window IDs, visibility and known animation
+sources, without enabling continuous profiling.
+
 The renderer keeps a 64-entry in-memory history of selected composer, Tiptap,
 context-card, and tooltip update requests. Consecutive identical requests
 coalesce; counters retain totals since renderer startup. These are requests,
@@ -1100,6 +1105,29 @@ Canonicalization failures degrade rather than propagate:
 `canonicalizeNavigationThreadPullRequests` catches, logs, and serves the
 overlay rows, because possibly-stale chips beat a failed snapshot (which
 for a viewer means a disconnected window).
+
+### Which PRs a thread attaches automatically
+
+A thread gets a PR without the operator asking from two sources only:
+
+- **A branch lookup of its own branch and directories.** A default branch
+  (`main`, the remote's `HEAD`) looks up nothing, so a thread on it
+  attaches nothing automatically (`resolvePrLookupBranches`).
+- **Its own history.** A PR the thread attached earlier, on another
+  branch, stays attached after the checkout moves on.
+
+**A thread never inherits another thread's PRs**, even when both are on
+the same branch in the same checkout. The PR lookup registry
+(`prLookupRegistry`, durable via `pr_lookup_cache`) is keyed by provider,
+branch and directories, not by thread. Every thread on that branch and
+checkout reads the same entry. It must therefore hold only what
+`detectPullRequestsForThread` returned. Never seed it from a thread's
+overlay `prs` or `detachedPrs`. That list is the thread's history.
+Seeding it once attached four old merged PRs to every new thread in a
+primary checkout on `main`. Detaching them on one thread did not stop the
+next thread from getting them.
+`app-server-ipc.test.ts` ("never shares one thread's PR history…") holds
+this.
 
 ### Who owns a PR's status when two instances can see it
 

@@ -24,6 +24,8 @@ const createMainWindowMock = vi.fn();
 const stopWindowDiagnosticsMock = vi.fn<() => Promise<void>>();
 const registerAppServerIpcHandlersMock = vi.fn();
 const registerNativeVoiceIpcHandlersMock = vi.fn();
+const installPermissionPolicyMock = vi.fn();
+const nativeVoiceMediaRulesFixture = { check: vi.fn(), request: vi.fn() };
 const startAppServerOwnerNavigationMock = vi.fn(async () => undefined);
 const disposeAppServerIpcHandlersMock = vi.fn();
 const registerAgentIpcHandlersMock = vi.fn();
@@ -123,6 +125,7 @@ const connectedPeerTargetsMock = vi.fn(() => [] as Array<{
   >;
 }>);
 const federationPeerStatusChangedMock = vi.fn(() => () => {});
+const federationShortNamesChangedMock = vi.fn(() => () => {});
 const rendererEventSubscriptions = new Map<number, Array<{
   sourceInstanceId: string;
   eventClasses: string[];
@@ -274,6 +277,7 @@ const buildDockProfileSnapshotMock = vi.fn(() => ({
 const writeDockProfileSnapshotMock = vi.fn();
 
 vi.mock("electron", () => ({
+  session: { defaultSession: { fixture: "default-session" } },
   powerMonitor: {
     on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
       powerMonitorEventHandlers.set(event, handler);
@@ -338,6 +342,7 @@ vi.mock("../linux-password-store", () => ({
 
 vi.mock("../window", () => ({
   createMainWindow: createMainWindowMock,
+  getRendererEntry: () => ({ kind: "file", value: "/fixture/renderer/index.html" }),
   isFederationWindowWebContents: vi.fn(() => false),
   stopWindowDiagnostics: stopWindowDiagnosticsMock,
   syncHotCpuProfilersFromSettings: vi.fn(),
@@ -395,7 +400,12 @@ vi.mock("../ipc/agent-ipc", () => ({
 }));
 
 vi.mock("../ipc/native-voice", () => ({
+  nativeVoiceMediaRules: nativeVoiceMediaRulesFixture,
   registerNativeVoiceIpcHandlers: registerNativeVoiceIpcHandlersMock,
+}));
+
+vi.mock("../permission-policy", () => ({
+  installPermissionPolicy: installPermissionPolicyMock,
 }));
 
 vi.mock("../ipc/thread-todos-ipc", () => ({
@@ -592,6 +602,7 @@ vi.mock("../federation/federation-runtime", () => ({
     restart: federationRuntimeRestartMock,
     connectedPeerTargets: connectedPeerTargetsMock,
     onPeerStatusChanged: federationPeerStatusChangedMock,
+    onShortNamesChanged: federationShortNamesChangedMock,
     setRemoteWindowEventSubscription: setRemoteWindowEventSubscriptionMock,
     clearRendererEventSubscriptions: clearRendererEventSubscriptionsMock,
     rendererWantsRemoteEvent: rendererWantsRemoteEventMock,
@@ -759,6 +770,7 @@ describe("bootstrapApp", () => {
     }));
     registerAppServerIpcHandlersMock.mockReset();
     registerNativeVoiceIpcHandlersMock.mockReset();
+    installPermissionPolicyMock.mockReset();
     startAppServerOwnerNavigationMock.mockClear();
     disposeAppServerIpcHandlersMock.mockReset();
     registerAgentIpcHandlersMock.mockReset();
@@ -868,6 +880,7 @@ describe("bootstrapApp", () => {
     connectedPeerTargetsMock.mockReset();
     connectedPeerTargetsMock.mockReturnValue([]);
     federationPeerStatusChangedMock.mockClear();
+    federationShortNamesChangedMock.mockClear();
     rendererEventSubscriptions.clear();
     setRemoteWindowEventSubscriptionMock.mockClear();
     clearRendererEventSubscriptionsMock.mockClear();
@@ -1203,6 +1216,14 @@ describe("bootstrapApp", () => {
     });
     expect(registerAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerNativeVoiceIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(installPermissionPolicyMock).toHaveBeenCalledTimes(1);
+    expect(installPermissionPolicyMock).toHaveBeenCalledWith(
+      { fixture: "default-session" },
+      {
+        rendererEntry: { kind: "file", value: "/fixture/renderer/index.html" },
+        media: nativeVoiceMediaRulesFixture,
+      },
+    );
     expect(startAppServerOwnerNavigationMock).toHaveBeenCalledTimes(1);
     expect(registerAgentIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerScheduledActionIpcHandlersMock).toHaveBeenCalledTimes(1);

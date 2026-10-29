@@ -1,10 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 import { useState } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppServerPendingRequestNotification, OperatorServerRequest } from "@pwragent/shared";
 import { AppNoticeStack } from "../../notifications/AppNoticeStack";
 import type { AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
+import { APPROVAL_STILL_OPEN_MESSAGE } from "../approval-choices";
 import {
   APPROVAL_NOTICE_HIDE_LABEL,
   approvalNoticeId,
@@ -93,6 +94,20 @@ describe("buildApprovalNotices", () => {
     });
   });
 
+  it.each([
+    { ownerTitle: undefined, displayTitle: "Untitled thread", expectedOrigin: undefined },
+    { ownerTitle: "Owner title", displayTitle: "Owner title", expectedOrigin: "owner" },
+    { ownerTitle: "Older owner title", displayTitle: "New navigation title", expectedOrigin: undefined },
+  ])("marks only the exact owner-supplied title ($displayTitle)", ({ ownerTitle, displayTitle, expectedOrigin }) => {
+    const [notice] = buildApprovalNotices({
+      waits: waitsFor([{ ...commandApproval, threadTitle: ownerTitle }]),
+      hiddenKeys: new Set(), threadTitleForKey: () => displayTitle,
+      onReview: vi.fn(), onHide: vi.fn(), onHideAll: vi.fn(),
+    });
+    expect(notice?.threadLink?.title).toBe(displayTitle);
+    expect(notice?.threadLink?.titleOrigin).toBe(expectedOrigin);
+  });
+
   it("leaves out the thread on screen and the cards the operator hid", () => {
     const waits = waitsFor([commandApproval, mcpApproval, fileApproval]);
     const notices = buildApprovalNotices({
@@ -112,6 +127,7 @@ function Harness(props: {
   initialWaits: OperatorWait[];
   otherNotices?: AppNoticeToastNotice[];
   onReview?: (wait: OperatorWait) => void;
+  respond?: (wait: OperatorWait, response: unknown) => Promise<void>;
 }) {
   const [waits, setWaits] = useState(props.initialWaits);
   const [selected, setSelected] = useState<string>();
@@ -120,6 +136,7 @@ function Harness(props: {
     selectedThreadKey: selected,
     threadTitleForKey: titleFor,
     onReview: props.onReview ?? (() => {}),
+    ...(props.respond ? { respond: props.respond } : {}),
   });
   return (
     <>
@@ -213,5 +230,118 @@ describe("approval notice cards", () => {
       threadId: "thread-a",
       key: "request:codex:thread-a:req-1000",
     }));
+  });
+});
+
+const mcpSessionApproval = serverRequest("mcpServer/elicitation/request", {
+  serverName: "github",
+  mode: "form",
+  _meta: {
+    codex_approval_kind: "mcp_tool_call",
+    pwragent_approval_kind: "mcp_tool_call",
+    persist: ["session", "always"],
+  },
+  message: "Allow the agent to open a pull request on GitHub?",
+  requestedSchema: { type: "object", properties: {} },
+}, { createdAt: 5_000, threadId: "thread-e" });
+
+describe("answering from an approval notice", () => {
+  it("offers Review alone when the window cannot answer", () => {
+    const [notice] = buildApprovalNotices({
+      waits: waitsFor([commandApproval]),
+      hiddenKeys: new Set(),
+      threadTitleForKey: titleFor,
+      onReview: vi.fn(),
+      onHide: vi.fn(),
+      onHideAll: vi.fn(),
+    });
+    expect(notice.actions).toHaveLength(1);
+    expect(notice.actions?.[0]).not.toHaveProperty("menu");
+  });
+
+  it("keeps Review the default and lists the answers on its chevron", async () => {
+    const onReview = vi.fn();
+    const respond = vi.fn(() => new Promise<void>(() => {}));
+    render(
+      <Harness
+        initialWaits={waitsFor([mcpSessionApproval])}
+        onReview={onReview}
+        respond={respond}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    expect(onReview).toHaveBeenCalledTimes(1);
+    expect(respond).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Approval options" }));
+    const menu = screen.getByRole("menu", { name: "Approval options" });
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Allow",
+      "Allow this tool for this conversation",
+      "Always allow",
+      "Decline",
+      "Cancel turn",
+    ]);
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Allow this tool for this conversation" }));
+    await vi.waitFor(() => expect(respond).toHaveBeenCalledTimes(1));
+    expect(respond.mock.calls[0]).toEqual([
+      expect.objectContaining({ threadId: "thread-e" }),
+      expect.objectContaining({ action: "accept" }),
+    ]);
+    // In flight: the card says so and takes no second answer.
+    expect(screen.getByText("Allowing…")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approval options" })).not.toBeInTheDocument();
+  });
+
+  it("answers a command approval and shows a refusal on the card", async () => {
+    const respond = vi.fn(async () => {
+      throw new Error("Error invoking remote method 'agent:submitServerRequest': Error: The turn already ended.");
+    });
+    render(<Harness initialWaits={waitsFor([commandApproval])} respond={respond} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Approval options" }));
+    const menu = screen.getByRole("menu", { name: "Approval options" });
+    const labels = within(menu).getAllByRole("menuitem").map((item) => item.textContent);
+    expect(labels[0]).toMatch(/^(Approve|Allow)/);
+    expect(labels).toContain("Decline");
+
+    fireEvent.click(within(menu).getAllByRole("menuitem")[0]!);
+    // Named as a failure, so it does not read as the request's own text.
+    expect(await screen.findByText("Could not answer: The turn already ended.")).toBeInTheDocument();
+    // A refused answer can be sent again.
+    expect(screen.getByRole("button", { name: "Approval options" })).toBeInTheDocument();
+  });
+
+  it("closes an open menu when another notice takes the card", () => {
+    const respond = vi.fn(() => new Promise<void>(() => {}));
+    render(
+      <Harness
+        initialWaits={waitsFor([mcpSessionApproval, commandApproval])}
+        respond={respond}
+      />,
+    );
+
+    // Approvals lead the stack, so the command's notice is on the card.
+    expect(screen.getByText("pnpm test --run checkout")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Approval options" }));
+    expect(screen.getByRole("menu", { name: "Approval options" })).toBeInTheDocument();
+    // The command is answered elsewhere; the MCP notice takes the card.
+    fireEvent.click(screen.getByRole("button", { name: "Answer first" }));
+    expect(screen.getByText("Allow the agent to open a pull request on GitHub?")).toBeInTheDocument();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("gives the answers back when the owner still lists the request", async () => {
+    // `respond` re-reads the queue before resolving, and the wait stays.
+    const respond = vi.fn(async () => undefined);
+    render(<Harness initialWaits={waitsFor([commandApproval])} respond={respond} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Approval options" }));
+    fireEvent.click(within(screen.getByRole("menu")).getAllByRole("menuitem")[0]!);
+    expect(await screen.findByText(APPROVAL_STILL_OPEN_MESSAGE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approval options" })).toBeInTheDocument();
   });
 });

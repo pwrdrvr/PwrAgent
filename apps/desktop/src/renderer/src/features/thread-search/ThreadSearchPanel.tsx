@@ -26,6 +26,7 @@ import type { HistoryNavControls } from "../chrome/HistoryNavButtons";
 import type { MastheadActionsProps } from "../chrome/MastheadActions";
 import { ThreadPlaceholderHeader } from "../thread-detail/ThreadPlaceholderHeader";
 import { AgentThreadChip } from "../navigation/AgentThreadChip";
+import { InstanceChip } from "../federation/InstanceGlyph";
 import { useProviderChipNeeded } from "../navigation/provider-chip-visibility";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { ProjectSearchInput } from "./ProjectSearchInput";
@@ -198,7 +199,14 @@ function ThreadSearchResultRow(props: {
           ) : null}
           {props.isAgent ? <AgentThreadChip /> : null}
           {result.federation ? (
-            <span className="chip">{result.federation.instanceLabel}</span>
+            <InstanceChip
+              instanceId={
+                result.federation.ref.target.scope === "remote"
+                  ? result.federation.ref.target.instanceId
+                  : ""
+              }
+              label={result.federation.instanceLabel}
+            />
           ) : null}
           {workspaceLabel ? (
             <span className="thread-search-result__meta-item">

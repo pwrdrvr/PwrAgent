@@ -1,7 +1,7 @@
-import { createContext, useContext, useMemo, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, type ReactNode } from "react";
 import {
   formatFederationPeerDisplayLabel,
-  formatFederationPeerDisplayLabelParts,
+  formatFederationPeerShortDisplayLabel,
   type FederationHealthStatus,
 } from "@pwragent/shared";
 
@@ -9,9 +9,7 @@ type DisplayPeer = { label: string; profileName?: string; shortLabel?: string; r
 
 /** The machine name shown on UI controls, with its distinguishing profile. */
 export function federationDisplayLabel(peer: DisplayPeer, peers: readonly DisplayPeer[]): string {
-  const parts = formatFederationPeerDisplayLabelParts(peer, peers);
-  const machine = parts.shortLabel ?? parts.label;
-  return parts.profileName ? `${machine} / ${parts.profileName}` : machine;
+  return formatFederationPeerShortDisplayLabel(peer, peers);
 }
 
 export function federationLocalDisplayLabel(health: FederationHealthStatus | undefined): string {
@@ -64,4 +62,20 @@ export function useFederationInstanceNames(
 ): FederationInstanceNames {
   return useContext(FederationDisplayLabels)?.get(instanceId)
     ?? { label: fallback, fullLabel: fallback };
+}
+
+/**
+ * The same names as {@link useFederationInstanceNames}, for a render callback
+ * that draws many instances and cannot call a hook per row.
+ */
+export function useFederationInstanceNameLookup(): (
+  instanceId: string,
+  fallback: string,
+) => FederationInstanceNames {
+  const labels = useContext(FederationDisplayLabels);
+  return useCallback(
+    (instanceId: string, fallback: string) =>
+      labels?.get(instanceId) ?? { label: fallback, fullLabel: fallback },
+    [labels],
+  );
 }

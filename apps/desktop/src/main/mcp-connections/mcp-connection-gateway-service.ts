@@ -1367,6 +1367,50 @@ export class McpConnectionGatewayService {
     return this.announced(await this.connectionStatus(connection));
   }
 
+  /**
+   * Choose whether images in text pasted from Linear are fetched through a
+   * Linear connection. Nothing live changes: the next paste reads it.
+   */
+  async setLinearPasteImages(enabled: boolean): Promise<void> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      await this.requestOwnerBroker<null>(
+        ownership.holder,
+        "broker/set-linear-paste-images",
+        { enabled },
+      );
+      return;
+    }
+    this.registry.setLinearPasteImages(enabled);
+    // Announced even with no Linear connection, so every Settings window
+    // re-reads the switch.
+    this.announceChanged(
+      this.registry.list()
+        .filter((connection) => connection.linearPasteImages !== undefined)
+        .map((connection) => connection.id),
+    );
+  }
+
+  /** Whether images in text pasted from Linear are attached. Profile-local. */
+  isLinearPasteImagesEnabled(): boolean {
+    return this.registry.isLinearPasteImagesEnabled();
+  }
+
+  /**
+   * The Linear connections a paste may fetch images through, or `undefined`
+   * when the setting is off. Reads the local registry, like
+   * `isSandboxerCleanupOnPrCloseEnabled`: config.toml is profile-local.
+   * Signed-in state is checked when the session opens.
+   */
+  linearPasteConnectionIds(): string[] | undefined {
+    // The setting also governs fetching a fresh signed link, which needs no
+    // connection, so it is read from config rather than from Linear rows.
+    if (!this.registry.isLinearPasteImagesEnabled()) return undefined;
+    return this.registry.list()
+      .filter((connection) => connection.linearPasteImages !== undefined && connection.enabled)
+      .map((connection) => connection.id);
+  }
+
   async setSandboxerTransport(transport: SandboxerTransport): Promise<McpConnectionStatus> {
     if (!isSandboxerTransport(transport)) throw new Error("Choose a Sandboxer transport.");
     const ownership = await this.ensureOwnerBroker();
@@ -2939,6 +2983,13 @@ export class McpConnectionGatewayService {
         throw new Error("Invalid Sandboxer cleanup on PR close request.");
       }
       return await this.setSandboxerCleanupOnPrClose(values.enabled);
+    }
+    if (operation === "broker/set-linear-paste-images") {
+      if (typeof values.enabled !== "boolean") {
+        throw new Error("Invalid Linear paste images request.");
+      }
+      await this.setLinearPasteImages(values.enabled);
+      return null;
     }
     if (operation === "broker/set-tool-approval") {
       if (

@@ -4,6 +4,7 @@ import {
   readRendererFederationTarget,
 } from "../../lib/federation-window";
 import { copyText } from "../../lib/copy-text";
+import { useFederationInstanceNames } from "../../lib/federation-display-label";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 /**
@@ -11,8 +12,9 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
  * as a sidebar identity pill (profile-style) while the sidebar is open,
  * and as a compact title-bar badge when the sidebar is the surface that
  * got hidden — the window must always carry a visible remote marker.
- * The label truncates, so the viewport tooltip spells out the full
- * machine name + instance id; clicking copies the instance id.
+ * The badge draws the machine's short name, like every other compact
+ * face; the viewport tooltip spells out the full machine name + instance
+ * id, and clicking copies the instance id.
  */
 export function FederationRemoteBadge(props: {
   className?: string;
@@ -20,6 +22,8 @@ export function FederationRemoteBadge(props: {
 }) {
   const label = readRendererFederationLabel();
   const target = readRendererFederationTarget();
+  const fallback = label ?? target?.instanceId ?? "";
+  const names = useFederationInstanceNames(target?.instanceId ?? "", fallback);
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
@@ -35,17 +39,20 @@ export function FederationRemoteBadge(props: {
   if (!label && !target) {
     return null;
   }
-  const display = label ?? target?.instanceId ?? "";
+  // A window opened before health loads, or for a peer this instance no
+  // longer lists, keeps the label it was opened with.
+  const display = target ? names.label : fallback;
+  const fullName = target ? names.fullLabel : fallback;
   const tooltipText = copied
     ? "Copied instance id"
     : target
-      ? `${display} · ${target.instanceId}\nClick to copy the instance id`
-      : display;
+      ? `${fullName} · ${target.instanceId}\nClick to copy the instance id`
+      : fullName;
 
   return (
     <>
       <button
-        aria-label={`Remote instance: ${display}. Copy instance id.`}
+        aria-label={`Remote instance: ${fullName}. Copy instance id.`}
         className={props.className ?? "federation-remote-badge"}
         type="button"
         onBlur={() => {

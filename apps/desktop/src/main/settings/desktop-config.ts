@@ -126,6 +126,7 @@ export type DesktopSettingsConfig = {
     passSetupVariablesToAgents?: boolean;
     interactiveSvgSkipNotice?: boolean;
     interactiveSvgAutoOpen?: boolean;
+    htmlPreviewRunScripts?: boolean;
     mcpGatewayEnabled?: boolean;
     pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
@@ -198,9 +199,12 @@ export type DesktopSettingsConfig = {
   ui?: {
     sidebarHidden?: boolean;
     contextRailPinned?: boolean;
+    projectIndexHidden?: boolean;
+    projectIndexWidth?: number;
     activeContextTab?: string;
     editedFilesDock?: string;
     actionRunsDock?: string;
+    launchpadConnectionsDock?: string;
     logs?: Partial<DesktopLogsViewerPreferences>;
   };
   federation?: {
@@ -706,6 +710,12 @@ export function desktopSettingsPatchToEdits(
       patch.general.interactiveSvgAutoOpen,
     );
   }
+  if (patch.general?.htmlPreviewRunScripts !== undefined) {
+    set(
+      ["general", "html_preview_run_scripts"],
+      patch.general.htmlPreviewRunScripts,
+    );
+  }
   if (patch.general?.mcpGatewayEnabled !== undefined) {
     set(["general", "mcp_gateway_enabled"], patch.general.mcpGatewayEnabled);
   }
@@ -1147,6 +1157,24 @@ export function desktopSettingsPatchToEdits(
       set(["ui", "context_rail_pinned"], false);
     }
   }
+  // The project index defaults to shown, so only an explicit hide persists.
+  if (patch.ui?.projectIndexHidden !== undefined) {
+    if (patch.ui.projectIndexHidden) {
+      set(["ui", "project_index_hidden"], true);
+    } else {
+      edits.push({ op: "delete", path: ["ui", "project_index_hidden"] });
+    }
+  }
+  // `null` (a double-click on the grip) returns the column to the width of
+  // its longest name, which is the absence of the key.
+  if (patch.ui?.projectIndexWidth !== undefined) {
+    const width = patch.ui.projectIndexWidth;
+    if (width === null || !Number.isFinite(width) || width <= 0) {
+      edits.push({ op: "delete", path: ["ui", "project_index_width"] });
+    } else {
+      set(["ui", "project_index_width"], Math.round(width));
+    }
+  }
   if (patch.ui?.activeContextTab !== undefined) {
     if (patch.ui.activeContextTab === "info") {
       edits.push({ op: "delete", path: ["ui", "active_context_tab"] });
@@ -1166,6 +1194,13 @@ export function desktopSettingsPatchToEdits(
       edits.push({ op: "delete", path: ["ui", "action_runs_dock"] });
     } else {
       set(["ui", "action_runs_dock"], patch.ui.actionRunsDock);
+    }
+  }
+  if (patch.ui?.launchpadConnectionsDock !== undefined) {
+    if (patch.ui.launchpadConnectionsDock === "launchpad") {
+      edits.push({ op: "delete", path: ["ui", "launchpad_connections_dock"] });
+    } else {
+      set(["ui", "launchpad_connections_dock"], patch.ui.launchpadConnectionsDock);
     }
   }
   // Help → Logs viewer prefs: same delete-on-default rule, in [ui.logs].
@@ -2126,6 +2161,7 @@ function normalizeDesktopConfig(
         general?.interactive_svg_skip_notice,
       ),
       interactiveSvgAutoOpen: readBoolean(general?.interactive_svg_auto_open),
+      htmlPreviewRunScripts: readBoolean(general?.html_preview_run_scripts),
       mcpGatewayEnabled: readBoolean(general?.mcp_gateway_enabled),
       pdfAnalysisEnabled: readBoolean(general?.pdf_analysis_enabled),
       developerMode: readBoolean(general?.developer_mode),
@@ -2273,9 +2309,12 @@ function normalizeDesktopConfig(
     ui: {
       sidebarHidden: readBoolean(ui?.sidebar_hidden),
       contextRailPinned: readBoolean(ui?.context_rail_pinned),
+      projectIndexHidden: readBoolean(ui?.project_index_hidden),
+      projectIndexWidth: readPositiveWidth(ui?.project_index_width),
       activeContextTab: readString(ui?.active_context_tab),
       editedFilesDock: readString(ui?.edited_files_dock),
       actionRunsDock: readString(ui?.action_runs_dock),
+      launchpadConnectionsDock: readString(ui?.launchpad_connections_dock),
       logs: readLogsViewerConfig(uiLogs),
     },
     federation: {
@@ -2599,6 +2638,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const passSetupVariablesToAgents = config.general?.passSetupVariablesToAgents;
   const interactiveSvgSkipNotice = config.general?.interactiveSvgSkipNotice;
   const interactiveSvgAutoOpen = config.general?.interactiveSvgAutoOpen;
+  const htmlPreviewRunScripts = config.general?.htmlPreviewRunScripts;
   const pdfAnalysisEnabled = config.general?.pdfAnalysisEnabled;
   const notificationsEnabled = config.general?.notificationsEnabled;
   const toolOutputAlerts = config.general?.toolOutputAlerts;
@@ -2624,6 +2664,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     passSetupVariablesToAgents !== undefined ||
     interactiveSvgSkipNotice !== undefined ||
     interactiveSvgAutoOpen !== undefined ||
+    htmlPreviewRunScripts !== undefined ||
     pdfAnalysisEnabled !== undefined ||
     notificationsEnabled !== undefined ||
     toolOutputAlertsDefined ||
@@ -2675,6 +2716,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (interactiveSvgAutoOpen !== undefined) {
       pruned.general.interactiveSvgAutoOpen = interactiveSvgAutoOpen;
+    }
+    if (htmlPreviewRunScripts !== undefined) {
+      pruned.general.htmlPreviewRunScripts = htmlPreviewRunScripts;
     }
     if (pdfAnalysisEnabled !== undefined) {
       pruned.general.pdfAnalysisEnabled = pdfAnalysisEnabled;
@@ -3776,6 +3820,12 @@ function legacyTokenMiserGeneralComment(): string {
 
 function readNumber(value: TomlScalar | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/** A remembered pane width: a positive whole number of px, or nothing. */
+function readPositiveWidth(value: TomlScalar | undefined): number | undefined {
+  const width = readNumber(value);
+  return width !== undefined && width > 0 ? Math.round(width) : undefined;
 }
 
 function readImageProfile(

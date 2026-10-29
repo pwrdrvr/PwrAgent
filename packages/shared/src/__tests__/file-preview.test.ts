@@ -16,6 +16,8 @@ describe("file preview kinds", () => {
     ["/repo/results.tsv", "tsv"],
     ["/repo/notes.txt", "text"],
     ["C:\\repo\\build.log", "text"],
+    ["/repo/brief/index.html", "html"],
+    ["/repo/report.HTM", "html"],
     ["/Users/example/.codex/worktrees/abc/repo/events.jsonl", "jsonl"],
   ])("maps %s to %s", (filePath, kind) => {
     expect(filePreviewKind(filePath)).toBe(kind);

@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { transcriptFileReference, type DesktopApplicationsSnapshot, type ResolveTranscriptFilesRequest, type ResolveTranscriptFilesResponse } from "@pwragent/shared";
@@ -52,8 +52,18 @@ describe("inline file links", () => {
     const openMarkdownFileViewer = vi.fn(async () => ({ opened: true as const }));
     render(<ThreadMarkdown fileViewerContext={context} desktopApi={{ resolveTranscriptFiles, readMarkdownFile, openMarkdownFileViewer }}
       text={`Notes: \`${reference}\` and \`research/pwr-video-pilot/PILOT.md\`.`} />);
-    fireEvent.click(await screen.findByRole("link", { name: reference }));
+    const chip = await screen.findByRole("link", { name: reference });
+    // A file chip, not inline code: it says what a click does.
+    expect(chip).toHaveClass("thread-markdown__file-chip");
+    expect(chip).toHaveAttribute("data-tooltip", expect.stringMatching(/^Preview .*\/NOTES\.md$/));
+    fireEvent.click(chip);
     expect(await screen.findByRole("heading", { name: "Pilot notes" })).toBeInTheDocument();
+    // The header names the file once, though the link text was its path.
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("heading", { level: 2, name: "NOTES.md" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Copy path" }))
+      .toHaveTextContent(/^\/owner\/project\/research\/pwr-video-pilot$/);
+    expect(within(dialog).queryByText(reference)).toBeNull();
     expect(resolveTranscriptFiles).toHaveBeenCalledWith(expect.objectContaining({
       references: [reference, "research/pwr-video-pilot/PILOT.md"], thread: context.thread, projectPath: context.projectPath,
     }));

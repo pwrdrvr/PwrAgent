@@ -387,12 +387,17 @@ describe("TranscriptList", () => {
     });
 
     it("keeps work the renderer saw after an agent's reply below that reply", () => {
-      // A finished turn: only the observed order keeps the row below.
+      // A finished turn: only the observed order keeps the row below. The
+      // reply is tagged final, so it stays the answer and the late row folds
+      // into its own group after it.
       const reply = withRendererSequence(completedTurnEntries[4]!, 4);
       const { container } = render(
         <TranscriptList
           entries={[...completedTurnEntries.slice(0, 4), reply]}
-          expandedWorkPhaseGroupIds={["work:turn-1:commentary:complete"]}
+          expandedWorkPhaseGroupIds={[
+            "work:turn-1:commentary:complete",
+            "work:turn-1:live-tools-1:complete",
+          ]}
           loading={false}
           loadingMore={false}
           pendingActivityEntry={withRendererSequence(
@@ -5423,12 +5428,12 @@ Implementation notes remain in a readable bubble.`;
     );
 
     const action = screen.getByRole("button", {
-      name: "Always Allow Prefix: python -m unittest package.tests.test_first package.tests.test_second",
+      name: "Always allow prefix: python -m unittest package.tests.test_first package.tests.test_second",
     });
     expect(action).toHaveClass("button--ghost", "transcript-request__action--detailed");
     expect(action).not.toHaveClass("button--primary");
     expect(action.querySelector(".transcript-request__action-label")).toHaveTextContent(
-      "Always Allow Prefix"
+      "Always allow prefix"
     );
     expect(action.querySelector(".transcript-request__action-detail")).toHaveTextContent(
       "python -m unittest package.tests.test_first package.tests.test_second"
@@ -5470,11 +5475,11 @@ Implementation notes remain in a readable bubble.`;
     );
 
     const action = screen.getByRole("button", {
-      name: `Always Allow Prefix: ${powershell} -Command ${command}`,
+      name: `Always allow prefix: ${powershell} -Command ${command}`,
     });
     expect(action).toHaveClass("button--ghost", "transcript-request__action--detailed");
     expect(action.querySelector(".transcript-request__action-label")).toHaveTextContent(
-      "Always Allow Prefix"
+      "Always allow prefix"
     );
     expect(action.querySelector(".transcript-request__action-detail")).toHaveTextContent(
       command
