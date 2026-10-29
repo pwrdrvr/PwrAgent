@@ -22,7 +22,7 @@ function signed(file: string, expiresInSeconds: number, path = new URL(file).pat
   return `${file}?signature=${token}`;
 }
 
-function imageResponse(bytes: Uint8Array, contentType = "image/png"): Response {
+function imageResponse(bytes: Uint8Array<ArrayBuffer>, contentType = "image/png"): Response {
   return new Response(bytes, { status: 200, headers: { "content-type": contentType } });
 }
 
