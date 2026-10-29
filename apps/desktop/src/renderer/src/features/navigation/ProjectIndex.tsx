@@ -337,13 +337,13 @@ export function ProjectIndex(props: {
                   tabIndex={project.key === tabStop ? 0 : -1}
                   aria-controls={props.scrollRegionId}
                   aria-current={current ? "location" : undefined}
-                  // The marks are decoration beside the name, so the name
-                  // says what they mean.
-                  aria-label={project.active
-                    ? `${project.label}, turn running`
-                    : project.review
-                      ? `${project.label}, unread`
-                      : undefined}
+                  // "Jump to" keeps the name apart from the project's own
+                  // header button, which carries the bare label. The marks
+                  // are decoration beside the name, so the name says what
+                  // they mean.
+                  aria-label={`Jump to ${project.label}${
+                    project.active ? ", turn running" : project.review ? ", unread" : ""
+                  }`}
                   onClick={() => {
                     tooltip.hide();
                     jumpedKey.current = project.key;

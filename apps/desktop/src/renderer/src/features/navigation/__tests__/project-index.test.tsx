@@ -92,9 +92,9 @@ describe("ProjectIndex", () => {
 
   it("tints only the selection's project, and marks running and unread projects", () => {
     renderIndex();
-    expect(screen.getByRole("button", { name: "atlas-web, turn running" })).toHaveClass("is-selected");
-    expect(screen.getByRole("button", { name: "harbor, unread" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "atlas-api" })).not.toHaveClass("is-selected");
+    expect(screen.getByRole("button", { name: "Jump to atlas-web, turn running" })).toHaveClass("is-selected");
+    expect(screen.getByRole("button", { name: "Jump to harbor, unread" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Jump to atlas-api" })).not.toHaveClass("is-selected");
   });
 
   it("is one Tab stop, walked with the arrows, Home/End, and typeahead", () => {
@@ -240,7 +240,7 @@ describe("Sidebar project index", () => {
     const onSelectThread = vi.fn();
     const { onBrowseModeChange } = renderSidebar({ onSelectThread });
     const nav = screen.getByRole("navigation", { name: "Project index" });
-    fireEvent.click(within(nav).getByRole("button", { name: /^relay/ }));
+    fireEvent.click(within(nav).getByRole("button", { name: /^Jump to relay/ }));
     expect(onBrowseModeChange).toHaveBeenCalledWith("directories");
     expect(onSelectThread).not.toHaveBeenCalled();
   });
