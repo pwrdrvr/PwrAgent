@@ -94,7 +94,7 @@ function startProbe(args, options, root = createProbeRoot()) {
   child.once("close", (code, signal) => note("close", { code, signal }));
   for (const name of ["stdout", "stderr"]) {
     child[name].on("data", (chunk) => {
-      bytes[name] += chunk.length;
+      bytes[name] += Buffer.byteLength(chunk);
       tails[name] = (tails[name] + chunk.toString()).slice(-8192);
     });
     child[name].once("end", () => note(`${name}-end`));
@@ -117,26 +117,32 @@ function startProbe(args, options, root = createProbeRoot()) {
   onTestFailed(() => {
     capture("after-cleanup");
     const destination = path.join(desktop, "test-results/unit-shutdown-probes", path.basename(root));
-    cpSync(root, destination, { recursive: true });
     // Keep the CI log bounded; full timelines and pipe tails are in the artifact.
+    // Log before copying so a failed copy cannot also lose this summary.
     const beforeCleanup = path.join(root, "before-cleanup.json");
     const state = existsSync(beforeCleanup) ? JSON.parse(readFileSync(beforeCleanup, "utf8")) : snapshot();
     console.error(`[shutdown-probe] evidence=${destination}; boundary=${existsSync(beforeCleanup) ? "before-cleanup" : "completed"}; pid=${state.pid}; exit=${state.exitCode}; signal=${state.signalCode}; events=${state.events.map(({ kind }) => kind).join(",")}; pipes=${JSON.stringify(state.stdio.map(({ tail: _tail, ...pipe }) => pipe))}`);
+    cpSync(root, destination, { recursive: true });
   });
   activeProbes.add(probe);
   void result.then(() => {
-    capture("completed");
     activeProbes.delete(probe);
+    capture("completed");
   });
   return probe;
 }
 
 async function stopProbe(probe) {
-  probe.capture("before-stop");
+  // After an outer timeout, afterEach and probe()'s finally both stop the
+  // probe. Keep the first stop's evidence and request one abort.
+  const stopping = probe.controller.signal.aborted;
+  if (!stopping) probe.capture("before-stop");
   const exited = () => probe.child.exitCode !== null || probe.child.signalCode !== null;
   if (exited()) return;
-  probe.note("abort-requested");
-  probe.controller.abort();
+  if (!stopping) {
+    probe.note("abort-requested");
+    probe.controller.abort();
+  }
   await Promise.race([
     once(probe.child, "close").catch(() => undefined),
     new Promise((resolve) => setTimeout(resolve, 500)),
