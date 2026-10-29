@@ -3,7 +3,7 @@ import schema from "@agentclientprotocol/sdk/schema/schema.json";
 import Ajv2020 from "ajv/dist/2020.js";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { afterEach, describe, expect, it } from "vitest";
-import { AcpAgentClient, type AcpJsonRpcTransport } from "../acp/acp-client";
+import { AcpAgentClient, acpSafeMcpServerName, type AcpJsonRpcTransport } from "../acp/acp-client";
 import { AcpSessionStore } from "../acp/acp-session-store";
 import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import type { McpCredentialVault } from "../mcp-connections/mcp-credential-vault";
@@ -106,5 +106,78 @@ describe("ACP MCP request serialization", () => {
     expect(servers.find((server) => server.name === "remote")).toEqual(defaults[2]);
     // Host records remain usable by Codex configuration and process spawning.
     expect(JSON.stringify([gitBridge.server, snapBridge.server])).toBe(originals);
+  });
+
+  it.each(["session/new", "session/load"])("sends only server names Grok accepts for %s", async (method) => {
+    const db = openInMemoryStateDb();
+    cleanup.push(() => db.close());
+    const store = new AcpSessionStore(db);
+    const { transport, requests } = validatingTransport();
+    cleanup.push(() => transport.close?.());
+    const sandboxer = { name: "builtin:sandboxer", command: "node", args: ["bridge.js"], env: { TOKEN: "test" } };
+    const client = new AcpAgentClient({
+      backendId: "acp:grok", store, transport,
+      mcpServers: () => ({
+        servers: [
+          { name: "pwragent", type: "http" as const, url: "http://127.0.0.1:1/mcp", headers: [] },
+          { name: "pwrgit", command: "node" },
+          sandboxer,
+        ],
+      }),
+    });
+    await client.initialize();
+    if (method === "session/new") {
+      await client.startSession({ sessionId: "local-session", cwd: "/repo", executionMode: "default" });
+    } else {
+      store.upsertSession({
+        backendId: "acp:grok", sessionId: "local-session", cwd: "/repo", title: "Wire test",
+        createdAt: 1, updatedAt: 1, executionMode: "default", status: "idle",
+      });
+      await client.refreshSession(store.getSession("acp:grok", "local-session")!);
+    }
+    const request = requests.find((request) => request.method === method)!;
+    const servers = request.params?.mcpServers as Array<Record<string, unknown>>;
+    expect(servers.map((server) => server.name)).toEqual(["pwragent", "pwrgit", "_builtin_sandboxer"]);
+    for (const server of servers) expect(server.name).toMatch(/^[A-Za-z_][A-Za-z0-9_-]*$/u);
+    expect(servers[2]).toMatchObject({ command: "node", args: ["bridge.js"], env: [{ name: "TOKEN", value: "test" }] });
+    // The bridge keeps its connection ID everywhere else.
+    expect(sandboxer.name).toBe("builtin:sandboxer");
+  });
+
+  it("keeps rewritten server names unique within a session", async () => {
+    const db = openInMemoryStateDb();
+    cleanup.push(() => db.close());
+    const store = new AcpSessionStore(db);
+    const { transport, requests } = validatingTransport();
+    cleanup.push(() => transport.close?.());
+    const client = new AcpAgentClient({
+      backendId: "acp:grok", store, transport,
+      mcpServers: () => ({
+        servers: [
+          { name: "_a_b", command: "node" },
+          { name: "a:b", command: "node" },
+          { name: "a.b", command: "node" },
+        ],
+      }),
+    });
+    await client.initialize();
+    await client.startSession({ sessionId: "local-session", cwd: "/repo", executionMode: "default" });
+    const request = requests.find((request) => request.method === "session/new")!;
+    const servers = request.params?.mcpServers as Array<Record<string, unknown>>;
+    expect(servers.map((server) => server.name)).toEqual(["_a_b", "_a_b_2", "_a_b_3"]);
+  });
+});
+
+describe("acpSafeMcpServerName", () => {
+  it("keeps every name Grok accepts", () => {
+    for (const name of ["pwragent", "pwrgit", "pwrsuitelab-control", "my_server", "_private"]) {
+      expect(acpSafeMcpServerName(name)).toBe(name);
+    }
+  });
+
+  it("rewrites other names so they cannot collide with a custom connection ID", () => {
+    expect(acpSafeMcpServerName("builtin:sandboxer")).toBe("_builtin_sandboxer");
+    expect(acpSafeMcpServerName("9lives")).toBe("_9lives");
+    expect(acpSafeMcpServerName("a.b c")).toBe("_a_b_c");
   });
 });

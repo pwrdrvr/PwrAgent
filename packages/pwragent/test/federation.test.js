@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   connectFederationClient, decodeFederationInvite, FederationRpcEndpoint,
-  generateFederationIdentityKeyPair, generateNoiseStaticKeyPair,
+  generateFederationIdentityKeyPair, generateNoiseStaticKeyPair, pushFederationFile, FederationReplacementReceiver,
 } from "../dist/federation-core.js";
 import { HEADLESS_CAPABILITIES, HeadlessFederation } from "../src/federation.js";
 import { setup, eventually } from "./helpers.js";
@@ -141,6 +141,7 @@ test("SCP-style invite import joins through an outbound SSH-forward equivalent, 
   assert.equal(before.lifecycle.retainUntil, null);
   const peer = JSON.parse(readFileSync(path.join(gateway.directory, "federation.json"), "utf8")).peers[before.instanceId];
   assert.equal(peer.host.outpost.threadStorage, "owner");
+  assert.deepEqual(peer.receiverPermissions, { remoteShells: true, portForwarding: false, filePush: true, filePull: false, filePullOutsideThreadDirectories: false });
   // A third peer talks to the owner through the gateway's actual router.
   const viewerInvite = decodeFederationInvite((await gateway.rpc("federation-invite", { port: Number(destination.port) })).invite);
   const v = await viewer(viewerInvite);
@@ -150,6 +151,8 @@ test("SCP-style invite import joins through an outbound SSH-forward equivalent, 
   const originalReceive = v.rpc.receiveEnvelope.bind(v.rpc);
   v.rpc.receiveEnvelope = (envelope) => remote.receiveEnvelope(envelope) || originalReceive(envelope);
   assert.equal((await remote.request({ method: "backend.listBackends", params: {} })).backends[0].kind, "codex");
+  const pushed = await pushFederationFile(remote, Buffer.from("desktop intake bytes"), "desktop-intake.txt");
+  assert.equal(readFileSync(pushed.path, "utf8"), "desktop intake bytes");
   v.connection.sendEnvelope({ kind: "notification", id: randomUUID(), protocolVersion: 1,
     sourceInstanceId: v.identity.id, targetInstanceId: before.instanceId, createdAt: Date.now(), method: "federation.eventSubscription",
     params: { eventClasses: ["navigation", "transcript"], eventClassSelections: { navigation: { kind: "all" } } } });
@@ -168,6 +171,7 @@ test("SCP-style invite import joins through an outbound SSH-forward equivalent, 
   await eventually(async () => (await outpost.rpc("federation-status")).gateway.status === "connected");
   assert.equal((await outpost.rpc("federation-status")).instanceId, before.instanceId);
   assert.equal((await outpost.rpc("show", { id: "detached-work" })).status, "completed");
+  assert.equal(JSON.parse(readFileSync(path.join(gateway.directory, "federation.json"), "utf8")).peers[before.instanceId].receiverPermissions.filePush, true);
 });
 
 test("ungranted mutation capabilities and wrong pinned keys fail closed", { timeout: 15000 }, async (t) => {
@@ -236,6 +240,7 @@ test("leave removes the upstream router entry and subscriptions before asynchron
   const client = { close: () => { closed = true; } };
   const federation = Object.assign(Object.create(HeadlessFederation.prototype), {
     state: { instanceId: randomUUID(), gateway: { gatewayInstanceId: id } }, client,
+    remotePeers: new Map([["cached", {}]]), peerDirectory: new FederationReplacementReceiver(),
     generation: 0, ptyRoutes: new Map(), endpoints: new Map(), pty: { notifyPeerDisconnected() {} }, connections: new Map([[id, client]]), subscriptions: new Map([["viewer", { via: id }]]),
     router: { unregisterConnection: (peer) => { assert.equal(peer, id); unregistered = true; } }, save: () => {},
   });
@@ -243,6 +248,7 @@ test("leave removes the upstream router entry and subscriptions before asynchron
   assert.equal(status.gateway, undefined);
   assert.deepEqual(status.peers, []);
   assert.equal(federation.subscriptions.size, 0);
+  assert.equal(federation.remotePeers.size, 0);
   assert.equal(unregistered, true);
   assert.equal(closed, true);
 });
@@ -291,3 +297,21 @@ for (const outcome of ["success", "failure"]) {
     assert.deepEqual((await outpost.rpc("federation-leave")).peers, []);
   });
 }
+
+test("messaging origins never replace required handoff capabilities", { timeout: 20000 }, async (t) => {
+  const h = await setup(t);
+  const listenPort = await port();
+  for (const missing of ["turn_control", "environment_actions", "file_push", "messaging_route"]) {
+    const invite = decodeFederationInvite((await h.rpc("federation-invite", { port: listenPort })).invite);
+    const v = await viewer(invite, undefined, "enroll", HEADLESS_CAPABILITIES.filter((capability) => capability !== missing));
+    t.after(() => v.connection.close());
+    for (const messageOrigin of [{ kind: "messaging" }, { kind: "agent", causalMessagingSource: { ownerId: "owner", requestId: "human" } }]) {
+      for (const method of ["send", "prepare", "import"]) {
+        await assert.rejects(v.rpc.request({ method: `thread.handoff.${method}`,
+          params: { sourceThreadId: "source", targetInstanceId: "target", operation: "move", messageOrigin } }),
+        new RegExp(`requires ${missing}`));
+      }
+    }
+  }
+  assert.equal(h.calls().filter((call) => ["thread/fork", "thread/archive", "fs/readFile"].includes(call.method)).length, 0);
+});

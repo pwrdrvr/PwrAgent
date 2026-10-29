@@ -6,6 +6,7 @@ import {
   reconcileCompletedTurnUsageEntries,
   tokenUsageActivityScope,
   turnUsageEntryTurnId,
+  finalTurnOutputText,
   isTerminalTurnMetadata,
   readUuidV7Timestamp,
 } from "@pwragent/shared";
@@ -4742,20 +4743,40 @@ function hasReviewEntryForTurn(
 function hasCompletedAssistantMessageForTurn(
   response: AppServerReadThreadResponse | undefined,
   turnId: string | undefined,
-  text: string | undefined
+  text: string | undefined,
+  pendingAssistantMessage?: AppServerThreadMessageEntry
 ): boolean {
   if (!response || !turnId || !text) {
     return false;
   }
 
   const normalizedText = normalizeTranscriptText(text);
-  return response.replay.entries.some(
-    (entry) =>
+  const turnMessages = response.replay.entries.filter(
+    (entry): entry is AppServerThreadMessageEntry =>
       entry.type === "message" &&
       entry.role === "assistant" &&
+      entry.turn?.id === turnId
+  );
+  if (turnMessages.some(
+    (entry) =>
       (!entry.phase || entry.phase === "final") &&
-      entry.turn?.id === turnId &&
       normalizeTranscriptText(entry.text) === normalizedText
+  )) {
+    return true;
+  }
+  // An ACP agent can report the whole turn's text as one output. It repeats
+  // the turn's replies in order, with or without separators between them.
+  // ACP sends no item/completed for a reply, so the last one is still
+  // pending here, and thoughts shown as commentary are not in the output.
+  const replies = [
+    ...turnMessages,
+    ...(pendingAssistantMessage?.turn?.id === turnId ? [pendingAssistantMessage] : []),
+  ].filter((entry) => entry.phase !== "commentary");
+  const withoutWhitespace = (value: string) => value.replace(/\s+/g, "");
+  return (
+    replies.length > 1
+    && withoutWhitespace(replies.map((entry) => entry.text).join(""))
+      === withoutWhitespace(text)
   );
 }
 
@@ -4940,15 +4961,7 @@ function readCompletedTurnText(
     return undefined;
   }
 
-  const turnRecord = (notification as { turn?: { output?: Array<{ type: string; text?: string }> } })
-    .turn;
-  const text = turnRecord?.output
-    ?.filter((part) => part.type === "text" && typeof part.text === "string")
-    .map((part) => part.text!.trim())
-    .filter(Boolean)
-    .join("\n\n");
-
-  return text || undefined;
+  return finalTurnOutputText((notification as { turn?: { output?: unknown } }).turn?.output);
 }
 
 function didHydrateCompletedTurn(
@@ -6928,7 +6941,8 @@ export function useThreadSessionState(params: {
               !hasCompletedAssistantMessageForTurn(
                 current.response,
                 completedTurn?.id,
-                completedText
+                completedText,
+                current.pendingAssistantMessage
               )
           );
           const unphasedAssistantCompletionPhase =

@@ -132,6 +132,20 @@ the RPC requires `messaging_route` and `thread_navigation`. The source profile
 rechecks provider admission, actor RBAC, route and remote-control authority.
 An unavailable or older owner cannot be replaced by a matching local thread ID.
 
+Lightweight outposts consume file/PDF tools through the `messaging_files`
+capability without provider adapters. An outbound file is validated in the
+active outpost workspace using the shared file policy, then its byte snapshot
+is pushed through the shared federation transfer protocol. The provider owner
+accepts only a completed receiver receipt bound to the authenticated source;
+it consumes the receipt before loading bytes and validates checksum, MIME,
+upload limits and retained actor/route permissions before delivery. A caller's
+path is never resolved on that owner. Receipts expire and disappear on restart.
+PDF tools use the owner's existing bounded PDF store and require the exact
+remote execution identity, turn and human source recorded at intake. Rendered
+pages return to the outpost as native image content; attachment bytes and
+provider credentials stay on the owner. The existing outpost tool-call ledger
+records outcomes at call boundaries and never replays an uncertain send.
+
 ## Data flow
 
 ### Inbound (user message arrives at the bot)

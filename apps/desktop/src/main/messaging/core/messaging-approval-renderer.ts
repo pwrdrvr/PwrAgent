@@ -119,7 +119,7 @@ function buildDecisions(
       },
       {
         id: "approval:mcp:cancel",
-        label: "Cancel Turn",
+        label: "Cancel turn",
         decision: "cancel" as const,
         style: "secondary" as const,
         fallbackText: "cancel",
@@ -152,7 +152,7 @@ function buildDecisions(
     return {
       id: action.id,
       label: isPersistent && description
-        ? `Always Allow Prefix${describedPersistentCount > 1 ? ` ${persistentIndex}` : ""}`
+        ? `Always allow prefix${describedPersistentCount > 1 ? ` ${persistentIndex}` : ""}`
         : action.label,
       ...(description ? { description } : {}),
       decision: messagingDecisionFromPendingAction(action),

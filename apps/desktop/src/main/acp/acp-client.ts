@@ -118,6 +118,36 @@ export function mergeMcpServerRegistrations(
   };
 }
 
+// Grok accepts an MCP server name only when it starts with a letter or an
+// underscore and holds only letters, digits, `_` and `-`. It connects a server
+// with any other name and then drops all of its tools. Custom connection IDs
+// always pass. The built-in `builtin:sandboxer` does not. A rewritten name
+// starts with `_`, so it cannot collide with a custom ID, which must start
+// with a letter.
+const ACP_MCP_SERVER_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]*$/u;
+
+export function acpSafeMcpServerName(name: string): string {
+  if (ACP_MCP_SERVER_NAME_PATTERN.test(name)) return name;
+  return `_${name.replace(/[^A-Za-z0-9_-]/gu, "_")}`;
+}
+
+function toAcpMcpServerWireConfigs(
+  servers: readonly AcpMcpServerConfig[],
+): ReturnType<typeof normalizeAcpMcpServerConfigs> {
+  // Two names can rewrite to the same string (`a:b` and `a.b`). An agent
+  // keeps one server per name, so give a rewritten name a numeric suffix
+  // rather than let it hide another server's tools.
+  const taken = new Set(servers.map((server) => server.name));
+  return normalizeAcpMcpServerConfigs(servers.map((server) => {
+    const safe = acpSafeMcpServerName(server.name);
+    if (safe === server.name) return server;
+    let name = safe;
+    for (let suffix = 2; taken.has(name); suffix += 1) name = `${safe}_${suffix}`;
+    taken.add(name);
+    return { ...server, name };
+  }));
+}
+
 export type AcpPromptContentBlock =
   | { type: "text"; text: string }
   | { type: "image"; mimeType: string; data: string };
@@ -571,7 +601,7 @@ export class AcpAgentClient {
     );
     const result = await this.options.transport.request("session/new", {
       cwd,
-      mcpServers: normalizeAcpMcpServerConfigs(mcpRegistration.servers),
+      mcpServers: toAcpMcpServerWireConfigs(mcpRegistration.servers),
       ...(params.sessionMeta ? { _meta: params.sessionMeta } : {}),
     });
     const now = this.now();
@@ -1677,7 +1707,7 @@ export class AcpAgentClient {
     try {
       result = await this.options.transport.request("session/load", {
         cwd,
-        mcpServers: normalizeAcpMcpServerConfigs(mcpRegistration.servers),
+        mcpServers: toAcpMcpServerWireConfigs(mcpRegistration.servers),
         sessionId: protocolSessionId,
       });
     } finally {

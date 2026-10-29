@@ -35,6 +35,7 @@ const windowsArchiveScriptPath = resolve(
 );
 const desktopReleaseRunbookPath = resolve(repoRoot, "docs/desktop-release-runbook.md");
 const changelogPath = resolve(repoRoot, "CHANGELOG.md");
+const macosRunner = "[self-hosted, macOS, ARM64, pwrdrvr-macos]";
 
 function usage() {
   console.error("Usage: RELEASE_TAG=v1.0.0-alpha.4 pnpm release:check");
@@ -376,7 +377,7 @@ assertWorkflowJobRunner(
   ciWorkflow,
   ".github/workflows/ci.yml",
   "macos-install-deps",
-  "macos-26",
+  macosRunner,
 );
 for (const unexpected of [
   "ci:windows-signing",
@@ -431,7 +432,35 @@ assertWorkflowJobOrdersText(
   "Upload Linux package artifact",
 );
 for (const jobName of ["install-deps", "lint", "test", "prepare", "sign"]) {
-  assertWorkflowJobRunner(releaseWorkflow, ".github/workflows/release.yml", jobName, "macos-26");
+  assertWorkflowJobRunner(releaseWorkflow, ".github/workflows/release.yml", jobName, macosRunner);
+}
+for (const jobName of ["install-deps", "lint", "test", "prepare"]) {
+  assertWorkflowStepContainsText(
+    releaseWorkflow, ".github/workflows/release.yml", jobName,
+    "Install Node.js and dependencies", "persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}",
+  );
+  assertWorkflowJobExcludesText(releaseWorkflow, ".github/workflows/release.yml", jobName, "lookup-only:");
+}
+assertWorkflowJobRunner(ciWorkflow, ".github/workflows/ci.yml", "test-macos", macosRunner);
+for (const expected of ["lane: [1, 2]", "run: pnpm test --shard=${{ matrix.lane }}/2", 'PWRAGENT_REQUIRE_ACTOOL: "1"']) {
+  assertWorkflowJobContainsText(ciWorkflow, ".github/workflows/ci.yml", "test-macos", expected);
+}
+for (const expected of [
+  "environment: apple-signing",
+  "working-directory: release-signing",
+  "Initialize isolated signing workspace",
+  "path: release-signing/.release-input",
+  "uses: ./release-signing/.github/actions/select-xcode-for-actool",
+  "Remove isolated signing workspace",
+]) {
+  assertWorkflowJobContainsText(releaseWorkflow, ".github/workflows/release.yml", "sign", expected);
+}
+assertWorkflowJobOrdersText(
+  releaseWorkflow, ".github/workflows/release.yml", "sign",
+  "Initialize isolated signing workspace", "Download signing input",
+);
+for (const unexpected of ["actions/checkout@", "configure-nodejs@", "pnpm install"]) {
+  assertWorkflowJobExcludesText(releaseWorkflow, ".github/workflows/release.yml", "sign", unexpected);
 }
 for (const jobName of ["lint", "test", "prepare"]) {
   assertWorkflowJobNeeds(releaseWorkflow, ".github/workflows/release.yml", jobName, "install-deps");
@@ -457,7 +486,7 @@ assertWorkflowJobRunner(
   previewBuildWorkflow,
   ".github/workflows/preview-build.yml",
   "preview",
-  "macos-26",
+  macosRunner,
 );
 for (const expected of [
   "Select an Xcode with actool 26",
@@ -473,7 +502,7 @@ for (const expected of [
 }
 for (const expected of [
   "host_version=\"$(sw_vers -productVersion)\"",
-  "Use runs-on: macos-26 for Icon Composer packaging.",
+  "Use a macOS 26+ runner for Icon Composer packaging.",
 ]) {
   if (!selectXcodeForActool.includes(expected)) {
     fail(`${selectXcodeForActoolPath} must contain ${JSON.stringify(expected)}`);

@@ -20,7 +20,9 @@ import {
   subscribeLaunchpadAttachmentHandoffs,
 } from "./launchpad-composer-handoff";
 import {
+  buildLaunchpadComposerScopeKey,
   getEditableLaunchpadDirectoryKey,
+  getEditableLaunchpadOwner,
   getLaunchpadScopeDirectoryKey,
   isStartingLaunchpadComposerScopeKey,
 } from "./launchpad-composer-scope";
@@ -237,10 +239,9 @@ import {
 import {
   formatPastedImageAlt,
   formatPastedImageName,
-  getImageFilesFromDataTransfer,
-  getNonImageFilesFromDataTransfer,
+  getComposerFilesFromDataTransfer,
   hasAnyFiles,
-  isGifFile,
+  getAnimationPreservingImageType,
   readFileAsImageDataUrl,
   type ComposerImageFile,
 } from "./composer-image-files";
@@ -523,7 +524,11 @@ export type ComposerProps = {
         | "agent"
       >
     >,
-    options?: { stickySettingsChanged?: boolean }
+    options?: {
+      stickySettingsChanged?: boolean;
+      /** Whose draft this is, when the caller knows (see useThreadNavigation). */
+      owner?: FederationTarget;
+    }
   ) => Promise<void>;
   removeOptimisticMessage?: (id: string) => void;
   /**
@@ -3140,7 +3145,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const pendingProgrammaticComposerChangeRef =
     useRef<PendingProgrammaticComposerChange | undefined>(undefined);
   const composerScopeKey = props.launchpad
-    ? props.launchpadComposerScopeKey ?? `launchpad:${props.launchpad.directoryKey}`
+    ? props.launchpadComposerScopeKey ?? buildLaunchpadComposerScopeKey(
+        props.launchpad.directoryKey,
+        props.launchpad.federationTarget ?? rendererFederationTarget,
+      )
     : props.thread
       ? buildThreadComposerScopeKey(props.thread.source, props.thread.id, props.thread.federation?.ref.target ?? rendererFederationTarget ?? { scope: "local" })
       : "empty";
@@ -3431,6 +3439,21 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>(
     latestDraftSnapshotRef.current.snapshot.imageAttachments
   );
+  const pendingImageBatchesRef = useRef(new Map<{ scopeKey: string }, number>());
+  const [pendingImageBatches, setPendingImageBatches] = useState(
+    pendingImageBatchesRef.current,
+  );
+  const preparingImages = Array.from(pendingImageBatches.keys()).some(
+    (destination) => destination.scopeKey === composerScopeKey,
+  );
+  const updatePendingImageBatches = (destination: { scopeKey: string }, delta: number): void => {
+    const next = new Map(pendingImageBatchesRef.current);
+    const count = (next.get(destination) ?? 0) + delta;
+    if (count > 0) next.set(destination, count);
+    else next.delete(destination);
+    pendingImageBatchesRef.current = next;
+    setPendingImageBatches(next);
+  };
   const [fileAttachments, setFileAttachments] = useState<ComposerFileAttachment[]>(
     latestDraftSnapshotRef.current.snapshot.fileAttachments ?? []
   );
@@ -4151,8 +4174,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       || snapshot.imageAttachments.length > 0
       || (snapshot.fileAttachments?.length ?? 0) > 0,
     );
-  const prepareDraftRetarget = (directoryKey: string): void => {
-    const targetScopeKey = `launchpad:${directoryKey}`;
+  /**
+   * `owner` is the destination launchpad's owner. Undefined means this
+   * window's own owner, as for a Composer whose launchpad names none.
+   */
+  const prepareDraftRetarget = (
+    directoryKey: string,
+    owner: FederationTarget | undefined,
+  ): void => {
+    const targetScopeKey = buildLaunchpadComposerScopeKey(directoryKey, owner);
     const latest = latestDraftSnapshotRef.current;
     if (
       latest.scopeKey === targetScopeKey
@@ -5257,6 +5287,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       fileAttachments:
         snapshot.fileAttachments?.length ? snapshot.fileAttachments : undefined,
       prompt: serializeDraftWithSkillTokens(snapshot.draft, snapshot.skillTokens),
+    }, {
+      // A scope left behind can share its key with the launchpad now open
+      // for another owner. Its text goes to its own owner's draft.
+      owner: getEditableLaunchpadOwner(scopeKey),
     });
   };
   const flushComposerDraftSnapshot = (
@@ -5495,12 +5529,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     autocompleteListboxId && autocompleteKind && autocompleteLength > 0
       ? `${autocompleteListboxId}-option-${activeAutocompleteIndex}`
       : undefined;
-  // Directories the draft references: `@` chips (authoritative, from the
-  // token state) unioned with paths typed or pasted as plain text (from
-  // the serialized-draft scan). Deleting a chip or a typed path drops the
-  // reference. Directories that are already linked (the launchpad's own
-  // directory; a thread's linked directories, including worktree
-  // checkouts) are excluded so send-time attach only sees new references.
+  // Directories the draft references: `@` chips only, from the token state
+  // and the chips serialized in the draft. A path typed or pasted as plain
+  // text is not a reference. Deleting a chip drops the reference.
+  // Directories that are already linked (the launchpad's own directory; a
+  // thread's linked directories, including worktree checkouts) are excluded
+  // so send-time attach only sees new references.
   const listDraftReferencedDirectories = (
     text: string,
     tokens?: ComposerSkillToken[],
@@ -5518,8 +5552,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     const fromTokens: NavigationDirectorySummary[] = [];
     for (const token of tokens ?? []) {
       // Only directory-kind tokens are attachable directories. File-kind
-      // tokens are excluded here — a file's containing repo still links
-      // via the text scan's deeper-path matching above.
+      // tokens are excluded here — a file chip's containing repo still
+      // links through `listReferencedDirectories` below.
       if (token.kind !== "directory" || !token.path) {
         continue;
       }
@@ -5546,7 +5580,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     const scanned = listReferencedDirectories(text, [
       ...(props.directories ?? []),
       ...fromTokens,
-    ], { excludePaths });
+    ], {
+      excludePaths,
+      // A file chip's label can break the link syntax (`[id].tsx`); it then
+      // serializes as a bare path, so pass its target from the token state.
+      referencePaths: (tokens ?? []).flatMap((token) =>
+        token.kind === "file" && token.path ? [token.path] : []),
+    });
     const scannedPaths = new Set(scanned.map((directory) =>
       normalizeDirectoryReferencePath(directory.path!),
     ));
@@ -6609,7 +6649,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         fileAttachments: fileAttachments.length > 0 ? fileAttachments : undefined,
         prompt: canonicalDraft,
         editorDocument: editorDocument as Record<string, unknown> | undefined,
-      });
+      }, { owner: getEditableLaunchpadOwner(composerScopeKey) });
     }, 250);
 
     return () => {
@@ -8836,7 +8876,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   ): Promise<void> => {
     // The status line under the tray says why: the message would reference
     // files the owner does not have yet.
-    if (remoteFileUploads.uploads.length > 0) {
+    if (
+      remoteFileUploads.uploads.length > 0
+      || Array.from(pendingImageBatchesRef.current.keys()).some(
+        (destination) => destination.scopeKey === composerScopeKey,
+      )
+    ) {
       return;
     }
     if (forkCommand) {
@@ -10062,12 +10107,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
 
-    const pastedFiles = getImageFilesFromDataTransfer(event.clipboardData);
-    // Non-image FILES only (kind === "file" items) — plain text paste
-    // must fall through to the editor untouched.
-    const pastedNonImageFiles = getNonImageFilesFromDataTransfer(
-      event.clipboardData,
-    );
+    const { images: pastedFiles, files: pastedNonImageFiles, readMs } =
+      getComposerFilesFromDataTransfer(event.clipboardData);
     if (pastedFiles.length === 0 && pastedNonImageFiles.length === 0) {
       return;
     }
@@ -10084,7 +10125,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (!accepted || accepted.length === 0) {
       return;
     }
-    void attachImages(accepted);
+    void attachImages(accepted, readMs);
   };
 
   const handleDragOver = (event: DragEvent<HTMLElement>): void => {
@@ -10097,10 +10138,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   };
 
   const handleDrop = (event: DragEvent<HTMLElement>): void => {
-    const droppedFiles = getImageFilesFromDataTransfer(event.dataTransfer);
-    const droppedNonImageFiles = getNonImageFilesFromDataTransfer(
-      event.dataTransfer,
-    );
+    const { images: droppedFiles, files: droppedNonImageFiles, readMs } =
+      getComposerFilesFromDataTransfer(event.dataTransfer);
     if (droppedFiles.length === 0 && droppedNonImageFiles.length === 0) {
       return;
     }
@@ -10117,30 +10156,32 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (!accepted || accepted.length === 0) {
       return;
     }
-    void attachImages(accepted);
+    void attachImages(accepted, readMs);
   };
 
-  const attachImages = async (files: ComposerImageFile[]): Promise<void> => {
+  const attachImages = async (files: ComposerImageFile[], transferMs: number): Promise<void> => {
     const pasteScope = pasteScopeRef.current;
     const destination = getLaunchpadComposerDestination(draftStore, pasteScope.key);
     const pasteDraft = draft;
     const pasteEditorDocument = editorDocument;
     const pasteImageAttachments = imageAttachments;
     const pasteFileAttachments = fileAttachments;
+    updatePendingImageBatches(destination, 1);
 
     try {
       const nextAttachments = await Promise.all(
         files.map(async ({ file, type }, index) => {
           const fallbackName = formatPastedImageName(type, index);
-          if (isGifFile(file, type)) {
-            // GIFs skip normalization (to preserve animation), so they have no
+          const preservedType = await getAnimationPreservingImageType(file, type);
+          if (preservedType) {
+            // Animations skip normalization, so they have no
             // measured dimensions — the card shows only the size chip for them.
             return {
               id: `pasted-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
               name: file.name || fallbackName,
               size: file.size,
-              type: "image/gif",
-              url: await readFileAsImageDataUrl(file, "image/gif"),
+              type: preservedType,
+              url: await readFileAsImageDataUrl(file, preservedType),
             };
           }
 
@@ -10150,6 +10191,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             sourceMimeType: type,
           });
           void props.desktopApi?.recordImageUploadNormalization?.({
+            timing: normalized.timing ? { ...normalized.timing, transferMs } : undefined,
             fileName: file.name || fallbackName,
             original: {
               height: normalized.original.height,
@@ -10275,6 +10317,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       setSendError(
         error instanceof Error ? error.message : "The pasted image could not be read."
       );
+    } finally {
+      updatePendingImageBatches(destination, -1);
     }
   };
 
@@ -10994,6 +11038,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const sendButtonDisabled =
     forking ||
     preparingSend ||
+    preparingImages ||
     props.disabled ||
     remoteFileUploads.uploads.length > 0 ||
     steering ||
@@ -12866,6 +12911,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         ref={queuedReorder.announcerRef}
       />
 
+      {preparingImages ? (
+        <p className="composer__meta" aria-live="polite">
+          Preparing image attachments…
+        </p>
+      ) : null}
       {hasVisibleAttachments ? (
         <div
           className="composer__attachments"
@@ -13931,7 +13981,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     if (!plan || latestDraftSnapshotRef.current.scopeKey !== sourceScopeKey) {
                       return;
                     }
-                    prepareDraftRetarget(plan.directoryKey);
+                    // The draft moves to the picked machine's launchpad.
+                    prepareDraftRetarget(
+                      plan.directoryKey,
+                      instanceId ? { scope: "remote", instanceId } : undefined,
+                    );
                     await plan.open();
                   })();
                 }}
@@ -14083,7 +14137,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               picking={props.pickingDirectory}
               onSelect={(directory) => {
                 props.onClearPickDirectoryError?.();
-                prepareDraftRetarget(directory.key);
+                prepareDraftRetarget(
+                  directory.key,
+                  props.launchpad?.federationTarget,
+                );
                 props.onSelectDirectoryFromPicker?.(directory);
               }}
               onSelectNoDirectory={

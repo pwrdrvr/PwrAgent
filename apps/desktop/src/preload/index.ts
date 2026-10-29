@@ -1,5 +1,6 @@
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import { FEDERATION_SERVICES_CHANNEL } from "../shared/ipc";
+import { DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL, DIAGNOSTICS_STOP_RENDERING_CHANNEL, type RenderingCaptureResult } from "../shared/rendering-diagnostics";
 import {
   NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL, NATIVE_VOICE_CAMERA_CUE_CHANNEL, NATIVE_VOICE_CAMERA_REPEAT_CHANNEL,
   type VoiceCameraRequest, type VoiceCameraFrame, type VoiceCameraCue, type VoiceCameraRepeatCheck,
@@ -2117,6 +2118,10 @@ const desktopApi = Object.freeze({
       ipcRenderer.off(INTEGRATED_TERMINAL_ERROR_CHANNEL, listener);
     };
   },
+  captureRenderingDiagnostics: (seconds = 10): Promise<RenderingCaptureResult> =>
+    ipcRenderer.invoke(DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL, seconds),
+  stopRenderingDiagnostics: (): Promise<RenderingCaptureResult | undefined> =>
+    ipcRenderer.invoke(DIAGNOSTICS_STOP_RENDERING_CHANNEL),
   captureHeapSnapshot: async (
     request: CaptureHeapSnapshotRequest,
   ): Promise<{ delayMs: number }> =>

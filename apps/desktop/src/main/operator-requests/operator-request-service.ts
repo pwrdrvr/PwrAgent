@@ -20,6 +20,7 @@ import type { OperatorRequestStore } from "./operator-request-store.js";
 
 /** The registry surface the service reads. */
 export type OperatorRequestRegistry = {
+  getThreadInfo(identity: { backend: AppServerBackendKind; threadId: string }): { title?: string } | undefined;
   listPendingServerRequests(): Array<{
     backend: AppServerBackendKind;
     notification: AppServerPendingRequestNotification;
@@ -87,7 +88,8 @@ export class OperatorRequestService {
     const matches = (backend: AppServerBackendKind, threadId: string) =>
       (!filter.backend || backend === filter.backend) && (!filter.threadId || threadId === filter.threadId);
     const serverRequests = this.listServerRequests().filter((entry) => matches(entry.backend, entry.notification.params.threadId));
-    const questions = this.store.listOpenQuestions().filter((entry) => matches(entry.backend, entry.threadId));
+    const questions = this.store.listOpenQuestions().filter((entry) => matches(entry.backend, entry.threadId))
+      .map((entry) => ({ ...entry, threadTitle: this.registry.getThreadInfo(entry)?.title }));
     let seenKeys = this.store.listSeenKeys();
     if (filter.backend || filter.threadId) {
       const visibleKeys = new Set([
@@ -132,6 +134,17 @@ export class OperatorRequestService {
     // request; every change to the pending set rides some other event.
     if (STREAMED_DELTA_METHOD.test(notification.method)) return;
     this.syncRequests();
+    if (notification.method === "thread/name/updated") {
+      const { threadId, threadName } = notification.params;
+      if (typeof threadId === "string" && typeof threadName === "string" && threadName.trim()
+        && (this.registry.listPendingServerRequests().some((entry) =>
+          entry.backend === event.backend && entry.notification.params.threadId === threadId)
+          || this.store.listOpenQuestions().some((entry) =>
+            entry.backend === event.backend && entry.threadId === threadId))) {
+        this.broadcast({ reason: "requests", backend: event.backend, threadId });
+      }
+      return;
+    }
     if (notification.method === "thread/archived") {
       const changed = this.store.dismissQuestionsForThread({
         backend: event.backend,
@@ -208,7 +221,10 @@ export class OperatorRequestService {
           createdAt = this.now();
           this.firstSeenAt.set(key, createdAt);
         }
-        return { backend, notification, createdAt };
+        return {
+          backend, notification, createdAt,
+          threadTitle: this.registry.getThreadInfo({ backend, threadId: notification.params.threadId })?.title,
+        };
       })
       .sort((left, right) => right.createdAt - left.createdAt);
   }

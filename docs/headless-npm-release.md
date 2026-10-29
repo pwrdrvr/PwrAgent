@@ -59,9 +59,13 @@ trusted publisher configuration; the npm owner must verify those settings.
    for prereleases; use a new suffix-free version for a stable release.
 3. Confirm the **Headless CLI package** workflow passes both Node 22 and 24 on
    that commit. It runs mocked Codex integration and release-guard tests,
-   builds at npm `prepack`, checks the tarball contents and MIT/`ws` notices,
+   builds the standalone services, stages a flat native dependency tree, and
+   checks the tarball contents and bundled-library license notices. It
    then installs it offline into a fresh npm prefix with an empty cache and
-   install scripts disabled. The installed executable exercises help, a mocked
+   install scripts disabled. The pinned `node-pty` package and its `node-addon-api`
+   dependency travel inside the tarball; every other runtime dependency is rejected.
+   The installed native PTY is exercised without a rebuild. The executable
+   exercises help, a mocked
    turn, transcript reads, federation initialization, restart and idempotent
    submission. No model requests or credentials are used.
 

@@ -53,6 +53,7 @@ import {
   type ThreadSpendAlert,
   type ThreadUsageLineRecord,
   type SetThreadToolIncidentNoticeRequest,
+  type SubmitServerRequestRequest,
   resolveToolIncidentVisibility,
   SUBTHREAD_LAUNCHPAD_KEY_PREFIX,
   toolOutputWarningChars,
@@ -62,6 +63,7 @@ import type { ProjectRevealRequest } from "./features/navigation/DirectoriesList
 import { isSubthreadLaunchpadDraft } from "./features/navigation/StartingThreadRow";
 import { SidebarResizeHandle } from "./features/navigation/SidebarResizeHandle";
 import { useThreadJump } from "./features/navigation/useThreadJump";
+import { revealSelectedSidebarThreadRow } from "./features/navigation/reveal-selected-thread-row";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
 import { buildFederationThreadTargets } from "./features/chrome/federation-thread-targets";
 import { FederationDisplayLabelsProvider, federationLocalDisplayLabel } from "./lib/federation-display-label";
@@ -1687,17 +1689,10 @@ function DesktopAppShell(props: {
       // Directory threads divider, overflow cap, or parent-thread group. The
       // request nonce lets the active sidebar lens open those containers
       // before ThreadRow's mount effect performs the final nearest-edge
-      // scroll. Keep the direct query for the common already-visible case so
-      // title clicks retain their centered smooth-scroll behavior.
+      // scroll. A mounted row that is off screen is centered right away; one
+      // already in full view does not move.
       setRevealSelectedThreadRequest((current) => current + 1);
-      const selectedRow = document.querySelector<HTMLElement>(
-        ".sidebar .thread-row.is-selected",
-      );
-      selectedRow?.scrollIntoView({
-        behavior: options?.instant === true ? "auto" : "smooth",
-        block: "center",
-        inline: "nearest",
-      });
+      revealSelectedSidebarThreadRow(options);
     },
     [],
   );
@@ -2572,8 +2567,10 @@ function DesktopAppShell(props: {
   // it only closes the card; the request stays in its thread and To-dos.
   // One lookup for every surface that names a wait's thread.
   const waitThreadTitle = useCallback(
-    (threadKey: string) => localThreadTitles.get(threadKey) ?? "Untitled thread",
-    [localThreadTitles],
+    (threadKey: string) => localThreadTitles.get(threadKey)
+      ?? operatorRequests.waitsByThreadKey.get(threadKey)?.[0]?.threadTitle
+      ?? "Untitled thread",
+    [localThreadTitles, operatorRequests.waitsByThreadKey],
   );
   const reviewApprovalNotice = useCallback((wait: OperatorWait): void => {
     showThreadFromLink({
@@ -2582,11 +2579,35 @@ function DesktopAppShell(props: {
       ...(wait.federationTarget ? { instanceId: wait.federationTarget.instanceId } : {}),
     });
   }, [showThreadFromLink]);
+  const submitServerRequest = desktopApi?.submitServerRequest;
+  const refreshOperatorRequests = operatorRequests.refresh;
+  // One answer path for the To-dos rows and the approval notices. It reads
+  // the owner queue once the answer is taken: a peer's change event can be
+  // lost, and the read is what tells a surface the request is still open.
+  const respondToOperatorWait = useCallback(async (
+    wait: OperatorWait,
+    response: SubmitServerRequestRequest["response"],
+  ): Promise<void> => {
+    const request = wait.request;
+    if (!request || !submitServerRequest) {
+      throw new Error("This request can only be answered in its thread.");
+    }
+    await submitServerRequest({
+      backend: wait.backend,
+      threadId: wait.threadId,
+      federationTarget: wait.federationTarget,
+      turnId: typeof request.params.turnId === "string" ? request.params.turnId : undefined,
+      requestId: request.params.requestId,
+      response,
+    });
+    await refreshOperatorRequests();
+  }, [refreshOperatorRequests, submitServerRequest]);
   const approvalNotices = useApprovalNotices({
     waits: operatorRequests.waits,
     selectedThreadKey,
     threadTitleForKey: waitThreadTitle,
     onReview: reviewApprovalNotice,
+    ...(submitServerRequest ? { respond: respondToOperatorWait } : {}),
   });
   const durableNotices = useMemo(
     () => approvalNotices.length > 0
@@ -2609,7 +2630,6 @@ function DesktopAppShell(props: {
       : undefined,
     [listThreadTodoProjects, setThreadTodoProject],
   );
-  const submitServerRequest = desktopApi?.submitServerRequest;
   const configuredMergeMethod = props.settings.snapshot?.git?.defaultMergeMethod?.value;
   // Peers that can host a handoff thread, the same list the new-thread
   // machine chip offers.
@@ -2756,20 +2776,7 @@ function DesktopAppShell(props: {
       waitsByThreadKey: operatorRequests.waitsByThreadKey,
       seenKeys: operatorRequests.seenKeys,
       markSeen: operatorRequests.markSeen,
-      respond: async (wait, response) => {
-        const request = wait.request;
-        if (!request || !submitServerRequest) {
-          throw new Error("This request can only be answered in its thread.");
-        }
-        await submitServerRequest({
-          backend: wait.backend,
-          threadId: wait.threadId,
-          federationTarget: wait.federationTarget,
-          turnId: typeof request.params.turnId === "string" ? request.params.turnId : undefined,
-          requestId: request.params.requestId,
-          response,
-        });
-      },
+      respond: respondToOperatorWait,
       dismissQuestion: operatorRequests.dismissQuestion,
       dismissedQuestionKeys: operatorRequests.dismissedQuestionKeys,
       openWait: openOperatorWait,
@@ -2785,7 +2792,7 @@ function DesktopAppShell(props: {
     offscreenQuestionAnswers,
     openOperatorWait,
     operatorRequests,
-    submitServerRequest,
+    respondToOperatorWait,
     requestTodoExecutionMode,
     showThreadFromLink,
     threadTodoController,

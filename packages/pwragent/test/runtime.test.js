@@ -15,7 +15,7 @@ function runningRuntime(request) {
   });
 }
 
-test("tool-call receipts survive cold restart without replaying successful or uncertain sends", async (t) => {
+for (const operation of ["send_private_response", "send_messaging_file", "render_messaging_pdf_pages"]) test(`${operation} receipts survive cold restart without replaying successful or uncertain sends`, async (t) => {
   const local = fileURLToPath(new URL("../../../.local/", import.meta.url));
   mkdirSync(local, { recursive: true });
   const directory = mkdtempSync(path.join(local, "tool-receipts-"));
@@ -26,7 +26,7 @@ test("tool-call receipts survive cold restart without replaying successful or un
   runtime.toolLedgerCount = 0;
   let sends = 0;
   runtime.messagingTools = { handleDynamicToolCall: async () => { sends++; throw new Error("Owner disconnected after accepting the send"); } };
-  const call = { threadId: "thread", turnId: "turn", callId: "uncertain", namespace: "pwragent", tool: "send_private_response", arguments: { text: "mock reply" } };
+  const call = { threadId: "thread", turnId: "turn", callId: "uncertain", namespace: "pwragent", tool: operation, arguments: { text: "mock reply" } };
   await assert.rejects(runtime.dispatchTool(call), /disconnected/);
   runtime.toolLedger = new Map();
   await assert.rejects(runtime.dispatchTool(call), /uncertain/);

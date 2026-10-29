@@ -782,6 +782,13 @@ const updateDirectoryLaunchpad = vi.fn(async (request: {
     executionMode: "default" as const,
   },
 }));
+const resetDirectoryLaunchpad = vi.fn(async (request: { directoryKey: string }) => ({
+  directoryKey: request.directoryKey,
+  defaults: {
+    backend: "codex" as const,
+    executionMode: "default" as const,
+  },
+}));
 const markThreadSeen = vi.fn(async (request: MarkThreadSeenRequest) => ({
   backend: request.backend ?? "codex",
   threadId: request.threadId,
@@ -1056,6 +1063,11 @@ vi.mock("../window", () => ({
   isFederationWindowWebContents: (
     webContents: { id?: number } | undefined,
   ) => webContents?.id === 999,
+  federationWindowTargetForWebContents: (
+    webContents: { id?: number } | undefined,
+  ) => webContents?.id === 999
+    ? { scope: "remote", instanceId: "window_owner" }
+    : undefined,
 }));
 
 vi.mock("../log", () => ({
@@ -1196,6 +1208,7 @@ vi.mock("../app-server/backend-registry", () => {
     setThreadPrAutoDispatchBatch,
     ensureDirectoryLaunchpad,
     updateDirectoryLaunchpad,
+    resetDirectoryLaunchpad,
     getQueuedExecutionModesSnapshot: () => ({}),
     getQueuedTurnsSnapshot: () => ({}),
     getQueuedTurnsForThread: () => [],
@@ -1460,6 +1473,7 @@ describe("app server ipc", () => {
     setThreadPrAutoDispatchBatch.mockClear();
     ensureDirectoryLaunchpad.mockClear();
     updateDirectoryLaunchpad.mockClear();
+    resetDirectoryLaunchpad.mockClear();
     markThreadSeen.mockClear();
     setThreadReactionOverlay.mockClear();
     setDirectoryThreadsCollapsedOverlay.mockClear();
@@ -4079,23 +4093,23 @@ describe("app server ipc", () => {
           id: "remote-multi",
           title: "MCP registration",
           titleSource: "derived" as const,
-          // Home directory on the owner prefers the repo checkout over the
-          // worktree entry, then linked order — so PwrAgent, even though the
-          // worktree link for agent-kit comes first. The extra links must not
-          // duplicate the row into other local groups — one row per thread,
-          // like local threads.
+          // Home directory on the owner is the first linked project; only a
+          // tool-managed worktree folder ranks last. A `worktree` link's path
+          // is its repo checkout, so PwrAgent wins over the later plain
+          // agent-kit folder. The extra links must not duplicate the row into
+          // other local groups — one row per thread, like local threads.
           linkedDirectories: [
-            {
-              id: "dir-b",
-              label: "agent-kit",
-              path: "/peer/dev/agent-kit",
-              kind: "worktree" as const,
-              worktreePath: "/peer/worktrees/x/agent-kit",
-            },
             {
               id: "dir-a",
               label: "PwrAgent",
               path: "/peer/dev/PwrAgent",
+              kind: "worktree" as const,
+              worktreePath: "/peer/.pwragent/worktrees/x/PwrAgent",
+            },
+            {
+              id: "dir-b",
+              label: "agent-kit",
+              path: "/peer/dev/agent-kit",
               kind: "local" as const,
             },
           ],
@@ -10746,8 +10760,13 @@ describe("app server ipc", () => {
         currentBranch: undefined,
       }),
       // A viewer's draft takes neither this machine's filesystem metadata
-      // nor its MCP defaults: connection ids are per machine.
-      { skipFilesystemInspection: true, skipMcpConnectionDefaults: true },
+      // nor its MCP defaults: connection ids are per machine. It is stored
+      // under its owner, apart from this machine's draft for the same key.
+      {
+        skipFilesystemInspection: true,
+        skipMcpConnectionDefaults: true,
+        owner: federationTarget,
+      },
     );
     expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
     expect(response).toEqual(
@@ -10957,6 +10976,40 @@ describe("app server ipc", () => {
     expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
   });
 
+  it("stores a peer's draft edits under that peer, whichever window sends them", async () => {
+    const {
+      NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
+      NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
+    } = await import("../../shared/ipc");
+    const directoryKey = "directory:/Users/fixture/src/app";
+    const pinnedPeer = { scope: "remote" as const, instanceId: "owner_one" };
+    registerAppServerIpcHandlers();
+    const update = handlers.get(NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL)!;
+    const reset = handlers.get(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL)!;
+    const remoteWindow = { sender: { id: 999 } };
+
+    // This machine's own draft.
+    await update({}, { directoryKey, patch: { prompt: "local" } });
+    await reset({}, { directoryKey });
+    // A pinned peer's draft in the main window names its peer.
+    await update({}, { federationTarget: pinnedPeer, directoryKey, patch: { prompt: "pinned" } });
+    await reset({}, { federationTarget: pinnedPeer, directoryKey, preserveEnvironment: true });
+    // A remote window's drafts are its peer's, never this machine's.
+    await update(remoteWindow, { directoryKey, patch: { prompt: "remote" } });
+    await reset(remoteWindow, { federationTarget: { scope: "local" }, directoryKey });
+    // A draft it moved to another peer with the Machine chip stays that peer's.
+    await update(remoteWindow, { federationTarget: pinnedPeer, directoryKey, patch: { prompt: "moved" } });
+    await reset(remoteWindow, { federationTarget: pinnedPeer, directoryKey });
+
+    const windowOwner = { scope: "remote", instanceId: "window_owner" };
+    const owners = [{ owner: undefined }, { owner: pinnedPeer }, { owner: windowOwner }, { owner: pinnedPeer }];
+    expect(updateDirectoryLaunchpad.mock.calls.map((call) => (call as unknown[])[1])).toEqual(owners);
+    expect(resetDirectoryLaunchpad.mock.calls.map((call) => (call as unknown[])[1])).toEqual(owners);
+    // The owner's key reaches the registry unchanged; it picks the row.
+    expect(updateDirectoryLaunchpad.mock.calls.map(([request]) => request.directoryKey))
+      .toEqual([directoryKey, directoryKey, directoryKey, directoryKey]);
+  });
+
   it("falls back to owner snapshot metadata when the peer lacks launchpad metadata RPC support", async () => {
     const { NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL } = await import("../../shared/ipc");
     const federationTarget = {
@@ -11013,8 +11066,13 @@ describe("app server ipc", () => {
         currentBranch: undefined,
       }),
       // A viewer's draft takes neither this machine's filesystem metadata
-      // nor its MCP defaults: connection ids are per machine.
-      { skipFilesystemInspection: true, skipMcpConnectionDefaults: true },
+      // nor its MCP defaults: connection ids are per machine. It is stored
+      // under its owner, apart from this machine's draft for the same key.
+      {
+        skipFilesystemInspection: true,
+        skipMcpConnectionDefaults: true,
+        owner: federationTarget,
+      },
     );
     expect(response).toEqual(
       expect.objectContaining({

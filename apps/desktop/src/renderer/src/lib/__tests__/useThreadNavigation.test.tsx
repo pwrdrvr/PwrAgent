@@ -23,6 +23,7 @@ import type {
 } from "@pwragent/shared";
 import { useMemo } from "react";
 import { useComposerDraftStore } from "../../features/composer/useComposerDraftStore";
+import { buildLaunchpadComposerScopeKey } from "../../features/composer/launchpad-composer-scope";
 import { navigationOwnerApiFixture, type NavigationOwnerFixtureApi as DesktopApi } from "../../test/navigation-owner-api-fixture";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -36,7 +37,8 @@ function useThreadNavigation(api?: DesktopApi, options?: Parameters<typeof useRe
   const composerDraftStore = options?.composerDraftStore ?? localStore;
   const ownerApi = useMemo(() => api ? navigationOwnerApiFixture(api, (launchpads) => {
     for (const launchpad of launchpads) {
-      const scope = `launchpad:${launchpad.directoryKey}`;
+      // Where main's draft index keeps it: a peer's draft names its owner.
+      const scope = buildLaunchpadComposerScopeKey(launchpad.directoryKey);
       if (!composerDraftStore.get(scope)) composerDraftStore.set(scope, { draft: launchpad.prompt,
         imageAttachments: launchpad.imageAttachments ?? [], fileAttachments: launchpad.fileAttachments ?? [], skillTokens: [] });
     }
@@ -5389,7 +5391,12 @@ describe("useThreadNavigation", () => {
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({ federationTarget }),
     );
-    expect(resetDirectoryLaunchpad).toHaveBeenCalledWith({ directoryKey, preserveEnvironment: true });
+    // The viewer's copy is cleared under its owner, apart from its own draft.
+    expect(resetDirectoryLaunchpad).toHaveBeenCalledWith({
+      federationTarget,
+      directoryKey,
+      preserveEnvironment: true,
+    });
     expect(result.current.selectedLaunchpad).toBeUndefined();
   });
 
@@ -8057,6 +8064,123 @@ describe("useThreadNavigation", () => {
           name: "PwrAgent",
         }),
       ],
+    });
+  });
+
+  it("keeps the owner's environments when editing a pinned peer's draft in the main window", async () => {
+    const federationTarget = { scope: "remote" as const, instanceId: "remote-instance" };
+    const project = {
+      key: "directory:/Users/fixture/src/PwrAgent",
+      kind: "directory" as const,
+      label: "PwrAgent",
+      path: "/Users/fixture/src/PwrAgent",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    };
+    const defaults = { backend: "codex" as const, executionMode: "default" as const };
+    const snapshot = (target?: typeof federationTarget): NavigationSnapshot => ({
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: target ? [project] : [],
+      launchpadDefaults: defaults,
+      ...(target ? { federationTarget: target } : {}),
+    });
+    const ownerEnvironment = {
+      id: "environment",
+      name: "Owner environment",
+      sourcePath: "/Users/fixture/src/PwrAgent/.codex/environments/environment.toml",
+      actions: [],
+    };
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: project.key,
+      directoryKind: "directory",
+      directoryLabel: project.label,
+      directoryPath: project.path,
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      federationTarget,
+      codexEnvironmentOptions: [ownerEnvironment],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    // This machine stores the draft and reads none of the peer's folders.
+    const updateDirectoryLaunchpad = vi.fn(async () => ({
+      defaults,
+      launchpad: {
+        ...launchpad,
+        federationTarget: undefined,
+        codexEnvironmentId: "environment",
+        codexEnvironmentOptions: undefined,
+        updatedAt: 2,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      readPopulation: vi.fn(async (request) => snapshot(request?.federationTarget as typeof federationTarget | undefined)),
+      getNavigationQueryPage: async (request) => navigationQueryFixture(request,
+        snapshot(request.federationTarget as typeof federationTarget | undefined)),
+      ensureDirectoryLaunchpad: vi.fn(async () => ({ launchpad, defaults })),
+      updateDirectoryLaunchpad,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async () => {
+      await result.current.openFederatedDirectoryLaunchpad(federationTarget, project);
+    });
+    await act(async () => {
+      await result.current.updateDirectoryLaunchpad(project.key, {
+        codexEnvironmentId: "environment",
+        codexEnvironmentExecutionTarget: "local",
+      });
+    });
+
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({ federationTarget, directoryKey: project.key }),
+    );
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      federationTarget,
+      codexEnvironmentId: "environment",
+      codexEnvironmentOptions: [expect.objectContaining({ name: "Owner environment" })],
+    });
+
+    // Saves for the same key that belong to another owner leave the open
+    // peer's draft alone.
+    updateDirectoryLaunchpad.mockClear();
+    const otherPeer = { scope: "remote" as const, instanceId: "other-instance" };
+    await act(async () => {
+      await result.current.updateDirectoryLaunchpad(
+        project.key,
+        { prompt: "for the other peer" },
+        { owner: otherPeer },
+      );
+    });
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith({
+      federationTarget: otherPeer,
+      directoryKey: project.key,
+      patch: { prompt: "for the other peer" },
+      stickySettingsChanged: undefined,
+    });
+    await act(async () => {
+      await result.current.updateDirectoryLaunchpad(
+        project.key,
+        { prompt: "for this machine" },
+        { owner: { scope: "local" } },
+      );
+    });
+    expect(updateDirectoryLaunchpad).toHaveBeenLastCalledWith({
+      directoryKey: project.key,
+      patch: { prompt: "for this machine" },
+      stickySettingsChanged: undefined,
+    });
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      federationTarget,
+      prompt: "",
     });
   });
 

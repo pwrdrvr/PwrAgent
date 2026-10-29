@@ -9,7 +9,8 @@ import { classifyVoiceCamera, clefRequestsInFlight, judgeVoiceCameraRepeat } fro
 import { SystemOneRejected, type SystemOneTarget } from "../decision/system-one";
 import { decisionCameraCueAvailability } from "@pwragent/shared";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
-import { ipcMain, session, type WebContents } from "electron";
+import { ipcMain, type WebContents } from "electron";
+import type { MediaPermissionRules } from "../permission-policy";
 import {
   NATIVE_VOICE_CAPABILITY_CHANNEL, NATIVE_VOICE_START_CHANNEL,
   NATIVE_VOICE_STOP_CHANNEL, NATIVE_VOICE_TEXT_CHANNEL, NATIVE_VOICE_EVENT_CHANNEL,
@@ -76,20 +77,20 @@ function validTarget(request: NativeVoiceTarget): void {
     throw new Error("Invalid voice session.");
   }
 }
+/**
+ * Media belongs to the opted-in voice owner. Camera needs a separate opt-in.
+ * `permission-policy.ts` owns the session handlers and asks these rules only
+ * for `media` from the app's own main frame.
+ */
+export const nativeVoiceMediaRules: MediaPermissionRules = {
+  check: (contents, details) => Boolean(details.isMainFrame
+    && (details.mediaType === "audio"
+      ? sessions.allowsMicrophone(contents.id)
+      : details.mediaType === "video" && sessions.allowsCamera(contents.id))),
+  request: (contents, details) => Boolean("mediaTypes" in details && details.mediaTypes?.length === 1 && details.isMainFrame
+    && (details.mediaTypes[0] === "audio" ? sessions.allowsMicrophone(contents.id) : details.mediaTypes[0] === "video" && sessions.allowsCamera(contents.id))),
+};
 export function registerNativeVoiceIpcHandlers(): void {
-  // Media belongs to the opted-in voice owner. Camera needs a separate opt-in.
-  session.defaultSession.setPermissionCheckHandler((contents, permission, _origin, details) => {
-    if (permission !== "media") return true;
-    return Boolean(contents && details.isMainFrame
-      && (details.mediaType === "audio"
-        ? sessions.allowsMicrophone(contents.id)
-        : details.mediaType === "video" && sessions.allowsCamera(contents.id)));
-  });
-  session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
-    if (permission !== "media") { callback(true); return; }
-    callback("mediaTypes" in details && details.mediaTypes?.length === 1 && details.isMainFrame
-      && (details.mediaTypes[0] === "audio" ? sessions.allowsMicrophone(contents.id) : details.mediaTypes[0] === "video" && sessions.allowsCamera(contents.id)));
-  });
   ipcMain.handle(NATIVE_VOICE_CAPABILITY_CHANNEL, async () => {
     const availability = cameraCueAvailability();
     const camera = availability.available ? { available: true } : { available: false, reason: availability.reason };

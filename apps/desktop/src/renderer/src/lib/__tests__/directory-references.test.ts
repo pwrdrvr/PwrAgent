@@ -50,6 +50,11 @@ const UNLINKED = makeDirectory({
   latestUpdatedAt: 400,
 });
 
+/** The serialized `@` chip the composer sends for a path. */
+function chip(path: string): string {
+  return buildDirectoryReferenceMarkdown({ label: fileLabelFromPath(path), path });
+}
+
 describe("Windows directory reference round trips", () => {
   it.each(["C:/Projects", "C:\\Projects", "//server/share", "\\\\server\\share"])(
     "links the deepest directory after inserting a native path under %s",
@@ -58,7 +63,7 @@ describe("Windows directory reference round trips", () => {
       const child = makeDirectory({ key: "child", path: `${root}/app` });
       const sibling = makeDirectory({ key: "sibling", path: `${root}/app-other` });
       const nativePath = buildDirectoryReferenceInsertText(child);
-      const draft = `Read ${nativePath}\\src\\file.ts`;
+      const draft = `Read ${chip(`${nativePath}\\src\\file.ts`)}`;
       expect(listReferencedDirectories(draft, [parent, child, sibling])).toEqual([child]);
       expect(listReferencedDirectories(draft, [child], { excludePaths: [nativePath] })).toEqual([]);
       expect(listReferencedDirectories(draft, [parent, child], { excludePaths: [nativePath] })).toEqual([]);
@@ -72,9 +77,9 @@ describe("Windows directory reference round trips", () => {
   it("keeps POSIX backslashes as filename characters", () => {
     const parent = makeDirectory({ key: "parent", path: "/repo" });
     const sibling = makeDirectory({ key: "sibling", path: "/repo\\other" });
-    expect(listReferencedDirectories("Read /repo\\other/file.ts", [parent, sibling]))
+    expect(listReferencedDirectories(`Read ${chip("/repo\\other/file.ts")}`, [parent, sibling]))
       .toEqual([sibling]);
-    expect(listReferencedDirectories("Read /repo and /repo\\other", [parent, sibling]))
+    expect(listReferencedDirectories(`Read ${chip("/repo")} and ${chip("/repo\\other")}`, [parent, sibling]))
       .toEqual([parent, sibling]);
   });
 });
@@ -315,40 +320,90 @@ describe("buildDirectoryReferenceMarkdown", () => {
 describe("listReferencedDirectories", () => {
   const directories = [CATALOG_SERVICE, CATALOG_PORTAL, PWRAGNT, UNLINKED];
 
-  it("finds a tilde-path reference", () => {
+  it("finds a tilde-path chip", () => {
     expect(
       listReferencedDirectories(
-        "You might be able to see it in ~/Projects/catalog-portal.",
+        "You might be able to see it in [@catalog-portal](~/Projects/catalog-portal).",
         directories,
         { homeDir: HOME },
       ).map((d) => d.key),
     ).toEqual([CATALOG_PORTAL.key]);
   });
 
-  it("finds an absolute-path reference", () => {
+  it("finds an absolute-path chip", () => {
     expect(
       listReferencedDirectories(
-        `compare against ${HOME}/pwrdrvr/PwrAgnt please`,
+        `compare against [@PwrAgnt](${HOME}/pwrdrvr/PwrAgnt) please`,
         directories,
         { homeDir: HOME },
       ).map((d) => d.key),
     ).toEqual([PWRAGNT.key]);
   });
 
-  it("resolves a deeper file path to its tracked repo", () => {
+  it("resolves a file chip to its tracked repo", () => {
     expect(
       listReferencedDirectories(
-        "look at ~/Projects/catalog-service/build.sbt",
+        "look at [@build.sbt](~/Projects/catalog-service/build.sbt)",
         directories,
         { homeDir: HOME },
       ).map((d) => d.key),
     ).toEqual([CATALOG_SERVICE.key]);
   });
 
+  // Typed or pasted text is not a reference. A pasted log, a diagnostics
+  // block, or a stack trace mentions paths in other projects all the time,
+  // and linking each of them moved threads into unrelated project groups.
+  it.each([
+    ["a tilde path", "You might be able to see it in ~/Projects/catalog-portal."],
+    ["an absolute path", `compare against ${HOME}/pwrdrvr/PwrAgnt please`],
+    ["a deeper file path", "look at ~/Projects/catalog-service/build.sbt"],
+    ["a path in a pasted code block", [
+      "what went wrong with this thread?",
+      "```",
+      "Collected at (UTC): 2026-10-28T02:23:21.875Z",
+      `Project directory/worktree path: ${HOME}/Projects/catalog-portal/2026-10-27-ae1587`,
+      `Log path: ${HOME}/pwrdrvr/PwrAgnt/apps/desktop/main.log`,
+      "```",
+    ].join("\n")],
+  ])("does not attach %s written as plain text", (_label, draft) => {
+    expect(listReferencedDirectories(draft, directories, { homeDir: HOME })).toEqual([]);
+  });
+
+  it("attaches only the chip when plain text names other projects", () => {
+    expect(
+      listReferencedDirectories(
+        `Use [@catalog-portal](~/Projects/catalog-portal). Logs: ${HOME}/pwrdrvr/PwrAgnt/main.log`,
+        directories,
+        { homeDir: HOME },
+      ).map((d) => d.key),
+    ).toEqual([CATALOG_PORTAL.key]);
+  });
+
+  it.each([
+    ["a sibling whose name extends the path", "[@backup](~/Projects/catalog-portal.bak)"],
+    ["the same path under another root", `[@x](/Volumes/backup${HOME}/Projects/catalog-portal/x)`],
+  ])("does not attach a chip for %s", (_label, draft) => {
+    expect(listReferencedDirectories(draft, directories, { homeDir: HOME })).toEqual([]);
+  });
+
+  it("resolves chip targets the draft text cannot carry", () => {
+    // A file named `[id].tsx` breaks the link syntax, so its chip serializes
+    // as a bare path; the composer passes the target from its token state.
+    const bareChip = buildDirectoryReferenceMarkdown(
+      { label: "[id].tsx", path: `${HOME}/Projects/catalog-service/app/[id].tsx` },
+      HOME,
+    );
+    expect(listReferencedDirectories(`Read ${bareChip}`, directories, { homeDir: HOME })).toEqual([]);
+    expect(listReferencedDirectories(`Read ${bareChip}`, directories, {
+      homeDir: HOME,
+      referencePaths: [`${HOME}/Projects/catalog-service/app/[id].tsx`],
+    }).map((d) => d.key)).toEqual([CATALOG_SERVICE.key]);
+  });
+
   it("does not match a sibling directory whose name extends the path", () => {
     expect(
       listReferencedDirectories(
-        "see ~/Projects/catalog-portal-v2 for details",
+        "see [@catalog-portal-v2](~/Projects/catalog-portal-v2) for details",
         directories,
         { homeDir: HOME },
       ),
@@ -358,7 +413,7 @@ describe("listReferencedDirectories", () => {
   it("returns each directory once for repeated mentions", () => {
     expect(
       listReferencedDirectories(
-        "~/Projects/catalog-portal and again ~/Projects/catalog-portal",
+        "[@catalog-portal](~/Projects/catalog-portal) and again [@catalog-portal](~/Projects/catalog-portal)",
         directories,
         { homeDir: HOME },
       ),
@@ -368,7 +423,7 @@ describe("listReferencedDirectories", () => {
   it("honors excludePaths for already-linked directories", () => {
     expect(
       listReferencedDirectories(
-        "work in ~/Projects/catalog-service and read ~/Projects/catalog-portal",
+        "work in [@catalog-service](~/Projects/catalog-service) and read [@catalog-portal](~/Projects/catalog-portal)",
         directories,
         { homeDir: HOME, excludePaths: [`${HOME}/Projects/catalog-service`] },
       ).map((d) => d.key),
@@ -383,7 +438,7 @@ describe("listReferencedDirectories", () => {
     });
     expect(
       listReferencedDirectories(
-        "fetch ~/Projects/catalog-portal",
+        "fetch [@catalog-portal](~/Projects/catalog-portal)",
         [...directories, parent],
         { homeDir: HOME },
       ).map((d) => d.key),
@@ -391,9 +446,8 @@ describe("listReferencedDirectories", () => {
   });
 
   it.each([
-    "Read ~/Projects/catalog-portal",
     "Read [@catalog-portal](~/Projects/catalog-portal)",
-    `Read ${HOME}/Projects/catalog-portal/src/index.ts`,
+    `Read [@index.ts](${HOME}/Projects/catalog-portal/src/index.ts)`,
   ])("does not attach ancestors of an already-linked reference: %s", (draft) => {
     const home = makeDirectory({ key: "home", label: "example", path: HOME });
     const parent = makeDirectory({ key: "projects", path: `${HOME}/Projects` });
@@ -413,17 +467,17 @@ describe("listReferencedDirectories", () => {
 
   it("still attaches an ancestor when the draft references that ancestor alone", () => {
     const home = makeDirectory({ key: "home", path: HOME });
-    expect(listReferencedDirectories("Read ~", [home], {
+    expect(listReferencedDirectories("Read [@example](~)", [home], {
       homeDir: HOME,
       excludePaths: [CATALOG_PORTAL.path!],
     })).toEqual([home]);
   });
 
-  it("accepts punctuation boundaries after the path", () => {
+  it("accepts punctuation after the chip", () => {
     for (const draft of [
-      "(~/Projects/catalog-portal)",
-      "~/Projects/catalog-portal, then more",
-      "~/Projects/catalog-portal? yes",
+      "([@catalog-portal](~/Projects/catalog-portal))",
+      "[@catalog-portal](~/Projects/catalog-portal), then more",
+      "[@catalog-portal](~/Projects/catalog-portal)? yes",
     ]) {
       expect(
         listReferencedDirectories(draft, directories, { homeDir: HOME }),

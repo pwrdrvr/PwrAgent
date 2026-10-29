@@ -1111,7 +1111,7 @@ export type ThreadViewProps = {
         | "agent"
       >
     >,
-    options?: { stickySettingsChanged?: boolean }
+    options?: { stickySettingsChanged?: boolean; owner?: FederationTarget }
   ) => Promise<void>;
   removeOptimisticMessage: (id: string) => void;
   transcriptViewport?: {
@@ -1543,7 +1543,7 @@ export function ThreadView(props: ThreadViewProps) {
   const composerSlotView = composerLaunchpad
     ? {
         launchpadScope: launchpadComposerScope(
-          composerLaunchpad.directoryKey,
+          composerLaunchpad,
           props.pendingLaunchpadCreation?.composerScopeKey,
         ),
       }

@@ -399,11 +399,12 @@ flattens namespace tool names, and restores namespaces in streamed responses and
 tool history. It rejects unsupported tool types instead of silently dropping them.
 Its HTTP listener uses an ephemeral loopback port and lives with the wrapped Codex
 process; the upstream must also use loopback. The wrapper accepts `--codex PATH`,
-`--upstream http://127.0.0.1:PORT/v1`, `--provider NAME`, then `--` and Codex's
-arguments. It passes the bridge URL as a process-local `-c` override and does not
-edit Codex configuration, copy authentication, or log request bodies. The profile's
-catalog must disable unsupported built-in tools such as freeform patching and
-hosted web search. Shell-based file edits remain available.
+`--upstream http://127.0.0.1:PORT/v1`, `--provider NAME`, optionally
+`--stream-idle-timeout-ms MS`, then `--` and Codex's arguments. It passes the
+bridge URL as a process-local `-c` override and does not edit Codex
+configuration, copy authentication, or log request bodies. The profile's catalog
+must disable unsupported built-in tools such as freeform patching and hosted web
+search. Shell-based file edits remain available.
 
 With `--model-catalog TEMPLATE`, the launcher refreshes the single-model
 template's input modalities from llama.cpp's `/v1/models` and `/props` before
@@ -418,6 +419,32 @@ redirects, and have five-second timeouts and 1 MiB response limits. Unavailable,
 unknown, or mismatched metadata fails startup explicitly instead of advertising
 stale capabilities. Version probes skip discovery. Restart the provider connection
 after changing the loaded model's vision projector so Codex reloads the catalog.
+
+Two timeouts can end a local model's stream while llama-server processes a long
+uncached prompt, because it sends no bytes until the first token. Both default
+to 300 s, and a prompt tail of about 50k tokens deep in a long context can take
+longer. Each layer waits 15 minutes on a silent stream. That value is still
+finite, so a hung server fails.
+
+- Codex's per-provider `stream_idle_timeout_ms` ends the SSE stream with `idle
+  timeout waiting for SSE` and retries up to `stream_max_retries` times. The
+  wrapper passes `-c model_providers.<provider>.stream_idle_timeout_ms=...`, the
+  Bonsai runtime passes the same override, and every PwrAgent provider with a
+  loopback `base_url` gets it in its provider table
+  (`LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS`). An operator's own
+  `model_providers.<id>.stream_idle_timeout_ms` override still wins for an
+  ordinary provider, because provider tables come first.
+- Node's global `fetch` uses undici, whose default dispatcher ends a response
+  after 300 s without headers (`headersTimeout`) or body bytes (`bodyTimeout`).
+  The bridge therefore posts upstream with `node:http`, which has no response
+  deadline, and sets one socket idle timeout (`startBridge`'s `idleTimeoutMs`,
+  default `DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS`). A timeout before headers
+  answers 504, which Codex retries as a server error; a timeout mid-stream
+  drops the stream. The `requestTimeout` of the bridge's own listener covers
+  only receiving the request, so it does not end a long response.
+
+The wrapper's `--stream-idle-timeout-ms MS` sets both layers to one value. Its
+Codex override replaces a value from the profile's `config.toml`.
 
 ### Codex model providers
 

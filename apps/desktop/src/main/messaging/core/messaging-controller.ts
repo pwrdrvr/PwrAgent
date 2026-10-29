@@ -171,6 +171,8 @@ import {
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import {
   resolveMessagingOutboundFile,
+  resolveMessagingOutboundBytes,
+  validateMessagingFileMetadata,
   type MessagingOutboundFileAccess,
 } from "./messaging-outbound-file.js";
 import { resolveScratchProjectsRoots } from "../../app-server/scratch-projects.js";
@@ -1209,6 +1211,7 @@ export class MessagingController {
 
   async handlePwrAgentMessagingRequest(
     request: PwrAgentMessagingRequest,
+    receivedFile?: Uint8Array,
   ): Promise<PwrAgentMessagingResponse> {
     switch (request.operation) {
       case "list_messaging_surfaces":
@@ -1235,7 +1238,7 @@ export class MessagingController {
       case "send_private_response":
         return await this.sendPrivateResponseFromAgentMessagingOrigin(request);
       case "send_messaging_file":
-        return await this.sendMessagingFileFromAgentMessagingOrigin(request);
+        return await this.sendMessagingFileFromAgentMessagingOrigin(request, receivedFile);
       case "attach_thread_here":
         return await this.attachThreadHereFromAgentMessagingOrigin(request);
       case "inspect_messaging_pdfs":
@@ -4871,6 +4874,7 @@ export class MessagingController {
           ...this.options.attachmentPolicy,
         },
         pdfHandling,
+        deferSinglePagePdf: binding?.federatedThread?.target.scope === "remote",
         text: turnEvent.text,
       });
       this.addInputPreparationTiming(
@@ -4993,6 +4997,7 @@ export class MessagingController {
       return await this.options.backend.supportsMessagingPdfTools({
         backend: binding.backend,
         threadId: binding.threadId,
+        federationTarget: federationTargetForBinding(binding),
       })
         ? "model_directed"
         : "render_initial_pages";
@@ -5255,6 +5260,9 @@ export class MessagingController {
           backend: params.binding.backend,
           threadId: params.binding.threadId,
           turnId: started.turnId,
+          sourceInstanceId: params.binding.federatedThread?.target.scope === "remote"
+            ? params.binding.federatedThread.target.instanceId : undefined,
+          sourceRequest: startingOrigin?.source?.ref,
         },
         params.pdfAttachments ?? [],
       );
@@ -19103,7 +19111,13 @@ export class MessagingController {
       PwrAgentMessagingRequest,
       { operation: "send_messaging_file" }
     >,
+    receivedFile?: Uint8Array,
   ): Promise<PwrAgentMessagingResponse> {
+    const invalid = validateMessagingFileMetadata(request.args);
+    if (invalid) return { ok: false, error: { code: invalid.code, message: invalid.message } };
+    if (request.context.requestingInstanceId && !receivedFile) {
+      return { ok: false, error: { code: "forbidden", message: "Federated file sends require received bytes, never a provider-owner path." } };
+    }
     const caption = typeof request.args?.caption === "string"
       ? request.args.caption.trim()
       : "";
@@ -19234,15 +19248,15 @@ export class MessagingController {
       };
     }
 
-    const outbound = await resolveMessagingOutboundFile(
-      {
-        path: typeof request.args?.path === "string" ? request.args.path : "",
-        ...(filename ? { filename } : {}),
-        ...(mediaKind ? { mediaKind } : {}),
-      },
-      this.capabilityProfile.outboundAttachments ?? {},
-      await this.resolveOutboundFileAccess(request.context),
-    );
+    const fileRequest = {
+      path: typeof request.args?.path === "string" ? request.args.path : "",
+      ...(filename ? { filename } : {}),
+      ...(mediaKind ? { mediaKind } : {}),
+    };
+    const outbound = receivedFile
+      ? resolveMessagingOutboundBytes(fileRequest, this.capabilityProfile.outboundAttachments ?? {}, receivedFile)
+      : await resolveMessagingOutboundFile(fileRequest, this.capabilityProfile.outboundAttachments ?? {},
+        await this.resolveOutboundFileAccess(request.context));
     if (!outbound.ok) {
       return {
         ok: false,
@@ -19253,6 +19267,14 @@ export class MessagingController {
       };
     }
 
+    if (request.context.requestingInstanceId) {
+      const permission = await this.authorizeRetainedTool(request.context, {
+        ...request.context, category: "messaging_context", tool: "send_messaging_file", arguments: request.args,
+      });
+      if (!permission.allowed || !(await this.resolveAgentMessagingOrigin(request.context)).ok) {
+        return { ok: false, error: { code: "forbidden", message: "The original messaging authority changed before file delivery." } };
+      }
+    }
     const sourceBinding = origin.origin.deliveryBinding ?? origin.origin.binding;
     const filePart = outbound.mediaKind === "image"
       ? {
@@ -19575,6 +19597,11 @@ export class MessagingController {
           },
         },
       };
+    }
+    if (request.context.requestingInstanceId && !this.pdfAttachmentStore.authorizesSource({
+      backend: request.context.backend, threadId: request.context.threadId, turnId: request.context.turnId,
+    }, request.context.requestingInstanceId, request.context.causalMessagingSource)) {
+      return { ok: false, error: { ok: false, error: { code: "forbidden", message: "PDF attachments do not belong to this source and messaging turn." } } };
     }
     const origin = await this.resolveAgentMessagingOrigin(request.context);
     if (!origin.ok) {

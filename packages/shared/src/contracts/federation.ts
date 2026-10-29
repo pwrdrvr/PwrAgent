@@ -27,6 +27,7 @@ export const FEDERATION_CAPABILITIES = [
   "federated_search",
   "messaging_route",
   "messaging_destinations",
+  "messaging_files",
   "pwrsnap_connection",
   "gateway_relay",
   "remote_pty",

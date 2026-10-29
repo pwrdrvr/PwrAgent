@@ -30,6 +30,9 @@ import { FEDERATION_MESSAGING_DESTINATION_METHOD, handleFederationMessagingDesti
   type FederationMessagingDestinationOperation, type FederationMessagingDestinationResult } from "./federation-messaging-tools";
 import {
   FederationFilePushReceiver,
+  FederationFilePushReceipts,
+  FILE_PUSH_MAX_BYTES,
+  type FilePushResult,
   FILE_PUSH_METHOD_CAPABILITIES,
   registerFilePushHandlers,
   pushFederationFile,
@@ -611,6 +614,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "federated_search",
   "messaging_route",
   "messaging_destinations",
+  "messaging_files",
   "pwrsnap_connection",
   "gateway_relay",
   // Federation is a same-operator trust domain and turn_control already
@@ -1051,6 +1055,13 @@ export class DesktopFederationRuntime {
     return this.ensureLocalInstanceId();
   }
 
+  async consumeMessagingFile(sourceInstanceId: string, file: FilePushResult): Promise<Uint8Array> {
+    if (!this.receiverPermissions().filePush) throw new Error("Incoming files are disabled on the messaging owner.");
+    const bytes = await this.messagingFileReceipts.consume(sourceInstanceId, file, FILE_PUSH_MAX_BYTES);
+    if (!this.receiverPermissions().filePush) throw new Error("Incoming files were disabled during the transfer.");
+    return bytes;
+  }
+
   async requestMessagingDestination(instanceId: FederationInstanceId, operation: FederationMessagingDestinationOperation): Promise<FederationMessagingDestinationResult> {
     if (!this.remotePeerAdvertisesCapability(instanceId, "messaging_destinations")) {
       throw new Error("The messaging owner is unavailable or does not support retained destinations. Upgrade that owner.");
@@ -1253,6 +1264,7 @@ export class DesktopFederationRuntime {
   private releaseWorktreeTerminalOwner?: () => void;
   private filePushReceiver?: FederationFilePushReceiver;
   private threadHandoffService?: ThreadInstanceHandoffService;
+  private readonly messagingFileReceipts = new FederationFilePushReceipts();
   private readonly handoffFileReceipts = new Map<string, { peerId: string; sizeBytes: number; sha256: string }>();
   private readonly remotePtyEventListeners = new Set<
     (event: FederationPtyStreamEvent) => void
@@ -1690,6 +1702,7 @@ export class DesktopFederationRuntime {
     this.filePushReceiver = undefined;
     this.threadHandoffService = undefined;
     this.handoffFileReceipts.clear();
+    this.messagingFileReceipts.clear();
     this.serviceViews.clear();
     this.serviceForwarder.dispose();
     this.services?.dispose();
@@ -3647,7 +3660,9 @@ export class DesktopFederationRuntime {
         [FILE_RESOLVE_TRANSCRIPT_METHOD]: "file_pull",
       },
       additionalRequiredCapabilities: (envelope) => envelope.method === FEDERATION_MESSAGING_DESTINATION_METHOD
-        ? ["thread_navigation"]
+        ? ((envelope.params as FederationMessagingDestinationOperation)?.kind === "request"
+          && (envelope.params as { request?: { operation?: string } }).request?.operation === "send_messaging_file"
+          ? ["thread_navigation", "file_push"] : ["thread_navigation"])
         : envelope.method === FEDERATION_THREAD_TODO_METHODS.runAction
         ? ["environment_actions"]
         : envelope.method === THREAD_HANDOFF_METHODS.import
@@ -3689,6 +3704,7 @@ export class DesktopFederationRuntime {
       onCompleted: (peerId, result) => {
         if (this.handoffFileReceipts.size >= 128) this.handoffFileReceipts.delete(this.handoffFileReceipts.keys().next().value!);
         this.handoffFileReceipts.set(result.path, { peerId, sizeBytes: result.sizeBytes, sha256: result.sha256 });
+        this.messagingFileReceipts.record(peerId, result);
       },
     });
     registerFilePushHandlers(router, this.filePushReceiver);

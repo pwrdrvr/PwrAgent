@@ -299,6 +299,30 @@ describe("ReplayClient", () => {
     });
   });
 
+  it("does not acknowledge a scripted rename until its response completes", async () => {
+    const thread = {
+      id: "thread-1", title: "Original title", titleSource: "explicit" as const,
+      source: "codex" as const, linkedDirectories: [],
+    };
+    const client = ReplayClient.fromFixture({
+      metadata: { backend: "codex", scenario: "rename-list-causality" },
+      steps: [
+        { id: "initialize", kind: "response", method: "initialize", result: {
+          serverInfo: { name: "Replay Codex", version: "1.0.0" }, methods: ["thread/list", "thread/name/set"],
+        } },
+        { id: "original", kind: "response", method: "thread/list", result: [thread] },
+        { id: "rename", kind: "response", method: "thread/name/set", result: {} },
+        { id: "renamed", kind: "response", method: "thread/list", afterResponseId: "rename",
+          result: [{ ...thread, title: "Renamed title" }] },
+      ],
+    });
+    await expect(client.listThreads()).resolves.toMatchObject([thread]);
+    await expect(client.listThreads()).resolves.toMatchObject([thread]);
+    await expect(client.renameThread({ threadId: thread.id, name: "Renamed title" }))
+      .resolves.toEqual({ threadId: thread.id });
+    await expect(client.listThreads()).resolves.toMatchObject([{ ...thread, title: "Renamed title" }]);
+  });
+
   it("keeps the active thread list available until archive completes", async () => {
     const thread = {
       id: "thread-1",

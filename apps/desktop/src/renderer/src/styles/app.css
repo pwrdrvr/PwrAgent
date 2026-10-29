@@ -2579,10 +2579,13 @@ textarea,
   top: var(--win-titlebar-h);
 }
 
+/* Grows with the window, from 640px to 800px at 60vw. Each row carries
+   chips, branch, project and age on one line, and a fixed 640px left a wide
+   window's titles clipped beside empty scrim. */
 .jump-palette__panel {
   display: flex;
   flex-direction: column;
-  width: min(640px, 100%);
+  width: min(100%, clamp(640px, 60vw, 800px));
   max-height: 66vh;
   overflow: hidden;
   border: 1px solid var(--border-strong);
@@ -2788,6 +2791,21 @@ textarea,
   font-family: var(--font-mono);
   font-size: 9.5px;
   font-weight: 600;
+}
+
+/* The sidebar row's time column, in its type. It never shrinks, so the title
+   and branch give way first. Its minimum fits the widest date label ("May 28",
+   41.7px in Geist at 12px), so the project chips beside it line up down the
+   list whatever age each row prints. */
+.jump-palette__row-time {
+  flex: none;
+  min-width: 3.5em;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .jump-palette__row .chip--agent,
@@ -10705,6 +10723,26 @@ a.button {
 .app-notice-toast__dismiss-all:hover {
   background: var(--bg-panel-hover);
   color: var(--text-primary);
+}
+
+/* A split action takes the card's own `.button` corners. The composer's
+   pill radius beside a card of 6px controls read as a different control,
+   and changed shape when an answer replaced it with the plain button. */
+.app-notice-toast .todo-split__pill {
+  border-radius: 6px;
+}
+
+/* A split action's menu leaves the card, which clips to its rounded edge
+   otherwise. The content keeps its own scroller. */
+.app-notice-toast:has(.todo-split--open) {
+  overflow: visible;
+}
+
+/* The stack sits on the window's bottom edge unless focus moved it to the
+   top, so its menus open upward there. */
+.app-toast-stack:not([data-placement="top"]) .todo-split__menu {
+  top: auto;
+  bottom: calc(100% + 6px);
 }
 
 /* Borderless. 24px keeps WCAG 2.5.8's target size, which the a11y gate

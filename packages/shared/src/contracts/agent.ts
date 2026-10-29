@@ -1065,6 +1065,12 @@ export type EnsureDirectoryLaunchpadResponse = {
 };
 
 export type UpdateDirectoryLaunchpadRequest = {
+  /**
+   * The instance that owns `directoryKey`. A viewer stores its draft for a
+   * peer's directory apart from its own draft for the same key. A remote
+   * window's own target wins over this one.
+   */
+  federationTarget?: FederationTarget;
   directoryKey: string;
   patch: Partial<
     Pick<
@@ -1109,6 +1115,8 @@ export type UpdateDirectoryLaunchpadResponse = {
 };
 
 export type ResetDirectoryLaunchpadRequest = {
+  /** The instance that owns `directoryKey`, as on an update. */
+  federationTarget?: FederationTarget;
   directoryKey: string;
   /** Clear submitted viewer input while retaining the project's environment. */
   preserveEnvironment?: boolean;

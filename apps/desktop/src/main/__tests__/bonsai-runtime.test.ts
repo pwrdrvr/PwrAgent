@@ -46,11 +46,13 @@ describe("isolated Bonsai launch resources", () => {
       }
       expect(runtime.overrides).toEqual(expect.arrayContaining([
         'model_provider="bonsai"', 'model_providers.bonsai.base_url="http://127.0.0.1:12345/v1"',
+        "model_providers.bonsai.stream_idle_timeout_ms=900000",
         "model_context_window=65536", "model_auto_compact_token_limit=49152", "features.apps=false", "features.plugins=false",
         "features.goals=false", "features.multi_agent=false", "features.image_generation=false", 'web_search="disabled"',
       ]));
       expect(bridge.discover).toHaveBeenCalledWith(provider.baseUrl, expect.any(Object), "fixture-key");
-      expect(startBridge).toHaveBeenCalledWith(provider.baseUrl, "fixture-key");
+      // The bridge waits on a silent prefill exactly as long as Codex does.
+      expect(startBridge).toHaveBeenCalledWith(provider.baseUrl, "fixture-key", { idleTimeoutMs: 900_000 });
       await runtime.close();
       await expect(stat(catalogPath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(bridge.close).toHaveBeenCalledOnce();

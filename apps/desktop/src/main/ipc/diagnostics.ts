@@ -16,6 +16,8 @@ import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
 import { subscribersForChannel } from "../window-channels";
+import { DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL, DIAGNOSTICS_STOP_RENDERING_CHANNEL } from "../../shared/rendering-diagnostics";
+import { captureRenderingDiagnostics, stopRenderingDiagnostics } from "../diagnostics/rendering-capture";
 
 const logger = getMainLogger("pwragent:diagnostics-ipc");
 
@@ -70,6 +72,11 @@ async function runCapture(
 }
 
 export function registerDiagnosticsIpcHandlers(): void {
+  ipcMain.removeHandler(DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL);
+  ipcMain.removeHandler(DIAGNOSTICS_STOP_RENDERING_CHANNEL);
+  ipcMain.handle(DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL, (_event, seconds?: number) =>
+    captureRenderingDiagnostics(resolveDiagnosticsOutputRoot(), seconds));
+  ipcMain.handle(DIAGNOSTICS_STOP_RENDERING_CHANNEL, () => stopRenderingDiagnostics());
   ipcMain.removeHandler(DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_CODEX_PROTOCOL_CAPTURE_STATUS_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_START_CODEX_PROTOCOL_CAPTURE_CHANNEL);
@@ -125,6 +132,8 @@ export function registerDiagnosticsIpcHandlers(): void {
 }
 
 export function disposeDiagnosticsIpcHandlers(): void {
+  ipcMain.removeHandler(DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL);
+  ipcMain.removeHandler(DIAGNOSTICS_STOP_RENDERING_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_CODEX_PROTOCOL_CAPTURE_STATUS_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_START_CODEX_PROTOCOL_CAPTURE_CHANNEL);

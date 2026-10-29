@@ -308,10 +308,22 @@ function buildCompletedGroups(
  * into a run of "More work" groups. A reply that more tool work follows in the
  * same turn was not the answer, whatever its phase says. A user message in
  * between ends the search: a reply the operator answered stays in view.
+ *
+ * A turn that tags some replies commentary does tell its answer apart, so its
+ * final reply stays the answer. Codex reports a tool call it cancelled at turn
+ * end after the answer, and that call is not work done after it. A row whose
+ * every call failed is how that arrives, with or without commentary, so it
+ * never makes the reply before it interim.
  */
 function collectInterimReplies(
   entries: AppServerThreadEntry[],
 ): Set<AppServerThreadEntry> {
+  const phaseTaggedTurnIds = new Set<string>();
+  for (const entry of entries) {
+    if (entry.turn?.id && isAssistantMessage(entry) && entry.phase === "commentary") {
+      phaseTaggedTurnIds.add(entry.turn.id);
+    }
+  }
   const interim = new Set<AppServerThreadEntry>();
   let workFollowsInTurn: string | undefined;
   for (let index = entries.length - 1; index >= 0; index -= 1) {
@@ -320,10 +332,13 @@ function collectInterimReplies(
     if (entry.type === "message" && entry.role === "user") {
       workFollowsInTurn = undefined;
     } else if (turnId && isConcreteWorkEntry(entry)) {
-      workFollowsInTurn = turnId;
+      if (!isAllFailedActivity(entry)) workFollowsInTurn = turnId;
     } else if (!turnId || turnId !== workFollowsInTurn) {
       workFollowsInTurn = undefined;
-    } else if (isAssistantMessage(entry)) {
+    } else if (
+      isAssistantMessage(entry)
+      && !(entry.phase === "final" && phaseTaggedTurnIds.has(turnId))
+    ) {
       interim.add(entry);
     }
   }
@@ -521,6 +536,14 @@ export function isConcreteWorkEntry(
       !isFileDiffActivity(entry) &&
       !isTokenUsageActivity(entry))
   );
+}
+
+function isAllFailedActivity(
+  entry: AppServerThreadActivityEntry | AppServerThreadPlanEntry,
+): boolean {
+  return entry.type === "activity"
+    && entry.status === "failed"
+    && entry.details.every((detail) => detail.status === "failed");
 }
 
 function isTerminalTurnFailureActivity(

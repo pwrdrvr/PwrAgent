@@ -34,6 +34,7 @@ export type PwrAgentMessagingHandler = (
 
 export type PwrAgentMessagingToolRouterOptions = {
   includeModelDirectedPdfMcp?: boolean;
+  nativeDynamicPdfImages?: boolean;
   namespace?: string;
   unsupportedMessage?: string;
 };
@@ -44,6 +45,7 @@ export function buildPwrAgentMessagingToolRouter(
 ): AgentToolRouter {
   return new AgentToolRouter(buildPwrAgentMessagingToolDefinitions(handler, {
     includeModelDirectedPdfMcp: options.includeModelDirectedPdfMcp,
+    nativeDynamicPdfImages: options.nativeDynamicPdfImages,
     namespace: options.namespace,
   }), {
     unsupportedMessage:
@@ -76,7 +78,7 @@ export function buildPwrAgentMessagingToolDefinitions(
   handler: PwrAgentMessagingHandler | undefined,
   options: Pick<
     PwrAgentMessagingToolRouterOptions,
-    "includeModelDirectedPdfMcp" | "namespace"
+    "includeModelDirectedPdfMcp" | "nativeDynamicPdfImages" | "namespace"
   > = {},
 ): AgentToolDefinition<PwrAgentMessagingOperationName>[] {
   return PWRAGENT_MESSAGING_CALLABLE_OPERATION_NAMES.map((operation) => ({
@@ -84,7 +86,9 @@ export function buildPwrAgentMessagingToolDefinitions(
     name: operation,
     // Rendering writes page images. Only inspection and text search are read-only.
     annotations: { readOnlyHint: ["get_current_location", "get_current_messaging_surface", "list_messaging_surfaces", "inspect_messaging_pdfs", "search_messaging_pdf_text"].includes(operation) },
-    description: descriptionForOperation(operation),
+    description: options.nativeDynamicPdfImages && operation === "render_messaging_pdf_pages"
+      ? "Render selected pages from the current messaging turn. Page images arrive directly as tool image content. Use only this tool for PwrAgent PDFs; do not use local files or conversion tools. Repeated requests return only pages not shown before. Page, pixel and byte limits apply."
+      : descriptionForOperation(operation),
     inputSchema: inputSchemaForOperation(operation),
     advertise: PWRAGENT_MESSAGING_OPERATION_NAMES.includes(
       operation as (typeof PWRAGENT_MESSAGING_OPERATION_NAMES)[number],
@@ -109,7 +113,7 @@ export function buildPwrAgentMessagingToolDefinitions(
         },
         args,
       } as PwrAgentMessagingRequest);
-      return messagingResponseToAgentToolResult(response, context.transport);
+      return messagingResponseToAgentToolResult(response, context.transport, options.nativeDynamicPdfImages);
     },
   }));
 }
@@ -377,6 +381,7 @@ function inputSchemaForOperation(
 function messagingResponseToAgentToolResult(
   response: PwrAgentMessagingResponse,
   transport: AgentToolTransport,
+  nativeDynamicPdfImages = false,
 ): AgentToolDispatchResult {
   if (response.ok) {
     if (response.imageContent) {
@@ -397,6 +402,13 @@ function messagingResponseToAgentToolResult(
           mimeType: image.mimeType,
         })),
       ];
+      if (transport === "codex_dynamic_tool" && nativeDynamicPdfImages) {
+        return agentToolSuccess(response.data, {
+          contentItems: [{ type: "inputText", text: metadata }, ...response.imageContent.map((image) => ({
+            type: "inputImage" as const, imageUrl: `data:${image.mimeType};base64,${image.base64}`,
+          }))],
+        });
+      }
       if (transport === "codex_dynamic_tool") {
         return agentToolSuccess(response.data, {
           contentItems: [

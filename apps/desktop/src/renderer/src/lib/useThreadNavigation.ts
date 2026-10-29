@@ -9,7 +9,10 @@ import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
 import { isLensCollectionId, projectDisclosedNavigationParents } from "./navigation-window-demand";
 import type { ComposerDraftStore } from "../features/composer/useComposerDraftStore";
 import { useRecoverableRef, useRecoverableState } from "./RendererRecoveryState";
-import { buildStartingLaunchpadComposerScopeKey } from "../features/composer/launchpad-composer-scope";
+import {
+  buildLaunchpadComposerScopeKey,
+  buildStartingLaunchpadComposerScopeKey,
+} from "../features/composer/launchpad-composer-scope";
 import { loadedThreadRows, loadedDirectoryRows, indexLoadedThreadRows, indexLoadedDirectoryRows, type NavigationLoadedRows, type NavigationPresentedThread, type NavigationDirectoryView as NavigationDirectorySummary } from "./navigation-loaded-rows";
 import { readNavigationUnlinkPlan } from "./navigation-unlink-plan";
 import { readNavigationActionDetail, readNavigationActionThread } from "./navigation-action-authority";
@@ -3151,7 +3154,7 @@ export function useThreadNavigation(
   updateDirectoryLaunchpad: (
     directoryKey: string,
     patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"],
-    options?: { stickySettingsChanged?: boolean }
+    options?: { stickySettingsChanged?: boolean; owner?: FederationTarget }
   ) => Promise<void>;
   setBrowseMode: (browseMode: BrowseMode) => void;
   selectThread: (thread: NavigationThreadSummary) => void;
@@ -3741,9 +3744,9 @@ export function useThreadNavigation(
           ? { gitStatus: launchpadConfiguration.value.directoryGitStatus } : {}),
         ...(launchpadConfiguration.value?.directoryKey === directory.key
           ? { launchpad: launchpadConfiguration.value.launchpad ? { ...launchpadConfiguration.value.launchpad,
-              prompt: draftStore?.get(`launchpad:${directory.key}`)?.draft ?? "",
-              imageAttachments: draftStore?.get(`launchpad:${directory.key}`)?.imageAttachments,
-              fileAttachments: draftStore?.get(`launchpad:${directory.key}`)?.fileAttachments } : undefined } : {}),
+              prompt: draftStore?.get(buildLaunchpadComposerScopeKey(directory.key))?.draft ?? "",
+              imageAttachments: draftStore?.get(buildLaunchpadComposerScopeKey(directory.key))?.imageAttachments,
+              fileAttachments: draftStore?.get(buildLaunchpadComposerScopeKey(directory.key))?.fileAttachments } : undefined } : {}),
       })));
       // A directory that left the list needs no record of its last patch.
       for (const key of directoryPatchReadsRef.current.keys()) {
@@ -7314,7 +7317,15 @@ export function useThreadNavigation(
     async (
       directoryKey: string,
       patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"],
-      options?: { stickySettingsChanged?: boolean }
+      options?: {
+        stickySettingsChanged?: boolean;
+        /**
+         * Whose draft this is. A pinned peer's draft and this window's own
+         * draft can share a directory key, so the key alone picks whichever
+         * one is open. Composer names the owner of the scope it saves.
+         */
+        owner?: FederationTarget;
+      }
     ): Promise<void> => {
       if (!desktopApi?.updateDirectoryLaunchpad) {
         setLaunchpadError("Desktop bridge is missing updateDirectoryLaunchpad().");
@@ -7322,11 +7333,35 @@ export function useThreadNavigation(
       }
 
       setLaunchpadError(undefined);
+      const owner = options?.owner;
+      // This window's own drafts: local in the main window, the peer's in a
+      // remote window, where main fills the owner in.
+      const ownsWindowDraft = owner !== undefined && (
+        owner.scope === "local"
+        || federationTargetsEqual(owner, rendererFederationTarget)
+      );
       const federatedSelection =
         activeFederatedLaunchpad
         && activeFederatedLaunchpad.launchpad.directoryKey === directoryKey
+        && !ownsWindowDraft
+        && (!owner || federationTargetsEqual(owner, activeFederatedLaunchpad.target))
           ? activeFederatedLaunchpad
           : undefined;
+      if (owner?.scope === "remote" && !ownsWindowDraft && !federatedSelection) {
+        // A peer's draft this window no longer shows: save it, change nothing
+        // on screen.
+        try {
+          await desktopApi.updateDirectoryLaunchpad({
+            federationTarget: owner,
+            directoryKey,
+            patch,
+            stickySettingsChanged: options?.stickySettingsChanged,
+          });
+        } catch (error) {
+          setLaunchpadError(error instanceof Error ? error.message : String(error));
+        }
+        return;
+      }
       const launchpadUpdateKey = federatedSelection
         ? `${federatedSelection.target.instanceId}:${directoryKey}`
         : directoryKey;
@@ -7359,6 +7394,7 @@ export function useThreadNavigation(
 
         try {
           const response = await desktopApi.updateDirectoryLaunchpad({
+            federationTarget: federatedSelection.target,
             directoryKey,
             patch,
             stickySettingsChanged: options?.stickySettingsChanged,
@@ -7377,6 +7413,9 @@ export function useThreadNavigation(
                       current.launchpad,
                       response.launchpad,
                       patch,
+                      // The response carries no environments: those are
+                      // the owner's, already held here.
+                      { preserveOwnerCodexEnvironmentMetadata: true },
                     ),
                     federationTarget: federatedSelection.target,
                   },
@@ -7512,7 +7551,7 @@ export function useThreadNavigation(
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
-    [activeFederatedLaunchpad, desktopApi, isRendererFederationWindow, setFederatedLaunchpad, setLocalLaunchpads]
+    [activeFederatedLaunchpad, desktopApi, isRendererFederationWindow, rendererFederationTarget, setFederatedLaunchpad, setLocalLaunchpads]
   );
 
   const resetDirectoryLaunchpad = useCallback(
@@ -7529,7 +7568,10 @@ export function useThreadNavigation(
           activeFederatedLaunchpad
           && activeFederatedLaunchpad.launchpad.directoryKey === directoryKey
         ) {
-          await desktopApi.resetDirectoryLaunchpad({ directoryKey });
+          await desktopApi.resetDirectoryLaunchpad({
+            federationTarget: activeFederatedLaunchpad.target,
+            directoryKey,
+          });
           setFederatedLaunchpad(undefined);
           setSelectedItemKey((current) =>
             current === buildFederatedLaunchpadSelectionKey(
@@ -7731,7 +7773,10 @@ export function useThreadNavigation(
             || initialConfiguration.directoryKey !== directoryKey || !initialConfiguration.defaults) {
             throw new Error("Launchpad configuration is not ready. The draft has been retained.");
           }
-          const saved = draftStore?.get(`launchpad:${directoryKey}`);
+          const saved = draftStore?.get(buildLaunchpadComposerScopeKey(
+            directoryKey,
+            federatedSelection?.target ?? rendererFederationTarget,
+          ));
           if (initialConfiguration.launchpad) launchpad = { ...initialConfiguration.launchpad,
             prompt: saved?.draft ?? "", imageAttachments: saved?.imageAttachments, fileAttachments: saved?.fileAttachments };
         } catch (error) {
@@ -7886,7 +7931,11 @@ export function useThreadNavigation(
             // clears its overlay row as part of that operation, but it cannot
             // clear the viewer's local copy. Clear its submitted input after
             // success while retaining the project's environment selection.
-            await desktopApi.resetDirectoryLaunchpad({ directoryKey, preserveEnvironment: true });
+            await desktopApi.resetDirectoryLaunchpad({
+              federationTarget,
+              directoryKey,
+              preserveEnvironment: true,
+            });
           } catch (error) {
             localDraftResetFailure =
               error instanceof Error ? error.message : String(error);
@@ -8041,7 +8090,10 @@ export function useThreadNavigation(
         }
         onMaterialized?.(
           namedOptimisticMaterializedThread,
-          composerScopeKey ?? `launchpad:${directoryKey}`,
+          composerScopeKey ?? buildLaunchpadComposerScopeKey(
+            directoryKey,
+            submittedFederationTarget,
+          ),
         );
         const shouldSelectMaterializedThread =
           selectedItemKeyRef.current === selectionKeyAtMaterializationStart;
@@ -8201,13 +8253,17 @@ export function useThreadNavigation(
       if (isRegisteredDirectory) {
         void desktopApi
           ?.updateDirectoryLaunchpad?.({
+            federationTarget: activeFederatedLaunchpad.target,
             directoryKey,
             patch: { prompt: "", imageAttachments: [], editorDocument: undefined },
           })
           .catch(handleDiscardError);
       } else {
         void desktopApi
-          ?.resetDirectoryLaunchpad?.({ directoryKey })
+          ?.resetDirectoryLaunchpad?.({
+            federationTarget: activeFederatedLaunchpad.target,
+            directoryKey,
+          })
           .catch(handleDiscardError);
       }
       return false;

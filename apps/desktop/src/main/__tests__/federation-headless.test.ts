@@ -1,6 +1,6 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -14,7 +14,7 @@ import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import { connectFederationClient } from "../federation/federation-transport";
 
 describe.skipIf(process.platform === "win32")("desktop client against the standalone outpost", () => {
-  it("uses the current navigation, composer, transcript and project contracts", async () => {
+  it.each(["direct", "symlink"])("uses the current navigation, composer, transcript and project contracts (%s workspace)", async (workspaceKind) => {
     const repo = process.cwd();
     const packageRoot = path.join(repo, "packages/pwragent");
     execFileSync(process.execPath, [path.join(packageRoot, "scripts/build.mjs")], { cwd: repo, stdio: "pipe" });
@@ -23,15 +23,21 @@ describe.skipIf(process.platform === "win32")("desktop client against the standa
     // root inside the checkout makes that depend on where the checkout lives,
     // and Sandboxer's ~/pwragent/wt/<sha> worktrees overflow it. /tmp keeps
     // the path short everywhere; os.tmpdir() does not on macOS, where it
-    // resolves to a long /private/var/folders/... path.
-    const root = mkdtempSync("/tmp/pwragent-h-");
+    // resolves to a long /private/var/folders/... path. Canonicalize the short
+    // root so every fixture path uses the outpost's realpath identity (on
+    // macOS /tmp is an alias for /private/tmp, which is still short enough).
+    const root = realpathSync(mkdtempSync("/tmp/pwragent-h-"));
     const workspace = path.join(root, "w");
     const home = path.join(root, "c");
     const data = path.join(root, "f");
     for (const directory of [workspace, home, data]) mkdirSync(directory);
+    // Exercise alias resolution on Linux too, while all RPC requests and
+    // assertions continue to use the canonical project/directory identity.
+    const workspaceInput = workspaceKind === "symlink" ? path.join(root, "alias") : workspace;
+    if (workspaceKind === "symlink") symlinkSync(workspace, workspaceInput, "dir");
     const env = { ...process.env, PWRAGENT_HOME: root, PWRAGENT_PROFILE: "t", PWRAGENT_TEST_DATA: data };
     const cli = path.join(packageRoot, "bin/pwragent.js");
-    const daemon = spawn(process.execPath, [cli, "serve", "--workspace", workspace, "--codex-home", home,
+    const daemon = spawn(process.execPath, [cli, "serve", "--workspace", workspaceInput, "--codex-home", home,
       "--codex-bin", path.join(packageRoot, "test/fixtures/codex.js")], { env, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     let errors = "";
@@ -57,7 +63,7 @@ describe.skipIf(process.platform === "win32")("desktop client against the standa
         peerInstanceId: viewerId, role: "client", inviteToken: invite.token,
         gatewayInstanceId: invite.gatewayInstanceId, gatewayPublicKeyPem: invite.gatewayPublicKeyPem,
         gatewayNoisePublicKey: Buffer.from(invite.gatewayNoisePublicKey!, "base64"), noiseStatic: generateNoiseStaticKeyPair(),
-        capabilities: ["remote_window", "thread_navigation", "thread_detail", "turn_control", "messaging_route", "messaging_destinations", "environment_actions"], deferReceiving: true,
+        capabilities: ["remote_window", "thread_navigation", "thread_detail", "turn_control", "messaging_route", "messaging_destinations", "messaging_files", "environment_actions"], deferReceiving: true,
         onEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); },
       });
       const connected = connection;
@@ -71,6 +77,7 @@ describe.skipIf(process.platform === "win32")("desktop client against the standa
       expect(projects.directories[0].path).toBe(workspace);
       const created = await client.startThread({ backend: "codex", cwd: workspace, executionMode: "auto" });
       const ref = { backend: "codex" as const, threadId: created.threadId };
+      expect(await client.supportsMessagingPdfTools(ref)).toBe(true);
       const page = await client.getNavigationQueryPage({ protocol: 2, consumer: "remote-window", query: { kind: "directory", directoryKey: workspace } });
       expect(page.entries[0].row.ref).toEqual(ref);
       expect(page.selectionDirectory?.path).toBe(workspace);
@@ -108,6 +115,7 @@ describe.skipIf(process.platform === "win32")("desktop client against the standa
       expect(launchpadRead.replay.lastAssistantMessage).toBe("Fixture result");
       const projectOutput = await promisify(execFile)(process.execPath, [cli, "project-create", "--name", "contract-project"], { env });
       const project = JSON.parse(projectOutput.stdout) as { path: string };
+      expect(project.path).toBe(path.join(workspace, "contract-project"));
       const projectThread = await client.startThread({ backend: "codex", cwd: project.path });
       const messageOrigin = { kind: "messaging" as const,
         causalMessagingSource: { ownerId: "fixture-provider-owner", requestId: "fixture-human-request", instanceId: viewerId },

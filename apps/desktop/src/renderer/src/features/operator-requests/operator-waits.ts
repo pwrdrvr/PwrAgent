@@ -37,6 +37,7 @@ export type OperatorWait = {
   backend: AppServerBackendKind;
   federationTarget?: FederationRemoteTarget;
   threadId: string;
+  threadTitle?: string;
   /** `backend:threadId`. */
   threadKey: string;
   title: string;
@@ -102,11 +103,11 @@ export function buildOperatorWaits(response: ListOperatorRequestsResponse): Oper
   const waits: OperatorWait[] = [];
   for (const entry of response.serverRequests) {
     const wait = waitForServerRequest(entry.backend, entry.notification, entry.createdAt, entry.federationTarget);
-    if (wait) waits.push(wait);
+    if (wait) waits.push({ ...wait, threadTitle: entry.threadTitle });
   }
   for (const question of response.questions) {
     const wait = waitForQuestion(question);
-    if (wait) waits.push(wait);
+    if (wait) waits.push({ ...wait, threadTitle: question.threadTitle });
   }
   return waits.sort(compareOperatorWaits);
 }

@@ -22,6 +22,11 @@ export type OperatorRequestsController = {
   waitsByThreadKey: ReadonlyMap<string, OperatorWait[]>;
   /** Item keys the operator has had on screen, to-dos included. */
   seenKeys: ReadonlySet<string>;
+  /**
+   * Reads the owner queue again. Resolves once a read that started after the
+   * call has landed, so a caller can tell whether a request is still open.
+   */
+  refresh: () => Promise<void>;
   /** Records items as seen. Calls in one tick go out as one write. */
   markSeen: (keys: readonly string[]) => void;
   dismissQuestion: (target: OperatorQuestionTarget) => Promise<void>;
@@ -63,7 +68,7 @@ export function useOperatorRequests(
   const [unavailableInstances, setUnavailableInstances] = useState(EMPTY_UNAVAILABLE);
   const [waits, setWaits] = useState<OperatorWait[]>(EMPTY_WAITS);
   const [seenKeys, setSeenKeys] = useState<ReadonlySet<string>>(EMPTY_SET);
-  const loadingRef = useRef(false);
+  const loadingRef = useRef<Promise<void> | undefined>(undefined);
   const reloadQueuedRef = useRef(false);
   const pendingSeenRef = useRef(new Set<string>());
   // Viewing an item is a local fact even if saving it on the owner fails.
@@ -74,15 +79,16 @@ export function useOperatorRequests(
   const storedSeenRef = useRef<ReadonlySet<string>>(EMPTY_SET);
   const flushScheduledRef = useRef(false);
 
-  const reload = useCallback(async (): Promise<void> => {
+  const reload = useCallback((): Promise<void> => {
     const list = api?.listOperatorRequests;
-    if (!list) return;
+    if (!list) return Promise.resolve();
+    // A read in flight may predate the change, so it loops once more, and
+    // the caller waits for that pass.
     if (loadingRef.current) {
       reloadQueuedRef.current = true;
-      return;
+      return loadingRef.current;
     }
-    loadingRef.current = true;
-    try {
+    const run = (async (): Promise<void> => {
       do {
         reloadQueuedRef.current = false;
         try {
@@ -108,9 +114,11 @@ export function useOperatorRequests(
           setError(error instanceof Error ? error.message : String(error));
         }
       } while (reloadQueuedRef.current);
-    } finally {
-      loadingRef.current = false;
-    }
+    })().finally(() => {
+      loadingRef.current = undefined;
+    });
+    loadingRef.current = run;
+    return run;
   }, [api]);
 
   useEffect(() => {
@@ -184,18 +192,20 @@ export function useOperatorRequests(
       waits,
       waitsByThreadKey,
       seenKeys,
+      refresh: reload,
       markSeen,
       dismissQuestion,
       dismissedQuestionKeys,
     }),
-    [ready, error, unavailableInstances, waits, waitsByThreadKey, seenKeys, markSeen, dismissQuestion, dismissedQuestionKeys],
+    [ready, error, unavailableInstances, waits, waitsByThreadKey, seenKeys, reload, markSeen, dismissQuestion, dismissedQuestionKeys],
   );
 }
 
-/** Same waits, in the same order. A key names one immutable request or question. */
+/** Request contents are immutable, but their owner-cached thread title can change. */
 function sameWaits(left: readonly OperatorWait[], right: readonly OperatorWait[]): boolean {
   return left.length === right.length
-    && left.every((wait, index) => wait.key === right[index]!.key);
+    && left.every((wait, index) => wait.key === right[index]!.key
+      && wait.threadTitle === right[index]!.threadTitle);
 }
 
 export type OperatorWaitsContextValue = {

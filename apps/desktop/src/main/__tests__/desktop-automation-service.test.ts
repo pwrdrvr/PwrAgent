@@ -1048,6 +1048,68 @@ describe("DesktopAutomationService", () => {
     });
   });
 
+  it("keeps only a terminal turn's last message as the run's final text", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    service.start();
+    const created = await service.create({
+      backend: "claude",
+      threadId: "thread-1",
+      name: "Check weather",
+      taskPrompt: "Check weather",
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
+      },
+    });
+    store.createRun({
+      id: "run-weather",
+      automationId: created.automation.id,
+      trigger: "scheduled",
+      scheduledFor: 1_000,
+      now: 1_000,
+    });
+    store.markRunStarted({
+      runId: "run-weather",
+      backendTurnId: "turn-weather",
+      startedAt: 1_100,
+      now: 1_100,
+    });
+
+    // Claude reports every assistant message of the turn as its own part.
+    await Promise.all(
+      registryListeners.map((listener) =>
+        listener({
+          backend: "claude",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "headless-thread-1",
+              turnId: "turn-weather",
+              turn: {
+                id: "turn-weather",
+                status: "completed",
+                output: [
+                  { type: "text", text: "Now checking the forecast." },
+                  { type: "text", text: "No rain is expected soon." },
+                  { type: "text", text: "" },
+                ],
+              },
+            },
+          },
+        } as AgentEvent),
+      ),
+    );
+
+    expect(store.getRunArtifact("run-weather")).toMatchObject({
+      finalText: "No rain is expected soon.",
+      outputDecision: {
+        kind: "parse_failed",
+        summary: "No rain is expected soon.",
+      },
+    });
+  });
+
   it("quietly ignores terminal backend turns that are not automations", async () => {
     const service = new DesktopAutomationService({ registry, store });
     service.start();
