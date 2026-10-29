@@ -315,6 +315,13 @@ export function ProjectIndex(props: {
                   tabIndex={project.key === tabStop ? 0 : -1}
                   aria-controls={props.scrollRegionId}
                   aria-current={current ? "location" : undefined}
+                  // The marks are decoration beside the name, so the name
+                  // says what they mean.
+                  aria-label={project.active
+                    ? `${project.label}, turn running`
+                    : project.review
+                      ? `${project.label}, unread`
+                      : undefined}
                   onClick={() => {
                     tooltip.hide();
                     props.onJump(project.key);
@@ -329,12 +336,12 @@ export function ProjectIndex(props: {
                 >
                   <span className="project-index__label">{project.label}</span>
                   {project.active ? (
-                    <span className="project-index__mark" role="img" aria-label="Turn running">
+                    <span className="project-index__mark" aria-hidden="true">
                       <ThinkingScanner compact />
                     </span>
                   ) : project.review ? (
-                    <span className="project-index__mark" role="img" aria-label="Unread">
-                      <span aria-hidden="true" className="thread-row__status-cookie" />
+                    <span className="project-index__mark" aria-hidden="true">
+                      <span className="thread-row__status-cookie" />
                     </span>
                   ) : null}
                 </button>
