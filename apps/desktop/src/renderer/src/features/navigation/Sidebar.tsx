@@ -941,7 +941,7 @@ export function Sidebar(props: SidebarProps) {
     props.onProjectIndexHiddenChange && props.onProjectIndexWidthChange,
   );
   const selectedThreadDirectoryKeys = props.selectedThreadDirectoryKeys;
-  const selectedItemKey = props.selectedItemKey;
+  const indexSelectedItemKey = props.selectedItemKey;
   const projectIndexEntries = useMemo((): ProjectIndexEntry[] => {
     if (!projectIndexEnabled) return [];
     const projects = renderedDirectories.filter(
@@ -953,12 +953,12 @@ export function Sidebar(props: SidebarProps) {
       key: directory.key,
       label: directory.label,
       containsSelection:
-        selectedItemKey === `launchpad:${directory.key}`
+        indexSelectedItemKey === `launchpad:${directory.key}`
         || (selectedThreadDirectoryKeys?.includes(directory.key) ?? false),
       active: (directory.counts?.active ?? 0) > 0,
       review: (directory.counts?.review ?? 0) > 0,
     }));
-  }, [projectIndexEnabled, renderedDirectories, selectedItemKey, selectedThreadDirectoryKeys]);
+  }, [indexSelectedItemKey, projectIndexEnabled, renderedDirectories, selectedThreadDirectoryKeys]);
   // One project needs no map.
   const projectIndexShown = projectIndexEnabled
     && !props.projectIndexHidden
