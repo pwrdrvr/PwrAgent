@@ -262,12 +262,16 @@ test("previews an HTML file offline, with scripts off until asked, and asks befo
     // any of them would have landed by the time this one does.
     const controlRtc = await app.window.evaluate((port) => {
       const peer = new RTCPeerConnection({ iceServers: [{ urls: `stun:127.0.0.1:${port}` }] });
+      (window as unknown as { htmlPreviewControlPeer?: RTCPeerConnection }).htmlPreviewControlPeer = peer;
       peer.createDataChannel("control");
       void peer.createOffer().then((offer) => peer.setLocalDescription(offer));
       return typeof RTCPeerConnection;
     }, controlStun.port);
     expect(controlRtc).toBe("function");
     await expect.poll(() => controlStun.packets()).toBeGreaterThan(0);
+    await app.window.evaluate(() => {
+      (window as unknown as { htmlPreviewControlPeer?: RTCPeerConnection }).htmlPreviewControlPeer?.close();
+    });
     const rtcReports = await frame.locator("body").evaluate(
       () => (window as unknown as { rtcProbeReports: { tag: string; rtc: string }[] }).rtcProbeReports,
     );

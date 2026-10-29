@@ -152,7 +152,7 @@ function serializeError(error: unknown): string {
   return String(error);
 }
 
-export function getPreloadPath(): string {
+function getPreloadPath(): string {
   return join(moduleDirectory, "../preload/index.cjs");
 }
 
@@ -161,7 +161,7 @@ export function getPreloadPath(): string {
  * in the window's subframes too, still sandboxed and without Node, and removes
  * WebRTC there before the frame's first script (`preload/subframe-hardening.ts`).
  * HTML file previews depend on it: without the flag, a page with scripts on
- * can reach the network over WebRTC. Use this, not `getPreloadPath()` alone.
+ * can reach the network over WebRTC. The path is not exported on its own.
  */
 export function rendererPreloadWebPreferences(): Pick<
   WebPreferences,
