@@ -169,6 +169,28 @@ describe("to-do card resting height", () => {
     expect(precedes(toggle, prompt)).toBe(true);
   });
 
+  it("puts Show more above a card's prerequisites", () => {
+    reportClampedDetailAsCut();
+    render(
+      <ThreadTodoCard
+        {...props(card([], {
+          kind: "handoff",
+          action: HANDOFF,
+          items: [
+            { id: "p1", text: "Merge the protocol change", checked: false, prerequisite: true },
+            { id: "s1", text: "Read the owner's version", checked: false },
+          ],
+        }))}
+      />,
+    );
+    const detail = screen.getByText(LONG_DETAIL.trim(), { exact: false });
+    const prerequisites = screen.getByRole("list", { name: /^Before you start/ });
+
+    const more = screen.getByRole("button", { name: "Show more" });
+    expect(precedes(detail, more)).toBe(true);
+    expect(precedes(more, prerequisites)).toBe(true);
+  });
+
   it("scrolls the opened body instead of growing the card", () => {
     render(<ThreadTodoCard {...props(card())} />);
     const toggle = screen.getByRole("button", { name: "Show all 8 steps" });

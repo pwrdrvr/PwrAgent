@@ -1210,7 +1210,8 @@ function useRestingCard(todo: ThreadTodo) {
     : hiddenSteps > 0
       ? `Show all ${items.length} steps`
       : detailCut ? "Show more" : undefined;
-  // Fixed per card, so Show less sits where Show more was.
+  // Set by the step count alone, not by whether the card is open, so Show
+  // less sits where Show more was.
   const toggleAfter: "steps" | "detail" = items.length > RESTING_STEP_ROWS ? "steps" : "detail";
 
   return {
