@@ -129,3 +129,28 @@ describe("operator queue owner identity", () => {
     expect(result.current.ready).toBe(false);
   });
 });
+
+describe("operator queue refresh", () => {
+  it("resolves only after a read that started after the call", async () => {
+    const { api } = fixture();
+    const reads: Array<() => void> = [];
+    api.listOperatorRequests.mockImplementation(() => new Promise((resolve) => {
+      reads.push(() => resolve({ serverRequests: [], seenKeys: [], questions: [] }));
+    }));
+    const { result } = renderHook(() => useOperatorRequests(api));
+    // The mount's read is in flight; a refresh must not settle on it.
+    await waitFor(() => expect(reads).toHaveLength(1));
+    let settled = false;
+    let refreshed!: Promise<void>;
+    act(() => {
+      refreshed = result.current.refresh().then(() => { settled = true; });
+    });
+    await act(async () => reads[0]!());
+    await waitFor(() => expect(reads).toHaveLength(2));
+    expect(settled).toBe(false);
+    await act(async () => reads[1]!());
+    await refreshed;
+    expect(settled).toBe(true);
+    expect(api.listOperatorRequests).toHaveBeenCalledTimes(2);
+  });
+});

@@ -522,14 +522,14 @@ describe("desktopSettingsPatchToEdits — image uploads", () => {
     expect(
       desktopSettingsPatchToEdits({
         imageUploads: {
-          pastedImageMaxPatches: 4096,
+          pastedImageMaxPatches: 0,
         },
       }),
     ).toEqual([
       {
         op: "set",
         path: ["image_uploads", "pasted_image_max_patches"],
-        value: 4096,
+        value: 0,
       },
     ]);
   });
@@ -538,7 +538,7 @@ describe("desktopSettingsPatchToEdits — image uploads", () => {
     expect(
       desktopSettingsPatchToEdits({
         imageUploads: {
-          pastedImageMaxPatches: 1536,
+          pastedImageMaxPatches: 4096,
         },
       }),
     ).toEqual([

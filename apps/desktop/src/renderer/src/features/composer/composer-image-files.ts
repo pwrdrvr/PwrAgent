@@ -3,111 +3,67 @@ export type ComposerImageFile = {
   type: string;
 };
 
-export function getImageFilesFromDataTransfer(
+export function getComposerFilesFromDataTransfer(
   dataTransfer: DataTransfer,
-): ComposerImageFile[] {
-  const files: ComposerImageFile[] = [];
+): { images: ComposerImageFile[]; files: File[]; readMs: number } {
+  const start = performance.now();
+  const images: ComposerImageFile[] = [];
+  const files: File[] = [];
+  const seenImages = new Set<string>();
   const seenFiles = new Set<string>();
   let foundImageItem = false;
-
-  for (const item of Array.from(dataTransfer.items)) {
-    if (item.kind !== "file") {
-      continue;
-    }
-
-    const file = item.getAsFile();
-    if (!file) {
-      continue;
-    }
-
-    const type = isSupportedComposerImageMimeType(item.type)
-      ? item.type
-      : inferTransferImageType(file);
-    if (!type) {
-      continue;
-    }
-
-    foundImageItem = true;
-    const key = buildFileKey(file);
-    if (!seenFiles.has(key)) {
-      files.push({ file, type });
-      seenFiles.add(key);
-    }
-  }
-
-  if (foundImageItem) {
-    return files;
-  }
-
-  for (const file of Array.from(dataTransfer.files)) {
-    const type = inferTransferImageType(file);
-    if (!type) {
-      continue;
-    }
-
-    const key = buildFileKey(file);
-    if (!seenFiles.has(key)) {
-      files.push({ file, type });
-      seenFiles.add(key);
-    }
-  }
-
-  return files;
-}
-
-/**
- * Every dropped/pasted File that is not an image. Image files stay on the
- * upload path; callers can turn the rest into path-only references.
- */
-export function getNonImageFilesFromDataTransfer(
-  dataTransfer: DataTransfer,
-): File[] {
-  const files: File[] = [];
-  const seenFiles = new Set<string>();
   let foundFileItem = false;
 
   for (const item of Array.from(dataTransfer.items)) {
-    if (item.kind !== "file") {
-      continue;
-    }
-
+    if (item.kind !== "file") continue;
+    // Native clipboard extraction can be expensive. Classify each File once
+    // instead of calling getAsFile again to collect non-image attachments.
     const file = item.getAsFile();
-    if (!file) {
-      continue;
-    }
-
+    if (!file) continue;
     foundFileItem = true;
-    if (
-      isSupportedComposerImageMimeType(item.type)
-      || inferTransferImageType(file)
-    ) {
-      continue;
-    }
-
+    const type = isSupportedComposerImageMimeType(item.type)
+      ? item.type
+      : inferTransferImageType(file);
     const key = buildFileKey(file);
-    if (!seenFiles.has(key)) {
+    if (type) {
+      foundImageItem = true;
+      if (!seenImages.has(key)) {
+        images.push({ file, type });
+        seenImages.add(key);
+      }
+    } else if (!seenFiles.has(key)) {
       files.push(file);
       seenFiles.add(key);
     }
   }
 
-  if (foundFileItem) {
-    return files;
-  }
-
-  for (const file of Array.from(dataTransfer.files)) {
-    if (inferTransferImageType(file)) {
-      continue;
-    }
-
-    const key = buildFileKey(file);
-    if (!seenFiles.has(key)) {
-      files.push(file);
-      seenFiles.add(key);
+  if (!foundImageItem || !foundFileItem) {
+    for (const file of Array.from(dataTransfer.files)) {
+      const type = inferTransferImageType(file);
+      const key = buildFileKey(file);
+      if (type && !foundImageItem && !seenImages.has(key)) {
+        images.push({ file, type });
+        seenImages.add(key);
+      } else if (!type && !foundFileItem && !seenFiles.has(key)) {
+        files.push(file);
+        seenFiles.add(key);
+      }
     }
   }
+  return { images, files, readMs: performance.now() - start };
+}
 
-  return files;
+export function getImageFilesFromDataTransfer(
+  dataTransfer: DataTransfer,
+): ComposerImageFile[] {
+  return getComposerFilesFromDataTransfer(dataTransfer).images;
+}
+
+/** Non-image files remain path references, never implicit image uploads. */
+export function getNonImageFilesFromDataTransfer(
+  dataTransfer: DataTransfer,
+): File[] {
+  return getComposerFilesFromDataTransfer(dataTransfer).files;
 }
 
 export function hasAnyFiles(dataTransfer: DataTransfer): boolean {
@@ -155,6 +111,46 @@ function isSupportedComposerImageMimeType(type: string): boolean {
 export function isGifFile(file: File, type: string): boolean {
   return inferTransferImageType(file) === "image/gif"
     || type.toLowerCase() === "image/gif";
+}
+
+export async function getAnimationPreservingImageType(
+  file: File,
+  type: string,
+): Promise<"image/gif" | "image/webp" | undefined> {
+  if (isGifFile(file, type)) {
+    return "image/gif";
+  }
+  if ((type || file.type).trim().toLowerCase() !== "image/webp") {
+    return undefined;
+  }
+
+  // Extended WebP puts VP8X first and stores its animation flag in bit 1.
+  // Read only the header; decoding through canvas would flatten the animation.
+  // https://developers.google.com/speed/webp/docs/riff_container#extended_file_format
+  const blob = file.slice(0, 30);
+  const buffer = typeof blob.arrayBuffer === "function"
+    ? await blob.arrayBuffer()
+    : await new Promise<ArrayBuffer>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.addEventListener("load", () => resolve(reader.result as ArrayBuffer));
+      reader.addEventListener("error", () => reject(reader.error));
+      reader.readAsArrayBuffer(blob);
+    });
+  const header = new Uint8Array(buffer);
+  if (header.length < 30) {
+    return undefined;
+  }
+  const view = new DataView(header.buffer);
+  if (
+    view.getUint32(0) === 0x52494646
+    && view.getUint32(8) === 0x57454250
+    && view.getUint32(12) === 0x56503858
+    && view.getUint32(16, true) === 10
+    && (header[20]! & 0x02) !== 0
+  ) {
+    return "image/webp";
+  }
+  return undefined;
 }
 
 export function readFileAsImageDataUrl(

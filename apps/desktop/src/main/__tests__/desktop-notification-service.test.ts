@@ -139,7 +139,7 @@ function approvalIntent(params?: {
       [
         {
           id: "approval:accept",
-          label: "Approve Once",
+          label: "Approve once",
           decision: "accept",
           style: "primary",
           fallbackText: "1",

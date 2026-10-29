@@ -177,7 +177,8 @@ test("pasted WebP image is uploaded as bounded JPEG or PNG", async () => {
         width: image.naturalWidth,
       };
     }, imageUrl);
-    expect(dimensions).toEqual({ width: 1536, height: 1024 });
+    expect(dimensions).toEqual({ width: 2483, height: 1655 });
+    expect(Math.ceil(dimensions.width / 32) * Math.ceil(dimensions.height / 32)).toBeLessThanOrEqual(4096);
   } finally {
     await app.close();
     await fixture.cleanup();

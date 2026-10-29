@@ -358,12 +358,12 @@ describe("buildApprovalIntent", () => {
     expect(intent.decisions).toEqual([
       expect.objectContaining({
         decision: "accept",
-        label: "Approve Once",
+        label: "Approve once",
       }),
       expect.objectContaining({
         id: "approval:accept_with_execpolicy_amendment:1",
         decision: "accept_with_execpolicy_amendment",
-        label: "Always Allow Prefix",
+        label: "Always allow prefix",
         description: "pnpm test",
         style: "secondary",
         response: { decision: structuredDecision },
@@ -411,12 +411,12 @@ describe("buildApprovalIntent", () => {
     expect(intent.decisions).toEqual([
       expect.objectContaining({ decision: "accept" }),
       expect.objectContaining({
-        label: "Always Allow Prefix 1",
+        label: "Always allow prefix 1",
         description: "pnpm test",
         response: { decision: firstDecision },
       }),
       expect.objectContaining({
-        label: "Always Allow Prefix 2",
+        label: "Always allow prefix 2",
         description: "pnpm lint",
         response: { decision: secondDecision },
       }),
@@ -429,10 +429,10 @@ describe("buildApprovalIntent", () => {
     ]);
     expect(intent.body).toContain("Persistent prefixes:");
     expect(intent.body).toContain(
-      ["Always Allow Prefix 1:", "```shell", "pnpm test", "```"].join("\n"),
+      ["Always allow prefix 1:", "```shell", "pnpm test", "```"].join("\n"),
     );
     expect(intent.body).toContain(
-      ["Always Allow Prefix 2:", "```shell", "pnpm lint", "```"].join("\n"),
+      ["Always allow prefix 2:", "```shell", "pnpm lint", "```"].join("\n"),
     );
   });
 

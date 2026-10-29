@@ -53,6 +53,7 @@ import {
   type ThreadSpendAlert,
   type ThreadUsageLineRecord,
   type SetThreadToolIncidentNoticeRequest,
+  type SubmitServerRequestRequest,
   resolveToolIncidentVisibility,
   SUBTHREAD_LAUNCHPAD_KEY_PREFIX,
   toolOutputWarningChars,
@@ -2578,11 +2579,35 @@ function DesktopAppShell(props: {
       ...(wait.federationTarget ? { instanceId: wait.federationTarget.instanceId } : {}),
     });
   }, [showThreadFromLink]);
+  const submitServerRequest = desktopApi?.submitServerRequest;
+  const refreshOperatorRequests = operatorRequests.refresh;
+  // One answer path for the To-dos rows and the approval notices. It reads
+  // the owner queue once the answer is taken: a peer's change event can be
+  // lost, and the read is what tells a surface the request is still open.
+  const respondToOperatorWait = useCallback(async (
+    wait: OperatorWait,
+    response: SubmitServerRequestRequest["response"],
+  ): Promise<void> => {
+    const request = wait.request;
+    if (!request || !submitServerRequest) {
+      throw new Error("This request can only be answered in its thread.");
+    }
+    await submitServerRequest({
+      backend: wait.backend,
+      threadId: wait.threadId,
+      federationTarget: wait.federationTarget,
+      turnId: typeof request.params.turnId === "string" ? request.params.turnId : undefined,
+      requestId: request.params.requestId,
+      response,
+    });
+    await refreshOperatorRequests();
+  }, [refreshOperatorRequests, submitServerRequest]);
   const approvalNotices = useApprovalNotices({
     waits: operatorRequests.waits,
     selectedThreadKey,
     threadTitleForKey: waitThreadTitle,
     onReview: reviewApprovalNotice,
+    ...(submitServerRequest ? { respond: respondToOperatorWait } : {}),
   });
   const durableNotices = useMemo(
     () => approvalNotices.length > 0
@@ -2605,7 +2630,6 @@ function DesktopAppShell(props: {
       : undefined,
     [listThreadTodoProjects, setThreadTodoProject],
   );
-  const submitServerRequest = desktopApi?.submitServerRequest;
   const configuredMergeMethod = props.settings.snapshot?.git?.defaultMergeMethod?.value;
   // Peers that can host a handoff thread, the same list the new-thread
   // machine chip offers.
@@ -2752,20 +2776,7 @@ function DesktopAppShell(props: {
       waitsByThreadKey: operatorRequests.waitsByThreadKey,
       seenKeys: operatorRequests.seenKeys,
       markSeen: operatorRequests.markSeen,
-      respond: async (wait, response) => {
-        const request = wait.request;
-        if (!request || !submitServerRequest) {
-          throw new Error("This request can only be answered in its thread.");
-        }
-        await submitServerRequest({
-          backend: wait.backend,
-          threadId: wait.threadId,
-          federationTarget: wait.federationTarget,
-          turnId: typeof request.params.turnId === "string" ? request.params.turnId : undefined,
-          requestId: request.params.requestId,
-          response,
-        });
-      },
+      respond: respondToOperatorWait,
       dismissQuestion: operatorRequests.dismissQuestion,
       dismissedQuestionKeys: operatorRequests.dismissedQuestionKeys,
       openWait: openOperatorWait,
@@ -2781,7 +2792,7 @@ function DesktopAppShell(props: {
     offscreenQuestionAnswers,
     openOperatorWait,
     operatorRequests,
-    submitServerRequest,
+    respondToOperatorWait,
     requestTodoExecutionMode,
     showThreadFromLink,
     threadTodoController,

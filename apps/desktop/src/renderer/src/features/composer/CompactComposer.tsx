@@ -31,10 +31,9 @@ import {
 import {
   formatPastedImageAlt,
   formatPastedImageName,
-  getImageFilesFromDataTransfer,
-  getNonImageFilesFromDataTransfer,
+  getComposerFilesFromDataTransfer,
   hasAnyFiles,
-  isGifFile,
+  getAnimationPreservingImageType,
   readFileAsImageDataUrl,
 } from "./composer-image-files";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
@@ -455,7 +454,7 @@ export function CompactComposer(props: CompactComposerProps) {
   ]);
 
   const attachImages = useCallback(
-    (pastedImages: ReturnType<typeof getImageFilesFromDataTransfer>) => {
+    (pastedImages: ReturnType<typeof getComposerFilesFromDataTransfer>["images"]) => {
       if (pastedImages.length === 0) return;
       if (!imagesSupported) {
         onAttachmentError?.(imagesUnsupportedMessage);
@@ -480,13 +479,14 @@ export function CompactComposer(props: CompactComposerProps) {
       void Promise.all(
         accepted.map(async ({ file, type }, index) => {
           const fallbackName = formatPastedImageName(type, index);
-          if (isGifFile(file, type)) {
+          const preservedType = await getAnimationPreservingImageType(file, type);
+          if (preservedType) {
             return {
               id: `pasted-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
               name: file.name || fallbackName,
               size: file.size,
-              type: "image/gif",
-              url: await readFileAsImageDataUrl(file, "image/gif"),
+              type: preservedType,
+              url: await readFileAsImageDataUrl(file, preservedType),
             };
           }
 
@@ -598,8 +598,7 @@ export function CompactComposer(props: CompactComposerProps) {
 
   const attachTransferredFiles = useCallback(
     (dataTransfer: DataTransfer): boolean => {
-      const images = getImageFilesFromDataTransfer(dataTransfer);
-      const files = getNonImageFilesFromDataTransfer(dataTransfer);
+      const { images, files } = getComposerFilesFromDataTransfer(dataTransfer);
       if (images.length === 0 && files.length === 0) return false;
       onAttachmentError?.(undefined);
       attachLocalFiles(files);
