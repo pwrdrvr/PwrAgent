@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { ThreadChip, threadCopyTargets } from "../ThreadChip";
 import { ThreadMarkdown } from "../ThreadMarkdown";
+import { AppNoticeToast } from "../../notifications/AppNoticeToast";
+import { resolveCodexStreamNotice } from "../../notifications/codex-stream-notice";
 
 const CHILD_THREAD_ID = "019f5d79-a595-73f2-84d9-a0976762c303";
 const copyText = vi.hoisted(() => vi.fn(async () => {}));
@@ -487,6 +489,32 @@ describe("thread links in transcript markdown", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Open thread RELATED query deranking issue" }));
     expect(onShowThread).toHaveBeenCalledWith({ backend: "codex", threadId: CHILD_THREAD_ID });
+  });
+
+  it.each(["warning", "error"])("keeps the retained thread title on an off-page stream %s notice", (method) => {
+    const onShowThread = vi.fn();
+    const text = `See [related thread](pwragent://thread/${CHILD_THREAD_ID}?backend=codex)`;
+    const { rerender } = render(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={[threadSummary()]}>
+        <ThreadMarkdown text={text} />
+      </ThreadLinkProvider>,
+    );
+    const result = resolveCodexStreamNotice({
+      threadLabel: `Codex thread ${CHILD_THREAD_ID}`,
+      notification: { method, params: {
+        threadId: CHILD_THREAD_ID, message: "Model fallback in use.",
+        error: { message: "Stream interrupted." }, willRetry: true,
+      } },
+    }, []);
+    if (!result || !("notice" in result)) throw new Error("Expected a stream notice");
+    rerender(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={[]}>
+        <ThreadMarkdown text={text} />
+        <AppNoticeToast notice={result.notice} onDismiss={() => {}} onOpenThread={onShowThread} />
+      </ThreadLinkProvider>,
+    );
+    expect(screen.getAllByRole("button", { name: "Open thread RELATED query deranking issue" })).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: `Open thread Codex thread ${CHILD_THREAD_ID}` })).not.toBeInTheDocument();
   });
 
   it.each([false, true])("accepts updated owner titles on off-page chips (previously loaded=%s)", (previouslyLoaded) => {
