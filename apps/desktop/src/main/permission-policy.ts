@@ -50,6 +50,10 @@ export function createPermissionPolicy(
   options: PermissionPolicyOptions,
 ): PermissionPolicy {
   const log = getMainLogger("pwragent:permissions");
+  // One line per permission and frame kind: a frame that asks again and
+  // again must not flood the log. Permission names are a fixed set, so
+  // this stays small.
+  const loggedDenials = new Set<string>();
 
   const fromAppFrame = (isMainFrame: boolean, requestingUrl: string | undefined) =>
     isMainFrame && isAppRendererUrl(requestingUrl, options.rendererEntry);
@@ -78,9 +82,11 @@ export function createPermissionPolicy(
         ? options.media.request(contents, details)
         : APP_FRAME_PERMISSIONS.has(permission);
     }
-    if (!granted && permission !== "media") {
-      // Media denials are routine (voice is off); anything else means a
-      // frame asked for something the app never uses.
+    const denialKey = `${permission}:${details.isMainFrame ? "main" : "sub"}`;
+    // Media denials are routine (voice is off); anything else means a
+    // frame asked for something the app never uses.
+    if (!granted && permission !== "media" && !loggedDenials.has(denialKey)) {
+      loggedDenials.add(denialKey);
       log.warn("denied renderer permission request", {
         permission,
         isMainFrame: details.isMainFrame,

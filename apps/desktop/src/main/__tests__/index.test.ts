@@ -25,6 +25,7 @@ const stopWindowDiagnosticsMock = vi.fn<() => Promise<void>>();
 const registerAppServerIpcHandlersMock = vi.fn();
 const registerNativeVoiceIpcHandlersMock = vi.fn();
 const installPermissionPolicyMock = vi.fn();
+const nativeVoiceMediaRulesFixture = { check: vi.fn(), request: vi.fn() };
 const startAppServerOwnerNavigationMock = vi.fn(async () => undefined);
 const disposeAppServerIpcHandlersMock = vi.fn();
 const registerAgentIpcHandlersMock = vi.fn();
@@ -398,7 +399,7 @@ vi.mock("../ipc/agent-ipc", () => ({
 }));
 
 vi.mock("../ipc/native-voice", () => ({
-  nativeVoiceMediaRules: { check: vi.fn(), request: vi.fn() },
+  nativeVoiceMediaRules: nativeVoiceMediaRulesFixture,
   registerNativeVoiceIpcHandlers: registerNativeVoiceIpcHandlersMock,
 }));
 
@@ -1215,9 +1216,10 @@ describe("bootstrapApp", () => {
     expect(installPermissionPolicyMock).toHaveBeenCalledTimes(1);
     expect(installPermissionPolicyMock).toHaveBeenCalledWith(
       { fixture: "default-session" },
-      expect.objectContaining({
+      {
         rendererEntry: { kind: "file", value: "/fixture/renderer/index.html" },
-      }),
+        media: nativeVoiceMediaRulesFixture,
+      },
     );
     expect(startAppServerOwnerNavigationMock).toHaveBeenCalledTimes(1);
     expect(registerAgentIpcHandlersMock).toHaveBeenCalledTimes(1);

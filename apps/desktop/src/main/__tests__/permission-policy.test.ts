@@ -162,6 +162,22 @@ describe("permission request handler", () => {
     });
   });
 
+  it("logs a repeated denial once per permission and frame kind", () => {
+    const handler = policy().request as unknown as (
+      contents: Contents, permission: string, callback: (granted: boolean) => void, details: unknown,
+    ) => void;
+    const callback = vi.fn();
+    for (let i = 0; i < 50; i += 1) {
+      handler(contents(), "clipboard-read", callback, APP_MAIN_FRAME);
+      handler(contents(), "clipboard-read", callback, { isMainFrame: false, requestingUrl: "about:srcdoc" });
+    }
+    expect(callback).toHaveBeenCalledTimes(100);
+    expect(callback.mock.calls.every(([granted]) => granted === false)).toBe(true);
+    expect(mocks.warn).toHaveBeenCalledTimes(2);
+    expect(mocks.warn).toHaveBeenCalledWith("denied renderer permission request", { permission: "clipboard-read", isMainFrame: true });
+    expect(mocks.warn).toHaveBeenCalledWith("denied renderer permission request", { permission: "clipboard-read", isMainFrame: false });
+  });
+
   it("delegates media from the app's main frame to the voice rules", () => {
     const details = { ...APP_MAIN_FRAME, mediaTypes: ["audio"] };
     expect(request("media", details)).toBe(true);
