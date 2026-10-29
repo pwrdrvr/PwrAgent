@@ -126,6 +126,7 @@ export type DesktopSettingsConfig = {
     passSetupVariablesToAgents?: boolean;
     interactiveSvgSkipNotice?: boolean;
     interactiveSvgAutoOpen?: boolean;
+    htmlPreviewRunScripts?: boolean;
     mcpGatewayEnabled?: boolean;
     pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
@@ -705,6 +706,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["general", "interactive_svg_auto_open"],
       patch.general.interactiveSvgAutoOpen,
+    );
+  }
+  if (patch.general?.htmlPreviewRunScripts !== undefined) {
+    set(
+      ["general", "html_preview_run_scripts"],
+      patch.general.htmlPreviewRunScripts,
     );
   }
   if (patch.general?.mcpGatewayEnabled !== undefined) {
@@ -2134,6 +2141,7 @@ function normalizeDesktopConfig(
         general?.interactive_svg_skip_notice,
       ),
       interactiveSvgAutoOpen: readBoolean(general?.interactive_svg_auto_open),
+      htmlPreviewRunScripts: readBoolean(general?.html_preview_run_scripts),
       mcpGatewayEnabled: readBoolean(general?.mcp_gateway_enabled),
       pdfAnalysisEnabled: readBoolean(general?.pdf_analysis_enabled),
       developerMode: readBoolean(general?.developer_mode),
@@ -2608,6 +2616,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const passSetupVariablesToAgents = config.general?.passSetupVariablesToAgents;
   const interactiveSvgSkipNotice = config.general?.interactiveSvgSkipNotice;
   const interactiveSvgAutoOpen = config.general?.interactiveSvgAutoOpen;
+  const htmlPreviewRunScripts = config.general?.htmlPreviewRunScripts;
   const pdfAnalysisEnabled = config.general?.pdfAnalysisEnabled;
   const notificationsEnabled = config.general?.notificationsEnabled;
   const toolOutputAlerts = config.general?.toolOutputAlerts;
@@ -2633,6 +2642,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     passSetupVariablesToAgents !== undefined ||
     interactiveSvgSkipNotice !== undefined ||
     interactiveSvgAutoOpen !== undefined ||
+    htmlPreviewRunScripts !== undefined ||
     pdfAnalysisEnabled !== undefined ||
     notificationsEnabled !== undefined ||
     toolOutputAlertsDefined ||
@@ -2684,6 +2694,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (interactiveSvgAutoOpen !== undefined) {
       pruned.general.interactiveSvgAutoOpen = interactiveSvgAutoOpen;
+    }
+    if (htmlPreviewRunScripts !== undefined) {
+      pruned.general.htmlPreviewRunScripts = htmlPreviewRunScripts;
     }
     if (pdfAnalysisEnabled !== undefined) {
       pruned.general.pdfAnalysisEnabled = pdfAnalysisEnabled;

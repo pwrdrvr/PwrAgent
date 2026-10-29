@@ -109,6 +109,7 @@ describe("desktop settings contracts", () => {
         messagingAcknowledgment: { value: null, source: "default" },
         interactiveSvgSkipNotice: { value: false, source: "default" },
         interactiveSvgAutoOpen: { value: false, source: "default" },
+        htmlPreviewRunScripts: { value: false, source: "default" },
       },
       onboarding: {
         completed: { value: true, source: "default" },

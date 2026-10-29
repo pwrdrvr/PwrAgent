@@ -3158,6 +3158,31 @@ describe("DesktopSettingsService", () => {
     expect(service.resolvePassSetupVariablesToAgents()).toBe(false);
   });
 
+  it("defaults HTML preview scripts off and persists the override", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettingsProjection()).general.htmlPreviewRunScripts).toEqual({
+      value: false,
+      source: "default",
+    });
+
+    await service.writeConfigPatchTargeted({
+      general: { htmlPreviewRunScripts: true },
+    });
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain("html_preview_run_scripts = true");
+    expect((await service.readSettingsProjection()).general.htmlPreviewRunScripts).toEqual({
+      value: true,
+      source: "config",
+    });
+  });
+
   it("defaults both interactive SVG preferences off and persists overrides", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

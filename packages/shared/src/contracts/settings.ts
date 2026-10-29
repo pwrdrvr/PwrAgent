@@ -847,6 +847,12 @@ export type DesktopGeneralSettingsSnapshot = {
    */
   interactiveSvgAutoOpen: DesktopSettingsValue<boolean>;
   /**
+   * Run a previewed HTML file's own scripts as soon as it opens. Off shows
+   * the page without scripts until the operator turns them on for that view.
+   * Either way the page has no network access.
+   */
+  htmlPreviewRunScripts: DesktopSettingsValue<boolean>;
+  /**
    * Whether the profile runs the PwrAgent-managed MCP connection gateway.
    *
    * Off stops the gateway, withholds every managed connection from new
@@ -1619,6 +1625,7 @@ export type DesktopSettingsConfigPatch = {
     passSetupVariablesToAgents?: boolean;
     interactiveSvgSkipNotice?: boolean;
     interactiveSvgAutoOpen?: boolean;
+    htmlPreviewRunScripts?: boolean;
     mcpGatewayEnabled?: boolean;
     pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
@@ -1947,6 +1954,8 @@ export type DesktopConfigBootstrapSnapshot = {
   };
   /** Help → Logs viewer preferences, defaults filled in. */
   logs: DesktopLogsViewerPreferences;
+  /** `general.html_preview_run_scripts`, for windows without the full snapshot. */
+  htmlPreviewRunScripts: boolean;
 };
 
 export type ReadDesktopConfigBootstrapResponse = {
@@ -2448,6 +2457,35 @@ export type ReadMarkdownFileRequest = {
 export type ReadMarkdownFileResponse = {
   path: string;
   content?: string;
+  error?: string;
+};
+
+/**
+ * Files an HTML preview references by relative path (images, stylesheets,
+ * fonts, scripts, media). Each ref resolves against the HTML file's own
+ * folder and must stay inside it.
+ */
+export type ReadHtmlPreviewAssetsRequest = {
+  path: string;
+  refs: string[];
+  federationTarget?: FederationTarget;
+};
+
+export type HtmlPreviewAsset = {
+  ref: string;
+  /** A `data:` URL: the frame has no other way to load a local file. */
+  dataUrl: string;
+};
+
+export type HtmlPreviewSkippedAsset = {
+  ref: string;
+  reason: "missing" | "outside-folder" | "unsupported-type" | "too-large";
+};
+
+export type ReadHtmlPreviewAssetsResponse = {
+  assets: HtmlPreviewAsset[];
+  skipped: HtmlPreviewSkippedAsset[];
+  /** Set when no asset could be read at all, such as a peer's file. */
   error?: string;
 };
 

@@ -14,6 +14,7 @@ import { ThreadMarkdown } from "./ThreadMarkdown";
 import { BrandLockup } from "../chrome/BrandLockup";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
 import { FilePreviewBody, FilePreviewCopyButton } from "./FilePreview";
+import { HtmlFilePreview } from "./HtmlFilePreview";
 import { tildifyPath } from "../../lib/tildify-path";
 
 type LoadState =
@@ -51,6 +52,7 @@ export function MarkdownFilesWindow() {
     ? { status: "loading" }
     : rawLoadState;
   const readMarkdownFile = viewerApi?.readMarkdownFile;
+  const remoteSource = Boolean(federationTarget && isRemoteFederationTarget(federationTarget));
 
   useEffect(() => {
     if (!snapshot?.context.title) {
@@ -141,6 +143,21 @@ export function MarkdownFilesWindow() {
     },
     [snapshot],
   );
+
+  const openLinkedFile = useCallback((path: string) => {
+    if (!snapshot || !desktopApi?.openMarkdownFileViewer) {
+      return;
+    }
+    void desktopApi
+      .openMarkdownFileViewer({
+        context: snapshot.context,
+        editorApplication: snapshot.editorApplication,
+        file: { path, label: path.split(/[\\/]/).filter(Boolean).pop() ?? path },
+      })
+      .catch((error: unknown) => {
+        console.error("Failed to open linked file", error);
+      });
+  }, [desktopApi, snapshot]);
 
   const openSelectedFileInEditor = useCallback(() => {
     if (!viewerApi?.openApplication || !snapshot?.editorApplication || !selectedFile) {
@@ -285,6 +302,7 @@ export function MarkdownFilesWindow() {
               className={[
                 "markdown-files-window__markdown-scroll",
                 previewKind === "markdown" ? undefined : "markdown-files-window__markdown-scroll--file",
+                previewKind === "html" ? "markdown-files-window__markdown-scroll--html" : undefined,
               ].filter(Boolean).join(" ")}
             >
               {loadState.status === "loading" ? (
@@ -295,7 +313,17 @@ export function MarkdownFilesWindow() {
                   {loadState.error}
                 </p>
               ) : null}
-              {loadState.status === "loaded" ? (previewKind !== "markdown" ? (
+              {loadState.status === "loaded" ? (previewKind === "html" && selectedFile ? (
+                <HtmlFilePreview
+                  key={selectedFile.path}
+                  content={loadState.content}
+                  desktopApi={viewerApi}
+                  federationTarget={federationTarget}
+                  label={selectedFile.label}
+                  path={selectedFile.path}
+                  onOpenLocalFile={remoteSource ? undefined : openLinkedFile}
+                />
+              ) : previewKind !== "markdown" && previewKind !== "html" ? (
                 <FilePreviewBody
                   content={loadState.content}
                   kind={previewKind}

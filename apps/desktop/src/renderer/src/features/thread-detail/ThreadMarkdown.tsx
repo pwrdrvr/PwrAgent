@@ -68,6 +68,8 @@ import { buildSelectionClipboard } from "./selection-clipboard";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
+import { HtmlFilePreview } from "./HtmlFilePreview";
+import { isLoopbackHost } from "../../lib/loopback-host";
 import {
   TranscriptFileRegistrationContext,
   useTranscriptFileReference,
@@ -88,6 +90,9 @@ type ThreadMarkdownProps = {
     | "copyRichText"
     | "openApplication"
     | "openMarkdownFileViewer"
+    | "onHtmlPreviewNavigation"
+    | "readConfigBootstrap"
+    | "readHtmlPreviewAssets"
     | "readMarkdownFile"
     | "resolveTranscriptFiles"
   >;
@@ -982,6 +987,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
           fileViewerContext={props.fileViewerContext}
           onClose={() => setMarkdownViewerTarget(undefined)}
           onOpenInEditor={openLocalFileInEditor}
+          onOpenTarget={setMarkdownViewerTarget}
           skills={props.skills}
           target={markdownViewerTarget}
         />
@@ -1000,12 +1006,16 @@ function MarkdownDocumentModal(props: {
     | "copyRichText"
     | "openApplication"
     | "openMarkdownFileViewer"
+    | "onHtmlPreviewNavigation"
+    | "readConfigBootstrap"
+    | "readHtmlPreviewAssets"
     | "readMarkdownFile"
   >;
   editorApplication?: EditorApplication;
   fileViewerContext?: MarkdownFileViewerContext;
   onClose: () => void;
   onOpenInEditor: (target: LocalFileTarget) => boolean;
+  onOpenTarget: (target: MarkdownViewerTarget) => void;
   skills?: AppServerSkillSummary[];
   target: MarkdownViewerTarget;
 }) {
@@ -1021,6 +1031,10 @@ function MarkdownDocumentModal(props: {
   >({ status: "loading" });
   const readMarkdownFile = props.desktopApi?.readMarkdownFile;
   const { thread, federationTarget } = useMarkdownFileSource(props.fileViewerContext);
+  const onOpenTarget = props.onOpenTarget;
+  const openLinkedFile = useCallback((path: string) => {
+    onOpenTarget({ path, label: fileNameFromPath(path) });
+  }, [onOpenTarget]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1080,7 +1094,10 @@ function MarkdownDocumentModal(props: {
     >
       <div
         ref={contentRef}
-        className="markdown-document-modal__content"
+        className={[
+          "markdown-document-modal__content",
+          previewKind === "html" ? "markdown-document-modal__content--html" : undefined,
+        ].filter(Boolean).join(" ")}
         onClick={(event) => event.stopPropagation()}
       >
         <header className="markdown-document-modal__head">
@@ -1175,6 +1192,7 @@ function MarkdownDocumentModal(props: {
           className={[
             "markdown-document-modal__body",
             previewKind === "markdown" ? undefined : "markdown-document-modal__body--file",
+            previewKind === "html" ? "markdown-document-modal__body--html" : undefined,
           ].filter(Boolean).join(" ")}
         >
           {loadState.status === "loading" ? (
@@ -1185,7 +1203,18 @@ function MarkdownDocumentModal(props: {
               {loadState.error}
             </p>
           ) : null}
-          {loadState.status === "loaded" ? (previewKind !== "markdown" ? (
+          {loadState.status === "loaded" ? (previewKind === "html" ? (
+            <HtmlFilePreview
+              // A linked page starts over: its own scripts default and links.
+              key={props.target.path}
+              content={loadState.content}
+              desktopApi={props.desktopApi}
+              federationTarget={federationTarget}
+              label={props.target.label}
+              path={props.target.path}
+              onOpenLocalFile={openLinkedFile}
+            />
+          ) : previewKind !== "markdown" ? (
             <FilePreviewBody
               content={loadState.content}
               kind={previewKind}
@@ -1252,16 +1281,6 @@ function isSafeMarkdownUrl(url: string): boolean {
   }
 
   return parsed.protocol === "http:" && isLoopbackHost(parsed.hostname);
-}
-
-function isLoopbackHost(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-  return (
-    normalized === "localhost" ||
-    normalized === "127.0.0.1" ||
-    normalized === "::1" ||
-    normalized.endsWith(".localhost")
-  );
 }
 
 function isImplicitBareAutolink(params: {

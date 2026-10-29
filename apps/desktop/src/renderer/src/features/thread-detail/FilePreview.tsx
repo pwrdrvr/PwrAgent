@@ -13,7 +13,7 @@ import {
 } from "./file-preview-model";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 
-type CodeKind = Exclude<FilePreviewKind, "markdown" | "csv" | "tsv">;
+type CodeKind = Exclude<FilePreviewKind, "markdown" | "csv" | "tsv" | "html">;
 
 /** "JSON document", "Text document": names the preview dialog. */
 export function filePreviewDocumentName(kind: FilePreviewKind): string {
@@ -45,13 +45,14 @@ export function FilePreviewCopyButton(props: {
 
 /**
  * The body for every previewable kind except Markdown, which the callers
- * render with ThreadMarkdown so links and skills keep working.
+ * render with ThreadMarkdown so links and skills keep working, and HTML,
+ * which HtmlFilePreview renders in its sandboxed frame.
  */
 // Memoized: a dialog opened from a streaming message re-renders with every
 // delta, and the body can hold 20,000 rows. Every prop is a primitive.
 export const FilePreviewBody = memo(function FilePreviewBody(props: {
   content: string;
-  kind: Exclude<FilePreviewKind, "markdown">;
+  kind: Exclude<FilePreviewKind, "markdown" | "html">;
   targetLine?: number;
 }) {
   if (props.kind === "csv" || props.kind === "tsv") {

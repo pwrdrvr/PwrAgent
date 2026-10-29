@@ -20,6 +20,11 @@ import {
   DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT,
 } from "@pwragent/shared";
 import type { WindowShowThreadRequest } from "../shared/window-show-thread";
+import {
+  HTML_PREVIEW_FRAME_NAME,
+  HTML_PREVIEW_NAVIGATION_CHANNEL,
+  type HtmlPreviewNavigationEvent,
+} from "../shared/html-preview";
 import { resolveHeapMonitorConfig } from "./diagnostics/heap-monitor-config";
 import { createHeapSession } from "./diagnostics/heap-session";
 import { resolveHotCpuProfileConfig } from "./diagnostics/hot-cpu-profile-config";
@@ -174,8 +179,9 @@ export function getRendererEntry(): RendererEntry {
  *   away — only the bundled index.html and the dev server origin are
  *   allowed (the app's own entry / hot-reload), everything else is blocked.
  * - Subframes cannot navigate away from their initial document. Interactive
- *   SVGs run in an opaque-origin iframe and must not use navigation to send
- *   local data to an external site.
+ *   SVGs and HTML previews run in an opaque-origin iframe and must not use
+ *   navigation to send local data to an external site. A blocked link in an
+ *   HTML preview goes back to its window, which asks before opening it.
  */
 export function applyWindowSecurityHardening(window: BrowserWindow): void {
   const log = getMainLogger("pwragent:window-guards");
@@ -198,10 +204,20 @@ export function applyWindowSecurityHardening(window: BrowserWindow): void {
   });
 
   window.webContents.on("will-frame-navigate", (event) => {
-    if (event.isMainFrame || event.url === "about:srcdoc") {
+    // A fragment link inside a srcdoc frame scrolls its own document.
+    if (
+      event.isMainFrame
+      || event.url === "about:srcdoc"
+      || event.url.startsWith("about:srcdoc#")
+    ) {
       return;
     }
     event.preventDefault();
+    if (frameName(event) === HTML_PREVIEW_FRAME_NAME) {
+      const payload: HtmlPreviewNavigationEvent = { url: event.url };
+      window.webContents.send(HTML_PREVIEW_NAVIGATION_CHANNEL, payload);
+      return;
+    }
     log.warn("blocked renderer subframe navigation");
   });
 
@@ -332,6 +348,15 @@ function appendSeparator(template: MenuItemConstructorOptions[]): void {
  * Hash-only navigation (e.g. `#messaging-activity` set by the spawn
  * code) is allowed because the path matches.
  */
+function frameName(event: { frame?: { name?: string } | null }): string | undefined {
+  try {
+    return event.frame?.name;
+  } catch {
+    // A frame that has gone away throws on access.
+    return undefined;
+  }
+}
+
 function isSafeRendererNavigation(targetUrl: string): boolean {
   return isAppRendererUrl(targetUrl, getRendererEntry());
 }

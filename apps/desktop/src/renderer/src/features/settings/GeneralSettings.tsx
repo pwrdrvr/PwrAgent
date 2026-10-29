@@ -250,6 +250,7 @@ export function GeneralSettings(props: {
     interactiveSvgSkipNotice?: boolean;
     interactiveSvgAutoOpen?: boolean;
   }) => Promise<void>;
+  onHtmlPreviewRunScriptsChange: (value: boolean) => Promise<void>;
   onPdfAnalysisEnabledChange: (value: boolean) => Promise<void>;
   onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
   onNotificationsEnabledChange: (value: boolean) => Promise<void>;
@@ -276,6 +277,7 @@ export function GeneralSettings(props: {
     interactiveSvgSkipNotice.value || !interactiveSvgAutoOpen.value
       ? interactiveSvgSkipNotice
       : interactiveSvgAutoOpen;
+  const htmlPreviewRunScripts = props.snapshot.general.htmlPreviewRunScripts;
   const pdfAnalysisEnabled = props.snapshot.general.pdfAnalysisEnabled;
   const notificationsEnabled = props.snapshot.general.notificationsEnabled;
   const themedDockIcon = props.snapshot.general.appearance.themedDockIcon;
@@ -521,6 +523,25 @@ export function GeneralSettings(props: {
             source={sourceBadge(interactiveSvgAutoOpen)}
             onChange={(next) => {
               return props.onInteractiveSvgChange({ interactiveSvgAutoOpen: next });
+            }}
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="General"
+        title="HTML previews"
+        chip={sourceBadge(htmlPreviewRunScripts)}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={htmlPreviewRunScripts.value}
+            disabled={props.saving}
+            label="Run scripts in HTML previews"
+            sub="Pages open with their scripts running. Off, a page opens without them, and Run Scripts turns them on for that page. Either way, a previewed page cannot reach the network."
+            source={sourceBadge(htmlPreviewRunScripts)}
+            onChange={(next) => {
+              return props.onHtmlPreviewRunScriptsChange(next);
             }}
           />
         </div>
