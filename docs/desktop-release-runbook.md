@@ -295,12 +295,18 @@ persistent guests must supply macOS 26 and stable Xcode 26 or newer:
 5. `Sign, notarize, package macOS`, gated by the protected `apple-signing`
    environment, with `contents: read` and explicit `id-token: none`. It does
    not check out the repository or run dependency installation/postinstall
-   scripts. It starts with a fresh `release-signing` directory and removes it
-   even on failure, so a prior runner checkout cannot supply extra signing
-   files. It downloads the prepared artifact, verifies its SHA-256 digest,
+   scripts. A SHA-pinned `actions/setup-node` selects Node.js `^24.22.1`
+   with `package-manager-cache: false`; it only installs the runtime into the
+   runner tool cache and adds it to this job's PATH. No system Node install or
+   package-manager setup is required. It starts with a fresh `release-signing`
+   directory and removes it even on failure, so a prior runner checkout cannot
+   supply extra signing files. It downloads the prepared artifact, verifies its SHA-256 digest,
    expands it, and runs `apps/desktop/scripts/release.mjs --sign-stage-only
    --no-publish`
-   with the environment-scoped Apple secrets.
+   with the environment-scoped Apple secrets. Before those secrets are passed
+   to packaging, a preflight checks the Node runtime, Apple signing/notarization
+   tools and the staged electron-builder/YAML dependency, and reports available
+   disk space.
 6. `Package Linux`, running on native Ubuntu x64 and arm64 GitHub-hosted
    runners. Each job runs `apps/desktop/scripts/release.mjs --linux
    --no-publish`, verifies the packaged ASAR, writes a stable download alias,
@@ -337,6 +343,12 @@ persistent guests must supply macOS 26 and stable Xcode 26 or newer:
    publishing, extracts the matching `CHANGELOG.md` section, updates the
    GitHub Release body, and fails the workflow if the body still reads back as
    empty.
+
+Both signing jobs and both publication jobs explicitly select the same Node.js
+runtime with `actions/setup-node`, with package-manager caching disabled. They
+do not depend on a prior job's PATH or the hosted image's preinstalled Node.
+Signing dependencies arrive in the verified archive; publication scripts use
+Node's standard library and do not install project dependencies.
 
 The macOS no-secret prepare job runs on the restricted self-hosted Apple Silicon
 pool. Icon Composer's Xcode 26 `AssetCatalogAgent` loads macOS 26 frameworks,

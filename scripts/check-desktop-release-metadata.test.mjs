@@ -111,6 +111,56 @@ test("rejects signing without an isolated artifact workspace", () => {
   expect(result.stderr).toContain("working-directory: release-signing");
 });
 
+test.each(["sign", "windows-sign", "publish-release-assets", "publish-release-notes"])(
+  "rejects %s without explicit runtime-only Node setup",
+  (job) => {
+    const root = fixture();
+    const path = ".github/workflows/release.yml";
+    const workflow = readFileSync(join(root, path), "utf8");
+    const body = workflow.split(`\n  ${job}:\n`)[1].split(/\n  [A-Za-z0-9_-]+:\n/)[0];
+    const runtime = body.match(/      - name: Set up Node\.js runtime only\n[\s\S]*?(?=      - )/)[0];
+    replace(root, path, body, body.replace(runtime, ""));
+    const result = check(root);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`${job} Set up Node.js runtime only must contain`);
+  },
+);
+
+test.each(["sign", "windows-sign", "publish-release-assets", "publish-release-notes"])(
+  "rejects %s enabling package-manager caching in runtime-only setup",
+  (job) => {
+    const root = fixture();
+    const path = ".github/workflows/release.yml";
+    const workflow = readFileSync(join(root, path), "utf8");
+    const body = workflow.split(`\n  ${job}:\n`)[1].split(/\n  [A-Za-z0-9_-]+:\n/)[0];
+    replace(root, path, body, body.replace("package-manager-cache: false", "package-manager-cache: true"));
+    const result = check(root);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`${job} Set up Node.js runtime only must contain "package-manager-cache: false"`);
+  },
+);
+
+test("rejects signing before its runtime setup or prerequisite check", () => {
+  const root = fixture();
+  const path = ".github/workflows/release.yml";
+  const workflow = readFileSync(join(root, path), "utf8");
+  const body = workflow.split("\n  sign:\n")[1].split(/\n  [A-Za-z0-9_-]+:\n/)[0];
+  const runtime = body.match(/      - name: Set up Node\.js runtime only\n[\s\S]*?(?=      - )/)[0];
+  const changed = body.replace(runtime, "").replace("      - name: Remove temporary signing credentials", `${runtime}      - name: Remove temporary signing credentials`);
+  replace(root, path, body, changed);
+  const result = check(root);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain('sign must place "Set up Node.js runtime only" before "Check macOS signing prerequisites"');
+});
+
+test("rejects signing without Apple tool and staged dependency checks", () => {
+  const root = fixture();
+  replace(root, ".github/workflows/release.yml", "actool notarytool stapler", "actool");
+  const result = check(root);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("Check macOS signing prerequisites must contain");
+});
+
 test("rejects a release test matrix that omits half the suite", () => {
   const root = fixture();
   replace(root, ".github/workflows/release.yml", "lane: [1, 2]", "lane: [1]");
