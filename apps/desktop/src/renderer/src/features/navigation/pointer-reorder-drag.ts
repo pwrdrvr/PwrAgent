@@ -50,7 +50,9 @@ export type PointerReorderDragOptions<T> = {
  * path can queue scroll momentum for seconds at a scroll boundary. Hit tests
  * batch to one per animation frame and scrolling stays browser-controlled.
  *
- * Returns a function that cancels the session.
+ * Returns a function that ends the session: it cancels a drag still in
+ * progress and drops the release-click suppression a finished one keeps
+ * for a moment. Owners hold it until unmount, past the drag's own end.
  */
 export function beginPointerReorderDrag<T>(options: PointerReorderDragOptions<T>): () => void {
   const { event, sourceElement, dropIndicator } = options;
@@ -217,5 +219,9 @@ export function beginPointerReorderDrag<T>(options: PointerReorderDragOptions<T>
   window.addEventListener("pointercancel", cancelOnPointer);
   window.addEventListener("blur", cancel);
   window.addEventListener("keydown", cancelOnEscape, true);
-  return cancel;
+  return () => {
+    // Cancelling a live drag arms the suppression, so drop it after.
+    cancel();
+    removeClickSuppression();
+  };
 }

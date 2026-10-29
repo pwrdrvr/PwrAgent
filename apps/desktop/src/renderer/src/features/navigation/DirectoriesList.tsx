@@ -764,7 +764,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
         if (scrollElement) scrollElement.scrollTop += header.getBoundingClientRect().top - before;
       },
       onSettle: (dropped) => {
-        directoryDragCancelRef.current = undefined;
         // A drop keeps the folder it landed beside where it was on screen; a
         // cancel goes back to where the drag began.
         const anchor = dropped?.element;

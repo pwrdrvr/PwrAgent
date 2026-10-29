@@ -79,9 +79,6 @@ export function useSubthreadReorderDrag(params: {
       scrollElement: source.closest<HTMLElement>(".sidebar-list--dense") ?? undefined,
       dropIndicator,
       resolveTarget,
-      onSettle: () => {
-        cancelRef.current = undefined;
-      },
       onDrop: ({ value }) => {
         const anchor = params.threadByKey.get(value.anchorKey);
         if (!anchor) return;
