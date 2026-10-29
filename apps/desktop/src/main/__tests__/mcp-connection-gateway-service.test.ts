@@ -1019,6 +1019,10 @@ describe("McpConnectionGatewayService", () => {
       dispatchBrokerOperation: (op: unknown, params: unknown) => Promise<unknown>;
     };
     expect(service.linearPasteConnectionIds()).toEqual([]);
+    // Off holds with no Linear connection: a fresh signed link needs none.
+    await service.setLinearPasteImages(false);
+    expect(service.linearPasteConnectionIds()).toBeUndefined();
+    await service.setLinearPasteImages(true);
     const linear = registry.create({ displayName: "Linear", serverUrl: "https://mcp.linear.app/mcp" });
     const parked = registry.create({ displayName: "Linear Two", serverUrl: "https://mcp.linear.app/sse" });
     registry.create({ displayName: "Other", serverUrl: "https://example.com/mcp" });

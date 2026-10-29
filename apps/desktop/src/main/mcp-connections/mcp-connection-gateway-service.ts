@@ -1396,13 +1396,11 @@ export class McpConnectionGatewayService {
    * Signed-in state is checked when the session opens.
    */
   linearPasteConnectionIds(): string[] | undefined {
-    const linear = this.registry.list()
-      .filter((connection) => connection.linearPasteImages !== undefined);
-    if (linear.some((connection) => connection.linearPasteImages === false)) {
-      return undefined;
-    }
-    return linear
-      .filter((connection) => connection.enabled)
+    // The setting also governs fetching a fresh signed link, which needs no
+    // connection, so it is read from config rather than from Linear rows.
+    if (!this.registry.isLinearPasteImagesEnabled()) return undefined;
+    return this.registry.list()
+      .filter((connection) => connection.linearPasteImages !== undefined && connection.enabled)
       .map((connection) => connection.id);
   }
 

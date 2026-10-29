@@ -912,6 +912,40 @@ describe("Composer", () => {
     })));
   });
 
+  it("holds Send while Linear images download", async () => {
+    const pasted = `<linear-image>${JSON.stringify({
+      type: "image",
+      attrs: { src: "https://uploads.linear.app/org/issue/file", alt: "held.png" },
+    })}</linear-image>`;
+    const response = createDeferred<{
+      status: "fetched"; failed: number;
+      images: Array<{ name: string; mimeType: string; dataBase64: string }>;
+    }>();
+    render(<Composer desktopApi={{ fetchLinearPastedImages: () => response.promise }} skills={[]} thread={{
+      id: "thread-1", title: "Linear paste", titleSource: "explicit", source: "codex",
+      linkedDirectories: [], inbox: { inInbox: false },
+    }} />);
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [],
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+      },
+    });
+
+    expect(await screen.findByText("Preparing image attachments…")).toBeInTheDocument();
+    await act(async () => {
+      response.resolve({
+        status: "fetched",
+        failed: 0,
+        images: [{ name: "held.png", mimeType: "image/png", dataBase64: "AQID" }],
+      });
+      await response.promise;
+    });
+    expect(await screen.findByAltText("held.png")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Preparing image attachments…")).toBeNull());
+  });
+
   it("drops Linear images that arrive after the thread changes", async () => {
     const pasted = `<linear-image>${JSON.stringify({
       type: "image",

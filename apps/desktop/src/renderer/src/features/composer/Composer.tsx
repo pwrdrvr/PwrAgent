@@ -10149,6 +10149,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (!fetchImages || !imagesSupported) return;
     if (findLinearPastedImages(text).length === 0) return;
     const pasteScope = pasteScopeRef.current;
+    // Hold Send while they download, as a pasted screenshot does while it
+    // resizes; otherwise a quick Enter sends the text without them.
+    // `attachImages` takes over the hold synchronously once they arrive.
+    const destination = getLaunchpadComposerDestination(draftStore, pasteScope.key);
+    updatePendingImageBatches(destination, 1);
     let response: Awaited<ReturnType<typeof fetchImages>>;
     try {
       response = await fetchImages({ text });
@@ -10157,6 +10162,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         status: "failed",
         message: error instanceof Error ? error.message : String(error),
       };
+    } finally {
+      updatePendingImageBatches(destination, -1);
     }
     if (pasteScopeRef.current.key !== pasteScope.key) return;
     // Off: the paste is plain text, as before.

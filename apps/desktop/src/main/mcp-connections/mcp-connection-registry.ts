@@ -192,6 +192,11 @@ export class McpConnectionRegistry {
     this.writeScalar(["mcp_connections", "linear_paste_images"], enabled);
   }
 
+  /** Read from the scalar itself, so it holds with no Linear connection too. */
+  isLinearPasteImagesEnabled(): boolean {
+    return this.readConnectionsTable()?.linear_paste_images !== false;
+  }
+
   /**
    * Choose when a gateway call to this connection asks first.
    *
