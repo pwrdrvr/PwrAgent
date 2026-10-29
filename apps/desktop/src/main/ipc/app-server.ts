@@ -1890,7 +1890,7 @@ class DesktopAppServerService {
       readRemote: (instanceId, root) => federation.remoteBackend({ scope: "remote", instanceId })
         .readThreadFamilyPricing(root),
       localInstanceId,
-      peerLabel: (instanceId) => health?.peers.find((peer) => peer.id === instanceId)?.label,
+      peerLabel: (instanceId) => health?.peers?.find((peer) => peer.id === instanceId)?.label,
     });
   }
 
