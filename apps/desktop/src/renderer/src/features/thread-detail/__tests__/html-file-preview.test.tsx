@@ -222,6 +222,8 @@ describe("HtmlFilePreview", () => {
     await waitFor(() => {
       expect(screen.getByText("Files beside a page on another machine are not loaded.")).toBeInTheDocument();
     });
+    // The label says why the image is blank, not just that the page is offline.
+    expect(screen.getByText("1 not loaded")).toBeInTheDocument();
     expect(api.readHtmlPreviewAssets).not.toHaveBeenCalled();
   });
 });

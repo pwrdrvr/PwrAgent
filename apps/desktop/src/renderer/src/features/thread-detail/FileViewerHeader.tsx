@@ -26,14 +26,16 @@ export function FileViewerHeader(props: {
   placeholder?: string;
 }) {
   const Heading = props.headingLevel === 1 ? "h1" : "h2";
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    if (!copied) return undefined;
-    const timer = window.setTimeout(() => setCopied(false), COPIED_MS);
-    return () => window.clearTimeout(timer);
-  }, [copied]);
-
   const path = props.path;
+  // Keyed by path: another file shown in the same header was never copied.
+  const [copiedPath, setCopiedPath] = useState<string>();
+  const copied = path !== undefined && copiedPath === path;
+  useEffect(() => {
+    if (copiedPath === undefined) return undefined;
+    const timer = window.setTimeout(() => setCopiedPath(undefined), COPIED_MS);
+    return () => window.clearTimeout(timer);
+  }, [copiedPath]);
+
   const { folder, name } = path ? splitFilePath(path) : { folder: "", name: "" };
   const kindBadge = path ? fileKindBadge(name, props.kind) : undefined;
 
@@ -42,18 +44,23 @@ export function FileViewerHeader(props: {
       {kindBadge ? (
         <span className="file-viewer-header__kind" aria-hidden="true">{kindBadge}</span>
       ) : null}
-      <Heading className="file-viewer-header__name" title={name || undefined}>
+      <Heading
+        className={name ? "file-viewer-header__name tooltip-target" : "file-viewer-header__name"}
+        data-tooltip={name || undefined}
+      >
         {name || props.placeholder}
       </Heading>
       {path ? (
         <button
           type="button"
-          className="file-viewer-header__folder tooltip-target"
+          className={folder
+            ? "file-viewer-header__folder tooltip-target"
+            : "file-viewer-header__folder file-viewer-header__folder--bare tooltip-target"}
           aria-label="Copy path"
           data-copied={copied ? "true" : undefined}
           data-tooltip={copied ? "Copied path" : tildifyPath(path)}
           onClick={() => {
-            void copyText(path, props.desktopApi).then(() => setCopied(true), () => undefined);
+            void copyText(path, props.desktopApi).then(() => setCopiedPath(path), () => undefined);
           }}
         >
           {folder ? (
@@ -64,6 +71,7 @@ export function FileViewerHeader(props: {
             : <CopyIcon size={12} aria-hidden="true" />}
         </button>
       ) : null}
+      <span className="file-viewer-header__spring" />
       <div ref={props.controlsRef} className="file-viewer-header__controls" />
       <div className="file-viewer-header__actions">{props.actions}</div>
     </header>

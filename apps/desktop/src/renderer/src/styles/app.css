@@ -27402,15 +27402,12 @@ a.transcript-message__messaging-origin:focus-visible {
   white-space: nowrap;
 }
 
-/* The folder sits left of a spring: the controls and actions keep the right
-   edge whether or not a preview has controls. */
 .file-viewer-header__folder {
   display: inline-flex;
   flex: 0 1 auto;
   align-items: center;
   gap: 4px;
   min-width: 26px;
-  margin-right: auto;
   padding: 3px 6px;
   border: 0;
   border-radius: 5px;
@@ -27440,6 +27437,17 @@ a.transcript-message__messaging-origin:focus-visible {
 .file-viewer-header__folder > svg {
   flex: none;
   opacity: 0;
+}
+
+/* With no folder to show, the glyph is the whole control. */
+.file-viewer-header__folder--bare > svg {
+  opacity: 1;
+}
+
+/* Keeps the controls and actions at the right edge, with or without a file. */
+.file-viewer-header__spring {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .file-viewer-header__folder:hover,

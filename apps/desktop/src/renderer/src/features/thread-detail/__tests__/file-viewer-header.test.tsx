@@ -28,6 +28,30 @@ describe("FileViewerHeader", () => {
     expect(folder).toHaveAttribute("data-tooltip", "Copied path");
   });
 
+  it("forgets a copy when the header moves to another file", async () => {
+    const copyText = vi.fn(async () => undefined);
+    const header = (path: string) => (
+      <FileViewerHeader actions={null} desktopApi={{ copyText }} headingLevel={1} path={path} />
+    );
+    const { rerender } = render(header("/work/a.md"));
+    fireEvent.click(screen.getByRole("button", { name: "Copy path" }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Copy path" })).toHaveAttribute("data-copied", "true");
+    });
+
+    rerender(header("/work/b.md"));
+    expect(screen.getByRole("button", { name: "Copy path" })).not.toHaveAttribute("data-copied");
+    expect(screen.getByRole("button", { name: "Copy path" })).toHaveAttribute("data-tooltip", "/work/b.md");
+  });
+
+  it("marks a Copy path with no folder to show, so its glyph stays visible", () => {
+    render(<FileViewerHeader actions={null} headingLevel={2} path="notes.md" />);
+
+    const button = screen.getByRole("button", { name: "Copy path" });
+    expect(button).toHaveClass("file-viewer-header__folder--bare");
+    expect(button.textContent).toBe("");
+  });
+
   it("shows the placeholder and no path controls when no file is selected", () => {
     render(
       <FileViewerHeader actions={null} headingLevel={1} placeholder="No file selected" />,

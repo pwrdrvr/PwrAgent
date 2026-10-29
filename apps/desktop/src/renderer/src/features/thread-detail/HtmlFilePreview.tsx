@@ -6,6 +6,7 @@ import {
   type FederationTarget,
 } from "@pwragent/shared";
 import { HTML_PREVIEW_FRAME_NAME } from "../../../../shared/html-preview";
+import { splitFilePath } from "./FileViewerHeader";
 import { BanIcon, FileCodeIcon, ShieldIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useHtmlPreviewRunScripts } from "../../lib/html-preview-preferences";
@@ -125,22 +126,27 @@ export function HtmlFilePreview(props: {
       : undefined,
   ].filter((notice): notice is string => Boolean(notice));
 
+  // Every local file counts as not loaded when none could be read, as on a
+  // peer's page, so the label shows why an image is blank either way.
   const blocked = prepared?.blockedRemote ?? 0;
-  const missing = !unavailable && prepared ? prepared.missingLocal : 0;
+  const missing = prepared?.missingLocal ?? 0;
+  const statusLabel = [
+    blocked > 0 ? `${blocked} blocked` : undefined,
+    missing > 0 ? `${missing} not loaded` : undefined,
+  ].filter(Boolean).join(" · ") || "Offline";
+  const statusNotices = ["No network access", ...notices];
   const controls = (
     <div className="html-preview-controls" role="group" aria-label="Page permissions">
       <span
         className="html-preview-controls__status tooltip-target"
-        data-tooltip={["No network access", ...notices].join(" · ")}
+        data-tooltip={statusNotices.join(" · ")}
       >
         {blocked > 0 || missing > 0
           ? <BanIcon size={12} aria-hidden="true" />
           : <ShieldIcon size={12} aria-hidden="true" />}
-        <span aria-hidden="true">
-          {blocked > 0 ? `${blocked} blocked` : missing > 0 ? `${missing} missing` : "Offline"}
-        </span>
+        <span aria-hidden="true">{statusLabel}</span>
         {/* The short label is for sight; a screen reader hears each notice. */}
-        {["No network access", ...notices].map((notice) => (
+        {statusNotices.map((notice) => (
           <span key={notice} className="html-preview-controls__notice">{notice}</span>
         ))}
       </span>
@@ -209,7 +215,7 @@ function PendingLinkBar(props: {
   const question = link.kind === "web"
     ? "Open this link in your browser?"
     : link.kind === "file"
-      ? `Open ${baseName(link.path)} here?`
+      ? `Open ${splitFilePath(link.path).name} here?`
       : "This link cannot be opened from a preview.";
   const target = link.kind === "web" ? link.url : link.kind === "file" ? link.path : link.target;
   return (
@@ -262,10 +268,6 @@ function classifyLink(url: string, canOpenFiles: boolean): PendingLink {
     // Not a URL at all: show it as written.
   }
   return { kind: "unsupported", target: url };
-}
-
-function baseName(filePath: string): string {
-  return filePath.split(/[\\/]/).filter(Boolean).pop() ?? filePath;
 }
 
 function countLabel(count: number, noun: string): string {

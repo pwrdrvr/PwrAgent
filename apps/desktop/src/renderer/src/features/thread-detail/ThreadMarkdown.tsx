@@ -67,7 +67,7 @@ import { buildSelectionClipboard } from "./selection-clipboard";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
-import { FileViewerHeader } from "./FileViewerHeader";
+import { FileViewerHeader, splitFilePath } from "./FileViewerHeader";
 import { HtmlFilePreview } from "./HtmlFilePreview";
 import { isLoopbackHost } from "../../lib/loopback-host";
 import {
@@ -1378,7 +1378,7 @@ function findMarkdownLinkedImagePart(
 }
 
 function fileNameFromPath(filePath: string): string {
-  return filePath.split("/").filter(Boolean).pop() ?? filePath;
+  return splitFilePath(filePath).name || filePath;
 }
 
 function openFileInEditorTitle(editorName: string): string {
