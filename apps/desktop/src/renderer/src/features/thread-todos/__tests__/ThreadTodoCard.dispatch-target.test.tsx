@@ -41,6 +41,7 @@ const ENVIRONMENTS: Record<string, ListThreadTodoDispatchEnvironmentsResponse> =
   owner: {
     projectFound: true, projectLabel: "atlas", defaultEnvironmentId: "dev", defaultSource: "thread",
     environments: [{ id: "dev", name: "Dev" }, { id: "ci", name: "CI" }],
+    repositoryKey: "github.com/fixture-org/atlas",
   },
   win: {
     projectFound: true, projectLabel: "atlas", defaultEnvironmentId: "win-ci", defaultSource: "project",
@@ -112,9 +113,12 @@ describe("to-do dispatch target", () => {
     await choose("Machine for the new thread", "win-lab / dev");
     await settle();
     expect(api.listBackends).toHaveBeenCalledWith({ federationTarget: { scope: "remote", instanceId: "win" } });
-    expect(api.listThreadTodoDispatchEnvironments).toHaveBeenLastCalledWith({
-      project: ATLAS, federationTarget: { scope: "remote", instanceId: "win" },
-    });
+    // The owner names the repository, so the peer can find a copy it files
+    // under another name.
+    expect(api.listThreadTodoDispatchEnvironments.mock.calls.slice(-2).map(([request]) => request)).toEqual([
+      { id: "card" },
+      { project: { ...ATLAS, repositoryKey: "github.com/fixture-org/atlas" }, federationTarget: { scope: "remote", instanceId: "win" } },
+    ]);
     expect(chip("Model for the new thread").getAttribute("aria-label")).toBe("Model for the new thread: OpenAI, GPT-6.1-Sol, high");
     expect(screen.getByText("Claude is not set up on win-lab / dev. Using another provider.")).toBeTruthy();
     expect(chip("Where the new thread works").textContent).toBe("atlas checkout");

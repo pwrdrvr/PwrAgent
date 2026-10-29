@@ -109,6 +109,38 @@ describe("listThreadTodoDispatchEnvironments", () => {
     expect(d.listOptions).toHaveBeenCalledWith("C:/src/repo");
   });
 
+  it("tells another machine which repository the card's project clones", async () => {
+    const d = {
+      ...deps(card({ sourceProject: { key: "directory:/src/PwrAgnt", label: "PwrAgnt", path: "/src/PwrAgnt" } })),
+      listProjects: async () => [{
+        key: "directory:/src/PwrAgnt", label: "PwrAgnt", kind: "directory" as const, path: "/src/PwrAgnt",
+        repositoryKey: "github.com/pwrdrvr/pwragent", repositoryKeys: ["github.com/fixture-user/pwragent"],
+      }],
+    };
+    expect(await listThreadTodoDispatchEnvironments({ id: "todo-1" }, d)).toMatchObject({
+      projectLabel: "PwrAgnt",
+      repositoryKey: "github.com/pwrdrvr/pwragent",
+      repositoryKeys: ["github.com/fixture-user/pwragent"],
+    });
+  });
+
+  it("finds this machine's copy filed under another name by its origin", async () => {
+    const d = {
+      ...deps(card()),
+      listProjects: async () => [
+        { key: "directory:C:/scratch/PwrAgnt", label: "PwrAgnt", kind: "directory" as const, path: "C:/scratch/PwrAgnt",
+          repositoryKey: "github.com/fixture-user/pwragnt-notes" },
+        { key: "directory:C:/src/PwrAgent", label: "PwrAgent", kind: "directory" as const, path: "C:/src/PwrAgent",
+          repositoryKey: "github.com/pwrdrvr/pwragent" },
+      ],
+    };
+    const listed = await listThreadTodoDispatchEnvironments({
+      project: { key: "directory:/src/PwrAgnt", label: "PwrAgnt", path: "/src/PwrAgnt", repositoryKey: "github.com/pwrdrvr/pwragent" },
+    }, d);
+    expect(listed).toMatchObject({ projectFound: true, projectLabel: "PwrAgent" });
+    expect(d.listOptions).toHaveBeenCalledWith("C:/src/PwrAgent");
+  });
+
   it("says when this machine has no copy of the project", async () => {
     const d = { ...deps(card()), listProjects: async () => [] };
     expect(await listThreadTodoDispatchEnvironments({ project: { key: "k", label: "other", path: "/other" } }, d))

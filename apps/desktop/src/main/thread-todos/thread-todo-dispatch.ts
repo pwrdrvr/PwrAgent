@@ -19,7 +19,11 @@ import {
   listCodexEnvironmentOptions,
   resolveCodexEnvironmentSelector,
 } from "../app-server/codex-environment-config.js";
-import { findPeerThreadTodoProject, type ThreadTodoProjectCandidate } from "./thread-todo-projects.js";
+import {
+  findPeerThreadTodoProject,
+  threadTodoProjectIdentity,
+  type ThreadTodoProjectCandidate,
+} from "./thread-todo-projects.js";
 import { ThreadTodoError } from "./thread-todo-service.js";
 
 type SpeedSettings = { serviceTier?: string; fastMode?: boolean };
@@ -160,17 +164,28 @@ export async function listThreadTodoDispatchEnvironments(
       throw new ThreadTodoError("invalid_arguments", "Only a start-thread card has environments to choose.");
     }
     const project = threadTodoActionProject(todo);
-    return await describe({
-      cwd: todo.targetProject?.path ?? todo.cwd,
-      ...(project ? { project } : {}),
-      ...(todo.targetProject ? {} : { threadEnvironmentId: () => deps.readThreadEnvironmentId(todo) }),
-    });
+    // The repository lets another machine find its copy under another name.
+    const identity = project
+      ? threadTodoProjectIdentity(project, await deps.listProjects().catch(() => []))
+      : undefined;
+    return {
+      ...await describe({
+        cwd: todo.targetProject?.path ?? todo.cwd,
+        ...(project ? { project } : {}),
+        ...(todo.targetProject ? {} : { threadEnvironmentId: () => deps.readThreadEnvironmentId(todo) }),
+      }),
+      ...(identity?.repositoryKey ? { repositoryKey: identity.repositoryKey } : {}),
+      ...(identity?.repositoryKeys?.length ? { repositoryKeys: [...identity.repositoryKeys] } : {}),
+    };
   }
   if (!request.project || typeof request.project.label !== "string" || typeof request.project.path !== "string") {
     throw new ThreadTodoError("invalid_arguments", "Name the card or its project.");
   }
   const candidates = await deps.listProjects();
-  const counterpart = candidates.find((candidate) => candidate.kind === "directory" && candidate.key === request.project!.key)
+  const counterpart = candidates.find((candidate) =>
+    candidate.kind === "directory"
+    && candidate.localAvailability !== "unconfigured"
+    && candidate.key === request.project!.key)
     ?? findPeerThreadTodoProject(request.project, candidates);
   if (!counterpart) return { projectFound: false, environments: [], defaultSource: "none" };
   return await describe({

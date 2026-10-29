@@ -1,4 +1,5 @@
 import type { CodexSpeed } from "../codex-speed";
+import type { ProjectRepositoryIdentity } from "../federation-project-match";
 import type { FederationRemoteTarget } from "./federation";
 import { federatedThreadIdentityKey } from "./federation";
 import { buildThreadIdentityKey } from "./navigation";
@@ -519,7 +520,12 @@ export type RunThreadTodoActionRequest = {
 export type ListThreadTodoDispatchEnvironmentsRequest = {
   federationTarget?: FederationRemoteTarget;
   id?: string;
-  project?: ThreadTodoProject;
+  /**
+   * The card's project, asked of another machine. Its repository identity,
+   * from the card's owner, finds a copy filed under another name: PwrAgnt
+   * here and PwrAgent there clone one origin.
+   */
+  project?: ThreadTodoProject & ProjectRepositoryIdentity;
 };
 
 export type ThreadTodoDispatchEnvironment = { id: string; name: string };
@@ -536,6 +542,12 @@ export type ListThreadTodoDispatchEnvironmentsResponse = {
    */
   defaultEnvironmentId?: string;
   defaultSource: "thread" | "project" | "none";
+  /**
+   * Asked by card id: the repository the card's project clones, so another
+   * machine can be asked for its copy by origin rather than by name.
+   */
+  repositoryKey?: string;
+  repositoryKeys?: string[];
 };
 
 export type ThreadTodoMutationResponse = {

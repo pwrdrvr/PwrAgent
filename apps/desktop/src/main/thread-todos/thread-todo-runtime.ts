@@ -21,6 +21,7 @@ import { GithubPrFetcher } from "../pr-status/github-pr-fetcher.js";
 import { getAppStateDb } from "../state/app-state.js";
 import {
   findPeerThreadTodoProject,
+  threadTodoProjectIdentity,
   matchThreadTodoProject,
   threadTodoProjectChoices,
   threadTodoProjectForDirectory,
@@ -203,7 +204,7 @@ export function installThreadTodoRuntime(params: {
   };
   readDefaultMergeMethod = params.readDefaultMergeMethod;
   todos.setOnChanged(changed);
-  todos.setRunners(createThreadTodoRunners({ registry, federation }));
+  todos.setRunners(createThreadTodoRunners({ registry, federation, listProjects }));
   todos.setDispatchSettingsReader(async (thread) => {
     const settings = await registry.readThreadHandoffSettings(thread);
     const threadSpeed = {
@@ -454,8 +455,21 @@ export type ThreadTodoRunnerRegistry = Pick<
 export function createThreadTodoRunners(params: {
   registry: ThreadTodoRunnerRegistry;
   federation?: PwrAgentFederationHandler;
+  /**
+   * This machine's Directories rows, whose origins find a card's project on
+   * a peer that files it under another name.
+   */
+  listProjects?: () => Promise<ThreadTodoProjectCandidate[]>;
 }): ThreadTodoActionRunners {
   const { registry, federation } = params;
+  // Without them the peer is matched by name, as before.
+  const listLocalProjects = async (): Promise<ThreadTodoProjectCandidate[]> =>
+    await (params.listProjects?.() ?? Promise.resolve([])).catch((error: unknown) => {
+      threadTodoLog.warn("could not list projects to match a peer's copy", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    });
   return {
     mergePullRequest: async (request) =>
       await new GithubPrFetcher().mergePullRequest(request),
@@ -619,9 +633,14 @@ export function createThreadTodoRunners(params: {
               if (cursors.has(cursor)) throw new Error("The peer project listing cursor did not advance.");
               cursors.add(cursor);
             } while (cursor);
-            const counterpart = findPeerThreadTodoProject(project, candidates);
+            // The peer may file the same checkout under another name, so
+            // match by the repository this machine's row says it clones.
+            const identity = threadTodoProjectIdentity(project, await listLocalProjects());
+            const counterpart = findPeerThreadTodoProject(identity, candidates);
             if (!counterpart) {
-              throw new Error(`${projects.instanceLabel} has no project named ${project.label}.`);
+              throw new Error(identity.repositoryKey
+                ? `${projects.instanceLabel} has no checkout of ${identity.repositoryKey} (${project.label} here).`
+                : `${projects.instanceLabel} has no project named ${project.label}.`);
             }
             // No title: create_instance_thread has none to set, and the
             // peer names the thread from its first turn.
