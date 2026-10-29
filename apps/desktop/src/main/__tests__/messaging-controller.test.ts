@@ -4209,6 +4209,91 @@ describe("MessagingController", () => {
     ]);
   });
 
+  it.each([
+    ["every message in the turn output", true],
+    ["an empty turn output", false],
+  ])("privately delivers the last unphased message, given %s", async (_label, withOutput) => {
+    const { harness } = await createSlackPrivateResponseHarness();
+    const note = "Now looking up the AWS SSO session.";
+    const answer = "Open the AWS SSO URL and enter `LAST-CODE`.";
+
+    // Claude reports every assistant message without a phase, so the first
+    // one is a progress note, not the answer.
+    for (const [id, text] of [["message-1", note], ["message-2", answer]]) {
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: { id, type: "agentMessage", text },
+          },
+        },
+      } satisfies AgentEvent);
+    }
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: withOutput
+              ? [{ type: "text", text: note }, { type: "text", text: answer }]
+              : [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const messages = harness.delivered.filter((intent) => intent.kind === "message");
+    expect(messages).toEqual([
+      expect.objectContaining({
+        parts: [expect.objectContaining({ text: answer })],
+      }),
+    ]);
+    expect(
+      messages.filter(
+        (intent) => intent.audit?.channel.conversation.id === "C012SIGNALS",
+      ),
+    ).toEqual([]);
+  });
+
+  it("privately delivers a final-phase message before the turn ends", async () => {
+    const { harness } = await createSlackPrivateResponseHarness();
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "message-1",
+            type: "agentMessage",
+            phase: "final_answer",
+            text: "Open the AWS SSO URL and enter `FINAL-CODE`.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(
+      harness.delivered.filter((intent) => intent.kind === "message"),
+    ).toEqual([
+      expect.objectContaining({
+        parts: [expect.objectContaining({
+          text: "Open the AWS SSO URL and enter `FINAL-CODE`.",
+        })],
+      }),
+    ]);
+  });
+
   it("honors explicit negation when detecting private response requests", async () => {
     const { harness } = await createSlackPrivateResponseHarness({
       inboundText: "I don't want you to DM me; reply here publicly.",
@@ -19511,13 +19596,17 @@ describe("MessagingController", () => {
     ]);
   });
 
-  it("preserves every text fragment from a completion-only response", async () => {
-    const harness = await createHarness();
-    await bindThread(harness);
+  it("posts only a Claude turn's last message from a completion-only output", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.source = "claude";
+    const harness = await createHarness({ navigation });
+    await bindThreadToBackend(harness, "claude");
     harness.delivered.length = 0;
 
+    // Claude reports each assistant message of the turn as its own part: the
+    // progress notes first, then the answer.
     await harness.controller.handleBackendEvent({
-      backend: "codex",
+      backend: "claude",
       notification: {
         method: "turn/completed",
         params: {
@@ -19527,14 +19616,9 @@ describe("MessagingController", () => {
             id: "turn-1",
             status: "completed",
             output: [
-              {
-                type: "text",
-                text: "The build completed successfully and every signed release artifact is ready for publication.",
-              },
-              {
-                type: "text",
-                text: "The operator documentation was updated and the acceptance smoke passed from end to end.",
-              },
+              { type: "text", text: "Now re-rendering the screenshot." },
+              { type: "text", text: "Checking the result." },
+              { type: "text", text: "The screenshot now shows the new header." },
             ],
           },
         },
@@ -19549,14 +19633,78 @@ describe("MessagingController", () => {
       expect.objectContaining({
         parts: [
           expect.objectContaining({
-            text: [
-              "The build completed successfully and every signed release artifact is ready for publication.",
-              "The operator documentation was updated and the acceptance smoke passed from end to end.",
-            ].join("\n\n"),
+            text: "The screenshot now shows the new header.",
           }),
         ],
       }),
     ]);
+  });
+
+  it("keeps a Claude turn's progress notes out of its review card", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.source = "claude";
+    const harness = await createHarness({ navigation });
+    await bindThreadToBackend(harness, "claude");
+    harness.delivered.length = 0;
+    const note = "Now reading the diff.";
+    const answer = "Review found no blocking issues.";
+    const agentMessage = (id: string, text: string): AgentEvent => ({
+      backend: "claude",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "review-turn-1",
+          item: { id, type: "agentMessage", text },
+        },
+      },
+    });
+
+    await harness.controller.handleBackendEvent(agentMessage("message-1", note));
+    await harness.controller.handleBackendEvent({
+      backend: "claude",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "review-turn-1",
+          item: {
+            id: "review-1",
+            type: "exitedReviewMode",
+            review: "No findings.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent(agentMessage("message-2", answer));
+    await harness.controller.handleBackendEvent({
+      backend: "claude",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "review-turn-1",
+          turn: {
+            id: "review-turn-1",
+            status: "completed",
+            output: [
+              { type: "text", text: note },
+              { type: "text", text: answer },
+            ],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const reviewCards = harness.delivered.filter(
+      (intent) => intent.kind === "message" && "artifactDelivery" in intent,
+    );
+    expect(reviewCards).toEqual([
+      expect.objectContaining({
+        parts: [expect.objectContaining({ text: expect.stringContaining(answer) })],
+      }),
+    ]);
+    expect(JSON.stringify(reviewCards)).not.toContain(note);
   });
 
   it("keeps only the final completion fragment when terminal output nearly repeats itself", async () => {

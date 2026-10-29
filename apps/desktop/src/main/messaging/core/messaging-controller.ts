@@ -1,5 +1,6 @@
 import { automatedWorkStartedLabel, correspondenceNotice, incomingWorkText } from "./messaging-thread-notifications";
 import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed, selectedCodexSpeed } from "@pwragent/shared";
+import { finalTurnOutputText } from "@pwragent/shared";
 import type { ReviewRunMode } from "@pwragent/shared";
 import { formatModelOptionLabel, isThreadLockRefusal, modelOptionsForThreadProvider } from "@pwragent/shared";
 import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
@@ -414,9 +415,6 @@ type MessagingAdmissionTimingRecord = {
 const MAX_DELIVERED_AUTOMATION_KEYS = 1_000;
 const MAX_TRACKED_REVIEW_TURNS = 1_000;
 const MAX_TRACKED_TURN_PROSE = 256;
-const MIN_NEAR_DUPLICATE_ASSISTANT_WORDS = 12;
-const MIN_NEAR_DUPLICATE_ASSISTANT_LENGTH_RATIO = 0.7;
-const MIN_NEAR_DUPLICATE_ASSISTANT_BIGRAM_OVERLAP = 0.8;
 const MESSAGING_ENVIRONMENT_SETUP_PROGRESS_INTERVAL_MS = 15_000;
 
 type MessagingTurnProseState = {
@@ -1076,6 +1074,7 @@ export class MessagingController {
   private readonly terminalPrivateResponseTurnKeys = new Set<string>();
   private readonly privateResponseFallbackTurnKeys = new Set<string>();
   private readonly attemptedPrivateResponseFallbackTurnKeys = new Set<string>();
+  private readonly heldPrivateResponseFallbackTextByTurnKey = new Map<string, string>();
   private readonly queuedAgentMessagingOriginsByQueueKey = new Map<
     string,
     ActiveAgentMessagingOrigin
@@ -2136,7 +2135,17 @@ export class MessagingController {
         && !isNonFinalAssistantTextForBackendEvent(event)
       ) {
         const fallbackTurnId = eventTurnId ?? activeTurn?.turnId;
-        if (fallbackTurnId) {
+        if (fallbackTurnId && isUnphasedAssistantMessageEvent(event)) {
+          // Only the first fallback is sent, and an unphased message can be a
+          // progress note: Claude reports every message this way. Hold the
+          // latest one until the turn ends.
+          rememberBoundedMap(
+            this.heldPrivateResponseFallbackTextByTurnKey,
+            agentMessagingTurnKey(event.backend, binding.threadId, fallbackTurnId),
+            assistantText,
+            MAX_TRACKED_TURN_PROSE,
+          );
+        } else if (fallbackTurnId) {
           await this.deliverPrivateResponseFallback({
             binding,
             event,
@@ -2156,11 +2165,16 @@ export class MessagingController {
           binding,
         );
         const fallbackTurnId = eventTurnId ?? activeTurn?.turnId;
-        if (bufferedText && fallbackTurnId) {
+        const fallbackText = fallbackTurnId
+          ? this.heldPrivateResponseFallbackTextByTurnKey.get(
+              agentMessagingTurnKey(event.backend, binding.threadId, fallbackTurnId),
+            ) ?? bufferedText
+          : undefined;
+        if (fallbackText && fallbackTurnId) {
           await this.deliverPrivateResponseFallback({
             binding,
             event,
-            text: bufferedText,
+            text: fallbackText,
             turnId: fallbackTurnId,
           });
         }
@@ -8497,6 +8511,7 @@ export class MessagingController {
     this.terminalPrivateResponseTurnKeys.clear();
     this.privateResponseFallbackTurnKeys.clear();
     this.attemptedPrivateResponseFallbackTurnKeys.clear();
+    this.heldPrivateResponseFallbackTextByTurnKey.clear();
     this.assistantStreamCancellationFailures.clear();
     for (const cancellation of this.assistantStreamCancellationSignals.values()) {
       cancellation.cancel();
@@ -18240,6 +18255,7 @@ export class MessagingController {
       params.binding.threadId,
       params.turnId,
     );
+    this.heldPrivateResponseFallbackTextByTurnKey.delete(turnKey);
     if (this.attemptedPrivateResponseFallbackTurnKeys.has(turnKey)) {
       return;
     }
@@ -18849,6 +18865,7 @@ export class MessagingController {
       request.context.turnId,
     );
     this.privateResponseFallbackTurnKeys.delete(turnKey);
+    this.heldPrivateResponseFallbackTextByTurnKey.delete(turnKey);
     rememberBoundedKey(this.attemptedPrivateResponseFallbackTurnKeys, turnKey);
     const origin = await this.resolveAgentMessagingOrigin(request.context);
     if (!origin.ok) {
@@ -22808,6 +22825,17 @@ function isNonFinalAssistantTextForBackendEvent(event: AgentEvent): boolean {
   return Boolean(phase && phase !== "final" && phase !== "final_answer");
 }
 
+/** An `agentMessage` completion with no phase, which may be a progress note. */
+function isUnphasedAssistantMessageEvent(event: AgentEvent): boolean {
+  if (event.notification.method !== "item/completed") {
+    return false;
+  }
+  const item = (event.notification.params as {
+    item?: { phase?: unknown; type?: unknown };
+  }).item;
+  return item?.type === "agentMessage" && typeof item.phase !== "string";
+}
+
 function isFinalAssistantImageResolutionEvent(event: AgentEvent): boolean {
   if (event.notification.method === "turn/completed") {
     return true;
@@ -23215,115 +23243,13 @@ function assistantTextForBackendEvent(event: AgentEvent): string | undefined {
   }
 
   if (event.notification.method === "turn/completed") {
-    const text = assistantOutputTextFragmentsForBackendEvent(event)
-      .join("\n\n")
-      .trim();
-    return text || undefined;
+    // Claude reports each assistant message of the turn as its own part, and
+    // each one already arrived through item/completed. The answer is the last.
+    const params = event.notification.params as { turn?: { output?: unknown } };
+    return finalTurnOutputText(params.turn?.output);
   }
 
   return undefined;
-}
-
-function assistantOutputTextFragmentsForBackendEvent(
-  event: AgentEvent,
-): string[] {
-  return deduplicateAssistantOutputTextFragments(
-    rawAssistantOutputTextFragmentsForBackendEvent(event),
-  );
-}
-
-function rawAssistantOutputTextFragmentsForBackendEvent(
-  event: AgentEvent,
-): string[] {
-  if (event.notification.method !== "turn/completed") {
-    return [];
-  }
-  const params = event.notification.params as {
-    turn?: {
-      output?: unknown;
-    };
-  };
-  if (!Array.isArray(params.turn?.output)) {
-    return [];
-  }
-  return params.turn.output
-    .map((item) =>
-      item && typeof item === "object" && "text" in item
-        ? (item as { text?: unknown }).text
-        : undefined,
-    )
-    .filter((value): value is string => typeof value === "string")
-    .map((value) => value.trim())
-    .filter(Boolean);
-}
-
-function deduplicateAssistantOutputTextFragments(fragments: string[]): string[] {
-  // Some backends expose commentary and a rewritten final answer only through
-  // turn/completed. Keep the later fragment when the two are substantially the
-  // same response, but require enough ordered overlap that short acknowledgments
-  // and related multi-part answers remain separate.
-  const preserved: string[] = [];
-  for (let index = fragments.length - 1; index >= 0; index -= 1) {
-    const fragment = fragments[index]!;
-    if (
-      preserved.some((laterFragment) =>
-        areNearDuplicateAssistantTextFragments(fragment, laterFragment)
-      )
-    ) {
-      continue;
-    }
-    preserved.unshift(fragment);
-  }
-  return preserved;
-}
-
-function areNearDuplicateAssistantTextFragments(
-  left: string,
-  right: string,
-): boolean {
-  if (left === right) {
-    return true;
-  }
-  const leftWords = normalizedAssistantTextWords(left);
-  const rightWords = normalizedAssistantTextWords(right);
-  const shorterWords = leftWords.length <= rightWords.length
-    ? leftWords
-    : rightWords;
-  const longerWords = leftWords.length <= rightWords.length
-    ? rightWords
-    : leftWords;
-  if (
-    shorterWords.length < MIN_NEAR_DUPLICATE_ASSISTANT_WORDS
-    || shorterWords.length / longerWords.length
-      < MIN_NEAR_DUPLICATE_ASSISTANT_LENGTH_RATIO
-  ) {
-    return false;
-  }
-
-  const shorterBigrams = assistantTextBigrams(shorterWords);
-  const longerBigramCounts = new Map<string, number>();
-  for (const bigram of assistantTextBigrams(longerWords)) {
-    longerBigramCounts.set(bigram, (longerBigramCounts.get(bigram) ?? 0) + 1);
-  }
-  let overlap = 0;
-  for (const bigram of shorterBigrams) {
-    const remaining = longerBigramCounts.get(bigram) ?? 0;
-    if (remaining === 0) {
-      continue;
-    }
-    overlap += 1;
-    longerBigramCounts.set(bigram, remaining - 1);
-  }
-  return overlap / shorterBigrams.length
-    >= MIN_NEAR_DUPLICATE_ASSISTANT_BIGRAM_OVERLAP;
-}
-
-function normalizedAssistantTextWords(text: string): string[] {
-  return text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
-}
-
-function assistantTextBigrams(words: string[]): string[] {
-  return words.slice(1).map((word, index) => `${words[index]}\0${word}`);
 }
 
 /**
@@ -23586,20 +23512,9 @@ function assistantMessageDeliveryKeys(
     text,
     identity,
   );
-  // A terminal aggregate can contain earlier commentary followed by a final
-  // assistant item that was already delivered. Include each output fragment's
-  // content key in the same claim so that prior final-item delivery suppresses
-  // the repeated aggregate without changing completion-only aggregation.
-  const contentKeys = [
-    contentKey,
-    ...rawAssistantOutputTextFragmentsForBackendEvent(event).map((fragment) =>
-      assistantMessageContentDeliveryKey(event, binding, fragment, identity)
-    ),
-  ];
-  const uniqueContentKeys = [...new Set(contentKeys)];
   const itemId = identity?.itemId ?? assistantItemIdForBackendEvent(event);
   if (!itemId) {
-    return uniqueContentKeys;
+    return [contentKey];
   }
   // Backend item identity is authoritative and intentionally independent of
   // turn/text: replaying one item with changed metadata must never post it
@@ -23612,7 +23527,7 @@ function assistantMessageDeliveryKeys(
       assistantMessageThreadId(event, identity),
       `item:${itemId}`,
     ].join("\0"),
-    ...uniqueContentKeys,
+    contentKey,
   ];
 }
 
