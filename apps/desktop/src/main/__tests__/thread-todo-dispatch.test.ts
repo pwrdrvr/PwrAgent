@@ -117,11 +117,40 @@ describe("listThreadTodoDispatchEnvironments", () => {
         repositoryKey: "github.com/pwrdrvr/pwragent", repositoryKeys: ["github.com/fixture-user/pwragent"],
       }],
     };
-    expect(await listThreadTodoDispatchEnvironments({ id: "todo-1" }, d)).toMatchObject({
+    expect(await listThreadTodoDispatchEnvironments({ id: "todo-1", repositoryOnly: true }, d)).toEqual({
+      projectFound: true,
       projectLabel: "PwrAgnt",
+      environments: [],
+      defaultSource: "none",
       repositoryKey: "github.com/pwrdrvr/pwragent",
       repositoryKeys: ["github.com/fixture-user/pwragent"],
     });
+    // Environments are read on the other machine, not here.
+    expect(d.listOptions).not.toHaveBeenCalled();
+  });
+
+  it("reads no project list for the owner's own environments", async () => {
+    const listProjects = vi.fn(async () => []);
+    const listed = await listThreadTodoDispatchEnvironments({ id: "todo-1" }, { ...deps(card()), listProjects });
+    expect(listed).not.toHaveProperty("repositoryKey");
+    expect(listProjects).not.toHaveBeenCalled();
+  });
+
+  it("lets the origin, not a shared path, pick this machine's copy", async () => {
+    const d = {
+      ...deps(card()),
+      listProjects: async () => [
+        { key: "directory:/src/app", label: "app", kind: "directory" as const, path: "/src/app",
+          repositoryKey: "github.com/fixture-org/other-app" },
+        { key: "directory:/src/app-v2", label: "app-v2", kind: "directory" as const, path: "/src/app-v2",
+          repositoryKey: "github.com/fixture-org/app" },
+      ],
+    };
+    const project = { key: "directory:/src/app", label: "app", path: "/src/app" };
+    expect(await listThreadTodoDispatchEnvironments({ project: { ...project, repositoryKey: "github.com/fixture-org/app" } }, d))
+      .toMatchObject({ projectLabel: "app-v2" });
+    // Without a repository the path still decides.
+    expect(await listThreadTodoDispatchEnvironments({ project }, d)).toMatchObject({ projectLabel: "app" });
   });
 
   it("finds this machine's copy filed under another name by its origin", async () => {

@@ -133,7 +133,7 @@ export async function resolveThreadTodoStartEnvironment(params: {
  * the default is that copy's preset.
  */
 export async function listThreadTodoDispatchEnvironments(
-  request: Pick<ListThreadTodoDispatchEnvironmentsRequest, "id" | "project">,
+  request: Pick<ListThreadTodoDispatchEnvironmentsRequest, "id" | "project" | "repositoryOnly">,
   deps: {
     getTodo: (id: string) => ThreadTodo;
     listProjects: () => Promise<ThreadTodoProjectCandidate[]>;
@@ -164,28 +164,40 @@ export async function listThreadTodoDispatchEnvironments(
       throw new ThreadTodoError("invalid_arguments", "Only a start-thread card has environments to choose.");
     }
     const project = threadTodoActionProject(todo);
-    // The repository lets another machine find its copy under another name.
-    const identity = project
-      ? threadTodoProjectIdentity(project, await deps.listProjects().catch(() => []))
-      : undefined;
-    return {
-      ...await describe({
-        cwd: todo.targetProject?.path ?? todo.cwd,
-        ...(project ? { project } : {}),
-        ...(todo.targetProject ? {} : { threadEnvironmentId: () => deps.readThreadEnvironmentId(todo) }),
-      }),
-      ...(identity?.repositoryKey ? { repositoryKey: identity.repositoryKey } : {}),
-      ...(identity?.repositoryKeys?.length ? { repositoryKeys: [...identity.repositoryKeys] } : {}),
-    };
+    if (request.repositoryOnly === true) {
+      // Only the repository, which lets another machine find its copy under
+      // another name. Environments are read there, not here.
+      const identity = project
+        ? threadTodoProjectIdentity(project, await deps.listProjects().catch(() => []))
+        : undefined;
+      return {
+        projectFound: project !== undefined,
+        ...(project ? { projectLabel: project.label } : {}),
+        environments: [],
+        defaultSource: "none",
+        ...(identity?.repositoryKey ? { repositoryKey: identity.repositoryKey } : {}),
+        ...(identity?.repositoryKeys?.length ? { repositoryKeys: [...identity.repositoryKeys] } : {}),
+      };
+    }
+    return await describe({
+      cwd: todo.targetProject?.path ?? todo.cwd,
+      ...(project ? { project } : {}),
+      ...(todo.targetProject ? {} : { threadEnvironmentId: () => deps.readThreadEnvironmentId(todo) }),
+    });
   }
   if (!request.project || typeof request.project.label !== "string" || typeof request.project.path !== "string") {
     throw new ThreadTodoError("invalid_arguments", "Name the card or its project.");
   }
   const candidates = await deps.listProjects();
-  const counterpart = candidates.find((candidate) =>
+  // A key is a path, and the same path can hold another repository here, so
+  // the key decides only when the request names no repository.
+  const named =
+    (typeof request.project.repositoryKey === "string" && request.project.repositoryKey.length > 0)
+    || (Array.isArray(request.project.repositoryKeys) && request.project.repositoryKeys.length > 0);
+  const counterpart = (named ? undefined : candidates.find((candidate) =>
     candidate.kind === "directory"
     && candidate.localAvailability !== "unconfigured"
-    && candidate.key === request.project!.key)
+    && candidate.key === request.project!.key))
     ?? findPeerThreadTodoProject(request.project, candidates);
   if (!counterpart) return { projectFound: false, environments: [], defaultSource: "none" };
   return await describe({

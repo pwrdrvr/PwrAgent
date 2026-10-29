@@ -116,7 +116,7 @@ describe("to-do dispatch target", () => {
     // The owner names the repository, so the peer can find a copy it files
     // under another name.
     expect(api.listThreadTodoDispatchEnvironments.mock.calls.slice(-2).map(([request]) => request)).toEqual([
-      { id: "card" },
+      { id: "card", repositoryOnly: true },
       { project: { ...ATLAS, repositoryKey: "github.com/fixture-org/atlas" }, federationTarget: { scope: "remote", instanceId: "win" } },
     ]);
     expect(chip("Model for the new thread").getAttribute("aria-label")).toBe("Model for the new thread: OpenAI, GPT-6.1-Sol, high");

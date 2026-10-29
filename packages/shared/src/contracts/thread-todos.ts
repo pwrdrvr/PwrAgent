@@ -526,6 +526,11 @@ export type ListThreadTodoDispatchEnvironmentsRequest = {
    * here and PwrAgent there clone one origin.
    */
   project?: ThreadTodoProject & ProjectRepositoryIdentity;
+  /**
+   * With `id`: answer only the repository the card's project clones, without
+   * reading environments. Another machine is then asked by origin.
+   */
+  repositoryOnly?: boolean;
 };
 
 export type ThreadTodoDispatchEnvironment = { id: string; name: string };
@@ -543,8 +548,9 @@ export type ListThreadTodoDispatchEnvironmentsResponse = {
   defaultEnvironmentId?: string;
   defaultSource: "thread" | "project" | "none";
   /**
-   * Asked by card id: the repository the card's project clones, so another
-   * machine can be asked for its copy by origin rather than by name.
+   * Asked by card id with `repositoryOnly`: the repository the card's
+   * project clones, so another machine can be asked for its copy by origin
+   * rather than by name.
    */
   repositoryKey?: string;
   repositoryKeys?: string[];

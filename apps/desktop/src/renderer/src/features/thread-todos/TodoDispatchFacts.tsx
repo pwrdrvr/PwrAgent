@@ -238,7 +238,7 @@ function useDispatchEnvironments(params: {
       if (onOwner) return await list({ id: todo.id });
       // The owner knows which repository the card's project clones; the
       // other machine may file its copy under another name.
-      const owner = await list({ id: todo.id }).catch(() => undefined);
+      const owner = await list({ id: todo.id, repositoryOnly: true }).catch(() => undefined);
       return await list({
         project: {
           ...cardProject!,

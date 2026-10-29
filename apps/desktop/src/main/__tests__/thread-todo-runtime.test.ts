@@ -11,6 +11,7 @@ import {
   setThreadTodoProject,
   type ThreadTodoRunnerRegistry,
 } from "../thread-todos/thread-todo-runtime";
+import type { ThreadTodoProjectCandidate } from "../thread-todos/thread-todo-projects";
 
 const FULL_ACCESS_SOL: HandoffSourceSettings = {
   executionMode: "full-access",
@@ -198,7 +199,7 @@ describe("thread to-do Start thread on a peer that names the project differently
   ];
 
   function setup(params: {
-    listProjects?: () => Promise<typeof local>;
+    listProjects?: () => Promise<ThreadTodoProjectCandidate[]>;
     peer?: ListInstanceProjectsResult["projects"];
   }) {
     const { registry } = fakeRegistry(FULL_ACCESS_SOL);
@@ -240,6 +241,12 @@ describe("thread to-do Start thread on a peer that names the project differently
       "DESKTOP-FIXTURE / dev has no checkout of github.com/pwrdrvr/pwragent (PwrAgnt here).",
     );
     expect(created()).toBeUndefined();
+  });
+
+  it("names a fetch remote when the checkout has no origin", async () => {
+    const remoteOnly = [{ ...card, kind: "directory" as const, repositoryKeys: [ORIGIN] }];
+    const { run } = setup({ listProjects: async () => remoteOnly, peer: [peerProjects[0]!] });
+    await expect(run()).rejects.toThrow(`has no checkout of ${ORIGIN} (PwrAgnt here).`);
   });
 
   it("falls back to the name when this machine's projects cannot be listed", async () => {

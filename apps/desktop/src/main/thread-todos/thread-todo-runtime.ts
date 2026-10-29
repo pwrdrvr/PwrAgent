@@ -464,7 +464,7 @@ export function createThreadTodoRunners(params: {
   const { registry, federation } = params;
   // Without them the peer is matched by name, as before.
   const listLocalProjects = async (): Promise<ThreadTodoProjectCandidate[]> =>
-    await (params.listProjects?.() ?? Promise.resolve([])).catch((error: unknown) => {
+    await Promise.resolve().then(() => params.listProjects?.() ?? []).catch((error: unknown) => {
       threadTodoLog.warn("could not list projects to match a peer's copy", {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -612,6 +612,9 @@ export function createThreadTodoRunners(params: {
             };
             // Match against the complete list, including label matches that
             // take precedence over a folder-name fallback on an earlier page.
+            // Read alongside the peer's pages: this machine's row names the
+            // repository the card's project clones.
+            const localProjects = listLocalProjects();
             const candidates: ListInstanceProjectsResult["projects"] = [];
             const cursors = new Set<string>();
             let cursor: string | undefined;
@@ -635,11 +638,12 @@ export function createThreadTodoRunners(params: {
             } while (cursor);
             // The peer may file the same checkout under another name, so
             // match by the repository this machine's row says it clones.
-            const identity = threadTodoProjectIdentity(project, await listLocalProjects());
+            const identity = threadTodoProjectIdentity(project, await localProjects);
             const counterpart = findPeerThreadTodoProject(identity, candidates);
             if (!counterpart) {
-              throw new Error(identity.repositoryKey
-                ? `${projects.instanceLabel} has no checkout of ${identity.repositoryKey} (${project.label} here).`
+              const repository = identity.repositoryKey ?? identity.repositoryKeys?.[0];
+              throw new Error(repository
+                ? `${projects.instanceLabel} has no checkout of ${repository} (${project.label} here).`
                 : `${projects.instanceLabel} has no project named ${project.label}.`);
             }
             // No title: create_instance_thread has none to set, and the
