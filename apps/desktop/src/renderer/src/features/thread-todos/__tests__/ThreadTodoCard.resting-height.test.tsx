@@ -57,6 +57,25 @@ function props(todo: ThreadTodo): ThreadTodoCardProps {
   };
 }
 
+const HANDOFF: ThreadTodo["action"] = {
+  type: "start_thread",
+  prompt: "Add stdio server support to the gateway.",
+};
+
+/** jsdom has no layout; report the clamped paragraph as overflowing. */
+function reportClampedDetailAsCut(): void {
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("is-clamped") ? 120 : 0;
+  });
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("is-clamped") ? 51 : 0;
+  });
+}
+
+function precedes(first: Node, second: Node): boolean {
+  return (first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+}
+
 function visibleSteps(): string[] {
   return screen.queryAllByRole("checkbox").map((box) => box.closest("label")?.textContent ?? "");
 }
@@ -114,18 +133,40 @@ describe("to-do card resting height", () => {
   });
 
   it("offers Show more when only the description is cut", () => {
-    // jsdom has no layout; report the clamped paragraph as overflowing.
-    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
-      return this.classList.contains("is-clamped") ? 120 : 0;
-    });
-    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) {
-      return this.classList.contains("is-clamped") ? 51 : 0;
-    });
+    reportClampedDetailAsCut();
     render(<ThreadTodoCard {...props(card([], { items: undefined }))} />);
 
     const toggle = screen.getByRole("button", { name: "Show more" });
     fireEvent.click(toggle);
     expect(screen.getByRole("button", { name: "Show less" }).getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("puts Show more under the description, above a handoff's prompt", () => {
+    // The toggle used to sit under the whole body, below the prompt's own
+    // Show less, and read as the prompt's control.
+    reportClampedDetailAsCut();
+    render(<ThreadTodoCard {...props(card([], { kind: "handoff", items: undefined, action: HANDOFF }))} />);
+    const detail = screen.getByText(LONG_DETAIL.trim(), { exact: false });
+    const prompt = screen.getByRole("region", { name: "Proposed prompt" });
+
+    const more = screen.getByRole("button", { name: "Show more" });
+    expect(precedes(detail, more)).toBe(true);
+    expect(precedes(more, prompt)).toBe(true);
+
+    fireEvent.click(more);
+    const less = screen.getByRole("button", { name: "Show less" });
+    expect(precedes(detail, less)).toBe(true);
+    expect(precedes(less, prompt)).toBe(true);
+  });
+
+  it("puts Show all steps under the step window, above a handoff's prompt", () => {
+    render(<ThreadTodoCard {...props(card([], { kind: "handoff", action: HANDOFF }))} />);
+    const steps = screen.getByRole("list", { name: /^Steps for the new thread/ });
+    const prompt = screen.getByRole("region", { name: "Proposed prompt" });
+
+    const toggle = screen.getByRole("button", { name: "Show all 8 steps" });
+    expect(precedes(steps, toggle)).toBe(true);
+    expect(precedes(toggle, prompt)).toBe(true);
   });
 
   it("scrolls the opened body instead of growing the card", () => {
