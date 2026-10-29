@@ -2244,21 +2244,23 @@ export function Sidebar(props: SidebarProps) {
   });
 
   useEffect(() => {
-    const captureComposerArchive = (event: KeyboardEvent): void => {
-      // ProseMirror consumes native Backspace at a block boundary before the
-      // window's bubble listener sees it. Claim only the permitted archive
-      // chord in the composer, through the same action/lifecycle owner.
+    const captureComposerThreadHotkey = (event: KeyboardEvent): void => {
+      // The editor's keymap sees a keydown before the window's bubble
+      // listener. ProseMirror consumes native Backspace at a block boundary,
+      // and Underline's Mod-U also takes ⇧⌘U, because ProseMirror retries a
+      // shifted letter without Shift. Claim every thread chord permitted in
+      // the composer here, through the same action/lifecycle owner.
       if (threadHotkeyFocusContext(event) !== "field"
-        || matchThreadHotkey(event) !== "threads.archive") return;
+        || matchThreadHotkey(event) === null) return;
       runThreadHotkey(event);
-      // Keep the editor from deleting draft content and the bubble listener
-      // from dispatching a second archive. Unhandled chords stay with editing.
+      // Keep the editor from acting on the chord and the bubble listener
+      // from dispatching it again. Unhandled chords stay with editing.
       if (event.defaultPrevented) event.stopPropagation();
     };
-    window.addEventListener("keydown", captureComposerArchive, true);
+    window.addEventListener("keydown", captureComposerThreadHotkey, true);
     window.addEventListener("keydown", runThreadHotkey);
     return () => {
-      window.removeEventListener("keydown", captureComposerArchive, true);
+      window.removeEventListener("keydown", captureComposerThreadHotkey, true);
       window.removeEventListener("keydown", runThreadHotkey);
     };
   }, [runThreadHotkey]);

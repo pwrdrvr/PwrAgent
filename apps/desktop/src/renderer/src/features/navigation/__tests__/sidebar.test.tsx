@@ -10673,6 +10673,74 @@ describe("Sidebar thread shortcuts", () => {
     }
   });
 
+  // Binds Mark Unread / Read to the macOS default and renders a focused reply
+  // field. jsdom has no platform, so ProseMirror's Mod is Ctrl here; the
+  // chord pressed with Ctrl meets the same Underline keymap ⌘ does on macOS.
+  async function withMarkReadInComposer(
+    sidebarProps: Partial<ComponentProps<typeof Sidebar>>,
+    run: (field: HTMLElement) => Promise<void> | void,
+  ): Promise<void> {
+    const { _resetKeybindingsStoreForTests } = await import("../../../lib/keybindings-store");
+    _resetKeybindingsStoreForTests({
+      overrides: { "threads.toggle_unread": ["CmdOrCtrl+Shift+U"] },
+      filePath: "/tmp/keybindings.toml",
+    });
+    try {
+      renderShortcutSidebar(sidebarProps);
+      render(<form className="composer">
+        <ComposerTiptapInput id="reply" label="Reply" value="Draft" skillTokens={[]}
+          placeholder="Ask anything" onChange={() => undefined} />
+      </form>);
+      const field = screen.getByRole("textbox", { name: "Reply" });
+      Object.defineProperty(field, "isContentEditable", { value: true });
+      field.focus();
+      await run(field);
+    } finally {
+      act(() => _resetKeybindingsStoreForTests());
+    }
+  }
+  const markReadChord = { key: "U", code: "KeyU", keyCode: 85, ctrlKey: true, shiftKey: true };
+
+  it("marks the open thread read from the composer, where Underline also binds the chord", async () => {
+    // Attention keeps an opened thread unread, so Mark Read is pressed with
+    // focus in the reply. Tiptap's Underline binds Mod-U, and ProseMirror
+    // retries a shifted letter without Shift, so the editor took ⇧⌘U first.
+    const onMarkThreadsSeen = vi.fn(async () => undefined);
+    await withMarkReadInComposer({ browseMode: "attention", onMarkThreadsSeen }, async (field) => {
+      await pressAndSettle(field, markReadChord);
+    });
+    expect(onMarkThreadsSeen).toHaveBeenCalledTimes(1);
+    expect(onMarkThreadsSeen).toHaveBeenCalledWith([sharedThread]);
+  });
+
+  it("leaves the editor its chord when there is no thread to act on", async () => {
+    const onMarkThreadsSeen = vi.fn(async () => undefined);
+    await withMarkReadInComposer({ selectedItemKey: undefined, onMarkThreadsSeen }, (field) => {
+      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...markReadChord });
+      act(() => { field.dispatchEvent(event); });
+      // Unhandled, the chord stays with editing: Underline still claims it.
+      expect(event.defaultPrevented).toBe(true);
+    });
+    expect(onMarkThreadsSeen).not.toHaveBeenCalled();
+  });
+
+  it("marks the focused unread row read in Attention", async () => {
+    stubMacPlatform();
+    const onMarkThreadsSeen = vi.fn(async () => undefined);
+    const onMarkThreadUnread = vi.fn(async () => undefined);
+    renderShortcutSidebar({
+      browseMode: "attention",
+      selectedItemKey: undefined,
+      onMarkThreadsSeen,
+      onMarkThreadUnread,
+    });
+    const row = screen.getByRole("button", { name: "Cross-project cleanup" });
+    row.focus();
+    await pressAndSettle(row, { key: "U", code: "KeyU", keyCode: 85, metaKey: true, shiftKey: true });
+    expect(onMarkThreadsSeen).toHaveBeenCalledWith([sharedThread]);
+    expect(onMarkThreadUnread).not.toHaveBeenCalled();
+  });
+
   it("does nothing while Settings covers the window", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     renderShortcutSidebar({ onSetThreadPin, inert: true });
