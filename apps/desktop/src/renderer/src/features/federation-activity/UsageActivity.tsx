@@ -23,7 +23,8 @@ const time = (value: number) => new Date(value).toLocaleString();
 const localDate = (date: Date) => new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 const sourceId = (target: FederationTarget) => target.scope === "local" ? "local" : target.instanceId;
 
-type Source = { label: string; target: FederationTarget; status?: string };
+/** `label` is the full name; the toggle draws `shortLabel` when the machine has one. */
+type Source = { label: string; shortLabel?: string; target: FederationTarget; status?: string };
 type Preset = "reset" | "five" | "today" | "day" | "week" | "month" | "custom";
 type SourceResult = Source & { data?: ReadUsageActivityResponse; error?: string };
 type Snapshot = {
@@ -151,11 +152,16 @@ export function UsageActivity({ desktopApi, initialProvider }: {
     if (!desktopApi?.readFederationActivity) return;
     void desktopApi.readFederationActivity({ includeHistory: false }).then((value) => {
       if (!mounted.current) return;
-      setSources([{ label: value.health.localLabel ?? "This instance", target: { scope: "local" } },
-        ...value.health.peers.filter((peer) => peer.id !== value.health.instanceId).map((peer) => ({
-          label: `${peer.label}${peer.profileName ? ` (${peer.profileName})` : ""}`, status: peer.status,
-          target: { scope: "remote" as const, instanceId: peer.id },
-        }))]);
+      const localShort = value.health.localLabel ? value.health.localShortLabel : undefined;
+      setSources([{ label: value.health.localLabel ?? "This instance",
+        ...(localShort ? { shortLabel: localShort } : {}), target: { scope: "local" } },
+        ...value.health.peers.filter((peer) => peer.id !== value.health.instanceId).map((peer) => {
+          const profile = peer.profileName ? ` (${peer.profileName})` : "";
+          return {
+            label: `${peer.label}${profile}`, ...(peer.shortLabel ? { shortLabel: `${peer.shortLabel}${profile}` } : {}),
+            status: peer.status, target: { scope: "remote" as const, instanceId: peer.id },
+          };
+        })]);
     }).catch(() => { /* Reads still cover this instance. */ })
       .finally(() => { if (mounted.current) setPeersReady(true); });
   }, [desktopApi]);
@@ -547,7 +553,8 @@ export function UsageActivity({ desktopApi, initialProvider }: {
           const online = isOnline(source);
           return <button type="button" key={id} className={`usage-instance${online ? "" : " is-offline"}`}
             aria-pressed={online && !disabled.has(id)} disabled={!online} onClick={() => toggleSource(id)}
-            title={online ? source.label : `${source.label} is offline`}><i aria-hidden="true" />{source.label}</button>;
+            aria-label={source.shortLabel ? source.label : undefined}
+            title={online ? source.label : `${source.label} is offline`}><i aria-hidden="true" />{source.shortLabel ?? source.label}</button>;
         })}
       </div>
       <label className="usage-account-filter"><span className="usage-sr-only">Account</span><Select value={accountFilter} onChange={selectAccount} options={[

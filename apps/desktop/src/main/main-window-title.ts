@@ -18,7 +18,10 @@ export const APP_WINDOW_TITLE = "PwrAgent";
 /**
  * Title for a shell window. Remote (federated) windows append the peer
  * label so windows targeting different machines stay tellable apart in
- * the Window menu; the local window is just the product name.
+ * the Window menu; the local window is just the product name. Callers pass
+ * the peer's short name when it has one, as the Profiles menu draws it.
+ * AppKit's Window menu rows take no tooltip, so the full name lives in the
+ * window's own Remote badge tooltip instead.
  */
 export function mainWindowTitle(federationLabel?: string): string {
   const label = federationLabel?.trim();
@@ -53,6 +56,7 @@ export function lockMainWindowTitle(
   window: BrowserWindow,
   title: string,
 ): void {
+  lockedTitles.set(window, title);
   window.setTitle(title);
   window.on("page-title-updated", (event) => {
     event.preventDefault();
@@ -60,6 +64,25 @@ export function lockMainWindowTitle(
       return;
     }
 
-    window.setTitle(title);
+    window.setTitle(lockedTitles.get(window) ?? title);
   });
+}
+
+/** The title each locked window keeps, so the owner can change it later. */
+const lockedTitles = new WeakMap<BrowserWindow, string>();
+
+/**
+ * Change a locked window's title. A remote window's title names its
+ * machine, and the machine's short name can arrive or change while the
+ * window is open.
+ */
+export function updateLockedMainWindowTitle(
+  window: BrowserWindow,
+  title: string,
+): void {
+  if (window.isDestroyed() || lockedTitles.get(window) === title) {
+    return;
+  }
+  lockedTitles.set(window, title);
+  window.setTitle(title);
 }

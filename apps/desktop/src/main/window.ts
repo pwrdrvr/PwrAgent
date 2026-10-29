@@ -380,7 +380,10 @@ export function syncHotCpuProfilersFromSettings(
 
 export function createMainWindow(options?: {
   onShown?: () => void;
+  /** The peer's full display label; the renderer and diagnostics read it. */
   federationLabel?: string;
+  /** The peer's short display label for the window title, when it has one. */
+  federationTitleLabel?: string;
   federationTarget?: FederationRemoteTarget;
   initialLaunchpad?: boolean;
   initialThread?: WindowShowThreadRequest;
@@ -390,7 +393,9 @@ export function createMainWindow(options?: {
 }): BrowserWindow {
   installWindowsTitleBarAppearanceSync();
   const preloadPath = getPreloadPath();
-  const windowTitle = mainWindowTitle(options?.federationLabel);
+  const windowTitle = mainWindowTitle(
+    options?.federationTitleLabel ?? options?.federationLabel,
+  );
   const appearance = readBootstrapAppearance();
   const navigationPreferences = readBootstrapNavigationPreferences();
   const initialBounds = boundsForCursorDisplay(

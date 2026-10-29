@@ -3,6 +3,7 @@ import type { BackendSummary } from "@pwragent/shared";
 import { PopoutIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { formatBackendLabel } from "../../../lib/backend-label";
+import { useFederationInstanceNames } from "../../../lib/federation-display-label";
 import { formatBackendPlanType } from "../../../lib/backend-status-format";
 import { limitLabel, sinceResetSeries, type LimitProjection, type LimitSeries } from "../../federation-activity/usage-limits";
 import {
@@ -20,6 +21,8 @@ type UsagePaceCardProps = {
   backends?: BackendSummary[];
   /** The remote instance a remote thread runs on; its spend is that machine's. */
   ownerLabel?: string;
+  /** That instance's id, so the chip can draw its short name. */
+  ownerInstanceId?: string;
 };
 
 /** Chart box, in viewBox units; 100% sits `CAP` below the top edge. */
@@ -34,7 +37,8 @@ const CAP = 6;
  * which is exact for the limit (account-wide) and labeled for the spend: this
  * machine's, or the named owner's for a remote thread.
  */
-export const UsagePaceCard = memo(function UsagePaceCard({ desktopApi, backends, ownerLabel }: UsagePaceCardProps) {
+export const UsagePaceCard = memo(function UsagePaceCard({ desktopApi, backends, ownerLabel, ownerInstanceId }: UsagePaceCardProps) {
+  const owner = useFederationInstanceNames(ownerInstanceId ?? "", ownerLabel ?? "");
   const verdictId = useId();
   const open = desktopApi?.openUsageActivity;
   // Nothing renders without a way to open the window, so nothing is read.
@@ -105,7 +109,7 @@ export const UsagePaceCard = memo(function UsagePaceCard({ desktopApi, backends,
           {/* A long instance label gives way before the amount or the date. */}
           <span className="usage-pace-card__spend">
             {ownerLabel
-              ? <span className="usage-pace-card__owner tooltip-target" data-tooltip={ownerLabel}>{ownerLabel}</span>
+              ? <span className="usage-pace-card__owner tooltip-target" data-tooltip={owner.fullLabel}>{owner.label}</span>
               : <span className="usage-pace-card__owner">This machine</span>}
             <span> <b>{usageMoney(pace.costMicros)}</b> API-eq.</span>
           </span>
