@@ -187,7 +187,7 @@ test("previews an HTML file offline, with scripts off until asked, and asks befo
     // A link to another previewable file opens it in the viewer.
     await frame.locator("#next").click();
     await expect(dialog.getByText("Open appendix.html here?")).toBeVisible();
-    await dialog.getByRole("button", { name: "Open" }).click();
+    await dialog.getByRole("button", { name: "Open", exact: true }).click();
     const appendix = app.window.getByRole("dialog", { name: "HTML document: appendix.html" });
     await expect(appendix).toBeVisible();
     await expect(
