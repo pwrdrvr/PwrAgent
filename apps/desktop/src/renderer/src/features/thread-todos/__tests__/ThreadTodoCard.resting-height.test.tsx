@@ -14,6 +14,11 @@ import { ThreadTodoCard, type ThreadTodoCardProps } from "../ThreadTodoCard";
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  if (nativeScrollIntoView) {
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", nativeScrollIntoView);
+  } else {
+    delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+  }
 });
 
 const STEPS = [
@@ -72,13 +77,17 @@ function reportClampedDetailAsCut(): void {
   });
 }
 
-function stubOpenedLayout(): void {
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-    const scrolled = this.closest<HTMLElement>(".thread-todo-card__body")?.scrollTop ?? 0;
-    if (this.classList.contains("thread-todo-card__body")) return new DOMRect(0, 0, 340, 440);
-    if (this.classList.contains("thread-todo-card__more")) return new DOMRect(0, 600 - scrolled, 80, 24);
-    return new DOMRect(0, 0, 0, 0);
+const nativeScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+
+/** jsdom has no scrollIntoView; install a spy, removed after each test. */
+function stubScrollIntoView() {
+  const scrollIntoView = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    writable: true,
+    value: scrollIntoView,
   });
+  return scrollIntoView;
 }
 
 function precedes(first: Node, second: Node): boolean {
@@ -200,28 +209,26 @@ describe("to-do card resting height", () => {
     expect(precedes(more, prerequisites)).toBe(true);
   });
 
-  it("keeps a keyboard-opened toggle in view inside the scrolling body", () => {
-    // jsdom has no layout: the opened body shows 0-440px, and the full
-    // description and eight steps push Show less down to 600-624px.
-    stubOpenedLayout();
+  it("scrolls a keyboard-opened toggle into view", () => {
+    const scrollIntoView = stubScrollIntoView();
     render(<ThreadTodoCard {...props(card())} />);
     const toggle = screen.getByRole("button", { name: "Show all 8 steps" });
-    const body = document.getElementById(toggle.getAttribute("aria-controls") ?? "")!;
 
     // Enter and Space dispatch a click with detail 0.
     fireEvent.click(toggle, { detail: 0 });
     expect(screen.getByRole("button", { name: "Show less" })).toBe(toggle);
-    expect(body.scrollTop).toBe(184);
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView.mock.contexts[0]).toBe(toggle);
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
   });
 
-  it("leaves a clicked-open body at its top", () => {
-    stubOpenedLayout();
+  it("leaves a clicked-open card where it is", () => {
+    const scrollIntoView = stubScrollIntoView();
     render(<ThreadTodoCard {...props(card())} />);
-    const toggle = screen.getByRole("button", { name: "Show all 8 steps" });
-    const body = document.getElementById(toggle.getAttribute("aria-controls") ?? "")!;
 
-    fireEvent.click(toggle, { detail: 1 });
-    expect(body.scrollTop).toBe(0);
+    fireEvent.click(screen.getByRole("button", { name: "Show all 8 steps" }), { detail: 1 });
+    expect(screen.getByRole("button", { name: "Show less" })).toBeTruthy();
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
   it("scrolls the opened body instead of growing the card", () => {

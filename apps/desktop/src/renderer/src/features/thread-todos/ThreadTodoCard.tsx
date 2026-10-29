@@ -906,7 +906,6 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       {todo.detail || progress || prerequisites.length > 0 || facts.length > 0 || prompt || todo.error
         || action?.type === "start_thread" ? (
         <div
-          ref={resting.bodyRef}
           id={resting.bodyId}
           className={`thread-todo-card__body${resting.expanded ? " is-expanded" : ""}`}
         >
@@ -1184,7 +1183,6 @@ function useRestingCard(todo: ThreadTodo) {
   const [anchor, setAnchor] = useState(() => restingStepStart(items));
   const [detailCut, setDetailCut] = useState(false);
   const detailRef = useRef<HTMLParagraphElement>(null);
-  const bodyRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const revealToggleRef = useRef(false);
   const bodyId = useId();
@@ -1211,21 +1209,14 @@ function useRestingCard(todo: ThreadTodo) {
   }, [expanded, todo.detail]);
 
   // Opening grows the text above the toggle, and the body starts at its
-  // top. A keyboard user's focus stays on the toggle, so scroll the body
-  // just enough to keep it in view. A click keeps the top in view instead.
+  // top. A keyboard user's focus stays on the toggle, so scroll it just
+  // into view: in the body, and in the rail panel when the card sits there.
+  // Its scroll margin leaves room for the focus ring. A click keeps the top
+  // of the text in view instead.
   useLayoutEffect(() => {
     if (!revealToggleRef.current) return;
     revealToggleRef.current = false;
-    const body = bodyRef.current;
-    const toggle = toggleRef.current;
-    if (!body || !toggle) return;
-    const bodyRect = body.getBoundingClientRect();
-    const toggleRect = toggle.getBoundingClientRect();
-    if (toggleRect.bottom > bodyRect.bottom) {
-      body.scrollTop += toggleRect.bottom - bodyRect.bottom;
-    } else if (toggleRect.top < bodyRect.top) {
-      body.scrollTop -= bodyRect.top - toggleRect.top;
-    }
+    toggleRef.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   }, [expanded]);
 
   const toggleLabel = expanded
@@ -1244,7 +1235,6 @@ function useRestingCard(todo: ThreadTodo) {
     steps: expanded ? items : items.slice(start, start + RESTING_STEP_ROWS),
     toggleLabel,
     toggleAfter,
-    bodyRef,
     toggleRef,
     toggle: (event: ReactMouseEvent<HTMLButtonElement>) => {
       // Enter and Space dispatch a click with no pointer presses.
