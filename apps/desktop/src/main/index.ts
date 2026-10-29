@@ -1,11 +1,12 @@
-import { registerNativeVoiceIpcHandlers } from "./ipc/native-voice";
+import { nativeVoiceMediaRules, registerNativeVoiceIpcHandlers } from "./ipc/native-voice";
+import { installPermissionPolicy } from "./permission-policy";
 import { markAgentProjectRead } from "./app-server/agent-project-read";
 import { configureBundledGit } from "./bundled-git";
 import {
   applyRememberedLinuxPasswordStore,
   relaunchForLinuxSecretStore,
 } from "./linux-password-store";
-import { app, BrowserWindow, dialog, Menu, nativeImage, safeStorage, shell } from "electron";
+import { app, BrowserWindow, dialog, Menu, nativeImage, safeStorage, session, shell } from "electron";
 import { performance } from "node:perf_hooks";
 import {
   getDesktopBackendRegistry,
@@ -208,6 +209,7 @@ import {
 import type { AutoVacuumConversion } from "./state/state-db";
 import {
   createMainWindow,
+  getRendererEntry,
   isFederationWindowWebContents,
   stopWindowDiagnostics,
 } from "./window";
@@ -1495,6 +1497,12 @@ export function bootstrapApp(): void {
     // and create fresh windows or captures after diagnostics shutdown began.
     if (mainProcessShutdownPromise) return;
     recordStartupProfileEvent({ type: "app-when-ready" });
+    // Every window shares the default session. Deny by default before any
+    // window can ask.
+    installPermissionPolicy(session.defaultSession, {
+      rendererEntry: getRendererEntry(),
+      media: nativeVoiceMediaRules,
+    });
     installDevelopmentDockIcon();
     registerManagedGrokSignatureRejectionBroadcast();
     registerManagedRuntimeProgressBroadcast();
