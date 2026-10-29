@@ -508,7 +508,6 @@ export class ClaudeBackend {
         id, source: "claude", title: "Untitled thread", titleSource: "fallback",
         createdAt: now, updatedAt: now, model: params.model, executionMode: params.executionMode,
         linkedDirectories: params.linkedDirectories ?? [{ id: params.cwd, kind: "local", label: path.basename(params.cwd), path: params.cwd }],
-        workspaceHandoff: { available: false, unavailableReason: "Start a new Claude thread in the target workspace." },
       },
     });
     return { threadId: id };
@@ -541,7 +540,6 @@ export class ClaudeBackend {
         id, source: "claude", title: `${source.thread.title} (fork)`, titleSource: "derived",
         createdAt: now, updatedAt: now, model: params.model ?? source.thread.model, executionMode: params.executionMode,
         linkedDirectories: params.linkedDirectories ?? [{ id: params.cwd, kind: "local", label: path.basename(params.cwd), path: params.cwd }],
-        workspaceHandoff: { available: false, unavailableReason: "Start a new Claude thread in the target workspace." },
       },
       forkFromSdkSessionId,
       // A pending rewind point is where the source's conversation continues.
@@ -560,7 +558,9 @@ export class ClaudeBackend {
 
   async listThreads(params: { archived?: boolean; filter?: string } = {}): Promise<AppServerThreadSummary[]> {
     const filter = params.filter?.toLowerCase();
-    return (await this.store.list()).map(({ thread }) => ({
+    // Metadata from builds that could not move a Claude thread still carries
+    // their refusal; this build can, so drop it.
+    return (await this.store.list()).map(({ thread: { workspaceHandoff: _refusal, ...thread } }) => ({
       ...thread, threadStatus: this.sessions.get(thread.id)?.turn ? "active" as const : "idle" as const,
     })).filter((thread) => Boolean(thread.archivedAt) === Boolean(params.archived)
       && (!filter || thread.title.toLowerCase().includes(filter) || thread.id.includes(filter)));
@@ -599,6 +599,50 @@ export class ClaudeBackend {
     if (live) throw new Error("Stop Claude's background tasks before archiving.");
     const session = await this.store.read(threadId);
     session.thread.archivedAt = archived ? Date.now() : undefined;
+    await this.store.save(session);
+  }
+
+  /**
+   * Throws when the thread cannot change folders now. A move relaunches
+   * Claude in the new folder, and closing the old process ends its tasks.
+   * Check before moving any files, so a refusal leaves everything in place.
+   */
+  assertWorkspaceMovable(threadId: string): void {
+    if (this.rewinding.has(threadId) || this.rewindQueries.has(threadId)) {
+      throw new Error("Claude is rewinding this thread. Try again when it finishes.");
+    }
+    const live = this.sessions.get(threadId);
+    if (live?.turn || (!live && this.starting.has(threadId))) {
+      throw new Error("Wait for the active Claude turn to finish before moving this thread.");
+    }
+    if (live && live.tasks.active().length > 0) {
+      throw new Error("Stop Claude's background tasks before moving this thread.");
+    }
+  }
+
+  /**
+   * Continue the thread in another folder. The next turn resumes the same
+   * Claude session there: the conversation carries over, and Claude's tools
+   * and environment use the new folder. Claude keeps the session file under
+   * the folder that first wrote it; session reads fall back to every folder.
+   */
+  async moveWorkspace(params: {
+    threadId: string; cwd: string; linkedDirectory: LinkedDirectorySummary;
+  }): Promise<void> {
+    this.assertWorkspaceMovable(params.threadId);
+    const live = this.sessions.get(params.threadId);
+    // An idle process keeps its launch folder; the next turn relaunches.
+    if (live) await this.closeSession(live);
+    const session = await this.store.read(params.threadId);
+    const previous = path.resolve(session.cwd);
+    // Replace the directory the thread worked in; keep its other links.
+    const others = session.thread.linkedDirectories.filter((directory) => {
+      const activePath = directory.kind === "worktree" ? directory.worktreePath ?? directory.path : directory.path;
+      return !activePath || path.resolve(activePath) !== previous;
+    });
+    session.cwd = params.cwd;
+    session.thread.linkedDirectories = [params.linkedDirectory, ...others];
+    session.thread.updatedAt = Date.now();
     await this.store.save(session);
   }
 
@@ -1527,7 +1571,11 @@ export class ClaudeBackend {
       let title: string | undefined;
       if (live.titleEnv?.CLAUDE_CONFIG_DIR === process.env.CLAUDE_CONFIG_DIR) {
         try {
-          const info = await (this.options.getSessionInfo ?? getSessionInfo)(session.sdkSessionId, { dir: session.cwd });
+          const read = this.options.getSessionInfo ?? getSessionInfo;
+          // A moved thread's session file stays under the folder that wrote
+          // it; search every project folder when the current one lacks it.
+          const info = await read(session.sdkSessionId, { dir: session.cwd })
+            ?? await read(session.sdkSessionId);
           title = normalizeClaudeTitle(info?.customTitle);
         } catch {
           // Missing/unreadable metadata must not disable the query's native
@@ -2336,7 +2384,11 @@ export class ClaudeBackend {
   private async rewindPoint(session: ClaudeSession, target: ThreadRewindTarget): Promise<ClaudeRewindPoint> {
     if (!session.sdkSessionId) throw new Error("Claude has no conversation to rewind yet.");
     const promptUuid = target.messageId.startsWith("user:") ? target.messageId.slice("user:".length) : undefined;
-    const messages = (await (this.options.getSessionMessages ?? getSessionMessages)(session.sdkSessionId, { dir: session.cwd }))
+    const read = this.options.getSessionMessages ?? getSessionMessages;
+    // A moved thread's session file stays under the folder that wrote it;
+    // search every project folder when the current one lacks it.
+    const local = await read(session.sdkSessionId, { dir: session.cwd });
+    const messages = (local.length > 0 ? local : await read(session.sdkSessionId))
       .filter((message) => message.parent_tool_use_id === null);
     const index = promptUuid ? messages.findIndex((message) => message.uuid === promptUuid && message.type === "user") : -1;
     // A pending rewind already dropped the entries after its point.

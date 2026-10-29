@@ -19286,6 +19286,48 @@ describe("Composer", () => {
     });
   });
 
+  it("hands a Claude worktree thread to a new worktree", async () => {
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backends={[backendSummary("claude")]}
+        directory={{ key: "directory:/repo", kind: "directory", label: "PwrAgent", path: "/repo", gitStatus: { currentBranch: "main", branches: ["main", "feature/handoff"] } }}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Worktree thread", titleSource: "explicit", source: "claude",
+          executionMode: "default", gitBranch: "feature/handoff",
+          linkedDirectories: [{ id: "dir-1", label: "PwrAgent", path: "/repo", worktreePath: "/repo/.worktrees/pwragent-feature", kind: "worktree" }],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
+    expect(screen.getByRole("menuitem", { name: "Handoff to Local" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
+    expect(within(dialog).getByRole("radio", { name: /^Handoff to Detached HEAD/ })).toHaveAttribute("aria-checked", "true");
+    expect(within(dialog).getByText(/current worktree is archived with a checkpoint/)).toBeInTheDocument();
+    // Leaving a worktree needs no branch for Local.
+    fireEvent.click(within(dialog).getByRole("radio", { name: /^Handoff Current Branch/ }));
+    expect(within(dialog).queryByLabelText("Leave current checkout on")).toBeNull();
+    fireEvent.click(within(dialog).getByRole("radio", { name: /^Handoff to New Branch/ }));
+    fireEvent.change(within(dialog).getByLabelText("New branch name"), { target: { value: "feature/next" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Handoff" }));
+
+    await waitFor(() => {
+      expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+        direction: "worktree-to-worktree",
+        strategy: "new-branch",
+        repositoryPath: "/repo",
+        sourcePath: "/repo/.worktrees/pwragent-feature",
+        sourceBranch: "feature/handoff",
+        newBranchName: "feature/next",
+      });
+    });
+  });
+
   it("names the machine to update when its owner cannot keep Local's branch", async () => {
     render(
       <Composer

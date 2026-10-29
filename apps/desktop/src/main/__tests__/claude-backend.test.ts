@@ -85,6 +85,68 @@ async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUs
 }
 
 describe("Claude SDK backend", () => {
+  it("moves a thread to another folder and resumes the same session there", async () => {
+    const f = await fixture();
+    const previous = path.join(f.root, "checkout");
+    const secondary = path.join(f.root, "other-repo");
+    const worktree = path.join(f.root, "worktrees", "checkout");
+    const { threadId } = await f.backend.startThread({
+      cwd: previous, executionMode: "default",
+      linkedDirectories: [
+        { id: previous, kind: "local", label: "checkout", path: previous },
+        { id: secondary, kind: "local", label: "other-repo", path: secondary },
+      ],
+    });
+    // Builds before this one stored a refusal on every Claude thread.
+    const stored = await f.store.read(threadId);
+    await f.store.save({ ...stored, thread: { ...stored.thread, workspaceHandoff: { available: false, unavailableReason: "old" } } });
+    expect((await f.backend.listThreads())[0]?.workspaceHandoff).toBeUndefined();
+
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Remember PINEAPPLE" }] });
+    await f.waitForTurn();
+    const linkedDirectory = {
+      id: `pwragent-handoff:claude:${threadId}`, kind: "worktree" as const, label: "checkout",
+      path: previous, worktreePath: worktree,
+    };
+    await f.backend.moveWorkspace({ threadId, cwd: worktree, linkedDirectory });
+
+    const moved = await f.store.read(threadId);
+    expect(moved.cwd).toBe(worktree);
+    expect(moved.sdkSessionId).toBe("5a85c1ad-85c1-4930-ae19-50f721ad13dd");
+    expect(moved.thread.linkedDirectories).toEqual([
+      linkedDirectory,
+      { id: secondary, kind: "local", label: "other-repo", path: secondary },
+    ]);
+    expect(f.backend.liveSessionThreadIds()).toEqual([]);
+
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Where are you?" }] });
+    await f.waitForTurn();
+    expect(f.queries[1]).toMatchObject({ cwd: worktree, resume: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" });
+    expect(f.queries[1].additionalDirectories).toEqual([path.resolve(secondary)]);
+  });
+
+  it("refuses to move a thread while its turn runs", async () => {
+    const finish = Promise.withResolvers<void>();
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      await finish.promise;
+      yield { type: "result", subtype: "success", is_error: false, result: "Done" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Work" }] });
+    try {
+      expect(() => f.backend.assertWorkspaceMovable(threadId)).toThrow("Wait for the active Claude turn to finish");
+      await expect(f.backend.moveWorkspace({
+        threadId, cwd: path.join(f.root, "elsewhere"),
+        linkedDirectory: { id: "elsewhere", kind: "local", label: "elsewhere", path: path.join(f.root, "elsewhere") },
+      })).rejects.toThrow("Wait for the active Claude turn to finish");
+      expect((await f.store.read(threadId)).cwd).toBe(f.root);
+    } finally {
+      finish.resolve();
+      await f.waitForTurn();
+    }
+  });
+
   it("publishes a native title during the first turn without blocking assistant streaming", async () => {
     const pendingTitle = Promise.withResolvers<string>();
     const finishTurn = Promise.withResolvers<void>();

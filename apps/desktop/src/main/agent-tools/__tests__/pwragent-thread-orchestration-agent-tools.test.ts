@@ -707,13 +707,30 @@ describe("pwragent thread orchestration agent tools", () => {
         callId: "call-1",
         turnId: "turn-1",
       },
+      // The owner picks local-to-worktree or worktree-to-worktree from where
+      // the thread works, so an omitted direction stays omitted.
       args: {
-        direction: "local-to-worktree",
         repositoryPath: "/repo/app",
         sourcePath: "/repo/app",
         leaveLocalBranch: "main",
       },
     });
+  });
+
+  it("passes worktree-to-worktree through with its strategy", async () => {
+    const handler = vi.fn(async () => ({ ok: false as const, error: { code: "forbidden" as const, message: "stub" } }));
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+    await router.handleDynamicToolCall({
+      backend: "claude",
+      call: {
+        threadId: "thread-1", turnId: "turn-1", callId: "call-1", namespace: "pwragent",
+        tool: "move_thread_workspace",
+        arguments: { direction: "worktree-to-worktree", strategy: "new-branch", newBranchName: " fix/next " },
+      },
+    });
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+      args: { direction: "worktree-to-worktree", strategy: "new-branch", newBranchName: "fix/next" },
+    }));
   });
 
   it.each([

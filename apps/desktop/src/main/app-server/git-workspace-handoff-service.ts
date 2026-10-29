@@ -95,6 +95,11 @@ type HandoffParams = {
   sourceBranch?: string;
   leaveLocalBranch?: string;
   newBranchName?: string;
+  /**
+   * worktree-to-worktree only: leave the previous worktree on disk instead of
+   * archiving it, because this thread does not own it.
+   */
+  keepSourceWorktree?: boolean;
   now?: number;
 };
 
@@ -359,7 +364,9 @@ export class GitWorkspaceHandoffService {
         ? await this.handoffToProject(params)
         : params.direction === "local-to-worktree"
           ? await this.handoffLocalToWorktree(params)
-          : await this.handoffWorktreeToLocal(params);
+          : params.direction === "worktree-to-worktree"
+            ? await this.handoffWorktreeToNewWorktree(params)
+            : await this.handoffWorktreeToLocal(params);
     return normalizeHandoffResponseIdentifiers(response);
   }
 
@@ -686,7 +693,7 @@ export class GitWorkspaceHandoffService {
     return {
       backend: context.backend,
       threadId: context.threadId,
-      direction: "local-to-worktree",
+      direction: params.direction,
       strategy: "new-branch",
       workMode: "worktree",
       branch: newBranchName,
@@ -753,7 +760,7 @@ export class GitWorkspaceHandoffService {
     return {
       backend: context.backend,
       threadId: context.threadId,
-      direction: "local-to-worktree",
+      direction: params.direction,
       strategy: "detached-changes",
       workMode: "worktree",
       baseSha,
@@ -762,6 +769,113 @@ export class GitWorkspaceHandoffService {
       linkedDirectory,
       sourceStash: appliedSourceStash,
       warnings,
+      completedAt: context.now,
+    };
+  }
+
+  /**
+   * Moves the thread from its worktree into a new one. Dirty non-ignored
+   * changes travel with it, as they do from Local. The previous worktree is
+   * archived with a checkpoint unless the thread does not own it.
+   */
+  private async handoffWorktreeToNewWorktree(
+    params: HandoffParams,
+  ): Promise<HandoffThreadWorkspaceResponse> {
+    const context = await this.buildContext(params);
+    if (path.resolve(context.repositoryPath) === path.resolve(context.sourcePath)) {
+      throw new Error("Worktree-to-worktree handoff must start from a worktree.");
+    }
+    const strategy = params.strategy ?? "detached-changes";
+    const moved = strategy === "new-branch"
+      ? await this.handoffLocalChangesToNewBranchWorktree(params, context)
+      : strategy === "detached-changes"
+        ? await this.handoffLocalChangesToDetachedWorktree(params, context)
+        : await this.moveWorktreeBranchToNewWorktree(context);
+    if (params.keepSourceWorktree) {
+      return {
+        ...moved,
+        warnings: [...moved.warnings, "The previous worktree was created outside PwrAgent, so it was left on disk."],
+      };
+    }
+    // The thread already moved. A failed archive leaves the old worktree in
+    // place; it must not undo the move.
+    try {
+      const archivedSourceWorktree = await this.worktreeArchiveService.archive({
+        backend: context.backend,
+        threadId: context.threadId,
+        repositoryPath: context.repositoryPath,
+        worktreePath: context.sourcePath,
+        now: context.now,
+      });
+      return { ...moved, archivedSourceWorktree };
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      return {
+        ...moved,
+        warnings: [...moved.warnings, `The previous worktree was left on disk: ${detail}`],
+      };
+    }
+  }
+
+  /** Checks the worktree's branch out in a new worktree and detaches the old one. */
+  private async moveWorktreeBranchToNewWorktree(
+    context: HandoffContext,
+  ): Promise<HandoffThreadWorkspaceResponse> {
+    if (context.branch === "HEAD") {
+      throw new Error("Moving the branch requires a named branch. Choose a detached or new-branch handoff instead.");
+    }
+    ensureBranchNotCheckedOutElsewhere({
+      allowedPath: context.sourcePath,
+      branch: context.branch,
+      worktrees: context.worktrees,
+    });
+    const targetPath = await computeWorktreePath({
+      backend: context.backend,
+      repoRoot: context.repositoryPath,
+      storage: await this.resolveStorage(),
+      homeDir: this.homeDir,
+      timestamp: context.now,
+    });
+    const sourceStash = await createNamedStashIfDirty({
+      gitEnv: this.gitEnv,
+      path: context.sourcePath,
+      message: this.buildStashMessage(context, "source"),
+    }).catch((error) => releaseReservationAndRethrow(targetPath, error));
+    // Free the branch so the new worktree can check it out.
+    await runGit(context.sourcePath, ["switch", "--detach"], this.gitEnv)
+      .catch((error) => releaseReservationAndRethrow(targetPath, error));
+    await mkdir(path.dirname(targetPath), { recursive: true });
+    try {
+      await runGit(
+        context.repositoryPath,
+        ["worktree", "add", targetPath, context.branch],
+        this.gitEnv,
+      );
+    } catch (error) {
+      await releaseWorktreePathReservation(targetPath);
+      throw error;
+    }
+    const appliedSourceStash = await applyVerifyAndDropStash(
+      targetPath,
+      sourceStash,
+      this.gitEnv,
+    );
+    return {
+      backend: context.backend,
+      threadId: context.threadId,
+      direction: "worktree-to-worktree",
+      strategy: "move-branch",
+      workMode: "worktree",
+      branch: context.branch,
+      repositoryPath: context.repositoryPath,
+      targetPath,
+      linkedDirectory: this.buildLinkedDirectory({
+        context,
+        kind: "worktree",
+        targetPath,
+      }),
+      sourceStash: appliedSourceStash,
+      warnings: ["Ignored files are not preserved by workspace handoff."],
       completedAt: context.now,
     };
   }

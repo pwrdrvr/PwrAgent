@@ -11437,6 +11437,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
   }, [activeTurnId]);
 
+  // Both directions create a new worktree and offer the same strategies.
+  const toNewWorktree = handoffDialog === "local-to-worktree"
+    || handoffDialog === "worktree-to-worktree";
+  const fromWorktreeToNew = handoffDialog === "worktree-to-worktree";
   const openHandoffDialog = (
     direction: HandoffThreadWorkspaceRequest["direction"]
   ): void => {
@@ -11450,7 +11454,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         props.onMoveThreadToMainCheckout ? "keep-local-branch" : "move-branch",
       );
     }
-    if (direction === "local-to-worktree") {
+    if (direction === "local-to-worktree" || direction === "worktree-to-worktree") {
       setLocalHandoffStrategy("detached-changes");
       setLeaveLocalBranch(branchOptions[0] ?? "");
       setNewLocalBranch(buildHandoffBranchSuggestion(sourceBranch));
@@ -11471,10 +11475,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     setHandoffSubmitting(true);
     setHandoffError(undefined);
     try {
-      const handoffStrategy =
-        handoffDialog === "local-to-worktree"
-          ? localHandoffStrategy
-          : undefined;
+      const handoffStrategy = toNewWorktree ? localHandoffStrategy : undefined;
       if (handoffDialog === "to-project") {
         await props.onHandoffThreadWorkspace({
           direction: "to-project",
@@ -11497,7 +11498,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         ...(handoffDialog === "local-to-worktree" && handoffStrategy === "move-branch"
           ? { leaveLocalBranch: leaveLocalBranch || undefined }
           : {}),
-        ...(handoffDialog === "local-to-worktree" && handoffStrategy === "new-branch"
+        ...(toNewWorktree && handoffStrategy === "new-branch"
           ? { newBranchName: newLocalBranch || undefined }
           : {}),
       });
@@ -11553,8 +11554,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       ? !projectTargetPath.trim()
       : !keepLocalBranchSelected && !sourceBranch) ||
     (handoffDialog === "local-to-worktree" &&
-      ((localHandoffStrategy === "move-branch" && !leaveLocalBranch) ||
-        (localHandoffStrategy === "new-branch" && !newLocalBranch.trim())));
+      localHandoffStrategy === "move-branch" && !leaveLocalBranch) ||
+    (fromWorktreeToNew &&
+      localHandoffStrategy === "move-branch" && (!sourceBranch || sourceBranch === "HEAD")) ||
+    (toNewWorktree &&
+      localHandoffStrategy === "new-branch" && !newLocalBranch.trim());
 
   const commitActiveAutocomplete = (): void => {
     if (autocompleteKind === "skills") {
@@ -12050,7 +12054,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               aria-label={
                 handoffDialog === "to-project"
                   ? "Move to Project"
-                  : handoffDialog === "local-to-worktree"
+                  : toNewWorktree
                     ? "Handoff to New Worktree"
                     : "Handoff to Local"
               }
@@ -12061,14 +12065,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               <h2>
                 {handoffDialog === "to-project"
                   ? "Move to Project"
-                  : handoffDialog === "local-to-worktree"
+                  : toNewWorktree
                     ? "Handoff to New Worktree"
                     : "Handoff to Local"}
               </h2>
               <p>
                 {handoffDialog === "to-project"
                   ? "Continue this conversation in another Git project. Files and branches stay in their current locations."
-                  : handoffDialog === "local-to-worktree"
+                  : toNewWorktree
                     ? "Choose how this thread should move into a new worktree."
                     : keepLocalBranchAvailable
                       ? <>Continue this thread in the main checkout, <code>{threadWorkspace.repositoryPath}</code>.</>
@@ -12151,8 +12155,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     <dt>
                       {handoffDialog === "worktree-to-local" && sourceBranch === "HEAD"
                         ? "Detached HEAD to move"
-                        : handoffDialog === "local-to-worktree" &&
-                            localHandoffStrategy === "detached-changes"
+                        : (handoffDialog === "local-to-worktree" &&
+                            localHandoffStrategy === "detached-changes")
+                          || (fromWorktreeToNew && localHandoffStrategy !== "move-branch")
                           ? "Current branch"
                           : "Branch to move"}
                     </dt>
@@ -12160,7 +12165,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   </div>
                 </dl>
               )}
-              {handoffDialog === "local-to-worktree" ? (
+              {toNewWorktree ? (
                 <>
                   <div
                     aria-label="Handoff strategy"
@@ -12179,8 +12184,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                         Handoff to Detached HEAD
                       </span>
                       <span>
-                        Keep Local on the current branch. Create a detached worktree at
-                        the current branch tip and move dirty non-ignored changes on top.
+                        {fromWorktreeToNew
+                          ? "Create a detached worktree at the current commit and move dirty non-ignored changes on top."
+                          : "Keep Local on the current branch. Create a detached worktree at the current branch tip and move dirty non-ignored changes on top."}
                       </span>
                     </button>
                     <button
@@ -12195,14 +12201,17 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                         Handoff to New Branch
                       </span>
                       <span>
-                        Keep Local on this branch. Create a named branch in the new
-                        worktree and move dirty non-ignored changes on top.
+                        {fromWorktreeToNew
+                          ? "Create a named branch in the new worktree and move dirty non-ignored changes on top."
+                          : "Keep Local on this branch. Create a named branch in the new worktree and move dirty non-ignored changes on top."}
                       </span>
                     </button>
                     <button
                       aria-checked={localHandoffStrategy === "move-branch"}
                       className="workspace-handoff-dialog__strategy"
-                      disabled={handoffSubmitting || branchOptions.length === 0}
+                      disabled={handoffSubmitting || (fromWorktreeToNew
+                        ? !sourceBranch || sourceBranch === "HEAD"
+                        : branchOptions.length === 0)}
                       role="radio"
                       type="button"
                       onClick={() => setLocalHandoffStrategy("move-branch")}
@@ -12211,12 +12220,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                         Handoff Current Branch
                       </span>
                       <span>
-                        Move this branch into the new worktree, then switch this checkout to
-                        a selected branch.
+                        {fromWorktreeToNew
+                          ? "Move this branch into the new worktree. The old worktree lets go of it first."
+                          : "Move this branch into the new worktree, then switch this checkout to a selected branch."}
                       </span>
                     </button>
                   </div>
-                  {localHandoffStrategy === "move-branch" ? (
+                  {handoffDialog === "local-to-worktree" && localHandoffStrategy === "move-branch" ? (
                     <div className="workspace-handoff-dialog__field">
                       <span aria-hidden="true">Leave current checkout on</span>
                       <BranchPicker
@@ -12252,7 +12262,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   No available local branch can be checked out before moving this branch.
                 </p>
               ) : null}
-              {handoffDialog === "local-to-worktree" &&
+              {toNewWorktree &&
               localHandoffStrategy === "detached-changes" ? (
                 <p className="workspace-handoff-dialog__note">
                   The new worktree starts at the current tip of{" "}
@@ -12260,7 +12270,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   top.
                 </p>
               ) : null}
-              {handoffDialog === "local-to-worktree" &&
+              {toNewWorktree &&
               localHandoffStrategy === "new-branch" ? (
                 <p className="workspace-handoff-dialog__note">
                   The new worktree creates{" "}
@@ -12271,6 +12281,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   )}{" "}
                   at the current tip of {sourceBranch ?? "this branch"} and receives
                   dirty non-ignored changes on top.
+                </p>
+              ) : null}
+              {fromWorktreeToNew ? (
+                <p className="workspace-handoff-dialog__note">
+                  The current worktree is archived with a checkpoint. Its branch stays where it is.
                 </p>
               ) : null}
               {keepLocalBranchSelected ? (
@@ -14311,6 +14326,21 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     {workspaceLabel}
                   </button>
                   <div className="composer-dropdown__separator" role="separator" />
+                  {/* A peer on an older build would read this direction as
+                      Handoff to Local, so only this machine's threads offer it. */}
+                  {threadWorkspace.mode === "worktree"
+                  && filesystemFederationTarget?.scope !== "remote" ? (
+                    <button
+                      className="composer-dropdown__option"
+                      disabled={!canHandoffThreadWorkspace}
+                      role="menuitem"
+                      type="button"
+                      onClick={() => openHandoffDialog("worktree-to-worktree")}
+                    >
+                      <span aria-hidden="true" className="composer-dropdown__check" />
+                      Handoff to New Worktree
+                    </button>
+                  ) : null}
                   <button
                     className="composer-dropdown__option"
                     disabled={!canHandoffThreadWorkspace}

@@ -195,7 +195,7 @@ function descriptionForOperation(
     case "detach_thread_directory":
       return "Detach a secondary directory from the current PwrAgent thread. Use this only when the user requests cleanup. You cannot detach the primary provider/runtime cwd. Pass directoryId when known. Otherwise, pass path or worktreePath from get_thread_status.";
     case "move_thread_workspace":
-      return "Move the current thread workspace after this turn ends. Use direction=to-project with targetPath to adopt an existing Git checkout or worktree, including one managed by another agent. Files and branches stay in place, and adopted worktrees are preserved on thread archive. Default Access requires confirmation for an untrusted destination. Omit direction to create an isolated worktree. Pass sourcePath if that source is unclear. Do not create a child thread. After success, stop work and end the turn. PwrAgent updates cwd, reconnects ACP when necessary, and starts a continuation. Check pendingWorkspaceMoves only after the turn.";
+      return "Move the current thread workspace after this turn ends. Use direction=to-project with targetPath to adopt an existing Git checkout or worktree, including one managed by another agent. Files and branches stay in place, and adopted worktrees are preserved on thread archive. Default Access requires confirmation for an untrusted destination. Omit direction to create an isolated new worktree from the current checkout or worktree; dirty non-ignored changes move with the thread, and a previous worktree this thread owns is archived with a checkpoint. Pass sourcePath if that source is unclear. Do not create a child thread. After success, stop work and end the turn. PwrAgent updates cwd, reconnects ACP when necessary, and starts a continuation. Check pendingWorkspaceMoves only after the turn.";
     case "send_message_to_thread":
       return "Send guidance to another PwrAgent thread. Prefer steer_thread for cross-thread communication. Default delivery groups pending messages from all senders into one queued steer. Each message retains its sender and time context. Supported active turns receive steering. Idle targets receive one grouped follow-up. A batch already dispatching is immutable. Later messages form the next batch. Set delivery=new_turn only when a distinct new turn is required. To replace your pending contribution, pass its queueEntryId as replaceQueueEntryId. Supply your complete consolidated prompt. Other senders' messages and queue position are preserved. A replacement fails if already dispatched. Use stop_thread for urgent interruption. Find unknown targets with search_threads or read_thread. Pass instanceId for remote targets when known. Set includeRemote=false for local resolution. Reply normally to the current thread. Return threadLink verbatim.";
     case "steer_thread":
@@ -362,7 +362,7 @@ function inputSchemaForOperation(
             type: "string",
             enum: THREAD_WORKSPACE_HANDOFF_DIRECTIONS,
             description:
-              "Use `to-project` with targetPath to continue in an existing checkout or worktree. `local-to-worktree` creates a worktree and is the default. `worktree-to-local` is reserved and may be rejected until implemented.",
+              "Omit it to create a new worktree from the current workspace. `local-to-worktree` starts from the local checkout and `worktree-to-worktree` starts from a worktree. Use `to-project` with targetPath to continue in an existing checkout or worktree. `worktree-to-local` is not supported for agent moves.",
           },
           targetPath: {
             type: "string",
@@ -958,11 +958,13 @@ function normalizeStartReviewArgs(
 function normalizeMoveThreadWorkspaceArgs(
   args: Record<string, unknown>,
 ): MoveThreadWorkspaceToolArgs | undefined {
+  // Omitted, PwrAgent picks local-to-worktree or worktree-to-worktree from
+  // where the thread works now.
   const direction =
     args.direction === undefined
-      ? "local-to-worktree"
+      ? undefined
       : readChoice(args.direction, THREAD_WORKSPACE_HANDOFF_DIRECTIONS);
-  if (!direction) {
+  if (args.direction !== undefined && !direction) {
     return undefined;
   }
   const strategy =
@@ -1005,7 +1007,7 @@ function normalizeMoveThreadWorkspaceArgs(
   const newBranchName = readTrimmedString(args.newBranchName);
 
   return {
-    direction,
+    ...(direction ? { direction } : {}),
     ...(targetPath ? { targetPath } : {}),
     ...(strategy ? { strategy } : {}),
     ...(backend ? { backend: backend as MoveThreadWorkspaceToolArgs["backend"] } : {}),

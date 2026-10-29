@@ -1127,6 +1127,8 @@ export type ArchiveWorktreeResponse = {
 export const THREAD_WORKSPACE_HANDOFF_DIRECTIONS = [
   "local-to-worktree",
   "worktree-to-local",
+  /** From a worktree into a new worktree of the same repository. */
+  "worktree-to-worktree",
   "to-project",
 ] as const;
 

@@ -524,6 +524,84 @@ describe("GitWorkspaceHandoffService", () => {
     );
   });
 
+  describe("worktree to new worktree", () => {
+    async function dirtyWorktree(): Promise<{ repoPath: string; worktreePath: string }> {
+      const repoPath = await createRepo();
+      await git(repoPath, ["switch", "main"]);
+      const worktreePath = path.join(path.dirname(repoPath), "worktree-feature");
+      await git(repoPath, ["worktree", "add", worktreePath, "feature/handoff"]);
+      await writeFile(path.join(worktreePath, "README.md"), "dirty worktree\n", "utf8");
+      await writeFile(path.join(worktreePath, "worktree-note.txt"), "untracked\n", "utf8");
+      return { repoPath, worktreePath };
+    }
+
+    async function expectCarriedChanges(targetPath: string): Promise<void> {
+      await expect(readFile(path.join(targetPath, "README.md"), "utf8")).resolves.toBe("dirty worktree\n");
+      await expect(readFile(path.join(targetPath, "worktree-note.txt"), "utf8")).resolves.toBe("untracked\n");
+    }
+
+    it("moves the branch and its changes to a new worktree and archives the old one", async () => {
+      const { repoPath, worktreePath } = await dirtyWorktree();
+      const service = new GitWorkspaceHandoffService({ resolveWorktreeStorage: () => "in-repo" });
+      const result = await service.handoff({
+        backend: "claude", threadId: "thread-1", direction: "worktree-to-worktree", strategy: "move-branch",
+        repositoryPath: repoPath, sourcePath: worktreePath, sourceBranch: "feature/handoff", now: 3000,
+      });
+
+      expect(result).toMatchObject({ direction: "worktree-to-worktree", strategy: "move-branch", workMode: "worktree", branch: "feature/handoff" });
+      expect(result.linkedDirectory).toMatchObject({ kind: "worktree", worktreePath: toForwardSlashes(result.targetPath) });
+      expect(path.resolve(result.targetPath)).not.toBe(path.resolve(worktreePath));
+      expect(await git(result.targetPath, ["branch", "--show-current"])).toBe("feature/handoff");
+      await expectCarriedChanges(result.targetPath);
+      expect(result.archivedSourceWorktree).toMatchObject({ state: "archived" });
+      expect(await pathExists(worktreePath)).toBe(false);
+      // Local was never involved.
+      expect(await git(repoPath, ["branch", "--show-current"])).toBe("main");
+    });
+
+    it("starts a new branch from the worktree's commit and keeps the old branch", async () => {
+      const { repoPath, worktreePath } = await dirtyWorktree();
+      const baseSha = await git(worktreePath, ["rev-parse", "HEAD"]);
+      const service = new GitWorkspaceHandoffService({ resolveWorktreeStorage: () => "in-repo" });
+      const result = await service.handoff({
+        backend: "claude", threadId: "thread-1", direction: "worktree-to-worktree", strategy: "new-branch",
+        newBranchName: "feature/next", repositoryPath: repoPath, sourcePath: worktreePath, now: 3100,
+      });
+
+      expect(result).toMatchObject({ direction: "worktree-to-worktree", strategy: "new-branch", branch: "feature/next", baseSha });
+      expect(await git(result.targetPath, ["branch", "--show-current"])).toBe("feature/next");
+      await expectCarriedChanges(result.targetPath);
+      expect(await pathExists(worktreePath)).toBe(false);
+      expect(await git(repoPath, ["rev-parse", "feature/handoff"])).toBe(baseSha);
+    });
+
+    it("leaves a worktree the thread does not own on disk", async () => {
+      const { repoPath, worktreePath } = await dirtyWorktree();
+      const service = new GitWorkspaceHandoffService({ resolveWorktreeStorage: () => "in-repo" });
+      const result = await service.handoff({
+        backend: "codex", threadId: "thread-1", direction: "worktree-to-worktree",
+        repositoryPath: repoPath, sourcePath: worktreePath, keepSourceWorktree: true, now: 3200,
+      });
+
+      expect(result.strategy).toBe("detached-changes");
+      expect(await git(result.targetPath, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
+      await expectCarriedChanges(result.targetPath);
+      expect(result.archivedSourceWorktree).toBeUndefined();
+      expect(result.warnings).toContain("The previous worktree was created outside PwrAgent, so it was left on disk.");
+      expect(await pathExists(worktreePath)).toBe(true);
+      expect(await git(worktreePath, ["status", "--porcelain", "--untracked-files=normal"])).toBe("");
+    });
+
+    it("refuses to start from the local checkout", async () => {
+      const repoPath = await createRepo();
+      const service = new GitWorkspaceHandoffService({ resolveWorktreeStorage: () => "in-repo" });
+      await expect(service.handoff({
+        backend: "claude", threadId: "thread-1", direction: "worktree-to-worktree",
+        repositoryPath: repoPath, sourcePath: repoPath,
+      })).rejects.toThrow("Worktree-to-worktree handoff must start from a worktree.");
+    });
+  });
+
   it("moves a detached worktree head back to local without treating stale branch metadata as truth", async () => {
     const repoPath = await createRepo();
     await writeFile(path.join(repoPath, "README.md"), "dirty detached\n", "utf8");
