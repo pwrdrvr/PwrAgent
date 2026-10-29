@@ -31,7 +31,6 @@ import remarkGfm from "remark-gfm";
 import { AppIcon } from "../../components/AppIcon";
 import { CloseIcon, FileIcon, FolderIcon, PopoutIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { copyText } from "../../lib/copy-text";
 import { parseInstanceReferenceUrl } from "../../lib/instance-references";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { decodeMarkdownDestination } from "../../lib/directory-references";
@@ -341,7 +340,11 @@ function InlineTranscriptCode(props: { children: ReactNode; text: string }) {
               viewLocalFile({ ...target, label: props.text });
             }}
           >
-            <FileIcon className="thread-markdown__file-chip-icon" size={12} aria-hidden="true" />
+            {/* The word joiner keeps the glyph on the line with the name. */}
+            <span aria-hidden="true">
+              <FileIcon className="thread-markdown__file-chip-icon" size={12} />
+              {"\u2060"}
+            </span>
             <code className="thread-markdown__file-chip-code">{props.children}</code>
           </a>
         ) : (

@@ -27163,18 +27163,17 @@ a.transcript-message__messaging-origin:focus-visible {
 
 /* A previewable file named in inline code. The glyph and accent set it apart
    from plain inline code, which copies on click. */
+/* Inline, not inline-block: a long path wraps with the sentence, and each
+   line fragment keeps the chip's border and padding. */
 .thread-markdown__file-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 100%;
   padding: 1px 7px 1px 5px;
   border: 1px solid var(--accent-border);
   border-radius: 6px;
   background: var(--accent-soft);
   color: var(--accent-bright);
   text-decoration: none;
-  vertical-align: baseline;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 .thread-markdown__file-chip:hover {
@@ -27187,11 +27186,12 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .thread-markdown__file-chip-icon {
-  flex: none;
+  display: inline-block;
+  margin-right: 5px;
+  vertical-align: -1px;
 }
 
 .thread-markdown__file-chip-code {
-  min-width: 0;
   font-family: var(--font-mono);
   font-size: 12px;
   overflow-wrap: anywhere;
@@ -27712,11 +27712,12 @@ a.transcript-message__messaging-origin:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
-/* Copy sits beside the outline icon buttons in both preview headers, so it
-   drops the transcript chip's fill and takes their size and glyph. */
+/* Copy sits beside the borderless icon buttons in both preview headers, so it
+   drops the transcript chip's border and fill and takes their size and glyph. */
 .transcript-copy-button.file-preview__copy {
   width: 28px;
   height: 28px;
+  border-color: transparent;
   background: transparent;
   opacity: 1;
 }
@@ -27726,9 +27727,14 @@ a.transcript-message__messaging-origin:focus-visible {
   height: 16px;
 }
 
-.transcript-copy-button.file-preview__copy:hover,
+.transcript-copy-button.file-preview__copy:hover {
+  border-color: transparent;
+  background: var(--bg-panel-hover);
+}
+
 .transcript-copy-button.file-preview__copy:focus-visible,
 .transcript-copy-button.file-preview__copy[data-copied="true"] {
+  border-color: transparent;
   background: transparent;
 }
 
