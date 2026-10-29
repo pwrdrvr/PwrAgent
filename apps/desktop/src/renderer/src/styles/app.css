@@ -5398,6 +5398,240 @@ textarea,
   margin-inline: var(--sidebar-rail-inset);
 }
 
+/* The lens switch and the project index toggle share one row. The row takes
+   the pull to the lane inset that `.lens-switch` carries on its own, so the
+   switch gives up its explicit width and fills what the toggle leaves. At the
+   280px sidebar the switch is then 224px: the arithmetic on `.lens-switch`
+   leaves each icon tab ~35px, still above its 28px floor. */
+.sidebar__lens-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  margin-inline: var(--sidebar-masthead-pull);
+}
+
+.sidebar__lens-row > .lens-switch {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  margin-inline: 0;
+}
+
+.sidebar__project-index-toggle {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.sidebar__project-index-toggle.is-on {
+  color: var(--accent-bright);
+}
+
+.sidebar__project-index-toggle:hover {
+  background: var(--bg-panel-hover);
+}
+
+.sidebar__project-index-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* Project index (ProjectIndex.tsx): a column of project names beside the
+   list, ported from PwrGit's repo index. The section becomes a grid so the
+   index and the lane region sit side by side without another wrapper.
+
+   The fit is CSS. The column takes its longest name's width, never less
+   than 76px (`calc(7ch + 19px)` in its 12px font, the shortest cut that
+   still tells a family of names apart) and never more than the sidebar
+   past the list's 280px floor. The section is the sidebar minus its 2 × 16px
+   rail padding, so that budget is `100cqi + 32px − 280px`, and below a
+   324px section (a 356px sidebar) the column steps aside.
+
+   Each track is named explicitly: with the column hidden, auto-placement
+   would otherwise drop the lane region into the 0-width first track. */
+.sidebar__section--with-project-index {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  container: sidebar-lanes / inline-size;
+}
+
+.sidebar__section--with-project-index > .sidebar__lens-row {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+
+.sidebar__section--with-project-index > .project-index-pane {
+  grid-column: 1;
+  grid-row: 2;
+  margin-left: calc(-1 * var(--sidebar-rail-inset));
+}
+
+.sidebar__section--with-project-index > .sidebar__scroll-region {
+  grid-column: 2;
+  grid-row: 2;
+  margin-left: 0;
+}
+
+@container sidebar-lanes (max-width: 323.98px) {
+  .sidebar__section--with-project-index > .project-index-pane {
+    display: none;
+  }
+
+  .sidebar__section--with-project-index > .sidebar__scroll-region {
+    margin-left: calc(-1 * var(--sidebar-rail-inset));
+  }
+}
+
+.project-index-pane {
+  display: flex;
+  position: relative;
+  min-height: 0;
+}
+
+.project-index {
+  width: max-content;
+  min-width: 76px;
+  max-width: max(76px, calc(100cqi + 2 * var(--sidebar-rail-inset) - 280px));
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  padding: 2px 0 16px;
+  border-right: 1px solid var(--border-subtle);
+  font: 500 calc(var(--sidebar-title-size) - 1px) / 1.25 var(--font-sans);
+}
+
+.project-index__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.project-index__item {
+  display: flex;
+  position: relative;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px 4px 11px;
+  border: 0;
+  border-radius: 0 6px 6px 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  scroll-margin-block: 4px;
+}
+
+/* Scroll position is a 2px rail, never a tint: grey for a project on
+   screen, the accent for the project at the top of the list. Only the
+   selection tints, so the two never read as two selections. */
+.project-index__item::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 3px;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+}
+
+.project-index__item.is-in-view::before {
+  background: var(--border-strong);
+}
+
+.project-index__item.is-current {
+  color: var(--text-primary);
+}
+
+.project-index__item.is-current::before {
+  background: var(--accent);
+}
+
+.project-index__item:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.project-index__item.is-selected {
+  background: var(--bg-row-active);
+  color: var(--accent-bright);
+}
+
+.project-index__item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.project-index__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-index__mark {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+/* The seam between the index and the list, drawn like the sidebar's own:
+   an 11px hit area centred on the border, lit 1px on hover or focus. */
+.project-index__grip {
+  position: absolute;
+  top: 0;
+  right: -6px;
+  bottom: 0;
+  z-index: 11;
+  width: 11px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.project-index__grip::after {
+  content: "";
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 5px;
+  width: 1px;
+  background: transparent;
+  transition:
+    background 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.project-index__grip:hover::after,
+.project-index__grip:focus-visible::after,
+.is-project-index-resizing .project-index__grip::after {
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-bg-medium);
+}
+
+.project-index__grip:hover:not(:focus-visible)::after {
+  transition-delay: 120ms;
+}
+
+.project-index__grip:focus-visible {
+  outline: none;
+}
+
+body.is-project-index-resizing {
+  cursor: col-resize;
+}
+
 .context-panel h3 {
   margin: 0;
   font-size: 14px;

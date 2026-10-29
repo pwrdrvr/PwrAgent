@@ -100,10 +100,14 @@ import type { SubthreadLaunchpadDraft } from "../../lib/useThreadNavigation";
  * it was clicked from instead: it keeps that row in view, and flashes the
  * project's summary, because that click can also switch the lens and the
  * eye needs somewhere to land.
+ *
+ * A jump from the project index waits for nothing: it moves the list and
+ * leaves the selection alone, and flashes the summary for the same reason.
  */
 export type ProjectRevealRequest = {
   key: string;
   selectedThreadKey?: string;
+  jump?: true;
 };
 
 /** How long a header reveal outlines the project's summary. */
@@ -571,9 +575,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
   useEffect(() => {
     const request = props.projectReveal;
     if (!request || handledProjectReveal.current === request
-      || props.selectedItemKey !== (
+      || (!request.jump && props.selectedItemKey !== (
         request.selectedThreadKey ?? buildLaunchpadSelectionKey(request.key)
-      )) return;
+      ))) return;
     const header = projectHeaders.current.get(request.key);
     if (!header) return;
     if (expandedByKey[request.key] !== true) {
@@ -600,6 +604,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
           ?.scrollIntoView?.({ block: "nearest" });
         setFlashedProjectKey(request.key);
       }
+      if (request.jump) setFlashedProjectKey(request.key);
       handledProjectReveal.current = request;
       props.onProjectRevealComplete?.();
     });

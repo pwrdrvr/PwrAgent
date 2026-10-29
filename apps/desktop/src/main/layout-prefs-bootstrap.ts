@@ -47,6 +47,9 @@ import { getExistingDesktopConfigStore } from "./settings/config-store/desktop-c
 export type BootstrapLayoutPreferences = {
   contextRailPinned: boolean;
   sidebarHidden: boolean;
+  /** The project index splits the sidebar, so it moves the list's width too. */
+  projectIndexHidden: boolean;
+  projectIndexWidth: number | null;
 };
 
 /**
@@ -74,6 +77,12 @@ export function readBootstrapLayoutPreferences(
           ?? BOOTSTRAP_LAYOUT_DEFAULTS.contextRailPinned,
         sidebarHidden:
           stored.sidebarHidden ?? BOOTSTRAP_LAYOUT_DEFAULTS.sidebarHidden,
+        projectIndexHidden:
+          stored.projectIndexHidden
+          ?? BOOTSTRAP_LAYOUT_DEFAULTS.projectIndexHidden,
+        projectIndexWidth:
+          stored.projectIndexWidth
+          ?? BOOTSTRAP_LAYOUT_DEFAULTS.projectIndexWidth,
       };
     }
   }
@@ -87,6 +96,12 @@ export function readBootstrapLayoutPreferences(
         ?? BOOTSTRAP_LAYOUT_DEFAULTS.contextRailPinned,
       sidebarHidden:
         config.ui?.sidebarHidden ?? BOOTSTRAP_LAYOUT_DEFAULTS.sidebarHidden,
+      projectIndexHidden:
+        config.ui?.projectIndexHidden
+        ?? BOOTSTRAP_LAYOUT_DEFAULTS.projectIndexHidden,
+      projectIndexWidth:
+        config.ui?.projectIndexWidth
+        ?? BOOTSTRAP_LAYOUT_DEFAULTS.projectIndexWidth,
     };
   } catch {
     // Config missing / unreadable / malformed. The renderer's full settings
@@ -127,10 +142,21 @@ export function parseBootstrapLayoutPreferencesArg(
           typeof parsed?.sidebarHidden === "boolean"
             ? parsed.sidebarHidden
             : BOOTSTRAP_LAYOUT_DEFAULTS.sidebarHidden,
+        projectIndexHidden:
+          typeof parsed?.projectIndexHidden === "boolean"
+            ? parsed.projectIndexHidden
+            : BOOTSTRAP_LAYOUT_DEFAULTS.projectIndexHidden,
+        projectIndexWidth: readBootstrapWidth(parsed?.projectIndexWidth),
       };
     } catch {
       return undefined;
     }
   }
   return undefined;
+}
+
+function readBootstrapWidth(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.round(value)
+    : BOOTSTRAP_LAYOUT_DEFAULTS.projectIndexWidth;
 }

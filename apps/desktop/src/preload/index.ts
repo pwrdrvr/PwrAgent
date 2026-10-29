@@ -3595,13 +3595,20 @@ const LAYOUT_ARG_PREFIX = "--pwragent-layout-preferences=";
 function readBootstrapLayoutPreferences(): {
   contextRailPinned: boolean;
   sidebarHidden: boolean;
+  projectIndexHidden: boolean;
+  projectIndexWidth: number | null;
 } {
   const defaults = DESKTOP_UI_LAYOUT_DEFAULTS;
   for (const arg of process.argv) {
     if (!arg.startsWith(LAYOUT_ARG_PREFIX)) continue;
     try {
       const raw = JSON.parse(arg.slice(LAYOUT_ARG_PREFIX.length)) as
-        | { contextRailPinned?: unknown; sidebarHidden?: unknown }
+        | {
+          contextRailPinned?: unknown;
+          sidebarHidden?: unknown;
+          projectIndexHidden?: unknown;
+          projectIndexWidth?: unknown;
+        }
         | null;
       return {
         contextRailPinned: typeof raw?.contextRailPinned === "boolean"
@@ -3610,6 +3617,14 @@ function readBootstrapLayoutPreferences(): {
         sidebarHidden: typeof raw?.sidebarHidden === "boolean"
           ? raw.sidebarHidden
           : defaults.sidebarHidden,
+        projectIndexHidden: typeof raw?.projectIndexHidden === "boolean"
+          ? raw.projectIndexHidden
+          : defaults.projectIndexHidden,
+        projectIndexWidth: typeof raw?.projectIndexWidth === "number"
+          && Number.isFinite(raw.projectIndexWidth)
+          && raw.projectIndexWidth > 0
+          ? Math.round(raw.projectIndexWidth)
+          : defaults.projectIndexWidth,
       };
     } catch {
       break;
