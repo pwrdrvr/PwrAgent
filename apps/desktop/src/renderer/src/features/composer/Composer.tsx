@@ -3094,6 +3094,9 @@ function ComposerApplicationButton(props: {
   );
 }
 
+const LINEAR_EXPIRED_LINKS_MESSAGE =
+  "Linear image links expire five minutes after copying. Connect Linear in Settings → Plugins to attach older ones.";
+
 export const Composer = memo(function Composer(props: ComposerProps) {
   const nativeVoiceApi = isNativeVoiceApi(props.desktopApi) ? props.desktopApi : undefined;
   // Composer voice entry points stay hidden until dictation can edit only the
@@ -10136,9 +10139,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
   /**
    * Text copied from Linear names its images by a link that expires five
-   * minutes after the copy. Main reads them through the Linear connection
-   * instead, and they join the tray of the composer the text was pasted
-   * into. A thread switch before they arrive drops them.
+   * minutes after the copy. Main fetches a link that is still valid and reads
+   * an expired one through the Linear connection, and the images join the
+   * tray of the composer the text was pasted into. A thread switch before
+   * they arrive drops them.
    */
   const attachLinearPastedImages = async (text: string): Promise<void> => {
     const fetchImages = props.desktopApi?.fetchLinearPastedImages;
@@ -10155,8 +10159,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       };
     }
     if (pasteScopeRef.current.key !== pasteScope.key) return;
-    // Off, or no Linear connection: the paste is plain text, as before.
-    if (response.status === "disabled" || response.status === "unavailable") return;
+    // Off: the paste is plain text, as before.
+    if (response.status === "disabled") return;
+    if (response.status === "unavailable") {
+      showComposerNotice({
+        title: "Linear images not attached",
+        message: LINEAR_EXPIRED_LINKS_MESSAGE,
+      });
+      return;
+    }
     if (response.status === "failed") {
       showComposerNotice({
         title: "Linear images not attached",
@@ -10167,9 +10178,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (response.failed > 0) {
       showComposerNotice({
         title: "Some Linear images not attached",
-        message: response.failed === 1
-          ? "One image could not be downloaded from Linear."
-          : `${response.failed} images could not be downloaded from Linear.`,
+        message: response.needsConnection
+          ? LINEAR_EXPIRED_LINKS_MESSAGE
+          : response.failed === 1
+            ? "One image could not be downloaded from Linear."
+            : `${response.failed} images could not be downloaded from Linear.`,
       });
     }
     if (response.images.length === 0) return;

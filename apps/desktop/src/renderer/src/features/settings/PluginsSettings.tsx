@@ -2797,8 +2797,8 @@ function ManagedMcpConnectionRow(props: {
                 </span>
                 <span className="settings-mcp-row__policy-hint">
                   {connection.enabled
-                    ? "When you paste an issue or description from Linear, its images are downloaded through this connection and attached to the message."
-                    : "Offer it to threads first. Pasted images are downloaded through this connection."}
+                    ? "When you paste an issue or description from Linear, its images are attached to the message. Links older than five minutes are downloaded through this connection."
+                    : "Pasted images are attached while their links are fresh. Offer it to threads to download older ones."}
                 </span>
               </span>
             </div>

@@ -17,7 +17,7 @@ function tag(src: string, alt?: string, attrs = ' quality="preview"'): string {
 }
 
 describe("findLinearPastedImages", () => {
-  it("reads a copied prompt's image and drops the expiring signature", () => {
+  it("reads a copied prompt's image, keeping its signed link beside the file identity", () => {
     const text = [
       '<issue identifier="PWR-5"> <title>Mark Read hotkey</title> <description>',
       "## Report",
@@ -25,9 +25,11 @@ describe("findLinearPastedImages", () => {
       "</description> </issue>",
     ].join("\n");
 
-    expect(findLinearPastedImages(text)).toEqual([
-      { url: FILE, alt: "attention-lens-mark-read.png" },
-    ]);
+    expect(findLinearPastedImages(text)).toEqual([{
+      url: FILE,
+      signedUrl: `${FILE}?signature=eyJ.abc.def`,
+      alt: "attention-lens-mark-read.png",
+    }]);
   });
 
   it("reads a tag with no attributes, as the MCP returns it", () => {
@@ -61,7 +63,21 @@ describe("findLinearPastedImages", () => {
   it("lists a file once however many times it appears", () => {
     const text = `${tag(`${FILE}?signature=a`, "one")}${tag(`${FILE}?signature=b`, "two")}`;
 
-    expect(findLinearPastedImages(text)).toEqual([{ url: FILE, alt: "one" }]);
+    expect(findLinearPastedImages(text)).toEqual([
+      { url: FILE, signedUrl: `${FILE}?signature=a`, alt: "one" },
+    ]);
+  });
+
+  it("takes the signature from a later copy when the first had none", () => {
+    const text = `${tag(FILE, "one")}![two](${FILE}?x=1&signature=late)`;
+
+    expect(findLinearPastedImages(text)).toEqual([
+      { url: FILE, signedUrl: `${FILE}?signature=late`, alt: "one" },
+    ]);
+  });
+
+  it("ignores a signature that is only in the fragment", () => {
+    expect(findLinearPastedImages(tag(`${FILE}#signature=nope`))).toEqual([{ url: FILE }]);
   });
 
   it("caps one paste", () => {

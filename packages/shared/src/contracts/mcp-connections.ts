@@ -423,10 +423,19 @@ export type LinearPastedImageData = {
 };
 
 export type FetchLinearPastedImagesResponse =
-  | { status: "fetched"; images: LinearPastedImageData[]; failed: number }
+  | {
+    status: "fetched";
+    images: LinearPastedImageData[];
+    failed: number;
+    /** Some links had expired, and no Linear connection could read them. */
+    needsConnection?: boolean;
+  }
   /** The Linear paste setting is off. */
   | { status: "disabled" }
-  /** No signed-in Linear connection is offered to threads. */
+  /**
+   * Every link had expired, and no Linear connection is offered to threads
+   * to read them.
+   */
   | { status: "unavailable" }
   | { status: "failed"; message: string };
 

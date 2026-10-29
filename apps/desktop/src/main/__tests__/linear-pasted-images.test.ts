@@ -7,6 +7,24 @@ import {
 
 const FILE = "https://uploads.linear.app/org/issue/file";
 const PNG = Buffer.from("png-bytes").toString("base64");
+const NOW = 1_793_243_811_000;
+const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+
+/** A Linear upload signature with the given claims. Linear verifies the MAC, not us. */
+function signed(file: string, expiresInSeconds: number, path = new URL(file).pathname): string {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const iat = Math.floor(NOW / 1000) - 10;
+  const token = [
+    encode({ alg: "HS256", typ: "JWT" }),
+    encode({ path, iat, exp: Math.floor(NOW / 1000) + expiresInSeconds }),
+    "mac",
+  ].join(".");
+  return `${file}?signature=${token}`;
+}
+
+function imageResponse(bytes: Uint8Array, contentType = "image/png"): Response {
+  return new Response(bytes, { status: 200, headers: { "content-type": contentType } });
+}
 
 function pasted(src: string, alt = "shot.png"): string {
   return `<issue identifier="PWR-5"><description><linear-image quality="preview">${JSON.stringify({
@@ -35,6 +53,11 @@ function options(
   return {
     opened,
     connectionIds: connectionIds ?? undefined,
+    // No test reaches the network; a direct fetch must be stubbed explicitly.
+    fetch: vi.fn(async () => {
+      throw new Error("unexpected direct fetch");
+    }),
+    now: () => NOW,
     openSession: async ({ connectionId }) => {
       opened.push(connectionId);
       const found = sessions[connectionId];
@@ -135,5 +158,101 @@ describe("fetchLinearPastedImages", () => {
     expect(linear.callTool).toHaveBeenCalledWith("extract_images", {
       markdown: `![ahttps://evilb](${FILE})`,
     });
+  });
+});
+
+describe("fetchLinearPastedImages with a fresh signed link", () => {
+  it("fetches the signed link directly, with no Linear connection", async () => {
+    const opts = options({}, []);
+    opts.fetch = vi.fn(async () => imageResponse(PNG_BYTES));
+    const link = signed(FILE, 240);
+
+    await expect(fetchLinearPastedImages(pasted(link), opts)).resolves.toEqual({
+      status: "fetched",
+      failed: 0,
+      images: [{
+        name: "shot.png",
+        mimeType: "image/png",
+        dataBase64: Buffer.from(PNG_BYTES).toString("base64"),
+      }],
+    });
+    expect(opts.fetch).toHaveBeenCalledWith(link, expect.objectContaining({ redirect: "error" }));
+    expect(opts.opened).toEqual([]);
+  });
+
+  it("leaves an expired link to the MCP", async () => {
+    const linear = session({ content: [{ type: "image", data: PNG, mimeType: "image/png" }] });
+    const opts = options({ linear });
+
+    await expect(fetchLinearPastedImages(pasted(signed(FILE, -60)), opts))
+      .resolves.toMatchObject({ status: "fetched", failed: 0 });
+    expect(opts.fetch).not.toHaveBeenCalled();
+    expect(opts.opened).toEqual(["linear"]);
+  });
+
+  it("says a connection is needed when an expired link has none", async () => {
+    await expect(fetchLinearPastedImages(pasted(signed(FILE, -60)), options({}, [])))
+      .resolves.toEqual({ status: "unavailable" });
+  });
+
+  it("attaches the fresh images and flags the expired ones when there is no connection", async () => {
+    const opts = options({}, []);
+    opts.fetch = vi.fn(async () => imageResponse(PNG_BYTES));
+    const text = `${pasted(signed(`${FILE}-a`, 240), "a.png")}${pasted(signed(`${FILE}-b`, -60), "b.png")}`;
+
+    await expect(fetchLinearPastedImages(text, opts)).resolves.toMatchObject({
+      status: "fetched",
+      failed: 1,
+      needsConnection: true,
+      images: [{ name: "a.png" }],
+    });
+  });
+
+  it("falls back to the MCP when the direct fetch is refused", async () => {
+    const linear = session({ content: [{ type: "image", data: PNG, mimeType: "image/png" }] });
+    const opts = options({ linear });
+    opts.fetch = vi.fn(async () => new Response("denied", { status: 403 }));
+
+    await expect(fetchLinearPastedImages(pasted(signed(FILE, 240)), opts))
+      .resolves.toMatchObject({ status: "fetched", images: [{ dataBase64: PNG }] });
+    expect(opts.opened).toEqual(["linear"]);
+  });
+
+  it("keeps only bytes that are a raster image, whatever the header says", async () => {
+    const opts = options({}, []);
+    opts.fetch = vi.fn(async () =>
+      imageResponse(new TextEncoder().encode("<svg onload=alert(1)>"), "image/png")
+    );
+
+    await expect(fetchLinearPastedImages(pasted(signed(FILE, 240)), opts))
+      .resolves.toEqual({ status: "unavailable" });
+  });
+
+  it("refuses a body larger than the cap", async () => {
+    const opts = options({}, []);
+    opts.fetch = vi.fn(async () => new Response(PNG_BYTES, {
+      status: 200,
+      headers: { "content-length": String(26 * 1024 * 1024) },
+    }));
+
+    await expect(fetchLinearPastedImages(pasted(signed(FILE, 240)), opts))
+      .resolves.toEqual({ status: "unavailable" });
+  });
+
+  it("does not use a signature granted for a different file", async () => {
+    const opts = options({}, []);
+
+    await expect(
+      fetchLinearPastedImages(pasted(signed(FILE, 240, "/org/issue/other")), opts),
+    ).resolves.toEqual({ status: "unavailable" });
+    expect(opts.fetch).not.toHaveBeenCalled();
+  });
+
+  it("does nothing at all when the setting is off", async () => {
+    const opts = options({}, null);
+
+    await expect(fetchLinearPastedImages(pasted(signed(FILE, 240)), opts))
+      .resolves.toEqual({ status: "disabled" });
+    expect(opts.fetch).not.toHaveBeenCalled();
   });
 });

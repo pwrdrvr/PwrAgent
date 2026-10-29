@@ -3,10 +3,10 @@
  *
  * Linear's "copy as prompt" wraps each image in a `<linear-image>` tag holding
  * the editor's image node as JSON. Its `src` is an `uploads.linear.app` URL
- * with a `signature` that expires five minutes after the copy, so the link in
- * a pasted prompt is almost always dead by the time anything reads it. The
- * same file is still readable through the Linear MCP's `extract_images`,
- * which authenticates as the signed-in account and ignores the signature.
+ * with a `signature` that expires five minutes after the copy. Within those
+ * five minutes the signed link alone fetches the file. After that, the same
+ * file is still readable through the Linear MCP's `extract_images`, which
+ * authenticates as the signed-in account and ignores the signature.
  *
  * Plain Markdown images pointing at `uploads.linear.app` are found too: that
  * is how a description copied as Markdown carries them.
@@ -20,6 +20,8 @@ export const LINEAR_PASTED_IMAGE_LIMIT = 10;
 export type LinearPastedImage = {
   /** The upload URL without its query or fragment: the stable file identity. */
   url: string;
+  /** `url` with the paste's `signature`, when it carried one. */
+  signedUrl?: string;
   /** The image's name in Linear, when the paste carried one. */
   alt?: string;
 };
@@ -27,6 +29,7 @@ export type LinearPastedImage = {
 const LINEAR_IMAGE_TAG = /<linear-image\b[^>]*>([\s\S]*?)<\/linear-image>/g;
 const LINEAR_UPLOAD_URL = /^https:\/\/uploads\.linear\.app(\/[A-Za-z0-9._~%/-]*)(?:[?#]\S*)?$/i;
 const LINEAR_MCP_URL = /^https:\/\/mcp\.linear\.app(?:[/?#]|$)/i;
+const SIGNATURE_PARAM = /[?&]signature=([A-Za-z0-9._-]{1,4096})(?:[&#]|$)/;
 const MARKDOWN_IMAGE = /!\[([^\]\n]{0,300})\]\((https:\/\/uploads\.linear\.app\/[^\s)]+)\)/g;
 
 /** Whether a pasted string may carry a Linear image. Cheap enough per paste. */
@@ -47,19 +50,24 @@ export function findLinearPastedImages(text: string): LinearPastedImage[] {
     if (image) found.push({ ...image, index: match.index ?? 0 });
   }
   for (const match of text.matchAll(MARKDOWN_IMAGE)) {
-    const url = normalizeLinearUploadUrl(match[2] ?? "");
-    if (!url) continue;
+    const upload = parseLinearUploadUrl(match[2] ?? "");
+    if (!upload) continue;
     const alt = normalizeAlt(match[1]);
-    found.push({ url, ...(alt ? { alt } : {}), index: match.index ?? 0 });
+    found.push({ ...upload, ...(alt ? { alt } : {}), index: match.index ?? 0 });
   }
   found.sort((left, right) => left.index - right.index);
-  const seen = new Set<string>();
+  const byUrl = new Map<string, LinearPastedImage>();
   const images: LinearPastedImage[] = [];
   for (const { index: _index, ...image } of found) {
-    if (seen.has(image.url)) continue;
-    seen.add(image.url);
+    const earlier = byUrl.get(image.url);
+    if (earlier) {
+      // A later copy of the same file may carry the signature the first lacked.
+      if (!earlier.signedUrl && image.signedUrl) earlier.signedUrl = image.signedUrl;
+      continue;
+    }
+    if (images.length >= LINEAR_PASTED_IMAGE_LIMIT) continue;
+    byUrl.set(image.url, image);
     images.push(image);
-    if (images.length >= LINEAR_PASTED_IMAGE_LIMIT) break;
   }
   return images;
 }
@@ -70,13 +78,25 @@ export function findLinearPastedImages(text: string): LinearPastedImage[] {
  * minutes, and the MCP does not need it.
  */
 export function normalizeLinearUploadUrl(value: string): string | undefined {
+  return parseLinearUploadUrl(value)?.url;
+}
+
+function parseLinearUploadUrl(
+  value: string,
+): Pick<LinearPastedImage, "url" | "signedUrl"> | undefined {
   // Hand-parsed: this package runs without DOM or Node globals, so no `URL`.
   // The authority must be exactly the host, so a port, a user name, or a
   // longer host such as `uploads.linear.app.example` does not match.
-  const match = LINEAR_UPLOAD_URL.exec(value.trim());
+  const trimmed = value.trim();
+  const match = LINEAR_UPLOAD_URL.exec(trimmed);
   const path = match?.[1];
   if (!path || path === "/") return undefined;
-  return `https://${LINEAR_UPLOADS_HOSTNAME}${path}`;
+  const url = `https://${LINEAR_UPLOADS_HOSTNAME}${path}`;
+  // The pattern is anchored, so the query starts right after the path.
+  const rest = trimmed.slice(`https://${LINEAR_UPLOADS_HOSTNAME}`.length + path.length);
+  const query = rest.startsWith("?") ? rest.split("#")[0]! : "";
+  const signature = SIGNATURE_PARAM.exec(query)?.[1];
+  return signature ? { url, signedUrl: `${url}?signature=${signature}` } : { url };
 }
 
 /** Whether an MCP connection's server URL is Linear's hosted MCP server. */
@@ -96,10 +116,10 @@ function parseLinearImageNode(json: string): LinearPastedImage | undefined {
   if (!attrs || typeof attrs !== "object") return undefined;
   const { src, alt } = attrs as { src?: unknown; alt?: unknown };
   if (typeof src !== "string") return undefined;
-  const url = normalizeLinearUploadUrl(src);
-  if (!url) return undefined;
+  const upload = parseLinearUploadUrl(src);
+  if (!upload) return undefined;
   const name = normalizeAlt(alt);
-  return { url, ...(name ? { alt: name } : {}) };
+  return { ...upload, ...(name ? { alt: name } : {}) };
 }
 
 function normalizeAlt(value: unknown): string | undefined {

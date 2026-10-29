@@ -886,6 +886,32 @@ describe("Composer", () => {
     expect(fetchLinearPastedImages).toHaveBeenCalledWith({ text: pasted });
   });
 
+  it("says how to attach expired Linear images when there is no connection", async () => {
+    const pasted = `<linear-image>${JSON.stringify({
+      type: "image",
+      attrs: { src: "https://uploads.linear.app/org/issue/file", alt: "old.png" },
+    })}</linear-image>`;
+    const onShowNotice = vi.fn();
+    const fetchLinearPastedImages = vi.fn(async () => ({ status: "unavailable" as const }));
+    render(<Composer desktopApi={{ fetchLinearPastedImages }} onShowNotice={onShowNotice} skills={[]} thread={{
+      id: "thread-1", title: "Linear paste", titleSource: "explicit", source: "codex",
+      linkedDirectories: [], inbox: { inInbox: false },
+    }} />);
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [],
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+      },
+    });
+
+    await waitFor(() => expect(onShowNotice).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Linear images not attached",
+      message: expect.stringContaining("Connect Linear in Settings → Plugins"),
+    })));
+  });
+
   it("drops Linear images that arrive after the thread changes", async () => {
     const pasted = `<linear-image>${JSON.stringify({
       type: "image",
