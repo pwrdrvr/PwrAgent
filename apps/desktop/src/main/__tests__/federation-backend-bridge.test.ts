@@ -10,6 +10,7 @@ import type {
   TrustCodexProjectRequest,
 } from "@pwragent/shared";
 import {
+  HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
   buildFederatedThreadRef,
   rankThreadJumpMatches,
 } from "@pwragent/shared";
@@ -5060,6 +5061,19 @@ describe("federation workspace recovery methods", () => {
       FEDERATION_BACKEND_METHODS.handoffThreadWorkspace,
       FEDERATION_BACKEND_METHODS.handoffThreadWorkspace,
     ]);
+  });
+
+  it("names an older owner that cannot move a thread into a new worktree", async () => {
+    const olderOwner = vi.fn(async () => {
+      throw Object.assign(new Error("No handler"), { code: "method_not_found" });
+    });
+    const client = new FederationRemoteBackendClient({ request: olderOwner } as unknown as FederationRpcEndpoint);
+
+    await expect(client.handoffThreadWorkspace({ backend: "codex", threadId: "t1", direction: "worktree-to-worktree" }))
+      .rejects.toThrow(HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE);
+    // The original method keeps the owner's own error.
+    await expect(client.handoffThreadWorkspace({ backend: "codex", threadId: "t1", direction: "worktree-to-local" }))
+      .rejects.toThrow("No handler");
   });
 
   it("answers method_not_found where the owner has no implementation", async () => {

@@ -1144,6 +1144,13 @@ export const THREAD_WORKSPACE_HANDOFF_STRATEGIES = [
 export type ThreadWorkspaceHandoffStrategy =
   (typeof THREAD_WORKSPACE_HANDOFF_STRATEGIES)[number];
 
+/**
+ * What a viewer hears when the owning instance predates moves into a new
+ * worktree from a worktree or from a base branch. Nothing moved.
+ */
+export const HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE =
+  "The PwrAgent that owns this thread is too old for this move. Update PwrAgent there. Nothing moved.";
+
 export type ThreadWorkspaceHandoffStashSummary = {
   ref?: string;
   message: string;

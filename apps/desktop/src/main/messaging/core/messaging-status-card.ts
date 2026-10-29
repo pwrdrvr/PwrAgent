@@ -1310,7 +1310,7 @@ export function buildHandoffConfirmationIntent(params: {
     params.targetPath
       ? "Confirm moving this conversation to another project. Files and branches stay in place."
       : direction === "worktree-to-worktree"
-        ? "Confirm moving this thread to a new worktree. Its changes move too, and the old worktree is archived."
+        ? "Confirm moving this thread to a new worktree. Its changes move too. The old worktree is archived unless it was created outside PwrAgent."
       : params.strategy === "detached-changes"
       ? "Confirm new detached-head worktree."
       : direction === "local-to-worktree"

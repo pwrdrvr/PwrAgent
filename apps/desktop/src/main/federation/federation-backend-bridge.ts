@@ -1,6 +1,7 @@
 import { authenticateMessageOrigin, type ResolvedSourceInstance } from "@pwragent/federation/federation-message-origin";
 export { authenticateMessageOrigin } from "@pwragent/federation/federation-message-origin";
 import { ForgeReadError, type ForgeReadRequest } from "../pr-status/forge-tool-contract";
+import { HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE } from "@pwragent/shared";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -3376,12 +3377,19 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<HandoffThreadWorkspaceResponse> {
     // Older owners know only the original method and must refuse these moves.
     const toNewWorktree = request.direction === "worktree-to-worktree" || Boolean(request.baseRef);
-    return await this.rpc.request<HandoffThreadWorkspaceResponse>({
-      method: toNewWorktree
-        ? FEDERATION_BACKEND_METHODS.handoffThreadWorkspaceToNewWorktree
-        : FEDERATION_BACKEND_METHODS.handoffThreadWorkspace,
-      params: request,
-    });
+    try {
+      return await this.rpc.request<HandoffThreadWorkspaceResponse>({
+        method: toNewWorktree
+          ? FEDERATION_BACKEND_METHODS.handoffThreadWorkspaceToNewWorktree
+          : FEDERATION_BACKEND_METHODS.handoffThreadWorkspace,
+        params: request,
+      });
+    } catch (error) {
+      if (toNewWorktree && hasFederationErrorCode(error, "method_not_found")) {
+        throw new Error(HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE);
+      }
+      throw error;
+    }
   }
 
   // Both run Git on the owner, which can take a while on a large checkout.

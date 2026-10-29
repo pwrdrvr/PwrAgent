@@ -16348,12 +16348,10 @@ export class DesktopBackendRegistry {
           ...(projectMoveOverlay?.extraLinkedDirectories ?? []),
         ]
       : undefined;
-    const sourceCwd = resolveThreadWorkspaceCwd(thread, projectMoveOverlay?.extraLinkedDirectories);
-    const sourceWorkMode: "local" | "worktree" = workspaceDirectories && mergeThreadLinkedDirectories(workspaceDirectories).some((directory) =>
-      directory.kind === "worktree"
-      && sourceCwd
-      && normalizeWorktreePathForComparison(directory.worktreePath ?? directory.path) === normalizeWorktreePathForComparison(sourceCwd),
-    ) ? "worktree" : "local";
+    const sourceWorkMode: "local" | "worktree" = workspaceDirectories
+      && threadWorkspaceIsWorktree(thread, projectMoveOverlay?.extraLinkedDirectories)
+      ? "worktree"
+      : "local";
     // PR workspace provenance survives an earlier project relink that lost
     // its directory. Git still validates every candidate against the target
     // repository's registered worktrees before it can be reused.

@@ -22,6 +22,7 @@ import {
   type StartReviewRequest,
   type ModelSettingsRecent,
   type FederationCapability,
+  HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
   type MoveQueuedTurnResponse,
   type SetQueuedTurnPausedRequest,
   type SetQueuedTurnPausedResponse,
@@ -19414,7 +19415,7 @@ describe("Composer", () => {
         backends={[backendSummary("codex")]}
         directory={{ key: "directory:/repo", kind: "directory", label: "PwrAgent", path: "/repo", gitStatus: { currentBranch: "main", branches: ["main"] } }}
         onHandoffThreadWorkspace={async () => {
-          throw new Error("Error invoking remote method: Error: method_not_found: No federation handler registered for backend.handoffThreadWorkspaceToNewWorktree");
+          throw new Error(`Error invoking remote method: Error: ${HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE}`);
         }}
         skills={[]}
         thread={{

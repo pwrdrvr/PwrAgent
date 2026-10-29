@@ -111,6 +111,7 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
+  HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
   buildThreadIdentityKey,
   buildReviewBranchOptions,
   federatedThreadIdentityKey,
@@ -3311,7 +3312,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     useState<"keep-local-branch" | "move-branch">("keep-local-branch");
   const [leaveLocalBranch, setLeaveLocalBranch] = useState("");
   const [newLocalBranch, setNewLocalBranch] = useState("");
-  const [freshBaseRef, setFreshBaseRef] = useState("");
+  // Empty until the operator picks one; the default follows the branch list.
+  const [pickedFreshBaseRef, setFreshBaseRef] = useState("");
   const [freshBranchName, setFreshBranchName] = useState("");
   const [projectTargetPath, setProjectTargetPath] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
@@ -11419,6 +11421,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     () => buildLaunchpadBranchPickerOptions(undefined, props.directory),
     [props.directory],
   );
+  const defaultFreshBaseRef = useMemo(
+    () => pickFreshHandoffBaseRef(freshBaseOptions, props.directory),
+    [freshBaseOptions, props.directory],
+  );
+  const freshBaseRef = pickedFreshBaseRef || defaultFreshBaseRef;
   const canMoveThreadProject = Boolean(
     props.thread &&
       !props.workspaceActionsBlocked &&
@@ -11465,7 +11472,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       setLocalHandoffStrategy("detached-changes");
       setLeaveLocalBranch(branchOptions[0] ?? "");
       setNewLocalBranch(buildHandoffBranchSuggestion(sourceBranch));
-      setFreshBaseRef(pickFreshHandoffBaseRef(freshBaseOptions, props.directory));
+      setFreshBaseRef("");
       setFreshBranchName("");
     }
   };
@@ -11522,14 +11529,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       const message = error instanceof Error ? error.message : String(error);
       // An owner that predates the keep-branch handoff answers
       // method_not_found; nothing moved. The text survives IPC, the code does not.
-      const outdated = isOutdatedOwnerError(message);
       const owner = props.thread?.federation?.instanceLabel ?? "the other machine";
-      // New-worktree moves use their own method, which an older owner lacks.
-      const newWorktreeMove = handoffDialog === "worktree-to-worktree"
-        || (toNewWorktree && localHandoffStrategy === "fresh-from-base");
-      setHandoffError(outdated && keepLocalBranchSelected
+      // New-worktree moves use their own method; the bridge names its refusal.
+      setHandoffError(keepLocalBranchSelected && isOutdatedOwnerError(message)
         ? `${owner} runs an older PwrAgent that can only hand off by switching Local’s branch. Update PwrAgent on ${owner}, or choose Move ${sourceBranch ?? "the branch"} to Local.`
-        : outdated && newWorktreeMove
+        : message.includes(HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE)
           ? `${owner} runs an older PwrAgent that cannot make this move. Update PwrAgent on ${owner}. Nothing moved.`
           : message);
     } finally {
