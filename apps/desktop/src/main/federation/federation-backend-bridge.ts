@@ -903,7 +903,7 @@ export type FederationBackendOperations = {
     request: FederationReadTurnAssistantReplyRequest,
   ): Promise<FederationReadTurnAssistantReplyResponse>;
   readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse>;
-  readThreadFamilyPricing(request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse>;
+  readThreadFamilyPricing(request: ReadThreadFamilyPricingRequest, rpcOptions?: FederationRpcRequestOptions): Promise<ReadThreadFamilyPricingResponse>;
   analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse>;
   inspectTokenMiserOutput(request: InspectTokenMiserOutputRequest): Promise<InspectTokenMiserOutputResponse>;
   analyzeThreadToolHistory(
@@ -2507,8 +2507,16 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     return await this.rpc.request<ReadUsageActivityResponse>({ method: FEDERATION_BACKEND_METHODS.readUsageActivity, params: request });
   }
 
-  async readThreadFamilyPricing(request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse> {
-    return await this.rpc.request<ReadThreadFamilyPricingResponse>({ method: FEDERATION_BACKEND_METHODS.readThreadFamilyPricing, params: request });
+  async readThreadFamilyPricing(
+    request: ReadThreadFamilyPricingRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<ReadThreadFamilyPricingResponse> {
+    return await this.rpc.request<ReadThreadFamilyPricingResponse>({
+      method: FEDERATION_BACKEND_METHODS.readThreadFamilyPricing,
+      params: request,
+      ...(rpcOptions?.deadlineAt !== undefined ? { deadlineAt: rpcOptions.deadlineAt } : {}),
+      ...(rpcOptions?.signal ? { signal: rpcOptions.signal } : {}),
+    });
   }
 
   async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {
