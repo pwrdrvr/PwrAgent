@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   isFilePreviewPath,
   isRemoteFederationTarget,
   type FederationTarget,
 } from "@pwragent/shared";
 import { HTML_PREVIEW_FRAME_NAME } from "../../../../shared/html-preview";
+import { BanIcon, FileCodeIcon, ShieldIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useHtmlPreviewRunScripts } from "../../lib/html-preview-preferences";
 import { isLoopbackHost } from "../../lib/loopback-host";
@@ -30,12 +32,17 @@ type ResourceState =
 /**
  * An HTML file, shown in an opaque-origin frame that cannot reach the
  * network. Scripts start off unless the operator's setting says otherwise
- * (`useHtmlPreviewRunScripts`), and the toolbar turns them on or off for
- * this page. A link the page tries
- * to follow is offered here, with its URL, instead of opening on its own.
+ * (`useHtmlPreviewRunScripts`), and the Scripts switch turns them on or off
+ * for this page. A link the page tries to follow is offered here, with its
+ * URL, instead of opening on its own.
  */
 export function HtmlFilePreview(props: {
   content: string;
+  /**
+   * The viewer's header slot for the page's permissions. Null while the slot
+   * mounts; leave it out to draw them in a bar above the page.
+   */
+  controlsContainer?: HTMLElement | null;
   desktopApi?: Pick<
     DesktopApi,
     "readConfigBootstrap" | "readHtmlPreviewAssets" | "onHtmlPreviewNavigation"
@@ -118,28 +125,51 @@ export function HtmlFilePreview(props: {
       : undefined,
   ].filter((notice): notice is string => Boolean(notice));
 
+  const blocked = prepared?.blockedRemote ?? 0;
+  const missing = !unavailable && prepared ? prepared.missingLocal : 0;
+  const controls = (
+    <div className="html-preview-controls" role="group" aria-label="Page permissions">
+      <span
+        className="html-preview-controls__status tooltip-target"
+        data-tooltip={["No network access", ...notices].join(" · ")}
+      >
+        {blocked > 0 || missing > 0
+          ? <BanIcon size={12} aria-hidden="true" />
+          : <ShieldIcon size={12} aria-hidden="true" />}
+        <span aria-hidden="true">
+          {blocked > 0 ? `${blocked} blocked` : missing > 0 ? `${missing} missing` : "Offline"}
+        </span>
+        {/* The short label is for sight; a screen reader hears each notice. */}
+        {["No network access", ...notices].map((notice) => (
+          <span key={notice} className="html-preview-controls__notice">{notice}</span>
+        ))}
+      </span>
+      <span className="html-preview-controls__divider" aria-hidden="true" />
+      <button
+        type="button"
+        role="switch"
+        className="html-preview-controls__scripts tooltip-target"
+        aria-checked={scripts}
+        data-tooltip={scripts
+          ? "Stop this page's scripts"
+          : "Run this page's scripts. The page still has no network access."}
+        onClick={() => {
+          setPendingLink(undefined);
+          setChosenScripts(!scripts);
+        }}
+      >
+        <FileCodeIcon size={12} aria-hidden="true" />
+        Scripts
+        <span aria-hidden="true">{scripts ? " on" : " off"}</span>
+      </button>
+    </div>
+  );
+
   return (
     <div className="html-preview">
-      <div className="html-preview__bar">
-        <p className="html-preview__status">
-          <span>{scripts ? "Scripts on" : "Scripts off"}</span>
-          <span>No network access</span>
-          {notices.map((notice) => (
-            <span key={notice} className="html-preview__notice">{notice}</span>
-          ))}
-        </p>
-        <button
-          type="button"
-          className="button button--secondary html-preview__button"
-          aria-pressed={scripts}
-          onClick={() => {
-            setPendingLink(undefined);
-            setChosenScripts(!scripts);
-          }}
-        >
-          {scripts ? "Stop Scripts" : "Run Scripts"}
-        </button>
-      </div>
+      {props.controlsContainer === undefined ? (
+        <div className="html-preview__bar">{controls}</div>
+      ) : props.controlsContainer ? createPortal(controls, props.controlsContainer) : null}
       {pendingLink ? (
         <PendingLinkBar
           link={pendingLink}

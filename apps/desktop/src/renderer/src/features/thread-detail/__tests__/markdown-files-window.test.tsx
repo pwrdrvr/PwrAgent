@@ -65,12 +65,13 @@ describe("MarkdownFilesWindow", () => {
     render(<MarkdownFilesWindow />);
 
     expect(
-      await screen.findByRole("heading", { name: `docs/${fileName}` }),
+      await screen.findByRole("heading", { name: fileName }),
     ).toBeInTheDocument();
     expect(
       screen.getByLabelText("PwrAgent > Slack-to-Agent automation plan > Files"),
     ).toBeInTheDocument();
-    expect(screen.getByText("Project: /repo/PwrAgent")).toBeInTheDocument();
+    // The folder is shown once, beside the name, and copies the full path.
+    expect(screen.getByRole("button", { name: "Copy path" })).toHaveTextContent("/repo/PwrAgent/docs");
     if (kind === "JSON") {
       expect(await screen.findByLabelText("JSON contents")).toHaveTextContent('"title": "Widget"');
     } else {

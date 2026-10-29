@@ -28,6 +28,7 @@ export { EditorIcon } from "./EditorIcon";
 export { EditsIcon } from "./EditsIcon";
 export { FeishuIcon } from "./FeishuIcon";
 export { FileCodeIcon } from "./FileCodeIcon";
+export { FileIcon } from "./FileIcon";
 export { FitToWindowIcon } from "./FitToWindowIcon";
 export { FolderIcon } from "./FolderIcon";
 export { FolderPlusIcon } from "./FolderPlusIcon";

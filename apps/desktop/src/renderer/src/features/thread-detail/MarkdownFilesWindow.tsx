@@ -7,15 +7,14 @@ import type {
   MarkdownFileViewerSnapshot,
 } from "@pwragent/shared";
 import { AppIcon } from "../../components/AppIcon";
-import { CloseIcon, CopyIcon } from "../../icons";
-import { copyText } from "../../lib/copy-text";
+import { CloseIcon } from "../../icons";
 import { useDesktopApi } from "../../lib/desktop-api";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { BrandLockup } from "../chrome/BrandLockup";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
 import { FilePreviewBody, FilePreviewCopyButton } from "./FilePreview";
+import { FileViewerHeader } from "./FileViewerHeader";
 import { HtmlFilePreview } from "./HtmlFilePreview";
-import { tildifyPath } from "../../lib/tildify-path";
 
 type LoadState =
   | { status: "idle" | "loading" }
@@ -37,6 +36,8 @@ export function MarkdownFilesWindow() {
   ) ?? snapshot?.files[0];
   const selectedPath = selectedFile?.path;
   const previewKind = filePreviewKind(selectedPath ?? "") ?? "markdown";
+  // The HTML preview renders its permissions into the header row.
+  const [headerControls, setHeaderControls] = useState<HTMLDivElement | null>(null);
   const markdownApplications = useMemo(
     () => applicationsSnapshotForEditor(snapshot),
     [snapshot],
@@ -234,69 +235,49 @@ export function MarkdownFilesWindow() {
           </aside>
 
           <article className="markdown-files-window__content">
-            <header className="markdown-files-window__file-header">
-              <div className="markdown-files-window__file-title-wrap">
-                <h1 className="markdown-files-window__file-title">
-                  {selectedFile?.label ?? "No file selected"}
-                </h1>
-                {selectedFile ? (
-                  <div className="markdown-files-window__path-row">
-                    <p className="markdown-files-window__file-path">
-                      {tildifyPath(selectedFile.path)}
-                    </p>
+            <FileViewerHeader
+              actions={(
+                <>
+                  {loadState.status === "loaded" ? (
+                    <FilePreviewCopyButton
+                      content={loadState.content}
+                      desktopApi={viewerApi}
+                      kind={previewKind}
+                    />
+                  ) : null}
+                  {snapshot?.editorApplication && selectedFile ? (
                     <button
                       type="button"
-                      className="markdown-files-window__path-copy"
-                      aria-label="Copy path"
-                      title="Copy path to clipboard"
-                      onClick={() => {
-                        void copyText(selectedFile.path, viewerApi);
-                      }}
+                      className="markdown-files-window__icon-button"
+                      aria-label={`Open file in ${snapshot.editorApplication.name}: ${selectedFile.label}`}
+                      title={`Open file in ${snapshot.editorApplication.name}`}
+                      onClick={openSelectedFileInEditor}
                     >
-                      <CopyIcon size={13} aria-hidden="true" />
+                      <AppIcon
+                        application={snapshot.editorApplication}
+                        className="markdown-files-window__app-icon"
+                        size={16}
+                      />
                     </button>
-                  </div>
-                ) : null}
-                {snapshot?.context.projectPath ? (
-                  <p className="markdown-files-window__project">
-                    Project: {tildifyPath(snapshot.context.projectPath)}
-                  </p>
-                ) : null}
-              </div>
-              <div className="markdown-files-window__file-actions">
-                {loadState.status === "loaded" ? (
-                  <FilePreviewCopyButton
-                    content={loadState.content}
-                    desktopApi={viewerApi}
-                    kind={previewKind}
-                  />
-                ) : null}
-                {snapshot?.editorApplication && selectedFile ? (
+                  ) : null}
                   <button
                     type="button"
                     className="markdown-files-window__icon-button"
-                    aria-label={`Open file in ${snapshot.editorApplication.name}: ${selectedFile.label}`}
-                    title={`Open file in ${snapshot.editorApplication.name}`}
-                    onClick={openSelectedFileInEditor}
+                    aria-label="Close window"
+                    title="Close"
+                    onClick={() => window.close()}
                   >
-                    <AppIcon
-                      application={snapshot.editorApplication}
-                      className="markdown-files-window__app-icon"
-                      size={16}
-                    />
+                    <CloseIcon size={18} aria-hidden="true" />
                   </button>
-                ) : null}
-                <button
-                  type="button"
-                  className="markdown-files-window__icon-button"
-                  aria-label="Close window"
-                  title="Close"
-                  onClick={() => window.close()}
-                >
-                  <CloseIcon size={18} aria-hidden="true" />
-                </button>
-              </div>
-            </header>
+                </>
+              )}
+              controlsRef={setHeaderControls}
+              desktopApi={viewerApi}
+              headingLevel={1}
+              kind={selectedFile ? previewKind : undefined}
+              path={selectedFile?.path}
+              placeholder="No file selected"
+            />
 
             <div
               className={[
@@ -321,6 +302,7 @@ export function MarkdownFilesWindow() {
                   federationTarget={federationTarget}
                   label={selectedFile.label}
                   path={selectedFile.path}
+                  controlsContainer={headerControls}
                   onOpenLocalFile={remoteSource ? undefined : openLinkedFile}
                 />
               ) : previewKind !== "markdown" && previewKind !== "html" ? (

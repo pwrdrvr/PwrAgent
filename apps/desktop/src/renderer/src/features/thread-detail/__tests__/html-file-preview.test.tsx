@@ -57,9 +57,10 @@ describe("HtmlFilePreview", () => {
       path: "/work/brief/index.html",
       refs: ["logo.png"],
     });
-    expect(screen.getByText("Scripts off")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Scripts" })).toHaveAttribute("aria-checked", "false");
     expect(screen.getByText("No network access")).toBeInTheDocument();
     expect(screen.getByText("Blocked 1 web resource")).toBeInTheDocument();
+    expect(screen.getByText("1 blocked")).toBeInTheDocument();
   });
 
   it("runs scripts only in a frame that still has no other permission", async () => {
@@ -74,12 +75,11 @@ describe("HtmlFilePreview", () => {
     );
 
     await frame();
-    fireEvent.click(screen.getByRole("button", { name: "Run Scripts" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Scripts" }));
 
     const scripted = await frame();
     expect(scripted.getAttribute("sandbox")).toBe("allow-scripts");
-    expect(screen.getByRole("button", { name: "Stop Scripts" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText("Scripts on")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Scripts" })).toHaveAttribute("aria-checked", "true");
   });
 
   it("starts with scripts on when the window's setting says so", async () => {
@@ -117,13 +117,13 @@ describe("HtmlFilePreview", () => {
 
     expect((await frame()).getAttribute("sandbox")).toBe("");
     // The operator chooses before the setting arrives; the setting must not undo it.
-    fireEvent.click(screen.getByRole("button", { name: "Run Scripts" }));
-    fireEvent.click(screen.getByRole("button", { name: "Stop Scripts" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Scripts" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Scripts" }));
     await act(async () => resolveBootstrap(true));
 
     expect(readConfigBootstrap).toHaveBeenCalledOnce();
     expect((await frame()).getAttribute("sandbox")).toBe("");
-    expect(screen.getByRole("button", { name: "Run Scripts" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("switch", { name: "Scripts" })).toHaveAttribute("aria-checked", "false");
   });
 
   it("opens with the setting a window without a provider reads", async () => {
