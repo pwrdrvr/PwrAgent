@@ -5046,7 +5046,7 @@ describe("federation workspace recovery methods", () => {
   });
 
   it("sends only the moves an older owner would misread on the new method", async () => {
-    const rpcRequest = vi.fn(async () => ({}));
+    const rpcRequest = vi.fn(async (_call: { method: string }) => ({}));
     const client = new FederationRemoteBackendClient({ request: rpcRequest } as unknown as FederationRpcEndpoint);
 
     await client.handoffThreadWorkspace({ backend: "codex", threadId: "t1", direction: "worktree-to-worktree" });
@@ -5054,7 +5054,7 @@ describe("federation workspace recovery methods", () => {
     await client.handoffThreadWorkspace({ backend: "codex", threadId: "t1", direction: "local-to-worktree" });
     await client.handoffThreadWorkspace({ backend: "codex", threadId: "t1", direction: "worktree-to-local" });
 
-    expect(rpcRequest.mock.calls.map(([call]) => (call as { method: string }).method)).toEqual([
+    expect(rpcRequest.mock.calls.map(([call]) => call.method)).toEqual([
       FEDERATION_BACKEND_METHODS.handoffThreadWorkspaceToNewWorktree,
       FEDERATION_BACKEND_METHODS.handoffThreadWorkspaceToNewWorktree,
       FEDERATION_BACKEND_METHODS.handoffThreadWorkspace,
