@@ -1056,6 +1056,25 @@ export function formatFederationPeerDisplayLabel(
     : parts.label;
 }
 
+/**
+ * The single-line name a compact face draws: the federation's short name
+ * for the machine when it has one, with the same profile suffix as
+ * `formatFederationPeerDisplayLabel`. Pair it with that full label as the
+ * tooltip, so the exact machine name is one hover away.
+ */
+export function formatFederationPeerShortDisplayLabel(
+  peer: { label: string; profileName?: string; shortLabel?: string },
+  visiblePeers: readonly {
+    label: string;
+    profileName?: string;
+    revokedAt?: number;
+  }[],
+): string {
+  const parts = formatFederationPeerDisplayLabelParts(peer, visiblePeers);
+  const machine = parts.shortLabel ?? parts.label;
+  return parts.profileName ? `${machine} / ${parts.profileName}` : machine;
+}
+
 export function federationTargetKey(target: FederationTarget): string {
   return isRemoteFederationTarget(target) ? `remote:${target.instanceId}` : "local";
 }

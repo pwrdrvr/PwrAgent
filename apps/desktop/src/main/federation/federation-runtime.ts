@@ -178,6 +178,7 @@ import {
   isFederationEventClass,
   isAppServerBackendKind,
   formatFederationPeerDisplayLabel,
+  formatFederationPeerShortDisplayLabel,
   isRemoteFederationTarget,
   mergeCelestialIconAssignments,
   pickCelestialIcon,
@@ -1273,6 +1274,7 @@ export class DesktopFederationRuntime {
     (event: AgentEvent) => void | Promise<void>
   >();
   private readonly peerStatusListeners = new Set<() => void>();
+  private readonly shortNameListeners = new Set<() => void>();
   private readonly desiredEventSubscriptions = new Map<
     string,
     Map<FederationInstanceId, DesiredEventSubscription>
@@ -1577,9 +1579,26 @@ export class DesktopFederationRuntime {
     };
   }
 
+  /**
+   * Fires whenever the short-name map changes, so the application menu and
+   * remote window titles can redraw with the new names.
+   */
+  onShortNamesChanged(listener: () => void): () => void {
+    this.shortNameListeners.add(listener);
+    return () => {
+      this.shortNameListeners.delete(listener);
+    };
+  }
+
   connectedPeerTargets(): Array<{
     target: FederationRemoteTarget;
     label: string;
+    /**
+     * `label` with the federation's short name for the machine, for window
+     * titles and the Remote Instances menu. Absent when the machine has no
+     * short name. `label` stays the full name for tooltips and agents.
+     */
+    shortLabel?: string;
     capabilities: FederationCapability[];
     navigationQueryProtocol?: 2;
   }> {
@@ -1590,12 +1609,23 @@ export class DesktopFederationRuntime {
     const visible = this.visiblePeers();
     return visible
       .filter((peer) => peer.status === "connected")
-      .map((peer) => ({
-        target: { scope: "remote", instanceId: peer.id },
-        label: formatFederationPeerDisplayLabel(peer, visible),
-        capabilities: [...peer.capabilities],
-        navigationQueryProtocol: peer.navigationQueryProtocol,
-      }));
+      .map((peer) => {
+        const shortLabel = this.shortNames.shortLabelFor(peer.id, peer.label);
+        return {
+          target: { scope: "remote", instanceId: peer.id },
+          label: formatFederationPeerDisplayLabel(peer, visible),
+          ...(shortLabel
+            ? {
+                shortLabel: formatFederationPeerShortDisplayLabel(
+                  { ...peer, shortLabel },
+                  visible,
+                ),
+              }
+            : {}),
+          capabilities: [...peer.capabilities],
+          navigationQueryProtocol: peer.navigationQueryProtocol,
+        };
+      });
   }
 
   assertRemoteNavigationQueryProtocol(
@@ -5871,6 +5901,15 @@ export class DesktopFederationRuntime {
         params: {},
       },
     });
+    for (const listener of this.shortNameListeners) {
+      try {
+        listener();
+      } catch (error) {
+        log.warn("federation short name listener failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   /**

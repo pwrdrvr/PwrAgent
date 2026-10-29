@@ -6,8 +6,10 @@
  * instance cards, the Activity window's peer chips. The root gateway asks a
  * helper model for one short name per machine, checks the answer by rule,
  * and shares the map over federation, so every instance shows the same
- * names. Tooltips, accessible names, menus, Settings and anything an agent
- * reads keep the full label.
+ * names. Compact faces, including the Profiles menu and remote window
+ * titles, draw the short name and keep the full label in a tooltip (a
+ * window title's is on the window's Remote badge). Tooltips, accessible
+ * names, Settings and anything an agent reads keep the full label.
  *
  * The map travels and merges exactly like the celestial icon assignments:
  * one entry per instance, last-writer-wins by `updatedAt`, operator

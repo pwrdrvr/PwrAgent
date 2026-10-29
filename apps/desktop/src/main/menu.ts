@@ -11,7 +11,10 @@ import {
 
 export type ApplicationMenuFederationPeer = {
   instanceId: string;
+  /** The full display label, e.g. "DESKTOP-17ISFOI / dev". */
   label: string;
+  /** The same label with the machine's short name, when it has one. */
+  shortLabel?: string;
 };
 
 /**
@@ -315,7 +318,11 @@ function buildFederationPeerItems(
   const peerItems: MenuItemConstructorOptions[] = orderPeersForMenu(
     options.federationPeers,
   ).map((peer) => ({
-    label: peer.label,
+    // The short name, as every other compact face draws the machine. The
+    // full name is the macOS hover text; other platforms have none, and
+    // Settings → Federation lists every full name.
+    label: peer.shortLabel ?? peer.label,
+    ...(peer.shortLabel ? { toolTip: peer.label } : {}),
     click: () => {
       options.actions.openFederationWindow(peer);
     },
@@ -370,16 +377,18 @@ function buildWindowMenu(options: ApplicationMenuOptions): MenuItemConstructorOp
  * federation restart. The menu rebuilds on every peer status change, so
  * leaving that order alone would let rows swap under the pointer and turn
  * a muscle-memory click into the wrong machine's remote window. Sort by
- * label, with the instance id breaking ties so two identically labelled
- * peers hold still too. Local profiles keep the operator's own order; peers
- * have no order to keep, because they come and go with connectivity.
+ * the label the row shows, then the full label, with the instance id
+ * breaking ties so two identically labelled peers hold still too. Local
+ * profiles keep the operator's own order; peers have no order to keep,
+ * because they come and go with connectivity.
  */
 function orderPeersForMenu(
   peers: ApplicationMenuFederationPeer[],
 ): ApplicationMenuFederationPeer[] {
   return [...peers].sort(
     (left, right) =>
-      left.label.localeCompare(right.label)
+      (left.shortLabel ?? left.label).localeCompare(right.shortLabel ?? right.label)
+      || left.label.localeCompare(right.label)
       || left.instanceId.localeCompare(right.instanceId),
   );
 }

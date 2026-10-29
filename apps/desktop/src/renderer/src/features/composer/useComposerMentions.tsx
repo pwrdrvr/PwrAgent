@@ -17,6 +17,7 @@ import type {
 import { CelestialIcon, FolderIcon, PullRequestIcon, ThreadIcon } from "../../icons";
 import { filterAtReferenceCandidates, type InstanceReference } from "../../lib/instance-references";
 import { InstanceGlyph } from "../federation/InstanceGlyph";
+import { useFederationInstanceNameLookup } from "../../lib/federation-display-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   buildDirectoryReferenceInsertText,
@@ -201,6 +202,7 @@ export function useComposerMentions(params: {
   sources?: ComposerMentionSources;
 }): ComposerMentions {
   const { sources } = params;
+  const instanceNames = useFederationInstanceNameLookup();
   const inputRef = useRef<ComposerInputHandle | null>(null);
   const listboxId = useId();
   const currentFederation = sources?.currentThread?.federation;
@@ -793,6 +795,14 @@ export function useComposerMentions(params: {
       if (option.kind === "thread") {
         const thread = option.thread;
         const meta = describeHashReferenceThread(thread, query);
+        const target = thread.federation?.ref.target;
+        const instance = option.remote && thread.federation?.instanceLabel
+          ? instanceNames(
+              target?.scope === "remote" ? target.instanceId : "",
+              thread.federation.instanceLabel,
+            )
+          : undefined;
+        const tooltip = formatHashReferenceThreadTooltip(thread);
         return renderOption(
           index,
           <>
@@ -809,12 +819,16 @@ export function useComposerMentions(params: {
                 card's popover, so the instance rides in the meta line
                 instead of spending one of them on a heading. */}
             <span className="compact-composer__mention-meta">
-              {option.remote && thread.federation?.instanceLabel
-                ? `${thread.federation.instanceLabel}${meta ? ` · ${meta}` : ""}`
+              {instance
+                ? `${instance.label}${meta ? ` · ${meta}` : ""}`
                 : meta}
             </span>
           </>,
-          { title: formatHashReferenceThreadTooltip(thread) },
+          // The meta line draws the short name; the row's tooltip names the
+          // machine in full.
+          { title: instance && instance.label !== instance.fullLabel
+            ? `${tooltip}\nOn ${instance.fullLabel}`
+            : tooltip },
         );
       }
       const pullRequest = option.pullRequest;

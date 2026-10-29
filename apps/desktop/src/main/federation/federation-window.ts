@@ -4,6 +4,7 @@ import type {
 } from "@pwragent/shared";
 import { getDesktopFederationRuntime } from "./federation-runtime";
 import { createMainWindow } from "../window";
+import { mainWindowTitle, updateLockedMainWindowTitle } from "../main-window-title";
 import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
 import {
   WINDOW_OPEN_NEW_THREAD_CHANNEL,
@@ -13,6 +14,8 @@ import {
 export type FederationWindowPeer = {
   target: FederationRemoteTarget;
   label: string;
+  /** The machine's short display label, which the window title uses. */
+  shortLabel?: string;
   capabilities: readonly FederationCapability[];
 };
 
@@ -94,6 +97,7 @@ export function createFederationWindow(options: {
 
   const window = createMainWindow({
     federationLabel: peer.label,
+    ...(peer.shortLabel ? { federationTitleLabel: peer.shortLabel } : {}),
     federationTarget: peer.target,
     ...(options.initialLaunchpad ? { initialLaunchpad: true } : {}),
     initialThread: options.initialThread,
@@ -138,4 +142,22 @@ export function createFederationWindow(options: {
     runtime.clearRendererEventSubscriptions(webContentsId, "remote-window");
   });
   return window;
+}
+
+/**
+ * Retitle every open remote window from the current peer labels, after a
+ * short name arrives or changes. A peer that is not connected keeps the
+ * title it had.
+ */
+export function refreshFederationWindowTitles(
+  peers: readonly Pick<FederationWindowPeer, "target" | "label" | "shortLabel">[],
+): void {
+  for (const [instanceId, entry] of federationWindows) {
+    const peer = peers.find((candidate) => candidate.target.instanceId === instanceId);
+    if (!peer || entry.window.isDestroyed()) continue;
+    updateLockedMainWindowTitle(
+      entry.window,
+      mainWindowTitle(peer.shortLabel ?? peer.label),
+    );
+  }
 }
