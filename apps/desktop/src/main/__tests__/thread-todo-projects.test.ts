@@ -3,6 +3,7 @@ import {
   findPeerThreadTodoProject,
   matchThreadTodoProject,
   threadTodoProjectChoices,
+  threadTodoProjectIdentity,
   type ThreadTodoProjectCandidate,
 } from "../thread-todos/thread-todo-projects";
 
@@ -117,5 +118,60 @@ describe("findPeerThreadTodoProject", () => {
       { key: "directory:/src/pwrgit", label: "pwrgit", path: "/src/pwrgit" },
       peer,
     )).toBeUndefined();
+  });
+});
+
+describe("matching a project across machines by its repository", () => {
+  const ORIGIN = "github.com/pwrdrvr/pwragent";
+  // The Mac files the checkout as PwrAgnt; the Windows peer as PwrAgent.
+  const mac: ThreadTodoProjectCandidate[] = [
+    { key: "directory:/Users/fixture/src/PwrAgnt", label: "PwrAgnt", kind: "directory",
+      path: "/Users/fixture/src/PwrAgnt", repositoryKey: ORIGIN },
+  ];
+  const card = { key: "directory:/Users/fixture/src/PwrAgnt", label: "PwrAgnt", path: "/Users/fixture/src/PwrAgnt" };
+  const windows: ThreadTodoProjectCandidate[] = [
+    // A same-named folder that clones something else must lose to the origin.
+    { key: "directory:C:/scratch/PwrAgnt", label: "PwrAgnt", kind: "directory",
+      path: "C:\\scratch\\PwrAgnt", repositoryKey: "github.com/fixture-user/pwragnt-notes" },
+    { key: "directory:C:/src/PwrAgent", label: "PwrAgent", kind: "directory",
+      path: "C:\\src\\PwrAgent", repositoryKey: ORIGIN },
+  ];
+
+  it("reads the card's repository from this machine's row, by key and then by path", () => {
+    expect(threadTodoProjectIdentity(card, mac)).toEqual({ ...card, repositoryKey: ORIGIN });
+    expect(threadTodoProjectIdentity({ ...card, key: "directory:stale" }, mac).repositoryKey).toBe(ORIGIN);
+    expect(threadTodoProjectIdentity(card, [])).toEqual(card);
+  });
+
+  it("finds the peer's copy under another name by its origin", () => {
+    const identity = threadTodoProjectIdentity(card, mac);
+    expect(findPeerThreadTodoProject(identity, windows)?.key).toBe("directory:C:/src/PwrAgent");
+  });
+
+  it("finds a fork's copy through a shared fetch remote", () => {
+    const fork = [{ key: "directory:C:/src/agent-fork", label: "agent-fork", kind: "directory" as const,
+      path: "C:\\src\\agent-fork", repositoryKey: "github.com/fixture-user/pwragent", repositoryKeys: [ORIGIN] }];
+    expect(findPeerThreadTodoProject({ ...card, repositoryKey: ORIGIN }, fork)?.key).toBe("directory:C:/src/agent-fork");
+  });
+
+  it("never matches two different repositories by name", () => {
+    expect(findPeerThreadTodoProject({ ...card, repositoryKey: ORIGIN }, [windows[0]!])).toBeUndefined();
+  });
+
+  it("falls back to the name, including a Windows folder name, when either side has no remote", () => {
+    const unknown = [{ key: "directory:C:/src/PwrAgnt", label: "agent", kind: "directory" as const, path: "C:\\src\\PwrAgnt" }];
+    expect(findPeerThreadTodoProject({ ...card, repositoryKey: ORIGIN }, unknown)?.key).toBe("directory:C:/src/PwrAgnt");
+    expect(findPeerThreadTodoProject(card, unknown)?.key).toBe("directory:C:/src/PwrAgnt");
+  });
+
+  it("skips a row the peer has no checkout for", () => {
+    expect(findPeerThreadTodoProject({ ...card, repositoryKey: ORIGIN }, [
+      { ...windows[1]!, localAvailability: "unconfigured" },
+    ])).toBeUndefined();
+  });
+
+  it("ignores malformed repository keys in a peer's request", () => {
+    const request = { ...card, repositoryKey: 42, repositoryKeys: [null, ORIGIN] } as unknown as typeof card;
+    expect(findPeerThreadTodoProject(request, windows)?.key).toBe("directory:C:/src/PwrAgent");
   });
 });

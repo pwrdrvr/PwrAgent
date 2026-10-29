@@ -155,6 +155,19 @@ export type FederationInstanceProjectSummary = {
   kind: DirectorySummaryKind;
   path?: string;
   /**
+   * The checkout's origin as `host/owner/repo`, and its other fetch
+   * remotes. One project can have a different name on each machine;
+   * these say which projects are the same repository. Absent from older
+   * instances and from checkouts with no remote.
+   */
+  repositoryKey?: string;
+  repositoryKeys?: string[];
+  /**
+   * `unconfigured`: the instance lists the project only because one of its
+   * threads names it. It has no checkout there to start a thread in.
+   */
+  localAvailability?: "unconfigured";
+  /**
    * Whether the project has a configured launchpad draft (environment,
    * model, execution-mode presets). Threads can be created either way;
    * without one, instance-level defaults apply.

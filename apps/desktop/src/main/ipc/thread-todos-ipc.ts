@@ -79,6 +79,9 @@ async function listLocalProjects(): Promise<ThreadTodoProjectCandidate[]> {
     label: directory.label,
     kind: directory.kind,
     ...(directory.path ? { path: directory.path } : {}),
+    ...(directory.repositoryKey ? { repositoryKey: directory.repositoryKey } : {}),
+    ...(directory.repositoryKeys?.length ? { repositoryKeys: directory.repositoryKeys } : {}),
+    ...(directory.localAvailability ? { localAvailability: directory.localAvailability } : {}),
   }));
 }
 
