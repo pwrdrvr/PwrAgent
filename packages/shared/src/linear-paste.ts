@@ -25,6 +25,8 @@ export type LinearPastedImage = {
 };
 
 const LINEAR_IMAGE_TAG = /<linear-image\b[^>]*>([\s\S]*?)<\/linear-image>/g;
+const LINEAR_UPLOAD_URL = /^https:\/\/uploads\.linear\.app(\/[A-Za-z0-9._~%/-]*)(?:[?#]\S*)?$/i;
+const LINEAR_MCP_URL = /^https:\/\/mcp\.linear\.app(?:[/?#]|$)/i;
 const MARKDOWN_IMAGE = /!\[([^\]\n]{0,300})\]\((https:\/\/uploads\.linear\.app\/[^\s)]+)\)/g;
 
 /** Whether a pasted string may carry a Linear image. Cheap enough per paste. */
@@ -68,33 +70,18 @@ export function findLinearPastedImages(text: string): LinearPastedImage[] {
  * minutes, and the MCP does not need it.
  */
 export function normalizeLinearUploadUrl(value: string): string | undefined {
-  let url: URL;
-  try {
-    url = new URL(value.trim());
-  } catch {
-    return undefined;
-  }
-  if (
-    url.protocol !== "https:"
-    || url.hostname !== LINEAR_UPLOADS_HOSTNAME
-    || url.port !== ""
-    || url.username !== ""
-    || url.password !== ""
-    || url.pathname.length <= 1
-  ) {
-    return undefined;
-  }
-  return `${url.origin}${url.pathname}`;
+  // Hand-parsed: this package runs without DOM or Node globals, so no `URL`.
+  // The authority must be exactly the host, so a port, a user name, or a
+  // longer host such as `uploads.linear.app.example` does not match.
+  const match = LINEAR_UPLOAD_URL.exec(value.trim());
+  const path = match?.[1];
+  if (!path || path === "/") return undefined;
+  return `https://${LINEAR_UPLOADS_HOSTNAME}${path}`;
 }
 
 /** Whether an MCP connection's server URL is Linear's hosted MCP server. */
 export function isLinearMcpServerUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && url.hostname === LINEAR_MCP_HOSTNAME;
-  } catch {
-    return false;
-  }
+  return LINEAR_MCP_URL.test(value.trim());
 }
 
 function parseLinearImageNode(json: string): LinearPastedImage | undefined {

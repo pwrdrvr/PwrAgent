@@ -27,12 +27,14 @@ function session(result: CallToolResult | Error) {
 
 function options(
   sessions: Record<string, ReturnType<typeof session>>,
-  connectionIds: string[] | undefined = Object.keys(sessions),
+  // `null` stands for the setting being off; a default parameter would
+  // swallow an explicit `undefined`.
+  connectionIds: string[] | null = Object.keys(sessions),
 ): LinearPastedImagesOptions & { opened: string[] } {
   const opened: string[] = [];
   return {
     opened,
-    connectionIds,
+    connectionIds: connectionIds ?? undefined,
     openSession: async ({ connectionId }) => {
       opened.push(connectionId);
       const found = sessions[connectionId];
@@ -81,7 +83,7 @@ describe("fetchLinearPastedImages", () => {
   });
 
   it("reports the setting off and a missing connection without opening a session", async () => {
-    await expect(fetchLinearPastedImages(pasted(FILE), options({}, undefined)))
+    await expect(fetchLinearPastedImages(pasted(FILE), options({}, null)))
       .resolves.toEqual({ status: "disabled" });
     await expect(fetchLinearPastedImages(pasted(FILE), options({}, [])))
       .resolves.toEqual({ status: "unavailable" });
