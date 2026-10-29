@@ -55,8 +55,8 @@ const TODO_WRITING_GUIDANCE = [
 // Repeated on add_todo and list_todos: a backend that loads tool schemas on
 // demand may not read resolve_todo until the work is done.
 const CLAIM_GUIDANCE = [
-  "When the operator asks you to do a card's work in this thread, claim the card before you start:",
-  "call resolve_todo with resolution sent_here, as the card's Do it here button does.",
+  "When the operator asks you to do a card's work in this thread, claim it first.",
+  "Call resolve_todo with resolution sent_here before you start, as the card's Do it here button does.",
 ].join(" ");
 
 type ThreadTodoToolContext = {
@@ -844,12 +844,12 @@ function inputSchemaForOperation(
             type: "string",
             enum: ["sent_here"],
             description:
-              "With done: the operator asked you to do the card's work in this thread. Resolve before you start the work, so the card cannot be run twice.",
+              "With done: the operator asked you to do the card's work in this thread. Resolve before you start, so the card cannot run twice.",
           },
           allowOpenItems: {
             type: "boolean",
             description:
-              "With done: mark the card done although some steps are unchecked. Pass it only when the operator says the remaining steps no longer apply, or with resolution sent_here when those steps are the work you are taking on.",
+              "With done: mark the card done although some steps are unchecked. Pass it only when the operator says the remaining steps no longer apply. Also pass it with resolution sent_here when those steps are the work you take on.",
           },
         },
       };
