@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.3.6 - 2026-10-29
+
+- Offline HTML Previews - Open HTML files directly in the file viewer, including local images and styles. Previews block network access, disable scripts by default, and require confirmation before opening external links.
+- Image Paste - Preserve image quality and animated GIF/WebP attachments while avoiding repeated resize and recompression passes. Show preparation progress before sending.
+- Approval Shortcuts - Answer approvals directly from a notice's Review menu without switching threads. Show correct thread titles even outside the loaded sidebar page, with clearer delivery and retry status.
+- Final Answer Clarity - Use only the turn's last assistant message as its final text across transcripts, automations, and messaging, preventing progress messages from being repeated as another answer.
+- Security Hardening - Deny renderer permissions by default, block permission access from embedded previews, and restrict application-window navigation to the intended renderer. Voice retains explicit microphone and camera opt-in.
+- Navigation Polish - Keep the sidebar steady when opening threads, preserve MCP counts during remote refreshes, and let the mark-read shortcut work from the composer.
+
 ## v1.3.5 - 2026-10-28
 
 - Messaging Continuity - Preserve the originating Slack or Telegram destination through handoffs, completions, monitors, and continuations. Keep Codex partial answers in Working Updates rather than treating them as final replies.
