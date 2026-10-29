@@ -7,6 +7,6 @@ export default defineConfig({
     environment: "jsdom",
     runner: "apps/desktop/src/renderer/src/test/act-warning-runner.ts",
     setupFiles: ["apps/desktop/src/renderer/src/test/setup.ts"],
-    include: ["apps/desktop/src/renderer/src/test/fixtures/startup-ownership.fixture.tsx"],
+    include: ["apps/desktop/src/renderer/src/test/fixtures/fake-timer-ownership.fixture.tsx"],
   },
 });
