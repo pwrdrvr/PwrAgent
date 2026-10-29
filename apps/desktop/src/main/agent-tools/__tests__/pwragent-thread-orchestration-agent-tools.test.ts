@@ -98,7 +98,7 @@ describe("pwragent thread orchestration agent tools", () => {
               additionalProperties: false,
               properties: expect.objectContaining({
                 direction: expect.objectContaining({
-                  enum: ["local-to-worktree", "worktree-to-local", "to-project"],
+                  enum: ["local-to-worktree", "worktree-to-local", "worktree-to-worktree", "to-project"],
                 }),
                 targetPath: expect.objectContaining({ type: "string" }),
                 strategy: expect.objectContaining({
