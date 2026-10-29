@@ -41249,6 +41249,122 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("carries a fresh-worktree baseRef through a queued move", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "ordinary-thread",
+      title: "Parent Thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/app",
+          kind: "local",
+          label: "app",
+          path: "/repo/app",
+        },
+      ],
+      gitBranch: "feature/handoff",
+      updatedAt: 1000,
+    };
+    const handoff = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "ordinary-thread",
+      direction: "local-to-worktree" as const,
+      workMode: "worktree" as const,
+      branch: "feature/handoff",
+      repositoryPath: "/repo/app",
+      targetPath: "/repo/app/.worktrees/app-feature-handoff",
+      linkedDirectory: {
+        id: "pwragent-handoff:codex:ordinary-thread",
+        kind: "worktree" as const,
+        label: "app",
+        path: "/repo/app",
+        worktreePath: "/repo/app/.worktrees/app-feature-handoff",
+      },
+      warnings: [],
+      completedAt: 1000,
+    }));
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/read", "turn/start"] },
+      threads: [thread],
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:ordinary-thread": {
+            backend: "codex",
+            threadId: "ordinary-thread",
+            executionMode: "default",
+            extraLinkedDirectories: thread.linkedDirectories ?? [],
+          },
+        },
+      }),
+      gitWorkspaceHandoffService: {
+        handoff,
+      } as never,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "move-call-1",
+        requestId: "move-call-1",
+        namespace: "pwragent",
+        tool: "move_thread_workspace",
+        arguments: {
+          sourcePath: "/repo/app",
+          baseRef: "origin/main",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/status/changed",
+        params: {
+          threadId: "ordinary-thread",
+          status: { type: "idle" },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(handoff).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "ordinary-thread",
+        direction: "local-to-worktree",
+        strategy: "detached-changes",
+        repositoryPath: "/repo/app",
+        sourcePath: "/repo/app",
+        baseRef: "origin/main",
+      });
+    });
+    await registry.close();
+  });
+
   it("reports running workspace moves as in-progress quit work", async () => {
     const handoffDeferred = createDeferred<{
       backend: "codex";
@@ -55314,6 +55430,73 @@ script = "printf setup"
       threadId: "claude-1",
       namedPullRequests: [{ number: 2947 }, { number: 2948 }],
     }));
+    await registry.close();
+  });
+
+  it("moves a Claude thread's workspace and points its next turn at the new folder", async () => {
+    const worktreePath = "/repo/app/.worktrees/old";
+    const targetPath = "/repo/app/.worktrees/new";
+    const handoff = vi.fn(async () => ({
+      backend: "claude" as const, threadId: "claude-1", direction: "worktree-to-worktree" as const,
+      strategy: "detached-changes" as const, workMode: "worktree" as const, branch: "HEAD",
+      repositoryPath: "/repo/app", targetPath,
+      linkedDirectory: { id: "pwragent-handoff:claude:claude-1", label: "app", path: "/repo/app", worktreePath: targetPath, kind: "worktree" as const },
+      warnings: [], completedAt: 1000,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: { recordCodexWorktreeOwnerThread: vi.fn(async () => {}) } as never,
+      gitWorkspaceHandoffService: { handoff } as never,
+    });
+    const internals = registry as unknown as {
+      claudeBackend: {
+        listThreads: () => Promise<AppServerThreadSummary[]>;
+        assertWorkspaceMovable: (threadId: string) => void;
+        moveWorkspace: (params: unknown) => Promise<void>;
+      };
+    };
+    vi.spyOn(internals.claudeBackend, "listThreads").mockResolvedValue([{
+      id: "claude-1", title: "Claude", titleSource: "explicit", source: "claude", updatedAt: 1,
+      // Adopted from another agent, so this thread must not archive it.
+      linkedDirectories: [{ id: worktreePath, label: "app", path: "/repo/app", worktreePath, kind: "worktree", worktreeOwnership: "external" }],
+    }]);
+    const assertMovable = vi.spyOn(internals.claudeBackend, "assertWorkspaceMovable").mockImplementation(() => {});
+    const moveWorkspace = vi.spyOn(internals.claudeBackend, "moveWorkspace").mockResolvedValue();
+
+    const response = await registry.handoffThreadWorkspace({
+      backend: "claude", threadId: "claude-1", direction: "worktree-to-worktree",
+      repositoryPath: "/repo/app", sourcePath: worktreePath,
+    });
+
+    expect(assertMovable).toHaveBeenCalledWith("claude-1");
+    expect(handoff).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "claude", direction: "worktree-to-worktree", sourcePath: worktreePath, keepSourceWorktree: true,
+    }));
+    expect(moveWorkspace).toHaveBeenCalledWith({
+      threadId: "claude-1", cwd: targetPath, linkedDirectory: response.linkedDirectory,
+    });
+    expect(response.warnings).toEqual([]);
+    await registry.close();
+  });
+
+  it("refuses a Claude workspace move before touching any files", async () => {
+    const handoff = vi.fn();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      gitWorkspaceHandoffService: { handoff } as never,
+    });
+    const internals = registry as unknown as { claudeBackend: { assertWorkspaceMovable: (threadId: string) => void } };
+    vi.spyOn(internals.claudeBackend, "assertWorkspaceMovable").mockImplementation(() => {
+      throw new Error("Stop Claude's background tasks before moving this thread.");
+    });
+
+    await expect(registry.handoffThreadWorkspace({
+      backend: "claude", threadId: "claude-1", direction: "local-to-worktree",
+      repositoryPath: "/repo/app", sourcePath: "/repo/app",
+    })).rejects.toThrow("Stop Claude's background tasks");
+    expect(handoff).not.toHaveBeenCalled();
     await registry.close();
   });
 

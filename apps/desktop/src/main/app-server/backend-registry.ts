@@ -443,6 +443,7 @@ import {
   type TrustCodexProjectResponse,
   type ThreadExecutionMode,
   type ThreadOverlayState,
+  type ThreadWorkspaceHandoffDirection,
   type ThreadWorkspaceHandoffStrategy,
   type ThreadSubAgentSummary,
   type ThreadToolAccounting,
@@ -861,6 +862,8 @@ const ACTIVE_TURN_WORKSPACE_RECOVERY_ERROR =
   "Wait for the current turn to finish, then try again.";
 const CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING =
   "Codex workspace CWD synchronization is pending and will retry automatically.";
+const CLAUDE_WORKSPACE_MOVE_FAILED_WARNING =
+  "Claude could not switch to the new folder. Move this thread again before you send a message.";
 /**
  * Number of consecutive queued-execution-mode flush failures tolerated
  * before the queue is auto-cancelled and an explanatory `cancelled`
@@ -1263,6 +1266,19 @@ function resolveThreadWorkspaceCwd(
     resolveLinkedDirectoryWorkspaceCwd(overlayDirectories) ??
     thread.projectKey
   );
+}
+
+/** True when the thread's runtime cwd is one of its linked worktrees. */
+function threadWorkspaceIsWorktree(
+  thread: AppServerThreadSummary | undefined,
+  overlayDirectories: AppServerThreadSummary["linkedDirectories"] = [],
+): boolean {
+  const cwd = resolveThreadWorkspaceCwd(thread, overlayDirectories);
+  if (!cwd) return false;
+  const target = normalizeWorktreePathForComparison(cwd);
+  return [...overlayDirectories, ...(thread?.linkedDirectories ?? [])].some((directory) =>
+    directory.kind === "worktree"
+    && normalizeWorktreePathForComparison(directory.worktreePath ?? directory.path) === target);
 }
 
 function linkedDirectoriesHaveSameWorkspaceIdentity(
@@ -16291,7 +16307,6 @@ export class DesktopBackendRegistry {
   async handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> {
-    if (request.backend === "claude") throw new Error("Start a new Claude thread in the target workspace.");
     return await this.withThreadLifecycleMutation(request, async () => await this.handoffThreadWorkspaceWithoutArchiveLock(request));
   }
 
@@ -16301,6 +16316,8 @@ export class DesktopBackendRegistry {
     if (this.threadHasActiveTurn(request.threadId, request.backend)) {
       throw new Error(ACTIVE_TURN_HANDOFF_ERROR);
     }
+    // Before any file moves: Claude refuses while it runs a turn or a task.
+    if (request.backend === "claude") this.claudeBackend.assertWorkspaceMovable(request.threadId);
     if (isAcpBackendId(request.backend)) {
       await this.assertAcpWorkspaceHandoffAllowed({
         backend: request.backend,
@@ -16337,12 +16354,10 @@ export class DesktopBackendRegistry {
           ...(projectMoveOverlay?.extraLinkedDirectories ?? []),
         ]
       : undefined;
-    const sourceCwd = resolveThreadWorkspaceCwd(thread, projectMoveOverlay?.extraLinkedDirectories);
-    const sourceWorkMode: "local" | "worktree" = workspaceDirectories && mergeThreadLinkedDirectories(workspaceDirectories).some((directory) =>
-      directory.kind === "worktree"
-      && sourceCwd
-      && normalizeWorktreePathForComparison(directory.worktreePath ?? directory.path) === normalizeWorktreePathForComparison(sourceCwd),
-    ) ? "worktree" : "local";
+    const sourceWorkMode: "local" | "worktree" = workspaceDirectories
+      && threadWorkspaceIsWorktree(thread, projectMoveOverlay?.extraLinkedDirectories)
+      ? "worktree"
+      : "local";
     // PR workspace provenance survives an earlier project relink that lost
     // its directory. Git still validates every candidate against the target
     // repository's registered worktrees before it can be reused.
@@ -16353,6 +16368,10 @@ export class DesktopBackendRegistry {
     ] : undefined;
     const result = await this.gitWorkspaceHandoffService.handoff({
       ...request,
+      ...(request.direction === "worktree-to-worktree"
+        && await this.threadWorktreeIsExternal(request, thread, request.sourcePath ?? candidate.sourcePath)
+        ? { keepSourceWorktree: true }
+        : {}),
       ...(workspacePaths ? {
         workspacePaths,
         sourceWorkMode,
@@ -16389,6 +16408,7 @@ export class DesktopBackendRegistry {
         backend: request.backend,
         threadId: request.threadId,
         cwd: workspaceCwd,
+        linkedDirectory: result.linkedDirectory,
       });
     } catch (error) {
       workspaceCwdSyncPending = true;
@@ -16456,7 +16476,9 @@ export class DesktopBackendRegistry {
           ...result,
           warnings: [
             ...result.warnings,
-            CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING,
+            request.backend === "claude"
+              ? CLAUDE_WORKSPACE_MOVE_FAILED_WARNING
+              : CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING,
           ],
         }
       : result;
@@ -16531,9 +16553,9 @@ export class DesktopBackendRegistry {
   async moveThreadToMainCheckout(
     request: MoveThreadToMainCheckoutRequest,
   ): Promise<MoveThreadToMainCheckoutResponse> {
-    if (request.backend === "claude") throw new Error("Start a new Claude thread in the main checkout.");
     return await this.withThreadLifecycleMutation(request, async () => {
       await this.assertWorkspaceRecoveryAllowed(request);
+      if (request.backend === "claude") this.claudeBackend.assertWorkspaceMovable(request.threadId);
       if (isAcpBackendId(request.backend)) {
         await this.assertAcpWorkspaceHandoffAllowed({
           backend: request.backend,
@@ -16585,9 +16607,12 @@ export class DesktopBackendRegistry {
           backend: request.backend,
           threadId: request.threadId,
           cwd: repositoryPath,
+          linkedDirectory,
         });
       } catch (error) {
-        warnings.push(CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING);
+        warnings.push(request.backend === "claude"
+          ? CLAUDE_WORKSPACE_MOVE_FAILED_WARNING
+          : CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING);
         backendRegistryLog.warn(
           "Codex workspace CWD synchronization failed after moving to the main checkout; will retry",
           {
@@ -16633,6 +16658,24 @@ export class DesktopBackendRegistry {
         completedAt: Date.now(),
       };
     });
+  }
+
+  /**
+   * True when the thread's link to this worktree says PwrAgent did not create
+   * it, so moving the thread away must leave the folder on disk.
+   */
+  private async threadWorktreeIsExternal(
+    request: { backend: AppServerBackendKind; threadId: string },
+    thread: AppServerThreadSummary | undefined,
+    worktreePath: string | undefined,
+  ): Promise<boolean> {
+    if (!worktreePath) return false;
+    const overlay = await this.overlayStore.getThreadOverlayState(request);
+    const target = normalizeWorktreePathForComparison(worktreePath);
+    return [...(overlay?.extraLinkedDirectories ?? []), ...(thread?.linkedDirectories ?? [])]
+      .some((directory) => directory.kind === "worktree"
+        && directory.worktreeOwnership === "external"
+        && normalizeWorktreePathForComparison(directory.worktreePath ?? directory.path) === target);
   }
 
   private async assertWorkspaceRecoveryAllowed(request: {
@@ -36691,17 +36734,19 @@ export class DesktopBackendRegistry {
       throw new Error("Thread workspace metadata is unavailable for handoff.");
     }
 
+    const fromWorktree = request.direction === "worktree-to-local"
+      || request.direction === "worktree-to-worktree";
     const directory =
-      request.direction === "worktree-to-local"
+      fromWorktree
         ? thread.linkedDirectories.find((candidate) => candidate.kind === "worktree")
         : thread.linkedDirectories.find((candidate) => candidate.kind === "local") ??
           thread.linkedDirectories[0];
     const sourcePath =
-      request.direction === "worktree-to-local"
+      fromWorktree
         ? directory?.worktreePath ?? directory?.path
         : directory?.path ?? thread.projectKey;
     const repositoryPath =
-      request.direction === "worktree-to-local"
+      fromWorktree
         ? directory?.path ?? request.repositoryPath
         : directory?.path ?? thread.projectKey ?? request.repositoryPath;
 
@@ -37326,13 +37371,29 @@ export class DesktopBackendRegistry {
   private async updateThreadWorkspaceCwd(params: {
     backend: AppServerBackendKind;
     cwd: string;
+    /** The thread's new primary directory; Claude records it with the cwd. */
+    linkedDirectory?: LinkedDirectorySummary;
     threadId: string;
   }): Promise<void> {
+    const cwd = params.cwd.trim();
+    if (params.backend === "claude") {
+      if (!cwd || !params.linkedDirectory) {
+        throw new Error("Workspace handoff did not produce a target CWD.");
+      }
+      // Claude reads its cwd from PwrAgent's own session metadata, and the
+      // next turn resumes the same session from there.
+      await this.claudeBackend.moveWorkspace({
+        threadId: params.threadId,
+        cwd,
+        linkedDirectory: params.linkedDirectory,
+      });
+      this.invalidateThreadListCache("claude", true);
+      return;
+    }
     if (params.backend !== "codex") {
       return;
     }
 
-    const cwd = params.cwd.trim();
     if (!cwd) {
       throw new Error("Workspace handoff did not produce a target CWD.");
     }
@@ -40746,6 +40807,7 @@ export class DesktopBackendRegistry {
       ...(move.sourceBranch ? { sourceBranch: move.sourceBranch } : {}),
       ...(move.leaveLocalBranch ? { leaveLocalBranch: move.leaveLocalBranch } : {}),
       ...(move.newBranchName ? { newBranchName: move.newBranchName } : {}),
+      ...(move.baseRef ? { baseRef: move.baseRef } : {}),
       ...(move.targetPath ? { targetPath: move.targetPath } : {}),
       ...(move.branch ? { branch: move.branch } : {}),
       ...(move.linkedDirectory ? { linkedDirectory: move.linkedDirectory } : {}),
@@ -41104,16 +41166,13 @@ export class DesktopBackendRegistry {
       );
     }
 
-    const direction = request.args.direction ?? "local-to-worktree";
-    if (direction !== "local-to-worktree" && direction !== "to-project") {
+    const requestedDirection = request.args.direction;
+    if (requestedDirection === "worktree-to-local") {
       return threadOrchestrationFailure(
         "unsupported_workspace",
-        'move_thread_workspace supports direction="local-to-worktree" or "to-project".',
+        'move_thread_workspace supports direction="local-to-worktree", "worktree-to-worktree", or "to-project".',
       );
     }
-    const strategy = direction === "to-project"
-      ? undefined
-      : this.resolveMoveThreadWorkspaceStrategy(request.args);
 
     const workspaceMoveId = [
       "workspace-move",
@@ -41142,6 +41201,16 @@ export class DesktopBackendRegistry {
       }),
     ]);
 
+    // Without a direction, a new worktree comes from wherever the thread is.
+    const direction = requestedDirection ?? (
+      threadWorkspaceIsWorktree(sourceThread, sourceOverlay?.extraLinkedDirectories)
+        ? "worktree-to-worktree"
+        : "local-to-worktree"
+    );
+    const strategy = direction === "to-project"
+      ? undefined
+      : this.resolveMoveThreadWorkspaceStrategy(request.args);
+
     let targetPath: string | undefined;
     let candidate: {
       repositoryPath?: string;
@@ -41160,6 +41229,7 @@ export class DesktopBackendRegistry {
         candidate = { sourcePath: resolveThreadWorkspaceCwd(sourceThread, sourceOverlay?.extraLinkedDirectories) };
       } else {
         candidate = this.resolveThreadWorkspaceMoveCandidate({
+          direction,
           ...(sourceOverlay ? { overlay: sourceOverlay } : {}),
           request,
           ...(sourceThread ? { thread: sourceThread } : {}),
@@ -41192,6 +41262,7 @@ export class DesktopBackendRegistry {
             (request.args.leaveLocalBranch ?? "") &&
           (duplicateMove.newBranchName ?? "") ===
             (request.args.newBranchName ?? "") &&
+          (duplicateMove.baseRef ?? "") === (request.args.baseRef ?? "") &&
           path.resolve(duplicateMove.sourcePath ?? "") ===
             path.resolve(candidate.sourcePath ?? "") &&
           path.resolve(duplicateMove.repositoryPath ?? "") ===
@@ -41262,6 +41333,7 @@ export class DesktopBackendRegistry {
       ...(request.args.newBranchName
         ? { newBranchName: request.args.newBranchName }
         : {}),
+      ...(request.args.baseRef ? { baseRef: request.args.baseRef } : {}),
       createdAt: now,
       updatedAt: now,
       message:
@@ -41289,6 +41361,7 @@ export class DesktopBackendRegistry {
   }
 
   private resolveThreadWorkspaceMoveCandidate(params: {
+    direction: ThreadWorkspaceHandoffDirection;
     overlay?: ThreadOverlayState;
     request: PwrAgentThreadOrchestrationRequest<"move_thread_workspace">;
     thread?: AppServerThreadSummary;
@@ -41364,7 +41437,7 @@ export class DesktopBackendRegistry {
     const candidate = this.resolveHandoffWorkspaceCandidate(inferredThread, {
       backend: params.request.context.backend,
       threadId: params.request.context.threadId,
-      direction: args.direction ?? "local-to-worktree",
+      direction: params.direction,
       ...(args.repositoryPath ? { repositoryPath: args.repositoryPath } : {}),
       ...(args.sourceBranch ? { sourceBranch: args.sourceBranch } : {}),
       ...(args.sourcePath ? { sourcePath: args.sourcePath } : {}),
@@ -41460,6 +41533,7 @@ export class DesktopBackendRegistry {
         ...(move.sourceBranch ? { sourceBranch: move.sourceBranch } : {}),
         ...(move.leaveLocalBranch ? { leaveLocalBranch: move.leaveLocalBranch } : {}),
         ...(move.newBranchName ? { newBranchName: move.newBranchName } : {}),
+        ...(move.baseRef ? { baseRef: move.baseRef } : {}),
       });
       this.updatePendingThreadWorkspaceMove(workspaceMoveId, {
         phase: "updating_metadata",
@@ -49306,6 +49380,7 @@ function pendingThreadWorkspaceMoveMatchesQuery(
     move.sourceBranch,
     move.leaveLocalBranch,
     move.newBranchName,
+    move.baseRef,
     move.targetPath,
     move.branch,
     move.linkedDirectory?.label,

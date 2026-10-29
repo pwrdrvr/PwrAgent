@@ -12720,7 +12720,7 @@ export class MessagingController {
       );
       return;
     }
-    if (actionId === "handoff:worktree-to-local") {
+    if (actionId === "handoff:worktree-to-local" || actionId === "handoff:worktree-to-worktree") {
       await this.presentHandoffConfirmation(binding, event);
       return;
     }
@@ -13250,6 +13250,7 @@ export class MessagingController {
           projectPageIndex: branchPageIndexFromValue(event.value),
           leaveLocalBranch: request.leaveLocalBranch,
           strategy: request.strategy,
+          direction: request.direction,
         }),
         audit: this.buildHandoffAudit(
           `handoff.confirmation.${request.direction}`,
@@ -21366,12 +21367,12 @@ function validateHandoffRequest(
   request: HandoffThreadWorkspaceRequest,
   context: MessagingWorkspaceHandoffContext,
 ): { valid: true } | { valid: false; reason: string } {
-  const expectedDirection =
-    context.workspaceKind === "local" ? "local-to-worktree" : "worktree-to-local";
+  const expectedDirections: HandoffThreadWorkspaceRequest["direction"][] =
+    context.workspaceKind === "local" ? ["local-to-worktree"] : ["worktree-to-local", "worktree-to-worktree"];
   if (
     request.backend !== context.backend ||
     request.threadId !== context.threadId ||
-    (request.direction !== "to-project" && request.direction !== expectedDirection) ||
+    (request.direction !== "to-project" && !expectedDirections.includes(request.direction)) ||
     request.repositoryPath !== context.repositoryPath ||
     request.sourcePath !== context.workingDirectoryPath
   ) {
@@ -21393,6 +21394,11 @@ function validateHandoffRequest(
       valid: false,
       reason: "The thread branch changed. Use /status to refresh before handoff.",
     };
+  }
+  if (request.direction === "worktree-to-worktree") {
+    return request.strategy === "new-branch" && !request.newBranchName?.trim()
+      ? { valid: false, reason: "Choose the new branch name before handoff." }
+      : { valid: true };
   }
   if (request.direction === "local-to-worktree") {
     if (request.strategy === "detached-changes") {
@@ -21427,7 +21433,8 @@ function formatHandoffDirection(
   direction: HandoffThreadWorkspaceRequest["direction"],
 ): string {
   return direction === "to-project" ? "Move to Project"
-    : direction === "local-to-worktree" ? "Local to new worktree" : "Worktree to Local";
+    : direction === "local-to-worktree" ? "Local to new worktree"
+      : direction === "worktree-to-worktree" ? "Worktree to new worktree" : "Worktree to Local";
 }
 
 function handoffSuccessText(result: HandoffThreadWorkspaceResponse): string {
