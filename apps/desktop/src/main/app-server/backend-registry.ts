@@ -24,6 +24,7 @@ import {
   totalTokenMiserGateAccountings,
   RENAME_THREAD_EXPECTED_NAME_MISMATCH,
   classifyDirectory,
+  finalTurnOutputText,
   readUuidV7Timestamp,
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepStatus,
@@ -5952,16 +5953,7 @@ function finalTextFromTerminalNotification(
     AppServerNotification,
     { method: "turn/completed" }
   >;
-  const output = Array.isArray(completed.params.turn.output)
-    ? completed.params.turn.output
-    : [];
-  const text = output
-    .filter((item) => item.type === "text")
-    .map((item) => item.text.trim())
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
-  return text || undefined;
+  return finalTurnOutputText(completed.params.turn.output);
 }
 
 function textFragmentsFromCodexNotification(

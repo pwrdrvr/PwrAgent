@@ -6,6 +6,7 @@ import {
   reconcileCompletedTurnUsageEntries,
   tokenUsageActivityScope,
   turnUsageEntryTurnId,
+  finalTurnOutputText,
   isTerminalTurnMetadata,
   readUuidV7Timestamp,
 } from "@pwragent/shared";
@@ -4960,15 +4961,7 @@ function readCompletedTurnText(
     return undefined;
   }
 
-  const turnRecord = (notification as { turn?: { output?: Array<{ type: string; text?: string }> } })
-    .turn;
-  // Claude reports each assistant message of the turn as its own part, so
-  // the final answer is the last part. Joining them made a message no
-  // backend sent.
-  return turnRecord?.output
-    ?.filter((part) => part.type === "text" && typeof part.text === "string")
-    .map((part) => part.text!.trim())
-    .findLast(Boolean);
+  return finalTurnOutputText((notification as { turn?: { output?: unknown } }).turn?.output);
 }
 
 function didHydrateCompletedTurn(

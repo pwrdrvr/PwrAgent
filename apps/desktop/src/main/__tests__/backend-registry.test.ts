@@ -37854,6 +37854,60 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("reports only a headless automation turn's last message as its final text", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+    await registry.startAutomationHeadlessTurn({
+      backend: "codex",
+      agentThreadId: "agent-thread-1",
+      automationName: "Check email",
+      automationRunId: "run-1",
+      input: [{ type: "text", text: "Run the scheduled task." }],
+    });
+
+    // Claude's shape: every assistant message of the turn is its own part.
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          output: [
+            { type: "text", text: "Now checking the inbox." },
+            { type: "text", text: "Two new messages. Reading them." },
+            { type: "text", text: "No email needs a reply." },
+            { type: "text", text: "  " },
+          ],
+        },
+      },
+    });
+
+    expect(events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: expect.objectContaining({
+          status: "terminal",
+          finalText: "No email needs a reply.",
+        }),
+      },
+    });
+
+    unsubscribe();
+    await registry.close();
+  });
+
   it("reports duplicate executions of one automation run as one quit blocker", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
