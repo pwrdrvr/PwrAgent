@@ -50788,6 +50788,17 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   font-family: var(--font-sans);
 }
 
+/* Machine, Speed, Where and Env hold short single-choice lists. */
+.todo-fact-menu {
+  width: 260px;
+}
+
+.todo-dispatch__pending {
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+}
+
 .todo-model-picker__detail {
   flex: none;
   color: var(--text-muted);

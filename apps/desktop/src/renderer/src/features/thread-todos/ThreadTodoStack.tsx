@@ -191,6 +191,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
             }}
             mergeMethods={view.mergeMethods}
             instances={view.instances}
+            localMachine={view.localMachine}
             projectMenu={view.projectMenu}
             onResolve={resolve}
             onRun={run}

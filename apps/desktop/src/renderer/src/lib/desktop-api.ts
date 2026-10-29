@@ -8,6 +8,8 @@ import type {
   TerminateBackgroundTerminalResponse,
 } from "@pwragent/shared";
 import type {
+  ListThreadTodoDispatchEnvironmentsRequest,
+  ListThreadTodoDispatchEnvironmentsResponse,
   ListThreadTodoProjectsResponse,
   ListThreadTodoProjectsRequest,
   ListThreadTodosRequest,
@@ -1115,6 +1117,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => Promise<ThreadTodoMutationResponse>;
   /** The projects a card's project menu offers. */
   listThreadTodoProjects?: (request?: ListThreadTodoProjectsRequest) => Promise<ListThreadTodoProjectsResponse>;
+  /** The environments a handoff card can start with on one instance. */
+  listThreadTodoDispatchEnvironments?: (
+    request: ListThreadTodoDispatchEnvironmentsRequest,
+  ) => Promise<ListThreadTodoDispatchEnvironmentsResponse>;
   /** The operator's pick from a card's project menu. */
   setThreadTodoProject?: (
     request: SetThreadTodoProjectRequest,

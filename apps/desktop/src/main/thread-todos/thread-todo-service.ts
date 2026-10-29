@@ -15,6 +15,7 @@ import type {
   ThreadTodosChangedEvent,
   ThreadTodoWorkMode,
   ThreadExecutionMode,
+  CodexSpeed,
 } from "@pwragent/shared";
 import {
   DEFAULT_THREAD_TODO_MERGE_METHOD,
@@ -54,7 +55,7 @@ export type ThreadTodoActionRunners = {
     crossProject: boolean;
     action: StartThreadAction;
     modelSettings?: ThreadTodoModelSettings;
-  }) => Promise<ThreadTodoStartedThread & {
+  } & ThreadTodoStartChoices) => Promise<ThreadTodoStartedThread & {
     dispatchSettings?: { settings: ThreadTodoModelSettings; source: ThreadTodoModelSettings };
   }>;
   /** The same, on a federation peer, in that peer's copy of `project`. */
@@ -65,7 +66,18 @@ export type ThreadTodoActionRunners = {
     project?: ThreadTodoProject;
     crossProject: boolean;
     action: StartThreadAction;
-  }) => Promise<ThreadTodoStartedThread>;
+    /** Checked against the peer's catalog; absent uses the peer's defaults. */
+    modelSettings?: ThreadTodoModelSettings;
+  } & ThreadTodoStartChoices) => Promise<ThreadTodoStartedThread>;
+};
+
+/** What the operator chose on a handoff card besides its model. */
+export type ThreadTodoStartChoices = {
+  /** Replaces the card's own Where. */
+  workMode?: ThreadTodoWorkMode;
+  /** An environment id, or `none`. Absent keeps the default. */
+  environment?: string;
+  speed?: CodexSpeed;
 };
 
 export type AddThreadTodoInput = {
@@ -169,7 +181,9 @@ export class ThreadTodoService {
     this.newId = options.newId ?? randomUUID;
   }
 
-  private readDispatchSettings: ((thread: { backend: AppServerBackendKind; threadId: string }) => Promise<ThreadTodoModelSettings>) | undefined;
+  private readDispatchSettings: ((thread: { backend: AppServerBackendKind; threadId: string }) => Promise<
+    Pick<NonNullable<ThreadTodo["dispatchDefaults"]>, "thread" | "threadSpeed">
+  >) | undefined;
 
   setDispatchSettingsReader(reader: NonNullable<ThreadTodoService["readDispatchSettings"]>): void {
     this.readDispatchSettings = reader;
@@ -183,8 +197,8 @@ export class ThreadTodoService {
       const key = JSON.stringify([todo.backend, todo.threadId]);
       let pending = defaults.get(key);
       if (!pending) {
-        pending = this.readDispatchSettings(todo).then((thread) => ({
-          thread,
+        pending = this.readDispatchSettings(todo).then((defaults) => ({
+          ...defaults,
           lastDispatch: this.store.getThreadModelSettings(todo.backend, todo.threadId),
         }));
         defaults.set(key, pending);
@@ -406,6 +420,11 @@ export class ThreadTodoService {
     });
   }
 
+  /** Any card on this owner, by id. */
+  get(id: string): ThreadTodo {
+    return this.require(id);
+  }
+
   /** One of the calling thread's cards, by id or by an open card's key. */
   findForThread(params: {
     backend: AppServerBackendKind;
@@ -578,7 +597,7 @@ export class ThreadTodoService {
       modelSettings?: ThreadTodoModelSettings;
       /** A run that succeeds marks the card done, so it asks the same. */
       allowOpenItems?: boolean;
-    } = {},
+    } & ThreadTodoStartChoices = {},
   ): Promise<ThreadTodo> {
     const todo = this.require(id);
     if (todo.status !== "open") {
@@ -634,6 +653,11 @@ export class ThreadTodoService {
         });
         return this.finish(id, { result: merged.summary });
       }
+      const choices: ThreadTodoStartChoices = {
+        ...(options.workMode ? { workMode: options.workMode } : {}),
+        ...(options.environment ? { environment: options.environment } : {}),
+        ...(options.speed ? { speed: options.speed } : {}),
+      };
       const started: Awaited<ReturnType<ThreadTodoActionRunners["startThread"]>> = startOnInstance && options.startOnInstanceId
         ? await startOnInstance({
             instanceId: options.startOnInstanceId,
@@ -642,6 +666,10 @@ export class ThreadTodoService {
             project,
             crossProject,
             action,
+            // The thread's remembered dispatch was checked against this
+            // machine's catalog, so only an explicit pick goes to a peer.
+            ...(options.modelSettings ? { modelSettings: options.modelSettings } : {}),
+            ...choices,
           })
         : await runners.startThread({
             sourceBackend: todo.backend,
@@ -651,6 +679,7 @@ export class ThreadTodoService {
             action,
             modelSettings: options.modelSettings
               ?? this.store.getThreadModelSettings(todo.backend, todo.threadId),
+            ...choices,
           });
       if (started.dispatchSettings) {
         this.store.rememberDispatch(todo.backend, todo.threadId,

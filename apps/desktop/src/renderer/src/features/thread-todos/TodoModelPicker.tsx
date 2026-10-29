@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { ModelSettingsRecent, ThreadTodo, ThreadTodoModelSettings } from "@pwragent/shared";
+import type { BackendSummary, ModelSettingsRecent, ThreadTodo, ThreadTodoModelSettings } from "@pwragent/shared";
 import { resolveThreadTodoModelSettings, sameThreadTodoModelSettings } from "@pwragent/shared";
 import { CheckIcon, ChevronDownIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
@@ -18,7 +18,18 @@ type PickerProps = {
   disabled?: boolean;
 };
 
-export function TodoModelPicker(props: PickerProps) {
+type MachinePickerProps = PickerProps & {
+  /**
+   * Another machine's catalog, when the card starts there instead of on
+   * its owner. Rows that machine cannot run are left out.
+   */
+  backends?: BackendSummary[];
+  machineLabel?: string;
+  /** Marks the chip when the settings differ from the card's own. */
+  changed?: boolean;
+};
+
+export function TodoModelPicker(props: MachinePickerProps) {
   const { todo, selection } = props;
   const context = useTodoDispatchContext();
   const [open, setOpen] = useState(false);
@@ -28,11 +39,16 @@ export function TodoModelPicker(props: PickerProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const id = useId();
-  const backends = useTodoDispatchBackends(todo, open);
+  const ownerBackends = useTodoDispatchBackends(todo, open);
+  const backends = props.backends ?? ownerBackends;
+  const elsewhere = props.machineLabel !== undefined;
   const thread = todo.dispatchDefaults?.thread ?? { backend: todo.backend };
   const suggested = resolveThreadTodoModelSettings({ thread, action: todo.action }).settings;
   const hasSuggestion = !sameThreadTodoModelSettings(suggested, thread);
-  const differs = !sameThreadTodoModelSettings(selection.settings, thread);
+  const differs = props.changed ?? !sameThreadTodoModelSettings(selection.settings, thread);
+  // Another machine offers this thread's settings only when it can run them.
+  const offerThread = !elsewhere || todoDispatchRecentResolves(thread, backends);
+  const offerSuggestion = hasSuggestion && (!elsewhere || todoDispatchRecentResolves(suggested, backends));
   const label = formatTodoDispatchSettings(selection.settings, backends);
   const close = () => setOpen(false);
   useMenuNavigation({ open, menuRef, triggerRef, onClose: close });
@@ -111,15 +127,15 @@ export function TodoModelPicker(props: PickerProps) {
         className={`composer-dropdown__button todo-model-picker__chip tooltip-target${differs ? " is-changed" : ""}`}
         aria-label={`Model for the new thread: ${label.replaceAll(" · ", ", ")}`}
         aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined}
-        data-tooltip={open ? undefined : "Settings for starts here. Start thread on another PwrAgent uses that peer’s defaults."}
+        data-tooltip={open ? undefined : elsewhere ? `Settings for the start on ${props.machineLabel}.` : "Settings for the start on this thread's machine."}
         onClick={() => setOpen(!open)}>
         <span className="composer-dropdown__label">{label}</span><span className="composer-dropdown__icon" aria-hidden="true"><ChevronDownIcon size={12} /></span>
       </button>
       {open ? createPortal(
         <div ref={menuRef} id={id} className="todo-split__menu todo-model-picker__menu"
           style={position} role="menu" aria-label="Model for the new thread" tabIndex={-1}>
-          {row(thread, "This thread")}
-          {hasSuggestion ? row(suggested, "Suggested") : null}
+          {offerThread ? row(thread, "This thread") : null}
+          {offerSuggestion ? row(suggested, "Suggested") : null}
           {recentRows.length ? <div className="composer-dropdown__group-label"><span>Recent</span><span className="composer-dropdown__group-detail">all threads</span></div> : null}
           {recentRows.map((recent, index) => row(recent, undefined, `recent-${index}`))}
           {error ? <p className="todo-model-picker__error" role="status">{error}</p> : null}
@@ -143,7 +159,11 @@ export function TodoModelPicker(props: PickerProps) {
               value={selection.settings.reasoningEffort ?? ""}
               onChange={(reasoningEffort) => props.onPick({ ...selection.settings, reasoningEffort })} /> : null}
           </div>
-          <p className="todo-model-picker__footnote">Starts this card. Later cards in this thread start with the last one you dispatched.</p>
+          <p className="todo-model-picker__footnote">
+            {elsewhere
+              ? `Starts this card on ${props.machineLabel}. Moving the card back keeps this thread's settings.`
+              : "Starts this card. Later cards in this thread start with the last one you dispatched."}
+          </p>
         </div>, document.body,
       ) : null}
     </>
