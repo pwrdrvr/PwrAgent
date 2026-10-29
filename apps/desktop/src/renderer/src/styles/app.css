@@ -27161,6 +27161,49 @@ a.transcript-message__messaging-origin:focus-visible {
   display: inline;
 }
 
+/* A previewable file named in inline code. The glyph and accent set it apart
+   from plain inline code, which copies on click. */
+/* Inline, not inline-block: a long path wraps with the sentence, and each
+   line fragment keeps the chip's border and padding. */
+.thread-markdown__file-chip {
+  padding: 1px 7px 1px 5px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  text-decoration: none;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.thread-markdown__file-chip:hover {
+  border-color: var(--accent-bright);
+}
+
+.thread-markdown__file-chip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.thread-markdown__file-chip-icon {
+  display: inline-block;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+
+.thread-markdown__file-chip-code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* A Markdown link to a previewable file carries the same glyph. */
+.thread-markdown__file-link-icon {
+  display: inline-block;
+  margin-right: 4px;
+  vertical-align: -1px;
+}
+
 .thread-markdown__editor-link {
   display: inline-flex;
   align-items: center;
@@ -27317,101 +27360,154 @@ a.transcript-message__messaging-origin:focus-visible {
   overflow: hidden;
 }
 
-.markdown-document-modal__head {
+/* One row names a previewed file in the dialog and the Files window: kind,
+   name, the folder (which copies the full path), the preview's own controls,
+   then the actions. */
+.file-viewer-header {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 16px;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 8px 0 14px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-panel-elevated);
 }
 
-.markdown-document-modal__title-wrap {
-  min-width: 0;
+.file-viewer-header__kind {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
-.markdown-document-modal__title {
+.file-viewer-header__name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
   margin: 0;
+  overflow: hidden;
   color: var(--text-primary);
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 650;
   line-height: 1.3;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.markdown-document-modal__path {
-  margin: 3px 0 0;
-  min-width: 0;
+.file-viewer-header__folder {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 26px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 11px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.markdown-document-modal__path-row,
-.markdown-files-window__path-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
-}
-
-.markdown-document-modal__path-copy,
-.markdown-files-window__path-copy {
-  display: inline-flex;
-  width: 24px;
-  height: 24px;
-  flex: 0 0 24px;
-  align-items: center;
-  justify-content: center;
-  margin-top: 2px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-muted);
+  line-height: 1.2;
   cursor: pointer;
 }
 
-.markdown-document-modal__path-copy:hover,
-.markdown-document-modal__path-copy:focus-visible,
-.markdown-files-window__path-copy:hover,
-.markdown-files-window__path-copy:focus-visible {
-  background: var(--bg-row-active);
-  color: var(--text-primary);
+/* Cut from the left so the end of the path stays visible. The left-to-right
+   mark keeps a leading "~" or "/" at the start of the right-to-left run. */
+.file-viewer-header__folder-text {
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.markdown-document-modal__path-copy:focus-visible,
-.markdown-files-window__path-copy:focus-visible {
+.file-viewer-header__folder-text::before {
+  content: "\200E";
+}
+
+.file-viewer-header__folder > svg {
+  flex: none;
+  opacity: 0;
+}
+
+/* With no folder to show, the glyph is the whole control. */
+.file-viewer-header__folder--bare > svg {
+  opacity: 1;
+}
+
+/* Keeps the controls and actions at the right edge, with or without a file. */
+.file-viewer-header__spring {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.file-viewer-header__folder:hover,
+.file-viewer-header__folder:focus-visible {
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+}
+
+.file-viewer-header__folder:hover > svg,
+.file-viewer-header__folder:focus-visible > svg,
+.file-viewer-header__folder[data-copied="true"] > svg {
+  opacity: 1;
+}
+
+.file-viewer-header__folder:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
-.markdown-document-modal__actions {
-  display: inline-flex;
+.file-viewer-header__controls {
+  display: flex;
+  flex: none;
   align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
 }
 
-.markdown-document-modal__icon-button {
+.file-viewer-header__controls:empty {
+  display: none;
+}
+
+.file-viewer-header__actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.file-viewer-header__controls:not(:empty) + .file-viewer-header__actions {
+  padding-left: 8px;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.markdown-document-modal__icon-button,
+.markdown-files-window__icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   padding: 0;
-  border: 1px solid var(--border-subtle);
+  border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
 }
 
-.markdown-document-modal__icon-button:hover {
-  border-color: var(--accent-border);
-  color: var(--accent-bright);
+.markdown-document-modal__icon-button:hover,
+.markdown-files-window__icon-button:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
 }
 
 .markdown-document-modal__icon-button:focus-visible {
@@ -27624,11 +27720,12 @@ a.transcript-message__messaging-origin:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
-/* Copy sits beside the outline icon buttons in both preview headers, so it
-   drops the transcript chip's fill and takes their size and glyph. */
+/* Copy sits beside the borderless icon buttons in both preview headers, so it
+   drops the transcript chip's border and fill and takes their size and glyph. */
 .transcript-copy-button.file-preview__copy {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
+  border-color: transparent;
   background: transparent;
   opacity: 1;
 }
@@ -27638,9 +27735,14 @@ a.transcript-message__messaging-origin:focus-visible {
   height: 16px;
 }
 
-.transcript-copy-button.file-preview__copy:hover,
+.transcript-copy-button.file-preview__copy:hover {
+  border-color: transparent;
+  background: var(--bg-panel-hover);
+}
+
 .transcript-copy-button.file-preview__copy:focus-visible,
 .transcript-copy-button.file-preview__copy[data-copied="true"] {
+  border-color: transparent;
   background: transparent;
 }
 
@@ -27722,65 +27824,6 @@ a.transcript-message__messaging-origin:focus-visible {
   background: var(--bg-app);
 }
 
-.markdown-files-window__file-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg-panel-elevated);
-}
-
-.markdown-files-window__file-title-wrap {
-  min-width: 0;
-}
-
-.markdown-files-window__file-title {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 16px;
-  font-weight: 650;
-  line-height: 1.3;
-  overflow-wrap: anywhere;
-}
-
-.markdown-files-window__file-path,
-.markdown-files-window__project {
-  margin: 3px 0 0;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.markdown-files-window__file-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-}
-
-.markdown-files-window__icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.markdown-files-window__icon-button:hover {
-  border-color: var(--accent-border);
-  color: var(--accent-bright);
-}
-
 .markdown-files-window__icon-button:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
@@ -27836,20 +27879,75 @@ a.transcript-message__messaging-origin:focus-visible {
   background: var(--bg-panel-elevated);
 }
 
-.html-preview__status {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 12px;
-  min-width: 0;
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.4;
+/* The page's permissions: one bordered group with a status and the Scripts
+   switch. It sits in the viewer's header row, or in a bar of its own. */
+.html-preview-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 26px;
+  padding: 0 2px 0 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
 }
 
-.html-preview__notice {
-  color: var(--text-muted);
+.html-preview-controls__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-right: 6px;
+}
+
+/* Each notice, named for a screen reader; the label beside it is for sight. */
+.html-preview-controls__notice {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.html-preview-controls__divider {
+  width: 1px;
+  height: 14px;
+  background: var(--border-subtle);
+}
+
+.html-preview-controls__scripts {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.html-preview-controls__scripts:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.html-preview-controls__scripts[aria-checked="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.html-preview-controls__scripts:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .html-preview__button {

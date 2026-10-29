@@ -189,7 +189,10 @@ describe("ThreadMarkdown", () => {
 
       fireEvent.click(screen.getByRole("link", { name: "AGENTS.md" }));
 
-      expect(await screen.findByText("~/PwrAgent/AGENTS.md")).toBeInTheDocument();
+      // The folder is shown home-relative, and copies the full path.
+      const folder = await screen.findByRole("button", { name: "Copy path" });
+      expect(folder).toHaveTextContent(/^~\/PwrAgent$/);
+      expect(folder).toHaveAttribute("data-tooltip", "~/PwrAgent/AGENTS.md");
     } finally {
       windowWithHomeDir.__pwragentHomeDir = previousHomeDir;
     }

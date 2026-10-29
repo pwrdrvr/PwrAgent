@@ -129,8 +129,12 @@ test("previews an HTML file offline, with scripts off until asked, and asks befo
     await expect(frame.locator("#local")).toHaveAttribute("src", /^data:image\/png;base64,/);
     await expect(frame.locator("#remote")).not.toHaveAttribute("src", /.+/);
     await expect(frame.locator("body")).not.toHaveAttribute("data-ran", "yes");
-    await expect(dialog.getByText("Scripts off")).toBeVisible();
-    await expect(dialog.getByText("Blocked 2 web resources")).toBeVisible();
+    // The header names the file once and carries the page's permissions.
+    await expect(dialog.getByRole("heading", { name: "brief.html", exact: true })).toBeVisible();
+    const scripts = dialog.getByRole("switch", { name: "Scripts", exact: true });
+    await expect(scripts).toHaveAttribute("aria-checked", "false");
+    await expect(dialog.getByText("2 blocked", { exact: true })).toBeVisible();
+    await expect(dialog.getByText("Blocked 2 web resources", { exact: true })).toHaveCount(1);
 
     // A web link is offered with its URL, never followed by the frame.
     await frame.locator("#web").click();
@@ -145,7 +149,8 @@ test("previews an HTML file offline, with scripts off until asked, and asks befo
     await expect(frame.locator("#title")).toHaveText("Product brief");
 
     // Scripts run on request, and still cannot reach the network.
-    await dialog.getByRole("button", { name: "Run Scripts" }).click();
+    await scripts.click();
+    await expect(scripts).toHaveAttribute("aria-checked", "true");
     await expect(frameElement).toHaveAttribute("sandbox", "allow-scripts");
     await expect(frame.locator("body")).toHaveAttribute("data-ran", "yes");
     const reach = await frame.locator("body").evaluate(async (_body, origin) => {
