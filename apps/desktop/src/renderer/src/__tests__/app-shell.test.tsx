@@ -1,4 +1,5 @@
 import { probe } from "../test/phase-probes";
+import { settleFakeTimers } from "../test/settle-fake-timers";
 import "@testing-library/jest-dom/vitest";
 import { navigationOwnerApiFixture } from "../test/navigation-owner-api-fixture";
 import type { DesktopApi } from "../lib/desktop-api";
@@ -491,8 +492,8 @@ describe("App", () => {
       }),
     });
     await renderThreadApp();
-    fireEvent.click(await screen.findByRole("link", { name: "report" }));
-    await screen.findByRole("heading", { name: "Stable report" });
+    await act(async () => { fireEvent.click(screen.getByRole("link", { name: "report" })); });
+    expect(screen.getByRole("heading", { name: "Stable report" })).toBeInTheDocument();
     const dialog = screen.getByRole("dialog", { name: "Markdown document: report" });
     const paragraph = within(dialog).getByText("Keep this paragraph selected.");
     const text = paragraph.firstChild!;
@@ -504,33 +505,41 @@ describe("App", () => {
     const scroll = dialog.querySelector<HTMLElement>(".markdown-document-modal__body")!;
     scroll.scrollTop = 640;
 
-    for (const status of ["queued", "cancelled", "queued", "cancelled"] as const) {
-      const readsBefore = getNavigationSnapshot.mock.calls.length;
-      await act(async () => {
-        for (const listener of listeners) listener({
-          backend: "codex",
-          notification: {
-            method: "thread/turnQueue/updated",
-            params: {
-              threadId: repair.id,
-              queueEntryId: "ci-auto-fix",
-              origin: "automation",
-              status,
-              displayText: "Repair CI checks",
+    vi.useFakeTimers();
+    try {
+      for (const status of ["queued", "cancelled", "queued", "cancelled"] as const) {
+        const readsBefore = getNavigationSnapshot.mock.calls.length;
+        await act(async () => {
+          for (const listener of listeners) listener({
+            backend: "codex",
+            notification: {
+              method: "thread/turnQueue/updated",
+              params: {
+                threadId: repair.id,
+                queueEntryId: "ci-auto-fix",
+                origin: "automation",
+                status,
+                displayText: "Repair CI checks",
+              },
             },
-          },
+          });
         });
-      });
-      await waitFor(() => expect(getNavigationSnapshot.mock.calls.length).toBeGreaterThan(readsBefore));
-      await flushReactUpdates();
-      expect(paragraph).toBeInTheDocument();
-      expect(selection.anchorNode).toBe(text);
-      expect(selection.toString()).toBe("Keep this paragraph selected.");
-      expect(scroll.scrollTop).toBe(640);
-      expect(readMarkdownFile).toHaveBeenCalledTimes(1);
-      expect(screen.queryByText("Loading file…")).not.toBeInTheDocument();
+        // Own the navigation event's 250ms coalescing timer and its fixture IPC
+        // completion before inspecting the retained document and selection.
+        await settleFakeTimers(250);
+        expect(getNavigationSnapshot.mock.calls.length).toBeGreaterThan(readsBefore);
+        expect(paragraph).toBeInTheDocument();
+        expect(selection.anchorNode).toBe(text);
+        expect(selection.toString()).toBe("Keep this paragraph selected.");
+        expect(scroll.scrollTop).toBe(640);
+        expect(readMarkdownFile).toHaveBeenCalledTimes(1);
+        expect(screen.queryByText("Loading file…")).not.toBeInTheDocument();
+      }
+    } finally {
+      selection.removeAllRanges();
+      cleanup();
+      vi.useRealTimers();
     }
-    selection.removeAllRanges();
   });
 
   it("shows the thread shell without starting backends while the startup settings read is pending", async () => {

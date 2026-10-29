@@ -7,6 +7,7 @@ import { useNavigationDirectoryDisclosure } from "../useNavigationDirectoryDiscl
 import { navigationThreadSelectionKey } from "../navigation-query-state";
 import { Sidebar } from "../../features/navigation/Sidebar";
 import { navigationQueryFixture } from "../../test/navigation-query-fixture";
+import { settleFakeTimers } from "../../test/settle-fake-timers";
 
 it.each(["local", "remote", "mounted"] as const)("retains expanded pins after creation, deselection and refresh (%s)", async (ownership) => {
   const home = { key: "directory:/fixture/project", kind: "directory" as const, label: "Fixture project", path: "/fixture/project" };
@@ -62,13 +63,19 @@ it.each(["local", "remote", "mounted"] as const)("retains expanded pins after cr
     view.rerender(<Window selected={created.ref} />);
     await waitFor(() => expect(view.getByRole("button", { name: /Fixture pin 20, pinned/ })).toBeTruthy());
     const beforeRefresh = pinReads().length;
-    act(() => {
-      const event: AgentEvent = { backend: "codex", federationTarget: target,
-        notification: ownership === "mounted"
-          ? { method: "navigation/remoteThreadPins/changed", params: { threadId: created.id, instanceId: "peer", pinned: true } }
-          : { method: "thread/pin/added", params: { threadId: created.id, pinnedRank: created.pinnedRank! } } };
-      for (const listener of listeners) listener(event);
-    });
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        const event: AgentEvent = { backend: "codex", federationTarget: target,
+          notification: ownership === "mounted"
+            ? { method: "navigation/remoteThreadPins/changed", params: { threadId: created.id, instanceId: "peer", pinned: true } }
+            : { method: "thread/pin/added", params: { threadId: created.id, pinnedRank: created.pinnedRank! } } };
+        for (const listener of listeners) listener(event);
+      });
+      await settleFakeTimers(250);
+    } finally {
+      vi.useRealTimers();
+    }
     await waitFor(() => expect(pinReads().length).toBeGreaterThan(beforeRefresh));
     await waitFor(() => expect(navigation.resources.get(pinsId)?.loading).toBe(false));
     view.rerender(<Window selected={threads[0]!.ref} />);

@@ -48,6 +48,7 @@ import { Composer as ProductionComposer } from "../Composer";
 import { ImageGalleryLayer } from "../../thread-detail/ImageGalleryLayer";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
+import { settleFakeTimers } from "../../../test/settle-fake-timers";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
 import { useComposerDraftStore } from "../useComposerDraftStore";
 import { useNavigationLaunchpadConfiguration } from "../../../lib/useNavigationLaunchpadConfiguration";
@@ -117,9 +118,7 @@ beforeAll(() => {
  * makes the same proof instant and exact.
  */
 async function settleFederatedSearch(): Promise<void> {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(FEDERATED_THREAD_SEARCH_DEBOUNCE_MS * 2);
-  });
+  await settleFakeTimers(FEDERATED_THREAD_SEARCH_DEBOUNCE_MS * 2);
 }
 
 async function flushReactUpdates(): Promise<void> {
