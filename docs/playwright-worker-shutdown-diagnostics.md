@@ -106,6 +106,38 @@ and deadlines in place. The hooks are inert outside the instrumented E2E
 workers. When upgrading Playwright, port both patches and run the real-worker
 tests: a green ordinary E2E run does not validate failure capture.
 
+## Unit probe timeouts
+
+The real-worker unit tests launch a separate Playwright CLI with a generated
+config and spec. A Vitest deadline can expire before that CLI reports its
+result. On failure, the harness copies the generated probe and its evidence to
+`apps/desktop/test-results/unit-shutdown-probes/shutdown-probe-*/` before the
+temporary root is deleted. The macOS unit lanes upload this directory as
+`macos-unit-shutdown-probes-lane-<lane>`.
+
+Read `before-cleanup.json` first for an outer timeout: it freezes the CLI PID,
+exit and signal codes, observed lifecycle events, and each pipe's state and
+bounded output tail before aborting the CLI. `before-stop.json`, `completed.json`
+and `after-cleanup.json` describe later boundaries; cleanup-induced exit must
+not be mistaken for the original stall. `parent.jsonl` timestamps the spawn
+request, spawn event, observed readiness, exit, stdio end/close, and exec callback.
+
+`milestones.jsonl` records Node entry from a preload, config evaluation, spec
+evaluation and test-body progress, with PIDs and UTC timestamps. A spawn event
+alone does not prove Node reached user code. Config evaluation also runs in the
+controller; only `results/worker-shutdown/*/timeline.jsonl`'s `worker-start`
+proves worker readiness. Compare that recorded readiness with the parent's
+`worker-ready-observed` event to identify delayed filesystem notification.
+Once ready, use the worker timeline and snapshots to locate test execution or
+cleanup. A CLI `exit` without `close`, together with a pipe that has not ended,
+identifies a pipe-lifetime wait; it does not identify the retaining descendant.
+No exit event means the CLI itself has not been observed to exit.
+
+These observations add no startup deadline, retry or cleanup policy. The
+20-second outer deadlines and Playwright's generated five-second deadlines
+remain unchanged. The retained data contains generated test fixtures, not the
+environment or an unfiltered Node diagnostic report.
+
 ## Limits
 
 The watchdog runs on the worker's event loop. A native deadlock that blocks that
