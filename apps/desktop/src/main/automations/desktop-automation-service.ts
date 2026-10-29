@@ -1627,13 +1627,12 @@ function finalTextFromTerminalTurnNotification(
   notification: TerminalTurnNotification,
 ): string | undefined {
   if (notification.method !== "turn/completed") return undefined;
-  const text = notification.params.turn.output
+  // Claude reports each assistant message of the turn as its own part, so
+  // the final answer is the last part, not its progress notes before it.
+  return notification.params.turn.output
     .filter((item) => item.type === "text")
     .map((item) => item.text.trim())
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
-  return text || undefined;
+    .findLast(Boolean);
 }
 
 function errorMessageFromTerminalTurnNotification(

@@ -5955,13 +5955,12 @@ function finalTextFromTerminalNotification(
   const output = Array.isArray(completed.params.turn.output)
     ? completed.params.turn.output
     : [];
-  const text = output
+  // Claude reports each assistant message of the turn as its own part, so
+  // the final answer is the last part, not its progress notes before it.
+  return output
     .filter((item) => item.type === "text")
     .map((item) => item.text.trim())
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
-  return text || undefined;
+    .findLast(Boolean);
 }
 
 function textFragmentsFromCodexNotification(
