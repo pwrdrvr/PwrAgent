@@ -856,6 +856,22 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     }
   };
 
+  // Under what it opens: the step window when steps are hidden, else the
+  // description. Below the whole body it read as the prompt's control.
+  const restingToggle = resting.toggleLabel ? (
+    <button
+      type="button"
+      className="thread-todo-card__more"
+      aria-expanded={resting.expanded}
+      aria-controls={resting.bodyId}
+      ref={resting.toggleRef}
+      onClick={resting.toggle}
+    >
+      {resting.expanded ? <ChevronUpIcon size={11} /> : <ChevronDownIcon size={11} />}
+      {resting.toggleLabel}
+    </button>
+  ) : null;
+
   return (
     <article
       className="thread-todo-card"
@@ -901,6 +917,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
               {todo.detail}
             </p>
           ) : null}
+          {resting.toggleAfter === "detail" ? restingToggle : null}
           {prerequisites.length > 0 ? (
             <>
               <p className="thread-todo-card__group-label" aria-hidden="true">
@@ -934,6 +951,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
               />
             </>
           ) : null}
+          {resting.toggleAfter === "steps" ? restingToggle : null}
           {action?.type === "start_thread" ? (
             <TodoDispatchFacts
               todo={todo}
@@ -974,7 +992,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
                   aria-label={promptExpanded ? "Collapse proposed prompt" : "Show the whole proposed prompt"}
                   onClick={() => setPromptExpanded((current) => !current)}
                 >
-                  {promptExpanded ? <ChevronUpIcon size={12} /> : <ChevronDownIcon size={12} />}
+                  {promptExpanded ? <ChevronUpIcon size={11} /> : <ChevronDownIcon size={11} />}
                   {promptExpanded ? "Show less" : "Show prompt"}
                 </button>
               </div>
@@ -993,19 +1011,6 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
             <p className="thread-todo-card__error" role="alert">{todo.error}</p>
           ) : null}
         </div>
-      ) : null}
-      {/* Outside the body, so Show less stays put while the body scrolls. */}
-      {resting.toggleLabel ? (
-        <button
-          type="button"
-          className="thread-todo-card__more"
-          aria-expanded={resting.expanded}
-          aria-controls={resting.bodyId}
-          onClick={resting.toggle}
-        >
-          {resting.expanded ? <ChevronUpIcon size={11} /> : <ChevronDownIcon size={11} />}
-          {resting.toggleLabel}
-        </button>
       ) : null}
 
       {confirmingMerge && action?.type === "merge_pull_request" ? (
@@ -1166,7 +1171,7 @@ function restingStepStart(items: ThreadTodoItem[]): number {
 /**
  * A card's resting height. Until the operator opens it, the description is
  * clamped to three lines and the checklist shows a window of steps from the
- * first open one; the toggle under the body opens the rest. A tick inside
+ * first open one; a toggle under those opens the rest. A tick inside
  * the window leaves it in place, so a mis-click can be undone where it
  * happened, and the window moves on once every step in it is checked.
  */
@@ -1178,6 +1183,8 @@ function useRestingCard(todo: ThreadTodo) {
   const [anchor, setAnchor] = useState(() => restingStepStart(items));
   const [detailCut, setDetailCut] = useState(false);
   const detailRef = useRef<HTMLParagraphElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const revealToggleRef = useRef(false);
   const bodyId = useId();
 
   let start = Math.max(0, Math.min(anchor, items.length - RESTING_STEP_ROWS));
@@ -1201,11 +1208,25 @@ function useRestingCard(todo: ThreadTodo) {
     return () => observer.disconnect();
   }, [expanded, todo.detail]);
 
+  // Opening grows the text above the toggle, and the body starts at its
+  // top. A keyboard user's focus stays on the toggle, so scroll it just
+  // into view: in the body, and in the rail panel when the card sits there.
+  // Its scroll margin leaves room for the focus ring. A click keeps the top
+  // of the text in view instead.
+  useLayoutEffect(() => {
+    if (!revealToggleRef.current) return;
+    revealToggleRef.current = false;
+    toggleRef.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [expanded]);
+
   const toggleLabel = expanded
     ? "Show less"
     : hiddenSteps > 0
       ? `Show all ${items.length} steps`
       : detailCut ? "Show more" : undefined;
+  // Set by the step count alone, not by whether the card is open, so Show
+  // less sits where Show more was.
+  const toggleAfter: "steps" | "detail" = items.length > RESTING_STEP_ROWS ? "steps" : "detail";
 
   return {
     expanded,
@@ -1213,7 +1234,13 @@ function useRestingCard(todo: ThreadTodo) {
     detailRef,
     steps: expanded ? items : items.slice(start, start + RESTING_STEP_ROWS),
     toggleLabel,
-    toggle: () => setExpanded((current) => !current),
+    toggleAfter,
+    toggleRef,
+    toggle: (event: ReactMouseEvent<HTMLButtonElement>) => {
+      // Enter and Space dispatch a click with no pointer presses.
+      revealToggleRef.current = event.detail === 0;
+      setExpanded((current) => !current);
+    },
   };
 }
 

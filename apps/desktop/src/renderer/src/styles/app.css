@@ -25009,19 +25009,22 @@ a.button {
   margin-top: 6px;
 }
 
-/* Opens and closes a resting card: the review card's "Show N more" type,
-   under the text column. */
+/* Opens and closes a resting card, or its prompt: the review card's
+   "Show N more" type. Each sits under the text it opens. */
 .thread-todo-card__more {
-  display: inline-flex;
+  display: flex;
+  width: fit-content;
   min-height: 24px;
   align-items: center;
-  align-self: flex-start;
   gap: 4px;
-  margin: 2px 0 0 22px;
+  margin: 2px 0 0;
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--text-secondary);
+  /* Room for the focus ring (2px outline, 2px offset) when a keyboard
+     open scrolls the toggle into view. */
+  scroll-margin-block: 4px;
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
@@ -25035,10 +25038,6 @@ a.button {
   border-radius: 4px;
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
-}
-
-.thread-todo-card__prompt .thread-todo-card__more {
-  margin-left: 0;
 }
 
 .thread-todo-card__error {
