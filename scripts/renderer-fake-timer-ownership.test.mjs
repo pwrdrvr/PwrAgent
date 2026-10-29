@@ -25,9 +25,10 @@ it("fake-clock advancement owns its React updates through completion", async () 
     const report = JSON.parse(await readFile(reportPath, "utf8"));
     const assertions = report.testResults.flatMap((file) => file.assertionResults);
     expect(assertions.map((test) => [test.title, test.status])).toEqual([
-      ["settles a busy fake clock without leaving act in the next test", "passed"],
+      ["interrupts a busy fake clock", "failed"],
       ["renders independently after the fake-clock test", "passed"],
     ]);
+    expect(assertions[0].failureMessages.join("\n")).toContain("Simulated test interruption");
     expect(output.stdout + output.stderr).not.toMatch(/overlapping act|not configured to support act|not wrapped in act/);
   } finally {
     await rm(directory, { recursive: true, force: true });
