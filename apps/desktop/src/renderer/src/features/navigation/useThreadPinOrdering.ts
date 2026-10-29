@@ -225,6 +225,10 @@ export function useThreadPinOrdering(params: {
     undefined,
   );
   const threadPinDragCleanupRef = useRef<(() => void) | undefined>(undefined);
+  // A finished drag keeps swallowing its release click for a moment after the
+  // session ends, so the session cleanup above no longer reaches it. Unmount
+  // tears these down, or the timer outlives the component.
+  const clickSuppressionTeardownsRef = useRef(new Set<() => void>());
   const threadsByKey = useMemo(
     () =>
       new Map(
@@ -448,6 +452,7 @@ export function useThreadPinOrdering(params: {
 
     let suppressClickTimer: number | undefined;
     const removeClickSuppression = (): void => {
+      clickSuppressionTeardownsRef.current.delete(removeClickSuppression);
       session.scopeElement.removeEventListener(
         "click",
         suppressReleaseClick,
@@ -469,6 +474,7 @@ export function useThreadPinOrdering(params: {
         suppressReleaseClick,
         true,
       );
+      clickSuppressionTeardownsRef.current.add(removeClickSuppression);
       session.releaseClickSuppression = () => {
         suppressClickTimer = window.setTimeout(
           removeClickSuppression,
@@ -582,10 +588,14 @@ export function useThreadPinOrdering(params: {
     window.addEventListener("keydown", cancelOnEscape);
   };
 
-  useEffect(
-    () => () => threadPinDragCleanupRef.current?.(),
-    [],
-  );
+  useEffect(() => {
+    const clickSuppressionTeardowns = clickSuppressionTeardownsRef.current;
+    return () => {
+      // Cancelling a live drag arms its release timer, so tear down after.
+      threadPinDragCleanupRef.current?.();
+      for (const teardown of [...clickSuppressionTeardowns]) teardown();
+    };
+  }, []);
 
   return {
     threadsByKey,
