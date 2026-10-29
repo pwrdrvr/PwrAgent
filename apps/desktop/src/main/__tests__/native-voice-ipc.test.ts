@@ -13,7 +13,7 @@ import {
 const mocks = vi.hoisted(() => ({
   info: vi.fn(), warn: vi.fn(),
   handlers: new Map<string, (...args: unknown[]) => Promise<void>>(),
-  check: vi.fn(), request: vi.fn(), start: vi.fn(async () => {}), stop: vi.fn(async () => {}), release: vi.fn(),
+  start: vi.fn(async () => {}), stop: vi.fn(async () => {}), release: vi.fn(),
   classify: vi.fn<(target: { endpoint: string; model: string; apiKey?: string }, images: string[], signal: AbortSignal, warming: boolean) => Promise<VoiceCameraObservation>>(),
   inFlight: vi.fn<(target: { endpoint: string; model: string; apiKey?: string }, signal: AbortSignal) => Promise<number | undefined>>(async () => undefined),
   judge: vi.fn<(target: { endpoint: string; model: string; apiKey?: string }, conversation: VoiceCameraConversationLine[], signal: AbortSignal) => Promise<VoiceCameraRepeatVerdict>>(),
@@ -33,7 +33,6 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
 }));
 vi.mock("electron", () => ({
   ipcMain: { handle: (name: string, handler: (...args: unknown[]) => Promise<void>) => { mocks.handlers.set(name, handler); } },
-  session: { defaultSession: { setPermissionCheckHandler: mocks.check, setPermissionRequestHandler: mocks.request } },
 }));
 vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: () => ({
@@ -52,8 +51,15 @@ vi.mock("../native-voice/voice-manager-thread", () => ({
 vi.mock("../window-channels", () => ({
   isLocalMainWindowWebContents: (contents?: { id: number }) => Boolean(contents && mocks.mainWindowIds.has(contents.id)),
 }));
-import { registerNativeVoiceIpcHandlers } from "../ipc/native-voice";
+import { nativeVoiceMediaRules, registerNativeVoiceIpcHandlers } from "../ipc/native-voice";
 import { readOperatorFocus, resetOperatorFocusRegistry } from "../native-voice/operator-focus-registry";
+type MediaRuleArgs = Parameters<typeof nativeVoiceMediaRules.check>;
+// The session handlers live in permission-policy.ts and call these rules for
+// "media" from the app's main frame; drive the rules in the handlers' shape.
+const voiceCheck = (contents: unknown, _permission: string, _origin: string, details: unknown) =>
+  nativeVoiceMediaRules.check(contents as MediaRuleArgs[0], details as MediaRuleArgs[1]);
+const voiceRequest = (contents: unknown, _permission: string, callback: (granted: boolean) => void, details: unknown) =>
+  callback(nativeVoiceMediaRules.request(contents as MediaRuleArgs[0], details as Parameters<typeof nativeVoiceMediaRules.request>[1]));
 
 beforeEach(() => { vi.clearAllMocks(); mocks.decisionSettings = { model: "local" }; mocks.handlers.clear(); registerNativeVoiceIpcHandlers(); });
 afterEach(() => vi.useRealTimers());
@@ -201,7 +207,7 @@ describe("native voice IPC permission boundary", () => {
     await vi.advanceTimersByTimeAsync(300_000);
     await rejected;
     expect(mocks.stop).toHaveBeenCalledTimes(stops);
-    expect(mocks.check.mock.calls[0][0](sender, "media", "", { mediaType: "audio", isMainFrame: true })).toBe(true);
+    expect(voiceCheck(sender, "media", "", { mediaType: "audio", isMainFrame: true })).toBe(true);
     await mocks.handlers.get(NATIVE_VOICE_STOP_CHANNEL)!({ sender }, target);
   });
 
@@ -209,8 +215,8 @@ describe("native voice IPC permission boundary", () => {
     const callbacks = new Map<string, (...args: unknown[]) => void>();
     const sender = { id: 77, on: (name: string, callback: (...args: unknown[]) => void) => { callbacks.set(name, callback); },
       once: (name: string, callback: (...args: unknown[]) => void) => { callbacks.set(name, callback); }, isDestroyed: () => false, send: vi.fn() };
-    const check = mocks.check.mock.calls[0][0];
-    const request = mocks.request.mock.calls[0][0];
+    const check = voiceCheck;
+    const request = voiceRequest;
     const decide = vi.fn();
     expect(check(sender, "media", "", { mediaType: "audio", isMainFrame: true })).toBe(false);
     await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { threadId: "fixture-thread", sessionId: "fixture-session", sdp: "v=0\r\nfixture" });
@@ -268,11 +274,11 @@ describe("native voice IPC permission boundary", () => {
     expect(mocks.info).toHaveBeenCalledWith("camera analysis cancelled", expect.objectContaining({ sessionId: target.sessionId }));
     expect(mocks.warn).not.toHaveBeenCalled();
     expect(signal.aborted).toBe(true);
-    expect(mocks.check.mock.calls[0][0](sender, "media", "", { mediaType: "audio", isMainFrame: true })).toBe(true);
+    expect(voiceCheck(sender, "media", "", { mediaType: "audio", isMainFrame: true })).toBe(true);
     await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
     mocks.classify.mockRejectedValueOnce(new Error("Clef unavailable"));
     await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, { ...target, images: ["data:image/jpeg;base64,AA=="] })).rejects.toThrow("Camera cues unavailable");
-    expect(mocks.check.mock.calls[0][0](sender, "media", "", { mediaType: "audio", isMainFrame: true })).toBe(true);
+    expect(voiceCheck(sender, "media", "", { mediaType: "audio", isMainFrame: true })).toBe(true);
     await mocks.handlers.get(NATIVE_VOICE_STOP_CHANNEL)!({ sender }, target);
   });
 
@@ -293,7 +299,7 @@ describe("native voice IPC permission boundary", () => {
     expect(mocks.info).toHaveBeenCalledWith("camera analysis cancelled", expect.objectContaining({ sessionId: target.sessionId }));
     expect(mocks.warn).not.toHaveBeenCalled();
     expect(signal.aborted).toBe(true);
-    expect(mocks.check.mock.calls[0][0](sender, "media", "", { mediaType: "video", isMainFrame: true })).toBe(false);
+    expect(voiceCheck(sender, "media", "", { mediaType: "video", isMainFrame: true })).toBe(false);
   });
 
   it("judges a repeat only for the owner's camera session, validates the excerpt, and never logs it", async () => {

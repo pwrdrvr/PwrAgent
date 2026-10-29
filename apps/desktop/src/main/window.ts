@@ -31,6 +31,7 @@ import { SharedHotCpuProfiler } from "./diagnostics/shared-hot-cpu-profiler";
 import { HotCpuProfiler } from "./diagnostics/hot-cpu-profiler";
 import { resolveAppBuildMetadata } from "./app-build-metadata";
 import { isSafeExternalOpenUrl } from "./external-url-policy";
+import { isAppRendererUrl, type RendererEntry } from "./renderer-entry-url";
 import { getMainLogger } from "./log";
 import { mainWindowChromeOptions } from "./main-window-chrome";
 import { lockMainWindowTitle, mainWindowTitle } from "./main-window-title";
@@ -149,7 +150,7 @@ export function getPreloadPath(): string {
   return join(moduleDirectory, "../preload/index.cjs");
 }
 
-export function getRendererEntry(): { kind: "url" | "file"; value: string } {
+export function getRendererEntry(): RendererEntry {
   if (process.env.ELECTRON_RENDERER_URL) {
     return { kind: "url", value: process.env.ELECTRON_RENDERER_URL };
   }
@@ -170,8 +171,8 @@ export function getRendererEntry(): { kind: "url" | "file"; value: string } {
  *   Safelisted external URLs (https / mailto / file / loopback http)
  *   open in the user's default browser via `shell.openExternal`.
  * - `will-navigate` prevents the existing window from being navigated
- *   away — only file:// and the dev server origin are allowed (the
- *   bundle's own assets / hot-reload), everything else is blocked.
+ *   away — only the bundled index.html and the dev server origin are
+ *   allowed (the app's own entry / hot-reload), everything else is blocked.
  * - Subframes cannot navigate away from their initial document. Interactive
  *   SVGs run in an opaque-origin iframe and must not use navigation to send
  *   local data to an external site.
@@ -325,31 +326,14 @@ function appendSeparator(template: MenuItemConstructorOptions[]): void {
 }
 
 /**
- * Renderer navigations are only allowed back to the loaded entry
- * (file:// in production, the dev server origin in development).
+ * Renderer navigations are only allowed back to the loaded entry: the exact
+ * bundled index.html in production, the dev server origin in development.
+ * Any other `file:` document would load with the preload API exposed.
  * Hash-only navigation (e.g. `#messaging-activity` set by the spawn
- * code) is allowed because the URL origin/path matches.
+ * code) is allowed because the path matches.
  */
 function isSafeRendererNavigation(targetUrl: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(targetUrl);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol === "file:") {
-    return true;
-  }
-  const devUrl = process.env.ELECTRON_RENDERER_URL;
-  if (!devUrl) {
-    return false;
-  }
-  try {
-    const dev = new URL(devUrl);
-    return parsed.origin === dev.origin;
-  } catch {
-    return false;
-  }
+  return isAppRendererUrl(targetUrl, getRendererEntry());
 }
 
 
