@@ -15,6 +15,12 @@ import { projectNavigationQuery, type NavigationQueryIndex } from "./navigation-
 /** A family can span machines; past this many owner reads the rest is left out. */
 const MAX_FAMILY_ROOT_READS = 64;
 const MAX_FAMILY_MEMBERS = 500;
+/**
+ * One budget for every owner read in a family read, not one per owner: owners
+ * are asked in rounds, so per-read timeouts would stack. A slow owner's rows
+ * then show as not included instead of holding the whole card on loading.
+ */
+export const THREAD_FAMILY_PRICING_PEER_BUDGET_MS = 10_000;
 
 /**
  * Total a thread and every sub-thread under it that this machine keeps.
@@ -107,8 +113,12 @@ export async function readFederatedThreadFamilyPricing(params: {
   root: NavigationIdentity;
   /** This machine's part, from its own index and pins. */
   readLocal: (root: NavigationIdentity) => Promise<ReadThreadFamilyPricingResponse>;
-  /** The owner's part, read over federation. */
-  readRemote: (instanceId: string, root: { backend: AppServerBackendKind; threadId: string }) => Promise<ReadThreadFamilyPricingResponse>;
+  /** The owner's part, read over federation, due by `deadlineAt`. */
+  readRemote: (
+    instanceId: string,
+    root: { backend: AppServerBackendKind; threadId: string },
+    deadlineAt: number,
+  ) => Promise<ReadThreadFamilyPricingResponse>;
   localInstanceId?: string;
   peerLabel?: (instanceId: string) => string | undefined;
   now?: () => number;
@@ -122,6 +132,7 @@ export async function readFederatedThreadFamilyPricing(params: {
   const label = (owner: string, fallback?: string): string | undefined => params.peerLabel?.(owner) ?? fallback;
   const members = new Map<string, ThreadFamilyPricingMember>();
   const queried = new Set<string>();
+  const deadlineAt = (params.now?.() ?? Date.now()) + THREAD_FAMILY_PRICING_PEER_BUDGET_MS;
   let pending: PendingRoot[] = [{ root: params.root }];
 
   const admit = (response: ReadThreadFamilyPricingResponse, owner: string | undefined, fallbackLabel?: string): PendingRoot[] => {
@@ -167,7 +178,7 @@ export async function readFederatedThreadFamilyPricing(params: {
       const { backend, threadId } = item.root;
       if (!owner) return admit(await params.readLocal({ backend, threadId }), undefined);
       const [remote, local] = await Promise.allSettled([
-        params.readRemote(owner, { backend, threadId }),
+        params.readRemote(owner, { backend, threadId }, deadlineAt),
         params.readLocal({ backend, threadId, ownerInstanceId: owner }),
       ]);
       const found: PendingRoot[] = [];

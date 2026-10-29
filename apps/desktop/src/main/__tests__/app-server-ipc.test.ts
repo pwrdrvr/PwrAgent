@@ -5273,7 +5273,9 @@ describe("app server ipc", () => {
     const read = () => handlers.get(THREAD_FAMILY_PRICING_READ_CHANNEL)!({}, { ...request, federationTarget: target });
     const result = await read() as { members: Array<Record<string, unknown>> };
     expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(target);
-    expect(federationMock.remoteBackend.readThreadFamilyPricing).toHaveBeenCalledExactlyOnceWith(request);
+    // One bounded budget covers the owner read; a hung owner cannot hold the card.
+    expect(federationMock.remoteBackend.readThreadFamilyPricing)
+      .toHaveBeenCalledExactlyOnceWith(request, { deadlineAt: expect.any(Number) });
     // Every member is stamped with the owner that keeps its total.
     expect(result.members.map(({ threadId, self, ownerInstanceId, totalCostMicros }) =>
       ({ threadId, self, ownerInstanceId, totalCostMicros }))).toEqual([

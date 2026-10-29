@@ -246,7 +246,7 @@ function FamilyMemberRow(props: {
     return (
       <div
         className={`thread-family-pricing__row${modifier}`}
-        {...(unavailable ? { title: `${name} could not be reached` } : {})}
+        {...(unavailable ? { title: `${name} could not be read` } : {})}
       >
         {content}
       </div>
@@ -264,14 +264,17 @@ function FamilyMemberRow(props: {
   );
 }
 
-/** "1 sub-thread on M2 Max could not be reached", naming up to two machines. */
+/**
+ * "1 sub-thread on M2 Max could not be read", naming up to two machines. The
+ * owner may be offline, older, or not granting this machine thread detail.
+ */
 function unreachableWarning(machines: Array<string | undefined>): string {
   const names = [...new Set(machines.filter((name): name is string => Boolean(name)))];
   const count = machines.length;
   const where = names.length === 0 ? ""
     : names.length <= 2 ? ` on ${names.join(" and ")}`
     : ` on ${names.length.toLocaleString()} machines`;
-  return `${count.toLocaleString()} sub-thread${count === 1 ? "" : "s"}${where} could not be reached`;
+  return `${count.toLocaleString()} sub-thread${count === 1 ? "" : "s"}${where} could not be read`;
 }
 
 /** The thread itself takes the accent; the four costliest sub-threads take the chart series. */

@@ -19,14 +19,17 @@ async function loadThreadFamilyPricingIndex(localInstanceId: string | undefined)
   return { ...index, ...(localInstanceId ? { localInstanceId } : {}), threads: [...index.threads, ...pins] };
 }
 
-/** This machine's part of a thread family, with referrals to the rest. */
-export async function readLocalThreadFamilyPricing(
-  root: NavigationIdentity,
+/**
+ * Reads this machine's part of a thread family, with referrals to the rest.
+ * One family read can ask about several roots; they share one index load.
+ */
+export function createLocalThreadFamilyPricingReader(
   localInstanceId: string | undefined,
-): Promise<ReadThreadFamilyPricingResponse> {
-  return await readThreadFamilyPricing({
+): (root: NavigationIdentity) => Promise<ReadThreadFamilyPricingResponse> {
+  let index: Promise<NavigationQueryIndex> | undefined;
+  return async (root) => await readThreadFamilyPricing({
     root,
-    loadIndex: () => loadThreadFamilyPricingIndex(localInstanceId),
+    loadIndex: () => index ??= loadThreadFamilyPricingIndex(localInstanceId),
     readSummaries: (threads) => getDesktopOverlayStore().readThreadPricingSummaries(threads),
   });
 }

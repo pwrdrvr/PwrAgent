@@ -225,7 +225,7 @@ describe("ThreadFamilyPricingCard", () => {
 
     // The total is a floor while a machine is missing.
     expect(await screen.findByText("$2.76+")).toBeInTheDocument();
-    expect(screen.getByText("1 sub-thread on M2 Max could not be reached")).toBeInTheDocument();
+    expect(screen.getByText("1 sub-thread on M2 Max could not be read")).toBeInTheDocument();
     const row = screen.getByText("Load test").closest(".thread-family-pricing__row");
     expect(row).toHaveClass("thread-family-pricing__row--off");
     expect(row).toHaveTextContent("Load testM2 Maxnot included");

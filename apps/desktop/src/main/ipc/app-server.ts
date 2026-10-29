@@ -19,7 +19,7 @@ import { archiveCandidateProtectionReason } from "../app-server/thread-archive-s
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../../shared/ipc";
 import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../../shared/ipc";
 import { readFederatedThreadFamilyPricing } from "../app-server/thread-family-pricing";
-import { readLocalThreadFamilyPricing } from "../app-server/thread-family-pricing-source";
+import { createLocalThreadFamilyPricingReader } from "../app-server/thread-family-pricing-source";
 import { conditionalThreadRead } from "../app-server/conditional-thread-read";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../../shared/ipc";
 import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
@@ -1886,9 +1886,9 @@ class DesktopAppServerService {
       ? request.federationTarget.instanceId : undefined;
     return await readFederatedThreadFamilyPricing({
       root: { backend: request.backend, threadId: request.threadId, ...(owner ? { ownerInstanceId: owner } : {}) },
-      readLocal: (root) => readLocalThreadFamilyPricing(root, localInstanceId),
-      readRemote: (instanceId, root) => federation.remoteBackend({ scope: "remote", instanceId })
-        .readThreadFamilyPricing(root),
+      readLocal: createLocalThreadFamilyPricingReader(localInstanceId),
+      readRemote: (instanceId, root, deadlineAt) => federation.remoteBackend({ scope: "remote", instanceId })
+        .readThreadFamilyPricing(root, { deadlineAt }),
       localInstanceId,
       peerLabel: (instanceId) => health?.peers?.find((peer) => peer.id === instanceId)?.label,
     });

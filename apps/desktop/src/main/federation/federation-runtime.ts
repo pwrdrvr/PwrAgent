@@ -296,7 +296,7 @@ import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { threadFamilyPricingForPeer } from "../app-server/thread-family-pricing";
-import { readLocalThreadFamilyPricing } from "../app-server/thread-family-pricing-source";
+import { createLocalThreadFamilyPricingReader } from "../app-server/thread-family-pricing-source";
 import { createScratchProjectDirectory, resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { dispatchStarMapIntake } from "../app-server/star-map-intake";
 import { spawnTerminalPty } from "../terminal/integrated-terminal-service";
@@ -7094,10 +7094,14 @@ function localBackendOperations(): FederationBackendOperations {
       // An owner answers for its own threads only. Its pins of other
       // instances' sub-threads go back as referrals; the reader asks those
       // owners itself, so a read never fans out from here.
-      const localInstanceId = (await Promise.resolve().then(() => getDesktopFederationRuntime().health())
-        .catch(() => undefined))?.instanceId;
-      return threadFamilyPricingForPeer(await readLocalThreadFamilyPricing(
-        { backend: request.backend, threadId: request.threadId }, localInstanceId));
+      let localInstanceId: string | undefined;
+      try {
+        localInstanceId = getDesktopFederationRuntime().localFederationInstanceId();
+      } catch {
+        // Pins still resolve by their recorded owner without it.
+      }
+      return threadFamilyPricingForPeer(await createLocalThreadFamilyPricingReader(localInstanceId)(
+        { backend: request.backend, threadId: request.threadId }));
     },
     async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {
       return await getDesktopBackendRegistry().analyzeUsageActivity(request);

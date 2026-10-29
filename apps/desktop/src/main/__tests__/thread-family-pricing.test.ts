@@ -5,6 +5,7 @@ import type {
 } from "@pwragent/shared";
 import type { NavigationIdentity, ReadThreadFamilyPricingResponse, ThreadFamilyPricingMember } from "@pwragent/shared";
 import {
+  THREAD_FAMILY_PRICING_PEER_BUDGET_MS,
   readFederatedThreadFamilyPricing,
   readThreadFamilyPricing,
   threadFamilyPricingForPeer,
@@ -276,5 +277,25 @@ describe("readFederatedThreadFamilyPricing", () => {
     });
     expect(readRemote).toHaveBeenCalledTimes(2);
     expect(family.members.map((member) => member.threadId).sort()).toEqual(["on-a", "on-b"]);
+  });
+
+  it("gives every owner read in one family read the same deadline", async () => {
+    const deadlines: number[] = [];
+    await readFederatedThreadFamilyPricing({
+      root: { backend: "codex", threadId: "parent" },
+      readLocal: async (root) => root.ownerInstanceId ? { readAt: 1, members: [] } : {
+        readAt: 1,
+        members: [priced("parent", 1, { self: true })],
+        referrals: [{ backend: "codex", threadId: "on-a", ownerInstanceId: "a" }],
+      },
+      readRemote: async (instanceId, root, deadlineAt) => {
+        deadlines.push(deadlineAt);
+        return instanceId === "a"
+          ? { readAt: 1, members: [priced(root.threadId, 1)], referrals: [{ backend: "codex", threadId: "on-b", ownerInstanceId: "b" }] }
+          : { readAt: 1, members: [priced(root.threadId, 1)] };
+      },
+      now: () => 1_000,
+    });
+    expect(deadlines).toEqual([1_000 + THREAD_FAMILY_PRICING_PEER_BUDGET_MS, 1_000 + THREAD_FAMILY_PRICING_PEER_BUDGET_MS]);
   });
 });
