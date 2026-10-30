@@ -389,7 +389,11 @@ export function TodoDispatchFacts(props: {
       )
     : undefined;
 
-  const expanded = target.settingsExpanded;
+  // The window's choice survives a remount; this copy keeps the toggle
+  // working where no dispatch provider holds choices, as the card keeps its
+  // own copy of a model pick.
+  const [localExpanded, setLocalExpanded] = useState<boolean>();
+  const expanded = target.legacy || (localExpanded ?? target.settingsExpanded);
   // A toggle moves focus to its counterpart, which mounts in the other layout.
   const toggleRef = useRef<HTMLButtonElement>(null);
   const focusToggleRef = useRef(false);
@@ -408,6 +412,7 @@ export function TodoDispatchFacts(props: {
       data-tooltip={expanded ? "Collapse" : "Show labels"}
       onClick={() => {
         focusToggleRef.current = true;
+        setLocalExpanded(!expanded);
         target.setSettingsExpanded(!expanded);
       }}
     >
