@@ -8,6 +8,7 @@ import { launchpadStorageKey } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
 import { stageTurnInputAttachment } from "../app-server/turn-input-attachment-files";
 import * as turnInputAttachmentFiles from "../app-server/turn-input-attachment-files";
+import * as gitExecutable from "../app-server/git-executable";
 import { resolveActiveProfilePath } from "../profile";
 import { execFile as execFileCallback } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -53698,6 +53699,43 @@ script = "printf setup"
         expect(response.structuredContent).toMatchObject({ preferredModel: "haiku" });
       } finally {
         await close();
+      }
+    });
+
+    it("owns the branch read until the monitor workspace can be removed", async () => {
+      const { close, registry, root } = await createClaudeMonitorRegistry({});
+      const runGitCommand = gitExecutable.runGitCommand;
+      let releaseBranch!: () => void;
+      const heldBranch = new Promise<void>((resolve) => { releaseBranch = resolve; });
+      const branchRead = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+        if (cwd !== root) return await runGitCommand(cwd, args, options);
+        await heldBranch;
+        return { stdout: "main\n", stderr: "" };
+      });
+      let closing: Promise<void> | undefined;
+      try {
+        const response = await callRegistryMcpTool({
+          registry, backend: "claude", threadId: parentThreadId, turnId: "parent-turn",
+          tool: "create_monitor_delegation", args: { task: "Watch a long job." },
+        });
+        expect(response.isError).not.toBe(true);
+        let closed = false;
+        closing = close().then(() => { closed = true; });
+        await vi.waitFor(() => expect(branchRead).toHaveBeenCalledWith(
+          root, ["rev-parse", "--abbrev-ref", "HEAD"], expect.objectContaining({ ownProcessTree: true }),
+        ));
+        expect(closed).toBe(false);
+        await expect(stat(root)).resolves.toBeDefined();
+        releaseBranch();
+        await closing;
+        await expect(stat(root)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        releaseBranch();
+        try {
+          await (closing ?? close());
+        } finally {
+          branchRead.mockRestore();
+        }
       }
     });
 
