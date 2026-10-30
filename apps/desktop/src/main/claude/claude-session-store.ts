@@ -117,7 +117,10 @@ export class ClaudeSessionStore {
 
   /** Drops an ephemeral session. A later save or append for it does nothing. */
   forgetEphemeral(id: string): void {
-    if (this.memory.delete(id)) this.forgotten.add(id);
+    if (!this.memory.delete(id)) return;
+    this.forgotten.add(id);
+    // Late writes land within seconds of the end; recent ids are enough.
+    if (this.forgotten.size > 256) this.forgotten.delete(this.forgotten.values().next().value!);
   }
 
   private file(id: string, suffix: string): string {

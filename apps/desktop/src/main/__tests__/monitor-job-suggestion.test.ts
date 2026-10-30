@@ -286,6 +286,7 @@ describe("CI wait commands", () => {
     "cd /w/disktree; sleep 30; gh pr checks 8 -R o/r --watch --interval 30 >/dev/null 2>&1; gh pr checks 8 -R o/r",
     "prev=\"\"; sleep 60; while true; do s=$(gh pr checks 8 -R o/r --json name,bucket); sleep 20; done",
     "gh run watch 123 --exit-status",
+    "while true; do gh api repos/o/r/commits/$SHA/check-runs --jq '.check_runs[].status'; sleep 30; done",
   ])("recognizes %s", (command) => {
     expect(isCiWaitCommand(command)).toBe(true);
   });
@@ -295,6 +296,7 @@ describe("CI wait commands", () => {
     "gh run view 123 --log-failed",
     "while read line; do echo $line; done < file",
     "sleep 30",
+    "while true; do gh api repos/o/r/issues --jq length; sleep 30; done",
   ])("ignores %s", (command) => {
     expect(isCiWaitCommand(command)).toBe(false);
   });

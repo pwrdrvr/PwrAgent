@@ -53373,7 +53373,7 @@ script = "printf setup"
         await registry.close();
         await rm(root, { recursive: true, force: true });
       };
-      return { close, codexClient, prompts, registry, root };
+      return { close, codexClient, prompts, registry, release, root, store };
     }
 
     it("runs on Claude's lightweight model in an ephemeral thread, and can complete", async () => {
@@ -53417,6 +53417,55 @@ script = "printf setup"
         });
         expect(completed.isError).not.toBe(true);
         expect(completed.structuredContent).toMatchObject({ monitorId });
+      } finally {
+        await close();
+      }
+    });
+
+    it("keeps the monitor thread for a recovery turn after its process exits", async () => {
+      const { close, prompts, registry, release, store } = await createClaudeMonitorRegistry({});
+      try {
+        const response = await callRegistryMcpTool({
+          registry,
+          backend: "claude",
+          threadId: parentThreadId,
+          turnId: "parent-turn",
+          tool: "create_monitor_delegation",
+          args: { task: "Watch PR #8 checks until they finish." },
+        });
+        expect(response.isError).not.toBe(true);
+        const monitorThreadId = String(response.structuredContent?.monitorThreadId);
+        await vi.waitFor(() => expect(prompts).toHaveLength(1));
+
+        // The first turn ends without complete_monitoring, and its process
+        // exits with it. The recovery turn must still find the thread.
+        release();
+        await vi.waitFor(() => expect(prompts.length).toBeGreaterThanOrEqual(2));
+        expect(prompts[1]!.model).toBe("haiku");
+        expect(prompts[1]!.persistSession).toBe(false);
+        // The recovery turn ends too, so the delegation finishes and the
+        // thread is released.
+        await vi.waitFor(async () => {
+          await expect(store.read(monitorThreadId)).rejects.toBeDefined();
+        });
+      } finally {
+        await close();
+      }
+    });
+
+    it("does not start a Claude monitor on a Codex model the agent asked for", async () => {
+      const { close, registry } = await createClaudeMonitorRegistry({});
+      try {
+        const response = await callRegistryMcpTool({
+          registry,
+          backend: "claude",
+          threadId: parentThreadId,
+          turnId: "parent-turn",
+          tool: "create_monitor_delegation",
+          args: { task: "Watch PR #8 checks until they finish.", preferredModel: "gpt-5.6-luna" },
+        });
+        expect(response.isError).not.toBe(true);
+        expect(response.structuredContent).toMatchObject({ preferredModel: "haiku" });
       } finally {
         await close();
       }

@@ -1,4 +1,4 @@
-import type { ThreadToolInvocationRecord } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE, type ThreadToolInvocationRecord } from "@pwragent/shared";
 
 /** What the deterministic detector reads from an invocation. */
 export type MonitorJobObservation = Pick<
@@ -85,7 +85,8 @@ export const CLAUDE_MONITOR_JOB_SUGGESTION =
   + "Each Monitor event or background-task notification wakes this model with its whole context. "
   + "For this thread's PR, call PwrAgent's watch_thread_pull_request instead; it wakes this thread once, on success or failure. "
   + "For any other long wait, call create_monitor_delegation; a lightweight monitor polls and reports back. "
-  + "Load them with ToolSearch: select:mcp__pwragent__watch_thread_pull_request,mcp__pwragent__create_monitor_delegation. "
+  + `Load them with ToolSearch: select:mcp__${PWRAGENT_TOOL_NAMESPACE}__watch_thread_pull_request,`
+  + `mcp__${PWRAGENT_TOOL_NAMESPACE}__create_monitor_delegation. `
   + "Then stop the watcher you started (TaskStop) and end this turn if no unrelated work remains. "
   + "This is an automatic reminder, sent at most once this turn.";
 
@@ -99,7 +100,8 @@ export function isCiWaitCommand(command: string): boolean {
   if (/\bgh\s+run\s+watch\b/.test(text)) return true;
   return /\b(?:while|until)\b/.test(text)
     && /\bsleep\s+\d/.test(text)
-    && /\bgh\s+(?:pr\s+(?:checks|view)|run\s+(?:view|list))\b/.test(text);
+    && (/\bgh\s+(?:pr\s+(?:checks|view)|run\s+(?:view|list))\b/.test(text)
+      || /\bgh\s+api\s+\S*(?:check-runs|check-suites|actions\/runs|\/status)\b/.test(text));
 }
 
 /** Observe protocol boundaries only. No timers, model calls, or per-poll writes. */

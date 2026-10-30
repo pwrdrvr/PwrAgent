@@ -7615,8 +7615,6 @@ const MONITOR_REASONING_EFFORT_ORDER = [
   "xhigh",
 ] as const;
 
-const isLightweightMonitorModel = isLightweightHelperModel;
-
 /**
  * The highest effort an agent may request for a Codex monitor. An effort
  * this list does not know, such as `max`, is never accepted.
@@ -23597,6 +23595,7 @@ export class DesktopBackendRegistry {
       this.taskMonitorDelegations.delete(params.monitorId);
       try {
         await this.interruptManagedTaskMonitor(taskMonitor);
+        this.releaseTaskMonitorThread(taskMonitor);
       } catch (error) {
         this.taskMonitorDelegations.set(params.monitorId, taskMonitor);
         throw error;
@@ -35299,7 +35298,7 @@ export class DesktopBackendRegistry {
       backend,
       threadId,
       turnId,
-      invocationId: params.toolUseId ?? `${turnId}:${Date.now()}`,
+      invocationId: params.toolUseId ?? randomUUID(),
       toolName: params.toolName,
       category: normalized.category,
       normalizedCommand: normalized.normalizedCommand,
@@ -43745,7 +43744,7 @@ export class DesktopBackendRegistry {
         preferredReasoningEffort,
         requestedModel,
         requestedReasoningEffort,
-        ...(codexMonitor && requestedModel && !isLightweightMonitorModel(requestedModel)
+        ...(codexMonitor && requestedModel && !isLightweightHelperModel(requestedModel)
           ? { declinedRequestedModel: true }
           : {}),
         ...(codexMonitor
@@ -44119,7 +44118,7 @@ export class DesktopBackendRegistry {
     // request Codex offers wins; otherwise the Helper model setting decides,
     // and the operator's Task monitors row may still name any model.
     const requestedModel =
-      params.preferredModel && isLightweightMonitorModel(params.preferredModel)
+      params.preferredModel && isLightweightHelperModel(params.preferredModel)
         ? params.preferredModel
         : undefined;
     const requestedReasoningEffort =
@@ -44158,16 +44157,25 @@ export class DesktopBackendRegistry {
     preferredReasoningEffort?: string;
   }): { preferredModel: string; preferredReasoningEffort: string; runtimeModel: string } {
     const models = this.claudeBackend.summary().launchpadOptions?.models ?? [];
-    const requestedModel =
-      params.preferredModel && isLightweightMonitorModel(params.preferredModel)
-        ? params.preferredModel
+    // A model Claude offers. Before discovery, only a Claude name: an agent
+    // may ask for a Codex model it read about.
+    const offered = (id: string | undefined): string | undefined =>
+      id && (models.length > 0
+        ? models.some((candidate) => candidate.id === id)
+        : /(?:^|[^a-z])(?:claude|haiku|sonnet|opus)(?:$|[^a-z])/iu.test(id))
+        ? id
         : undefined;
-    const model = params.choice?.model
+    const chosenModel = offered(params.choice?.model);
+    const requestedModel =
+      params.preferredModel && isLightweightHelperModel(params.preferredModel)
+        ? offered(params.preferredModel)
+        : undefined;
+    const model = chosenModel
       ?? requestedModel
       ?? automaticProviderMonitorModel(models)
       ?? "haiku";
     const entry = models.find((candidate) => candidate.id === model);
-    const requestedEffort = params.choice?.reasoningEffort
+    const requestedEffort = (chosenModel ? params.choice?.reasoningEffort : undefined)
       ?? (params.preferredReasoningEffort
         && isLightweightMonitorReasoningEffort(params.preferredReasoningEffort)
         ? params.preferredReasoningEffort
@@ -44339,6 +44347,9 @@ export class DesktopBackendRegistry {
         ...(params.causalContext?.causalMessagingSource || params.causalContext?.causalMessagingAmbiguous
           ? { messageOrigin: { kind: "sub-agent" as const, ...params.causalContext } }
           : {}),
+      }).catch((error: unknown) => {
+        this.claudeBackend.releaseEphemeralThread(thread.threadId);
+        throw error;
       });
       return { cwd, executionMode, threadId: turn.threadId, turnId: turn.turnId };
     }
@@ -44721,6 +44732,7 @@ export class DesktopBackendRegistry {
     }
 
     this.taskMonitorDelegations.delete(params.record.monitorId);
+    this.releaseTaskMonitorThread(params.record);
     if (
       params.completionSource.type === "monitor_tool"
       && params.record.monitorThreadId
@@ -44880,6 +44892,16 @@ export class DesktopBackendRegistry {
         record,
         reason: "monitor_stale_interrupt_failed",
       });
+    }
+  }
+
+  /**
+   * A Claude monitor thread lives in memory until its delegation ends; its
+   * process exits after each turn, and a recovery turn reuses the thread.
+   */
+  private releaseTaskMonitorThread(record: TaskMonitorDelegationRecord): void {
+    if (record.backend === "claude" && record.monitorThreadId) {
+      this.claudeBackend.releaseEphemeralThread(record.monitorThreadId);
     }
   }
 

@@ -196,6 +196,11 @@ export function buildTaskMonitorDynamicToolErrorResponse(params: {
   });
 }
 
+/** A PwrAgent tool's name as Claude Code's ToolSearch knows it. */
+function claudeMcpToolName(tool: string): string {
+  return `mcp__${PWRAGENT_TOOL_NAMESPACE}__${tool}`;
+}
+
 export function buildMonitorDelegationPrompt(params: {
   finalHandoffPrompt?: string;
   monitorContext?: string;
@@ -239,7 +244,7 @@ export function buildMonitorDelegationPrompt(params: {
     ...(params.deferredMcpTools
       ? [
           "",
-          "Before the first call, load the PwrAgent tools with ToolSearch: select:mcp__pwragent__inject_progress,mcp__pwragent__complete_monitoring.",
+          `Before the first call, load the PwrAgent tools with ToolSearch: select:${claudeMcpToolName("inject_progress")},${claudeMcpToolName("complete_monitoring")}.`,
         ]
       : []),
     "",

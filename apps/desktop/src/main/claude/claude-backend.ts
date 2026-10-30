@@ -585,6 +585,14 @@ export class ClaudeBackend {
       && (!filter || thread.title.toLowerCase().includes(filter) || thread.id.includes(filter)));
   }
 
+  /**
+   * Ends an ephemeral thread. Its process exits after every settled turn, and
+   * a monitor may still need a recovery turn, so its owner ends it instead.
+   */
+  releaseEphemeralThread(threadId: string): void {
+    this.store.forgetEphemeral(threadId);
+  }
+
   async readThread(threadId: string): Promise<AppServerThreadReplay> {
     const session = await this.store.read(threadId);
     const entries = new Map((await this.store.entries(threadId)).map((entry) => [entry.id, entry]));
@@ -1354,8 +1362,6 @@ export class ClaudeBackend {
 
   private runSessionClosed(live: LiveSession): void {
     live.closed = true;
-    // An ephemeral thread ends with its session, as a Codex one does.
-    if (live.session.ephemeral) this.store.forgetEphemeral(live.session.thread.id);
     live.accountChecked.resolve();
     for (const release of live.onClosed.splice(0)) {
       try { release(); }
