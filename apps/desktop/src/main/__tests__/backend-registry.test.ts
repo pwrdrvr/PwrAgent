@@ -85,6 +85,7 @@ import type {
   LinkedDirectorySummary,
   FederationInstanceId,
   MarkThreadSeenRequest,
+  SetThreadParentRequest,
   SetThreadPinRequest,
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
@@ -51349,6 +51350,7 @@ script = "printf setup"
         targetActive?: boolean;
         threads?: AppServerThreadSummary[];
         archivedThreads?: AppServerThreadSummary[];
+        overlays?: Record<string, MockOverlayState>;
       } = {},
     ) {
       const codexClient = new MockBackendClient({
@@ -51367,12 +51369,20 @@ script = "printf setup"
             executionMode: "default",
             extraLinkedDirectories: [],
           },
+          ...options.overlays,
         },
       });
       const registry = new DesktopBackendRegistry({
         codexClient,
         overlayStore,
       });
+      const setThreadParent = vi.fn(async (request: SetThreadParentRequest) => ({
+        backend: request.backend ?? "codex",
+        threadId: request.threadId,
+        ...(request.parentThreadId
+          ? { parentThreadId: request.parentThreadId, parentThreadBackend: request.parentThreadBackend ?? "codex" }
+          : {}),
+      }));
       const archiver = vi.fn(async (request: ArchiveThreadRequest) => ({
         backend: request.backend,
         threadId: request.threadId,
@@ -51394,6 +51404,7 @@ script = "printf setup"
         archiveThread: archiver,
         setThreadPin,
         markThreadSeen,
+        setThreadParent,
       });
       const handoff = vi
         .spyOn(registry, "handoffThreadWorkspace")
@@ -51454,9 +51465,94 @@ script = "printf setup"
         overlayStore,
         registry,
         restore,
+        setThreadParent,
         setThreadPin,
       };
     }
+
+    it("nests a thread under another and makes it top-level again through the app's own path", async () => {
+      const threads = [listedThread("target-thread"), listedThread("parent-thread")];
+      const nested = await setup({ threads });
+      const preview = await nested.call({ parentThreadId: "parent-thread", dryRun: true });
+      expect(preview.payload.mutation.changes).toEqual([
+        { field: "parent", status: "would_apply", to: { backend: "codex", threadId: "parent-thread" } },
+      ]);
+      expect(nested.setThreadParent).not.toHaveBeenCalled();
+      const result = await nested.call({ parentThreadId: "parent-thread" });
+      expect(result.success).toBe(true);
+      expect(result.payload.mutation.changes).toEqual([
+        { field: "parent", status: "applied", to: { backend: "codex", threadId: "parent-thread" } },
+      ]);
+      expect(nested.setThreadParent).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "target-thread",
+        parentThreadId: "parent-thread",
+        parentThreadBackend: "codex",
+      });
+      await nested.registry.close();
+
+      const detached = await setup({
+        threads,
+        overlays: {
+          "codex:target-thread": {
+            backend: "codex",
+            threadId: "target-thread",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            parentThreadId: "parent-thread",
+          },
+        },
+      });
+      const cleared = await detached.call({ detachFromParent: true });
+      expect(cleared.payload.mutation.changes).toEqual([{ field: "parent", status: "applied", to: null }]);
+      expect(detached.setThreadParent).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "target-thread",
+        parentThreadId: null,
+        parentThreadBackend: null,
+      });
+      await detached.registry.close();
+    });
+
+    it("refuses a parent change it cannot keep, before anything changes and on a dry run too", async () => {
+      const { call, registry, setThreadParent, setThreadPin } = await setup({
+        threads: [listedThread("target-thread"), listedThread("child-thread")],
+        archivedThreads: [listedThread("archived-parent", { archivedAt: 1_000 })],
+        overlays: {
+          // child-thread is already a sub-thread of target-thread.
+          "codex:child-thread": {
+            backend: "codex",
+            threadId: "child-thread",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            parentThreadId: "target-thread",
+          },
+        },
+      });
+      const refusals: Array<[Record<string, unknown>, string, RegExp]> = [
+        [{ parentThreadId: "target-thread" }, "invalid_arguments", /its own parent/],
+        [{ parentThreadId: "child-thread" }, "invalid_arguments", /own sub-thread/],
+        [{ parentThreadId: "child-thread", dryRun: true }, "invalid_arguments", /own sub-thread/],
+        [{ parentThreadId: "missing-thread" }, "not_found", /was not found on this instance/],
+        [{ parentThreadId: "archived-parent" }, "invalid_arguments", /is archived/],
+        [{ detachFromParent: true }, "invalid_arguments", /is not a sub-thread/],
+        [{ parentThreadId: "child-thread", detachFromParent: true }, "invalid_arguments", /cannot be combined/],
+        [{ parentThreadId: "child-thread", pinned: true }, "invalid_arguments", /not pinned/],
+        [{ parentBackend: "codex" }, "invalid_arguments", /requires parentThreadId/],
+        [{ parentThreadId: "child-thread", parentBackend: "nope" }, "invalid_arguments", /known PwrAgent backend/],
+        [{ parentThreadId: "" }, "invalid_arguments", /non-empty string/],
+        [{ parentThreadId: "child-thread", instanceId: "pwr_remote" }, "invalid_arguments", /only to threads on this instance/],
+        [{ detachFromParent: "yes" }, "invalid_arguments", /must be a boolean/],
+      ];
+      for (const [args, code, message] of refusals) {
+        const result = await call(args);
+        expect({ args, code: result.payload.code }).toEqual({ args, code });
+        expect(result.payload.message).toMatch(message);
+      }
+      expect(setThreadParent).not.toHaveBeenCalled();
+      expect(setThreadPin).not.toHaveBeenCalled();
+      await registry.close();
+    });
 
     it("locks a thread with a note as the agent tool, and unlocks it", async () => {
       const { call, overlayStore, registry } = await setup();
@@ -51875,6 +51971,11 @@ script = "printf setup"
         unread: false,
         dryRun: false,
       });
+      // The peer's mutation request carries no parent, so a parent change
+      // stops here rather than landing the rest of the call without it.
+      await call({ title: "Grouped", parentThreadId: "remote-parent" });
+      await call({ detachFromParent: true });
+      expect(mutationHandler).toHaveBeenCalledTimes(4);
       await registry.close();
     });
   });

@@ -42,6 +42,7 @@ import { starMapThreadProviders } from "./star-map-thread-providers";
 import { useStarMapProjectPages, starMapProjectResource } from "./useStarMapProjectPages";
 import type { NavigationWindowResource } from "../../lib/navigation-window-queries";
 import { navigationPageErrorCopy } from "../../lib/navigation-query-state";
+import { threadSupportsFederationCapability } from "../../lib/federated-thread-events";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import { SearchIcon } from "../../icons";
@@ -5473,6 +5474,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
     }): boolean => {
       const cloud = clusterClouds?.get(params.instanceId);
       if (!cloud || !desktopApi?.setThreadParent) return false;
+      // A peer's cloud holds the peer's threads, and only the peer stores
+      // their grouping. A peer that cannot group refuses the drop here
+      // rather than taking a link this machine would keep to itself.
+      if (!threadSupportsFederationCapability(params.thread, "thread_grouping")) return false;
       const drop = resolveCloudDrop({
         clusters: cloud.clusters,
         point: params.point,
@@ -5497,6 +5502,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
       );
       void desktopApi
         .setThreadParent({
+          ...(params.thread.federation
+            ? { federationTarget: params.thread.federation.ref.target }
+            : {}),
           backend: params.thread.source,
           threadId: params.thread.id,
           ...(drop.kind === "adopt"

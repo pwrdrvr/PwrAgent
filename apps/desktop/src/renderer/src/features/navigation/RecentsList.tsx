@@ -21,6 +21,7 @@ import {
 import { PinIcon } from "../../icons";
 import { useDropIndicatorController } from "./drag-drop";
 import { useSubthreadReorderDrag } from "./useSubthreadReorderDrag";
+import { useThreadNestDrag } from "./useThreadNestDrag";
 import { createSubthreadTrays } from "./subthread-trays";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import {
@@ -136,6 +137,11 @@ type RecentsListProps = {
     parent: NavigationThreadSummary,
     move: NavigationRelativeChildMove,
   ) => Promise<void>;
+  /** A thread dropped on another row becomes its sub-thread. */
+  onNestThread?: (
+    thread: NavigationThreadSummary,
+    parent: NavigationThreadSummary,
+  ) => void;
   onSetSubthreadsCollapsed?: (
     parent: NavigationThreadSummary,
     collapsed: boolean,
@@ -183,6 +189,7 @@ export function RecentsList(props: RecentsListProps) {
     dropIndicator: pinDropIndicator,
     onReorderThreadPins: props.onReorderThreadPins,
     onSetThreadPin: props.onSetThreadPin,
+    onNestThread: props.onNestThread,
   });
   const threadByKey = new Map(
     (props.loadedThreads ?? props.threads).map((thread) => [
@@ -193,6 +200,11 @@ export function RecentsList(props: RecentsListProps) {
   const pointerDownSubthread = useSubthreadReorderDrag({
     threadByKey,
     onUpdateSubthreadOrder: props.onUpdateSubthreadOrder,
+    onNestThread: props.onNestThread,
+  });
+  const pointerDownNestThread = useThreadNestDrag({
+    threadByKey,
+    onNestThread: props.onNestThread,
   });
   const presentation = props.presentationOrder ?? readNavigationPresentationOrder(props.pagedNavigation?.resources ?? new Map());
   const entries = props.pagedNavigation ? (props.resourceIds ?? ["lens"]).flatMap((id) => presentation.get(id) ?? []) : undefined;
@@ -350,9 +362,9 @@ export function RecentsList(props: RecentsListProps) {
           const childKey = threadSummaryIdentityKey(child);
           const reorderable =
             canManageSubthreads
-            && directChildKeys.length > 1
             && directChildKeySet.has(childKey)
-            && Boolean(props.onUpdateSubthreadOrder);
+            && ((directChildKeys.length > 1 && Boolean(props.onUpdateSubthreadOrder))
+              || Boolean(props.onNestThread));
           // A row plus its own worker group, as siblings of this list. A
           // wrapping element would break the tray's flat list semantics.
           return [
@@ -518,8 +530,10 @@ export function RecentsList(props: RecentsListProps) {
           subthreadCount={subthreadCount}
           subthreadsCollapsed={subthreadsCollapsed}
           threadPinState={pinned ? "pinned" : undefined}
-          pointerDraggable={pinned && pinOrderingEnabled}
-          onPointerDownThread={pinned && pinOrderingEnabled ? pointerDownPinnedThread : undefined}
+          pointerDraggable={(pinned && pinOrderingEnabled) || Boolean(props.onNestThread)}
+          onPointerDownThread={pinned && pinOrderingEnabled
+            ? pointerDownPinnedThread
+            : props.onNestThread ? pointerDownNestThread : undefined}
           onMovePinnedThread={pinned && pinOrderingEnabled ? movePinnedThread : undefined}
           onToggleSubthreads={
             subthreadCount > 0

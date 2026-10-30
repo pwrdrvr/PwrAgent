@@ -742,6 +742,19 @@ Render a brand through `BrandLockup`
   - A pinned folder dropped below the **Directories** divider is unpinned.
   - Only a tray's direct children reorder, across providers. The owner
     resolves each child's provider from its own child list.
+  - A thread dropped on another thread's row becomes its sub-thread
+    (`thread-nest-drop.ts`). The row wears an accent ring and the held card
+    says **Make sub-thread**. On a row that is also an order target (a pin
+    in its scope, a sibling in the tray) only the middle half nests; the
+    edges keep the line, and an unpinned thread's edge drop still pins.
+    The target's closed tray opens. Nesting unpins the thread, and its own
+    sub-threads move with it.
+  - Offer a nest only when the owner will keep it: both threads on one
+    owner that can group, no provider sub-agents, not the current parent,
+    and never one of the thread's own sub-threads. The owner refuses a
+    loop in `setThreadParent` too, because a loop drops every member from
+    every lens. Agents use `mutate_thread`'s `parentThreadId` and
+    `detachFromParent`, for threads on their own instance only.
 
 ### Unread behavior
 

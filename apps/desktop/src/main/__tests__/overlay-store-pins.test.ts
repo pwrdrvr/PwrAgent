@@ -187,6 +187,56 @@ describe("SqliteOverlayStore — thread pins", () => {
       expectedParent: { backend: "acp:gemini", threadId: "parent", instanceId: "owner-a" } })).resolves.toMatchObject({ parentThreadId: undefined });
   });
 
+  it("nests an existing thread, its own sub-threads moving with it", async () => {
+    await store.setThreadPin({ backend: "codex", threadId: "moved", pinnedRank: "1024" });
+    await store.setThreadParent({ backend: "codex", threadId: "moved-child", parentThreadId: "moved" });
+    const nested = await store.setThreadParent({ backend: "codex", threadId: "moved",
+      parentThreadId: "parent", parentThreadBackend: "acp:gemini" });
+    expect(nested).toMatchObject({ parentThreadId: "parent", parentThreadBackend: "acp:gemini" });
+    expect(nested.pinnedRank).toBeUndefined();
+    expect((await store.getThreadOverlayState({ backend: "acp:gemini", threadId: "parent" }))?.subthreadOrder)
+      .toEqual(["moved"]);
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "moved-child" }))?.parentThreadId)
+      .toBe("moved");
+  });
+
+  it("refuses to nest a thread under itself or under any of its own sub-threads", async () => {
+    await store.setThreadParent({ backend: "codex", threadId: "child", parentThreadId: "root" });
+    await store.setThreadParent({ backend: "acp:gemini", threadId: "grandchild", parentThreadId: "child",
+      parentThreadBackend: "codex" });
+    for (const [parentThreadId, parentThreadBackend] of [["root", "codex"], ["child", "codex"], ["grandchild", "acp:gemini"]] as const) {
+      await expect(store.setThreadParent({ backend: "codex", threadId: "root",
+        parentThreadId, parentThreadBackend })).rejects.toThrow(/its own/);
+    }
+    // A same-id thread on another provider is a different thread.
+    await expect(store.setThreadParent({ backend: "acp:gemini", threadId: "root", parentThreadId: "grandchild" }))
+      .resolves.toMatchObject({ parentThreadId: "grandchild" });
+    // A parent another instance owns ends the walk: its links live there.
+    await store.setThreadParent({ backend: "codex", threadId: "remote-linked", parentThreadId: "root",
+      parentThreadInstanceId: "peer" });
+    await expect(store.setThreadParent({ backend: "codex", threadId: "root", parentThreadId: "remote-linked" }))
+      .resolves.toMatchObject({ parentThreadId: "remote-linked" });
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.parentThreadId)
+      .toBe("remote-linked");
+  });
+
+  it("drops a moved thread from the group it left and keeps its place when linked again", async () => {
+    for (const threadId of ["a", "b", "c"]) {
+      await store.setThreadParent({ backend: "codex", threadId, parentThreadId: "old" });
+    }
+    await store.setThreadParent({ backend: "codex", threadId: "a", parentThreadId: "old" });
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "old" }))?.subthreadOrder)
+      .toEqual(["a", "b", "c"]);
+    await store.setThreadParent({ backend: "codex", threadId: "b", parentThreadId: "new" });
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "old" }))?.subthreadOrder)
+      .toEqual(["a", "c"]);
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "new" }))?.subthreadOrder)
+      .toEqual(["b"]);
+    await store.setThreadParent({ backend: "codex", threadId: "c" });
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "old" }))?.subthreadOrder)
+      .toEqual(["a"]);
+  });
+
   it("persists sub-thread parent, order, and collapsed state", async () => {
     const { dbPath, tempDir } = createTempStateDb("pwragent-pins-test-");
     stateDb.close();

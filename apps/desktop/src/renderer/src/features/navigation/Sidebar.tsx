@@ -447,6 +447,7 @@ type SidebarProps = {
   onSetThreadParent?: (
     thread: NavigationThreadSummary,
     parentThreadId?: string,
+    parentThreadBackend?: NavigationThreadSummary["source"],
   ) => Promise<void>;
   onUnlinkThreads?: (
     threads: NavigationThreadSummary[],
@@ -1049,6 +1050,19 @@ export function Sidebar(props: SidebarProps) {
     revealHoverStableSnapshot,
     props.onUpdateSubthreadOrder,
   );
+  // A drop on a row. The tray the thread lands in opens, so the drop shows
+  // where the thread went rather than making it vanish.
+  const nestThread = useRevealListChange(
+    revealHoverStableSnapshot,
+    props.onSetThreadParent
+      ? (thread: NavigationThreadSummary, parent: NavigationThreadSummary): void => {
+          if (parent.subthreadsCollapsed === true) {
+            void props.onSetSubthreadsCollapsed?.(parent, false);
+          }
+          void props.onSetThreadParent!(thread, parent.id, parent.source);
+        }
+      : undefined,
+  );
   // The row callbacks this component only forwards. (`onDetachPullRequest`
   // is absent: the rows get this component's own `detachPullRequest`, which
   // owns the confirmation dialog and is already stable.) They are stable in the
@@ -1082,6 +1096,7 @@ export function Sidebar(props: SidebarProps) {
     setDirectoryThreadsCollapsed: releasedSetDirectoryThreadsCollapsed,
     setSubthreadsCollapsed: releasedSetSubthreadsCollapsed,
     setThreadPin,
+    nestThread,
     updateSubthreadOrder: releasedUpdateSubthreadOrder,
   };
   // Counts cover the owner's full population, independently of the visible lens range.
@@ -3266,6 +3281,7 @@ export function Sidebar(props: SidebarProps) {
               onUpdateSubthreadOrder={
                 hoverReleasedListHandlers.updateSubthreadOrder
               }
+              onNestThread={hoverReleasedListHandlers.nestThread}
               onSetSubthreadsCollapsed={
                 hoverReleasedListHandlers.setSubthreadsCollapsed
               }
@@ -3341,6 +3357,7 @@ export function Sidebar(props: SidebarProps) {
                 onUpdateSubthreadOrder={
                   hoverReleasedListHandlers.updateSubthreadOrder
                 }
+                onNestThread={hoverReleasedListHandlers.nestThread}
                 onSetSubthreadsCollapsed={
                   hoverReleasedListHandlers.setSubthreadsCollapsed
                 }

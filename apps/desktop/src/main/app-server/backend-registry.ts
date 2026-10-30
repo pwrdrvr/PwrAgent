@@ -207,6 +207,8 @@ import {
   type MarkThreadSeenRequest,
   type MarkThreadSeenResponse,
   type SetThreadPinRequest,
+  type SetThreadParentRequest,
+  type SetThreadParentResponse,
   type SetThreadLockResponse,
   type FederationInstanceId,
   type ThreadLock,
@@ -8402,6 +8404,10 @@ export type AgentThreadActions = {
   markThreadSeen: (
     request: MarkThreadSeenRequest,
   ) => Promise<MarkThreadSeenResponse>;
+  /** The sidebar's own path, so every window hears the new grouping. */
+  setThreadParent?: (
+    request: SetThreadParentRequest,
+  ) => Promise<SetThreadParentResponse>;
 };
 
 function threadInspectionFailure(
@@ -45878,6 +45884,77 @@ export class DesktopBackendRegistry {
     return summary;
   }
 
+  /**
+   * Why `mutate_thread` would refuse a parent change, checked before anything
+   * changes and on a dry run too. No `parent` means a detach.
+   */
+  private async checkThreadParentChange(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    threadLabel: string;
+    parent?: { backend: AppServerBackendKind; threadId: string };
+  }): Promise<PwrAgentThreadInspectionResponse | undefined> {
+    if (!this.agentThreadActions?.setThreadParent) {
+      return threadInspectionFailure(
+        "internal_error",
+        "Thread grouping is not available in this process.",
+      );
+    }
+    if (!params.parent) {
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      return overlay?.parentThreadId?.trim()
+        ? undefined
+        : threadInspectionFailure(
+            "invalid_arguments",
+            `${params.threadLabel} is not a sub-thread.`,
+          );
+    }
+    const parentLabel = `Parent thread ${params.parent.backend}:${params.parent.threadId}`;
+    let parentSummary: ThreadInspectionSummary | undefined;
+    try {
+      parentSummary = await this.readThreadInspectionSummaryForMutation(params.parent);
+    } catch {
+      parentSummary = undefined;
+    }
+    if (!parentSummary) {
+      return threadInspectionFailure(
+        "not_found",
+        `${parentLabel} was not found on this instance.`,
+      );
+    }
+    // Archiving a parent ungroups its children, so the link would not last.
+    if (parentSummary.archivedAt !== undefined) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        `${parentLabel} is archived.`,
+      );
+    }
+    // The same walk the store repeats inside its write.
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const seen = new Set<string>();
+    let cursor: { backend: AppServerBackendKind; threadId: string } | undefined = params.parent;
+    while (cursor && seen.size < MAX_THREAD_PARENT_CHECK_DEPTH) {
+      const key = buildThreadIdentityKey(cursor.backend, cursor.threadId);
+      if (key === threadKey) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          `${parentLabel} is a sub-thread of ${params.threadLabel}. A thread cannot become a sub-thread of its own sub-thread.`,
+        );
+      }
+      if (seen.has(key)) break;
+      seen.add(key);
+      const overlay = await this.overlayStore.getThreadOverlayState(cursor);
+      const nextId = overlay?.parentThreadId?.trim();
+      cursor = nextId && !overlay!.parentThreadInstanceId
+        ? { backend: overlay!.parentThreadBackend ?? cursor.backend, threadId: nextId }
+        : undefined;
+    }
+    return undefined;
+  }
+
   private async resolvePullRequestReferenceForThread(
     args: AttachThreadPullRequestToolArgs,
     summary: ThreadInspectionSummary,
@@ -46140,6 +46217,69 @@ export class DesktopBackendRegistry {
     const lockNote = lockNoteProvided ? normalizeThreadLockNote(args.lockNote) ?? "" : undefined;
     const locked = args.locked ?? (lockNoteProvided ? true : undefined);
 
+    let parentThreadId: string | undefined;
+    if (Object.hasOwn(args, "parentThreadId")) {
+      if (typeof args.parentThreadId !== "string" || !args.parentThreadId.trim()) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          "parentThreadId must be a non-empty string when provided.",
+        );
+      }
+      parentThreadId = args.parentThreadId.trim();
+    }
+    if (Object.hasOwn(args, "parentBackend")) {
+      if (!isAppServerBackendKind(args.parentBackend)) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          "parentBackend must be a known PwrAgent backend when provided.",
+        );
+      }
+      if (parentThreadId === undefined) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          "parentBackend requires parentThreadId.",
+        );
+      }
+    }
+    if (Object.hasOwn(args, "detachFromParent") && typeof args.detachFromParent !== "boolean") {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "detachFromParent must be a boolean when provided.",
+      );
+    }
+    const detachFromParent = args.detachFromParent === true;
+    const parentBackend = parentThreadId !== undefined
+      ? args.parentBackend ?? args.backend
+      : undefined;
+    if (parentThreadId !== undefined && detachFromParent) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "detachFromParent cannot be combined with parentThreadId.",
+      );
+    }
+    if (parentThreadId === threadId && parentBackend === args.backend) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "A thread cannot be its own parent.",
+      );
+    }
+    // A sub-thread carries no pin: the parent change clears it.
+    if (parentThreadId !== undefined && pinned === true) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "pinned true cannot be combined with parentThreadId. A sub-thread is not pinned.",
+      );
+    }
+    const parentChange = parentThreadId !== undefined || detachFromParent;
+    // An Agent turn runs on one instance, and the remote mutation request is
+    // a signed message this change does not extend.
+    if (parentChange && instanceId) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "parentThreadId and detachFromParent apply only to threads on this instance.",
+      );
+    }
+
     const changes: ThreadMutationAppliedChange[] = [];
     if (title !== undefined) {
       changes.push({
@@ -46204,6 +46344,15 @@ export class DesktopBackendRegistry {
         to: lockNote,
       });
     }
+    if (parentChange) {
+      changes.push({
+        field: "parent",
+        status: dryRun ? "would_apply" : "applied",
+        to: parentThreadId !== undefined
+          ? { backend: parentBackend, threadId: parentThreadId }
+          : null,
+      });
+    }
 
     if (changes.length === 0) {
       return {
@@ -46211,7 +46360,7 @@ export class DesktopBackendRegistry {
         error: {
           code: "invalid_arguments",
           message:
-            "At least one mutation field is required: title, model, serviceTier, reasoningEffort, fastMode, executionMode, projectPath, archive, pinned, unread, locked, or lockNote.",
+            "At least one mutation field is required: title, model, serviceTier, reasoningEffort, fastMode, executionMode, projectPath, archive, pinned, unread, locked, lockNote, parentThreadId, or detachFromParent.",
         },
       };
     }
@@ -46259,6 +46408,15 @@ export class DesktopBackendRegistry {
         })
       : undefined;
     const mutateLocally = Boolean(localSummary || localOverlay);
+    if (!mutateLocally && parentChange) {
+      if (localError) {
+        return federatedThreadInspectionFailure(localError);
+      }
+      return threadInspectionFailure(
+        "not_found",
+        `Thread ${args.backend}:${threadId} was not found on this instance. parentThreadId and detachFromParent apply only to threads on this instance.`,
+      );
+    }
     let remoteOwner:
       | { instanceId: string; instanceLabel: string }
       | undefined;
@@ -46339,6 +46497,17 @@ export class DesktopBackendRegistry {
           "Pinning and read state are not available in this process.",
         );
       }
+      if (parentChange) {
+        const refusal = await this.checkThreadParentChange({
+          backend: args.backend,
+          threadId,
+          threadLabel,
+          parent: parentThreadId !== undefined
+            ? { backend: parentBackend!, threadId: parentThreadId }
+            : undefined,
+        });
+        if (refusal) return refusal;
+      }
     }
 
     if (mutateLocally && archive !== undefined && !dryRun) {
@@ -46353,6 +46522,25 @@ export class DesktopBackendRegistry {
         }
       } catch (error) {
         return federatedThreadInspectionFailure(error);
+      }
+    }
+
+    // The parent lands first. The store repeats the loop check inside its
+    // write, so a link made since the check above is refused before
+    // anything else here has changed.
+    if (mutateLocally && parentChange && !dryRun) {
+      try {
+        await this.agentThreadActions!.setThreadParent!({
+          backend: args.backend,
+          threadId,
+          parentThreadId: parentThreadId ?? null,
+          parentThreadBackend: parentBackend ?? null,
+        });
+      } catch (error) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          error instanceof Error ? error.message : String(error),
+        );
       }
     }
 
@@ -48963,6 +49151,8 @@ function readThreadInspectionBackend(
 
 const DEFAULT_THREAD_INSPECTION_READ_LIMIT = 10;
 const MAX_THREAD_INSPECTION_READ_LIMIT = 20;
+/** How far `mutate_thread` follows parent links when it checks for a loop. */
+const MAX_THREAD_PARENT_CHECK_DEPTH = 64;
 const DEFAULT_THREAD_INSPECTION_READ_ENTRY_CHARS = 4_000;
 const MAX_THREAD_INSPECTION_READ_ENTRY_CHARS = 20_000;
 
