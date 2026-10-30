@@ -1507,10 +1507,21 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) => {
       if (!params.backend.continueThreadEnvironmentStartup) throw new Error("Upgrade the thread owner to continue environment startup.");
       const request = envelope.params as Omit<ContinueThreadEnvironmentStartupRequest, "fallbackTurn"> & {
-        fallbackTurn?: Omit<NonNullable<ContinueThreadEnvironmentStartupRequest["fallbackTurn"]>, "input"> & { input: FederationWireTurnInputItem[] };
+        fallbackTurn?: Omit<NonNullable<ContinueThreadEnvironmentStartupRequest["fallbackTurn"]>, "input"> & {
+          input: FederationWireTurnInputItem[];
+          messageOrigin?: AppServerThreadMessageOrigin;
+        };
       };
       const fallbackTurn = request.fallbackTurn
-        ? { ...request.fallbackTurn, input: await resolveFederationTurnInput(params.resolveTurnInput, request.fallbackTurn.input, envelope.sourceInstanceId) }
+        ? {
+            ...request.fallbackTurn,
+            input: await resolveFederationTurnInput(params.resolveTurnInput, request.fallbackTurn.input, envelope.sourceInstanceId),
+            messageOrigin: authenticateMessageOrigin({
+              messageOrigin: request.fallbackTurn.messageOrigin,
+              resolveSourceInstance: params.resolveSourceInstance,
+              sourceInstanceId: envelope.sourceInstanceId,
+            }),
+          }
         : undefined;
       return await params.backend.continueThreadEnvironmentStartup({ ...request, fallbackTurn });
     },

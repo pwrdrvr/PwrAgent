@@ -25834,6 +25834,66 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it.each(["scheduled", "acknowledged"])("rejects a delayed launch fallback after continuation is %s", async (state) => {
+    const identity = { backend: "codex" as const, threadId: "thread-1" };
+    const input = [{ type: "text" as const, text: "Start this work tomorrow" }];
+    const scheduledFor = Date.now() + 86_400_000;
+    const pendingEnvironmentLaunchStore = new PendingEnvironmentLaunchStore();
+    pendingEnvironmentLaunchStore.put({
+      ...identity,
+      request: { directoryKey: "workspace:scheduled", input, scheduledFor },
+      launchpad: {
+        directoryKey: "workspace:scheduled",
+        directoryKind: "workspace",
+        directoryLabel: "Workspaces",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    });
+    const createScheduledThreadAction = vi.fn(async (
+      request: CreateScheduledThreadActionRequest,
+      options: { id: string },
+    ) => ({ action: {
+      ...request, id: options.id, origin: request.origin ?? "desktop" as const,
+      status: "scheduled" as const, createdAt: 1_000, updatedAt: 1_000,
+    } }));
+    const overlayStore = createOverlayStoreMock();
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, pendingEnvironmentLaunchStore, createScheduledThreadAction });
+    try {
+      const response = await registry.continueThreadEnvironmentStartup(identity);
+      expect(response.scheduledAction).toMatchObject({ scheduledFor, status: "scheduled" });
+      expect(pendingEnvironmentLaunchStore.get(identity)).toBeUndefined();
+      if (state === "acknowledged") {
+        await overlayStore.setThreadScheduledStart({ ...identity, scheduledStart: undefined });
+        await overlayStore.setThreadCodexEnvironmentRuntime({
+          ...identity,
+          codexEnvironmentRuntime: {
+            environmentId: "environment", environmentName: "Fixture", executionTarget: "local",
+            setupStatus: "failed", setupFailureAcknowledgedAt: 1_000,
+          },
+        });
+      }
+      // A different viewer can send its original optimistic prompt after the
+      // owner has restarted, when no active turn or history proves admission.
+      const recovered = new DesktopBackendRegistry({ codexClient, overlayStore, createScheduledThreadAction });
+      try {
+        await expect(recovered.continueThreadEnvironmentStartup({ ...identity, fallbackTurn: { input } }))
+          .rejects.toThrow("environment startup has already been continued");
+      } finally {
+        await recovered.close();
+      }
+      expect(codexClient.startTurnCallCount).toBe(0);
+      expect(createScheduledThreadAction).toHaveBeenCalledOnce();
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("keeps failed environment setup worktree threads registered without starting the turn", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-failure-"));
     const repoPath = path.join(root, "repo");

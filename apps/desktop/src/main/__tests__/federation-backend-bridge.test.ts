@@ -58,6 +58,46 @@ describe("federation backend bridge", () => {
     expect(backend.acknowledgeThreadEnvironmentFailure).toHaveBeenCalledExactlyOnceWith(request);
   });
 
+  it.each([true, false])("authenticates continuation fallback provenance (known sender: %s)", async (knownSender) => {
+    const continueThreadEnvironmentStartup = vi.fn(async () => ({ backend: "codex", threadId: "failed-setup", turnId: "turn-1" }));
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    router.registerConnection({ peerId: "viewer", capabilities: ["turn_control"], sendEnvelope: () => undefined });
+    registerFederationBackendHandlers({
+      router,
+      backend: { continueThreadEnvironmentStartup } as unknown as FederationBackendOperations,
+      resolveSourceInstance: () => knownSender ? { label: "Viewer Mac", celestialIcon: "moon" } : undefined,
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "viewer",
+      envelope: {
+        id: "continue-1", kind: "request", protocolVersion: 1,
+        method: FEDERATION_BACKEND_METHODS.continueThreadEnvironmentStartup,
+        sourceInstanceId: "viewer", targetInstanceId: "owner", createdAt: 1_000,
+        params: {
+          backend: "codex", threadId: "failed-setup",
+          fallbackTurn: {
+            input: [{ type: "text", text: "Resume this work" }],
+            messageOrigin: { kind: "agent", sourceThread: {
+              backend: "codex", threadId: "source-thread", turnId: "source-turn", rootTurnId: "root-turn",
+              instanceId: "spoofed-instance", instanceLabel: "Spoofed Mac", celestialIcon: "black-hole",
+            } },
+          },
+        },
+      },
+    });
+    expect(continueThreadEnvironmentStartup).toHaveBeenCalledExactlyOnceWith({
+      backend: "codex", threadId: "failed-setup",
+      fallbackTurn: {
+        input: [{ type: "text", text: "Resume this work" }],
+        messageOrigin: { kind: "agent", sourceThread: {
+          backend: "codex", threadId: "source-thread", turnId: "source-turn", rootTurnId: "root-turn",
+          instanceId: "viewer",
+          ...(knownSender ? { instanceLabel: "Viewer Mac", celestialIcon: "moon" } : {}),
+        } },
+      },
+    });
+  });
+
   it("round-trips owner-collated family pricing and requires thread_detail", async () => {
     const request = { backend: "codex" as const, threadId: "parent" };
     const family = { readAt: 42, members: [

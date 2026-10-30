@@ -28568,6 +28568,10 @@ export class DesktopBackendRegistry {
       result = await this.startMaterializedLaunchpadRequest(pending);
       if (result.turnStartFailure) throw new Error(result.turnStartFailure.message);
     } else if (request.fallbackTurn?.input.length) {
+      const overlay = await this.overlayStore.getThreadOverlayState(request);
+      if (overlay?.scheduledStart || typeof overlay?.codexEnvironmentRuntime?.setupFailureAcknowledgedAt === "number") {
+        throw new Error("This thread's environment startup has already been continued. Refresh it to view its state.");
+      }
       result = await this.startTurn({ ...request.fallbackTurn, backend: request.backend, threadId: request.threadId });
     } else {
       throw new Error("The original request is unavailable. Send your prompt again to start this thread.");
