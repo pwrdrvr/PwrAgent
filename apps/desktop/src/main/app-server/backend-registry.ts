@@ -18931,6 +18931,7 @@ export class DesktopBackendRegistry {
     threadId: string;
   }): Promise<Pick<StartThreadResponse, "pinnedRank" | "autoPinFailure">> {
     const directory = this.resolveCreatedThreadDirectoryVisibility(params);
+    process.stderr.write(`PIN_DEBUG ${JSON.stringify({ params, directory: directory && { ...directory, rows: [...directory.rowsByThreadKey.values()] }, keys: [...this.createdThreadDirectoryVisibility.keys()] })}\n`);
     if (!directory?.hasPinnedTopLevelThread) {
       return {};
     }

@@ -263,7 +263,8 @@ async function createDirectoryLaunchpadTranscriptFixture(): Promise<{
   };
 }
 
-test("directory launchpad preserves all-pinned placement and rereads an initially empty transcript after completion", async ({}, testInfo) => {
+test("directory launchpad preserves all-pinned placement and rereads an initially empty transcript after completion", async () => {
+  const testInfo = test.info();
   const fixture = await createDirectoryLaunchpadTranscriptFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
@@ -277,6 +278,9 @@ test("directory launchpad preserves all-pinned placement and rereads an initiall
     },
   });
 
+  app.electronApp.process().stderr?.on("data", (data: Buffer) => {
+    for (const line of data.toString().split("\n")) if (line.includes("PIN_DEBUG")) console.log(line);
+  });
   try {
     await app.window.getByRole("tab", { name: "directories" }).click();
     await expect(app.window.getByText("Directory threads", { exact: true })).toHaveCount(0);
