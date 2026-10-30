@@ -463,6 +463,26 @@ async function waitForCondition(predicate: () => boolean): Promise<void> {
   expect(predicate(), "waitForCondition predicate never held").toBe(true);
 }
 
+/**
+ * Settles with the method of the next terminal turn event. Register it before
+ * the action that ends the turn. The registry runs Git before it publishes the
+ * terminal event (the branch check at turn end; a review turn first resolves
+ * its card's provenance). On a loaded Windows runner each Git round took over
+ * half a second, so a polling budget cannot fit. The test timeout bounds this
+ * wait instead.
+ */
+function nextTurnEnd(registry: DesktopBackendRegistry): Promise<string> {
+  return new Promise((resolve) => {
+    const unsubscribe = registry.onEvent((event) => {
+      const { method } = event.notification;
+      if (method === "turn/completed" || method === "turn/failed" || method === "turn/cancelled") {
+        unsubscribe();
+        resolve(method);
+      }
+    });
+  });
+}
+
 async function expectEventually<T>(
   read: () => Promise<T>,
   expected: T,
@@ -3381,8 +3401,13 @@ describe("DesktopBackendRegistry", () => {
         } finally {
           await mcp.close();
         }
+        const ended = nextTurnEnd(registry);
+        // The session closes, and revokes the grant, after it reports the turn.
+        const bridgeRevoked = Promise.withResolvers<void>();
+        revokeBridge.mockImplementationOnce(() => bridgeRevoked.resolve());
         await registry.submitServerRequest({ backend: "claude", threadId, requestId: replay.pendingRequest!.params.requestId, response: { decision: "accept" } });
-        await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+        expect(await ended).toBe("turn/completed");
+        await bridgeRevoked.promise;
       }
       expect(revokeBridge).toHaveBeenCalledTimes(2);
       // Each turn checks for a title at initialization and again at completion.
@@ -62529,10 +62554,11 @@ script = "printf setup"
       const { registry, threadId, cwd, repo, pr } = await fixture();
       const events: AgentEvent[] = [];
       registry.onEvent((event) => { events.push(event); });
+      const ended = nextTurnEnd(registry);
       await registry.listBackends({ refreshModels: "claude", includeUnavailable: true },
         issueProviderDiscoveryPermit("settings-user-action"));
       await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "/code-review high" }] });
-      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+      expect(await ended).toBe("turn/completed");
 
       const review = events.find((event) => event.notification.method === "item/completed"
         && (event.notification.params.item as { type?: string }).type === "exitedReviewMode");
@@ -62550,12 +62576,11 @@ script = "printf setup"
       const { registry, threadId } = await fixture();
       const importReviews = vi.fn();
       registry.setPwrAgentThreadTodoHandler({ importReviews } as unknown as PwrAgentThreadTodoHandler);
-      const events: AgentEvent[] = [];
-      registry.onEvent((event) => { events.push(event); });
+      const ended = nextTurnEnd(registry);
       await registry.listBackends({ refreshModels: "claude", includeUnavailable: true },
         issueProviderDiscoveryPermit("settings-user-action"));
       await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "/code-review" }] });
-      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+      expect(await ended).toBe("turn/completed");
       importReviews.mockClear();
 
       await registry.readThread({ backend: "claude", threadId });
@@ -64964,9 +64989,7 @@ script = "printf setup"
     const metadataGate = new Promise<void>((resolve) => { releaseMetadata = resolve; });
     let metadataStarted!: () => void;
     const metadataPending = new Promise<void>((resolve) => { metadataStarted = resolve; });
-    const events: AgentEvent[] = [];
     registry.onEvent(async (event) => {
-      events.push(event);
       if (event.notification.method === "thread/availableCommands/updated") {
         metadataStarted();
         await metadataGate;
@@ -65002,8 +65025,9 @@ script = "printf setup"
       transport.emitSessionUpdate(threadId, {
         sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Done." },
       });
+      const ended = nextTurnEnd(registry);
       finishPrompt({ stopReason: "end_turn" });
-      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+      expect(await ended).toBe("turn/completed");
       expect(registry.getActiveTurnForThread({ backend, threadId })).toBeUndefined();
       const afterTurn = await client.callTool({ name: "search_threads", arguments: { includeRemote: false } });
       expect(afterTurn.isError).toBe(true);
