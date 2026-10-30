@@ -1,4 +1,10 @@
-import type { ThreadToolInvocationRecord } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE, type ThreadToolInvocationRecord } from "@pwragent/shared";
+
+/** What the deterministic detector reads from an invocation. */
+export type MonitorJobObservation = Pick<
+  ThreadToolInvocationRecord,
+  "backend" | "threadId" | "turnId" | "invocationId" | "toolName" | "category" | "normalizedCommand" | "observedAt"
+>;
 
 const HEURISTIC_LOOKBACK_MS = 5 * 60_000;
 const HEURISTIC_MIN_INVOCATIONS = 5;
@@ -70,6 +76,34 @@ export const MONITOR_JOB_SUGGESTION =
   + "A monitor cannot inherit a parent-local session or cell ID; give it durable process, log, or status identifiers. "
   + "This is an automatic reminder, sent at most once this turn.";
 
+/**
+ * The Claude form. Claude waits in a background shell or a Monitor watcher
+ * rather than in repeated tool calls, so one CI wait is the signal.
+ */
+export const CLAUDE_MONITOR_JOB_SUGGESTION =
+  "PwrAgent System - Monitor Job Suggestion: This command waits on CI or polls a long-running task. "
+  + "Each Monitor event or background-task notification wakes this model with its whole context. "
+  + "For this thread's PR, call PwrAgent's watch_thread_pull_request instead; it wakes this thread once, on success or failure. "
+  + "For any other long wait, call create_monitor_delegation; a lightweight monitor polls and reports back. "
+  + `Load them with ToolSearch: select:mcp__${PWRAGENT_TOOL_NAMESPACE}__watch_thread_pull_request,`
+  + `mcp__${PWRAGENT_TOOL_NAMESPACE}__create_monitor_delegation. `
+  + "Then stop the watcher you started (TaskStop) and end this turn if no unrelated work remains. "
+  + "This is an automatic reminder, sent at most once this turn.";
+
+/**
+ * A command that blocks until CI finishes: a `gh` watch, or a shell loop
+ * that sleeps between CI status reads.
+ */
+export function isCiWaitCommand(command: string): boolean {
+  const text = command.replace(/\s+/g, " ");
+  if (/(?:^|[;&|])\s*gh\s+pr\s+checks\b[^|;&]*\s--watch(?:\s|$|=true(?:\s|$))/.test(text)) return true;
+  if (/(?:^|[;&|])\s*gh\s+run\s+watch(?:\s|$)/.test(text)) return true;
+  return /\b(?:while|until)\b/.test(text)
+    && /\bsleep\s+\d/.test(text)
+    && (/\bgh\s+(?:pr\s+(?:checks|view)|run\s+(?:view|list))\b/.test(text)
+      || /\bgh\s+api\s+\S*(?:check-runs|check-suites|actions\/runs|\/status)\b/.test(text));
+}
+
 /** Observe protocol boundaries only. No timers, model calls, or per-poll writes. */
 export class MonitorJobSuggestionDetector {
   private readonly turns = new Map<string, {
@@ -83,7 +117,7 @@ export class MonitorJobSuggestionDetector {
     this.turns.delete(`${backend}:${threadId}`);
   }
 
-  observe(record: ThreadToolInvocationRecord): boolean {
+  observe(record: MonitorJobObservation): boolean {
     if (!record.turnId) return false;
     const ciWait = isCiWaitCommand(record.normalizedCommand ?? "");
     const signal = pollingSignal(record);
@@ -267,20 +301,15 @@ export function parseMonitorJobHeuristicDecision(
   };
 }
 
-/** A blocking CI watch already contains a polling loop in a single call. */
-export function isCiWaitCommand(command: string): boolean {
-  return /^gh\s+run\s+watch(?:\s|$)/.test(command)
-    || (/^gh\s+pr\s+checks(?:\s|$)/.test(command)
-      && /(?:^|\s)--watch(?:\s|$|=true(?:\s|$))/.test(command));
-}
-
-function pollingSignal(record: ThreadToolInvocationRecord): string | undefined {
+function pollingSignal(record: MonitorJobObservation): string | undefined {
   const tool = record.toolName.split(/[./]/).pop() ?? record.toolName;
   if (record.category === "polling" && record.normalizedCommand) {
     return record.normalizedCommand;
   }
   if (tool === "sleep" || tool.endsWith("__sleep")) return "sleep";
-  const command = record.normalizedCommand ?? "";
+  // `cd <dir> && gh pr checks 8` is the same check as `gh pr checks 8`.
+  const command = (record.normalizedCommand ?? "")
+    .replace(/^(?:cd\s+(?:"[^"]*"|'[^']*'|[^\s;&]+)\s*(?:;|&&)\s*)+/, "");
   if (/^sleep\s+\d/.test(command)) return "sleep";
   // Group only repeated read-only status queries. Logs, mutations, and PR
   // metadata reads are investigation/work, not evidence of a polling loop.

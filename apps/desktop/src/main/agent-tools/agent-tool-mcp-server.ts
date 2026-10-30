@@ -273,10 +273,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         capabilities: {
           tools: {},
         },
-        instructions: PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION
-          + (this.resolveMcpTools().some((tool) => tool.name === "read_tool_guide")
-            ? " Read read_tool_guide for the short tool guide."
-            : ""),
+        instructions: buildPwrAgentMcpInstructions(this.resolveMcpTools().map((tool) => tool.name)),
       },
     );
     mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -441,6 +438,23 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     const body = Buffer.from(await webResponse.arrayBuffer());
     response.end(body);
   }
+}
+
+/**
+ * The MCP server instructions. Claude Code defers PwrAgent's tools and shows
+ * only their names, so these are the one PwrAgent text it always reads. The
+ * waiting rule lives here because Claude otherwise waits on CI with its own
+ * Monitor and background shells, which wake the parent model for each event.
+ */
+export function buildPwrAgentMcpInstructions(toolNames: readonly string[]): string {
+  const has = (name: string) => toolNames.includes(name);
+  return PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION
+    + (has("read_tool_guide") ? " Read read_tool_guide for the short tool guide." : "")
+    + (has("watch_thread_pull_request") && has("create_monitor_delegation")
+      ? " To wait for CI on this thread's PR, call watch_thread_pull_request and end the turn;"
+        + " for any other long wait, call create_monitor_delegation."
+        + " Do not wait in sleep loops, background shells, or Monitor."
+      : "");
 }
 
 function forbiddenMcpResponse(message: string): AgentMcpToolCallResponse {

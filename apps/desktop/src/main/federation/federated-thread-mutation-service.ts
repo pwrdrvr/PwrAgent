@@ -5,7 +5,7 @@ import {
 import {
   PwrAgentFederatedThreadInspectionError,
   type PwrAgentFederatedThreadMutationHandler,
-  type PwrAgentFederatedThreadMutationRequest,
+  type PwrAgentFederatedThreadMutationRequestV2,
 } from "../agent-tools/pwragent-thread-agent-tools";
 import type { RemoteThreadTargetStore } from "../state/remote-thread-target-store";
 import {
@@ -26,7 +26,7 @@ import {
  * thread read would refuse a peer that allows exactly that.
  */
 function capabilitiesForMutation(
-  request: PwrAgentFederatedThreadMutationRequest,
+  request: PwrAgentFederatedThreadMutationRequestV2,
 ): FederationCapability[] {
   const required: FederationCapability[] = [];
   if (
@@ -42,6 +42,9 @@ function capabilitiesForMutation(
   }
   if (request.pinned !== undefined || request.unread !== undefined) {
     required.push("thread_navigation");
+  }
+  if (request.parentThreadId !== undefined || request.detachFromParent) {
+    required.push("thread_grouping");
   }
   return required;
 }
@@ -113,6 +116,28 @@ export function createFederatedThreadMutationHandler(
     // after its own order, which only the current navigation protocol does.
     if (request.pinned !== undefined) {
       runtime().assertRemoteNavigationQueryProtocol(match.peer.target);
+    }
+    if (request.parentThreadId !== undefined || request.detachFromParent) {
+      if (!match.peer.capabilities.includes("thread_parent_mutation_v1")) {
+        throw new PwrAgentFederatedThreadInspectionError(
+          "invalid_arguments",
+          `Upgrade ${match.peer.label}: owner-validated parent mutations require thread_parent_mutation_v1.`,
+        );
+      }
+      // Validation, including dry runs, runs on the owner. The owner's store
+      // repeats the loop check inside the write before any other field changes.
+      const response = await match.backend.mutateThreadParentV1({
+        backend: request.backend,
+        threadId: request.threadId,
+        ...(request.parentThreadId !== undefined ? {
+          parentThreadId: request.parentThreadId,
+          parentBackend: request.parentBackend ?? request.backend,
+        } : { detachFromParent: true }),
+        dryRun: request.dryRun,
+      });
+      if (!response.ok) {
+        throw new PwrAgentFederatedThreadInspectionError(response.error.code, response.error.message);
+      }
     }
     if (request.archive === true && !request.dryRun) {
       await match.backend.archiveThread({

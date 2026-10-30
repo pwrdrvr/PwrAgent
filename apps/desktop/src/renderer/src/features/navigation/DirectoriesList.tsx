@@ -211,6 +211,11 @@ type DirectoriesListProps = {
     parent: NavigationThreadSummary,
     move: NavigationRelativeChildMove,
   ) => Promise<void>;
+  /** A thread dropped on another row becomes its sub-thread. */
+  onNestThread?: (
+    thread: NavigationThreadSummary,
+    parent: NavigationThreadSummary,
+  ) => void;
   onSetSubthreadsCollapsed?: (
     parent: NavigationThreadSummary,
     collapsed: boolean,
@@ -442,6 +447,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     dropIndicator,
     onReorderThreadPins: props.onReorderThreadPins,
     onSetThreadPin: props.onSetThreadPin,
+    onNestThread: props.onNestThread,
     onDrop: () => {
       lastDirectoryThreadDropAtRef.current = Date.now();
     },
@@ -450,6 +456,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const pointerDownSubthread = useSubthreadReorderDrag({
     threadByKey: threadsByKey,
     onUpdateSubthreadOrder: props.onUpdateSubthreadOrder,
+    onNestThread: props.onNestThread,
   });
 
   // Directory pinning (plan 2026-05-09-002 Unit K). Same shape as
@@ -1137,10 +1144,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
       // direct children reorder with `useSubthreadReorderDrag`, the same
       // pointer drag RecentsList uses.
       const directChildKeySet = new Set(directChildKeys);
-      const reorderable =
-        threadSupportsFederationCapability(parent, "thread_grouping")
-        && directChildKeys.length > 1
-        && Boolean(props.onUpdateSubthreadOrder);
+      // Any row in the tray drags to nest it under another row, a sole
+      // child or a grandchild too; only direct children also reorder.
+      const groupable = threadSupportsFederationCapability(parent, "thread_grouping");
+      const draggable = (childKey: string) => groupable
+        && (Boolean(props.onNestThread)
+          || (directChildKeySet.has(childKey) && directChildKeys.length > 1 && Boolean(props.onUpdateSubthreadOrder)));
       return (
         // `listitem` box because this list is a SIBLING of its parent row
         // rather than a child of it: `renderStaticSubthreads` is called from a
@@ -1192,7 +1201,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 directoryKey={directory.key}
                 parentThreadKey={parentKey}
                 revealThreadRowKey={revealThreadRowKey}
-                pointerDraggable={reorderable && directChildKeySet.has(childKey)}
+                pointerDraggable={draggable(childKey)}
                 includeLinkedDirectories
                 linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(child)}
                 nested
@@ -1204,7 +1213,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 agentCommandThreadKeys={props.agentCommandThreadKeys}
                 thread={child}
                 onPointerDownThread={
-                  reorderable && directChildKeySet.has(childKey) ? pointerDownSubthread : undefined
+                  draggable(childKey) ? pointerDownSubthread : undefined
                 }
                 onOpenContextMenu={props.onOpenThreadContextMenu}
                 onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}

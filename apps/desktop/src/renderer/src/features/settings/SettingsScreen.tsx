@@ -1622,6 +1622,11 @@ function SettingsSectionBody(props: {
           models: { helperModels },
         });
       }}
+      onSaveTaskMonitorModels={async (taskMonitorModels) => {
+        return await props.settings.writeConfig({
+          models: { taskMonitorModels },
+        });
+      }}
       onSaveUsageAccountGroups={async (usageAccountGroups) => {
         return await props.settings.writeConfig({ models: { usageAccountGroups } });
       }}

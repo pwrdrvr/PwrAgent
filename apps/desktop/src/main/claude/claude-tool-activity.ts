@@ -1,7 +1,9 @@
 import path from "node:path";
 import type {
-  AppServerThreadActivityDetail, AppServerThreadActivityEntry, AppServerThreadFileDiff, AppServerThreadPlanStep,
+  AppServerThreadActivityDetail, AppServerThreadActivityEntry, AppServerThreadFileDiff, AppServerThreadImagePart,
+  AppServerThreadPlanStep,
 } from "@pwragent/shared";
+import { formatToolIdentifier, formatToolInvocation } from "../../shared/tool-activity";
 
 /** Claude's checklist tool. Its calls are the turn's plan, not tool rows. */
 export const CLAUDE_TODO_TOOL = "TodoWrite";
@@ -142,4 +144,125 @@ export function claudeTodoSteps(input: unknown): AppServerThreadPlanStep[] | und
       status: status === "completed" || status === "in_progress" ? status : "pending",
     }];
   });
+}
+
+const CLAUDE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+/** The media type a base64 image's leading bytes name, for a block that omits it. */
+function sniffBase64ImageType(data: string): string | undefined {
+  if (data.startsWith("iVBORw0KGgo")) return "image/png";
+  if (data.startsWith("/9j/")) return "image/jpeg";
+  if (data.startsWith("R0lGOD")) return "image/gif";
+  if (data.startsWith("UklGR")) return "image/webp";
+  return undefined;
+}
+
+function claudeImageBlockPart(block: Record<string, unknown>, alt: string): AppServerThreadImagePart | undefined {
+  const source = block.source as Record<string, unknown> | undefined;
+  if (!source || typeof source !== "object") return undefined;
+  if (source.type === "url" && typeof source.url === "string" && /^https:\/\//iu.test(source.url)) {
+    return { type: "image", url: source.url, alt };
+  }
+  if (source.type !== "base64" || typeof source.data !== "string" || !source.data) return undefined;
+  const data = source.data.replace(/\s+/gu, "");
+  const declared = typeof source.media_type === "string" ? source.media_type.toLowerCase() : undefined;
+  const mediaType = declared && CLAUDE_IMAGE_TYPES.has(declared) ? declared : sniffBase64ImageType(data);
+  return mediaType ? { type: "image", url: `data:${mediaType};base64,${data}`, alt } : undefined;
+}
+
+/**
+ * Splits a tool result's content into the text the row shows and the images
+ * it draws. Claude's replies carry no images of their own: a picture reaches
+ * the transcript as an `image` block of a tool result, as when Read opens a
+ * PNG or an MCP tool returns a screenshot. Other blocks stay as JSON.
+ */
+export function claudeToolResultContent(content: unknown, alt: string): {
+  text: string; images: AppServerThreadImagePart[];
+} {
+  if (typeof content === "string") return { text: content, images: [] };
+  if (!Array.isArray(content)) return { text: content === undefined ? "" : JSON.stringify(content), images: [] };
+  const text: string[] = [];
+  const images: AppServerThreadImagePart[] = [];
+  for (const block of content as unknown[]) {
+    const record = block && typeof block === "object" ? block as Record<string, unknown> : undefined;
+    if (record?.type === "text" && typeof record.text === "string") {
+      text.push(record.text);
+      continue;
+    }
+    // ToolSearch answers with the tools it loaded.
+    if (record?.type === "tool_reference" && typeof record.tool_name === "string") {
+      text.push(claudeToolIdentifier(record.tool_name).identifier);
+      continue;
+    }
+    const image = record?.type === "image" ? claudeImageBlockPart(record, alt) : undefined;
+    if (image) images.push(image);
+    else text.push(JSON.stringify(block));
+  }
+  return { text: text.join("\n"), images };
+}
+
+const CLAUDE_RESULT_BLOCK_TYPES = new Set(["text", "image", "tool_reference", "document", "search_result"]);
+
+/**
+ * A saved output, split as `claudeToolResultContent` splits a live one.
+ * Rows saved before images were drawn kept a non-string result as its JSON.
+ */
+export function claudeSavedToolOutput(markdown: string | undefined, alt: string): {
+  text: string; images: AppServerThreadImagePart[];
+} {
+  if (!markdown?.startsWith("[{\"type\":")) return { text: markdown ?? "", images: [] };
+  try {
+    const blocks: unknown = JSON.parse(markdown);
+    const isResult = Array.isArray(blocks) && blocks.every((block) => block && typeof block === "object"
+      && CLAUDE_RESULT_BLOCK_TYPES.has((block as { type?: unknown }).type as string));
+    return isResult ? claudeToolResultContent(blocks, alt) : { text: markdown, images: [] };
+  } catch {
+    return { text: markdown, images: [] };
+  }
+}
+
+/** The name a tool row shows. Claude names an MCP tool `mcp__<server>__<tool>`. */
+export function claudeToolIdentifier(name: string): { identifier: string; mcp: boolean } {
+  const match = /^mcp__(.+?)__(.+)$/u.exec(name);
+  return match
+    ? { identifier: formatToolIdentifier(match[1], match[2]), mcp: true }
+    : { identifier: name, mcp: false };
+}
+
+/**
+ * A call of an MCP tool, or of another tool without a row of its own: named,
+ * with its arguments and result inside, as Codex shows the same calls.
+ */
+export function claudeToolCallDetail(params: {
+  id: string; name: string; input: Record<string, unknown>; status: ActivityStatus;
+  output?: string; images?: AppServerThreadImagePart[];
+}): AppServerThreadActivityDetail {
+  const { identifier, mcp } = claudeToolIdentifier(params.name);
+  return {
+    id: params.id, kind: "command", label: mcp ? `Used MCP ${identifier}` : identifier,
+    command: {
+      displayCommand: formatToolInvocation(identifier, params.input), rawCommand: identifier, source: "tool",
+      ...(params.output ? { output: params.output } : {}),
+    },
+    ...(params.images?.length ? { images: params.images } : {}),
+    status: params.status,
+  };
+}
+
+/** The arguments a tool row was built with: its invocation after the name line. */
+export function claudeToolCallArguments(detail: AppServerThreadActivityDetail): Record<string, unknown> | undefined {
+  const command = detail.command;
+  if (command?.source !== "tool" || command.rawCommand === undefined) return undefined;
+  const json = command.displayCommand.slice(command.rawCommand.length + 1);
+  try {
+    const value: unknown = json ? JSON.parse(json) : undefined;
+    return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A shell command the row ran. A tool row's command names a tool instead. */
+export function claudeShellCommand(detail: AppServerThreadActivityDetail | undefined): string | undefined {
+  return detail?.command?.source === "tool" ? undefined : detail?.command?.rawCommand;
 }
