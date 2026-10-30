@@ -74,8 +74,14 @@ GPU-process events can serve several windows; only renderer-process events join
 directly to a window. Correlation is a lead, not proof of causality.
 
 The native buffer is 8 MiB and stops accepting events when full. Inspect
-`bufferUsage.percentFull`; near 1 means counts are lower bounds. Use a shorter
-capture if saturated. A JSON expansion above 64 MiB is rejected.
+`bufferUsage.percentage`, exported unchanged from Electron's
+`getTraceBufferUsage()` result. Near 1, treat trace event counts as lower bounds:
+native `activeSeconds` buckets can stop before the capture ends, even while
+snapshots continue. A live v1.3.5 ten-second capture returned
+`{percentage: 0.9853219985961914, value: 0}`; its native event buckets stopped
+before the capture ended. Missing later buckets do not establish idle rendering.
+Use a shorter capture to avoid saturation. A JSON expansion above 64 MiB is
+rejected.
 
 ## Controlled comparison
 
