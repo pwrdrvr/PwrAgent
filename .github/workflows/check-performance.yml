@@ -69,6 +69,7 @@ jobs:
 
       - name: Install baseline dependencies
         uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        timeout-minutes: 10
         with:
           node-version: "24.22.1"
           working-directory: baseline
@@ -76,6 +77,7 @@ jobs:
           persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}
       - name: Install candidate dependencies
         uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        timeout-minutes: 10
         with:
           node-version: "24.22.1"
           working-directory: candidate
