@@ -10,7 +10,10 @@ import type {
   ThreadWorkspaceHandoffStrategy,
   ThreadWorkspaceHandoffStashSummary,
 } from "@pwragent/shared";
-import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared";
+import {
+  DESKTOP_WORKTREE_STORAGE_DEFAULT,
+  readStatusWithoutNestedWorktrees,
+} from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import {
   computeWorktreePath,
@@ -254,14 +257,14 @@ async function getDirtyStatus(
   workspacePath: string,
   gitEnv?: NodeJS.ProcessEnv,
 ): Promise<string> {
-  return trim(
-    (await runGit(
-      workspacePath,
-      ["status", "--porcelain", "--untracked-files=normal"],
-      gitEnv,
-    ))
-      .stdout,
-  );
+  // A linked worktree nested in this checkout is another checkout, not a
+  // change: it must not block a handoff or produce an empty stash.
+  return trim(await readStatusWithoutNestedWorktrees({
+    cwd: workspacePath,
+    git: async (args) => (await runGit(workspacePath, args, gitEnv)).stdout,
+    statusArgs: ["status", "--porcelain", "--untracked-files=normal"],
+    realpath: (value) => realpath(value),
+  }));
 }
 
 async function assertLocalCleanForDestinationHandoff(

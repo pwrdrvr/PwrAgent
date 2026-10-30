@@ -417,6 +417,154 @@ describe("detectPullRequestsForThread", () => {
     });
   });
 
+  it("finds a merged PR by the tip commit when the branch was pushed under another name and deleted", async () => {
+    const { repo, tip } = await createRepoPushedUnderAnotherName({
+      localBranch: "deploy/pinned-gh-374964e",
+      pushedBranch: "feat/pinned-gh-runner-readiness",
+    });
+    const mergedPr = {
+      number: 116,
+      org: "ExampleOrg",
+      repo: "catalog-service",
+      state: "merged" as const,
+      headRefName: "feat/pinned-gh-runner-readiness",
+      headSha: tip,
+      url: "https://github.com/ExampleOrg/catalog-service/pull/116",
+    };
+    const fetcher = {
+      // The local name never had a PR; the pushed name is not known locally.
+      fetchAllPullRequestsForBranch: vi.fn(async () => []),
+      fetchPullRequestsForCommit: vi.fn(async ({ sha }: { sha: string }) =>
+        sha === tip ? [mergedPr] : []),
+    } as unknown as GithubPrFetcher;
+
+    const prs = await detectPullRequestsForThread({
+      fetcher,
+      branch: "deploy/pinned-gh-374964e",
+      directoryPaths: [repo],
+    });
+
+    expect(prs).toEqual([{ ...mergedPr, linkedDirectoryPaths: [repo] }]);
+    expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledWith({
+      cwd: repo,
+      branch: "deploy/pinned-gh-374964e",
+    });
+    expect(fetcher.fetchPullRequestsForCommit).toHaveBeenCalledWith({ cwd: repo, sha: tip });
+  });
+
+  it("does not attach a PR found by commit unless its head is the branch tip", async () => {
+    const { repo, tip } = await createRepoPushedUnderAnotherName({
+      localBranch: "deploy/stacked",
+      pushedBranch: "feat/stacked-base",
+    });
+    // Someone else's PR built on top of this commit, so GitHub associates it,
+    // but its head is a different commit.
+    const descendantPr = {
+      number: 117,
+      org: "ExampleOrg",
+      repo: "catalog-service",
+      state: "pending" as const,
+      headSha: "f".repeat(40),
+      url: "https://github.com/ExampleOrg/catalog-service/pull/117",
+    };
+    const fetcher = {
+      fetchAllPullRequestsForBranch: vi.fn(async () => []),
+      fetchPullRequestsForCommit: vi.fn(async () => [descendantPr]),
+    } as unknown as GithubPrFetcher;
+
+    await expect(detectPullRequestsForThread({
+      fetcher,
+      branch: "deploy/stacked",
+      directoryPaths: [repo],
+    })).resolves.toEqual([]);
+    expect(fetcher.fetchPullRequestsForCommit).toHaveBeenCalledWith({ cwd: repo, sha: tip });
+  });
+
+  it("does not look up by commit when the branch name lookup failed", async () => {
+    const { repo } = await createRepoPushedUnderAnotherName({
+      localBranch: "fix/provider-down",
+      pushedBranch: "fix/provider-down-pushed",
+    });
+    const fetcher = {
+      fetchAllPullRequestsForBranch: vi.fn(async ({ onProviderFailure }: { onProviderFailure?: () => void }) => {
+        onProviderFailure?.();
+        return [];
+      }),
+      fetchPullRequestsForCommit: vi.fn(async () => []),
+    } as unknown as GithubPrFetcher;
+    const onProviderFailure = vi.fn();
+
+    await detectPullRequestsForThread({
+      fetcher,
+      branch: "fix/provider-down",
+      directoryPaths: [repo],
+      onProviderFailure,
+    });
+
+    expect(onProviderFailure).toHaveBeenCalledOnce();
+    expect(fetcher.fetchPullRequestsForCommit).not.toHaveBeenCalled();
+  });
+
+  it("does not look up by commit when the branch name already found a PR", async () => {
+    const { repo } = await createRepoPushedUnderAnotherName({
+      localBranch: "fix/named-pr",
+      pushedBranch: "fix/other-name",
+    });
+    const namedPr = {
+      number: 118,
+      org: "ExampleOrg",
+      repo: "catalog-service",
+      state: "pending" as const,
+      url: "https://github.com/ExampleOrg/catalog-service/pull/118",
+    };
+    const fetcher = {
+      fetchAllPullRequestsForBranch: vi.fn(async () => [namedPr]),
+      fetchPullRequestsForCommit: vi.fn(async () => []),
+    } as unknown as GithubPrFetcher;
+
+    await detectPullRequestsForThread({ fetcher, branch: "fix/named-pr", directoryPaths: [repo] });
+
+    expect(fetcher.fetchPullRequestsForCommit).not.toHaveBeenCalled();
+  });
+
+  it("does not look up by commit when the branch tip is already on the default branch", async () => {
+    // A fresh branch at main's tip would otherwise find whichever PR landed
+    // that commit, which belongs to another thread.
+    const branch = "fix/fresh-from-main";
+    const repo = await createRepoWithDefaultBranch("main");
+    await git(repo, "branch", branch, "HEAD");
+    await git(repo, "checkout", branch);
+    const fetcher = {
+      fetchAllPullRequestsForBranch: vi.fn(async () => []),
+      fetchPullRequestsForCommit: vi.fn(async () => []),
+    } as unknown as GithubPrFetcher;
+
+    await detectPullRequestsForThread({ fetcher, branch, directoryPaths: [repo] });
+
+    expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledOnce();
+    expect(fetcher.fetchPullRequestsForCommit).not.toHaveBeenCalled();
+  });
+
+  it("does not look up by commit when the branch tracks a remote branch", async () => {
+    const repo = await createRepoWithRenamedTrackedBranch({
+      localBranch: "pr-13269",
+      remoteBranch: "search/tracked-rename",
+    });
+    await git(repo, "commit", "--allow-empty", "-m", "local work");
+    const fetcher = {
+      fetchAllPullRequestsForBranch: vi.fn(async () => []),
+      fetchPullRequestsForCommit: vi.fn(async () => []),
+    } as unknown as GithubPrFetcher;
+
+    await detectPullRequestsForThread({ fetcher, branch: "pr-13269", directoryPaths: [repo] });
+
+    expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledWith({
+      cwd: repo,
+      branch: "search/tracked-rename",
+    });
+    expect(fetcher.fetchPullRequestsForCommit).not.toHaveBeenCalled();
+  });
+
   it("records only the repository that discovered a PR in a multi-repository lookup", async () => {
     const branch = "fix/shared-branch-name";
     const firstRepo = await createRepoWithBranch(branch);
@@ -646,6 +794,44 @@ async function createRepoWithRenamedTrackedBranch(params: {
   await git(repo, "checkout", params.localBranch);
   await git(repo, "remote", "set-url", "origin", githubRemoteUrl());
   return repo;
+}
+
+/**
+ * The PwrSuiteLab case: a local branch with no upstream whose commits were
+ * pushed under a different branch name, squash-merged into main, and whose
+ * remote branch was then deleted. No remote ref holds the commits any more.
+ */
+async function createRepoPushedUnderAnotherName(params: {
+  localBranch: string;
+  pushedBranch: string;
+}): Promise<{ repo: string; tip: string }> {
+  const repo = await createRepoWithBranch("main");
+  const remote = await mkdtemp(
+    path.join(tmpdir(), "pwragent-pr-detection-remote-"),
+  );
+  tempDirs.push(remote);
+  await git(remote, "init", "--bare", "-b", "main");
+  await git(repo, "remote", "add", "origin", remote);
+  await git(repo, "push", "-u", "origin", "main");
+  await git(repo, "remote", "set-head", "origin", "main");
+  await git(repo, "checkout", "-b", params.localBranch);
+  await git(repo, "commit", "--allow-empty", "-m", "first change");
+  await git(repo, "commit", "--allow-empty", "-m", "second change");
+  const tip = (await git(repo, "rev-parse", "HEAD")).trim();
+  await git(repo, "push", "origin", `HEAD:refs/heads/${params.pushedBranch}`);
+  await git(repo, "checkout", "main");
+  await git(repo, "merge", "--squash", params.localBranch);
+  await git(repo, "commit", "--allow-empty", "-m", "squash merge");
+  await git(repo, "push", "origin", "main");
+  await git(repo, "push", "origin", "--delete", params.pushedBranch);
+  await git(repo, "fetch", "--prune", "origin");
+  await git(repo, "checkout", params.localBranch);
+  // The fixture must match the field case: no upstream, no remote ref.
+  expect(await git(repo, "for-each-ref", "--format=%(upstream)", `refs/heads/${params.localBranch}`))
+    .toBe("\n");
+  expect(await git(repo, "branch", "-r", "--contains", tip)).toBe("");
+  await git(repo, "remote", "set-url", "origin", githubRemoteUrl());
+  return { repo, tip };
 }
 
 async function createRepoWithBranch(branch: string): Promise<string> {

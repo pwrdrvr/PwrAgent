@@ -70,6 +70,7 @@ export * from "./decision-models";
 export * from "./pending-request-response";
 export * from "./file-preview";
 export * from "./path-display";
+export * from "./nested-worktree-pathspec";
 export * from "./release-notes";
 export * from "./review-branches";
 export * from "./skill-origin";
