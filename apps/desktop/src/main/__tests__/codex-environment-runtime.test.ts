@@ -1360,12 +1360,17 @@ describe("codex environment runtime", () => {
         setupScript: `${JSON.stringify(process.execPath.replace(/\\/g, "/"))} ${JSON.stringify(fixture.replace(/\\/g, "/"))}` },
         executionTarget: "local", runSetup: true },
     });
-    const rejected = expect(running).rejects.toMatchObject({ name: "AbortError" });
+    const outcome = running.then(
+      (result) => ({ result, error: undefined }),
+      (error: unknown) => ({ result: undefined, error }),
+    );
     try {
-      const pids = await ready;
+      const pids = await Promise.race([ready, outcome.then(({ error }) => {
+        throw error ?? new Error("Setup exited before the owned descendants announced readiness");
+      })]);
       expect(pids.every(isProcessIdAlive)).toBe(true);
       controller.abort();
-      await rejected;
+      expect((await outcome).error).toMatchObject({ name: "AbortError" });
       await expectEventually(async () => { expect(pids.filter(isProcessIdAlive)).toEqual([]); });
     } finally {
       controller.abort();
