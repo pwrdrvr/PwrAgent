@@ -97,6 +97,7 @@ export function archiveCandidateLastActivity({ thread, overlay }: ThreadArchiveC
 export function archiveCandidateProtectionReason({ thread, overlay, activeSubAgent, activePrWatch }: ThreadArchiveCandidate): string | undefined {
   if (thread.isPinned || overlay?.pinnedRank !== undefined) return "Pinned thread";
   if (overlay?.agent) return "Agent thread";
+  if (overlay?.mergeHolds?.some((hold) => hold.status === "waiting")) return "Merge held";
   if (overlay?.queuedAgentChange || overlay?.prAutoDispatchPending) return "Pending work";
   // The agent asked to be woken by its PR; archiving would strand the wake.
   if (activePrWatch) return "Watching a PR";

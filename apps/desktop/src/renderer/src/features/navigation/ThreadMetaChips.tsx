@@ -1,3 +1,4 @@
+import { useThreadMergeHoldsOpener } from "../thread-merge-holds/useThreadMergeHolds";
 import { useEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { isBranchDrifted, operatorTodoItemKey } from "@pwragent/shared";
@@ -145,6 +146,7 @@ export function ThreadMetaChips({
   // wherever one can open, and is a plain status marker elsewhere.
   const dependency = useThreadDependencyIndicator(thread);
   const openContinueAfter = useThreadDependencyIndicatorsContext()?.open;
+  const openMergeHolds = useThreadMergeHoldsOpener();
   const dependencyTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const dependencyTooltipText = dependency
     ? openContinueAfter ? `${dependency.tooltip}\nClick to manage` : dependency.tooltip
@@ -444,6 +446,15 @@ export function ThreadMetaChips({
         </span>
       ) : null}
       {todoTooltip.tooltipNode}
+
+      {thread.mergeHolds?.length ? (
+        <span className="thread-row__chip thread-row__chip--dependency thread-row__chip--persistent" role="button" tabIndex={0}
+          aria-label={`Merge held: ${thread.mergeHolds.map((hold) => hold.reason).join("; ")}`}
+          onClick={(event) => { event.preventDefault(); event.stopPropagation(); openMergeHolds?.(thread); }}
+          onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); openMergeHolds?.(thread); } }}>
+          <span className="thread-row__chip-label">Merge held{thread.mergeHolds.length > 1 ? ` (${thread.mergeHolds.length})` : ""}</span>
+        </span>
+      ) : null}
 
       {dependency ? (
         <span

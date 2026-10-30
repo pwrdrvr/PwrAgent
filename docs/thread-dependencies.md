@@ -1,5 +1,9 @@
 # Durable thread dependencies
 
+For an explicit prerequisite that prevents merging while work continues, use
+[merge holds](thread-merge-holds.md). A completed turn is a scheduling event;
+it does not establish that another thread has finished its work.
+
 `manage_thread_dependencies` registers one-shot prerequisites for a local
 thread. The thread ends its turn after registration; PwrAgent evaluates
 prerequisites from provider turn boundaries and its existing PR status bus.

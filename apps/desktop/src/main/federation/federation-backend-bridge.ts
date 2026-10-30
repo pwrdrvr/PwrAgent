@@ -1,3 +1,4 @@
+import type { ManageThreadMergeHoldsRequest, ManageThreadMergeHoldsResponse } from "@pwragent/shared";
 import { authenticateMessageOrigin, type ResolvedSourceInstance } from "@pwragent/federation/federation-message-origin";
 import {
   FEDERATION_BACKEND_METHODS,
@@ -682,6 +683,7 @@ export type FederationBackendOperations = {
   setThreadReaction(
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse>;
+  manageThreadMergeHolds(request: ManageThreadMergeHoldsRequest, options?: { requesterInstanceId?: string }): Promise<ManageThreadMergeHoldsResponse>;
   setThreadLock(
     request: SetThreadLockRequest,
     options?: { requesterInstanceId?: string },
@@ -1310,6 +1312,12 @@ export function registerFederationBackendHandlers(params: {
       await params.backend.setThreadReaction(
         envelope.params as SetThreadReactionRequest,
       ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.manageThreadMergeHolds,
+    async (envelope) => await params.backend.manageThreadMergeHolds(
+      envelope.params as ManageThreadMergeHoldsRequest, { requesterInstanceId: envelope.sourceInstanceId },
+    ),
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.setThreadLock,
@@ -2495,6 +2503,10 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       method: FEDERATION_BACKEND_METHODS.setThreadReaction,
       params: request,
     });
+  }
+
+  async manageThreadMergeHolds(request: ManageThreadMergeHoldsRequest): Promise<ManageThreadMergeHoldsResponse> {
+    return await this.rpc.request<ManageThreadMergeHoldsResponse>({ method: FEDERATION_BACKEND_METHODS.manageThreadMergeHolds, params: request });
   }
 
   async setThreadLock(
