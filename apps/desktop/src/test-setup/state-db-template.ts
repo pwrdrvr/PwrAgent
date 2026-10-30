@@ -16,30 +16,38 @@
 // A test that asserts how creation itself behaves (its commit count, or the
 // `auto_vacuum` mode a new file takes) opens through `openFreshStateDb` in
 // `sqlite-test-utils.ts`, which bypasses this.
+//
+// The patch is applied in a module factory, not by importing `state-db.ts`
+// here. A setup file runs for every test file, and most never open a
+// database; importing it eagerly raised Vitest's setup time from 1% to 8-11%
+// of a Windows lane.
 import fs from "node:fs";
 import path from "node:path";
-import { StateDb } from "../main/state/state-db";
+import { vi } from "vitest";
+import type { StateDb } from "../main/state/state-db";
 
 // The real open, bound, kept on the class so `openFreshStateDb` can reach it.
-// Vitest re-evaluates `state-db.ts` for each test file, so each class carries
-// its own.
 const ORIGINAL_OPEN = Symbol.for("pwragent.test.stateDbOriginalOpen");
 
 type OpenFn = typeof StateDb.open;
-const stateDbClass = StateDb as typeof StateDb & { [ORIGINAL_OPEN]?: OpenFn };
+type StateDbClass = typeof StateDb & { [ORIGINAL_OPEN]?: OpenFn };
 
 const templateDir = process.env.PWRAGENT_TEST_STATE_DB_TEMPLATE_DIR;
 
-function templatePathFor(original: OpenFn, profileName: string): string {
+function templatePathFor(
+  dir: string,
+  original: OpenFn,
+  profileName: string,
+): string {
   const name = profileName === ""
     ? "state.db"
     : `state-${Buffer.from(profileName).toString("hex")}.db`;
-  const finalPath = path.join(templateDir!, name);
+  const finalPath = path.join(dir, name);
   if (fs.existsSync(finalPath)) return finalPath;
 
   // Workers race to build the first template. Each builds a private copy and
   // renames it into place; a loser keeps using its own copy.
-  const buildDir = path.join(templateDir!, `build-${process.pid}-${name}`);
+  const buildDir = path.join(dir, `build-${process.pid}-${name}`);
   const builtPath = path.join(buildDir, "state.db");
   if (!fs.existsSync(builtPath)) {
     fs.rmSync(buildDir, { recursive: true, force: true });
@@ -59,15 +67,25 @@ function templatePathFor(original: OpenFn, profileName: string): string {
   }
 }
 
-if (templateDir && !stateDbClass[ORIGINAL_OPEN]) {
-  const original = StateDb.open.bind(StateDb);
-  stateDbClass[ORIGINAL_OPEN] = original;
-  StateDb.open = function openFromTemplate(dbPath, options) {
+function serveNewFilesFromTemplate(stateDb: StateDbClass, dir: string): void {
+  if (stateDb[ORIGINAL_OPEN]) return;
+  const original = stateDb.open.bind(stateDb);
+  stateDb[ORIGINAL_OPEN] = original;
+  stateDb.open = function openFromTemplate(dbPath, options) {
     if (dbPath !== ":memory:" && !fs.existsSync(dbPath)) {
-      const template = templatePathFor(original, options?.profileName ?? "");
+      const template = templatePathFor(dir, original, options?.profileName ?? "");
       fs.mkdirSync(path.dirname(dbPath), { recursive: true });
       fs.copyFileSync(template, dbPath, fs.constants.COPYFILE_EXCL);
     }
     return original(dbPath, options);
   };
 }
+
+// Vitest accepts `vi.mock` only at the top level and hoists it, so the
+// factory checks the environment itself. It runs once per test file, and only
+// in a file whose imports reach `state-db.ts`.
+vi.mock(import("../main/state/state-db"), async (importOriginal) => {
+  const actual = await importOriginal();
+  if (templateDir) serveNewFilesFromTemplate(actual.StateDb, templateDir);
+  return actual;
+});
