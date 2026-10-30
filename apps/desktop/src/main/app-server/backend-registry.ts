@@ -67,6 +67,7 @@ import {
 } from "./monitor-job-suggestion";
 import { resolvePullRequestReview } from "./pull-request-review";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
+import { PWRAGENT_MCP_SERVER_HASH_LENGTH, PWRAGENT_MCP_SERVER_PREFIX } from "../../shared/tool-activity";
 import { priceLocalModelUsage } from "@pwragent/shared";
 import {
   attributeCodexProviderUsageLine,
@@ -8014,8 +8015,6 @@ function buildCodexTokenMiserDynamicToolSpecs(
 }
 
 const PWRAGENT_PDF_MCP_SERVER_NAME = "pwragent_pdf";
-const PWRAGENT_CONNECTION_MCP_SERVER_PREFIX = "pwragent_";
-const PWRAGENT_CONNECTION_MCP_SERVER_HASH_LENGTH = 32;
 
 function buildCodexPdfMcpConfig(
   registration: AgentToolMcpRegistration,
@@ -8086,8 +8085,8 @@ export function buildCodexConnectionMcpServerName(
         .join("\0"),
     )
     .digest("hex")
-    .slice(0, PWRAGENT_CONNECTION_MCP_SERVER_HASH_LENGTH);
-  return `${PWRAGENT_CONNECTION_MCP_SERVER_PREFIX}${server.name}_${identity}`;
+    .slice(0, PWRAGENT_MCP_SERVER_HASH_LENGTH);
+  return `${PWRAGENT_MCP_SERVER_PREFIX}${server.name}_${identity}`;
 }
 
 /**
@@ -8135,7 +8134,7 @@ export function buildCodexConnectionMcpConfig(
         // inherited HTTP server.
         const aliases = [
           server.name,
-          `${PWRAGENT_CONNECTION_MCP_SERVER_PREFIX}${server.name}`,
+          `${PWRAGENT_MCP_SERVER_PREFIX}${server.name}`,
         ].filter((name) => inheritedNames.has(name));
         return [
           ...aliases.map((name) => [name, { enabled: false }] as const),
