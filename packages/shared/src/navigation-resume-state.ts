@@ -36,5 +36,16 @@ export function normalizeNavigationResumeState(value: unknown): NavigationResume
     loadedRowsByQuery: Object.fromEntries(entries(raw.loadedRowsByQuery).filter((entry): entry is [string, number] =>
       typeof entry[1] === "number" && Number.isSafeInteger(entry[1]) && entry[1] > 0 && entry[1] <= 100_000)),
   };
-  return JSON.stringify(result).length <= MAX_RESUME_LENGTH ? result : undefined;
+  let length = JSON.stringify(result).length;
+  // Pagination and disclosures are optional. Trim them deterministically so
+  // accumulated metadata can never prevent saving the current selection.
+  for (const field of [result.loadedRowsByQuery, result.unpinnedExpandedByKey, result.expandedByKey]) {
+    const optional = Object.entries(field);
+    for (let index = optional.length - 1; index >= 0 && length > MAX_RESUME_LENGTH; index -= 1) {
+      const [key, entry] = optional[index]!;
+      delete field[key];
+      length -= JSON.stringify(key).length + 1 + JSON.stringify(entry).length + (index > 0 ? 1 : 0);
+    }
+  }
+  return length <= MAX_RESUME_LENGTH ? result : undefined;
 }

@@ -21,6 +21,7 @@ export function useBoundedNavigationWindow(params: Demand & {
   observeEvents?: boolean;
   loadedRowsByQuery?: Readonly<Record<string, number>>;
   onLoadMore?: (queryKey: string, rows: number) => void;
+  onRangeReset?: (queryKey: string) => void;
 }) {
   const { desktopApi, enabled, visible } = params;
   const [state, setState] = useState<NavigationWindowQueriesState>(EMPTY);
@@ -141,6 +142,7 @@ export function useBoundedNavigationWindow(params: Demand & {
     const controller = new NavigationWindowQueries(paramsRef.current.desktopApi ?? {}, { ...diagnostic }, {
       loadedRowsByQuery: paramsRef.current.loadedRowsByQuery,
       onLoadMore: (key, rows) => paramsRef.current.onLoadMore?.(key, rows),
+      onRangeReset: (key) => paramsRef.current.onRangeReset?.(key),
     });
     controllerRef.current = controller;
     selectedRangeCheckedRef.current.clear();

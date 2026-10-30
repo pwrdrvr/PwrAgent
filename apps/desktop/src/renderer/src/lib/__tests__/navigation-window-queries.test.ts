@@ -50,6 +50,59 @@ it("restores only demanded collections and tolerates fewer available rows", asyn
 function request(filter = ""): NavigationQueryRequest {
   return { protocol: 2, consumer: "main-sidebar", pageSize: 10, query: { kind: "lens", lens: "inbox", filter } };
 }
+
+it.each(["reads", "time"] as const)("bounds saved pagination demand on startup by %s", async (budget) => {
+  let now = 0;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const read = vi.fn(async (request: NavigationQueryRequest) => {
+    if (budget === "time") now += 10_000;
+    return owner("fresh", 1000)({ ...request, pageSize: 1 });
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined,
+    { loadedRowsByQuery: { [navigationResumeQueryKey(request())]: 210 } });
+  try {
+    queries.setDemand(new Map([["lens", request()]]));
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+    const state = queries.getSnapshot().resources.get("lens")!.state;
+    const delivered = budget === "reads" ? 9 : 1;
+    expect(read).toHaveBeenCalledTimes(delivered);
+    expect(state.page?.directories).toHaveLength(delivered);
+    expect(state.page?.nextCursor).toBeDefined();
+    expect(state.error).toBeUndefined();
+  } finally { queries.dispose(); clock.mockRestore(); }
+});
+
+it.each(["restart", "rebaseline"] as const)("keeps an explicit %s reset across lens changes and a new controller", async (reset) => {
+  const key = navigationResumeQueryKey(request());
+  const saved: Record<string, number> = { [key]: 210 };
+  const onRangeReset = vi.fn((queryKey: string) => { delete saved[queryKey]; });
+  const api = { getNavigationQueryPage: vi.fn(owner("fresh", 350)) };
+  const queries = new NavigationWindowQueries(api, undefined, { loadedRowsByQuery: saved, onRangeReset });
+  const demand = new Map([["lens", request()]]);
+  const settled = (controller: NavigationWindowQueries) => vi.waitFor(() =>
+    expect(controller.getSnapshot().resources.get("lens")?.loading).toBe(false));
+  try {
+    queries.setDemand(demand);
+    await settled(queries);
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(210);
+    if (reset === "restart") await queries.restart("lens");
+    else await queries.rebaseline("lens", { kind: "directory", key: "0" });
+    expect(onRangeReset).toHaveBeenCalledExactlyOnceWith(key);
+    expect(saved[key]).toBeUndefined();
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(10);
+    queries.setDemand(new Map([["lens", { ...request(), query: { kind: "lens", lens: "recents" } }]]));
+    await settled(queries);
+    queries.setDemand(demand);
+    await settled(queries);
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(10);
+  } finally { queries.dispose(); }
+  const reopened = new NavigationWindowQueries(api, undefined, { loadedRowsByQuery: saved });
+  try {
+    reopened.setDemand(demand);
+    await settled(reopened);
+    expect(reopened.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(10);
+  } finally { reopened.dispose(); }
+});
 function page(patch: Partial<NavigationQueryPage> = {}): NavigationQueryPage {
   return { protocol: 2, queryKey: "query", generation: "generation", ownerEpoch: "owner", countsRevision: "revision",
     counts: { total: 100, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, entries: [], complete: false, nextCursor: "next", ...patch };

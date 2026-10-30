@@ -3268,6 +3268,14 @@ export function useThreadNavigation(
   const rememberLoadedRows = useCallback((key: string, rows: number) => {
     setLoadedRowsByQuery((current) => current[key] === rows ? current : { ...current, [key]: rows });
   }, [setLoadedRowsByQuery]);
+  const forgetLoadedRows = useCallback((key: string) => {
+    setLoadedRowsByQuery((current) => {
+      if (current[key] === undefined) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }, [setLoadedRowsByQuery]);
   const { setUnpinnedExpandedByKey } = directoryDisclosure;
   const markThreadSeen = desktopApi?.markThreadSeen;
   const forkThreadRequest = desktopApi?.forkThread;
@@ -3685,7 +3693,7 @@ export function useThreadNavigation(
     [state.rows?.threadRows]);
   disclosedParentsRef.current = disclosedParents;
   const boundedNavigation = useBoundedNavigationWindow({ desktopApi, enabled, visible: viewVisible, observeEvents: false,
-    loadedRowsByQuery, onLoadMore: rememberLoadedRows,
+    loadedRowsByQuery, onLoadMore: rememberLoadedRows, onRangeReset: forgetLoadedRows,
     browseMode, target: rendererFederationTarget, attentionView,
     pinnedThreadsOnTop,
     expandedByKey: directoryDisclosure.expandedByKey, unpinnedExpandedByKey: directoryDisclosure.unpinnedExpandedByKey,

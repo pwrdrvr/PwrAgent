@@ -31,4 +31,21 @@ describe("navigation resume metadata", () => {
   it("bounds the bootstrap payload", () => {
     expect(normalizeNavigationResumeState({ ...state, selection: { backend: "codex", threadId: "x".repeat(20_000) } })).toBeUndefined();
   });
+
+  it.each(["expandedByKey", "unpinnedExpandedByKey", "loadedRowsByQuery"] as const)("trims oversized %s while preserving the latest selection", (field) => {
+    const metadata = Object.fromEntries(Array.from({ length: 250 }, (_, index) =>
+      [`${index.toString().padStart(3, "0")}-${"\"\\".repeat(40)}`, field === "loadedRowsByQuery" ? 210 : false]));
+    const snapshot = { ...state, [field]: metadata };
+    expect(JSON.stringify(snapshot).length).toBeGreaterThan(12 * 1024);
+    const normalized = normalizeNavigationResumeState(snapshot)!;
+    expect(normalized.selection).toEqual(state.selection);
+    expect(JSON.stringify(normalized).length).toBeLessThanOrEqual(12 * 1024);
+    expect(Object.keys(normalized[field]).length).toBeLessThan(250);
+    expect(normalizeNavigationResumeState(normalized)).toEqual(normalized);
+    expect(normalizeNavigationResumeState({ ...snapshot,
+      [field]: Object.fromEntries(Object.entries(metadata).reverse()),
+    })).toEqual(normalized);
+    expect(normalizeNavigationResumeState({ ...snapshot, selection: { backend: "codex", threadId: "latest" } })?.selection)
+      .toEqual({ backend: "codex", threadId: "latest" });
+  });
 });

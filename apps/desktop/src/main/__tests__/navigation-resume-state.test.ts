@@ -53,3 +53,25 @@ it("reopens the saved session and commits only changed snapshots", async () => {
     removeTempStateDbDir(tempDir);
   }
 });
+
+it("keeps saving the latest selection after optional resume metadata exceeds its budget", () => {
+  const { dbPath, tempDir } = createTempStateDb("pwragent-navigation-resume-budget-");
+  let db = StateDb.open(dbPath);
+  const expandedByKey = Object.fromEntries(Array.from({ length: 300 }, (_, index) =>
+    [`project-${index}-${"x".repeat(60)}`, true]));
+  const snapshot: NavigationResumeState = { version: 1, selection: { backend: "codex", threadId: "first" },
+    expandedByKey, unpinnedExpandedByKey: expandedByKey, loadedRowsByQuery: { lens: 210 } };
+  try {
+    const store = new SqliteOverlayStore(db);
+    store.setNavigationResumeState(snapshot);
+    store.setNavigationResumeState({ ...snapshot, selection: { backend: "codex", threadId: "latest", ownerInstanceId: "peer" } });
+    db.close();
+    db = StateDb.open(dbPath);
+    const restored = new SqliteOverlayStore(db).getNavigationResumeStateSync();
+    expect(restored?.selection).toEqual({ backend: "codex", threadId: "latest", ownerInstanceId: "peer" });
+    expect(JSON.stringify(restored).length).toBeLessThanOrEqual(12 * 1024);
+  } finally {
+    db.close();
+    removeTempStateDbDir(tempDir);
+  }
+});

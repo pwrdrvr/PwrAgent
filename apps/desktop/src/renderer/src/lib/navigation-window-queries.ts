@@ -52,7 +52,6 @@ type Resource = {
   anchor?: NavigationQueryAnchor;
   /** Explicit continuation demand survives a short final page and later growth. */
   expandedRows?: number;
-  restoreRows?: number;
 };
 
 /** Semantic demand ignores object insertion order and identity-set ordering. */
@@ -108,6 +107,7 @@ export class NavigationWindowQueries {
     private readonly resume: {
       loadedRowsByQuery?: Readonly<Record<string, number>>;
       onLoadMore?: (queryKey: string, rows: number) => void;
+      onRangeReset?: (queryKey: string) => void;
     } = {}) {
     navigationListingDiagnostics.record({ ...diagnostic, phase: "effect" });
   }
@@ -187,8 +187,7 @@ export class NavigationWindowQueries {
         value: { id, state: retained ? { ...retained.state, stale: true, error: undefined } : createNavigationPageState(request),
           loading: false, restoredFromCache: Boolean(retained) },
         refreshAfterPending: false, invalidated: false, released: !this.visible, anchor: retained?.anchor ?? request.anchor,
-        expandedRows: retained?.expandedRows ?? this.resume.loadedRowsByQuery?.[navigationResumeQueryKey(request)],
-        restoreRows: retained ? undefined : this.resume.loadedRowsByQuery?.[navigationResumeQueryKey(request)],
+        expandedRows: retained ? retained.expandedRows : this.resume.loadedRowsByQuery?.[navigationResumeQueryKey(request)],
       };
       this.resources.set(id, resource);
       added.push(resource);
@@ -482,8 +481,19 @@ export class NavigationWindowQueries {
         };
         let page: NavigationQueryPage;
         let pageCursor = cursor;
-        const restoring = explicitAnchor || fromStart ? 0 : Math.max(size(started.page), resource.restoreRows ?? 0);
-        if (explicitAnchor || fromStart) resource.expandedRows = undefined;
+        // Only displayed rows bypass continuation limits. A persisted target
+        // is expansion demand, and may exceed what the previous owner served.
+        const restoring = explicitAnchor || fromStart ? 0 : size(started.page);
+        if (explicitAnchor || fromStart) {
+          resource.expandedRows = undefined;
+          const key = navigationResumeQueryKey(started.request);
+          if (this.resume.loadedRowsByQuery?.[key] !== undefined) {
+            const loadedRows = { ...this.resume.loadedRowsByQuery };
+            delete loadedRows[key];
+            this.resume.loadedRowsByQuery = loadedRows;
+            this.resume.onRangeReset?.(key);
+          }
+        }
         if (continuation) resource.expandedRows = restoring + LOAD_MORE_ROWS;
         const wanted = Math.max(restoring, resource.expandedRows ?? 0);
         // A cursor read serves rows this window has already committed to: the
@@ -551,7 +561,6 @@ export class NavigationWindowQueries {
           }
           extensions += 1;
         }
-        resource.restoreRows = undefined;
         resource.value = { ...resource.value, state: next, restoredFromCache: false };
       } catch (error) {
         if (this.isCurrent(resource)) resource.value = { ...resource.value,
