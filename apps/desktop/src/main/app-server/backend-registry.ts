@@ -1,6 +1,8 @@
 import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
 import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent-task-monitor-agent-tools";
 import { delegatedTurnAttribution, withoutTurnAttribution } from "./delegated-turn-attribution";
+import { LaunchpadCreationOperations, type LaunchpadCreationOperation } from "./launchpad-creation-operations";
+import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
 import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
@@ -6764,6 +6766,7 @@ function buildCodexEnvironmentSetupActivity(
   return {
     type: "activity",
     id: `codex-environment-setup-${runtime.environmentId}`,
+    createdAt: runtime.setupStartedAt,
     summary: completed
       ? `Environment setup completed: ${runtime.environmentName}`
       : failed
@@ -8983,6 +8986,7 @@ type ThreadRenameOptions = {
 };
 
 export class DesktopBackendRegistry {
+  private readonly launchpadCreationOperations = new LaunchpadCreationOperations();
   private readonly codexClient: BackendClient;
   private readonly configStore?: Pick<
     DesktopConfigStore,
@@ -28101,8 +28105,38 @@ export class DesktopBackendRegistry {
       sourceInstanceId?: FederationInstanceId;
     },
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
+    if (!request.operationId) return await this.runMaterializeDirectoryLaunchpad(request, options);
+    return await this.launchpadCreationOperations.run(request, options?.sourceInstanceId, async (operation) => {
+      try {
+        return await this.runMaterializeDirectoryLaunchpad(request, options, operation);
+      } catch (error) {
+        if (operation.controller.signal.aborted) {
+          if (operation.actionRunId) stopCodexEnvironmentDetachedCommand(operation.actionRunId, "terminate");
+          if (operation.status.threadId && operation.status.backend) {
+            await this.archiveThread({ backend: operation.status.backend, threadId: operation.status.threadId });
+          }
+          operation.check();
+        }
+        throw error;
+      }
+    });
+  }
+
+  async manageLaunchpadCreation(
+    request: LaunchpadCreationRequest,
+    sourceInstanceId?: FederationInstanceId,
+  ): Promise<LaunchpadCreationResponse> {
+    return this.launchpadCreationOperations.manage(request, sourceInstanceId);
+  }
+
+  private async runMaterializeDirectoryLaunchpad(
+    request: MaterializeDirectoryLaunchpadRequest,
+    options?: MaterializeDirectoryLaunchpadOptions & { sourceInstanceId?: FederationInstanceId },
+    operation?: LaunchpadCreationOperation,
+  ): Promise<MaterializeDirectoryLaunchpadResponse> {
+    operation?.check();
     if (!request.releaseLaunchpadOnSubmit) {
-      return await this.materializeLaunchpadDraft(request, options);
+      return await this.materializeLaunchpadDraft(request, options, operation);
     }
     const launchpad =
       request.launchpad ??
@@ -28120,7 +28154,7 @@ export class DesktopBackendRegistry {
       directoryKey: launchpad.directoryKey,
     });
     try {
-      return await this.materializeLaunchpadDraft({ ...request, launchpad }, options);
+      return await this.materializeLaunchpadDraft({ ...request, launchpad }, options, operation);
     } catch (error) {
       // No thread exists, so the draft is still the operator's only copy of
       // the message. Put it back, unless they have already started another.
@@ -28153,6 +28187,7 @@ export class DesktopBackendRegistry {
     options?: MaterializeDirectoryLaunchpadOptions & {
       sourceInstanceId?: FederationInstanceId;
     },
+    operation?: LaunchpadCreationOperation,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
     const draft =
       request.launchpad ??
@@ -28165,6 +28200,8 @@ export class DesktopBackendRegistry {
     let launchpad = options?.sourceInstanceId
       ? await this.resolveRemoteLaunchpadModelSettings(draft)
       : draft;
+    operation?.update({ backend: launchpad.backend, projectPath: launchpad.directoryPath, title: request.input?.find((item) => item.type === "text")?.text ?? launchpad.prompt });
+    operation?.check();
     if (
       request.scheduledFor !== undefined
       && (!Number.isFinite(request.scheduledFor) || request.scheduledFor < 0)
@@ -28197,6 +28234,7 @@ export class DesktopBackendRegistry {
       };
     }
 
+    operation?.check();
     const preparedWorkspace =
       await this.gitDirectoryService.prepareLaunchpadWorkspace(launchpad);
     const workspace =
@@ -28206,6 +28244,8 @@ export class DesktopBackendRegistry {
             cwd: await this.createScratchProjectDirectory(),
           }
         : preparedWorkspace;
+    operation?.update({ cwd: workspace.cwd });
+    operation?.check();
     const repositoryPath = await resolvePreparedRepositoryIdentityPath({
       preparedPath: workspace.repositoryPath,
       requestedPath: launchpad.directoryPath,
@@ -28233,6 +28273,12 @@ export class DesktopBackendRegistry {
     // from the runtime helper into the renderer's actionRuns entry and
     // into the post-startThread output/exit handlers.
     const autoActionRunId = randomUUID();
+    if (operation) {
+      operation.actionRunId = autoActionRunId;
+      operation.controller.signal.addEventListener("abort", () => {
+        stopCodexEnvironmentDetachedCommand(autoActionRunId, "terminate");
+      }, { once: true });
+    }
     const pendingActionThreadIdRef: { current?: string } = {};
     const queuedActionDetachedExits: CodexEnvironmentDetachedExit[] = [];
     const queuedActionDetachedOutputs: CodexEnvironmentDetachedOutput[] = [];
@@ -28268,18 +28314,31 @@ export class DesktopBackendRegistry {
     };
     try {
       codexEnvironmentRuntime = await applyLocalCodexEnvironmentSelection({
+        signal: operation?.controller.signal,
         commandRunner: this.codexEnvironmentCommandRunner,
         cwd: workspace.cwd,
         env: this.codexEnvironmentCommandEnv,
-        onSetupProgress: options?.onCodexEnvironmentSetupProgress
-          ? (event) => {
-              options.onCodexEnvironmentSetupProgress?.({
-                directoryKey:
-                  request.codexEnvironmentSetupProgressKey ?? launchpad.directoryKey,
-                ...event,
-              });
-            }
-          : undefined,
+        onSetupProgress: (event) => {
+          const progress = {
+            directoryKey: request.codexEnvironmentSetupProgressKey ?? launchpad.directoryKey,
+            ...event,
+            operationId: request.operationId,
+            sequence: operation ? (operation.status.setupProgress?.sequence ?? 0) + 1 : undefined,
+          };
+          const previous = operation?.status.setupProgress;
+          operation?.update({
+            phase: operation.controller.signal.aborted ? "cancelling" : "setup",
+            setupProgress: {
+              ...progress,
+              output: event.output ?? `${previous?.output ?? ""}${event.chunk ?? ""}`.slice(-32_000),
+            },
+          });
+          try {
+            options?.onCodexEnvironmentSetupProgress?.(progress);
+          } catch (error) {
+            backendRegistryLog.warn("launchpad-setup-progress-delivery-failed", { operationId: request.operationId, error: String(error) });
+          }
+        },
         onActionDetachedExit,
         onActionDetachedOutput,
         actionRunId: autoActionRunId,
@@ -28291,6 +28350,7 @@ export class DesktopBackendRegistry {
         selection: codexEnvironmentSelection,
       });
     } catch (error) {
+      operation?.check();
       if (!(error instanceof CodexEnvironmentStartupError)) {
         throw error;
       }
@@ -28301,6 +28361,8 @@ export class DesktopBackendRegistry {
         worktreeCleanupAvailable: workspace.workMode === "worktree",
       };
     }
+    operation?.check();
+    operation?.update({ phase: "creating" });
     const startThreadResponse = await this.startThread({
       backend: launchpad.backend,
       executionMode: launchpad.executionMode,
@@ -28331,6 +28393,8 @@ export class DesktopBackendRegistry {
       parentThreadInstanceId:
         request.parentThreadInstanceId ?? launchpad.parentThreadInstanceId,
     });
+    operation?.update({ threadId: startThreadResponse.threadId });
+    operation?.check();
     const linkedDirectory = linkedDirectories?.[0];
     if (linkedDirectory) {
       // Preserve the launchpad's requested repository identity durably. Codex
@@ -28410,6 +28474,7 @@ export class DesktopBackendRegistry {
       this.pendingEnvironmentLaunchStore.put({ ...pendingLaunch, request: { ...request, input: retainedInput } });
     }
     await options?.onThreadMaterialized?.(materializedThread);
+    operation?.commit();
     if (!codexEnvironmentStartupFailure) {
       continuation = await this.startMaterializedLaunchpadRequest(pendingLaunch);
     }
@@ -28737,6 +28802,7 @@ export class DesktopBackendRegistry {
 
   close(): Promise<void> {
     this.shutdownRequested = true;
+    this.launchpadCreationOperations.cancelAll();
     this.closeOperation ??= this.closeResources();
     return this.closeOperation;
   }

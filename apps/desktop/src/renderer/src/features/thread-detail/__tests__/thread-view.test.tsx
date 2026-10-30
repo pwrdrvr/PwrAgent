@@ -3054,7 +3054,7 @@ describe("ThreadView", () => {
     expect(screen.getByLabelText("Preparing transcript")).toHaveTextContent(
       "Running the PwrSnap setup first.",
     );
-    const setupRow = screen.getByLabelText("Env setup running");
+    const setupRow = screen.getByLabelText("Thread startup running");
     expect(setupRow.closest(".composer__band")).not.toBeNull();
     expect(screen.queryByLabelText("Env setup output")).not.toBeInTheDocument();
     fireEvent.click(within(setupRow).getByRole("button", { expanded: false }));
@@ -3882,6 +3882,7 @@ describe("ThreadView", () => {
       },
       selectedLaunchpad: launchpad,
       pendingLaunchpadCreation: {
+        operationId: "startup-1", submittedAt: 1_000,
         selectionKey: "starting-launchpad:1", directoryKey: launchpad.directoryKey,
         directoryLabel: launchpad.directoryLabel, launchpad, composerScopeKey,
         setupProgressKey: "starting-launchpad:1",
@@ -4099,6 +4100,7 @@ describe("ThreadView", () => {
           prompt: "Inspect this screenshot", workMode: "worktree", createdAt: 1, updatedAt: 1,
         }}
         pendingLaunchpadCreation={{
+          operationId: "startup-1", submittedAt: 1_000,
           selectionKey: "starting-launchpad:1", directoryKey: "directory:/repo",
           directoryLabel: "Example",
           launchpad: {

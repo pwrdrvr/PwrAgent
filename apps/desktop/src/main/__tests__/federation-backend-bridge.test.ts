@@ -121,6 +121,42 @@ describe("federation backend bridge", () => {
     expect(backend.setThreadParent).not.toHaveBeenCalled();
   });
 
+  it("routes startup status and cancellation to the authenticated owner without a thread ID", async () => {
+    const manageLaunchpadCreation = vi.fn(async () => ({ cancellationAccepted: true }));
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    let rpc: FederationRpcEndpoint;
+    router.registerConnection({ peerId: "viewer", capabilities: ["environment_actions"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    registerFederationBackendHandlers({ router, backend: { manageLaunchpadCreation } as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    await expect(client.manageLaunchpadCreation({ operationId: "op-1", action: "cancel" })).resolves.toEqual({ cancellationAccepted: true });
+    expect(manageLaunchpadCreation).toHaveBeenCalledWith({ operationId: "op-1", action: "cancel" }, "viewer");
+    router.registerConnection({ peerId: "viewer", capabilities: ["thread_detail"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    await expect(client.manageLaunchpadCreation({ operationId: "op-1", action: "cancel" })).rejects.toThrow();
+    expect(manageLaunchpadCreation).toHaveBeenCalledOnce();
+  });
+
+  it("delivers launchpad setup progress with owner timing and operation identity", async () => {
+    const progress = { directoryKey: "starting:op-1", operationId: "op-1", startedAt: 100, at: 200,
+      environmentId: "env", environmentName: "Env", command: "install", phase: "started" as const };
+    const onEnvironmentSetupProgress = vi.fn();
+    const materializeDirectoryLaunchpad = vi.fn<FederationBackendOperations["materializeDirectoryLaunchpad"]>(async (_request, options) => {
+      options?.onCodexEnvironmentSetupProgress?.(progress);
+      return { backend: "codex", threadId: "new-thread", executionMode: "default", workMode: "local" };
+    });
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    let rpc: FederationRpcEndpoint;
+    router.registerConnection({ peerId: "viewer", capabilities: ["environment_actions"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    registerFederationBackendHandlers({ router, backend: { materializeDirectoryLaunchpad } as unknown as FederationBackendOperations, onEnvironmentSetupProgress });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    await new FederationRemoteBackendClient(rpc).materializeDirectoryLaunchpad({ directoryKey: "repo", operationId: "op-1" });
+    expect(onEnvironmentSetupProgress).toHaveBeenCalledWith(progress, "viewer");
+  });
   it("round-trips owner-collated family pricing and requires thread_detail", async () => {
     const request = { backend: "codex" as const, threadId: "parent" };
     const family = { readAt: 42, members: [

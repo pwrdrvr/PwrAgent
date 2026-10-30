@@ -1,4 +1,5 @@
 import { authenticateMessageOrigin, type ResolvedSourceInstance } from "@pwragent/federation/federation-message-origin";
+import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
 export { authenticateMessageOrigin } from "@pwragent/federation/federation-message-origin";
 import { ForgeReadError, type ForgeReadRequest } from "../pr-status/forge-tool-contract";
 import { HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE } from "@pwragent/shared";
@@ -633,6 +634,7 @@ export const FEDERATION_BACKEND_METHODS = {
   listWorktreeUnpublishedCommits: "backend.listWorktreeUnpublishedCommits",
   getWorktreeUnpublishedCommitDiff: "backend.getWorktreeUnpublishedCommitDiff",
   materializeDirectoryLaunchpad: "backend.materializeDirectoryLaunchpad",
+  manageLaunchpadCreation: "backend.manageLaunchpadCreation",
   handoffThreadWorkspace: "backend.handoffThreadWorkspace",
   // Separate so an owner that predates these moves answers method_not_found.
   // It would read an unknown direction as Handoff to Local and ignore baseRef.
@@ -796,6 +798,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.listWorktreeUnpublishedCommits]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.getWorktreeUnpublishedCommitDiff]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad]: "environment_actions",
+  [FEDERATION_BACKEND_METHODS.manageLaunchpadCreation]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.handoffThreadWorkspace]: "turn_control",
   [FEDERATION_BACKEND_METHODS.handoffThreadWorkspaceToNewWorktree]: "turn_control",
   [FEDERATION_BACKEND_METHODS.recreateThreadWorktree]: "turn_control",
@@ -1137,6 +1140,10 @@ export type FederationBackendOperations = {
       sourceInstanceId?: FederationInstanceId;
     },
   ): Promise<MaterializeDirectoryLaunchpadResponse>;
+  manageLaunchpadCreation?(
+    request: LaunchpadCreationRequest,
+    sourceInstanceId?: FederationInstanceId,
+  ): Promise<LaunchpadCreationResponse>;
   handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse>;
@@ -2154,6 +2161,10 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as GetWorktreeUnpublishedCommitDiffRequest,
       ),
   );
+  if (params.backend.manageLaunchpadCreation) {
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.manageLaunchpadCreation, async (envelope) =>
+      await params.backend.manageLaunchpadCreation!(envelope.params as LaunchpadCreationRequest, envelope.sourceInstanceId));
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad,
     async (envelope) => {
@@ -3450,6 +3461,13 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
           ? { messageOrigin: options.messageOrigin }
           : {}),
       } satisfies FederationMaterializeDirectoryLaunchpadRequest,
+    });
+  }
+
+  async manageLaunchpadCreation(request: LaunchpadCreationRequest): Promise<LaunchpadCreationResponse> {
+    return await this.rpc.request<LaunchpadCreationResponse>({
+      method: FEDERATION_BACKEND_METHODS.manageLaunchpadCreation,
+      params: request,
     });
   }
 

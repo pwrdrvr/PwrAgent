@@ -1,4 +1,5 @@
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
+import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
 import type { NativeVoiceApi } from "../../../shared/native-voice";
 import type { HtmlPreviewNavigationEvent } from "../../../shared/html-preview";
 import type {
@@ -1225,6 +1226,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   materializeDirectoryLaunchpad?: (
     request: MaterializeDirectoryLaunchpadRequest
   ) => Promise<MaterializeDirectoryLaunchpadResponse>;
+  manageLaunchpadCreation?: (request: LaunchpadCreationRequest) => Promise<LaunchpadCreationResponse>;
   runCodexEnvironmentAction?: (
     request: RunCodexEnvironmentActionRequest,
   ) => Promise<RunCodexEnvironmentActionResponse>;

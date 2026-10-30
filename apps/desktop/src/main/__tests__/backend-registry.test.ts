@@ -24663,6 +24663,65 @@ ${id === "broken" ? '[setup]\nscript = "fail-setup"' : ""}
     }
   });
 
+  it.each(["setup", "creating"])("cancels a startup operation during %s without a late first turn", async (phase) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-startup-cancel-"));
+    await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
+    await writeFile(path.join(root, ".codex", "environments", "env.toml"), 'version = 1\nname = "Env"\n[setup]\nscript = "install"\n');
+    let ready!: () => void;
+    const reachedPhase = new Promise<void>((resolve) => { ready = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let setupSignal: AbortSignal | undefined;
+    const commandRunner: CodexEnvironmentCommandRunner = async (params) => {
+      setupSignal = params.signal;
+      params.onProgress?.({ phase: "stdout", chunk: "installing", at: Date.now() });
+      if (phase === "setup") { ready(); await gate; }
+      // Deliberately return success after cancellation, emulating a runner
+      // whose last successful exit races the AbortSignal.
+      return { exitCode: 0, output: "installed", durationMs: 10 };
+    };
+    const overlayStore = createOverlayStoreMock();
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: `directory:${root}`, directoryKind: "directory", directoryLabel: "Fixture",
+      directoryPath: root, backend: "codex", executionMode: "default", workMode: "local",
+      prompt: "Keep this submitted task", codexEnvironmentId: "env", codexEnvironmentExecutionTarget: "local",
+      createdAt: 1, updatedAt: 1,
+    };
+    await overlayStore.upsertDirectoryLaunchpad(launchpad);
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore,
+      codexEnvironmentCommandRunner: commandRunner, threadTitleGenerationService: null, pdfToolMcpServer: null });
+    const start = vi.spyOn(registry, "startThread").mockImplementation(async () => {
+      ready();
+      await gate;
+      return { backend: "codex", threadId: "late-empty-thread", executionMode: "default" };
+    });
+    const turn = vi.spyOn(registry, "startTurn");
+    const archive = vi.spyOn(registry, "archiveThread").mockResolvedValue({ backend: "codex", threadId: "late-empty-thread", archivedAt: 1, cleanup: [] });
+    try {
+      const running = registry.materializeDirectoryLaunchpad({ operationId: "cancel-race", submittedAt: 100,
+        directoryKey: launchpad.directoryKey, launchpad, releaseLaunchpadOnSubmit: true,
+        input: [{ type: "text", text: launchpad.prompt }] });
+      const rejected = expect(running).rejects.toThrow("startup cancelled");
+      await reachedPhase;
+      const before = await registry.manageLaunchpadCreation({ operationId: "cancel-race", action: "read" });
+      expect(before.operation).toMatchObject({ phase, backend: "codex", submittedAt: 100,
+        setupProgress: { output: expect.stringContaining(phase === "setup" ? "installing" : "installed"), startedAt: expect.any(Number) } });
+      expect((await registry.manageLaunchpadCreation({ operationId: "cancel-race", action: "cancel" })).cancellationAccepted).toBe(true);
+      expect(setupSignal?.aborted).toBe(true);
+      release();
+      await rejected;
+      expect(turn).not.toHaveBeenCalled();
+      expect(start).toHaveBeenCalledTimes(phase === "creating" ? 1 : 0);
+      expect(archive).toHaveBeenCalledTimes(phase === "creating" ? 1 : 0);
+      expect(await overlayStore.getDirectoryLaunchpad({ directoryKey: launchpad.directoryKey })).toMatchObject({ prompt: launchpad.prompt });
+      expect((await registry.manageLaunchpadCreation({ operationId: "cancel-race", action: "read" })).operation?.phase).toBe("cancelled");
+    } finally {
+      release();
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   it("captures Codex environment setup output in the thread replay", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-env-"));
     const environmentsDir = path.join(root, ".codex", "environments");
@@ -24736,6 +24795,7 @@ script = "printf setup-output"
       });
       expect(read.replay.entries[0]).toMatchObject({
         type: "activity",
+        createdAt: expect.any(Number),
         summary: "Environment setup completed: Repo Environment",
         details: [
           {
