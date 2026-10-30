@@ -4334,7 +4334,7 @@ class DesktopAppServerService {
         return results;
       },
     });
-    const result = await service.execute(operation, args, { remotes, attached, observations: [...observations.values()], branch: thread.observedGitBranch ?? thread.gitBranch }, context.signal);
+    const result = await service.execute(operation, args, { remotes, attached, directories, observations: [...observations.values()], branch: thread.observedGitBranch ?? thread.gitBranch }, context.signal);
     const prAutomation = await this.getThreadPullRequestAutomationStatus({ backend, threadId }, { backend: context.backend, threadId: context.threadId });
     return { ...(result as Record<string, unknown>), backend, threadId, prAutomation };
   }
