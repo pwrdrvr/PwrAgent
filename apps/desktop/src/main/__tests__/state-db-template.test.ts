@@ -1,3 +1,4 @@
+import Database from "better-sqlite3";
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -25,6 +26,10 @@ afterEach(() => {
 function describeDatabase(db: StateDb): unknown {
   return {
     autoVacuum: db.raw.pragma("auto_vacuum", { simple: true }),
+    // Per-connection settings `StateDb.open` applies; a served image must
+    // still get them.
+    busyTimeout: db.raw.pragma("busy_timeout", { simple: true }),
+    foreignKeys: db.raw.pragma("foreign_keys", { simple: true }),
     journalMode: db.raw.pragma("journal_mode", { simple: true }),
     meta: db.raw.prepare("SELECT key, value FROM meta ORDER BY key").all(),
     schema: db.raw
@@ -70,4 +75,49 @@ describe("desktop-main StateDb template", () => {
       }
     },
   );
+
+  it.each([undefined, "work"])(
+    "serves the in-memory database a fresh open builds (profile %s)",
+    (profileName) => {
+      const options = profileName ? { profileName } : undefined;
+      const fresh = openFreshStateDb(":memory:", options);
+      const served = StateDb.open(":memory:", options);
+      try {
+        expect(readdirSync(process.env.PWRAGENT_TEST_STATE_DB_TEMPLATE_DIR!))
+          .toContain(profileName ? "memory-776f726b.db" : "memory.db");
+        expect(served.raw.memory).toBe(true);
+        expect(served.raw.name).toBe(":memory:");
+        expect(describeDatabase(served)).toEqual(describeDatabase(fresh));
+      } finally {
+        fresh.close();
+        served.close();
+      }
+    },
+  );
+
+  it("gives each in-memory open its own database", () => {
+    const first = StateDb.open(":memory:");
+    const second = StateDb.open(":memory:");
+    try {
+      first.raw.prepare("INSERT INTO meta(key, value) VALUES ('probe', '1')").run();
+      expect(
+        second.raw.prepare("SELECT value FROM meta WHERE key = 'probe'").get(),
+      ).toBeUndefined();
+    } finally {
+      first.close();
+      second.close();
+    }
+  });
+
+  it("leaves a raw in-memory database empty", () => {
+    StateDb.open(":memory:").close();
+    const raw = new Database(":memory:");
+    try {
+      expect(
+        raw.prepare("SELECT count(*) AS n FROM sqlite_master").get(),
+      ).toEqual({ n: 0 });
+    } finally {
+      raw.close();
+    }
+  });
 });
