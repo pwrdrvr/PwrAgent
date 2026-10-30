@@ -32,6 +32,15 @@ describe("navigation resume metadata", () => {
     expect(normalizeNavigationResumeState({ ...state, selection: { backend: "codex", threadId: "x".repeat(20_000) } })).toBeUndefined();
   });
 
+  it("bounds automatically reopened projects while preserving explicit collapses and the selection", () => {
+    const expandedByKey = Object.fromEntries(Array.from({ length: 100 }, (_, index) => [`project-${index}`, true]));
+    const normalized = normalizeNavigationResumeState({ ...state, expandedByKey: { ...expandedByKey, closed: false } })!;
+    expect(Object.values(normalized.expandedByKey).filter(Boolean)).toHaveLength(8);
+    expect(normalized.expandedByKey.closed).toBe(false);
+    expect(normalized.selection).toEqual(state.selection);
+    expect(normalizeNavigationResumeState(normalized)).toEqual(normalized);
+  });
+
   it.each(["expandedByKey", "unpinnedExpandedByKey", "loadedRowsByQuery"] as const)("trims oversized %s while preserving the latest selection", (field) => {
     const metadata = Object.fromEntries(Array.from({ length: 250 }, (_, index) =>
       [`${index.toString().padStart(3, "0")}-${"\"\\".repeat(40)}`, field === "loadedRowsByQuery" ? 210 : false]));

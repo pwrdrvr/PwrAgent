@@ -12,6 +12,9 @@ export type NavigationResumeState = {
 // This snapshot also travels in the renderer's bootstrap arguments. Leave
 // room for Electron's other arguments on Windows (32K UTF-16 command line).
 const MAX_RESUME_LENGTH = 12 * 1024;
+// Each open project demands pinned and unpinned pages. Optional disclosure
+// history must not reopen hundreds of queries on the next launch.
+const MAX_RESUME_OPEN_DIRECTORIES = 8;
 
 export function normalizeNavigationResumeState(value: unknown): NavigationResumeState | undefined {
   if (!value || typeof value !== "object") return undefined;
@@ -36,6 +39,10 @@ export function normalizeNavigationResumeState(value: unknown): NavigationResume
     loadedRowsByQuery: Object.fromEntries(entries(raw.loadedRowsByQuery).filter((entry): entry is [string, number] =>
       typeof entry[1] === "number" && Number.isSafeInteger(entry[1]) && entry[1] > 0 && entry[1] <= 100_000)),
   };
+  let openDirectories = 0;
+  for (const [key, expanded] of Object.entries(result.expandedByKey)) {
+    if (expanded && ++openDirectories > MAX_RESUME_OPEN_DIRECTORIES) delete result.expandedByKey[key];
+  }
   let length = JSON.stringify(result).length;
   // Pagination and disclosures are optional. Trim them deterministically so
   // accumulated metadata can never prevent saving the current selection.

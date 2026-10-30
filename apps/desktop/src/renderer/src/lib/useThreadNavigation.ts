@@ -73,6 +73,7 @@ import {
   isRemoteFederationTarget,
   isSubthreadLaunchpadKey,
   normalizeNavigationBrowseMode,
+  normalizeNavigationResumeState,
   normalizeRenamedTitleSource,
   resolveThreadParentKey,
   shortenDerivedThreadTitle,
@@ -5285,7 +5286,8 @@ export function useThreadNavigation(
     setSelectedItemKey,
   ]);
 
-  const lastSavedResumeRef = useRef(resumeState ? JSON.stringify(resumeState) : undefined);
+  const initialSavedResume = useMemo(() => resumeState ? JSON.stringify(resumeState) : undefined, [resumeState]);
+  const lastSavedResumeRef = useRef(initialSavedResume);
   useEffect(() => {
     const restoring = restoringSelectionKeyRef.current;
     if (!restoring) return;
@@ -5309,12 +5311,13 @@ export function useThreadNavigation(
   useEffect(() => {
     if (!enabled || isRendererFederationWindow || !desktopApi?.setNavigationResumeState
       || !initialSelectionEstablishedRef.current || initialFallbackSelectionKey) return;
-    const snapshot: NavigationResumeState = {
+    const snapshot = normalizeNavigationResumeState({
       version: 1, selection: selectedItemKey ? navigationIdentityFromThreadKey(selectedItemKey) ?? null : null,
       expandedByKey: directoryDisclosure.expandedByKey,
       unpinnedExpandedByKey: directoryDisclosure.unpinnedExpandedByKey,
       loadedRowsByQuery,
-    };
+    } satisfies NavigationResumeState);
+    if (!snapshot) return;
     const serialized = JSON.stringify(snapshot);
     if (serialized === lastSavedResumeRef.current) return;
     lastSavedResumeRef.current = serialized;

@@ -13519,6 +13519,23 @@ describe("useThreadNavigation", () => {
     expect(setNavigationResumeState).not.toHaveBeenCalled();
   });
 
+  it("does no resume serialization or persistence on unrelated renders", () => {
+    const resumeState: NavigationResumeState = { version: 1, selection: null,
+      expandedByKey: { project: true }, unpinnedExpandedByKey: {}, loadedRowsByQuery: { lens: 210 } };
+    Object.defineProperty(window, "__pwragentNavigationPreferences", { configurable: true, value: { resumeState } });
+    const setNavigationResumeState = vi.fn(async () => undefined);
+    const api: DesktopApi = { setNavigationResumeState };
+    const { rerender } = renderHook(() => useThreadNavigation(api, { enabled: false }));
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      for (let index = 0; index < 20; index += 1) rerender();
+      const snapshots = stringify.mock.calls.filter(([value]) => value && typeof value === "object"
+        && "version" in value && "loadedRowsByQuery" in value);
+      expect(snapshots).toHaveLength(0);
+      expect(setNavigationResumeState).not.toHaveBeenCalled();
+    } finally { stringify.mockRestore(); }
+  });
+
   it("restores a deliberate empty selection and saves only changed navigation", async () => {
     const resumeState: NavigationResumeState = { version: 1, selection: null,
       expandedByKey: {}, unpinnedExpandedByKey: {}, loadedRowsByQuery: {} };
@@ -13537,6 +13554,48 @@ describe("useThreadNavigation", () => {
     await act(async () => { await result.current.refresh(); });
     expect(setNavigationResumeState).toHaveBeenCalledTimes(1);
     expect(setNavigationResumeState).toHaveBeenCalledWith({ ...resumeState, expandedByKey: { project: true } });
+  });
+
+  it("bounds resume saves before IPC and skips equivalent optional metadata", async () => {
+    const resumeState: NavigationResumeState = { version: 1, selection: null,
+      expandedByKey: {}, unpinnedExpandedByKey: {}, loadedRowsByQuery: {} };
+    Object.defineProperty(window, "__pwragentNavigationPreferences", { configurable: true, value: { resumeState } });
+    const setNavigationResumeState = vi.fn(async (_state: NavigationResumeState) => undefined);
+    const api: DesktopApi = { setNavigationResumeState,
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false, threads: [], directories: [], inboxThreadKeys: [],
+        launchpadDefaults: { backend: "codex", executionMode: "default" } }) };
+    const { result } = renderHook(() => useThreadNavigation(api));
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    const expanded = Object.fromEntries(Array.from({ length: 1000 }, (_, index) => [`project-${index}-${"x".repeat(60)}`, false]));
+    act(() => result.current.directoryDisclosure.setExpandedByKey(expanded));
+    await waitFor(() => expect(setNavigationResumeState).toHaveBeenCalledTimes(1));
+    expect(JSON.stringify(setNavigationResumeState.mock.lastCall?.[0]).length).toBeLessThanOrEqual(12 * 1024);
+    act(() => result.current.directoryDisclosure.setExpandedByKey(Object.fromEntries(Object.entries(expanded).reverse())));
+    expect(setNavigationResumeState).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps navigation usable after a resume save fails and retries on the next change", async () => {
+    const resumeState: NavigationResumeState = { version: 1, selection: null,
+      expandedByKey: {}, unpinnedExpandedByKey: {}, loadedRowsByQuery: {} };
+    Object.defineProperty(window, "__pwragentNavigationPreferences", { configurable: true, value: { resumeState } });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const setNavigationResumeState = vi.fn(async (_state: NavigationResumeState) => undefined)
+      .mockRejectedValueOnce(new Error("Storage unavailable"));
+    const api: DesktopApi = { setNavigationResumeState,
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false, threads: [], directories: [], inboxThreadKeys: [],
+        launchpadDefaults: { backend: "codex", executionMode: "default" } }) };
+    const { result, rerender } = renderHook(() => useThreadNavigation(api));
+    try {
+      await waitFor(() => expect(result.current.loaded).toBe(true));
+      act(() => result.current.directoryDisclosure.setExpandedByKey({ project: true }));
+      await waitFor(() => expect(warning).toHaveBeenCalledWith("Saving navigation state failed.", expect.any(Error)));
+      rerender();
+      expect(setNavigationResumeState).toHaveBeenCalledTimes(1);
+      expect(result.current.directoryDisclosure.expandedByKey.project).toBe(true);
+      act(() => result.current.directoryDisclosure.setExpandedByKey({ project: false }));
+      await waitFor(() => expect(setNavigationResumeState).toHaveBeenCalledTimes(2));
+      expect(setNavigationResumeState.mock.lastCall?.[0].expandedByKey.project).toBe(false);
+    } finally { warning.mockRestore(); }
   });
 
   it.each([

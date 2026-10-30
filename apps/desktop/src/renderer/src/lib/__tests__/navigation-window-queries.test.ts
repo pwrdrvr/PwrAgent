@@ -1,6 +1,7 @@
 import type { DesktopApi } from "../desktop-api";
 import { expect, it, vi } from "vitest";
 import type { AgentEvent, NavigationQueryEntry, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
 import { navigationDemandKey, navigationResumeQueryKey, NavigationWindowQueries } from "../navigation-window-queries";
 
 it("restores multiple Load more blocks in a new controller without saving refreshes", async () => {
@@ -69,7 +70,106 @@ it.each(["reads", "time"] as const)("bounds saved pagination demand on startup b
     expect(state.page?.directories).toHaveLength(delivered);
     expect(state.page?.nextCursor).toBeDefined();
     expect(state.error).toBeUndefined();
+    const cursorRequests = read.mock.calls.map(([sent]) => sent).filter((sent) => sent.cursor);
+    expect(cursorRequests.every((sent) => sent.deadlineAt === 10_000)).toBe(true);
+    // Later owner events refresh the delivered range without buying more
+    // expansion work toward a stale persisted target.
+    read.mockClear();
+    await queries.refresh();
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(delivered);
+    expect(read).toHaveBeenCalledTimes(delivered);
   } finally { queries.dispose(); clock.mockRestore(); }
+});
+
+it("does not start saved expansion when a list is first opened after startup", async () => {
+  let now = 0;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const later = request("later");
+  const read = vi.fn(async (request: NavigationQueryRequest) => owner("fresh", 1000)({ ...request, pageSize: 1 }));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined, {
+    loadedRowsByQuery: { [navigationResumeQueryKey(later)]: 100_000 },
+  });
+  try {
+    queries.setDemand(new Map([["lens", request()]]));
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+    now = 10_001;
+    read.mockClear();
+    queries.setDemand(new Map([["lens", later]]));
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(1);
+  } finally { queries.dispose(); clock.mockRestore(); }
+});
+
+it("shares one saved-expansion read budget across lists and size retries", async () => {
+  const left = request("left");
+  const right = request("right");
+  const read = vi.fn(async (request: NavigationQueryRequest) => {
+    const result = await owner("fresh", 1000)({ ...request, pageSize: 1 });
+    // A federation stamp can push a page over its owner's byte budget.
+    return request.cursor && (request.pageSize ?? 0) > 1
+      ? { ...result, generation: "x".repeat(NAVIGATION_QUERY_MAX_RESULT_BYTES) } : result;
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined, {
+    loadedRowsByQuery: { [navigationResumeQueryKey(left)]: 210, [navigationResumeQueryKey(right)]: 210 },
+  });
+  try {
+    queries.setDemand(new Map([["left", left], ["right", right]]));
+    await vi.waitFor(() => expect([...queries.getSnapshot().resources.values()].every((resource) => !resource.loading)).toBe(true));
+    expect(read.mock.calls.filter(([sent]) => sent.cursor)).toHaveLength(8);
+    expect(read).toHaveBeenCalledTimes(10);
+    for (const resource of queries.getSnapshot().resources.values()) {
+      expect(resource.state.page?.directories).toHaveLength(1);
+      expect(resource.state.error).toBeUndefined();
+      expect(resource.state.page?.nextCursor).toBeDefined();
+    }
+  } finally { queries.dispose(); }
+});
+
+it("publishes the first page before a saved continuation fails and does not retry the saved target", async () => {
+  const extension = deferred<NavigationQueryPage>();
+  const read = vi.fn(async (request: NavigationQueryRequest) => request.cursor
+    ? extension.promise : owner("fresh", 1000)({ ...request, pageSize: 1 }));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined, {
+    loadedRowsByQuery: { [navigationResumeQueryKey(request())]: 100_000 },
+  });
+  try {
+    queries.setDemand(new Map([["lens", request()]]));
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    const resource = queries.getSnapshot().resources.get("lens")!;
+    expect(resource.loading).toBe(true);
+    expect(resource.state.page?.directories).toHaveLength(1);
+    // Resolve a non-advancing page, which the continuation reader rejects.
+    extension.resolve(page({ generation: "fresh", countsRevision: "fresh", directories: [] }));
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(1);
+    expect(queries.getSnapshot().resources.get("lens")?.state.error).toContain("did not advance");
+    read.mockClear();
+    await queries.refresh();
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(queries.getSnapshot().resources.get("lens")?.state.error).toBeUndefined();
+  } finally { queries.dispose(); }
+});
+
+it.each(["demand", "visibility"] as const)("does not revive saved expansion after %s interrupts startup", async (interrupt) => {
+  const extension = deferred<NavigationQueryPage>();
+  const read = vi.fn(async (request: NavigationQueryRequest) => request.cursor
+    ? extension.promise : owner("fresh", 1000)({ ...request, pageSize: 1 }));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined, {
+    loadedRowsByQuery: { [navigationResumeQueryKey(request())]: 100_000 },
+  });
+  const demand = new Map([["lens", request()]]);
+  try {
+    queries.setDemand(demand);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    if (interrupt === "demand") { queries.setDemand(new Map()); queries.setDemand(demand); }
+    else { queries.setVisible(false); queries.setVisible(true); }
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+    extension.resolve(page({ directories: directoryRows(1, 100), nextCursor: "late:100" }));
+    await queries.refresh();
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(1);
+    expect(read.mock.calls.filter(([sent]) => sent.cursor)).toHaveLength(1);
+  } finally { queries.dispose(); }
 });
 
 it.each(["restart", "rebaseline"] as const)("keeps an explicit %s reset across lens changes and a new controller", async (reset) => {

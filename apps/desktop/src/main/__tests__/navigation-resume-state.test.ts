@@ -54,7 +54,8 @@ it("reopens the saved session and commits only changed snapshots", async () => {
   }
 });
 
-it("keeps saving the latest selection after optional resume metadata exceeds its budget", () => {
+it("keeps saving the latest selection after optional resume metadata exceeds its budget", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const { dbPath, tempDir } = createTempStateDb("pwragent-navigation-resume-budget-");
   let db = StateDb.open(dbPath);
   const expandedByKey = Object.fromEntries(Array.from({ length: 300 }, (_, index) =>
@@ -64,7 +65,14 @@ it("keeps saving the latest selection after optional resume metadata exceeds its
   try {
     const store = new SqliteOverlayStore(db);
     store.setNavigationResumeState(snapshot);
-    store.setNavigationResumeState({ ...snapshot, selection: { backend: "codex", threadId: "latest", ownerInstanceId: "peer" } });
+    const latest: NavigationResumeState = { ...snapshot, selection: { backend: "codex", threadId: "latest", ownerInstanceId: "peer" } };
+    const { writes } = await measureSqliteWrites(async () => {
+      store.setNavigationResumeState(latest);
+      store.setNavigationResumeState(latest);
+      for (let index = 0; index < 10; index += 1) store.getNavigationResumeStateSync();
+    });
+    expectSqliteWriteBudget({ scenario: "navigation-resume-state-full", writes,
+      note: `one selection change in a near-12K snapshot; duplicate saves and ten reads add no commits; 1000 navigation changes/day cost about ${(writes.walBytes / 1000).toFixed(1)} MB/day; no idle writes` });
     db.close();
     db = StateDb.open(dbPath);
     const restored = new SqliteOverlayStore(db).getNavigationResumeStateSync();
