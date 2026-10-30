@@ -2661,18 +2661,19 @@ describe("Claude transcript fidelity", () => {
       images: [expect.objectContaining({ url: "data:image/jpeg;base64,/9j/4AAQ" })],
     })]);
 
-    const entries = (await f.backend.readThread(threadId)).entries;
-    const row = (id: string) => entries.find((entry) => entry.type === "activity" && entry.id === id);
-    expect(row("read-1")).toMatchObject({ summary: "Read shot.png", status: "completed", details: [
-      { kind: "read", path: path.join(f.root, "shot.png") },
-      { id: "read-1:output", images: [{ type: "image", url: pngUrl, alt: "Read shot.png" }] },
-    ] });
-    expect(row("shot-1")).toMatchObject({ details: [
-      {}, { markdown: "Captured the page.", images: [{ url: "data:image/jpeg;base64,/9j/4AAQ" }] },
-    ] });
+    // The replay groups adjacent tool rows, so look the details up across rows.
+    const details = (await f.backend.readThread(threadId)).entries
+      .flatMap((entry) => entry.type === "activity" ? entry.details : []);
+    const detail = (id: string) => details.find((candidate) => candidate.id === id);
+    expect(detail("read-1:output")).toEqual({
+      id: "read-1:output", kind: "read", label: "Read shot.png output", status: "completed",
+      images: [{ type: "image", url: pngUrl, alt: "Read shot.png" }],
+    });
+    expect(detail("shot-1:output")).toMatchObject({
+      markdown: "Captured the page.", images: [{ url: "data:image/jpeg;base64,/9j/4AAQ" }],
+    });
     // No row keeps the image as text.
-    expect(JSON.stringify(entries.map((entry) => entry.type === "activity"
-      ? entry.details.map((detail) => detail.markdown) : []))).not.toContain("base64");
+    expect(JSON.stringify(details.map((candidate) => candidate.markdown))).not.toContain("base64");
   });
 
   it("diffs a new file's content when its patch is empty, and keeps a failed edit's error", async () => {
