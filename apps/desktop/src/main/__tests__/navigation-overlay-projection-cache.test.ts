@@ -23,7 +23,7 @@ function projectionCounts() {
   const counts: number[] = [];
   vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
     const statement = original(sql);
-    if (sql.includes("SELECT thread_id, json_object(")) {
+    if (sql.includes("AS compact FROM threads WHERE thread_id IN")) {
       const iterate = statement.iterate.bind(statement);
       vi.spyOn(statement, "iterate").mockImplementation((...args: unknown[]) => {
         counts.push((JSON.parse(args[1] as string) as string[]).length);

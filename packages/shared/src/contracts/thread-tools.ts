@@ -58,6 +58,7 @@ export const PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES = [
   "watch_thread_pull_request",
   "rename_current_thread",
   "manage_thread_dependencies",
+  "manage_thread_merge_holds",
   "mutate_thread",
   "mark_project_read",
 ] as const;
@@ -497,6 +498,7 @@ export type ThreadInspectionSummary = {
   linkedRepositories?: ThreadLinkedRepositorySummary[];
   pullRequests?: PrSummary[];
   prAutomation?: ThreadPullRequestAutomationStatus;
+  mergeHolds?: import("./thread-merge-holds").ThreadMergeHold[];
   score?: number;
   confidence?: ThreadSearchConfidenceBand;
   matchReasons?: ThreadSearchMatchReason[];
@@ -748,6 +750,7 @@ export type ThreadReadEvaluationTokenMiser = {
 };
 
 export type PwrAgentThreadInspectionToolArgsByOperation = {
+  manage_thread_merge_holds: import("./thread-merge-holds").ManageThreadMergeHoldsRequest;
   manage_thread_dependencies: import("./thread-dependencies").ManageThreadDependenciesRequest;
   search_threads: SearchThreadsToolArgs;
   read_thread: ReadThreadToolArgs;
@@ -780,6 +783,7 @@ export type PwrAgentThreadInspectionResponse =
   | {
       ok: true;
       data:
+        | { threadMergeHolds: import("./thread-merge-holds").ManageThreadMergeHoldsResponse }
         | {
             threadDependencies: import("./thread-dependencies").ManageThreadDependenciesResponse;
             /** Why the stored PR conditions wait, when the project holds PR watches. */

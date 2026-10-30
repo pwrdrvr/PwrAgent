@@ -89,6 +89,7 @@ export function archiveCandidateLastActivity({ thread, overlay }: ThreadArchiveC
 export function archiveCandidateProtectionReason({ thread, overlay, activeSubAgent }: ThreadArchiveCandidate): string | undefined {
   if (thread.isPinned || overlay?.pinnedRank !== undefined) return "Pinned thread";
   if (overlay?.agent) return "Agent thread";
+  if (overlay?.mergeHolds?.some((hold) => hold.status === "waiting")) return "Merge held";
   if (overlay?.queuedAgentChange || overlay?.prAutoDispatchPending) return "Pending work";
   if (overlay?.scheduledStart?.state === "scheduled") return "Scheduled work";
   if ((overlay?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime)?.executionTarget === "remote") return "Remote execution";

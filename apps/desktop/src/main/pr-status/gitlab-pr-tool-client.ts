@@ -397,6 +397,7 @@ export class GitlabPrToolClient {
         return writeResult({ updated: true, issue, url: issue.url });
       }
       case "merge_pull_request": {
+        ctx.assertCanMerge?.(r, args.number!);
         const method = args.method ?? ctx.defaultMergeMethod();
         if (method === "rebase") throw new ForgeReadError("unsupported_operation", "GitLab merges with the project's merge method. Use merge or squash.");
         // GitLab takes one commit message; the title is its first line.

@@ -120,7 +120,7 @@ export function buildPwrAgentThreadToolDefinitions(
   const operations = PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES
     .filter((operation) => options.namespace !== PWRAGENT_THREAD_TOOL_NAMESPACE || operation !== "rename_current_thread")
     .filter((operation) =>
-      operation !== "manage_thread_dependencies" || !options.namespace || options.namespace === PWRAGENT_TOOL_NAMESPACE);
+      !["manage_thread_dependencies", "manage_thread_merge_holds"].includes(operation) || !options.namespace || options.namespace === PWRAGENT_TOOL_NAMESPACE);
   return operations.map((operation) => ({
     namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: operation,
@@ -168,6 +168,8 @@ function descriptionForOperation(
       return "Create a durable, one-time watch for an attached pull request. success and failure wake the thread after CI success, early failure, or a merge conflict at the current head. The oldest duplicate CI watch receives the result. merged and closed wake the thread when the PR merges or closes without merge. Pushes and CI results do not end that watch. Each watching thread receives the wake. It reports the merge method (merge, squash, rebase, or unknown), merge commit SHA, merger, time, and base branch. Request merged and closed when this thread must release resources after the PR lands, such as a Sandboxer sandbox. Only a primary-workspace PR is eligible. A merged or closed PR returns currentOutcome and terminal details without a new watch. Omit backend and threadId for the current thread. Omit url only when one eligible PR exists. After creation, end the turn. Do not poll CI or create a monitor. Auto-fix PR handles failure wake-ups without a duplicate turn.";
     case "rename_current_thread":
       return "Rename the PwrAgent thread running this turn, including an ordinary coding thread. Use when the user asks to rename this thread. Choose a concise title from the conversation when no title is supplied. The calling thread is resolved automatically. The rename applies immediately and appears in the notification rail. No additional approval is required. Do not overwrite a user-set title without a request. This does not rename an attached messaging topic or conversation. Use rename_current_messaging_conversation for that.";
+    case "manage_thread_merge_holds":
+      return "Mark this thread waiting and hold its PR merge until an explicit prerequisite is resolved. Use for 'mark us waiting', 'do not merge until', or waiting for another thread to finish work. Rebase, CI repair, review, and conversation remain available. No to-do or thread is created. Create requires reason and releaseWhen. Optionally link dependency with its backend, threadId, and local or remote target. That prerequisite can be offline. Omit backend/threadId for the calling thread. federationTarget selects the waiting thread's owner for remote operations. List returns this thread's holds and threads waiting on it, including connected peers. Resolve a specific hold only when releaseWhen is met, with findings in note. Cancel only when the user removes the prerequisite. Turn completion, idle, archive, and disconnection never resolve holds. On the prerequisite thread, list holds to find the waiting thread and owner. Resolve that exact hold on its owner. No merge or continuation starts automatically. Use manage_thread_dependencies separately for a continuation.";
     case "manage_thread_dependencies":
       return "Manage durable prerequisites that resume this thread after another local thread reaches a turn or PR milestone. Conditions include successful turn completion, reviewable PR attachment, passing CI, and PR merge. Use dependencies instead of polling read_thread, gh, or a Job Monitor for prerequisites. Supports all/any conditions and rejects cycles. Create requires continuation: the concrete instructions the resumed turn will follow, since this conversation may be compacted by then. Set deliver to operator when only the human can do the follow-up. PwrAgent then raises a to-do card instead of resuming this thread. Omit backend/threadId for the calling thread. For turn_completed, omit turnId to pin the current or latest turn. For PR conditions, omit prUrl only for an unambiguous primary-workspace PR, which may be attached later. Omit headSha to follow the current head. CI must be fresh and complete. onFailure defaults to notify once. The wait option tolerates CI repairs. After creation, end this turn if no unrelated work remains. Do not poll the dependency. List returns failures and uncertain delivery for operator review. Cancel cannot undo an admitted continuation. Use dismiss only after the operator has inspected an uncertain admission. It retires the claim without cancelling any turn. Dependencies currently stay within this PwrAgent instance/profile.";
     case "mutate_thread":
@@ -181,6 +183,24 @@ function inputSchemaForOperation(
   operation: PwrAgentThreadInspectionOperationName,
 ): Record<string, unknown> {
   switch (operation) {
+    case "manage_thread_merge_holds":
+      return {
+        type: "object", additionalProperties: false, required: ["action"],
+        properties: {
+          action: { type: "string", enum: ["create", "list", "resolve", "cancel"] },
+          backend: { type: "string" }, threadId: { type: "string" },
+          federationTarget: { type: "object", additionalProperties: false, required: ["scope"], properties: { scope: { type: "string", enum: ["local", "remote"] }, instanceId: { type: "string" } } },
+          holdId: { type: "string" }, reason: { type: "string", maxLength: 2000 },
+          releaseWhen: { type: "string", maxLength: 2000 }, note: { type: "string", maxLength: 2000 },
+          dependency: {
+            type: "object", additionalProperties: false, required: ["backend", "threadId", "target"],
+            properties: {
+              backend: { type: "string" }, threadId: { type: "string" }, title: { type: "string", maxLength: 200 },
+              target: { type: "object", additionalProperties: false, required: ["scope"], properties: { scope: { type: "string", enum: ["local", "remote"] }, instanceId: { type: "string" } } },
+            },
+          },
+        },
+      };
     case "rename_current_thread":
       return {
         type: "object",

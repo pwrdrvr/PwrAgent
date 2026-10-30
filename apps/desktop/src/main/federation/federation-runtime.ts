@@ -1,3 +1,4 @@
+import { appendMergeHoldDependents } from "../thread-merge-holds/thread-merge-holds";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
 import type { ThreadTodoFeedDelta, ThreadTodosChangedEvent } from "@pwragent/shared";
 import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION_METHODS,
@@ -761,6 +762,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "thread/executionMode/queued",
   "thread/executionMode/updated",
   "thread/lock/updated",
+  "thread/mergeHolds/updated",
   "thread/modelSettings/updated",
   "thread/name/updated",
   "thread/parent/cleared",
@@ -7332,6 +7334,12 @@ function localBackendOperations(): FederationBackendOperations {
         threadId: request.threadId,
         pinnedRank: overlay.pinnedRank,
       };
+    },
+    async manageThreadMergeHolds(request: import("@pwragent/shared").ManageThreadMergeHoldsRequest, options?: { requesterInstanceId?: string }): Promise<import("@pwragent/shared").ManageThreadMergeHoldsResponse> {
+      const response = await getDesktopBackendRegistry().manageThreadMergeHolds(
+        { ...request, federationTarget: undefined }, `peer:${options?.requesterInstanceId ?? "unknown"}`,
+      );
+      return await appendMergeHoldDependents(response, request, getDesktopFederationRuntime());
     },
     async setThreadLock(
       request: SetThreadLockRequest,

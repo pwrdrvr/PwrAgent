@@ -11,6 +11,7 @@ input schema for argument details and result semantics.
 | Waiting for | PwrAgent workflow |
 | --- | --- |
 | CI on this thread's attached PR | `check_thread_pull_request_status`, follow `prAutomation.guidance`, then `watch_thread_pull_request` if a notification is needed. |
+| Explicit work completion before merging, including a remote thread | `manage_thread_merge_holds` with `action: "create"`. |
 | Another local thread's turn or PR milestone | `manage_thread_dependencies` with `action: "create"`. |
 | Any other long job or repeatable check | `create_monitor_delegation`. |
 
@@ -27,7 +28,24 @@ A success watch can still be needed when Auto-fix is active. Follow the status
 tool's description for `autoFixActive` monitoring ownership and repair-event
 semantics, and follow the returned `prAutomation.guidance` for this PR.
 
-## Another thread
+## Explicit work completion before merging
+
+Use `manage_thread_merge_holds` for "mark us waiting", "do not merge until",
+or another thread needing to finish work rather than a particular turn.
+Supply a reason and `releaseWhen`. Optionally identify the prerequisite by
+backend, thread id, and local or remote target. A remote prerequisite can be
+offline. The hold stays on the waiting thread and allows rebase, CI repair,
+review, and conversation. It creates no to-do or continuation.
+
+Clear a specific hold with `resolve` only when its release condition is met,
+including the findings in `note`. The operator can also resolve it in the UI
+or remove the prerequisite with a reason. On the prerequisite thread, `list`
+finds the waiting thread, hold id, and owner for reporting completion.
+A finished turn, idle state, archive, or disconnection never clears a hold.
+All holds must clear before PwrAgent allows the owning instance to merge.
+Clearing a hold does not merge or resume a thread automatically.
+
+## Another thread's milestone
 
 Create a durable dependency for the prerequisite milestone. Give `continuation`
 enough context to stand alone after compaction: identify the target PR or branch
@@ -45,7 +63,10 @@ effort. Follow the tool description for monitor-specific controls.
 
 ## After setting up the wait
 
-Confirm the wait or monitor was successfully created before relying on it.
+For a merge hold, confirm creation and state what releases it. Continue other
+work as needed; no turn is resumed automatically.
+
+For a watch, dependency, or monitor, confirm creation before relying on it.
 A `project_paused` error means the operator paused forge activity or turned off
 PR watches for that project. Do not retry or work around it with another wait
 or message. Stop and tell the operator what you were waiting for. A dependency

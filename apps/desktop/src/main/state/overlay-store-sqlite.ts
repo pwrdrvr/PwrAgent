@@ -1,3 +1,5 @@
+import type { ManageThreadMergeHoldsRequest, ThreadMergeHold } from "@pwragent/shared";
+import { validateMergeHoldRequest, updateMergeHolds } from "../thread-merge-holds/thread-merge-holds";
 import { buildLegacyEncodedThreadIdentityKey, parseUsageLimitObservation, validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRollup, type UsageActivityRow, type UsageLimitObservation, usageRollupStep } from "@pwragent/shared";
 import { createHash, randomUUID } from "node:crypto";
 import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
@@ -1162,7 +1164,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     if (missing.length > 0) {
       for (const key of missing) values.set(key, null);
       const rows = this.stateDb.raw.prepare(`
-        SELECT thread_id, json_object(
+        SELECT thread_id, json_patch(json_object(
             'backend', json_extract(payload, '$.backend'),
             'threadId', json_extract(payload, '$.threadId'),
             'executionMode', json_extract(payload, '$.executionMode'),
@@ -1207,7 +1209,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
               'createdAt', json_extract(payload, '$.agent.createdAt'),
               'updatedAt', json_extract(payload, '$.agent.updatedAt')
             ) END
-        ) AS compact FROM threads WHERE thread_id IN (SELECT value FROM json_each(?))
+        ), CASE WHEN EXISTS (SELECT 1 FROM json_each(payload, '$.mergeHolds') h WHERE json_extract(h.value, '$.status') = 'waiting')
+          THEN json_object('mergeHolds', (SELECT json_group_array(json(h.value)) FROM json_each(payload, '$.mergeHolds') h WHERE json_extract(h.value, '$.status') = 'waiting'))
+          ELSE '{}' END) AS compact FROM threads WHERE thread_id IN (SELECT value FROM json_each(?))
       `).iterate(LEGACY_HANDOFF_AGENT_INSTRUCTIONS, JSON.stringify(missing)) as Iterable<{ thread_id: string; compact: string }>;
       for (const row of rows) admit(row.thread_id, row.compact);
       if (cache) {
@@ -4394,6 +4398,49 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return nextState;
   }
 
+  /** Only explicit hold changes write. The read/modify/write is profile-atomic. */
+  manageThreadMergeHolds(
+    request: ManageThreadMergeHoldsRequest & { backend: ThreadOverlayState["backend"]; threadId: string },
+    actor: string,
+    now = Date.now(),
+  ): ThreadMergeHold[] {
+    validateMergeHoldRequest(request);
+    const initial = this.getThread(buildThreadIdentityKey(request.backend, request.threadId));
+    const previous = initial?.mergeHolds ?? [];
+    if (request.action === "list") return previous;
+    // Do not BEGIN/COMMIT a transaction for a repeated action. Re-read under
+    // the write lock below when there is an actual transition to make.
+    if (updateMergeHolds(previous, request, actor, now, []) === previous) return previous;
+    return this.stateDb.raw.transaction(() => {
+      const threadKey = buildThreadIdentityKey(request.backend, request.threadId);
+      const current = this.getThread(threadKey) ?? {
+        backend: request.backend, threadId: request.threadId,
+        executionMode: "default" as const, extraLinkedDirectories: [],
+      };
+      const previous = current.mergeHolds ?? [];
+      const holds = updateMergeHolds(previous, request, actor, now, (current.prs ?? []).flatMap((pr) => pr.url ? [pr.url] : []));
+      if (holds !== previous) {
+        if (request.action === "create" && this.listActiveThreadMergeHolds().length >= 512) throw new Error("There are already 512 active merge holds. Resolve or cancel one first.");
+        this.putThread(threadKey, { ...current, mergeHolds: holds });
+      }
+      return holds;
+    }).immediate();
+  }
+
+  /** Read across the profile, including threads outside the loaded sidebar page. */
+  listActiveThreadMergeHolds(): ThreadMergeHold[] {
+    const rows = this.stateDb.raw.prepare(`
+      SELECT h.value AS hold, json_extract(t.payload, '$.prs') AS prs
+      FROM threads t, json_each(t.payload, '$.mergeHolds') h
+      WHERE json_extract(h.value, '$.status') = 'waiting'
+    `).all() as Array<{ hold: string; prs: string | null }>;
+    return rows.map((row) => {
+      const hold = JSON.parse(row.hold) as ThreadMergeHold;
+      const prs = row.prs ? JSON.parse(row.prs) as PrSummary[] : [];
+      return { ...hold, pullRequestUrls: [...new Set([...hold.pullRequestUrls, ...prs.flatMap((pr) => pr.url ? [pr.url] : [])])] };
+    });
+  }
+
   /**
    * Records the operator's disposition of this thread's tool-output incident.
    * `firstWarningAt` is written once and never moved forward, so the cost
@@ -6152,6 +6199,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       prsFetchedAt: fetchedAt,
       prsRefreshKey: params.refreshKey,
     };
+    if (current.mergeHolds?.some((hold) => hold.status === "waiting")) {
+      const urls = nextState.prs?.flatMap((pr) => pr.url ? [pr.url] : []) ?? [];
+      nextState.mergeHolds = current.mergeHolds.map((hold) => hold.status === "waiting"
+        ? { ...hold, pullRequestUrls: [...new Set([...hold.pullRequestUrls, ...urls])] } : hold);
+    }
     // A lookup that found what is stored refreshes only its stamp, at most
     // once per stamp interval. Until then this process keeps the exact time in
     // memory; the stored stamp only seeds the lookup registry after a restart.
@@ -6162,6 +6214,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       && sameJson(stored.prs, nextState.prs)
       && sameJson(stored.detachedPrKeys, nextState.detachedPrKeys)
       && sameJson(stored.detachedPrs, nextState.detachedPrs)
+      && sameJson(stored.mergeHolds, nextState.mergeHolds)
     ) {
       this.unwrittenPrsFetchedAt.set(threadKey, fetchedAt);
       return nextState;
@@ -9865,10 +9918,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   async forgetThreadArchiveStates(records: Array<{ backend: ThreadOverlayState["backend"]; threadId: string }>): Promise<void> {
+    const hasHold = this.stateDb.raw.prepare(`
+      SELECT 1 FROM threads t, json_each(CASE WHEN json_valid(t.payload) THEN t.payload ELSE '{}' END, '$.mergeHolds') h
+      WHERE t.thread_id = ? AND json_extract(h.value, '$.status') = 'waiting' LIMIT 1
+    `);
+    const storageKey = (record: { backend: ThreadOverlayState["backend"]; threadId: string }) =>
+      encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(record.backend, record.threadId));
+    records = records.filter((record) => !hasHold.get(storageKey(record)));
     if (!records.length) return;
     this.stateDb.raw.transaction(() => {
       const remove = this.stateDb.raw.prepare("DELETE FROM threads WHERE thread_id = ?");
-      const storageKeys = records.map((record) => encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(record.backend, record.threadId)));
+      // Archive cleanup must not silently release a landing prerequisite.
+      // Keep its owner record until the hold is explicitly cleared.
+      const storageKeys = records.map(storageKey).filter((key) => !hasHold.get(key));
       for (const storageKey of storageKeys) remove.run(storageKey);
       // Explicit, not a trigger: with recursive_triggers on, INSERT OR REPLACE
       // fires delete triggers, which would erase a live thread's cards.

@@ -23,6 +23,7 @@ export class ForgePrToolService {
     enabled: (provider: ForgeRepository["provider"]) => boolean;
     clients: Record<ForgeRepository["provider"], ProviderClient>;
     defaultMergeMethod: ForgePrToolContext["defaultMergeMethod"];
+    assertCanMerge?: ForgePrToolContext["assertCanMerge"];
   }) {}
 
   /** The repository a call would act in. Used before an approval prompt, so the card can name it. */
@@ -60,7 +61,7 @@ export class ForgePrToolService {
     });
     return await this.options.clients[repository.provider].execute(operation, args, {
       repository, branch: scope.branch, directories: scope.directories, attached,
-      privateRoots: scope.privateRoots, defaultMergeMethod: this.options.defaultMergeMethod, signal,
+      privateRoots: scope.privateRoots, defaultMergeMethod: this.options.defaultMergeMethod, assertCanMerge: this.options.assertCanMerge, signal,
     });
   }
 }

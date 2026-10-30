@@ -410,6 +410,7 @@ export class GithubPrToolClient {
         return writeResult({ updated: true, issue, url: issue.url, ...(warning ? { attachmentWarning: warning } : {}) });
       }
       case "merge_pull_request": {
+        ctx.assertCanMerge?.(r, args.number!);
         const method = args.method ?? ctx.defaultMergeMethod();
         let result: Payload;
         try {
