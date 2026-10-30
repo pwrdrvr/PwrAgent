@@ -72,10 +72,12 @@ export function windowsSignatureVerification(
         ...WINDOWS_SIGNATURE_PRELUDE,
         "$application = Get-AuthenticodeSignature -LiteralPath $env:PWRAGENT_VERIFY_APPLICATION",
         "$runtime = Get-AuthenticodeSignature -LiteralPath $env:PWRAGENT_VERIFY_RUNTIME",
-        "if ($application.Status -ne 'Valid' -or $runtime.Status -ne 'Valid') { exit 1 }",
-        "if ($null -eq $application.SignerCertificate -or $null -eq $runtime.SignerCertificate) { exit 1 }",
-        "if ($runtime.SignerCertificate.Subject -cne $application.SignerCertificate.Subject) { exit 1 }",
-        "if ($runtime.SignerCertificate.Issuer -cne $application.SignerCertificate.Issuer) { exit 1 }",
+        "if ($application.Status -ne 'Valid') { Write-Output \"The installed PwrAgent executable does not have a valid Windows signature ($($application.Status)).\"; exit 1 }",
+        "if ($runtime.Status -ne 'Valid') { Write-Output \"The managed runtime does not have a valid Windows signature ($($runtime.Status)).\"; exit 1 }",
+        "if ($null -eq $application.SignerCertificate -or $null -eq $runtime.SignerCertificate) { Write-Output 'Windows did not return a signing certificate for PwrAgent or the managed runtime.'; exit 1 }",
+        // Windows validates each chain. Microsoft can rotate issuing CAs while
+        // the verified publisher's subject remains the same across releases.
+        "if ($runtime.SignerCertificate.Subject -cne $application.SignerCertificate.Subject) { Write-Output 'The managed runtime publisher does not match this PwrAgent build.'; exit 1 }",
       ].join("; "),
     ],
     env: {
@@ -130,9 +132,21 @@ export async function verifyMatchingPlatformSignature(
       applicationCommand,
       command,
     );
-    await execFile("powershell.exe", verification.args, {
-      env: { ...process.env, ...verification.env },
-    });
+    try {
+      await execFile("powershell.exe", verification.args, {
+        env: { ...process.env, ...verification.env },
+      });
+    } catch (error) {
+      const reason =
+        typeof error === "object" && error !== null
+        && "stdout" in error && typeof error.stdout === "string"
+          ? error.stdout.trim()
+          : "";
+      throw new Error(
+        reason || "Windows could not verify the managed runtime signature.",
+        { cause: error },
+      );
+    }
   }
 }
 
