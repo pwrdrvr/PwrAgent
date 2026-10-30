@@ -62525,14 +62525,32 @@ script = "printf setup"
       return { registry, threadId, cwd, repo, pr };
     }
 
+    /**
+     * Records events and settles with the turn's terminal method. After
+     * `startTurn` returns, the turn still waits on two rounds of Git: the
+     * review card's `rev-parse` pair, then the branch check at turn end. On a
+     * loaded Windows runner each round took over half a second, so a polling
+     * budget cannot fit. The test timeout bounds this wait instead.
+     */
+    function recordTurn(registry: DesktopBackendRegistry) {
+      const events: AgentEvent[] = [];
+      let settle!: (method: string) => void;
+      const ended = new Promise<string>((resolve) => { settle = resolve; });
+      registry.onEvent((event) => {
+        events.push(event);
+        const { method } = event.notification;
+        if (method === "turn/completed" || method === "turn/failed" || method === "turn/cancelled") settle(method);
+      });
+      return { events, ended };
+    }
+
     it("publishes a review card naming the workspace, branch, and attached pull request", async () => {
       const { registry, threadId, cwd, repo, pr } = await fixture();
-      const events: AgentEvent[] = [];
-      registry.onEvent((event) => { events.push(event); });
+      const { events, ended } = recordTurn(registry);
       await registry.listBackends({ refreshModels: "claude", includeUnavailable: true },
         issueProviderDiscoveryPermit("settings-user-action"));
       await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "/code-review high" }] });
-      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+      expect(await ended).toBe("turn/completed");
 
       const review = events.find((event) => event.notification.method === "item/completed"
         && (event.notification.params.item as { type?: string }).type === "exitedReviewMode");
@@ -62550,12 +62568,11 @@ script = "printf setup"
       const { registry, threadId } = await fixture();
       const importReviews = vi.fn();
       registry.setPwrAgentThreadTodoHandler({ importReviews } as unknown as PwrAgentThreadTodoHandler);
-      const events: AgentEvent[] = [];
-      registry.onEvent((event) => { events.push(event); });
+      const { ended } = recordTurn(registry);
       await registry.listBackends({ refreshModels: "claude", includeUnavailable: true },
         issueProviderDiscoveryPermit("settings-user-action"));
       await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "/code-review" }] });
-      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+      expect(await ended).toBe("turn/completed");
       importReviews.mockClear();
 
       await registry.readThread({ backend: "claude", threadId });
