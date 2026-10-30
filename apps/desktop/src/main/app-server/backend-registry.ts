@@ -396,6 +396,7 @@ import {
   type MoveThreadWorkspacePhase,
   type MoveThreadWorkspaceResult,
   type MutateThreadToolArgs,
+  type MutateThreadParentV1Request,
   type MarkProjectReadToolArgs,
   type MarkProjectReadResult,
   type PendingThreadHandoffPhase,
@@ -46109,6 +46110,25 @@ export class DesktopBackendRegistry {
     }
   }
 
+  async mutateThreadParentV1(
+    request: MutateThreadParentV1Request,
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    if (typeof request.dryRun !== "boolean") {
+      return threadInspectionFailure("invalid_arguments", "dryRun must be a boolean.");
+    }
+    // Whitelist the versioned fields: an inbound peer cannot forward another
+    // mutation or a routing hint through this grouping-only method.
+    return await this.handleMutateThreadInspectionRequest({
+      backend: request.backend,
+      threadId: request.threadId,
+      ...(Object.hasOwn(request, "parentThreadId") ? { parentThreadId: request.parentThreadId } : {}),
+      ...(Object.hasOwn(request, "parentBackend") ? { parentBackend: request.parentBackend } : {}),
+      ...(Object.hasOwn(request, "detachFromParent") ? { detachFromParent: request.detachFromParent } : {}),
+      dryRun: request.dryRun,
+      includeRemote: false,
+    });
+  }
+
   private async handleMutateThreadInspectionRequest(
     args: MutateThreadToolArgs,
     context?: PwrAgentThreadInspectionRequest["context"],
@@ -46282,14 +46302,6 @@ export class DesktopBackendRegistry {
       );
     }
     const parentChange = parentThreadId !== undefined || detachFromParent;
-    // An Agent turn runs on one instance, and the remote mutation request is
-    // a signed message this change does not extend.
-    if (parentChange && instanceId) {
-      return threadInspectionFailure(
-        "invalid_arguments",
-        "parentThreadId and detachFromParent apply only to threads on this instance.",
-      );
-    }
 
     const changes: ThreadMutationAppliedChange[] = [];
     if (title !== undefined) {
@@ -46419,19 +46431,21 @@ export class DesktopBackendRegistry {
         })
       : undefined;
     const mutateLocally = Boolean(localSummary || localOverlay);
-    if (!mutateLocally && parentChange) {
-      if (localError) {
-        return federatedThreadInspectionFailure(localError);
-      }
-      return threadInspectionFailure(
-        "not_found",
-        `Thread ${args.backend}:${threadId} was not found on this instance. parentThreadId and detachFromParent apply only to threads on this instance.`,
-      );
-    }
     let remoteOwner:
       | { instanceId: string; instanceLabel: string }
       | undefined;
     if (!mutateLocally && includeRemote && this.federatedThreadMutationHandler) {
+      if (parentChange && context) {
+        // An omitted instanceId can still resolve to a peer. Recheck scope
+        // with the trusted invoking turn before the handler can mutate it.
+        const denied = await this.dynamicToolPermissionDenied(context.backend, "thread_inspection", {
+          threadId: context.threadId,
+          turnId: context.turnId,
+          tool: "mutate_thread",
+          arguments: { ...args, includeRemote: true },
+        });
+        if (denied) return threadInspectionFailure("forbidden", `Missing permission: ${denied}.`);
+      }
       try {
         remoteOwner = await this.federatedThreadMutationHandler({
           backend: args.backend,
@@ -46446,6 +46460,8 @@ export class DesktopBackendRegistry {
           ...(unread !== undefined ? { unread } : {}),
           ...(locked !== undefined ? { locked } : {}),
           ...(lockNote !== undefined ? { lockNote } : {}),
+          ...(parentThreadId !== undefined ? { parentThreadId, parentBackend } : {}),
+          ...(detachFromParent ? { detachFromParent: true } : {}),
           dryRun,
         });
       } catch (error) {

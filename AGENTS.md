@@ -754,7 +754,7 @@ Render a brand through `BrandLockup`
     and never one of the thread's own sub-threads. The owner refuses a
     loop in `setThreadParent` too, because a loop drops every member from
     every lens. Agents use `mutate_thread`'s `parentThreadId` and
-    `detachFromParent`, for threads on their own instance only.
+    `detachFromParent`, for threads sharing an owner, including connected peers.
 
 ### Unread behavior
 

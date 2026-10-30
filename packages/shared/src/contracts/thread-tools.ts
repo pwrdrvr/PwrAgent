@@ -86,6 +86,8 @@ export type PwrAgentThreadInspectionContext = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   now?: number;
+  /** Trusted invoking turn, used when owner resolution reaches a peer. */
+  turnId?: string;
 };
 
 export type SearchThreadsToolArgs = {
@@ -260,6 +262,16 @@ export type MutateThreadToolArgs = {
    * Validate and report the requested mutations without applying them.
    */
   dryRun?: boolean;
+};
+
+/** Versioned owner-side parent mutation. Existing signed requests stay frozen. */
+export type MutateThreadParentV1Request = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  parentThreadId?: ThreadIdentifier;
+  parentBackend?: AppServerBackendKind;
+  detachFromParent?: boolean;
+  dryRun: boolean;
 };
 
 export type RenameCurrentThreadToolArgs = {

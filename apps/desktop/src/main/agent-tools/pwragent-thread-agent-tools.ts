@@ -6,6 +6,7 @@ import type {
   NavigationThreadSummary,
   SetThreadModelSettingsRequest,
   ThreadExecutionMode,
+  PwrAgentThreadInspectionErrorCode,
   PwrAgentThreadInspectionOperationName,
   PwrAgentThreadInspectionRequest,
   PwrAgentThreadInspectionResponse,
@@ -74,18 +75,25 @@ export type PwrAgentFederatedThreadMutationRequest = {
   dryRun: boolean;
 };
 
+/** Local dispatch contract; the V1 mutation shape above remains unchanged. */
+export type PwrAgentFederatedThreadMutationRequestV2 = PwrAgentFederatedThreadMutationRequest & {
+  parentThreadId?: string;
+  parentBackend?: AppServerBackendKind;
+  detachFromParent?: boolean;
+};
+
 export type PwrAgentFederatedThreadMutationResult = {
   instanceId: FederationInstanceId;
   instanceLabel: string;
 };
 
 export type PwrAgentFederatedThreadMutationHandler = (
-  request: PwrAgentFederatedThreadMutationRequest,
+  request: PwrAgentFederatedThreadMutationRequestV2,
 ) => Promise<PwrAgentFederatedThreadMutationResult | undefined>;
 
 export class PwrAgentFederatedThreadInspectionError extends Error {
   constructor(
-    readonly code: "peer_unavailable" | "forbidden" | "invalid_arguments",
+    readonly code: PwrAgentThreadInspectionErrorCode,
     message: string,
   ) {
     super(message);
@@ -133,6 +141,7 @@ export function buildPwrAgentThreadToolDefinitions(
         context: {
           backend: context.backend,
           threadId: context.threadId,
+          ...(operation === "mutate_thread" && context.turnId ? { turnId: context.turnId } : {}),
         },
         args,
       } as PwrAgentThreadInspectionRequest);
@@ -162,7 +171,7 @@ function descriptionForOperation(
     case "manage_thread_dependencies":
       return "Manage durable prerequisites that resume this thread after another local thread reaches a turn or PR milestone. Conditions include successful turn completion, reviewable PR attachment, passing CI, and PR merge. Use dependencies instead of polling read_thread, gh, or a Job Monitor for prerequisites. Supports all/any conditions and rejects cycles. Create requires continuation: the concrete instructions the resumed turn will follow, since this conversation may be compacted by then. Set deliver to operator when only the human can do the follow-up. PwrAgent then raises a to-do card instead of resuming this thread. Omit backend/threadId for the calling thread. For turn_completed, omit turnId to pin the current or latest turn. For PR conditions, omit prUrl only for an unambiguous primary-workspace PR, which may be attached later. Omit headSha to follow the current head. CI must be fresh and complete. onFailure defaults to notify once. The wait option tolerates CI repairs. After creation, end this turn if no unrelated work remains. Do not poll the dependency. List returns failures and uncertain delivery for operator review. Cancel cannot undo an admitted continuation. Use dismiss only after the operator has inspected an uncertain admission. It retires the claim without cancelling any turn. Dependencies currently stay within this PwrAgent instance/profile.";
     case "mutate_thread":
-      return "Change guarded settings on a PwrAgent thread: title, model, execution mode, project, pin, read state, lock, parent, or archived state. Use rename_current_thread when the user asks to rename this thread. To mark a whole project read, use mark_project_read once instead of looping through threads. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. This tool does not rename a messaging topic or thread. For projectPath, use a path from list_instance_projects on the thread's own instance. Confirm an archive with the user first. archive false restores it. Lock a thread whose worktree you hand to another agent, with a lockNote saying why. A locked thread refuses every new turn until it is unlocked. parentThreadId groups the thread under another thread on the same instance, as its sub-thread. detachFromParent makes it top-level again. Grouping is sidebar-only and shares no transcript.";
+      return "Change guarded settings on a PwrAgent thread: title, model, execution mode, project, pin, read state, lock, parent, or archived state. Use rename_current_thread when the user asks to rename this thread. To mark a whole project read, use mark_project_read once instead of looping through threads. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. This tool does not rename a messaging topic or thread. For projectPath, use a path from list_instance_projects on the thread's own instance. Confirm an archive with the user first. archive false restores it. Lock a thread whose worktree you hand to another agent, with a lockNote saying why. A locked thread refuses every new turn until it is unlocked. parentThreadId groups threads sharing an owner, locally or on a connected peer. detachFromParent makes it top-level again. Grouping is sidebar-only and shares no transcript.";
     case "mark_project_read":
       return "Mark every unread thread in one project read in a single call, across all backends and beyond listing limits. Use the exact projectKey from list_instance_projects (directory:<absolute path> for a checkout). Omit instanceId for this machine. Pass it for a known peer. Returns projectRead.changedCount. Uses the same guarded, atomic action as the sidebar. Does not archive threads or stop turns. Prefer this over repeated mutate_thread calls. For several projects in Code Mode, call tools.pwragent__mark_project_read for each and print only aggregate results.";
   }
@@ -601,7 +610,7 @@ function inputSchemaForOperation(
           parentThreadId: {
             type: "string",
             description:
-              "Make the thread a sub-thread of this thread. The parent must be another unarchived thread on the same instance, and not one of this thread's own sub-threads. The thread loses its pin, and its sub-threads move with it.",
+              "Make the thread a sub-thread of this thread. The parent must be another unarchived thread on the child's owning instance, and not one of this thread's own sub-threads. The thread loses its pin, and its sub-threads move with it.",
           },
           parentBackend: {
             type: "string",

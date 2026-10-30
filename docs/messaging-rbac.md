@@ -326,7 +326,7 @@ removed:
 | Status / handoff / skills callbacks | Top-guard, on the active binding |
 | Plain message + media turns | The `message.reply` floor, on the active binding (silent, like the floor itself) |
 | Commands (`/status`, `/schedule`, …) | Verb gate, on the active binding |
-| Agent dynamic tools | Added to the required set when the args explicitly target a peer |
+| Agent dynamic tools | Added to the required set when the args explicitly target a peer. Parent mutations also recheck before remote fallback, including when `instanceId` is omitted |
 
 **Three exemptions, each deliberate.** `resume` and `agent` only open the
 picker — it filters itself, and the bind is gated at the funnel. **`detach` is
@@ -352,7 +352,8 @@ onto a peer's thread. `toolArgsTargetRemoteInstance` only catches *explicit*
 targeting (`instanceId`, or `includeRemote: true`), because the check is
 synchronous and runs before resolution. The controller chokepoints above close
 the practical path by gating on the resolved binding; fully closing the ambient
-case belongs at the federation resolution site.
+case belongs at the federation resolution site. Parent mutations now perform that
+check before invoking the remote mutation handler.
 
 ## Deliberately deferred (Phase 1 boundaries)
 
