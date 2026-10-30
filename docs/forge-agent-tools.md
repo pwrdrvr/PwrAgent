@@ -176,15 +176,45 @@ and does not start a provider cooldown.
   its archive. This is the first-party alternative to the ChatGPT GitHub
   connector's `download_workflow_artifact` and `gh run download`.
   GitLab returns `unsupported_provider`. No CI operation is started or rerun.
-  Archives are streamed with a 128 MiB cap into a unique private directory under
-  `profiles/<profile>/artifacts/ci/` in the PwrAgent root. Results include
-  `archivePath`, `sizeBytes`, `sha256` and `pathOwner: "thread_owner"`.
-  Remote paths refer to the owning machine and are not transferred to the
-  caller. Filenames from provider metadata and ZIP entries never choose output
-  paths. Downloads are not extracted or executed, and their contents remain
-  untrusted and unredacted. Partial files are removed on failure or cancellation;
-  successful downloads are retained for inspection and may be removed by the
-  operator when no longer needed. Repeated calls create separate archives.
+  Archives stream directly into a new project file, with a 128 MiB cap and no
+  profile cache or separate staging store. Optional `destination` is a relative
+  ZIP filename, defaulting to `.local/ci-artifacts/<runId>/<artifactId>/artifact.zip`.
+  Optional `directory` selects an absolute linked directory on the thread owner;
+  it is required when linked project selection is ambiguous. Neither field is
+  required by existing dynamic-tool schemas. Missing projects fail explicitly.
+  The destination must actually be Git-ignored, including explicit destinations.
+  The tool does not edit ignore rules. Traversal, symlinks/junctions, nested
+  repositories, Git internals and existing files are refused. A repeated call
+  must select another destination or explicitly remove the previous download.
+  Results retain `archivePath`, `sizeBytes`, `sha256` and `pathOwner: "thread_owner"`,
+  and add `storage: "project"`, `projectDirectory` and `relativePath`.
+  Remote paths refer to the owning machine and are not transferred to the caller;
+  the Federation wrapper adds `archiveAvailableLocally: false` for remote downloads.
+  Filenames from provider metadata and ZIP entries never choose output paths.
+  Downloads are not extracted or executed, and contents remain untrusted and
+  unredacted. Failed/cancelled writes remove only the file created by that call.
+  Successful downloads are project-owned output, with no automatic expiry.
+  Extract explicitly, then inspect that directory with `rg --no-ignore`.
+
+### Artifact lifetime and legacy storage
+
+Ignored project files are excluded from worktree archive Git snapshots, and
+disappear when a disposable worktree is removed. Archiving a thread in a shared
+checkout does not delete project output. A hard process crash can leave an
+incomplete ZIP at its reserved project path; remove it explicitly before retrying.
+PwrAgent does not sweep project downloads or silently restore them into a global cache.
+
+The retired `profiles/<profile>/artifacts/ci/download-*/` store has no reliable
+thread ownership metadata and is never migrated by guessing a thread or project.
+Startup and downloads trigger an opportunistic sweep at most hourly, serialized
+within the process. Known legacy ZIPs and abandoned partials expire after seven
+days. Completed ZIPs are trimmed oldest-first toward 512 MiB, protecting files
+written within the last hour and buckets with recent partials. Active legacy
+writers publish through an atomic rename with a 30-second HTTP bound; recent
+partials are preserved. Unexpected names, symlinks and junctions are not followed
+or recursively removed. Other profiles and thread assets are not scanned.
+This is retirement of the previous store, not a new managed cache requiring
+ongoing Settings storage controls. All new output belongs to the selected project.
 - `read_ci_job_log`: one job's bounded tail and heuristic failure excerpts;
   every log is explicitly untrusted. Logs are defensively redacted and never
   interpreted as instructions. A failed retrieval is an error, never success.

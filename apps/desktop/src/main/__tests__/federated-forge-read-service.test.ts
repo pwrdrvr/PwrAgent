@@ -24,8 +24,9 @@ function fixture(capabilities: FederationCapability[] = ["thread_navigation", "t
 describe("forge owner routing", () => {
   it.each(["get_commit_checks", "list_ci_artifacts", "download_ci_artifact"] as const)("routes %s to the owner without local credential access", async (operation) => {
     const h = fixture();
-    const args = operation === "get_commit_checks" ? { headSha: "a".repeat(40) } : operation === "download_ci_artifact" ? { runId: 9, artifactId: 12 } : { runId: 9 };
-    await h.handler(operation, { ...args, threadId: "remote", instanceId: "owner" }, context);
+    const args = operation === "get_commit_checks" ? { headSha: "a".repeat(40) } : operation === "download_ci_artifact" ? { runId: 9, artifactId: 12, directory: "/owner/project", destination: ".local/report.zip" } : { runId: 9 };
+    const response = await h.handler(operation, { ...args, threadId: "remote", instanceId: "owner" }, context);
+    if (operation === "download_ci_artifact") expect(response).toMatchObject({ ownerInstanceId: "owner", archiveAvailableLocally: false });
     expect(h.local).not.toHaveBeenCalled();
     expect(h.readForge).toHaveBeenCalledWith({ operation, backend: "codex", threadId: "remote", args: { ...args, backend: "codex", threadId: "remote" } }, { signal: undefined, deadlineAt: expect.any(Number) });
   });

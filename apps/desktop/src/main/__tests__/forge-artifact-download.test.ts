@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +10,11 @@ import { buildForgeReadToolDefinitions } from "../agent-tools/pwragent-forge-age
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { searchPwrAgentTools } from "../agent-tools/pwragent-tool-search";
 import type { ForgeRepository } from "../pr-status/forge-tool-contract";
-import { resetCachedActiveProfileNameForTests } from "../profile";
+import { runGitCommand } from "../app-server/git-executable";
+import { resolveForgeArtifactDestination } from "../pr-status/forge-artifact-destination";
+import { resolveActiveProfilePath } from "../profile";
+
+vi.mock("../pr-status/legacy-ci-artifact-cleanup", () => ({ scheduleLegacyCiArtifactCleanup: vi.fn(async () => {}) }));
 
 // Keep the same boundary tests small enough to exercise the streamed limit on disk.
 vi.mock("../pr-status/forge-read-limits", async (original) => ({
@@ -30,13 +34,14 @@ describe("CI artifact downloads", () => {
   let directory: string;
   let root: string;
   beforeEach(async () => {
-    directory = await mkdtemp(path.join(os.tmpdir(), "pwragent-ci-artifact-test-"));
-    root = path.join(directory, "artifacts");
+    directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-ci-artifact-test-")));
+    root = path.join(directory, ".local", "ci-artifacts", "9", "12");
+    await runGitCommand(directory, ["init", "--quiet"]);
+    await writeFile(path.join(directory, ".gitignore"), ".local/\nignored/\n");
   });
   afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
     vi.unstubAllEnvs();
-    resetCachedActiveProfileNameForTests();
   });
 
   function fixture(options: { response?: () => Response; data?: unknown; enabled?: () => boolean; takeToken?: () => boolean } = {}) {
@@ -45,10 +50,10 @@ describe("CI artifact downloads", () => {
         : options.response?.() ?? new Response(zip));
     const githubToken = vi.fn(async (_host: string) => "fixture-token");
     const ci = new ForgeCiClient({ fetch: fetcher, githubToken, gitlab: { readApi: vi.fn() },
-      enabled: options.enabled ?? (() => true), takeToken: options.takeToken ?? (() => true), artifactRoot: () => root,
+      enabled: options.enabled ?? (() => true), takeToken: options.takeToken ?? (() => true),
     });
     const service = new ForgeReadService({ enabled: options.enabled ?? (() => true), ci, refresh: vi.fn() });
-    const scope = { remotes: [repository], attached: [], observations: [] };
+    const scope = { remotes: [repository], attached: [], observations: [], directories: [directory] };
     return { fetcher, githubToken, ci, service, scope, download: (signal?: AbortSignal) => service.execute("download_ci_artifact", { runId: 9, artifactId: 12 }, scope, signal) as Promise<Download> };
   }
 
@@ -67,9 +72,9 @@ describe("CI artifact downloads", () => {
     const payload = "contentItems" in result ? JSON.parse(result.contentItems.find((item) => item.type === "inputText")!.text) : result.structuredContent;
     expect(payload).toMatchObject({ runId: 9, artifactId: 12, providerRequests: 2, sizeBytes: zip.length, sha256: createHash("sha256").update(zip).digest("hex"), format: "zip", extracted: false, pathOwner: "thread_owner", trust: "untrusted" });
     expect(await readFile(payload.archivePath)).toEqual(zip);
-    expect(path.dirname(path.dirname(payload.archivePath))).toBe(root);
+    expect(path.dirname(payload.archivePath)).toBe(root);
     expect(await readdir(path.dirname(payload.archivePath))).toEqual(["artifact.zip"]);
-    expect(await readdir(directory)).toEqual(["artifacts"]);
+    expect(await readdir(directory)).toEqual([".git", ".gitignore", ".local"]);
     expect(JSON.stringify(result)).not.toContain("fixture-secret");
     expect(h.fetcher.mock.calls[0]![1]?.headers).toMatchObject({ Authorization: "Bearer fixture-token" });
     expect(h.fetcher.mock.calls[2]![1]).toMatchObject({ redirect: "error" });
@@ -77,14 +82,15 @@ describe("CI artifact downloads", () => {
     if (process.platform !== "win32") expect((await stat(payload.archivePath)).mode & 0o777).toBe(0o600);
   });
 
-  it("does not overwrite an earlier download or use an artifact name as a path", async () => {
+  it("refuses an existing destination and accepts an explicit project-relative ZIP", async () => {
     const h = fixture();
     const first = await h.download();
-    const second = await h.download();
+    await expect(h.download()).rejects.toMatchObject({ code: "destination_exists" });
+    const second = await h.service.execute("download_ci_artifact", { runId: 9, artifactId: 12, destination: "ignored/report.zip" }, h.scope) as Download;
     expect(first.archivePath).not.toBe(second.archivePath);
     expect(await readFile(first.archivePath)).toEqual(zip);
     expect(await readFile(second.archivePath)).toEqual(zip);
-    expect(await readdir(root)).toHaveLength(2);
+    expect(second.archivePath).toBe(path.join(directory, "ignored", "report.zip"));
   });
 
   it("uses the Enterprise API root and host-specific authentication", async () => {
@@ -98,15 +104,15 @@ describe("CI artifact downloads", () => {
     expect(h.githubToken).toHaveBeenCalledWith("ghe.example.test");
   });
 
-  it("stores downloads in the selected PwrAgent home and profile", async () => {
-    vi.stubEnv("PWRAGENT_HOME", directory);
-    vi.stubEnv("PWRAGENT_PROFILE", "artifact-fixture");
-    resetCachedActiveProfileNameForTests();
+  it("does not create a profile artifact store", async () => {
+    const profileHome = path.join(directory, ".local", "profile-home");
+    vi.stubEnv("PWRAGENT_HOME", profileHome);
     const h = fixture();
-    const ci = new ForgeCiClient({ fetch: h.fetcher, githubToken: h.githubToken, gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true });
-    const result = await ci.execute("download_ci_artifact", repository, { runId: 9, artifactId: 12 }) as Download;
-    expect(path.dirname(path.dirname(result.archivePath))).toBe(path.join(directory, "profiles", "artifact-fixture", "artifacts", "ci"));
-    expect(await readFile(result.archivePath)).toEqual(zip);
+    const result = await h.download();
+    expect(result.archivePath).toBe(path.join(root, "artifact.zip"));
+    await expect(stat(resolveActiveProfilePath("artifacts/ci"))).rejects.toMatchObject({ code: "ENOENT" });
+    await runGitCommand(directory, ["add", "-A", "--", "."]);
+    expect((await runGitCommand(directory, ["ls-files"])).stdout).toBe(".gitignore\n");
   });
 
   it.each([
@@ -119,7 +125,7 @@ describe("CI artifact downloads", () => {
     const h = fixture({ data });
     await expect(h.download()).rejects.toMatchObject({ code });
     expect(h.fetcher).toHaveBeenCalledOnce();
-    expect(await readdir(directory)).toEqual([]);
+    expect(await readdir(directory)).toEqual([".git", ".gitignore"]);
   });
 
   it.each(["http://artifacts.example.test/file", "https://user:password@artifacts.example.test/file", "bad location"])("refuses unsafe redirect %s", async (location) => {
@@ -132,7 +138,7 @@ describe("CI artifact downloads", () => {
   it.each([401, 403, 404, 410, 429])("returns a safe error for HTTP %s without a partial file", async (status) => {
     const h = fixture({ response: () => json({ message: signedUrl }, status) });
     await expect(h.download()).rejects.toMatchObject({ code: status === 401 ? "unauthenticated" : status === 403 ? "forbidden" : status === 404 ? "not_found" : status === 410 ? "artifact_expired" : "rate_limited", message: expect.not.stringContaining("fixture-secret") });
-    expect(await readdir(directory)).toEqual([]);
+    expect(await readdir(directory)).toEqual([".git", ".gitignore"]);
   });
 
   it("enforces advertised and actual streamed sizes without publishing partial archives", async () => {
@@ -140,7 +146,7 @@ describe("CI artifact downloads", () => {
     const advertised = fixture({ response: () => new Response(new ReadableStream({ cancel: cancelled }), { headers: { "content-length": String(FORGE_ARTIFACT_MAX_BYTES + 1) } }) });
     await expect(advertised.download()).rejects.toMatchObject({ code: "response_too_large" });
     expect(cancelled).toHaveBeenCalledOnce();
-    expect(await readdir(directory)).toEqual([]);
+    expect(await readdir(directory)).toEqual([".git", ".gitignore"]);
     const streamed = fixture({ response: () => new Response(new ReadableStream({ start(controller) {
       controller.enqueue(zip);
       controller.enqueue(new Uint8Array(FORGE_ARTIFACT_MAX_BYTES));
@@ -173,11 +179,11 @@ describe("CI artifact downloads", () => {
     const h = fixture({ response: () => new Response(new ReadableStream({ start(stream) { stream.error(new Error(signedUrl)); } })) });
     await expect(h.download()).rejects.toMatchObject({ code: "download_failed", message: expect.not.stringContaining("fixture-secret") });
     expect(await readdir(root)).toEqual([]);
-    await rm(root, { recursive: true });
-    await writeFile(root, "existing file");
+    await rm(path.join(directory, ".local"), { recursive: true });
+    await writeFile(path.join(directory, ".local"), "existing file");
     const disk = fixture();
-    await expect(disk.download()).rejects.toMatchObject({ code: "download_failed" });
-    expect(await readFile(root, "utf8")).toBe("existing file");
+    await expect(disk.download()).rejects.toMatchObject({ code: "forbidden" });
+    expect(await readFile(path.join(directory, ".local"), "utf8")).toBe("existing file");
   });
 
   it("rechecks provider enablement and shares request admission", async () => {
@@ -200,15 +206,16 @@ describe("CI artifact downloads", () => {
     });
     await expect(h.download()).rejects.toMatchObject({ code: "provider_disabled" });
     expect(h.fetcher).toHaveBeenCalledTimes(2);
-    expect(await readdir(directory)).toEqual([]);
+    expect(await readdir(directory)).toEqual([".git", ".gitignore"]);
   });
 
   it("fails a missing GitHub login before fetching or writing files", async () => {
     const h = fixture();
-    const ci = new ForgeCiClient({ fetch: h.fetcher, githubToken: async () => null, gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true, artifactRoot: () => root });
-    await expect(ci.execute("download_ci_artifact", repository, { runId: 9, artifactId: 12 })).rejects.toMatchObject({ code: "unauthenticated" });
+    const ci = new ForgeCiClient({ fetch: h.fetcher, githubToken: async () => null, gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true });
+    const destination = await resolveForgeArtifactDestination({ runId: 9, artifactId: 12 }, [directory]);
+    await expect(ci.execute("download_ci_artifact", repository, { runId: 9, artifactId: 12 }, undefined, destination)).rejects.toMatchObject({ code: "unauthenticated" });
     expect(h.fetcher).not.toHaveBeenCalled();
-    expect(await readdir(directory)).toEqual([]);
+    expect(await readdir(directory)).toEqual([".git", ".gitignore"]);
   });
 
   it("does not download from an unrelated repository or GitLab", async () => {
@@ -217,6 +224,79 @@ describe("CI artifact downloads", () => {
     const gitlab = { ...repository, provider: "gitlab" as const, host: "gitlab.com" };
     await expect(h.service.execute("download_ci_artifact", { runId: 9, artifactId: 12 }, { ...h.scope, remotes: [gitlab] })).rejects.toMatchObject({ code: "unsupported_provider" });
     expect(h.fetcher).not.toHaveBeenCalled();
+  });
+
+  it("requires project selection for multiple linked directories and rejects unrelated roots", async () => {
+    const h = fixture();
+    const other = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-artifact-other-")));
+    try {
+      const scope = { ...h.scope, directories: [directory, other] };
+      await expect(h.service.execute("download_ci_artifact", { runId: 9, artifactId: 12 }, scope)).rejects.toMatchObject({ code: "ambiguous_directory" });
+      await expect(h.service.execute("download_ci_artifact", { runId: 9, artifactId: 12, directory: other }, h.scope)).rejects.toMatchObject({ code: "forbidden" });
+      const result = await h.service.execute("download_ci_artifact", { runId: 9, artifactId: 12, directory }, scope) as Download;
+      expect(result.archivePath).toBe(path.join(root, "artifact.zip"));
+    } finally { await rm(other, { recursive: true, force: true }); }
+  });
+
+  it("refuses absent projects and unignored or tracked destinations without a profile fallback", async () => {
+    const h = fixture();
+    await expect(h.service.execute("download_ci_artifact", { runId: 9, artifactId: 12 }, { ...h.scope, directories: [] })).rejects.toMatchObject({ code: "ambiguous_directory" });
+    await expect(h.service.execute("download_ci_artifact", { runId: 9, artifactId: 12, destination: "report.zip" }, h.scope)).rejects.toMatchObject({ code: "destination_not_ignored" });
+    await writeFile(path.join(directory, ".gitignore"), "*.zip\n");
+    await writeFile(path.join(directory, "tracked.zip"), "tracked content");
+    await runGitCommand(directory, ["add", "--force", "--", "tracked.zip"]);
+    await rm(path.join(directory, "tracked.zip"));
+    await expect(h.service.execute("download_ci_artifact", { runId: 9, artifactId: 12, destination: "tracked.zip" }, h.scope)).rejects.toMatchObject({ code: "destination_not_ignored" });
+    expect(h.fetcher).not.toHaveBeenCalled();
+  });
+
+  it("refuses parent symlinks and junctions, including changes during download", async () => {
+    const h = fixture();
+    const outside = await mkdtemp(path.join(os.tmpdir(), "pwragent-artifact-outside-"));
+    try {
+      h.fetcher.mockImplementationOnce(async () => json(metadata)).mockImplementationOnce(async () => {
+        await symlink(outside, path.join(directory, ".local"), "junction");
+        return new Response(zip);
+      });
+      await expect(h.download()).rejects.toMatchObject({ code: "forbidden" });
+      expect(await readdir(outside)).toEqual([]);
+      await expect(h.download()).rejects.toMatchObject({ code: "forbidden" });
+    } finally { await rm(outside, { recursive: true, force: true }); }
+  });
+
+  it("rechecks ignore rules and never removes a competing writer's file", async () => {
+    const h = fixture();
+    h.fetcher.mockImplementationOnce(async () => json(metadata)).mockImplementationOnce(async () => {
+      await mkdir(root, { recursive: true });
+      await writeFile(path.join(root, "artifact.zip"), "another writer");
+      return new Response(zip);
+    });
+    await expect(h.download()).rejects.toMatchObject({ code: "destination_exists" });
+    expect(await readFile(path.join(root, "artifact.zip"), "utf8")).toBe("another writer");
+    await rm(path.join(root, "artifact.zip"));
+    const ignored = fixture();
+    ignored.fetcher.mockImplementationOnce(async () => json(metadata)).mockImplementationOnce(async () => {
+      await writeFile(path.join(directory, ".gitignore"), "");
+      return new Response(zip);
+    });
+    await expect(ignored.download()).rejects.toMatchObject({ code: "destination_not_ignored" });
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  it("does not enter nested repositories or Git metadata", async () => {
+    const h = fixture();
+    const nested = path.join(directory, ".local");
+    await mkdir(nested);
+    await runGitCommand(nested, ["init", "--quiet"]);
+    await expect(h.download()).rejects.toMatchObject({ code: "forbidden" });
+    expect(h.fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each(["/tmp/report.zip", "../report.zip", ".local/../report.zip", ".git/objects/report.zip", ".GIT/report.zip", "C:/report.zip", "ignored\\report.zip", "ignored/report.zip:stream", "ignored/aux.zip", "ignored/report.zip ", "ignored/not-a-zip"])("rejects unsafe destination %s before provider dispatch", async (destination) => {
+    const handler = vi.fn();
+    const tool = buildForgeReadToolDefinitions(handler).find((definition) => definition.name === "download_ci_artifact")!;
+    expect(await tool.dispatch({ runId: 9, artifactId: 12, destination }, context)).toMatchObject({ ok: false, code: "invalid_arguments" });
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it.each([{}, { runId: 9 }, { runId: 9, artifactId: -1 }, { runId: 9, artifactId: 1.5 }, { runId: 9, artifactId: 12, destination: "../outside" }, { runId: 9, artifactId: 12, url: signedUrl }])("rejects malformed identities and destination injection", async (args) => {

@@ -25,6 +25,8 @@ export function createOwnerRoutedForgeReadHandler(options: {
     const { instanceId: _instanceId, ...localArgs } = args;
     const request: ForgeReadRequest = { operation, backend, threadId, args: { ...localArgs, backend, threadId } };
     const result = await match.backend.readForge(request, { signal: context.signal, deadlineAt: Date.now() + 60_000 });
-    return { ownerInstanceId: match.peer.target.instanceId, result };
+    return { ownerInstanceId: match.peer.target.instanceId, result,
+      ...(operation === "download_ci_artifact" ? { archiveAvailableLocally: false } : {}),
+    };
   };
 }

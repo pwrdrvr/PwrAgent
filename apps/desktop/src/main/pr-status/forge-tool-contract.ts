@@ -16,6 +16,8 @@ export type ForgeReadArgs = {
   perPage?: number;
   runId?: number;
   artifactId?: number;
+  directory?: string;
+  destination?: string;
   jobId?: number;
   maxChars?: number;
   beforeChar?: number;
@@ -41,12 +43,12 @@ export function validateForgeReadArgs(operation: string, value: unknown): assert
     get_forge_status: ["url", "branch", "refresh"], list_ci_runs: ["branch", "headSha", "page", "perPage"],
     get_ci_run: ["runId", "page", "perPage"], get_ci_job: ["jobId"], read_ci_job_log: ["jobId", "maxChars", "beforeChar", "logSnapshot"],
     get_commit_checks: ["headSha", "branch", "page", "perPage"], list_ci_artifacts: ["runId", "page", "perPage"],
-    download_ci_artifact: ["runId", "artifactId"],
+    download_ci_artifact: ["runId", "artifactId", "directory", "destination"],
   };
   if (Object.keys(args).some((key) => ![...common, ...fields[operation as ForgeReadOperation]].includes(key))) {
     throw new ForgeReadError("invalid_arguments", "Unknown argument for this forge tool.");
   }
-  for (const key of ["backend", "threadId", "instanceId", "url", "branch", "headSha"]) {
+  for (const key of ["backend", "threadId", "instanceId", "url", "branch", "headSha", "directory", "destination"]) {
     if (args[key] !== undefined && (typeof args[key] !== "string" || !args[key].trim() || (args[key] as string).length > 2000)) {
       throw new ForgeReadError("invalid_arguments", `${key} must be a nonempty bounded string.`);
     }
@@ -62,6 +64,7 @@ export function validateForgeReadArgs(operation: string, value: unknown): assert
   if (operation === "download_ci_artifact" && (!args.runId || !args.artifactId)) {
     throw new ForgeReadError("invalid_arguments", "Downloading an artifact requires both runId and artifactId from list_ci_artifacts.");
   }
+  if (args.destination !== undefined) validateArtifactRelativePath(args.destination as string);
   if (operation === "get_commit_checks" && (typeof args.headSha !== "string" || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(args.headSha))) {
     throw new ForgeReadError("invalid_arguments", "headSha must be a full commit SHA from PR/MR status or a CI run.");
   }
@@ -87,4 +90,13 @@ export function repositoryKey(r: ForgeRepository): string {
 }
 export function repositoryUrl(r: ForgeRepository): string {
   return `https://${r.host}/${r.owner.split("/").map(encodeURIComponent).join("/")}/${encodeURIComponent(r.repo)}`;
+}
+
+export function validateArtifactRelativePath(value: string): void {
+  const parts = value.split("/");
+  if (value.length > 2000 || !/\.zip$/i.test(value) || parts.some((part) =>
+    !part || part === "." || part === ".." || /^\.git$/i.test(part)
+    || /[\\:\x00-\x1f\x7f]/.test(part) || /[. ]$/.test(part)
+    || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part)
+  )) throw new ForgeReadError("invalid_arguments", "destination must be a project-relative ZIP path without traversal, Git internals or platform-special names.");
 }
