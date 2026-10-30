@@ -9,6 +9,9 @@ import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type Forge
 import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { createOwnerRoutedForgeReadHandler } from "../federation/federated-forge-read-service";
+import { integratedTerminalOutputSource } from "./integrated-terminal";
+import { TerminalOutputReader } from "../terminal/terminal-output-reader";
+import { combineTerminalOutputSources } from "../terminal/terminal-output-source";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import { THREAD_DEPENDENCIES_CHANNEL, type ManageThreadDependenciesRequest, type ManageThreadDependenciesResponse, type ThreadDependencyCondition, type AppServerThreadTurnMetadata, type AppServerNotification } from "@pwragent/shared";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
@@ -9098,6 +9101,15 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setForgeToolPolicyResolver(
     () => getDesktopSettingsService().resolveForgeAgentToolPolicy(),
   );
+  const terminalOwnerInstanceId = getDesktopFederationRuntime().localFederationInstanceId();
+  const terminalOwnerId = () => terminalOwnerInstanceId;
+  getDesktopBackendRegistry().setTerminalOutputToolHandler(new TerminalOutputReader(
+    combineTerminalOutputSources(terminalOwnerId, [
+      integratedTerminalOutputSource(terminalOwnerId),
+      getDesktopFederationRuntime().ownerTerminalOutputSource(),
+    ]),
+  ));
+
   getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(
     async (args, context) =>
       await appServerService.checkThreadPullRequestStatusForTool(args, context),
@@ -10471,6 +10483,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL);
   const registry = getExistingDesktopBackendRegistry();
   registry?.setThreadDependencyToolHandler(undefined);
+  registry?.setTerminalOutputToolHandler(undefined);
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);
   registry?.setThreadPrimaryGitRepositoryReader(undefined);

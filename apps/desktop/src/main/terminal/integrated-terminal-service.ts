@@ -318,6 +318,8 @@ export class IntegratedTerminalService {
    *  in one window used to install 10 and trip Node's max-listeners warning. */
   private readonly subscribedWebContents = new Set<WebContents>();
   private readonly archived = new Map<string, TerminalHistoryRecord>();
+  /** Owner reads must bridge removal of the PTY and publication of its final screen. */
+  private readonly pendingExitCheckpoints = new Set<Promise<void>>();
   private readonly pendingCreates = new Map<string, {
     request: IntegratedTerminalCreateRequest;
     promise: Promise<IntegratedTerminalCreateResponse>;
@@ -573,16 +575,24 @@ export class IntegratedTerminalService {
     this.emitSessionsChanged();
   }
 
+  async listForOwnerThread(threadKey: string): Promise<IntegratedTerminalSessionSummary[]> {
+    await this.ready;
+    await Promise.all(this.pendingExitCheckpoints);
+    return this.listSessions().filter((session) => session.threadKey === threadKey
+      && !this.sessionsById.get(session.sessionId)?.closing);
+  }
+
   /** Thread-bound owner API for the read-only tool stack. */
   outputForThread(threadKey: string, sessionId: string): TerminalReplay | undefined {
     const session = this.sessionsById.get(sessionId);
-    return session?.threadKey === threadKey ? session.replay : undefined;
+    return session?.threadKey === threadKey && !session.closing ? session.replay : undefined;
   }
 
   async snapshotForThread(threadKey: string, sessionId: string) {
     await this.ready;
+    await Promise.all(this.pendingExitCheckpoints);
     const live = this.sessionsById.get(sessionId);
-    if (live?.threadKey === threadKey) return live.replay.snapshot();
+    if (live?.threadKey === threadKey) return live.closing ? undefined : live.replay.snapshot();
     const record = this.archived.get(sessionId);
     return record?.summary.threadKey === threadKey ? { ...record.snapshot } : undefined;
   }
@@ -676,6 +686,7 @@ export class IntegratedTerminalService {
     }
     this.disposing = true;
     this.disposePromise = Promise.all([
+      ...this.pendingExitCheckpoints,
       ...[...this.pendingCreates.values()].map(({ promise }) => promise),
       ...Array.from(this.sessionsById.values()).map((session) => Promise.all([
         this.checkpoint(session),
@@ -825,8 +836,12 @@ export class IntegratedTerminalService {
       // tab never drops out of the list in between: that unmounted its pane
       // and, for a thread's only terminal, closed the panel for a moment.
       const archiving = this.checkpoint(session, exitCode ?? null);
+      this.pendingExitCheckpoints.add(archiving);
       this.deleteSession(session, false);
-      void archiving.finally(() => this.emitSessionsChanged());
+      void archiving.finally(() => {
+        this.pendingExitCheckpoints.delete(archiving);
+        this.emitSessionsChanged();
+      });
     }
   }
 
