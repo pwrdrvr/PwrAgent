@@ -1975,6 +1975,9 @@ function DesktopAppShell(props: {
   // thread menu reports the thread it was opened on, without selecting it.
   const copyThreadDiagnosticsInfo = useEventCallback(
     (thread: NavigationThreadSummary | undefined): void => {
+      const pending = thread ? undefined : navigation.pendingLaunchpadCreations.find(
+        (creation) => creation.selectionKey === navigation.selectedItemKey,
+      );
       const metadataPromise = desktopApi?.readAppMetadata?.();
       if (!metadataPromise) {
         return;
@@ -2004,6 +2007,17 @@ function DesktopAppShell(props: {
                   federationWindowTarget: readRendererFederationTarget(),
                 }
               : {
+                  backend: pending?.launchpad.backend,
+                  projectPath: pending?.startup?.cwd ?? pending?.setupProgress?.cwd ?? pending?.launchpad.directoryPath,
+                  title: pending?.title,
+                  startup: pending ? {
+                    ...pending.startup,
+                    operationId: pending.operationId,
+                    submittedAt: pending.submittedAt,
+                    directoryKey: pending.directoryKey,
+                    setupProgress: pending.startup?.setupProgress,
+                    targetInstanceId: pending.target?.scope === "remote" ? pending.target.instanceId : federationHealth?.instanceId,
+                  } : undefined,
                   federationHealth,
                   federationWindowLabel: readRendererFederationLabel(),
                   federationWindowTarget: readRendererFederationTarget(),

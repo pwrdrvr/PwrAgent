@@ -36,7 +36,7 @@ import type { ThreadActionErrorKind } from "../../features/notifications/thread-
 function useThreadNavigation(api?: DesktopApi, options?: Parameters<typeof useRealThreadNavigation>[1]) {
   const localStore = useComposerDraftStore();
   const composerDraftStore = options?.composerDraftStore ?? localStore;
-  const ownerApi = useMemo(() => api ? navigationOwnerApiFixture(api, (launchpads) => {
+  const ownerApi = useMemo(() => api ? navigationOwnerApiFixture({ manageLaunchpadCreation: async () => ({}), ...api }, (launchpads) => {
     for (const launchpad of launchpads) {
       // Where main's draft index keeps it: a peer's draft names its owner.
       const scope = buildLaunchpadComposerScopeKey(launchpad.directoryKey);
@@ -5906,6 +5906,8 @@ describe("useThreadNavigation", () => {
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
       releaseLaunchpadOnSubmit: true,
       codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
+        operationId: expect.any(String),
+        submittedAt: expect.any(Number),
       directoryKey: "directory:/Users/fixture-user/github/PwrAgent",
       launchpad: expect.objectContaining({
         directoryKey: "directory:/Users/fixture-user/github/PwrAgent",
@@ -6101,6 +6103,8 @@ describe("useThreadNavigation", () => {
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
       releaseLaunchpadOnSubmit: true,
       codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
+        operationId: expect.any(String),
+        submittedAt: expect.any(Number),
       directoryKey,
       launchpad: expect.objectContaining({
         prompt: "/review main",
@@ -6992,6 +6996,8 @@ describe("useThreadNavigation", () => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
         releaseLaunchpadOnSubmit: true,
         codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
+        operationId: expect.any(String),
+        submittedAt: expect.any(Number),
         directoryKey,
         launchpad: expect.objectContaining({
           directoryKey,
@@ -7322,6 +7328,8 @@ describe("useThreadNavigation", () => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
         releaseLaunchpadOnSubmit: true,
         codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
+        operationId: expect.any(String),
+        submittedAt: expect.any(Number),
         directoryKey: firstDirectoryKey,
         launchpad: expect.objectContaining({
           directoryKey: firstDirectoryKey,

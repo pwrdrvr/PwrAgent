@@ -254,6 +254,7 @@ export const AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL =
   "agent:retain-thread-branch-drift";
 export const AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL =
   "agent:materialize-directory-launchpad";
+export const AGENT_LAUNCHPAD_CREATION_CHANNEL = "agent:launchpad-creation";
 export const CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL =
   "codex-environment:setup-progress";
 export const AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL =

@@ -7873,6 +7873,9 @@ function localBackendOperations(): FederationBackendOperations {
         },
       );
     },
+    async manageLaunchpadCreation(request, sourceInstanceId) {
+      return await getDesktopBackendRegistry().manageLaunchpadCreation(request, sourceInstanceId);
+    },
     async materializeDirectoryLaunchpad(
       request: MaterializeDirectoryLaunchpadRequest,
       options?: MaterializeDirectoryLaunchpadOptions & {

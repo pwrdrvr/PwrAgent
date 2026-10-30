@@ -1,4 +1,6 @@
 import { threadTodoThreadKey, parseRemoteOperatorItemKey } from "@pwragent/shared";
+import { StartupTiming } from "../composer/StartupTiming";
+import { LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
 import { ThreadServices } from "../federation/ThreadServices";
 import type { BackgroundTerminalsViewProps } from "./BackgroundTerminalsView";
 import type { AgentCommandsStatus } from "../../lib/useThreadSessionState";
@@ -1326,10 +1328,11 @@ export function ThreadView(props: ThreadViewProps) {
       id: "launchpad-submitted-message",
       type: "message",
       role: "user",
+      createdAt: props.pendingLaunchpadCreation?.submittedAt,
       text: parts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n\n"),
       parts,
     };
-  }, [launchpadSubmittedInput, props.pendingLaunchpadCreation?.input]);
+  }, [launchpadSubmittedInput, props.pendingLaunchpadCreation?.input, props.pendingLaunchpadCreation?.submittedAt]);
   // Terminal state is owned by `useIntegratedTerminals` up in App, mirroring
   // the main process's registry. It cannot live here: ThreadView unmounts on
   // search and on any refresh that flips `threadDetailPending`, which used to
@@ -2580,7 +2583,7 @@ export function ThreadView(props: ThreadViewProps) {
     const environment = selectedLaunchpad.codexEnvironmentOptions?.find(
       (option) => option.id === selectedLaunchpad.codexEnvironmentId,
     );
-    if (!environment?.setupScript) {
+    if (!environment?.setupScript && !launchpadSetupProgress) {
       return undefined;
     }
     const status = launchpadSetupProgress
@@ -2594,12 +2597,15 @@ export function ThreadView(props: ThreadViewProps) {
       : undefined;
     return {
       key: `launchpad:${selectedLaunchpad.directoryKey}`,
-      phase: "setup",
+      phase: launchpadSetupProgress ? "setup" : "startup",
       status,
+      startedAt: launchpadSetupProgress?.startedAt ?? props.pendingLaunchpadCreation?.submittedAt,
+      onCancel: props.pendingLaunchpadCreation?.startup?.cancellable === false ? undefined : props.pendingLaunchpadCreation?.onCancel,
+      cancelling: props.pendingLaunchpadCreation?.cancelling,
       ...fields,
-      environmentId: fields?.environmentId ?? environment.id,
-      environmentName: fields?.environmentName ?? environment.name,
-      command: fields?.command ?? environment.setupScript,
+      environmentId: fields?.environmentId ?? environment?.id,
+      environmentName: fields?.environmentName ?? environment?.name,
+      command: fields?.command ?? environment?.setupScript,
       cwd: fields?.cwd ?? selectedLaunchpad.directoryPath,
     };
   }, [
@@ -2607,6 +2613,7 @@ export function ThreadView(props: ThreadViewProps) {
     launchpadMaterializing,
     launchpadSetupProgress,
     selectedLaunchpad,
+    props.pendingLaunchpadCreation,
   ]);
 
   const branchDriftRetentionKey = (
@@ -3992,6 +3999,12 @@ export function ThreadView(props: ThreadViewProps) {
         scheduledFor,
       );
     } catch (error) {
+      if (error instanceof LaunchpadStartupCancelledError) {
+        setLaunchpadMaterializing(false);
+        setLaunchpadSubmittedInput([]);
+        setLaunchpadMaterializeError(undefined);
+        throw error;
+      }
       setLaunchpadMaterializeError(
         error instanceof Error ? error.message : String(error)
       );
@@ -4082,6 +4095,9 @@ export function ThreadView(props: ThreadViewProps) {
           onReloadLaunchpadConfiguration: props.onReloadLaunchpadConfiguration,
           onMaterializeLaunchpad: handleMaterializeLaunchpad,
           onCancelLaunchpad: props.onCancelLaunchpad,
+          onCancelLaunchpadStartup: props.pendingLaunchpadCreation?.onCancel,
+          launchpadStartupCancelling: props.pendingLaunchpadCreation?.cancelling,
+          launchpadStartupCancellable: props.pendingLaunchpadCreation?.startup?.cancellable,
           launchpadCancelRequest: props.launchpadCancelRequest,
           onDetachLaunchpadParent: props.onDetachLaunchpadParent,
           onSelectLaunchpadParent: props.onSelectLaunchpadParent,
@@ -4245,6 +4261,9 @@ export function ThreadView(props: ThreadViewProps) {
               <div className="launchpad-pending">
                 <p className="eyebrow">Preparing transcript</p>
                 <h3>Starting {composerLaunchpad.directoryLabel}</h3>
+                {props.pendingLaunchpadCreation ? <p><StartupTiming submittedAt={props.pendingLaunchpadCreation.submittedAt} startedAt={props.pendingLaunchpadCreation.startup?.startedAt} /></p> : null}
+                {props.pendingLaunchpadCreation?.cancelError ? <p role="alert">{props.pendingLaunchpadCreation.cancelError}</p> : null}
+                {props.pendingLaunchpadCreation?.connectionLost ? <p role="status">Connection to owner interrupted. Startup status will resume when it reconnects. Cancellation must be confirmed by the owner.</p> : null}
                 <p>
                   {launchpadRunningCodexEnvironmentSetup
                     ? `Running the ${
