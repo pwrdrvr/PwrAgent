@@ -946,3 +946,6 @@ export const KEYBINDINGS_WRITE_CHANNEL = "keybindings:write";
 export const KEYBINDINGS_CHANGED_CHANNEL = "keybindings:changed";
 
 export const INTEGRATED_TERMINAL_RENAME_CHANNEL = "integrated-terminal:rename";
+
+export const NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL =
+  "navigation:continue-thread-environment-startup";

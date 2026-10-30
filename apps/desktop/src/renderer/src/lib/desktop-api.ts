@@ -300,6 +300,8 @@ import type {
   ThreadLockNoteRequest,
   SetThreadToolIncidentNoticeRequest,
   SetThreadToolIncidentNoticeResponse,
+  ContinueThreadEnvironmentStartupRequest,
+  ContinueThreadEnvironmentStartupResponse,
   AcknowledgeThreadEnvironmentFailureRequest,
   AcknowledgeThreadEnvironmentFailureResponse,
   ListPendingThreadSpendAlertsRequest,
@@ -1519,6 +1521,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   acknowledgeThreadSpendAlert?: (
     request: AcknowledgeThreadSpendAlertRequest,
   ) => Promise<AcknowledgeThreadSpendAlertResponse>;
+  continueThreadEnvironmentStartup?: (
+    request: ContinueThreadEnvironmentStartupRequest,
+  ) => Promise<ContinueThreadEnvironmentStartupResponse>;
   acknowledgeThreadEnvironmentFailure?: (
     request: AcknowledgeThreadEnvironmentFailureRequest,
   ) => Promise<AcknowledgeThreadEnvironmentFailureResponse>;

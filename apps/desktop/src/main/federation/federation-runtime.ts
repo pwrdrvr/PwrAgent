@@ -230,6 +230,10 @@ import {
   type ReloadCodexMcpConfigRequest,
   type SetThreadPinRequest,
   type SetThreadPinResponse,
+  type ContinueThreadEnvironmentStartupRequest,
+  type ContinueThreadEnvironmentStartupResponse,
+  type AcknowledgeThreadEnvironmentFailureRequest,
+  type AcknowledgeThreadEnvironmentFailureResponse,
   type SetThreadReactionRequest,
   type SetThreadLockRequest,
   type SetThreadLockResponse,
@@ -7215,6 +7219,12 @@ function localBackendOperations(): FederationBackendOperations {
         source: "peer",
         ...(options?.requesterInstanceId ? { sourceInstanceId: options.requesterInstanceId } : {}),
       });
+    },
+    async continueThreadEnvironmentStartup(request: ContinueThreadEnvironmentStartupRequest): Promise<ContinueThreadEnvironmentStartupResponse> {
+      return await getDesktopBackendRegistry().continueThreadEnvironmentStartup(request);
+    },
+    async acknowledgeThreadEnvironmentFailure(request: AcknowledgeThreadEnvironmentFailureRequest): Promise<AcknowledgeThreadEnvironmentFailureResponse> {
+      return await getDesktopBackendRegistry().acknowledgeThreadEnvironmentFailure(request);
     },
     async setThreadReaction(
       request: SetThreadReactionRequest,

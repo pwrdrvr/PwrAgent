@@ -105,6 +105,7 @@ import {
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
 import { buildIncomingWorkSummary } from "./thread-work-notification";
 import { ThreadCorrespondenceStore } from "./thread-correspondence-store";
+import { PendingEnvironmentLaunchStore, type PendingEnvironmentLaunch } from "./pending-environment-launch-store";
 import { mergeCausalMessagingContext } from "./causal-messaging-context";
 import { rememberBoundedMap } from "../bounded-map";
 import { app } from "electron";
@@ -436,6 +437,10 @@ import {
   type SteerTurnRequest,
   type SteerTurnResponse,
   type StartTurnResponse,
+  type AcknowledgeThreadEnvironmentFailureRequest,
+  type AcknowledgeThreadEnvironmentFailureResponse,
+  type ContinueThreadEnvironmentStartupRequest,
+  type ContinueThreadEnvironmentStartupResponse,
   type StartReviewRequest,
   type StartReviewResponse,
   type StartReviewToolResult,
@@ -8704,6 +8709,7 @@ type CodexRetryableTurnStart = {
 type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
   Pick<
     SqliteOverlayStore,
+    | "acknowledgeThreadEnvironmentFailure"
     | "adoptLegacyRemoteDirectoryLaunchpad"
     | "readThreadGitWorkingStateCache"
     | "completeThreadUsageTurn"
@@ -8989,6 +8995,8 @@ export class DesktopBackendRegistry {
   private providerRuntimeFingerprints?: Readonly<Record<ProviderId, string>>;
   private providerRuntimeInvalidationPromise?: Promise<void>;
   private readonly correspondenceStore: ThreadCorrespondenceStore;
+  private readonly pendingEnvironmentLaunchStore: PendingEnvironmentLaunchStore;
+  private readonly environmentLaunchContinuations = new Map<string, Promise<ContinueThreadEnvironmentStartupResponse>>();
   private readonly overlayStore: BackendRegistryOverlayStoreLike;
   private readonly gitDirectoryService: GitDirectoryService;
   private readonly gitWorkingStateService: GitWorkingStateService;
@@ -10122,6 +10130,7 @@ export class DesktopBackendRegistry {
     codexClient?: BackendClient;
     overlayStore?: BackendRegistryOverlayStoreLike;
     correspondenceStore?: ThreadCorrespondenceStore;
+    pendingEnvironmentLaunchStore?: PendingEnvironmentLaunchStore;
     gitDirectoryService?: GitDirectoryService;
     gitWorkingStateService?: GitWorkingStateService;
     gitWorkspaceHandoffService?: GitWorkspaceHandoffService;
@@ -10284,6 +10293,10 @@ export class DesktopBackendRegistry {
     this.correspondenceStore = options?.correspondenceStore
       ?? new ThreadCorrespondenceStore(isAppStateInitialized()
         ? resolveActiveProfilePath("state/thread-correspondence")
+        : undefined);
+    this.pendingEnvironmentLaunchStore = options?.pendingEnvironmentLaunchStore
+      ?? new PendingEnvironmentLaunchStore(isAppStateInitialized()
+        ? resolveActiveProfilePath("state/pending-environment-launches")
         : undefined);
     const tokenMiserStateDir =
       createsLiveCodexClient && isAppStateInitialized()
@@ -15688,7 +15701,11 @@ export class DesktopBackendRegistry {
       await this.archiveThreadWithoutLifecycleLock(request, undefined, finishMutation),
     );
     this.threadArchiveOperations.set(key, operation);
-    try { return await operation; }
+    try {
+      const result = await operation;
+      this.pendingEnvironmentLaunchStore.delete({ backend: request.backend ?? "codex", threadId: request.threadId });
+      return result;
+    }
     catch (error) {
       backendRegistryLog.warn("thread archive failed", { ...logFields, durationMs: Date.now() - requestedAt, error: error instanceof Error ? error.message : String(error) });
       throw error;
@@ -28304,8 +28321,56 @@ export class DesktopBackendRegistry {
       codexEnvironmentRuntime,
       codexEnvironmentStartupFailure,
     } satisfies MaterializedDirectoryLaunchpadThread;
+    const pendingLaunch: PendingEnvironmentLaunch = {
+      backend: startThreadResponse.backend,
+      threadId: startThreadResponse.threadId,
+      request,
+      launchpad,
+      messageOrigin: options?.messageOrigin,
+    };
+    let continuation: ContinueThreadEnvironmentStartupResponse = {
+      backend: startThreadResponse.backend,
+      threadId: startThreadResponse.threadId,
+    };
+    if (codexEnvironmentStartupFailure) {
+      const retainedInput = await ownThreadInputAttachments(
+        request.input ?? (launchpad.prompt.trim() ? [{ type: "text", text: launchpad.prompt }] : []),
+        pendingLaunch,
+        this.localFilePrivateStorageRoots,
+      );
+      this.pendingEnvironmentLaunchStore.put({ ...pendingLaunch, request: { ...request, input: retainedInput } });
+    }
     await options?.onThreadMaterialized?.(materializedThread);
+    if (!codexEnvironmentStartupFailure) {
+      continuation = await this.startMaterializedLaunchpadRequest(pendingLaunch);
+    }
 
+    if (!request.releaseLaunchpadOnSubmit) {
+      await this.resetLaunchpadDraft(launchpad);
+    } else if (launchpad.prompt.trim()) {
+      // Released at submit. A draft save the renderer sent just before
+      // submitting can still land after that release and bring the sent
+      // prompt back. Clear it again only if it is still that prompt, so a
+      // new draft the operator started meanwhile survives.
+      const current = await this.overlayStore.getDirectoryLaunchpad({
+        directoryKey: launchpad.directoryKey,
+      });
+      if (current?.prompt === launchpad.prompt) {
+        await this.resetLaunchpadDraft(launchpad);
+      }
+    }
+
+    return {
+      ...materializedThread,
+      ...continuation,
+    };
+  }
+
+  private async startMaterializedLaunchpadRequest(
+    pending: PendingEnvironmentLaunch,
+  ): Promise<ContinueThreadEnvironmentStartupResponse> {
+    const { request, launchpad, messageOrigin } = pending;
+    const startThreadResponse = pending;
     const input =
       request.input ??
       (launchpad.prompt.trim()
@@ -28318,9 +28383,7 @@ export class DesktopBackendRegistry {
     let turnStartFailure:
       | MaterializeDirectoryLaunchpadResponse["turnStartFailure"]
       | undefined;
-    if (codexEnvironmentStartupFailure) {
-      turnId = undefined;
-    } else if (request.scheduledFor !== undefined) {
+    if (request.scheduledFor !== undefined) {
       const actionId = `scheduled-action:${randomUUID()}`;
       await this.overlayStore.setThreadScheduledStart({
         backend: launchpad.backend,
@@ -28377,7 +28440,7 @@ export class DesktopBackendRegistry {
                       launchpad.backend === "codex"
                         ? launchpad.fastMode
                         : undefined,
-                    messageOrigin: options?.messageOrigin,
+                    messageOrigin,
                   },
                 }),
           },
@@ -28449,7 +28512,7 @@ export class DesktopBackendRegistry {
           backend: launchpad.backend,
           threadId: startThreadResponse.threadId,
           input,
-          messageOrigin: options?.messageOrigin,
+          messageOrigin,
           model: launchpad.model,
           reasoningEffort: launchpad.reasoningEffort,
           serviceTier: launchpad.serviceTier,
@@ -28465,27 +28528,71 @@ export class DesktopBackendRegistry {
       }
     }
 
-    if (!request.releaseLaunchpadOnSubmit) {
-      await this.resetLaunchpadDraft(launchpad);
-    } else if (launchpad.prompt.trim()) {
-      // Released at submit. A draft save the renderer sent just before
-      // submitting can still land after that release and bring the sent
-      // prompt back. Clear it again only if it is still that prompt, so a
-      // new draft the operator started meanwhile survives.
-      const current = await this.overlayStore.getDirectoryLaunchpad({
-        directoryKey: launchpad.directoryKey,
-      });
-      if (current?.prompt === launchpad.prompt) {
-        await this.resetLaunchpadDraft(launchpad);
-      }
-    }
-
     return {
-      ...materializedThread,
+      backend: pending.backend,
+      threadId: pending.threadId,
       turnId,
       scheduledAction,
       turnStartFailure,
     };
+  }
+
+  async acknowledgeThreadEnvironmentFailure(
+    request: AcknowledgeThreadEnvironmentFailureRequest,
+  ): Promise<AcknowledgeThreadEnvironmentFailureResponse> {
+    const backend = request.backend ?? "codex";
+    return await this.withCodexEnvironmentRuntimeLock(backend, request.threadId, async () => {
+      const acknowledged = await this.overlayStore.acknowledgeThreadEnvironmentFailure?.({ ...request, backend }) ?? false;
+      this.pendingEnvironmentLaunchStore.delete({ backend, threadId: request.threadId });
+      if (acknowledged) {
+        const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId: request.threadId });
+        this.invalidateThreadListCache(backend);
+        await this.emitCodexEnvironmentRuntimeUpdated({ backend, threadId: request.threadId, codexEnvironmentRuntime: overlay?.codexEnvironmentRuntime });
+      }
+      return { backend, threadId: request.threadId, acknowledged };
+    });
+  }
+
+  async continueThreadEnvironmentStartup(
+    request: ContinueThreadEnvironmentStartupRequest,
+  ): Promise<ContinueThreadEnvironmentStartupResponse> {
+    const key = buildThreadIdentityKey(request.backend, request.threadId);
+    const existing = this.environmentLaunchContinuations.get(key);
+    if (existing) return await existing;
+    const continuation = this.resumeEnvironmentLaunch(request);
+    this.environmentLaunchContinuations.set(key, continuation);
+    try { return await continuation; }
+    finally { this.environmentLaunchContinuations.delete(key); }
+  }
+
+  private async resumeEnvironmentLaunch(
+    request: ContinueThreadEnvironmentStartupRequest,
+  ): Promise<ContinueThreadEnvironmentStartupResponse> {
+    if (this.threadHasActiveTurn(request.threadId, request.backend)) {
+      throw new Error("This thread already has an active turn. Refresh it to view the conversation.");
+    }
+    const pending = this.pendingEnvironmentLaunchStore.get(request);
+    const history = await this.readThread({ backend: request.backend, threadId: request.threadId, limit: 1 });
+    if (history.replay.messages.length > 0 || history.replay.entries.some((entry) => entry.type === "message")) {
+      this.pendingEnvironmentLaunchStore.delete(request);
+      throw new Error("This thread has already started. Refresh it to view the conversation.");
+    }
+    let result: ContinueThreadEnvironmentStartupResponse;
+    if (pending) {
+      result = await this.startMaterializedLaunchpadRequest(pending);
+      if (result.turnStartFailure) throw new Error(result.turnStartFailure.message);
+    } else if (request.fallbackTurn?.input.length) {
+      const overlay = await this.overlayStore.getThreadOverlayState(request);
+      if (overlay?.scheduledStart || typeof overlay?.codexEnvironmentRuntime?.setupFailureAcknowledgedAt === "number") {
+        throw new Error("This thread's environment startup has already been continued. Refresh it to view its state.");
+      }
+      result = await this.startTurn({ ...request.fallbackTurn, backend: request.backend, threadId: request.threadId });
+    } else {
+      throw new Error("The original request is unavailable. Send your prompt again to start this thread.");
+    }
+    this.pendingEnvironmentLaunchStore.delete(request);
+    await this.acknowledgeThreadEnvironmentFailure(request);
+    return result;
   }
 
   async markScheduledThreadBorn(params: {

@@ -1,3 +1,4 @@
+import { PendingEnvironmentLaunchStore } from "../app-server/pending-environment-launch-store";
 import type { Options as ClaudeOptions, Query as ClaudeQuery, SDKMessage as ClaudeMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -25860,6 +25861,66 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it.each(["scheduled", "acknowledged"])("rejects a delayed launch fallback after continuation is %s", async (state) => {
+    const identity = { backend: "codex" as const, threadId: "thread-1" };
+    const input = [{ type: "text" as const, text: "Start this work tomorrow" }];
+    const scheduledFor = Date.now() + 86_400_000;
+    const pendingEnvironmentLaunchStore = new PendingEnvironmentLaunchStore();
+    pendingEnvironmentLaunchStore.put({
+      ...identity,
+      request: { directoryKey: "workspace:scheduled", input, scheduledFor },
+      launchpad: {
+        directoryKey: "workspace:scheduled",
+        directoryKind: "workspace",
+        directoryLabel: "Workspaces",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    });
+    const createScheduledThreadAction = vi.fn(async (
+      request: CreateScheduledThreadActionRequest,
+      options: { id: string },
+    ) => ({ action: {
+      ...request, id: options.id, origin: request.origin ?? "desktop" as const,
+      status: "scheduled" as const, createdAt: 1_000, updatedAt: 1_000,
+    } }));
+    const overlayStore = createOverlayStoreMock();
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, pendingEnvironmentLaunchStore, createScheduledThreadAction });
+    try {
+      const response = await registry.continueThreadEnvironmentStartup(identity);
+      expect(response.scheduledAction).toMatchObject({ scheduledFor, status: "scheduled" });
+      expect(pendingEnvironmentLaunchStore.get(identity)).toBeUndefined();
+      if (state === "acknowledged") {
+        await overlayStore.setThreadScheduledStart({ ...identity, scheduledStart: undefined });
+        await overlayStore.setThreadCodexEnvironmentRuntime!({
+          ...identity,
+          codexEnvironmentRuntime: {
+            environmentId: "environment", environmentName: "Fixture", executionTarget: "local",
+            setupStatus: "failed", setupFailureAcknowledgedAt: 1_000,
+          },
+        });
+      }
+      // A different viewer can send its original optimistic prompt after the
+      // owner has restarted, when no active turn or history proves admission.
+      const recovered = new DesktopBackendRegistry({ codexClient, overlayStore, createScheduledThreadAction });
+      try {
+        await expect(recovered.continueThreadEnvironmentStartup({ ...identity, fallbackTurn: { input } }))
+          .rejects.toThrow("environment startup has already been continued");
+      } finally {
+        await recovered.close();
+      }
+      expect(codexClient.startTurnCallCount).toBe(0);
+      expect(createScheduledThreadAction).toHaveBeenCalledOnce();
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("keeps failed environment setup worktree threads registered without starting the turn", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-failure-"));
     const repoPath = path.join(root, "repo");
@@ -25881,6 +25942,7 @@ script = "printf setup-failed && exit 42"
     const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
+      startTurnErrors: [new Error("temporary start failure"), undefined],
     });
     const commandRunner: CodexEnvironmentCommandRunner = vi.fn(async (params) => {
       expect(params).toMatchObject({
@@ -25897,10 +25959,14 @@ script = "printf setup-failed && exit 42"
         },
       );
     });
+    const pendingDirectory = path.join(root, "pending-launches");
+    const acknowledgeThreadEnvironmentFailure = vi.fn(async () => true);
+    const overlayStore = { ...createOverlayStoreMock(), acknowledgeThreadEnvironmentFailure };
     const registry = new DesktopBackendRegistry({
+      pendingEnvironmentLaunchStore: new PendingEnvironmentLaunchStore(pendingDirectory),
       codexClient,
       codexEnvironmentCommandRunner: commandRunner,
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
       gitDirectoryService: {
         prepareLaunchpadWorkspace: vi.fn(async () => ({
           cwd: worktreePath,
@@ -25952,6 +26018,38 @@ script = "printf setup-failed && exit 42"
         threadId: "thread-1",
       });
       expect(codexClient.lastStartTurnParams).toBeUndefined();
+      // A fresh registry and store model an owner restart. The viewer supplies
+      // only a thread identity; the owner recovers the original request.
+      const recovered = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore,
+        pendingEnvironmentLaunchStore: new PendingEnvironmentLaunchStore(pendingDirectory),
+      });
+      try {
+        const request = { backend: "codex" as const, threadId: response.threadId };
+        await expect(recovered.continueThreadEnvironmentStartup(request)).rejects.toThrow("temporary start failure");
+        expect(acknowledgeThreadEnvironmentFailure).not.toHaveBeenCalled();
+        expect(new PendingEnvironmentLaunchStore(pendingDirectory).get(request)?.request.input)
+          .toEqual([{ type: "text", text: "start after setup" }]);
+        const [first, second] = await Promise.all([
+          recovered.continueThreadEnvironmentStartup(request),
+          recovered.continueThreadEnvironmentStartup(request),
+        ]);
+        expect(first.turnId).toBe("turn-1");
+        expect(second).toEqual(first);
+        expect(codexClient.startTurnCallCount).toBe(2);
+        expect(codexClient.lastStartTurnParams).toMatchObject({
+          input: [{ type: "text", text: "start after setup" }],
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+        });
+        expect(commandRunner).toHaveBeenCalledTimes(1);
+        expect(acknowledgeThreadEnvironmentFailure).toHaveBeenCalledOnce();
+        expect(new PendingEnvironmentLaunchStore(pendingDirectory).get(request)).toBeUndefined();
+      } finally {
+        await recovered.close();
+      }
+
     } finally {
       await registry.close();
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
