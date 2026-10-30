@@ -52,6 +52,7 @@ type Resource = {
   anchor?: NavigationQueryAnchor;
   /** Explicit continuation demand survives a short final page and later growth. */
   expandedRows?: number;
+  restoreRows?: number;
 };
 
 /** Semantic demand ignores object insertion order and identity-set ordering. */
@@ -64,6 +65,12 @@ export function navigationDemandKey(request: NavigationQueryRequest): string {
     return value && typeof value === "object" && !Array.isArray(value)
       ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value;
   });
+}
+
+/** Stable across renderer lifetimes, but distinct for every lens/owner/collection. */
+export function navigationResumeQueryKey(request: NavigationQueryRequest): string {
+  return navigationDemandKey({ protocol: 2, consumer: "main-sidebar", query: request.query,
+    inventory: request.inventory, backend: request.backend, federationTarget: request.federationTarget });
 }
 
 /** Prepared at the window's immutable demand boundary, never cached by caller object identity. */
@@ -97,7 +104,11 @@ export class NavigationWindowQueries {
 
   private nextLogical = 0;
   constructor(private readonly api: Pick<DesktopApi, "getNavigationQueryPage" | "releaseNavigationQuery">,
-    private readonly diagnostic = { view: createNavigationDiagnosticView(), effect: 1 }) {
+    private readonly diagnostic = { view: createNavigationDiagnosticView(), effect: 1 },
+    private readonly resume: {
+      loadedRowsByQuery?: Readonly<Record<string, number>>;
+      onLoadMore?: (queryKey: string, rows: number) => void;
+    } = {}) {
     navigationListingDiagnostics.record({ ...diagnostic, phase: "effect" });
   }
 
@@ -176,7 +187,8 @@ export class NavigationWindowQueries {
         value: { id, state: retained ? { ...retained.state, stale: true, error: undefined } : createNavigationPageState(request),
           loading: false, restoredFromCache: Boolean(retained) },
         refreshAfterPending: false, invalidated: false, released: !this.visible, anchor: retained?.anchor ?? request.anchor,
-        expandedRows: retained?.expandedRows,
+        expandedRows: retained?.expandedRows ?? this.resume.loadedRowsByQuery?.[navigationResumeQueryKey(request)],
+        restoreRows: retained ? undefined : this.resume.loadedRowsByQuery?.[navigationResumeQueryKey(request)],
       };
       this.resources.set(id, resource);
       added.push(resource);
@@ -355,6 +367,11 @@ export class NavigationWindowQueries {
     // that explicit continuation demand instead of treating the refresh as it.
     while (this.isCurrent(resource) && resource.pending) await resource.pending;
     await this.read(resource, true);
+    if (this.isCurrent(resource) && resource.value.state.page && resource.expandedRows) {
+      const key = navigationResumeQueryKey(resource.value.state.request);
+      this.resume.loadedRowsByQuery = { ...this.resume.loadedRowsByQuery, [key]: resource.expandedRows };
+      this.resume.onLoadMore?.(key, resource.expandedRows);
+    }
   }
 
   private isCurrent(resource: Resource): boolean {
@@ -465,7 +482,7 @@ export class NavigationWindowQueries {
         };
         let page: NavigationQueryPage;
         let pageCursor = cursor;
-        const restoring = explicitAnchor || fromStart ? 0 : size(started.page);
+        const restoring = explicitAnchor || fromStart ? 0 : Math.max(size(started.page), resource.restoreRows ?? 0);
         if (explicitAnchor || fromStart) resource.expandedRows = undefined;
         if (continuation) resource.expandedRows = restoring + LOAD_MORE_ROWS;
         const wanted = Math.max(restoring, resource.expandedRows ?? 0);
@@ -534,6 +551,7 @@ export class NavigationWindowQueries {
           }
           extensions += 1;
         }
+        resource.restoreRows = undefined;
         resource.value = { ...resource.value, state: next, restoredFromCache: false };
       } catch (error) {
         if (this.isCurrent(resource)) resource.value = { ...resource.value,

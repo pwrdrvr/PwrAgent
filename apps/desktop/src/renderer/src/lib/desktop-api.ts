@@ -611,6 +611,7 @@ import type {
   SetDefaultDesktopPwrAgentProfileRequest,
   SetDefaultDesktopPwrAgentProfileResponse,
   SetNavigationBrowseModeRequest,
+  NavigationResumeState,
   SetNavigationBrowseModeResponse,
   SetPinnedGroupCollapsedRequest,
   SetPinnedGroupCollapsedResponse,
@@ -1279,6 +1280,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   onNavigationMentionSourcesChanged?: (
     callback: () => void,
   ) => () => void;
+  setNavigationResumeState?: (state: NavigationResumeState) => Promise<void>;
   setNavigationBrowseMode?: (
     request: SetNavigationBrowseModeRequest,
   ) => Promise<SetNavigationBrowseModeResponse>;

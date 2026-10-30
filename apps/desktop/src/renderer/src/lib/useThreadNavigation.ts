@@ -1,5 +1,6 @@
 import type { NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 import { readNavigationQueryRange } from "./read-navigation-query-range";
+import { readBridgedNavigationResumeState } from "./navigation-resume-state";
 import { findPeerCounterpartDirectory, type ProjectIdentity } from "./federation-project-match";
 import { FederatedDirectoryIndexCache } from "./federated-directory-index-cache";
 import { useBoundedNavigationWindow } from "./useBoundedNavigationWindow";
@@ -38,6 +39,7 @@ import type {
   RecreateThreadWorktreeRequest,
   RecreateThreadWorktreeResponse,
   NavigationBrowseMode,
+  NavigationResumeState,
   NavigationDirectoryGitStatus,
   NavigationDirectoryGitStatusUpdatedNotification,
   NavigationLaunchpadDefaults,
@@ -3259,7 +3261,13 @@ export function useThreadNavigation(
   refreshSelectedLaunchpadConfiguration: () => Promise<void>;
   threads: NavigationThreadSummary[];
 } {
-  const directoryDisclosure = useNavigationDirectoryDisclosure();
+  const [resumeState] = useState(readBridgedNavigationResumeState);
+  const directoryDisclosure = useNavigationDirectoryDisclosure(resumeState);
+  const [loadedRowsByQuery, setLoadedRowsByQuery] = useRecoverableState<Record<string, number>>(
+    "navigation.loadedRowsByQuery", () => resumeState?.loadedRowsByQuery ?? {});
+  const rememberLoadedRows = useCallback((key: string, rows: number) => {
+    setLoadedRowsByQuery((current) => current[key] === rows ? current : { ...current, [key]: rows });
+  }, [setLoadedRowsByQuery]);
   const { setUnpinnedExpandedByKey } = directoryDisclosure;
   const markThreadSeen = desktopApi?.markThreadSeen;
   const forkThreadRequest = desktopApi?.forkThread;
@@ -3293,13 +3301,14 @@ export function useThreadNavigation(
   const [bridgedPinnedThreadsOnTop] = useState(readBridgedPinnedThreadsOnTop);
   const pinnedThreadsOnTop = options.pinnedThreadsOnTop ?? bridgedPinnedThreadsOnTop;
   const [selectedItemKey, setSelectedItemKey] = useRecoverableState<string | undefined>(
-    "navigation.selection", undefined,
+    "navigation.selection", () => resumeState?.selection ? navigationThreadSelectionKey(resumeState.selection) : undefined,
     // Materialization remains main-owned, but its old hook's pending row and
     // completion callback cannot be rebound to the recovered subtree. Return
     // to the ordinary empty selection instead of retaining an unresolved key.
     (saved) => isStartingLaunchpadSelectionKey(saved) ? undefined : saved,
   );
-  const initialSelectionEstablishedRef = useRecoverableRef("navigation.initialSelectionEstablished", false);
+  const initialSelectionEstablishedRef = useRecoverableRef("navigation.initialSelectionEstablished", Boolean(resumeState));
+  const restoringSelectionKeyRef = useRef(resumeState?.selection ? navigationThreadSelectionKey(resumeState.selection) : undefined);
   const [pendingSeenThreadKey, setPendingSeenThreadKey] = useState<string>();
   const [retainedUnreadThread, setRetainedUnreadThread] =
     useState<NavigationThreadSummary>();
@@ -3676,6 +3685,7 @@ export function useThreadNavigation(
     [state.rows?.threadRows]);
   disclosedParentsRef.current = disclosedParents;
   const boundedNavigation = useBoundedNavigationWindow({ desktopApi, enabled, visible: viewVisible, observeEvents: false,
+    loadedRowsByQuery, onLoadMore: rememberLoadedRows,
     browseMode, target: rendererFederationTarget, attentionView,
     pinnedThreadsOnTop,
     expandedByKey: directoryDisclosure.expandedByKey, unpinnedExpandedByKey: directoryDisclosure.unpinnedExpandedByKey,
@@ -5266,6 +5276,47 @@ export function useThreadNavigation(
     initialSelectionEstablishedRef,
     setSelectedItemKey,
   ]);
+
+  const lastSavedResumeRef = useRef(resumeState ? JSON.stringify(resumeState) : undefined);
+  useEffect(() => {
+    const restoring = restoringSelectionKeyRef.current;
+    if (!restoring) return;
+    if (restoring !== selectedItemKey) {
+      restoringSelectionKeyRef.current = undefined;
+      return;
+    }
+    const detail = selectedDetail.state?.detail;
+    const exact = boundedNavigation.resources.get("selected-context");
+    const query = exact?.state.request.query;
+    const missing = detail?.identity === "unresolved" && exact?.state.page?.coverage.state === "complete"
+      && exact.state.page.complete && !exact.loading && !exact.state.stale && !exact.state.error
+      && query?.kind === "exact" && query.identities.some((ref) => navigationThreadSelectionKey(ref) === restoring)
+      && !exact.state.page.entries.some((entry) => navigationThreadSelectionKey(entry.row.ref) === restoring);
+    if (!detail || navigationThreadSelectionKey(detail.ref) !== restoring
+      || (detail.identity !== "archived" && detail.identity !== "deleted" && !missing)) return;
+    restoringSelectionKeyRef.current = undefined;
+    initialSelectionEstablishedRef.current = false;
+    setSelectedItemKey(undefined);
+  }, [selectedItemKey, selectedDetail.state?.detail, boundedNavigation.resources, initialSelectionEstablishedRef, setSelectedItemKey]);
+  useEffect(() => {
+    if (!enabled || isRendererFederationWindow || !desktopApi?.setNavigationResumeState
+      || !initialSelectionEstablishedRef.current || initialFallbackSelectionKey) return;
+    const snapshot: NavigationResumeState = {
+      version: 1, selection: selectedItemKey ? navigationIdentityFromThreadKey(selectedItemKey) ?? null : null,
+      expandedByKey: directoryDisclosure.expandedByKey,
+      unpinnedExpandedByKey: directoryDisclosure.unpinnedExpandedByKey,
+      loadedRowsByQuery,
+    };
+    const serialized = JSON.stringify(snapshot);
+    if (serialized === lastSavedResumeRef.current) return;
+    lastSavedResumeRef.current = serialized;
+    void desktopApi.setNavigationResumeState(snapshot).catch((error: unknown) => {
+      if (lastSavedResumeRef.current === serialized) lastSavedResumeRef.current = undefined;
+      console.warn("Saving navigation state failed.", error);
+    });
+  }, [enabled, isRendererFederationWindow, desktopApi, selectedItemKey, initialFallbackSelectionKey,
+    directoryDisclosure.expandedByKey, directoryDisclosure.unpinnedExpandedByKey, loadedRowsByQuery,
+    initialSelectionEstablishedRef]);
 
   const activeFederatedLaunchpad =
     federatedLaunchpad

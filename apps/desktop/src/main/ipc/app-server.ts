@@ -208,6 +208,7 @@ import {
   type AcknowledgeThreadSpendAlertRequest,
   type AcknowledgeThreadSpendAlertResponse,
   type SetNavigationBrowseModeRequest,
+  type NavigationResumeState,
   type SetNavigationBrowseModeResponse,
   type SetPinnedGroupCollapsedRequest,
   type SetPinnedGroupCollapsedResponse,
@@ -406,6 +407,7 @@ import {
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
+  NAVIGATION_SET_RESUME_STATE_CHANNEL,
   NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL,
   NAVIGATION_QUERY_PAGE_CHANNEL,
   NAVIGATION_QUERY_RELEASE_CHANNEL,
@@ -2380,6 +2382,10 @@ class DesktopAppServerService {
         },
       });
     } finally { if (!consumerId) navigationQueryPool.release(token); }
+  }
+
+  setNavigationResumeState(state: NavigationResumeState): void {
+    this.getOverlayStore().setNavigationResumeState?.(state);
   }
 
   async setNavigationBrowseMode(
@@ -9570,6 +9576,10 @@ export function registerAppServerIpcHandlers(): void {
     ): Promise<NavigationQueueProjection | NavigationReadFailure> =>
       withNavigationConsumer(event, consumerId, (token) => appServerService.getNavigationQueueProjection(request, token)),
   );
+  ipcMain.removeHandler(NAVIGATION_SET_RESUME_STATE_CHANNEL);
+  ipcMain.handle(NAVIGATION_SET_RESUME_STATE_CHANNEL, (event, state: NavigationResumeState) => {
+    if (!federationWindowTargetForWebContents(event.sender)) appServerService.setNavigationResumeState(state);
+  });
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
   ipcMain.handle(
     NAVIGATION_SET_BROWSE_MODE_CHANNEL,
@@ -10426,6 +10436,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SELECTED_DETAIL_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_QUEUE_PROJECTION_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_SET_RESUME_STATE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);

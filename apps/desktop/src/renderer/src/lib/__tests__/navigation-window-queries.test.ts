@@ -1,7 +1,51 @@
 import type { DesktopApi } from "../desktop-api";
 import { expect, it, vi } from "vitest";
 import type { AgentEvent, NavigationQueryEntry, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
-import { navigationDemandKey, NavigationWindowQueries } from "../navigation-window-queries";
+import { navigationDemandKey, navigationResumeQueryKey, NavigationWindowQueries } from "../navigation-window-queries";
+
+it("restores multiple Load more blocks in a new controller without saving refreshes", async () => {
+  const saved: Record<string, number> = {};
+  const onLoadMore = vi.fn((key: string, rows: number) => { saved[key] = rows; });
+  const api = { getNavigationQueryPage: vi.fn(owner("fresh", 350)) };
+  const first = new NavigationWindowQueries(api, undefined, { onLoadMore });
+  first.setDemand(new Map([["lens", request()]]));
+  await first.refresh();
+  await first.loadMore("lens");
+  await first.loadMore("lens");
+  expect(first.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(210);
+  expect(onLoadMore).toHaveBeenCalledTimes(2);
+  first.dispose();
+  const restored = new NavigationWindowQueries(api, undefined, { loadedRowsByQuery: saved, onLoadMore });
+  try {
+    restored.setDemand(new Map([["lens", request()]]));
+    await restored.refresh();
+    expect(restored.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(210);
+    expect(onLoadMore).toHaveBeenCalledTimes(2);
+    restored.setDemand(new Map([["lens", { ...request(), query: { kind: "lens", lens: "recents" } }]]));
+    await restored.refresh();
+    expect(restored.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(10);
+  } finally { restored.dispose(); }
+});
+
+it("keeps durable query keys independent of transient view ids and distinct for owners", () => {
+  const key = navigationResumeQueryKey(request());
+  expect(navigationResumeQueryKey({ ...request(), pageSize: 100, attentionView: { id: "new-window", promoteOnTurnEnd: true } })).toBe(key);
+  expect(navigationResumeQueryKey({ ...request(), federationTarget: { scope: "remote", instanceId: "peer" } })).not.toBe(key);
+  expect(navigationResumeQueryKey({ ...request(), query: { kind: "directory", directoryKey: "project", roots: "unpinned" } })).not.toBe(key);
+});
+
+it("restores only demanded collections and tolerates fewer available rows", async () => {
+  const req = request();
+  const read = vi.fn(owner("fresh", 25));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined,
+    { loadedRowsByQuery: { [navigationResumeQueryKey(req)]: 210, unused: 1000 } });
+  try {
+    queries.setDemand(new Map([["lens", req]]));
+    await queries.refresh();
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(25);
+    expect(read.mock.calls.every(([value]) => value.query.kind === "lens")).toBe(true);
+  } finally { queries.dispose(); }
+});
 
 function request(filter = ""): NavigationQueryRequest {
   return { protocol: 2, consumer: "main-sidebar", pageSize: 10, query: { kind: "lens", lens: "inbox", filter } };

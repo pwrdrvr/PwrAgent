@@ -26,6 +26,7 @@ import type {
   MarkThreadSeenResponse,
   MessagingThreadBindingSummary,
   NavigationBrowseMode,
+  NavigationResumeState,
   NavigationRelativePinMove,
   NavigationRelativeChildMove,
   ThreadQueuedTurnSummary,
@@ -108,6 +109,7 @@ import {
   isAcpBackendId,
   isRemoteFederationTarget,
   normalizeNavigationBrowseMode,
+  normalizeNavigationResumeState,
   normalizeThreadIdentityKey,
   forgetRecentThreadLockNote,
   parseRecentThreadLockNotes,
@@ -8668,6 +8670,21 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     );
   }
 
+  getNavigationResumeStateSync(): NavigationResumeState | undefined {
+    const raw = this.stateDb.getMeta("navigation_resume_state");
+    try { return raw ? normalizeNavigationResumeState(JSON.parse(raw)) : undefined; }
+    catch { return undefined; }
+  }
+
+  setNavigationResumeState(state: NavigationResumeState): void {
+    const normalized = normalizeNavigationResumeState(state);
+    if (!normalized) throw new Error("Invalid navigation resume state.");
+    const payload = JSON.stringify(normalized);
+    if (payload !== this.stateDb.getMeta("navigation_resume_state")) {
+      this.stateDb.setMeta("navigation_resume_state", payload);
+    }
+  }
+
   async getNavigationBrowseMode(): Promise<NavigationBrowseMode> {
     return this.getNavigationBrowseModeSync();
   }
@@ -11146,6 +11163,7 @@ export type OverlayStoreLike = Pick<
   upsertThreadMessageOrigin?: SqliteOverlayStore["upsertThreadMessageOrigin"];
   readThreadMessageOrigins?: SqliteOverlayStore["readThreadMessageOrigins"];
   setPinnedGroupCollapsed?: SqliteOverlayStore["setPinnedGroupCollapsed"];
+  setNavigationResumeState?: SqliteOverlayStore["setNavigationResumeState"];
   listRecentThreadLockNotes?: SqliteOverlayStore["listRecentThreadLockNotes"];
   rememberRecentThreadLockNote?: SqliteOverlayStore["rememberRecentThreadLockNote"];
   forgetRecentThreadLockNote?: SqliteOverlayStore["forgetRecentThreadLockNote"];

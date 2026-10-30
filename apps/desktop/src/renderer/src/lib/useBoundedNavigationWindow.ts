@@ -19,6 +19,8 @@ export function useBoundedNavigationWindow(params: Demand & {
   enabled: boolean;
   visible: boolean;
   observeEvents?: boolean;
+  loadedRowsByQuery?: Readonly<Record<string, number>>;
+  onLoadMore?: (queryKey: string, rows: number) => void;
 }) {
   const { desktopApi, enabled, visible } = params;
   const [state, setState] = useState<NavigationWindowQueriesState>(EMPTY);
@@ -136,7 +138,10 @@ export function useBoundedNavigationWindow(params: Demand & {
   useEffect(() => {
     const diagnostic = diagnosticRef.current!;
     diagnostic.effect += 1;
-    const controller = new NavigationWindowQueries(paramsRef.current.desktopApi ?? {}, { ...diagnostic });
+    const controller = new NavigationWindowQueries(paramsRef.current.desktopApi ?? {}, { ...diagnostic }, {
+      loadedRowsByQuery: paramsRef.current.loadedRowsByQuery,
+      onLoadMore: (key, rows) => paramsRef.current.onLoadMore?.(key, rows),
+    });
     controllerRef.current = controller;
     selectedRangeCheckedRef.current.clear();
     const unsubscribe = controller.subscribe(() => setState(controller.getSnapshot()));
