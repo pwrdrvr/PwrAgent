@@ -766,10 +766,10 @@
   },
   "navigation-unlink-relative-pin": {
     "commits": 3,
-    "note": "One explicit unlink plus owner pin and relative placement: three commits; 100 children/day at ~4 KiB/commit is ~1.2 MB/day; no idle writes",
+    "note": "One explicit unlink (child row plus the old parent's order) plus owner pin and relative placement: three commits; 100 children/day at ~4 KiB/commit is ~1.2 MB/day; no idle writes",
     "observedWalBytes": 0,
-    "rowsChanged": 3,
-    "statements": 3
+    "rowsChanged": 4,
+    "statements": 4
   },
   "navigation-unread-initial-baseline": {
     "commits": 1,

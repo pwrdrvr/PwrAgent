@@ -49,7 +49,7 @@ code side).
 | `thread.control.compact` | control | Compact the thread's context. |
 | `thread.control.handoff` | control | Move a thread between local/worktree/branches (all `handoff:*` actions), or to another project (`mutate_thread` `projectPath`). Lock or unlock a thread (the status card's Lock/Unlock toggle, `status:lock`, and `mutate_thread` `locked` and `lockNote`). |
 | `thread.control.archive` | control (danger: med) | Let the agent archive a thread (`mutate_thread` `archive: true`), removing the worktrees PwrAgent created for it, or restore an archived one (`archive: false`). Admin only by default. |
-| `thread.control.organize` | control | Let the agent pin or unpin a thread (`mutate_thread` `pinned`), mark it read or unread (`unread`), and mark an entire project read (`mark_project_read`). |
+| `thread.control.organize` | control | Let the agent pin or unpin a thread (`mutate_thread` `pinned`), mark it read or unread (`unread`), group it under another thread as a sub-thread or make it top-level again (`parentThreadId`, `parentBackend`, `detachFromParent`), and mark an entire project read (`mark_project_read`). |
 | `thread.control.schedule` | control | Queue a message to the bound thread for later (`/schedule`) and list or cancel the queue (`/scheduled`). |
 | `approval.respond.default` | interactive | Approve or deny non-escalation approval requests. |
 | `approval.respond.escalation` | interactive (danger: med) | Approve or deny network / exec / filesystem escalation requests. |
@@ -326,7 +326,7 @@ removed:
 | Status / handoff / skills callbacks | Top-guard, on the active binding |
 | Plain message + media turns | The `message.reply` floor, on the active binding (silent, like the floor itself) |
 | Commands (`/status`, `/schedule`, …) | Verb gate, on the active binding |
-| Agent dynamic tools | Added to the required set when the args explicitly target a peer |
+| Agent dynamic tools | Added to the required set when the args explicitly target a peer. Parent mutations also recheck before remote fallback, including when `instanceId` is omitted |
 
 **Three exemptions, each deliberate.** `resume` and `agent` only open the
 picker — it filters itself, and the bind is gated at the funnel. **`detach` is
@@ -352,7 +352,8 @@ onto a peer's thread. `toolArgsTargetRemoteInstance` only catches *explicit*
 targeting (`instanceId`, or `includeRemote: true`), because the check is
 synchronous and runs before resolution. The controller chokepoints above close
 the practical path by gating on the resolved binding; fully closing the ambient
-case belongs at the federation resolution site.
+case belongs at the federation resolution site. Parent mutations now perform that
+check before invoking the remote mutation handler.
 
 ## Deliberately deferred (Phase 1 boundaries)
 

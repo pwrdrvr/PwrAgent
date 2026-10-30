@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import {
   buildInstanceClusters,
+  cloudDropParentRequest,
   computeClusterCloud,
   refitCluster,
   orderParentAdjacent,
@@ -1040,5 +1041,32 @@ describe("project clouds with multiple owners", () => {
     const cloud = computeClusterCloud({ clusters, cardWidth: 200, heightForThread: height });
     expect(cloud.threads).toHaveLength(4);
     expect(new Set(cloud.slots.map((slot) => `${slot.dx}:${slot.dy}`)).size).toBe(4);
+  });
+});
+
+describe("cloudDropParentRequest", () => {
+  const parent = thread("parent");
+  const peer = (capabilities: string[]) => ({
+    ...thread("peer-child"),
+    federation: {
+      capabilities,
+      instanceLabel: "Studio",
+      peerStatus: "connected",
+      ref: { backend: "codex", target: { scope: "remote", instanceId: "pwr_studio" }, threadId: "peer-child" },
+    },
+  }) as unknown as NavigationThreadSummary;
+
+  it("asks this instance to adopt or release a local thread", () => {
+    expect(cloudDropParentRequest(thread("child"), { kind: "adopt", clusterKey: "pc", parent }))
+      .toEqual({ backend: "codex", threadId: "child", parentThreadId: "parent", parentThreadBackend: "codex" });
+    expect(cloudDropParentRequest(thread("child"), { kind: "release", clusterKey: "alpha" }))
+      .toEqual({ backend: "codex", threadId: "child", parentThreadId: null, parentThreadBackend: null });
+  });
+
+  it("routes a peer's thread to that peer, and refuses a peer that cannot group", () => {
+    expect(cloudDropParentRequest(peer(["thread_grouping"]), { kind: "adopt", clusterKey: "pc", parent }))
+      .toMatchObject({ federationTarget: { scope: "remote", instanceId: "pwr_studio" }, threadId: "peer-child" });
+    expect(cloudDropParentRequest(peer(["thread_navigation"]), { kind: "adopt", clusterKey: "pc", parent }))
+      .toBeUndefined();
   });
 });

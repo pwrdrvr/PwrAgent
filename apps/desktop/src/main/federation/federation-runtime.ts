@@ -609,6 +609,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "remote_window",
   "thread_navigation",
   "thread_grouping",
+  "thread_parent_mutation_v1",
   "thread_detail",
   "turn_control",
   "durable_turn_requests_v1",
@@ -7335,6 +7336,9 @@ function localBackendOperations(): FederationBackendOperations {
         },
       });
       return { mounted: true };
+    },
+    async mutateThreadParentV1(request) {
+      return await getDesktopBackendRegistry().mutateThreadParentV1(request);
     },
     async setThreadParent(
       request: SetThreadParentRequest,

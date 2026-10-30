@@ -444,10 +444,12 @@ type SidebarProps = {
     pinned: boolean,
   ) => Promise<void>;
   onReorderThreadPins?: (orderedThreadKeys: string[], move?: NavigationRelativePinMove) => Promise<void>;
+  /** Resolves false when the owner refused the change. */
   onSetThreadParent?: (
     thread: NavigationThreadSummary,
     parentThreadId?: string,
-  ) => Promise<void>;
+    parentThreadBackend?: NavigationThreadSummary["source"],
+  ) => Promise<boolean | void>;
   onUnlinkThreads?: (
     threads: NavigationThreadSummary[],
   ) => Promise<void>;
@@ -1049,6 +1051,23 @@ export function Sidebar(props: SidebarProps) {
     revealHoverStableSnapshot,
     props.onUpdateSubthreadOrder,
   );
+  // A drop on a row. The tray the thread lands in opens, so the drop shows
+  // where the thread went rather than making it vanish. A refused drop
+  // closes it again.
+  const nestThread = useRevealListChange(
+    revealHoverStableSnapshot,
+    props.onSetThreadParent
+      ? (thread: NavigationThreadSummary, parent: NavigationThreadSummary): void => {
+          const setCollapsed = parent.subthreadsCollapsed === true
+            ? props.onSetSubthreadsCollapsed
+            : undefined;
+          void setCollapsed?.(parent, false);
+          void props.onSetThreadParent!(thread, parent.id, parent.source).then((saved) => {
+            if (saved === false) void setCollapsed?.(parent, true);
+          });
+        }
+      : undefined,
+  );
   // The row callbacks this component only forwards. (`onDetachPullRequest`
   // is absent: the rows get this component's own `detachPullRequest`, which
   // owns the confirmation dialog and is already stable.) They are stable in the
@@ -1082,6 +1101,7 @@ export function Sidebar(props: SidebarProps) {
     setDirectoryThreadsCollapsed: releasedSetDirectoryThreadsCollapsed,
     setSubthreadsCollapsed: releasedSetSubthreadsCollapsed,
     setThreadPin,
+    nestThread,
     updateSubthreadOrder: releasedUpdateSubthreadOrder,
   };
   // Counts cover the owner's full population, independently of the visible lens range.
@@ -3266,6 +3286,7 @@ export function Sidebar(props: SidebarProps) {
               onUpdateSubthreadOrder={
                 hoverReleasedListHandlers.updateSubthreadOrder
               }
+              onNestThread={hoverReleasedListHandlers.nestThread}
               onSetSubthreadsCollapsed={
                 hoverReleasedListHandlers.setSubthreadsCollapsed
               }
@@ -3341,6 +3362,7 @@ export function Sidebar(props: SidebarProps) {
                 onUpdateSubthreadOrder={
                   hoverReleasedListHandlers.updateSubthreadOrder
                 }
+                onNestThread={hoverReleasedListHandlers.nestThread}
                 onSetSubthreadsCollapsed={
                   hoverReleasedListHandlers.setSubthreadsCollapsed
                 }
