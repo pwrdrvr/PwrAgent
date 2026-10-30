@@ -36,6 +36,9 @@ import {
   CLAUDE_REPORT_FINDINGS_TOOL, claudeReportFindingsHooks, claudeReviewOutput, isClaudeOutcomeReport, matchClaudeFindingOutcomes,
   parseClaudeCodeReviewPullRequests, parseClaudeFindingsReport, type ClaudeFindingsReport,
 } from "./claude-review-findings";
+import {
+  claudeMonitorSuggestionHooks, mergeClaudeHooks, type ClaudeMonitorSuggestionRequest,
+} from "./claude-monitor-suggestion";
 import type { NamedReviewPullRequest } from "../../shared/review-command";
 import { formatReviewOutputText, reviewEntryFindings } from "../../shared/review-output";
 
@@ -63,6 +66,13 @@ export type ClaudeBackendOptions = {
   resolveReviewContext?: (params: {
     threadId: string; cwd: string; pullRequests?: NamedReviewPullRequest[];
   }) => Promise<AppServerReviewContext | undefined>;
+  /**
+   * Guidance to append to a Bash or Monitor result that waits on CI or polls,
+   * or undefined. Asked after each such call during a turn.
+   */
+  suggestMonitorJob?: (params: ClaudeMonitorSuggestionRequest & {
+    threadId: string; turnId: string;
+  }) => Promise<string | undefined>;
 };
 
 const claudeBackendLog = getMainLogger("pwragent:claude-backend");
@@ -498,6 +508,8 @@ export class ClaudeBackend {
   async startThread(params: {
     cwd: string; model?: string; executionMode: ThreadExecutionMode;
     linkedDirectories?: AppServerThreadSummary["linkedDirectories"];
+    /** A thread PwrAgent runs for its own work, such as a task monitor: never listed, never titled. */
+    hidden?: { title: string };
   }): Promise<{ threadId: string }> {
     await this.requireInstallation();
     const id = randomUUID();
@@ -505,10 +517,12 @@ export class ClaudeBackend {
     await this.store.save({
       cwd: params.cwd,
       thread: {
-        id, source: "claude", title: "Untitled thread", titleSource: "fallback",
+        id, source: "claude",
+        title: params.hidden?.title ?? "Untitled thread", titleSource: params.hidden ? "explicit" : "fallback",
         createdAt: now, updatedAt: now, model: params.model, executionMode: params.executionMode,
         linkedDirectories: params.linkedDirectories ?? [{ id: params.cwd, kind: "local", label: path.basename(params.cwd), path: params.cwd }],
       },
+      ...(params.hidden ? { hidden: true, titleGenerationAttempted: true } : {}),
     });
     return { threadId: id };
   }
@@ -560,7 +574,7 @@ export class ClaudeBackend {
     const filter = params.filter?.toLowerCase();
     // Metadata from builds that could not move a Claude thread still carries
     // their refusal; this build can, so drop it.
-    return (await this.store.list()).map(({ thread: { workspaceHandoff: _refusal, ...thread } }) => ({
+    return (await this.store.list()).filter((session) => !session.hidden).map(({ thread: { workspaceHandoff: _refusal, ...thread } }) => ({
       ...thread, threadStatus: this.sessions.get(thread.id)?.turn ? "active" as const : "idle" as const,
     })).filter((thread) => Boolean(thread.archivedAt) === Boolean(params.archived)
       && (!filter || thread.title.toLowerCase().includes(filter) || thread.id.includes(filter)));
@@ -787,7 +801,14 @@ export class ClaudeBackend {
           cancelRequest: (requestId, turnId) => this.options.cancelRequest(threadId, turnId, requestId),
         }),
         // A findings report that leaves findings skipped tells the agent they are still open.
-        hooks: claudeReportFindingsHooks(),
+        // A CI wait or polling loop is pointed at PwrAgent's PR watch and monitors.
+        hooks: mergeClaudeHooks(
+          claudeReportFindingsHooks(),
+          claudeMonitorSuggestionHooks(async (request) => {
+            const turnId = current.turn?.turnId;
+            return turnId ? await this.options.suggestMonitorJob?.({ ...request, threadId, turnId }) : undefined;
+          }),
+        ),
       };
       let releasePrompt!: () => void;
       const promptReady = new Promise<void>((resolve) => { releasePrompt = resolve; });

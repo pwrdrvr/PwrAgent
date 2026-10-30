@@ -205,6 +205,8 @@ export function buildMonitorDelegationPrompt(params: {
   preferredModel?: string;
   preferredReasoningEffort?: string;
   task: string;
+  /** Claude Code defers MCP tools until ToolSearch loads them. */
+  deferredMcpTools?: boolean;
 }): string {
   const pollInterval =
     normalizePollIntervalSeconds(params.pollIntervalSeconds) ??
@@ -231,9 +233,15 @@ export function buildMonitorDelegationPrompt(params: {
     "",
     "<model_guidance>",
     "- PwrAgent should have started this monitor on a cost-efficient lightweight model.",
-    "- This monitor is already running on the parent provider with the returned preferredModel and preferredReasoningEffort values.",
+    "- This monitor is already running with the returned preferredModel and preferredReasoningEffort values.",
     "- Do not launch or hand off to a different provider runtime.",
     "</model_guidance>",
+    ...(params.deferredMcpTools
+      ? [
+          "",
+          "Before the first call, load the PwrAgent tools with ToolSearch: select:mcp__pwragent__inject_progress,mcp__pwragent__complete_monitoring.",
+        ]
+      : []),
     "",
     "<task>",
     params.task.trim(),

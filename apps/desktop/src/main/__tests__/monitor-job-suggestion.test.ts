@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AppServerNotification } from "@pwragent/shared";
 import {
   buildMonitorJobHeuristicPrompt,
+  isCiWaitCommand,
   MonitorJobHeuristicDetector,
   MonitorJobSuggestionDetector,
   parseMonitorJobHeuristicDecision,
@@ -275,5 +276,34 @@ describe("monitor job suggestions", () => {
     });
     expect(parseMonitorJobHeuristicDecision({ decision: "continue" }))
       .toBeUndefined();
+  });
+});
+
+describe("CI wait commands", () => {
+  // The three waits a Claude thread used on pwrdrvr/PwrDisk#8.
+  it.each([
+    "until gh pr checks 8 -R o/r --json bucket | jq -e 'length>0' >/dev/null; do sleep 30; done; gh pr checks 8 -R o/r | cut -f1,2",
+    "cd /w/disktree; sleep 30; gh pr checks 8 -R o/r --watch --interval 30 >/dev/null 2>&1; gh pr checks 8 -R o/r",
+    "prev=\"\"; sleep 60; while true; do s=$(gh pr checks 8 -R o/r --json name,bucket); sleep 20; done",
+    "gh run watch 123 --exit-status",
+  ])("recognizes %s", (command) => {
+    expect(isCiWaitCommand(command)).toBe(true);
+  });
+
+  it.each([
+    "gh pr checks 8 -R o/r",
+    "gh run view 123 --log-failed",
+    "while read line; do echo $line; done < file",
+    "sleep 30",
+  ])("ignores %s", (command) => {
+    expect(isCiWaitCommand(command)).toBe(false);
+  });
+
+  it("counts a cd-prefixed status read as the same check", () => {
+    const detector = new MonitorJobSuggestionDetector();
+    const observations = [0, 1, 2].map((i) => detector.observe(
+      record(i, `cd /w/repo && gh pr checks 8 --repo o/r`),
+    ));
+    expect(observations).toEqual([false, false, true]);
   });
 });

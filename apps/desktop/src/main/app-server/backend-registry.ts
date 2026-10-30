@@ -62,6 +62,8 @@ import {
   MONITOR_JOB_HEURISTIC_SYSTEM,
   MonitorJobSuggestionDetector,
   MONITOR_JOB_SUGGESTION,
+  CLAUDE_MONITOR_JOB_SUGGESTION,
+  isCiWaitCommand,
   parseMonitorJobHeuristicDecision,
   type MonitorJobHeuristicEvidence,
 } from "./monitor-job-suggestion";
@@ -488,7 +490,10 @@ import {
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
   resolveHelperModel,
+  automaticProviderMonitorModel,
+  isLightweightHelperModel,
   type DesktopHelperModelSettings,
+  type DesktopTaskMonitorModelChoice,
   type HelperModelId,
   type HelperModelResolution,
   DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
@@ -720,6 +725,7 @@ import {
   mergeToolInvocationLifecycleWithStreamedOutput,
   toolAccountingLookbackSince,
   toolInvocationFromNotification,
+  normalizeToolInvocationCommand,
   toolInvocationReviewInputFromNotification,
   type ToolOutputIncidentAggregate,
 } from "./tool-invocation-accounting";
@@ -7609,11 +7615,7 @@ const MONITOR_REASONING_EFFORT_ORDER = [
   "xhigh",
 ] as const;
 
-// Whole name segments only: "gemini-3-pro" must not pass as "mini".
-function isLightweightMonitorModel(modelId: string): boolean {
-  return /(?:^|[^a-z])(?:mini|lite|flash|haiku|small|nano|luna)(?:$|[^a-z])/iu
-    .test(modelId);
-}
+const isLightweightMonitorModel = isLightweightHelperModel;
 
 /**
  * The highest effort an agent may request for a Codex monitor. An effort
@@ -10027,6 +10029,8 @@ export class DesktopBackendRegistry {
     DesktopProviderModelDefaults
   >;
   private readonly resolveHelperModelSettingsFn: () => DesktopHelperModelSettings;
+  /** `[[models.task_monitor_models]]`, keyed by the parent thread's provider. */
+  private readonly resolveTaskMonitorModelsFn: () => Record<string, DesktopTaskMonitorModelChoice>;
   /** `general.pass_setup_variables_to_agents`, read at each agent start. */
   private readonly resolvePassSetupVariablesToAgentsFn: () => boolean;
   private readonly resolveUsageAccountGroupsFn: () => Record<string, string>;
@@ -10172,6 +10176,7 @@ export class DesktopBackendRegistry {
       DesktopProviderModelDefaults
     >;
     resolveHelperModelSettings?: () => DesktopHelperModelSettings;
+    resolveTaskMonitorModels?: () => Record<string, DesktopTaskMonitorModelChoice>;
     resolvePassSetupVariablesToAgents?: () => boolean;
     resolveUsageAccountGroups?: () => Record<string, string>;
     resolveProviderThreadModelMigrations?: () => Record<
@@ -10340,6 +10345,9 @@ export class DesktopBackendRegistry {
     this.resolveHelperModelSettingsFn =
       options?.resolveHelperModelSettings ??
       (() => settingsService?.resolveHelperModelSettings?.() ?? { helpers: {} });
+    this.resolveTaskMonitorModelsFn =
+      options?.resolveTaskMonitorModels ??
+      (() => settingsService?.resolveTaskMonitorModels?.() ?? {});
     this.resolvePassSetupVariablesToAgentsFn =
       options?.resolvePassSetupVariablesToAgents ??
       (() => settingsService?.resolvePassSetupVariablesToAgents?.() ?? true);
@@ -10920,6 +10928,7 @@ export class DesktopBackendRegistry {
         target: { type: "custom", instructions: "/code-review" },
         ...(pullRequests ? { namedPullRequests: pullRequests } : {}),
       }),
+      suggestMonitorJob: async (request) => await this.suggestClaudeMonitorJob(request),
       ...options?.claudeBackendOptions,
     });
     this.acpBackend = new AcpBackendAdapter({
@@ -35267,6 +35276,51 @@ export class DesktopBackendRegistry {
     }, { kind: "pwragent", systemReason: "monitor-job-suggestion" });
   }
 
+  /**
+   * The Claude form of the monitor suggestion, appended to the Bash or Monitor
+   * result that earned it. Claude waits on CI in one background shell or one
+   * Monitor watcher, so a single CI wait qualifies; repeated foreground checks
+   * qualify through the same detector Codex uses. At most once per turn.
+   */
+  private async suggestClaudeMonitorJob(params: {
+    threadId: string;
+    turnId: string;
+    toolName: string;
+    command: string;
+    toolUseId?: string;
+  }): Promise<string | undefined> {
+    const backend = "claude";
+    const { threadId, turnId } = params;
+    const normalized = normalizeToolInvocationCommand({
+      toolName: params.toolName,
+      command: params.command,
+    });
+    const repeated = this.monitorJobSuggestionDetector.observe({
+      backend,
+      threadId,
+      turnId,
+      invocationId: params.toolUseId ?? `${turnId}:${Date.now()}`,
+      toolName: params.toolName,
+      category: normalized.category,
+      normalizedCommand: normalized.normalizedCommand,
+      observedAt: Date.now(),
+    });
+    if (!repeated && !isCiWaitCommand(params.command)) return undefined;
+    if (this.resolveSubAgentThreadOwner({ backend, threadId }).isSubAgent) return undefined;
+    if (Array.from(this.taskMonitorDelegations.values()).some(
+      (record) => record.backend === backend && record.monitorThreadId === threadId,
+    ) || this.completedTaskMonitorsByThread.has(taskMonitorThreadKey(backend, threadId))) return undefined;
+    if (!await this.monitorJobSuggestionEnabledForThread(backend, threadId)) return undefined;
+    if (!this.overlayStore.claimMonitorJobSuggestion({ backend, threadId, turnId })) return undefined;
+    backendRegistryLog.info("monitor job suggestion appended to Claude tool result", {
+      threadId,
+      turnId,
+      toolName: params.toolName,
+      reason: repeated ? "repeated-check" : "ci-wait",
+    });
+    return CLAUDE_MONITOR_JOB_SUGGESTION;
+  }
+
   private async monitorJobSuggestionEnabledForThread(
     backend: AppServerBackendKind,
     threadId: string,
@@ -43638,6 +43692,7 @@ export class DesktopBackendRegistry {
     const requestedModel = args.preferredModel?.trim() || undefined;
     const requestedReasoningEffort =
       args.preferredReasoningEffort?.trim() || undefined;
+    let monitorBackend: AppServerBackendKind;
     let preferredModel: string;
     let preferredReasoningEffort: string;
     let runtimeModel: string | undefined;
@@ -43648,6 +43703,7 @@ export class DesktopBackendRegistry {
         preferredModel: requestedModel,
         preferredReasoningEffort: requestedReasoningEffort,
       });
+      monitorBackend = resolved.monitorBackend;
       preferredModel = resolved.preferredModel;
       preferredReasoningEffort = resolved.preferredReasoningEffort;
       runtimeModel = resolved.runtimeModel;
@@ -43666,6 +43722,7 @@ export class DesktopBackendRegistry {
       startupTimeoutSeconds,
     });
     const prompt = buildMonitorDelegationPrompt({
+      deferredMcpTools: monitorBackend === "claude",
       finalHandoffPrompt: args.finalHandoffPrompt,
       monitorContext: args.monitorContext,
       monitorId,
@@ -43679,8 +43736,9 @@ export class DesktopBackendRegistry {
       preferredModel !== requestedModel ||
       preferredReasoningEffort !== requestedReasoningEffort
     ) {
-      const codexMonitor = !isAcpBackendId(context.backend);
+      const codexMonitor = monitorBackend === "codex";
       backendRegistryLog.info("adjusted task monitor model settings", {
+        monitorBackend,
         monitorId,
         parentThreadId,
         preferredModel,
@@ -43702,7 +43760,9 @@ export class DesktopBackendRegistry {
       causalContext,
       ...(ancestry.rootTurnId ? { rootTurnId: ancestry.rootTurnId } : {}),
       activeCommandCount: 0,
-      backend: context.backend,
+      // The monitor thread's provider. A Claude parent's monitor may run on
+      // Codex, and every lookup by monitor thread matches this backend.
+      backend: monitorBackend,
       createdAt: Date.now(),
       finalHandoffPrompt: args.finalHandoffPrompt?.trim() || undefined,
       heartbeatIntervalSeconds,
@@ -43722,7 +43782,7 @@ export class DesktopBackendRegistry {
     backendRegistryLog.info("created task monitor delegation", {
       heartbeatIntervalSeconds,
       monitorId,
-      monitorBackend: context.backend,
+      monitorBackend,
       parentThreadId,
       pollIntervalSeconds,
       startupTimeoutSeconds,
@@ -43740,6 +43800,7 @@ export class DesktopBackendRegistry {
         ...(record.rootTurnId ? { rootTurnId: record.rootTurnId } : {}),
         causalContext,
         cwd: args.cwd,
+        monitorBackend,
         monitorId,
         preferredModel,
         preferredReasoningEffort,
@@ -44003,21 +44064,43 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * Where a monitor runs and on which model. A Codex parent's monitor runs on
+   * the Helper model. Another provider's runs on its own lightweight model
+   * (Automatic), on a model the operator chose for that provider, or on the
+   * Helper model when the operator chose it.
+   */
   private async resolveTaskMonitorModelSettings(params: {
     backend: AppServerBackendKind;
     parentThreadId: string;
     preferredModel?: string;
     preferredReasoningEffort?: string;
   }): Promise<{
+    monitorBackend: AppServerBackendKind;
     preferredModel: string;
     preferredReasoningEffort: string;
     runtimeModel?: string;
   }> {
-    if (isAcpBackendId(params.backend)) {
-      return this.resolveAcpTaskMonitorModelSettings({
-        ...params,
-        backend: params.backend,
-      });
+    const choice = params.backend === "codex"
+      ? undefined
+      : this.resolveTaskMonitorModelsFn()[params.backend];
+    if (choice?.source !== "helper" && isAcpBackendId(params.backend)) {
+      return {
+        monitorBackend: params.backend,
+        ...this.resolveAcpTaskMonitorModelSettings({
+          ...params,
+          backend: params.backend,
+          // The operator's choice outranks the agent's request.
+          preferredModel: choice?.model ?? params.preferredModel,
+          preferredReasoningEffort: choice?.reasoningEffort ?? params.preferredReasoningEffort,
+        }),
+      };
+    }
+    if (choice?.source !== "helper" && params.backend === "claude") {
+      return {
+        monitorBackend: "claude",
+        ...this.resolveClaudeTaskMonitorModelSettings({ ...params, choice }),
+      };
     }
 
     const discoveredModels = await this.readCodexDefaultModelsOnce("task-monitor");
@@ -44058,9 +44141,42 @@ export class DesktopBackendRegistry {
     });
 
     return {
+      monitorBackend: "codex",
       preferredModel: selection.model ?? models[0].id,
       preferredReasoningEffort: selection.reasoningEffort ?? "provider-default",
     };
+  }
+
+  /**
+   * A Claude parent's monitor: the operator's model, else a lightweight model
+   * the agent asked for, else Claude's newest lightweight model. The `haiku`
+   * alias stands in until model discovery has run.
+   */
+  private resolveClaudeTaskMonitorModelSettings(params: {
+    choice?: DesktopTaskMonitorModelChoice;
+    preferredModel?: string;
+    preferredReasoningEffort?: string;
+  }): { preferredModel: string; preferredReasoningEffort: string; runtimeModel: string } {
+    const models = this.claudeBackend.summary().launchpadOptions?.models ?? [];
+    const requestedModel =
+      params.preferredModel && isLightweightMonitorModel(params.preferredModel)
+        ? params.preferredModel
+        : undefined;
+    const model = params.choice?.model
+      ?? requestedModel
+      ?? automaticProviderMonitorModel(models)
+      ?? "haiku";
+    const entry = models.find((candidate) => candidate.id === model);
+    const requestedEffort = params.choice?.reasoningEffort
+      ?? (params.preferredReasoningEffort
+        && isLightweightMonitorReasoningEffort(params.preferredReasoningEffort)
+        ? params.preferredReasoningEffort
+        : undefined);
+    const preferredReasoningEffort =
+      requestedEffort && entry?.reasoningEfforts?.includes(requestedEffort)
+        ? requestedEffort
+        : "provider-default";
+    return { preferredModel: model, preferredReasoningEffort, runtimeModel: model };
   }
 
   private resolveAcpTaskMonitorModelSettings(params: {
@@ -44084,7 +44200,8 @@ export class DesktopBackendRegistry {
       (requestedModel
         ? models.find((model) => model.id === requestedModel)
         : undefined) ??
-      models.find((model) => isLightweightMonitorModel(model.id)) ??
+      // Settings labels Automatic with this same pick.
+      models.find((model) => model.id === automaticProviderMonitorModel(models)) ??
       models.find(
         (model) => model.id === parentSession?.acpRuntime?.currentModelId,
       ) ??
@@ -44133,6 +44250,8 @@ export class DesktopBackendRegistry {
     causalContext?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
     context: TaskMonitorRequest<"create_monitor_delegation">["context"];
     cwd?: string;
+    /** The provider the monitor thread runs on. */
+    monitorBackend: AppServerBackendKind;
     monitorId: string;
     preferredModel: string;
     preferredReasoningEffort: string;
@@ -44173,8 +44292,10 @@ export class DesktopBackendRegistry {
         params.context.threadId,
         sourceOverlay,
       ));
+    // A Codex monitor reports through its dynamic tools whatever provider
+    // its parent runs on. Claude and ACP monitors use PwrAgent's MCP server.
     const dynamicTools =
-      params.context.backend === "codex"
+      params.monitorBackend === "codex"
         ? buildTaskMonitorDynamicToolSpecs("monitor")
         : [];
 
@@ -44190,6 +44311,7 @@ export class DesktopBackendRegistry {
               sourceOverlay.codexEnvironmentRuntime.shellEnvironment,
             ).length
           : 0,
+      monitorBackend: params.monitorBackend,
       monitorId: params.monitorId,
       model: params.preferredModel,
       parentThreadId: params.context.threadId,
@@ -44198,7 +44320,30 @@ export class DesktopBackendRegistry {
       toolCount: dynamicTools.length,
     });
 
-    if (isAcpBackendId(params.context.backend)) {
+    if (params.monitorBackend === "claude") {
+      const thread = await this.claudeBackend.startThread({
+        cwd: cwd ?? os.homedir(),
+        executionMode,
+        model: params.runtimeModel ?? params.preferredModel,
+        hidden: { title: "Task monitor" },
+      });
+      const turn = await this.startTurnWithoutHandoff({
+        backend: "claude",
+        threadId: thread.threadId,
+        input: [{ type: "text", text: params.prompt }],
+        executionMode,
+        model: params.runtimeModel ?? params.preferredModel,
+        ...(params.preferredReasoningEffort === "provider-default"
+          ? {}
+          : { reasoningEffort: params.preferredReasoningEffort }),
+        ...(params.causalContext?.causalMessagingSource || params.causalContext?.causalMessagingAmbiguous
+          ? { messageOrigin: { kind: "sub-agent" as const, ...params.causalContext } }
+          : {}),
+      });
+      return { cwd, executionMode, threadId: turn.threadId, turnId: turn.turnId };
+    }
+
+    if (isAcpBackendId(params.monitorBackend) && isAcpBackendId(params.context.backend)) {
       const parentSession = this.acpBackend.getSession(
         params.context.backend,
         params.context.threadId,
@@ -44764,6 +44909,35 @@ export class DesktopBackendRegistry {
     });
 
     try {
+      if (record.backend === "claude") {
+        const turn = await this.startTurnWithoutHandoff({
+          backend: "claude",
+          threadId: record.monitorThreadId,
+          input: [{
+            type: "text",
+            text: buildTaskMonitorRecoveryPrompt({
+              monitorId: record.monitorId,
+              task: record.task,
+              terminalStatus: params.terminalStatus,
+            }),
+          }],
+          executionMode,
+          model: record.runtimeModel ?? record.preferredModel,
+          ...(record.preferredReasoningEffort === "provider-default"
+            ? {}
+            : { reasoningEffort: record.preferredReasoningEffort }),
+        });
+        record.monitorTurnId = turn.turnId;
+        record.lastActivityAt = Date.now();
+        backendRegistryLog.warn("started Claude task monitor recovery turn", {
+          monitorId: record.monitorId,
+          monitorThreadId: record.monitorThreadId,
+          monitorTurnId: record.monitorTurnId,
+          parentThreadId: record.parentThreadId,
+          terminalStatus: params.terminalStatus,
+        });
+        return;
+      }
       if (isAcpBackendId(record.backend)) {
         const turn = await this.startAcpTurn({
           backend: record.backend,
@@ -44852,7 +45026,7 @@ export class DesktopBackendRegistry {
     if (!record.monitorThreadId || !record.monitorTurnId) {
       throw new Error("Task monitor does not expose an active turn.");
     }
-    if (isAcpBackendId(record.backend)) {
+    if (isAcpBackendId(record.backend) || record.backend === "claude") {
       await this.interruptTurn({
         backend: record.backend,
         threadId: record.monitorThreadId,

@@ -23,6 +23,8 @@ export type ClaudeSession = {
    * `forkSession`, and the session Claude creates becomes `sdkSessionId`.
    */
   forkFromSdkSessionId?: string;
+  /** A thread PwrAgent runs for its own work, such as a task monitor. Never listed. */
+  hidden?: boolean;
   /** At most one native title request, including failed requests, across restarts. */
   titleGenerationAttempted?: boolean;
   modelUsage?: ClaudeUsageTotals;
