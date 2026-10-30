@@ -45,7 +45,6 @@ describe("PwrAgent legacy agent tool namespaces", () => {
       context: {
         backend: "codex",
         threadId: "agent-thread",
-        turnId: "turn-1",
       },
       args: { limit: 5 },
     });

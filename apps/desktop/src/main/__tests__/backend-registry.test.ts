@@ -49040,7 +49040,6 @@ script = "printf setup"
       {
         backend: "codex",
         threadId: "agent-thread",
-        turnId: "turn-1",
       },
     );
 
@@ -50315,7 +50314,6 @@ script = "printf setup"
       {
         backend: "codex",
         threadId: "agent-thread",
-        turnId: "turn-1",
       },
     );
 
@@ -50394,7 +50392,6 @@ script = "printf setup"
       {
         backend: "codex",
         threadId: "agent-thread",
-        turnId: "turn-1",
       },
     );
     expect(response).toMatchObject({ success: true });

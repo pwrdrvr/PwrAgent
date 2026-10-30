@@ -237,7 +237,6 @@ describe("PwrAgent thread agent tools", () => {
       context: {
         backend: "codex",
         threadId: "agent-thread",
-        turnId: "turn-1",
       },
       args: {
         query: "PwrAgent",
