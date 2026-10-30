@@ -201,6 +201,8 @@ import {
   type SetThreadLockResponse,
   type SetThreadToolIncidentNoticeRequest,
   type SetThreadToolIncidentNoticeResponse,
+  type ContinueThreadEnvironmentStartupRequest,
+  type ContinueThreadEnvironmentStartupResponse,
   type AcknowledgeThreadEnvironmentFailureRequest,
   type AcknowledgeThreadEnvironmentFailureResponse,
   type ListPendingThreadSpendAlertsRequest,
@@ -208,6 +210,7 @@ import {
   type AcknowledgeThreadSpendAlertRequest,
   type AcknowledgeThreadSpendAlertResponse,
   type SetNavigationBrowseModeRequest,
+  type NavigationResumeState,
   type SetNavigationBrowseModeResponse,
   type SetPinnedGroupCollapsedRequest,
   type SetPinnedGroupCollapsedResponse,
@@ -390,6 +393,7 @@ import {
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
   NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
+  NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL,
   NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -406,6 +410,7 @@ import {
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
+  NAVIGATION_SET_RESUME_STATE_CHANNEL,
   NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL,
   NAVIGATION_QUERY_PAGE_CHANNEL,
   NAVIGATION_QUERY_RELEASE_CHANNEL,
@@ -2380,6 +2385,10 @@ class DesktopAppServerService {
         },
       });
     } finally { if (!consumerId) navigationQueryPool.release(token); }
+  }
+
+  setNavigationResumeState(state: NavigationResumeState): void {
+    this.getOverlayStore().setNavigationResumeState?.(state);
   }
 
   async setNavigationBrowseMode(
@@ -7076,26 +7085,26 @@ class DesktopAppServerService {
     };
   }
 
+  async continueThreadEnvironmentStartup(
+    request: ContinueThreadEnvironmentStartupRequest,
+  ): Promise<ContinueThreadEnvironmentStartupResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget)
+        .continueThreadEnvironmentStartup(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().continueThreadEnvironmentStartup(request);
+  }
+
   async acknowledgeThreadEnvironmentFailure(
     request: AcknowledgeThreadEnvironmentFailureRequest,
   ): Promise<AcknowledgeThreadEnvironmentFailureResponse> {
-    const backend = request.backend ?? "codex";
-    const acknowledged = await this.getOverlayStore()
-      .acknowledgeThreadEnvironmentFailure({
-        acknowledgedAt: request.acknowledgedAt,
-        backend,
-        threadId: request.threadId,
-      });
-    logDebug("acknowledgeThreadEnvironmentFailure", {
-      acknowledged,
-      backend,
-      threadId: request.threadId,
-    });
-    return {
-      acknowledged,
-      backend,
-      threadId: request.threadId,
-    };
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget)
+        .acknowledgeThreadEnvironmentFailure(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().acknowledgeThreadEnvironmentFailure(request);
   }
 
   async setThreadReaction(
@@ -9570,6 +9579,10 @@ export function registerAppServerIpcHandlers(): void {
     ): Promise<NavigationQueueProjection | NavigationReadFailure> =>
       withNavigationConsumer(event, consumerId, (token) => appServerService.getNavigationQueueProjection(request, token)),
   );
+  ipcMain.removeHandler(NAVIGATION_SET_RESUME_STATE_CHANNEL);
+  ipcMain.handle(NAVIGATION_SET_RESUME_STATE_CHANNEL, (event, state: NavigationResumeState) => {
+    if (!federationWindowTargetForWebContents(event.sender)) appServerService.setNavigationResumeState(state);
+  });
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
   ipcMain.handle(
     NAVIGATION_SET_BROWSE_MODE_CHANNEL,
@@ -9669,6 +9682,12 @@ export function registerAppServerIpcHandlers(): void {
     ): Promise<AcknowledgeThreadSpendAlertResponse> => {
       return await appServerService.acknowledgeThreadSpendAlert(request);
     },
+  );
+  ipcMain.removeHandler(NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL,
+    async (_event, request: ContinueThreadEnvironmentStartupRequest): Promise<ContinueThreadEnvironmentStartupResponse> =>
+      await appServerService.continueThreadEnvironmentStartup(request),
   );
   ipcMain.removeHandler(NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL);
   ipcMain.handle(
@@ -10426,6 +10445,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SELECTED_DETAIL_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_QUEUE_PROJECTION_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_SET_RESUME_STATE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);

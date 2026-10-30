@@ -300,6 +300,8 @@ import type {
   ThreadLockNoteRequest,
   SetThreadToolIncidentNoticeRequest,
   SetThreadToolIncidentNoticeResponse,
+  ContinueThreadEnvironmentStartupRequest,
+  ContinueThreadEnvironmentStartupResponse,
   AcknowledgeThreadEnvironmentFailureRequest,
   AcknowledgeThreadEnvironmentFailureResponse,
   ListPendingThreadSpendAlertsRequest,
@@ -611,6 +613,7 @@ import type {
   SetDefaultDesktopPwrAgentProfileRequest,
   SetDefaultDesktopPwrAgentProfileResponse,
   SetNavigationBrowseModeRequest,
+  NavigationResumeState,
   SetNavigationBrowseModeResponse,
   SetPinnedGroupCollapsedRequest,
   SetPinnedGroupCollapsedResponse,
@@ -1279,6 +1282,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   onNavigationMentionSourcesChanged?: (
     callback: () => void,
   ) => () => void;
+  setNavigationResumeState?: (state: NavigationResumeState) => Promise<void>;
   setNavigationBrowseMode?: (
     request: SetNavigationBrowseModeRequest,
   ) => Promise<SetNavigationBrowseModeResponse>;
@@ -1519,6 +1523,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   acknowledgeThreadSpendAlert?: (
     request: AcknowledgeThreadSpendAlertRequest,
   ) => Promise<AcknowledgeThreadSpendAlertResponse>;
+  continueThreadEnvironmentStartup?: (
+    request: ContinueThreadEnvironmentStartupRequest,
+  ) => Promise<ContinueThreadEnvironmentStartupResponse>;
   acknowledgeThreadEnvironmentFailure?: (
     request: AcknowledgeThreadEnvironmentFailureRequest,
   ) => Promise<AcknowledgeThreadEnvironmentFailureResponse>;

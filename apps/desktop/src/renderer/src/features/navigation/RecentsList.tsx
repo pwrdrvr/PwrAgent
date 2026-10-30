@@ -21,6 +21,7 @@ import {
 import { PinIcon } from "../../icons";
 import { useDropIndicatorController } from "./drag-drop";
 import { useSubthreadReorderDrag } from "./useSubthreadReorderDrag";
+import { useThreadNestDrag } from "./useThreadNestDrag";
 import { createSubthreadTrays } from "./subthread-trays";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import {
@@ -136,6 +137,11 @@ type RecentsListProps = {
     parent: NavigationThreadSummary,
     move: NavigationRelativeChildMove,
   ) => Promise<void>;
+  /** A thread dropped on another row becomes its sub-thread. */
+  onNestThread?: (
+    thread: NavigationThreadSummary,
+    parent: NavigationThreadSummary,
+  ) => void;
   onSetSubthreadsCollapsed?: (
     parent: NavigationThreadSummary,
     collapsed: boolean,
@@ -183,6 +189,7 @@ export function RecentsList(props: RecentsListProps) {
     dropIndicator: pinDropIndicator,
     onReorderThreadPins: props.onReorderThreadPins,
     onSetThreadPin: props.onSetThreadPin,
+    onNestThread: props.onNestThread,
   });
   const threadByKey = new Map(
     (props.loadedThreads ?? props.threads).map((thread) => [
@@ -193,6 +200,11 @@ export function RecentsList(props: RecentsListProps) {
   const pointerDownSubthread = useSubthreadReorderDrag({
     threadByKey,
     onUpdateSubthreadOrder: props.onUpdateSubthreadOrder,
+    onNestThread: props.onNestThread,
+  });
+  const pointerDownNestThread = useThreadNestDrag({
+    threadByKey,
+    onNestThread: props.onNestThread,
   });
   const presentation = props.presentationOrder ?? readNavigationPresentationOrder(props.pagedNavigation?.resources ?? new Map());
   const entries = props.pagedNavigation ? (props.resourceIds ?? ["lens"]).flatMap((id) => presentation.get(id) ?? []) : undefined;
@@ -348,11 +360,13 @@ export function RecentsList(props: RecentsListProps) {
           }
           const child = entry.thread;
           const childKey = threadSummaryIdentityKey(child);
-          const reorderable =
+          // Any row in the tray drags to nest it under another row, a sole
+          // child or a grandchild too; only direct children also reorder.
+          const draggable =
             canManageSubthreads
-            && directChildKeys.length > 1
-            && directChildKeySet.has(childKey)
-            && Boolean(props.onUpdateSubthreadOrder);
+            && (Boolean(props.onNestThread)
+              || (directChildKeySet.has(childKey) && directChildKeys.length > 1
+                && Boolean(props.onUpdateSubthreadOrder)));
           // A row plus its own worker group, as siblings of this list. A
           // wrapping element would break the tray's flat list semantics.
           return [
@@ -368,7 +382,7 @@ export function RecentsList(props: RecentsListProps) {
               renaming={isRenamingRow(props.renamingRow, childKey, undefined)}
               onRequestRename={props.onRequestRenameThread}
               onCommitRename={props.onCommitRenameThread}
-              pointerDraggable={reorderable}
+              pointerDraggable={draggable}
               includeLinkedDirectories
               nested
               nestedDepth={trays.depth(childKey)}
@@ -378,7 +392,7 @@ export function RecentsList(props: RecentsListProps) {
               thinkingThreadKeys={props.thinkingThreadKeys}
               agentCommandThreadKeys={props.agentCommandThreadKeys}
               thread={child}
-              onPointerDownThread={reorderable ? pointerDownSubthread : undefined}
+              onPointerDownThread={draggable ? pointerDownSubthread : undefined}
               onOpenContextMenu={props.onOpenThreadContextMenu}
               onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
               onDetachPullRequest={props.onDetachPullRequest}
@@ -518,8 +532,10 @@ export function RecentsList(props: RecentsListProps) {
           subthreadCount={subthreadCount}
           subthreadsCollapsed={subthreadsCollapsed}
           threadPinState={pinned ? "pinned" : undefined}
-          pointerDraggable={pinned && pinOrderingEnabled}
-          onPointerDownThread={pinned && pinOrderingEnabled ? pointerDownPinnedThread : undefined}
+          pointerDraggable={(pinned && pinOrderingEnabled) || Boolean(props.onNestThread)}
+          onPointerDownThread={pinned && pinOrderingEnabled
+            ? pointerDownPinnedThread
+            : props.onNestThread ? pointerDownNestThread : undefined}
           onMovePinnedThread={pinned && pinOrderingEnabled ? movePinnedThread : undefined}
           onToggleSubthreads={
             subthreadCount > 0

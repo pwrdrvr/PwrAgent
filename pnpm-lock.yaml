@@ -255,7 +255,7 @@ importers:
         version: 3.4.2(katex@0.19.0)(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0)
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.303
-        version: 0.3.303(@anthropic-ai/sdk@0.133.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.4.3))(zod@4.4.3)
+        version: 0.3.303(@anthropic-ai/sdk@0.133.0(zod@4.6.6))(@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.6.6))(zod@4.6.6)
       '@fontsource/geist-mono':
         specifier: ^5.3.0
         version: 5.3.0
@@ -264,7 +264,7 @@ importers:
         version: 5.3.0
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
-        version: 1.32.1(supports-color@7.2.0)(zod@4.4.3)
+        version: 1.32.1(supports-color@7.2.0)(zod@4.6.6)
       '@napi-rs/canvas':
         specifier: 1.0.11
         version: 1.0.11
@@ -306,7 +306,7 @@ importers:
         version: link:../../packages/shared
       '@pwrdrvr/agent-acp':
         specifier: ^0.16.1
-        version: 0.16.1(zod@4.4.3)
+        version: 0.16.1(zod@4.6.6)
       '@pwrdrvr/agent-client':
         specifier: ^0.8.2
         version: 0.8.2
@@ -436,10 +436,13 @@ importers:
       ws:
         specifier: 8.22.0
         version: 8.22.0
+      zod:
+        specifier: 4.6.6
+        version: 4.6.6
     devDependencies:
       '@agentclientprotocol/sdk':
         specifier: 1.9.0
-        version: 1.9.0(zod@4.4.3)
+        version: 1.9.0(zod@4.6.6)
       '@axe-core/playwright':
         specifier: ^4.11.3
         version: 4.14.0(playwright-core@1.63.0(patch_hash=8554b4c8ba32f72c901e65b8d75d007a24c94f013f9df9983f0dda077f94c82d))
@@ -513,7 +516,7 @@ importers:
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
-        version: 1.32.1(supports-color@7.2.0)(zod@4.4.3)
+        version: 1.32.1(supports-color@7.2.0)(zod@4.6.6)
       '@pwrdrvr/codex-app-server-protocol':
         specifier: 0.164.0
         version: 0.164.0
@@ -5863,8 +5866,8 @@ packages:
   zod@4.3.6:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
 
-  zod@4.4.3:
-    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+  zod@4.6.6:
+    resolution: {integrity: sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA==}
 
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
@@ -5873,13 +5876,13 @@ snapshots:
 
   '@adobe/css-tools@4.5.0': {}
 
-  '@agentclientprotocol/sdk@1.3.0(zod@4.4.3)':
+  '@agentclientprotocol/sdk@1.3.0(zod@4.6.6)':
     dependencies:
-      zod: 4.4.3
+      zod: 4.6.6
 
-  '@agentclientprotocol/sdk@1.9.0(zod@4.4.3)':
+  '@agentclientprotocol/sdk@1.9.0(zod@4.6.6)':
     dependencies:
-      zod: 4.4.3
+      zod: 4.6.6
 
   '@ai-markdown/engine@3.4.2(katex@0.19.0)(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0)':
     dependencies:
@@ -5995,11 +5998,11 @@ snapshots:
   '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.303':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk@0.3.303(@anthropic-ai/sdk@0.133.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.4.3))(zod@4.4.3)':
+  '@anthropic-ai/claude-agent-sdk@0.3.303(@anthropic-ai/sdk@0.133.0(zod@4.6.6))(@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.6.6))(zod@4.6.6)':
     dependencies:
-      '@anthropic-ai/sdk': 0.133.0(zod@4.4.3)
-      '@modelcontextprotocol/sdk': 1.32.1(supports-color@7.2.0)(zod@4.4.3)
-      zod: 4.4.3
+      '@anthropic-ai/sdk': 0.133.0(zod@4.6.6)
+      '@modelcontextprotocol/sdk': 1.32.1(supports-color@7.2.0)(zod@4.6.6)
+      zod: 4.6.6
     optionalDependencies:
       '@anthropic-ai/claude-agent-sdk-darwin-arm64': 0.3.303
       '@anthropic-ai/claude-agent-sdk-darwin-x64': 0.3.303
@@ -6010,12 +6013,12 @@ snapshots:
       '@anthropic-ai/claude-agent-sdk-win32-arm64': 0.3.303
       '@anthropic-ai/claude-agent-sdk-win32-x64': 0.3.303
 
-  '@anthropic-ai/sdk@0.133.0(zod@4.4.3)':
+  '@anthropic-ai/sdk@0.133.0(zod@4.6.6)':
     dependencies:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.1.1
     optionalDependencies:
-      zod: 4.4.3
+      zod: 4.6.6
 
   '@asamuzakjp/css-color@7.1.5':
     dependencies:
@@ -6578,7 +6581,7 @@ snapshots:
     dependencies:
       '@chevrotain/types': 11.1.2
 
-  '@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.4.3)':
+  '@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.6.6)':
     dependencies:
       '@hono/node-server': 2.0.10(hono@4.13.5)
       ajv: 8.20.0
@@ -6595,8 +6598,8 @@ snapshots:
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
-      zod: 4.4.3
-      zod-to-json-schema: 3.25.2(zod@4.4.3)
+      zod: 4.6.6
+      zod-to-json-schema: 3.25.2(zod@4.6.6)
     transitivePeerDependencies:
       - supports-color
 
@@ -6981,9 +6984,9 @@ snapshots:
 
   '@protobufjs/utf8@1.1.2': {}
 
-  '@pwrdrvr/agent-acp@0.16.1(zod@4.4.3)':
+  '@pwrdrvr/agent-acp@0.16.1(zod@4.6.6)':
     dependencies:
-      '@agentclientprotocol/sdk': 1.3.0(zod@4.4.3)
+      '@agentclientprotocol/sdk': 1.3.0(zod@4.6.6)
       '@pwrdrvr/agent-core': 0.2.0
       '@pwrdrvr/agent-transport': 0.1.7
     transitivePeerDependencies:
@@ -6995,7 +6998,7 @@ snapshots:
       '@pwrdrvr/agent-transport': 0.1.7
       '@pwrdrvr/codex-app-server-protocol': 0.144.0
       '@pwrdrvr/codex-discovery': 0.4.0
-      zod: 4.4.3
+      zod: 4.6.6
 
   '@pwrdrvr/agent-core@0.2.0': {}
 
@@ -11687,9 +11690,9 @@ snapshots:
 
   yocto-queue@0.1.0: {}
 
-  zod-to-json-schema@3.25.2(zod@4.4.3):
+  zod-to-json-schema@3.25.2(zod@4.6.6):
     dependencies:
-      zod: 4.4.3
+      zod: 4.6.6
 
   zod-validation-error@4.0.2(zod@4.3.6):
     dependencies:
@@ -11697,6 +11700,6 @@ snapshots:
 
   zod@4.3.6: {}
 
-  zod@4.4.3: {}
+  zod@4.6.6: {}
 
   zwitch@2.0.4: {}

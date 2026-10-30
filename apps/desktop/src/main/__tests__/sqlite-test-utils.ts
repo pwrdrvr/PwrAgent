@@ -84,12 +84,12 @@ export function createTempStateDb(prefix: string): {
 }
 
 /**
- * Opens through the real `StateDb.open`, building a new file's schema from
- * empty.
+ * Opens through the real `StateDb.open`, building a new file's or a
+ * `:memory:` database's schema from empty.
  *
- * `desktop-main` serves every other new file from a migrated copy (see
- * `test-setup/state-db-template.ts`). Use this only in a test that asserts
- * how creation itself behaves, such as its commit count.
+ * `desktop-main` serves every other new file and `:memory:` open from a
+ * migrated copy (see `test-setup/state-db-template.ts`). Use this only in a
+ * test that asserts how creation itself behaves, such as its commit count.
  */
 export function openFreshStateDb(
   dbPath: string,

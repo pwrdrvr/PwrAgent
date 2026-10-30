@@ -2,7 +2,9 @@ import {
   buildThreadIdentityKey,
   type NavigationThreadSummary,
   type NavigationDirectoryRow,
+  type SetThreadParentRequest,
 } from "@pwragent/shared";
+import { threadSupportsFederationCapability } from "../../lib/federated-thread-events";
 import {
   STAR_MAP_ESTIMATED_CARD_HEIGHT,
   type StarMapCardSlot,
@@ -1381,4 +1383,24 @@ export function resolveCloudDrop(params: {
   }
 
   return { kind: "adopt", clusterKey: target.key, parent };
+}
+
+/**
+ * The regroup a cloud drop asks the thread's owner for. A peer's thread
+ * routes to that peer, which alone stores its grouping. A peer that cannot
+ * group gets no request, so the drop is refused rather than kept here.
+ */
+export function cloudDropParentRequest(
+  thread: NavigationThreadSummary,
+  drop: Exclude<StarMapCloudDrop, { kind: "none" }>,
+): SetThreadParentRequest | undefined {
+  if (!threadSupportsFederationCapability(thread, "thread_grouping")) return undefined;
+  return {
+    ...(thread.federation ? { federationTarget: thread.federation.ref.target } : {}),
+    backend: thread.source,
+    threadId: thread.id,
+    ...(drop.kind === "adopt"
+      ? { parentThreadId: drop.parent.id, parentThreadBackend: drop.parent.source }
+      : { parentThreadId: null, parentThreadBackend: null }),
+  };
 }

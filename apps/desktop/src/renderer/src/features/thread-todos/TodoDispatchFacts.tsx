@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
   BackendSummary,
   CodexSpeed,
@@ -14,6 +14,16 @@ import {
   selectedCodexSpeed,
   threadTodoActionProject,
 } from "@pwragent/shared";
+import {
+  ChevronDownIcon,
+  ChevronUpIcon,
+  FileCodeIcon,
+  FolderIcon,
+  LightningIcon,
+  ServerIcon,
+  ShieldIcon,
+  WorktreeIcon,
+} from "../../icons";
 import { TodoFactMenu, type TodoFactMenuEntry } from "./TodoFactMenu";
 import { TodoModelPicker, TodoModelProvenance } from "./TodoModelPicker";
 import { todoDispatchPickKey, useTodoDispatchContext, useTodoMachineBackends } from "./TodoDispatchProvider";
@@ -60,6 +70,11 @@ export type TodoDispatchTarget = {
   setSpeed: (speed: CodexSpeed) => void;
   setWorkMode: (workMode: ThreadTodoWorkMode) => void;
   setEnvironment: (environment: string) => void;
+  /** A dispatch provider holds the choices, so every mounted copy of the card shares them. */
+  choicesShared: boolean;
+  /** The labelled grid is open instead of the chip row. Window-local, per card. */
+  settingsExpanded: boolean;
+  setSettingsExpanded: (expanded: boolean) => void;
   /** The run request's dispatch fields, as the chips show them. */
   runOptions: () => ThreadTodoRunOptions;
 };
@@ -153,6 +168,10 @@ export function useTodoDispatchTarget(params: {
       setSpeed: () => {},
       setWorkMode: () => {},
       setEnvironment: () => {},
+      choicesShared: context.provided,
+      // Model and Where alone already fit the grid.
+      settingsExpanded: true,
+      setSettingsExpanded: () => {},
       runOptions: () => ({ modelSettings: ownerSelection.settings }),
     };
   }
@@ -186,6 +205,9 @@ export function useTodoDispatchTarget(params: {
     setEnvironment: (next) => choose((current) => ({
       ...current, environments: { ...current.environments, [machine.key]: next },
     })),
+    choicesShared: context.provided,
+    settingsExpanded: choices.settingsExpanded === true,
+    setSettingsExpanded: (next) => choose((current) => ({ ...current, settingsExpanded: next })),
     runOptions: () => ({
       ...(!onOwner && machine.instanceId ? { startOnInstanceId: machine.instanceId } : {}),
       ...(model ? { modelSettings: model.settings } : {}),
@@ -371,113 +393,197 @@ export function TodoDispatchFacts(props: {
       )
     : undefined;
 
+  // The provider's choice survives a remount and is shared by the stack's
+  // and the To-dos panel's copy of the card. Without a provider, which
+  // keeps no choices, the card holds its own.
+  const [localExpanded, setLocalExpanded] = useState(false);
+  // An older owner's card has only Model and Where, which fit the grid.
+  const expanded = target.legacy || (target.choicesShared ? target.settingsExpanded : localExpanded);
+  // A toggle moves focus to its counterpart, which mounts in the other layout.
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const focusToggleRef = useRef(false);
+  useLayoutEffect(() => {
+    if (!focusToggleRef.current) return;
+    focusToggleRef.current = false;
+    toggleRef.current?.focus();
+  }, [expanded]);
+  const toggle = target.legacy ? null : (
+    <button
+      ref={toggleRef}
+      type="button"
+      className="todo-dispatch__toggle tooltip-target"
+      aria-expanded={expanded}
+      aria-label={expanded ? "Hide start settings labels" : "Show start settings"}
+      data-tooltip={expanded ? "Collapse" : "Show labels"}
+      onClick={() => {
+        focusToggleRef.current = true;
+        if (target.choicesShared) target.setSettingsExpanded(!expanded);
+        else setLocalExpanded(!expanded);
+      }}
+    >
+      {expanded ? <ChevronUpIcon size={12} /> : <ChevronDownIcon size={12} />}
+    </button>
+  );
+
+  // The same controls in both layouts. Collapsed, an icon and a tooltip
+  // name each one instead of the grid's label.
+  const compact = !expanded;
+  const machine = target.machines.length > 1 ? (
+    <TodoFactMenu
+      label="Machine for the new thread"
+      value={target.machine.label}
+      entries={machineEntries}
+      changed={!target.onOwner}
+      disabled={props.disabled}
+      testId="todo-dispatch-machine"
+      {...(compact ? { icon: ServerIcon, tooltip: `Machine: ${target.machine.label}` } : {})}
+    />
+  ) : null;
+  const model = target.onOwner ? (
+    <TodoModelPicker todo={todo} selection={target.model!} onPick={target.pickModel} disabled={props.disabled} />
+  ) : target.model ? (
+    <TodoModelPicker
+      todo={todo}
+      selection={target.model}
+      onPick={target.pickModel}
+      disabled={props.disabled}
+      backends={target.backends ?? []}
+      machineLabel={machineName}
+      changed={target.fit !== "kept"}
+    />
+  ) : (
+    <span className="todo-dispatch__pending">
+      {target.backends ? `No provider on ${machineName} can start a thread` : "Loading…"}
+    </span>
+  );
+  const speedLabel = speed ? CODEX_SPEED_LABELS[speed.speed] : "";
+  const speedChip = speed && !target.legacy ? (
+    <TodoFactMenu
+      label="Speed for the new thread"
+      value={speedLabel}
+      entries={speed.options.map((option) => ({
+        kind: "item",
+        key: option,
+        label: CODEX_SPEED_LABELS[option],
+        checked: option === speed.speed,
+        onSelect: () => target.setSpeed(option),
+      }))}
+      changed={speed.changed}
+      disabled={props.disabled || speed.locked !== undefined}
+      testId="todo-dispatch-speed"
+      {...(compact
+        ? {
+            icon: LightningIcon,
+            // Standard is the bare bolt and a faster tier is named and lit,
+            // as the composer draws its speed control.
+            iconOnly: speed.speed === "standard",
+            lit: speed.speed !== "standard",
+            tooltip: speedTooltip ?? `Speed: ${speedLabel}`,
+          }
+        : speedTooltip ? { tooltip: speedTooltip } : {})}
+    />
+  ) : null;
+  const whereValue = target.workMode === "worktree" ? "New worktree" : localLabel;
+  const where = target.legacy ? whereValue : (
+    <TodoFactMenu
+      label="Where the new thread works"
+      value={whereValue}
+      entries={whereEntries}
+      changed={target.workModeChanged}
+      disabled={props.disabled}
+      testId="todo-dispatch-where"
+      {...(compact
+        ? { icon: target.workMode === "worktree" ? WorktreeIcon : FolderIcon, tooltip: `Where: ${whereValue}` }
+        : {})}
+    />
+  );
+  const env = target.legacy ? null : (
+    <TodoFactMenu
+      label="Environment for the new thread"
+      value={environmentValue}
+      entries={environmentEntries}
+      changed={environment.changed}
+      disabled={props.disabled || !ready || !ready.projectFound}
+      testId="todo-dispatch-environment"
+      {...(compact
+        ? { icon: FileCodeIcon, tooltip: environmentTooltip ?? `Environment: ${environmentValue}` }
+        : environmentTooltip ? { tooltip: environmentTooltip } : {})}
+    />
+  );
+
+  const provenance = target.onOwner ? (
+    <TodoModelProvenance todo={todo} selection={target.model!} onPick={target.pickModel} disabled={props.disabled} />
+  ) : fitNote ? (
+    <p className="todo-model-picker__provenance">{fitNote}</p>
+  ) : null;
+
+  if (compact) {
+    return (
+      <>
+        <div className="todo-dispatch-chips" role="group" aria-label="Start settings">
+          {machine}
+          {model}
+          {speedChip}
+          {props.access ? (
+            <span
+              className="todo-dispatch-chips__static tooltip-target"
+              data-tooltip={`Access: ${props.access}`}
+              aria-label={`Access for the new thread: ${props.access}`}
+              role="img"
+            >
+              <ShieldIcon size={12} aria-hidden="true" />
+              <span className="todo-dispatch-chips__static-label">{props.access}</span>
+            </span>
+          ) : null}
+          {where}
+          {env}
+          {toggle}
+        </div>
+        {provenance}
+      </>
+    );
+  }
+
   return (
     <>
-      <dl className="thread-todo-card__facts">
-        {target.machines.length > 1 ? (
+      <div className="todo-dispatch-grid">
+        <dl className="thread-todo-card__facts">
+          {machine ? (
+            <div className="thread-todo-card__fact thread-todo-card__fact--model">
+              <dt>Machine</dt>
+              <dd>{machine}</dd>
+            </div>
+          ) : null}
           <div className="thread-todo-card__fact thread-todo-card__fact--model">
-            <dt>Machine</dt>
-            <dd>
-              <TodoFactMenu
-                label="Machine for the new thread"
-                value={target.machine.label}
-                entries={machineEntries}
-                changed={!target.onOwner}
-                disabled={props.disabled}
-                testId="todo-dispatch-machine"
-              />
-            </dd>
+            <dt>Model</dt>
+            <dd>{model}</dd>
           </div>
-        ) : null}
-        <div className="thread-todo-card__fact thread-todo-card__fact--model">
-          <dt>Model</dt>
-          <dd>
-            {target.onOwner ? (
-              <TodoModelPicker todo={todo} selection={target.model!} onPick={target.pickModel} disabled={props.disabled} />
-            ) : target.model ? (
-              <TodoModelPicker
-                todo={todo}
-                selection={target.model}
-                onPick={target.pickModel}
-                disabled={props.disabled}
-                backends={target.backends ?? []}
-                machineLabel={machineName}
-                changed={target.fit !== "kept"}
-              />
-            ) : (
-              <span className="todo-dispatch__pending">
-                {target.backends ? `No provider on ${machineName} can start a thread` : "Loading…"}
-              </span>
-            )}
-          </dd>
-        </div>
-        {speed && !target.legacy ? (
-          <div className="thread-todo-card__fact thread-todo-card__fact--model">
-            <dt>Speed</dt>
-            <dd>
-              <TodoFactMenu
-                label="Speed for the new thread"
-                value={CODEX_SPEED_LABELS[speed.speed]}
-                entries={speed.options.map((option) => ({
-                  kind: "item",
-                  key: option,
-                  label: CODEX_SPEED_LABELS[option],
-                  checked: option === speed.speed,
-                  onSelect: () => target.setSpeed(option),
-                }))}
-                changed={speed.changed}
-                disabled={props.disabled || speed.locked !== undefined}
-                {...(speedTooltip ? { tooltip: speedTooltip } : {})}
-                testId="todo-dispatch-speed"
-              />
-            </dd>
-          </div>
-        ) : null}
-        {props.access ? (
-          <div className="thread-todo-card__fact">
-            <dt>Access</dt>
-            <dd>{props.access}</dd>
-          </div>
-        ) : null}
-        {target.legacy ? (
-          <div className="thread-todo-card__fact">
+          {speedChip ? (
+            <div className="thread-todo-card__fact thread-todo-card__fact--model">
+              <dt>Speed</dt>
+              <dd>{speedChip}</dd>
+            </div>
+          ) : null}
+          {props.access ? (
+            <div className="thread-todo-card__fact">
+              <dt>Access</dt>
+              <dd>{props.access}</dd>
+            </div>
+          ) : null}
+          <div className={`thread-todo-card__fact${target.legacy ? "" : " thread-todo-card__fact--model"}`}>
             <dt>Where</dt>
-            <dd>{target.workMode === "worktree" ? "New worktree" : localLabel}</dd>
+            <dd>{where}</dd>
           </div>
-        ) : null}
-        {target.legacy ? null : <div className="thread-todo-card__fact thread-todo-card__fact--model">
-          <dt>Where</dt>
-          <dd>
-            <TodoFactMenu
-              label="Where the new thread works"
-              value={target.workMode === "worktree" ? "New worktree" : localLabel}
-              entries={whereEntries}
-              changed={target.workModeChanged}
-              disabled={props.disabled}
-              testId="todo-dispatch-where"
-            />
-          </dd>
-        </div>}
-        {target.legacy ? null : <div className="thread-todo-card__fact thread-todo-card__fact--model">
-          <dt>Env</dt>
-          <dd>
-            <TodoFactMenu
-              label="Environment for the new thread"
-              value={environmentValue}
-              entries={environmentEntries}
-              changed={environment.changed}
-              disabled={props.disabled || !ready || !ready.projectFound}
-              {...(environmentTooltip ? { tooltip: environmentTooltip } : {})}
-              testId="todo-dispatch-environment"
-            />
-          </dd>
-        </div>}
-      </dl>
-      {target.onOwner ? (
-        <TodoModelProvenance todo={todo} selection={target.model!} onPick={target.pickModel} disabled={props.disabled} />
-      ) : fitNote ? (
-        <p className="todo-model-picker__provenance">{fitNote}</p>
-      ) : null}
+          {env ? (
+            <div className="thread-todo-card__fact thread-todo-card__fact--model">
+              <dt>Env</dt>
+              <dd>{env}</dd>
+            </div>
+          ) : null}
+        </dl>
+        {toggle}
+      </div>
+      {provenance}
     </>
   );
 }

@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.3.6 - 2026-10-30
+
+- Thread Families - Drag an existing thread onto another sidebar thread to make it a sub-thread. Reorganize parent-child relationships locally and on connected machines, with protection against circular links.
+- Claude Task Monitors - Hand CI and long-running job waits to lightweight PwrAgent monitors. Choose each provider's monitor model in Settings, or use the Codex helper model.
+- Claude Tool Results - Display images returned by Claude tools and show MCP calls as clearly named transcript rows.
+- Approval Details - Make long tool-approval values fully readable, including in messaging, so you can inspect the requested action before approving it.
+- Merge To-dos - Show a live pull-request chip on merge cards, with status, a hover preview, and a direct link to the PR.
+
 ## v1.3.5 - 2026-10-29
 
 - Offline HTML and File Previews - Open HTML files with local images and styles in an offline sandbox. Scripts are off by default; external links require confirmation. Add compact file-viewer headers and file chips in transcripts.

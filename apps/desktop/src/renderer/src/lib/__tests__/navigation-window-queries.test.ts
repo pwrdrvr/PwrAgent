@@ -1,11 +1,208 @@
 import type { DesktopApi } from "../desktop-api";
 import { expect, it, vi } from "vitest";
 import type { AgentEvent, NavigationQueryEntry, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
-import { navigationDemandKey, NavigationWindowQueries } from "../navigation-window-queries";
+import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
+import { navigationDemandKey, navigationResumeQueryKey, NavigationWindowQueries } from "../navigation-window-queries";
+
+it("restores multiple Load more blocks in a new controller without saving refreshes", async () => {
+  const saved: Record<string, number> = {};
+  const onLoadMore = vi.fn((key: string, rows: number) => { saved[key] = rows; });
+  const api = { getNavigationQueryPage: vi.fn(owner("fresh", 350)) };
+  const first = new NavigationWindowQueries(api, undefined, { onLoadMore });
+  first.setDemand(new Map([["lens", request()]]));
+  await first.refresh();
+  await first.loadMore("lens");
+  await first.loadMore("lens");
+  expect(first.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(210);
+  expect(onLoadMore).toHaveBeenCalledTimes(2);
+  first.dispose();
+  const restored = new NavigationWindowQueries(api, undefined, { loadedRowsByQuery: saved, onLoadMore });
+  try {
+    restored.setDemand(new Map([["lens", request()]]));
+    await restored.refresh();
+    expect(restored.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(210);
+    expect(onLoadMore).toHaveBeenCalledTimes(2);
+    restored.setDemand(new Map([["lens", { ...request(), query: { kind: "lens", lens: "recents" } }]]));
+    await restored.refresh();
+    expect(restored.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(10);
+  } finally { restored.dispose(); }
+});
+
+it("keeps durable query keys independent of transient view ids and distinct for owners", () => {
+  const key = navigationResumeQueryKey(request());
+  expect(navigationResumeQueryKey({ ...request(), pageSize: 100, attentionView: { id: "new-window", promoteOnTurnEnd: true } })).toBe(key);
+  expect(navigationResumeQueryKey({ ...request(), federationTarget: { scope: "remote", instanceId: "peer" } })).not.toBe(key);
+  expect(navigationResumeQueryKey({ ...request(), query: { kind: "directory", directoryKey: "project", roots: "unpinned" } })).not.toBe(key);
+});
+
+it("restores only demanded collections and tolerates fewer available rows", async () => {
+  const req = request();
+  const read = vi.fn(owner("fresh", 25));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined,
+    { loadedRowsByQuery: { [navigationResumeQueryKey(req)]: 210, unused: 1000 } });
+  try {
+    queries.setDemand(new Map([["lens", req]]));
+    await queries.refresh();
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(25);
+    expect(read.mock.calls.every(([value]) => value.query.kind === "lens")).toBe(true);
+  } finally { queries.dispose(); }
+});
 
 function request(filter = ""): NavigationQueryRequest {
   return { protocol: 2, consumer: "main-sidebar", pageSize: 10, query: { kind: "lens", lens: "inbox", filter } };
 }
+
+it.each(["reads", "time"] as const)("bounds saved pagination demand on startup by %s", async (budget) => {
+  let now = 0;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const read = vi.fn(async (request: NavigationQueryRequest) => {
+    if (budget === "time") now += 10_000;
+    return owner("fresh", 1000)({ ...request, pageSize: 1 });
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined,
+    { loadedRowsByQuery: { [navigationResumeQueryKey(request())]: 210 } });
+  try {
+    queries.setDemand(new Map([["lens", request()]]));
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+    const state = queries.getSnapshot().resources.get("lens")!.state;
+    const delivered = budget === "reads" ? 9 : 1;
+    expect(read).toHaveBeenCalledTimes(delivered);
+    expect(state.page?.directories).toHaveLength(delivered);
+    expect(state.page?.nextCursor).toBeDefined();
+    expect(state.error).toBeUndefined();
+    const cursorRequests = read.mock.calls.map(([sent]) => sent).filter((sent) => sent.cursor);
+    expect(cursorRequests.every((sent) => sent.deadlineAt === 10_000)).toBe(true);
+    // Later owner events refresh the delivered range without buying more
+    // expansion work toward a stale persisted target.
+    read.mockClear();
+    await queries.refresh();
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(delivered);
+    expect(read).toHaveBeenCalledTimes(delivered);
+  } finally { queries.dispose(); clock.mockRestore(); }
+});
+
+it("does not start saved expansion when a list is first opened after startup", async () => {
+  let now = 0;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const later = request("later");
+  const read = vi.fn(async (request: NavigationQueryRequest) => owner("fresh", 1000)({ ...request, pageSize: 1 }));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined, {
+    loadedRowsByQuery: { [navigationResumeQueryKey(later)]: 100_000 },
+  });
+  try {
+    queries.setDemand(new Map([["lens", request()]]));
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+    now = 10_001;
+    read.mockClear();
+    queries.setDemand(new Map([["lens", later]]));
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(1);
+  } finally { queries.dispose(); clock.mockRestore(); }
+});
+
+it("shares one saved-expansion read budget across lists and size retries", async () => {
+  const left = request("left");
+  const right = request("right");
+  const read = vi.fn(async (request: NavigationQueryRequest) => {
+    const result = await owner("fresh", 1000)({ ...request, pageSize: 1 });
+    // A federation stamp can push a page over its owner's byte budget.
+    return request.cursor && (request.pageSize ?? 0) > 1
+      ? { ...result, generation: "x".repeat(NAVIGATION_QUERY_MAX_RESULT_BYTES) } : result;
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined, {
+    loadedRowsByQuery: { [navigationResumeQueryKey(left)]: 210, [navigationResumeQueryKey(right)]: 210 },
+  });
+  try {
+    queries.setDemand(new Map([["left", left], ["right", right]]));
+    await vi.waitFor(() => expect([...queries.getSnapshot().resources.values()].every((resource) => !resource.loading)).toBe(true));
+    expect(read.mock.calls.filter(([sent]) => sent.cursor)).toHaveLength(8);
+    expect(read).toHaveBeenCalledTimes(10);
+    for (const resource of queries.getSnapshot().resources.values()) {
+      expect(resource.state.page?.directories).toHaveLength(1);
+      expect(resource.state.error).toBeUndefined();
+      expect(resource.state.page?.nextCursor).toBeDefined();
+    }
+  } finally { queries.dispose(); }
+});
+
+it("publishes the first page before a saved continuation fails and does not retry the saved target", async () => {
+  const extension = deferred<NavigationQueryPage>();
+  const read = vi.fn(async (request: NavigationQueryRequest) => request.cursor
+    ? extension.promise : owner("fresh", 1000)({ ...request, pageSize: 1 }));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined, {
+    loadedRowsByQuery: { [navigationResumeQueryKey(request())]: 100_000 },
+  });
+  try {
+    queries.setDemand(new Map([["lens", request()]]));
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    const resource = queries.getSnapshot().resources.get("lens")!;
+    expect(resource.loading).toBe(true);
+    expect(resource.state.page?.directories).toHaveLength(1);
+    // Resolve a non-advancing page, which the continuation reader rejects.
+    extension.resolve(page({ generation: "fresh", countsRevision: "fresh", directories: [] }));
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(1);
+    expect(queries.getSnapshot().resources.get("lens")?.state.error).toContain("did not advance");
+    read.mockClear();
+    await queries.refresh();
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(queries.getSnapshot().resources.get("lens")?.state.error).toBeUndefined();
+  } finally { queries.dispose(); }
+});
+
+it.each(["demand", "visibility"] as const)("does not revive saved expansion after %s interrupts startup", async (interrupt) => {
+  const extension = deferred<NavigationQueryPage>();
+  const read = vi.fn(async (request: NavigationQueryRequest) => request.cursor
+    ? extension.promise : owner("fresh", 1000)({ ...request, pageSize: 1 }));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined, {
+    loadedRowsByQuery: { [navigationResumeQueryKey(request())]: 100_000 },
+  });
+  const demand = new Map([["lens", request()]]);
+  try {
+    queries.setDemand(demand);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    if (interrupt === "demand") { queries.setDemand(new Map()); queries.setDemand(demand); }
+    else { queries.setVisible(false); queries.setVisible(true); }
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+    extension.resolve(page({ directories: directoryRows(1, 100), nextCursor: "late:100" }));
+    await queries.refresh();
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(1);
+    expect(read.mock.calls.filter(([sent]) => sent.cursor)).toHaveLength(1);
+  } finally { queries.dispose(); }
+});
+
+it.each(["restart", "rebaseline"] as const)("keeps an explicit %s reset across lens changes and a new controller", async (reset) => {
+  const key = navigationResumeQueryKey(request());
+  const saved: Record<string, number> = { [key]: 210 };
+  const onRangeReset = vi.fn((queryKey: string) => { delete saved[queryKey]; });
+  const api = { getNavigationQueryPage: vi.fn(owner("fresh", 350)) };
+  const queries = new NavigationWindowQueries(api, undefined, { loadedRowsByQuery: saved, onRangeReset });
+  const demand = new Map([["lens", request()]]);
+  const settled = (controller: NavigationWindowQueries) => vi.waitFor(() =>
+    expect(controller.getSnapshot().resources.get("lens")?.loading).toBe(false));
+  try {
+    queries.setDemand(demand);
+    await settled(queries);
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(210);
+    if (reset === "restart") await queries.restart("lens");
+    else await queries.rebaseline("lens", { kind: "directory", key: "0" });
+    expect(onRangeReset).toHaveBeenCalledExactlyOnceWith(key);
+    expect(saved[key]).toBeUndefined();
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(10);
+    queries.setDemand(new Map([["lens", { ...request(), query: { kind: "lens", lens: "recents" } }]]));
+    await settled(queries);
+    queries.setDemand(demand);
+    await settled(queries);
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(10);
+  } finally { queries.dispose(); }
+  const reopened = new NavigationWindowQueries(api, undefined, { loadedRowsByQuery: saved });
+  try {
+    reopened.setDemand(demand);
+    await settled(reopened);
+    expect(reopened.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(10);
+  } finally { reopened.dispose(); }
+});
 function page(patch: Partial<NavigationQueryPage> = {}): NavigationQueryPage {
   return { protocol: 2, queryKey: "query", generation: "generation", ownerEpoch: "owner", countsRevision: "revision",
     counts: { total: 100, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, entries: [], complete: false, nextCursor: "next", ...patch };

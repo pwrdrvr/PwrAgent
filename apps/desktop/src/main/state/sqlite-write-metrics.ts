@@ -173,6 +173,8 @@ export function attachSqliteWriteMetrics(params: {
   const db = params.db;
   const originalPrepare = db.prepare.bind(db);
   const originalTransaction = db.transaction.bind(db);
+  const totalChanges = originalPrepare("SELECT total_changes() AS changes");
+  let writeStatements = 0;
 
   db.prepare = ((source: string) => {
     const statement = originalPrepare(source);
@@ -183,6 +185,7 @@ export function attachSqliteWriteMetrics(params: {
     const originalRun = statement.run.bind(statement);
     statement.run = ((...args: unknown[]) => {
       const result = originalRun(...(args as never[]));
+      writeStatements++;
       active.record({
         changes: result.changes,
         // Inside an explicit transaction the commit belongs to the
@@ -207,8 +210,13 @@ export function attachSqliteWriteMetrics(params: {
   ): T =>
     ((...args: unknown[]) => {
       const nested = db.inTransaction;
+      const before = writeStatements;
+      const beforeChanges = (totalChanges.get() as { changes: number }).changes;
       const result = transactionFn(...args);
-      if (!nested) {
+      // A read-only transaction commits a snapshot without flushing pages.
+      // total_changes also catches writes through exec() or RETURNING .get().
+      if (!nested && (writeStatements !== before
+        || (totalChanges.get() as { changes: number }).changes !== beforeChanges)) {
         active.recordExplicitCommit(walPath);
       }
       return result;

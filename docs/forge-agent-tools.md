@@ -196,6 +196,21 @@ another retry. This tool does not poll, start a repair turn, or add persistence.
   those contracts. GitLab returns at most 100 artifact records per call and
   explicitly reports truncation. Reduce `perPage` or open the source job URL
   when truncated. Metadata does not guarantee that an artifact is downloadable.
+- `download_ci_artifact`: downloads one GitHub Actions ZIP using the owner's
+  existing forge authentication. Requires `runId` and `artifactId` from
+  `list_ci_artifacts`, and verifies the artifact's run identity before fetching
+  its archive. This is the first-party alternative to the ChatGPT GitHub
+  connector's `download_workflow_artifact` and `gh run download`.
+  GitLab returns `unsupported_provider`. No CI operation is started or rerun.
+  Archives are streamed with a 128 MiB cap into a unique private directory under
+  `profiles/<profile>/artifacts/ci/` in the PwrAgent root. Results include
+  `archivePath`, `sizeBytes`, `sha256` and `pathOwner: "thread_owner"`.
+  Remote paths refer to the owning machine and are not transferred to the
+  caller. Filenames from provider metadata and ZIP entries never choose output
+  paths. Downloads are not extracted or executed, and their contents remain
+  untrusted and unredacted. Partial files are removed on failure or cancellation;
+  successful downloads are retained for inspection and may be removed by the
+  operator when no longer needed. Repeated calls create separate archives.
 - `read_ci_job_log`: one job's bounded tail and heuristic failure excerpts;
   every log is explicitly untrusted. Logs are defensively redacted and never
   interpreted as instructions. A failed retrieval is an error, never success.
@@ -242,8 +257,8 @@ GitHub Enterprise CI uses `/api/v3` and host-specific CLI authentication.
 The pre-existing GitHub PR status client supports github.com only; Enterprise
 PR refresh returns an explicit unsupported error. GitLab custom hosts and
 nested namespaces use explicit identities or attached MR URL evidence.
-Workflow dispatch, cancellation, reruns, artifact downloads and reviews are
-outside this read-only contract.
+Workflow dispatch, cancellation, reruns and reviews are outside this read-only
+contract. Artifact downloads write only their new archive on the owner.
 
 ## Provider references
 
@@ -255,6 +270,7 @@ Official API references inspected 2026-10-11:
 - [GitHub check runs](https://docs.github.com/en/rest/checks/runs#list-check-runs-for-a-git-reference)
 - [GitHub combined commit status contexts](https://docs.github.com/en/rest/commits/statuses#get-the-combined-status-for-a-specific-reference)
 - [GitHub workflow artifact metadata](https://docs.github.com/en/rest/actions/artifacts#list-workflow-run-artifacts)
+- [GitHub artifact downloads](https://docs.github.com/en/rest/actions/artifacts#download-an-artifact) (inspected 2026-10-30)
 - [GitLab pipelines](https://docs.gitlab.com/api/pipelines/)
 - [GitLab jobs and traces](https://docs.gitlab.com/api/jobs/)
 - [GitLab commit statuses](https://docs.gitlab.com/api/commits/#list-commit-statuses)
@@ -263,7 +279,7 @@ The GitHub client pins API version `2022-11-28` for compatibility with existing
 Enterprise deployments; the read contracts used here are also documented by
 the current `2026-03-10` reference.
 
-GitHub job log downloads redirect to a short-lived URL. The redirected request
+GitHub job log and artifact downloads redirect to a short-lived URL. The redirected request
 must not carry authorization. GitLab project paths are encoded as one project
 identifier. Lists are paged, with no implicit drain of all pages.
 
@@ -279,10 +295,12 @@ Pages default to 20 items and are capped at 100. `nextPage` is conservative on
 a full page and may lead to an empty terminal page. Failure summaries cover
 only returned jobs/retained log text. Logs default to 12,000 retained characters
 (maximum 50,000). Log downloads are capped at 16 MiB, while JSON metadata is
-capped at 2 MiB. Larger responses fail with an actionable error. No disk cache,
-unbounded download or automatic page-draining is introduced. CI calls report
+capped at 2 MiB. Artifact ZIPs are capped at 128 MiB, checked against metadata,
+Content-Length and the streamed bytes. Larger responses fail with an actionable
+error. Artifact writes are explicit downloads, with no disk cache or automatic
+page-draining. CI calls report
 their authenticated provider request count; redirects
-can add a credential-free log download. Cache reads do not probe authentication
+can add a credential-free log or artifact download. Cache reads do not probe authentication
 or retain prior refresh errors, and say so in their result.
 
 Cancellation stops new work and aborts direct HTTP/glab CI requests. Federation
@@ -293,7 +311,7 @@ existing host convention; use an explicit MR URL for other hosts. Check output
 is untrusted and redacted, with each text field capped at 2,000 characters.
 GitHub's check-run endpoint only covers the latest 1,000 check suites. Neither
 provider's page can prove the absence of required checks. No check annotations,
-artifact downloads, workflow definitions or review mutations are added.
+workflow definitions or review mutations are added by these read tools.
 
 ## Comparison with the Codex GitHub connector
 
@@ -311,7 +329,7 @@ log pagination.
 | `fetch_workflow_job_logs` | `read_ci_job_log`, bounded redacted pages with snapshot checks |
 | `get_commit_combined_status` | `get_commit_checks`, plus check runs and GitLab commit statuses |
 | `fetch_workflow_run_artifacts` | `list_ci_artifacts`, including GitLab job artifact metadata |
-| `download_workflow_artifact` | Not implemented |
+| `download_workflow_artifact` | `download_ci_artifact`, bounded GitHub ZIP downloads saved on the thread owner |
 | PR info and body (`fetch_pr`, `get_pr_info`) | `get_pull_request`, also for GitLab merge requests |
 | PR diffs and changed files | `get_pull_request_diff`, `list_pull_request_files` |
 | PR comments, reviews and review threads | `list_issue_comments`, `list_pull_request_reviews`, `list_pull_request_review_threads` |
@@ -320,7 +338,7 @@ log pagination.
 | Comments, review replies and reviews | `add_issue_comment`, `reply_to_review_comment`, `submit_pull_request_review`, `resolve_review_thread` |
 | Merge | `merge_pull_request`, with a required head SHA |
 | Repository-wide search, file and commit fetch, branch and commit creation | Not implemented. Threads read and commit through their local checkout |
-| CI reruns, artifact download | Not implemented |
+| CI reruns | Not implemented |
 
 The PwrAgent-specific capabilities remain cache freshness, explicit refresh
 costs, thread/repository authorization, owner routing, Auto-fix guidance, and

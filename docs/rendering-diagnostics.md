@@ -8,6 +8,24 @@ It works in release builds and requires no restart or graphics setting changes.
 
 ## Collect
 
+In **Settings → Troubleshooting → Rendering diagnostics**, select **Capture
+Rendering (10s)**. This works without Developer Mode or a restart. It waits five
+seconds before calling the existing capture API for a ten-second sample. Close
+Settings and DevTools during the delay, then leave the scene undisturbed until
+the capture finishes. You can cancel during staging. Leaving Settings does not
+cancel the delay or capture; keep the requesting window open during staging.
+Renderer throttling can extend the staging delay, but the main process still
+owns the ten-second capture deadline once tracing starts.
+
+A completion notice shows the sanitized summary path. Return to the same
+window's Troubleshooting pane to copy the path and see the recorded duration;
+open `summary.json` in a local editor. A failure appears both in the notice and
+the pane, where you can retry after resolving it. Status and the last result are
+in memory for that window only, with no settings or SQLite writes. The control
+does not run a countdown or poll while capturing.
+
+### Console alternative
+
 1. Open Developer Tools in the PwrAgent instance to investigate. In its console:
 
    ```js
@@ -74,8 +92,14 @@ GPU-process events can serve several windows; only renderer-process events join
 directly to a window. Correlation is a lead, not proof of causality.
 
 The native buffer is 8 MiB and stops accepting events when full. Inspect
-`bufferUsage.percentFull`; near 1 means counts are lower bounds. Use a shorter
-capture if saturated. A JSON expansion above 64 MiB is rejected.
+`bufferUsage.percentage`, exported unchanged from Electron's
+`getTraceBufferUsage()` result. Near 1, treat trace event counts as lower bounds:
+native `activeSeconds` buckets can stop before the capture ends, even while
+snapshots continue. A live v1.3.5 ten-second capture returned
+`{percentage: 0.9853219985961914, value: 0}`; its native event buckets stopped
+before the capture ended. Missing later buckets do not establish idle rendering.
+Use a shorter capture to avoid saturation. A JSON expansion above 64 MiB is
+rejected.
 
 ## Controlled comparison
 

@@ -1,3 +1,4 @@
+import { removeUsageActivityIndex } from "./usage-activity-index";
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -2177,6 +2178,7 @@ export class StateDb {
       // current profile every statement is IF NOT EXISTS and writes nothing.
       ensureThreadSubAgentSchema(db);
       ensureThreadUsageActivitySchema(db);
+      removeUsageActivityIndex(db);
       db.exec(THREAD_TODO_THREAD_PREFS_SCHEMA);
       // Additive columns on the card tables, with no version of their own so
       // no branch can claim it: one immediate transaction the first time,

@@ -1346,8 +1346,9 @@ describe("App", () => {
       });
       fireEvent.click(await screen.findByRole("option", { name: /Harold-MBP-M5-Max/, description: "This window" }));
       await waitFor(() => expect(screen.getByRole("button", { name: /^Machine(?::|$)/ })).toHaveTextContent("Harold-MBP-M5-Max"));
-      expect(getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })))
-        .toHaveAttribute("data-value", "Create this on the M5");
+      // The machine chip updates before the scoped editor restores its draft.
+      await waitFor(() => expect(getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })))
+        .toHaveAttribute("data-value", "Create this on the M5"));
     }
     await clickButton("Start thread");
     await waitFor(() => expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({

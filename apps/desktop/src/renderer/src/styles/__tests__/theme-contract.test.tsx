@@ -2680,7 +2680,7 @@ describe("Tangerine Terminal theme contract", () => {
     expect(miniScanner).toMatch(/--thinking-scanner-travel:\s*10px;/);
     expect(miniScanner).toMatch(/width:\s*16px;/);
     expect(extractRuleBody(css, ".thinking-scanner__beam")).toMatch(
-      /animation:\s*pwragent-thinking-scanner-sweep 1800ms ease-in-out infinite;/
+      /animation:\s*pwragent-thinking-scanner-sweep 1800ms steps\(27, end\) infinite;/
     );
   });
 
