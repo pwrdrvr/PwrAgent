@@ -135,6 +135,15 @@ describe("GitHub tool client", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("checks merge holds before issuing a provider write", async () => {
+    const { client, calls } = harness(() => json({ merged: true }));
+    const assertCanMerge = vi.fn(() => { throw new ForgeReadError("merge_held", "Merge held: Windows validation"); });
+    await expect(client.execute("merge_pull_request", { number: 17, expectedHeadSha: "a".repeat(40) }, ctx({ assertCanMerge })))
+      .rejects.toMatchObject({ code: "merge_held" });
+    expect(assertCanMerge).toHaveBeenCalledWith(repo, 17);
+    expect(calls).toEqual([]);
+  });
+
   it("opens a pull request into the default branch and returns it read back", async () => {
     const { calls, client } = harness((call) => {
       if (call.method === "GET" && call.url.endsWith("/repos/fixture/project")) return json({ default_branch: "main" });

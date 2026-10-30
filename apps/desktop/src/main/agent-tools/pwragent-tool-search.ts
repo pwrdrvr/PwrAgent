@@ -12,7 +12,7 @@ Search when the user wants to:
 - Run work on another machine or instance through Federation; discover connected machines, their load and projects; find remote threads or create work there.
 - Work with messaging in Telegram, Discord, Slack, LINE, Lark/Feishu, or Mattermost: inspect the current conversation, attach a thread or native child topic, rename a conversation, send a requested file or private response, or inspect/render PDF attachments. Search does not authorize sending messages.
 - Open, edit, read back, comment on, review, approve or merge GitHub pull requests and GitLab merge requests, with screenshot or video attachments; read PR/MR diffs, changed files, reviews and inline review threads; reply to or resolve review comments; search, open, edit or comment on GitHub and GitLab issues.
-- Read forge cache, PR/MR status, GitHub Actions workflow runs/jobs and download CI artifacts, GitLab CI pipelines and failure logs; request rerunning failed CI jobs; attach or watch pull requests; wait for another thread's turn or PR prerequisite with durable dependencies; or explicitly request a code review; record reviews, list unresolved findings, and settle each finding as addressed, declined, or deferred. Prefer these forge tools to GitHub connectors and gh/glab when they cover the task.
+- Read forge cache, PR/MR status, GitHub Actions workflow runs/jobs and download CI artifacts, GitLab CI pipelines and failure logs; request rerunning failed CI jobs; attach or watch pull requests; hold a PR merge while waiting for another thread to finish work; wait for another thread's turn or PR prerequisite with durable dependencies; or explicitly request a code review; record reviews, list unresolved findings, and settle each finding as addressed, declined, or deferred. Prefer these forge tools to GitHub connectors and gh/glab when they cover the task.
 - Inspect automations, schedules, runs, alerts, artifacts, or failures; inspect PwrAgent version, updates, restart, or shutdown.
 - Manage PwrAgent MCP connections and app access; inspect what connections a thread received.
 - Discover or invoke live tools from this thread's selected MCP connections, including tools added after registration. Use search_mcp_tools and call_mcp_tool.
@@ -53,6 +53,7 @@ const SEARCH_ALIASES: Record<string, string> = {
   merge_pull_request: "github gitlab mr merge request pr pull request merge squash rebase land",
   handoff_task: "delegate delegation child subagent split parallel tasks worktree",
   create_monitor_delegation: "job monitor polling long running command parallel tasks collect results",
+  manage_thread_merge_holds: "wait waiting mark blocked dependency dependencies hold merge do not merge until finishes done resolve clear soft lock",
   manage_thread_dependencies: "wait waiting prerequisite dependency dependencies dag notify notification continue after turn completion CI PR remind reminder operator todo",
   mutate_thread: "close closing archive restore rename pin lock unlock park freeze model fast priority mode settings",
   rename_current_thread: "rename name title this thread conversation self",

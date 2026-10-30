@@ -4052,6 +4052,22 @@ describe("federation backend bridge", () => {
     ]);
   });
 
+  it("routes explicit merge-hold resolution to the owner with authenticated peer provenance", async () => {
+    const manageThreadMergeHolds = vi.fn(async () => ({ holds: [], dependents: [] }));
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "waiting-owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES, now: () => 2_000 });
+    router.registerConnection({ peerId: "windows", capabilities: ["turn_control"], sendEnvelope: (envelope) => replies.push(envelope) });
+    registerFederationBackendHandlers({ router, backend: { manageThreadMergeHolds } as unknown as FederationBackendOperations });
+    const request = { action: "resolve", backend: "codex", threadId: "waiting", holdId: "hold-17", note: "Windows findings reconciled" };
+    await router.routeEnvelope({ sourcePeerId: "windows", envelope: {
+      id: "resolve-hold", kind: "request", method: FEDERATION_BACKEND_METHODS.manageThreadMergeHolds, params: request,
+      protocolVersion: 1, sourceInstanceId: "windows", targetInstanceId: "waiting-owner", createdAt: 1_000,
+    } });
+    expect(manageThreadMergeHolds).toHaveBeenCalledWith(request, { requesterInstanceId: "windows" });
+    expect(replies.at(-1)).toMatchObject({ kind: "response", result: { holds: [], dependents: [] } });
+    expect(FEDERATION_BACKEND_METHOD_CAPABILITIES[FEDERATION_BACKEND_METHODS.manageThreadMergeHolds]).toBe("turn_control");
+  });
+
   it("maps expanded remote control operations to capability-guarded handlers", async () => {
     const backend: FederationBackendOperations = {
       getNavigationSnapshot: vi.fn(),
@@ -4069,6 +4085,7 @@ describe("federation backend bridge", () => {
       markThreadSeen: vi.fn(),
       setThreadReaction: vi.fn(),
       setThreadLock: vi.fn(),
+      manageThreadMergeHolds: vi.fn(),
       setThreadPin: vi.fn(),
       reorderThreadPins: vi.fn(),
       mountRemoteChild: vi.fn(),
@@ -4595,6 +4612,7 @@ describe("federation backend bridge", () => {
         markThreadSeen: vi.fn(),
         setThreadReaction: vi.fn(),
         setThreadLock: vi.fn(),
+      manageThreadMergeHolds: vi.fn(),
       setThreadPin: vi.fn(),
       reorderThreadPins: vi.fn(),
         mountRemoteChild: vi.fn(),

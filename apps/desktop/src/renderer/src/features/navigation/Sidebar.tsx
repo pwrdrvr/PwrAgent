@@ -1,3 +1,4 @@
+import { useThreadMergeHoldsOpener } from "../thread-merge-holds/useThreadMergeHolds";
 import {
   getSubthreadProjectIdentity,
   getThreadNamedBranch,
@@ -631,6 +632,7 @@ export function Sidebar(props: SidebarProps) {
   const federationLabel = readRendererFederationLabel();
   const federationTarget = readRendererFederationTarget();
   const dependencyIndicators = useThreadDependencyIndicatorsContext();
+  const openMergeHolds = useThreadMergeHoldsOpener();
   const contextMenuRef = useRef<HTMLDivElement>(null);
   // What had focus when the thread context menu opened: the row's ⋮ button,
   // or wherever focus was for a right-click. Escape, Tab and a finished
@@ -3730,6 +3732,12 @@ export function Sidebar(props: SidebarProps) {
                     >
                       <span>Lock Thread…</span>
                       {menuShortcut("threads.lock")}
+                    </button>
+                  ) : null}
+                  {openMergeHolds && !contextMenuIsBulk ? (
+                    <button role="menuitem" type="button" onClick={() => { const target = contextMenu.thread; setContextMenu(undefined); openMergeHolds(target); }}>
+                      <span>Hold Merge…</span>
+                      {contextMenu.thread.mergeHolds?.length ? <span className="thread-context-menu__aside">{contextMenu.thread.mergeHolds.length} waiting</span> : null}
                     </button>
                   ) : null}
                   {contextMenuCanContinueAfter ? (

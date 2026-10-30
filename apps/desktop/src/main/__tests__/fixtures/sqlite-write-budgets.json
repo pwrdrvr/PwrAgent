@@ -1120,6 +1120,7 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "thread-merge-hold-lifecycle": {"commits": 2, "note": "One commit per create/resolve; reads and duplicate actions write nothing. No timer, turn, or streamed-event writes. Measured 28,872 WAL bytes/lifecycle; 50 lifecycles/day project 1.44 MB/day.", "observedWalBytes": 28872, "rowsChanged": 2, "statements": 2},
   "thread-model-settings-unchanged": {
     "commits": 0,
     "note": "a turn start re-asserting the thread's model, effort and fast mode: no writes. It rewrote the whole overlay row every turn",

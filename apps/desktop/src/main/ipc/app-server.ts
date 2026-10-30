@@ -1,3 +1,5 @@
+import { THREAD_MERGE_HOLDS_CHANNEL, type ManageThreadMergeHoldsRequest, type ManageThreadMergeHoldsResponse } from "@pwragent/shared";
+import { appendMergeHoldDependents, assertNoMergeHolds, qualifyMergeHoldOwners, validateMergeHoldRequest } from "../thread-merge-holds/thread-merge-holds";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
 import { ForgeReadService, repositoryFromPr } from "../pr-status/forge-read-service";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
@@ -4177,13 +4179,24 @@ class DesktopAppServerService {
     };
   }
 
-  private forgePrToolService(): ForgePrToolService {
+  private forgePrToolService(context?: AgentToolCallContext): ForgePrToolService {
     this.githubPrToolClient ??= new GithubPrToolClient({ ci: this.getForgeCiClient() });
     this.gitlabPrToolClient ??= new GitlabPrToolClient({ gitlab: this.getPrFetcher().gitlab });
     return new ForgePrToolService({
       enabled: (provider) => getDesktopSettingsService().isForgeEnabled(provider),
       clients: { github: this.githubPrToolClient, gitlab: this.gitlabPrToolClient },
       defaultMergeMethod: () => getDesktopSettingsService().resolveDefaultMergeMethod(),
+      assertCanMerge: (repository, number) => {
+        const marker = repository.provider === "gitlab" ? "-/merge_requests" : "pull";
+        try {
+          assertNoMergeHolds(getDesktopOverlayStore().listActiveThreadMergeHolds(), {
+            backend: context?.backend ?? "", threadId: context?.threadId ?? "",
+            pullRequest: `https://${repository.host}/${repository.owner}/${repository.repo}/${marker}/${number}`,
+          });
+        } catch (error) {
+          throw new ForgeReadError("merge_held", error instanceof Error ? error.message : String(error));
+        }
+      },
     });
   }
 
@@ -4194,7 +4207,7 @@ class DesktopAppServerService {
 
   /** Pull request and issue tools act only in the calling thread's own repositories. */
   async runForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<unknown> {
-    const result = await this.forgePrToolService().execute(operation, args, await this.forgePrToolScope(context), context.signal);
+    const result = await this.forgePrToolService(context).execute(operation, args, await this.forgePrToolScope(context), context.signal);
     return { ...(result as Record<string, unknown>), backend: context.backend, threadId: context.threadId };
   }
 
@@ -7155,6 +7168,21 @@ class DesktopAppServerService {
     };
   }
 
+  async manageThreadMergeHolds(request: ManageThreadMergeHoldsRequest, actor = "operator"): Promise<ManageThreadMergeHoldsResponse> {
+    validateMergeHoldRequest({ ...request, backend: request.backend ?? "codex", threadId: request.threadId ?? "" });
+    const runtime = getDesktopFederationRuntime();
+    if (request.federationTarget?.scope === "remote") {
+      const { federationTarget, ...ownerRequest } = request;
+      const localId = (await runtime.health()).instanceId;
+      if (federationTarget.instanceId !== localId) {
+        const response = await runtime.remoteBackend(federationTarget).manageThreadMergeHolds(ownerRequest);
+        return qualifyMergeHoldOwners(response, federationTarget, localId);
+      }
+    }
+    const response = await getDesktopBackendRegistry().manageThreadMergeHolds(request, actor);
+    return await appendMergeHoldDependents(response, request, runtime);
+  }
+
   async setThreadLock(
     request: SetThreadLockRequest,
   ): Promise<SetThreadLockResponse> {
@@ -9121,6 +9149,12 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setLocalPullRequestAuthorityResolver((prKey) =>
     appServerService.isPullRequestLocallyMonitored(prKey)
   );
+  getDesktopBackendRegistry().setThreadMergeHoldToolHandler(async (request, actor) => await appServerService.manageThreadMergeHolds(request, actor));
+  ipcMain.removeHandler(THREAD_MERGE_HOLDS_CHANNEL);
+  ipcMain.handle(THREAD_MERGE_HOLDS_CHANNEL, async (event, request: ManageThreadMergeHoldsRequest) => {
+    const federationTarget = federationWindowTargetForWebContents(event.sender);
+    return await appServerService.manageThreadMergeHolds({ ...request, ...(!request.federationTarget && federationTarget ? { federationTarget } : {}) });
+  });
   getDesktopBackendRegistry().setThreadDependencyToolHandler(async (request, provenance) => {
     try {
       return { ok: true, data: { threadDependencies: await appServerService.manageThreadDependencies(request, provenance) } };
@@ -10491,6 +10525,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL);
   const registry = getExistingDesktopBackendRegistry();
   registry?.setThreadDependencyToolHandler(undefined);
+  registry?.setThreadMergeHoldToolHandler(undefined);
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);
   registry?.setThreadPrimaryGitRepositoryReader(undefined);

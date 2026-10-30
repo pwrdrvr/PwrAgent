@@ -1008,6 +1008,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   readThread?: (
     request: AppServerReadThreadRequest
   ) => Promise<AppServerReadThreadResponse>;
+  manageThreadMergeHolds?: (request: import("@pwragent/shared").ManageThreadMergeHoldsRequest) => Promise<import("@pwragent/shared").ManageThreadMergeHoldsResponse>;
   manageThreadDependencies?: (
     request: import("@pwragent/shared").ManageThreadDependenciesRequest,
   ) => Promise<import("@pwragent/shared").ManageThreadDependenciesResponse>;

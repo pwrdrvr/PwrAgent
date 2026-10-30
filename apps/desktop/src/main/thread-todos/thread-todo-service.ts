@@ -46,6 +46,8 @@ type StartThreadAction = Extract<ThreadTodoAction, { type: "start_thread" }>;
  */
 export type ThreadTodoActionRunners = {
   mergePullRequest: (params: {
+    sourceBackend: AppServerBackendKind;
+    sourceThreadId: string;
     cwd?: string;
     pullRequest: string;
     method: ThreadTodoMergeMethod;
@@ -689,6 +691,7 @@ export class ThreadTodoService {
           });
         }
         const merged = await runners.mergePullRequest({
+          sourceBackend: todo.backend, sourceThreadId: todo.threadId,
           cwd,
           pullRequest: action.pullRequest,
           method,
