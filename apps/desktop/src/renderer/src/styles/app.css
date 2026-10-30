@@ -7824,14 +7824,17 @@ a.button {
   color: var(--danger-text);
 }
 
+.thread-row__chip--todos[role="button"],
 .thread-row__chip--dependency[role="button"] {
   cursor: pointer;
 }
 
+.thread-row__chip--todos[role="button"]:hover,
 .thread-row__chip--dependency[role="button"]:hover {
   border-color: var(--border-strong);
 }
 
+.thread-row__chip--todos[role="button"]:focus-visible,
 .thread-row__chip--dependency[role="button"]:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;

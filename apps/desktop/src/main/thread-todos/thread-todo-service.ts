@@ -410,12 +410,15 @@ export class ThreadTodoService {
     id?: string;
     key?: string;
     status: Exclude<ThreadTodoStatus, "open">;
+    /** The operator handed the card to this thread, which claims it first. */
+    resolution?: "sent_here";
     allowOpenItems?: boolean;
   }): ThreadTodo {
     const target = this.findForThread(params);
     return this.resolve({
       id: target.id,
       status: params.status,
+      ...(params.resolution ? { resolution: params.resolution } : {}),
       ...(params.allowOpenItems ? { allowOpenItems: true } : {}),
     });
   }
