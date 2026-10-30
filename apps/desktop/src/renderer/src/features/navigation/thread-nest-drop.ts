@@ -100,11 +100,13 @@ export function threadRowShellAt(
 }
 
 /**
- * The middle half of a pinned row nests; its top and bottom quarters keep
- * the pin-order line. A row that is not a reorder target nests anywhere.
+ * The middle third of a row that is also an order target nests; its top
+ * and bottom thirds keep the order line, so a reorder aimed anywhere in a
+ * row's outer half still lands. A row that is not an order target nests
+ * anywhere.
  */
 export function isInNestBand(element: HTMLElement, y: number): boolean {
   const bounds = element.getBoundingClientRect();
-  const quarter = (bounds.bottom - bounds.top) / 4;
-  return y >= bounds.top + quarter && y <= bounds.bottom - quarter;
+  const third = (bounds.bottom - bounds.top) / 3;
+  return y > bounds.top + third && y < bounds.bottom - third;
 }

@@ -24,7 +24,7 @@ type SubthreadDrop =
  * child that owns it, so the line is drawn between whole subtrees.
  *
  * A child dropped on another row becomes that row's sub-thread instead:
- * anywhere on a row outside its tray, or on the middle half of a sibling,
+ * anywhere on a row outside its tray, or on the middle third of a sibling,
  * whose edges keep the reorder line.
  */
 export function useSubthreadReorderDrag(params: {

@@ -745,8 +745,8 @@ Render a brand through `BrandLockup`
   - A thread dropped on another thread's row becomes its sub-thread
     (`thread-nest-drop.ts`). The row wears an accent ring and the held card
     says **Make sub-thread**. On a row that is also an order target (a pin
-    in its scope, a sibling in the tray) only the middle half nests; the
-    edges keep the line, and an unpinned thread's edge drop still pins.
+    in its scope, a sibling in the tray) only the middle third nests; the
+    outer thirds keep the line, and an unpinned thread's edge drop still pins.
     The target's closed tray opens. Nesting unpins the thread, and its own
     sub-threads move with it.
   - Offer a nest only when the owner will keep it: both threads on one

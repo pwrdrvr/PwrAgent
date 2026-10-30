@@ -143,7 +143,7 @@ function resolveThreadPinPointerDropTarget(
   }
 
   // A row nests the held thread. A pinned row of this scope is also an
-  // order target, so only its middle half nests and its edges keep the
+  // order target, so only its middle third nests and its edges keep the
   // line (or, for an unpinned thread, the pin it always meant).
   const nest = session.resolveNest?.(session.lastPoint);
   if (nest) {
