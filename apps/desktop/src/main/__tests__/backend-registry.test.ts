@@ -3216,6 +3216,7 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
   registry: DesktopBackendRegistry;
   threadId?: string;
   collapsed?: boolean;
+  unpinnedThreadIds?: string[];
 }): void {
   const threadId = params.threadId ?? "thread-pinned";
   params.registry.rememberCompleteNavigationSnapshot(buildNavigationSnapshot({
@@ -3238,10 +3239,9 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
       },
     },
     previousKnownThreadKeys: [`codex:${threadId}`],
-    threads: [
-      {
-        id: threadId,
-        title: "Pinned thread",
+    threads: [threadId, ...(params.unpinnedThreadIds ?? [])].map((id) => ({
+        id,
+        title: id,
         titleSource: "explicit",
         source: "codex",
         linkedDirectories: [
@@ -3253,8 +3253,7 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
           },
         ],
         updatedAt: 1_000,
-      },
-    ],
+    })),
     unchanged: false,
   }));
 }
@@ -14029,6 +14028,7 @@ describe("DesktopBackendRegistry", () => {
       directoryPath,
       registry,
       collapsed: !collapsed,
+      unpinnedThreadIds: ["older-unpinned"],
     });
     // The disclosure mutation reaches the owner immediately, even if provider
     // metadata cannot produce another complete navigation snapshot.
@@ -14047,6 +14047,38 @@ describe("DesktopBackendRegistry", () => {
 
     if (collapsed) {
       expect(response).toMatchObject({ pinnedRank: "0" });
+    } else {
+      expect(response).not.toHaveProperty("pinnedRank");
+    }
+    await registry.close();
+  });
+
+  it.each([
+    { name: "all remaining roots are pinned", unpinnedThreadIds: [], pinned: true },
+    { name: "the new root is already indexed", unpinnedThreadIds: ["thread-1"], pinned: true },
+    { name: "an older unpinned root remains", unpinnedThreadIds: ["older-unpinned"], pinned: false },
+  ])("places a new thread when $name and Directory threads has no saved collapse", async ({ unpinnedThreadIds, pinned }) => {
+    const directoryPath = expectedDir(path.join(os.tmpdir(), "pwragent-all-pinned-project"));
+    const directoryKey = `directory:${directoryPath}`;
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+    });
+    rememberCollapsedDirectoryWithPinnedThread({
+      directoryKey,
+      directoryPath,
+      registry,
+      collapsed: false,
+      unpinnedThreadIds,
+    });
+
+    const response = await registry.startThread({ backend: "codex", cwd: directoryPath });
+
+    if (pinned) {
+      expect(response).toMatchObject({ pinnedRank: "0" });
+      await expect(overlayStore.getThreadOverlayState({ backend: "codex", threadId: response.threadId }))
+        .resolves.toMatchObject({ pinnedRank: "0" });
     } else {
       expect(response).not.toHaveProperty("pinnedRank");
     }

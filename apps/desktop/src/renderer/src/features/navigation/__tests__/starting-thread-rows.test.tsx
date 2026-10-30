@@ -205,10 +205,15 @@ describe("a thread that is still starting", () => {
     expect(screen.queryByText("No directory-linked threads.")).not.toBeInTheDocument();
   });
 
-  it("lands last among the pins when its project's rows are collapsed under them", () => {
-    const pinnedDirectories = [{ ...directories[0]!, directoryThreadsCollapsed: true }] as NavigationDirectorySummary[];
+  it.each([
+    { name: "Directory threads is collapsed", collapsed: true, hasUnpinned: true },
+    { name: "archiving leaves only pins", collapsed: false, hasUnpinned: false },
+  ])("keeps a starting thread in its final pin position when $name", ({ collapsed, hasUnpinned }) => {
+    const pinnedDirectories = [{ ...directories[0]!, directoryThreadsCollapsed: collapsed }] as NavigationDirectorySummary[];
     const starting = creation();
-    render(
+    const kept = thread("Kept thread", { pinnedRank: String(-(2 ** 40)) });
+    const pinned = thread("Pinned thread", { pinnedRank: "1024" });
+    const renderStage = (landed: boolean) => (
       <Sidebar
         backends={[]}
         browseMode="directories"
@@ -216,24 +221,35 @@ describe("a thread that is still starting", () => {
         inboxThreads={[]}
         loaded
         loading={false}
-        pendingLaunchpadCreations={[starting]}
-        selectedItemKey={starting.selectionKey}
-        threads={[thread("Pinned thread", { pinnedRank: "a0" }), thread("Older thread")]}
+        pendingLaunchpadCreations={landed ? [] : [starting]}
+        selectedItemKey={landed ? "codex:Add a crop tool" : starting.selectionKey}
+        threads={[
+          kept,
+          pinned,
+          ...(hasUnpinned ? [thread("Older thread")] : []),
+          ...(landed ? [thread("Add a crop tool", { pinnedRank: "0" })] : []),
+        ]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />,
+      />
     );
+    const view = render(renderStage(false));
 
     const project = screen.getByRole("list", { name: "Threads in PwrSnap" });
-    // Main pins the new thread there, so it stays out from under the divider.
-    expect(rowNames(project)).toEqual(["Pinned thread, pinned", "Add a crop tool, starting in PwrSnap"]);
-    const divider = screen.getByRole("button", { name: "Show directory threads for PwrSnap" });
-    expect(
-      within(project).getByRole("button", { name: "Add a crop tool, starting in PwrSnap" })
-        .compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    expect(rowNames(project)).toEqual(["Kept thread, pinned", "Add a crop tool, starting in PwrSnap", "Pinned thread, pinned"]);
+    if (hasUnpinned) {
+      const divider = screen.getByRole("button", { name: "Show directory threads for PwrSnap" });
+      expect(within(project).getByRole("button", { name: "Add a crop tool, starting in PwrSnap" })
+        .compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    } else {
+      expect(screen.queryByText("Directory threads")).not.toBeInTheDocument();
+    }
+
+    view.rerender(renderStage(true));
+    expect(rowNames(project)).toEqual(["Kept thread, pinned", "Add a crop tool, pinned", "Pinned thread, pinned"]);
+    if (!hasUnpinned) expect(screen.queryByText("Directory threads")).not.toBeInTheDocument();
   });
 
   it("opens the parent's project for a starting sub-thread", () => {
