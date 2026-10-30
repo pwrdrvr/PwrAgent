@@ -8,6 +8,24 @@ It works in release builds and requires no restart or graphics setting changes.
 
 ## Collect
 
+In **Settings → Troubleshooting → Rendering diagnostics**, select **Capture
+Rendering (10s)**. This works without Developer Mode or a restart. It waits five
+seconds before calling the existing capture API for a ten-second sample. Close
+Settings and DevTools during the delay, then leave the scene undisturbed until
+the capture finishes. You can cancel during staging. Leaving Settings does not
+cancel the delay or capture; keep the requesting window open during staging.
+Renderer throttling can extend the staging delay, but the main process still
+owns the ten-second capture deadline once tracing starts.
+
+A completion notice shows the sanitized summary path. Return to the same
+window's Troubleshooting pane to copy the path and see the recorded duration;
+open `summary.json` in a local editor. A failure appears both in the notice and
+the pane, where you can retry after resolving it. Status and the last result are
+in memory for that window only, with no settings or SQLite writes. The control
+does not run a countdown or poll while capturing.
+
+### Console alternative
+
 1. Open Developer Tools in the PwrAgent instance to investigate. In its console:
 
    ```js
