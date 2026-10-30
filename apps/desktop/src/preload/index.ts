@@ -88,6 +88,7 @@ import {
   isDesktopLightTheme,
   isDesktopTextSize,
   normalizeNavigationBrowseMode,
+  normalizeNavigationResumeState,
 } from "@pwragent/shared";
 import {
   createEventSubscriptionMultiplexer,
@@ -277,6 +278,7 @@ import type {
   AcknowledgeAcpAgentUpdateRequest,
   AcknowledgeAcpAgentUpdateResponse,
   NavigationBrowseMode,
+  NavigationResumeState,
   AttachDirectoryToThreadRequest,
   AttachDirectoryToThreadResponse,
   DetachDirectoryFromThreadRequest,
@@ -1015,6 +1017,7 @@ import {
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
+  NAVIGATION_SET_RESUME_STATE_CHANNEL,
   NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL,
   NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL,
   NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
@@ -2696,6 +2699,8 @@ const desktopApi = Object.freeze({
       NAVIGATION_SNAPSHOT_CHANNEL,
       request,
     ),
+  setNavigationResumeState: async (state: NavigationResumeState): Promise<void> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_RESUME_STATE_CHANNEL, state),
   setNavigationBrowseMode: async (
     request: SetNavigationBrowseModeRequest,
   ): Promise<SetNavigationBrowseModeResponse> =>
@@ -3605,6 +3610,7 @@ const bootstrapAppearance = readBootstrapAppearance();
 const NAVIGATION_ARG_PREFIX = "--pwragent-navigation-preferences=";
 function readBootstrapNavigationPreferences(): {
   browseMode: NavigationBrowseMode;
+  resumeState?: NavigationResumeState;
   pinnedGroupCollapsed: boolean;
   pinnedThreadsOnTop: boolean;
 } {
@@ -3618,6 +3624,7 @@ function readBootstrapNavigationPreferences(): {
       // exact flicker this bootstrap hint exists to prevent.
       return {
         browseMode: normalizeNavigationBrowseMode(raw?.browseMode),
+        resumeState: normalizeNavigationResumeState(raw?.resumeState),
         pinnedGroupCollapsed: raw?.pinnedGroupCollapsed === true,
         pinnedThreadsOnTop: raw?.pinnedThreadsOnTop !== false,
       };

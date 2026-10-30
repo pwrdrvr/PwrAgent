@@ -757,6 +757,20 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "navigation-resume-state": {
+    "commits": 1,
+    "note": "one changed session, duplicate/reordered snapshots and ten reads: one commit; at 1000 navigation actions/day the measured WAL cost is about 8 MB/day",
+    "observedWalBytes": 8272,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "navigation-resume-state-full": {
+    "commits": 1,
+    "note": "one selection change in a near-12K snapshot; duplicate saves and ten reads add no commits; 1000 navigation changes/day cost about 33.0 MB/day; no idle writes",
+    "observedWalBytes": 32960,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "navigation-summaryless-pin-hydration": {
     "commits": 1,
     "note": "One atomic fill per summaryless mount; 20 later exact reads add no commits. At 200 new mounts/day and 4 KiB/page: ~0.8 MB/day per dirty page. Existing mounts add 0 MB/day.",

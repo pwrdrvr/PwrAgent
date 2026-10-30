@@ -343,6 +343,7 @@ export const NAVIGATION_QUEUE_PROJECTION_CHANNEL =
   "navigation:get-queue-projection";
 export const NAVIGATION_SET_BROWSE_MODE_CHANNEL =
   "navigation:set-browse-mode";
+export const NAVIGATION_SET_RESUME_STATE_CHANNEL = "navigation:set-resume-state";
 export const NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL =
   "navigation:set-pinned-group-collapsed";
 export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen";
