@@ -406,8 +406,8 @@ describe("sqlite write metrics", () => {
     expect(unchanged.commits).toBe(0);
   });
 
-  it("claims a monitor suggestion once per turn, durably, with no per-poll writes", async () => {
-    const target = { backend: "codex" as const, threadId: "monitor-parent", turnId: "turn-1" };
+  it.each(["codex", "acp:kimi"] as const)("claims a %s monitor suggestion once per turn, durably, with no per-poll writes", async (backend) => {
+    const target = { backend, threadId: "monitor-parent", turnId: "turn-1" };
     await store.setThreadMonitorJobSuggestions({ ...target, enabled: false });
     expect((await store.getThreadOverlayState(target))?.monitorJobSuggestionsEnabled).toBe(false);
     await store.setThreadMonitorJobSuggestions({ ...target, enabled: null });

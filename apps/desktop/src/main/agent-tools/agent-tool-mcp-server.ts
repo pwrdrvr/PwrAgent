@@ -94,6 +94,9 @@ export type AgentToolMcpServerOptions = {
   authorizeToolCall?: (
     params: AgentToolMcpAuthorization,
   ) => string | null | undefined | Promise<string | null | undefined>;
+  resolveToolResultReminder?: (
+    context: ResolvedAgentToolMcpCallContext,
+  ) => Promise<string | undefined>;
 };
 
 export class AgentToolMcpServer implements AgentToolMcpServerLike {
@@ -337,7 +340,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
             }),
           );
         }
-        return await catalog.router.handleMcpToolCall({
+        const result = await catalog.router.handleMcpToolCall({
           backend: callContext.backend,
           threadId: callContext.threadId,
           turnId: callContext.turnId,
@@ -346,6 +349,17 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           args: request.params.arguments,
           signal: extra.signal,
         });
+        try {
+          // Resolve after dispatch using the original turn identity. A reminder
+          // can only ride this response; it must never enqueue another turn.
+          const reminder = await this.options.resolveToolResultReminder?.(callContext);
+          if (reminder) {
+            return { ...result, content: [...result.content, { type: "text", text: reminder }] };
+          }
+        } catch (error) {
+          agentToolMcpLog.warn("MCP tool result reminder failed open", { error: String(error) });
+        }
+        return result;
       },
     );
     await mcpServer.connect(transport);

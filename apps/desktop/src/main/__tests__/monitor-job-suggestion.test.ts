@@ -4,6 +4,7 @@ import {
   buildMonitorJobHeuristicPrompt,
   MonitorJobHeuristicDetector,
   MonitorJobSuggestionDetector,
+  isCiWaitCommand,
   parseMonitorJobHeuristicDecision,
 } from "../app-server/monitor-job-suggestion";
 import { toolInvocationFromNotification } from "../app-server/tool-invocation-accounting";
@@ -24,6 +25,26 @@ function record(index: number, command = "gh run view 123 --repo owner/repo --js
 }
 
 describe("monitor job suggestions", () => {
+  it.each([
+    "gh run watch 123 --exit-status",
+    "gh pr checks 123 --repo owner/repo --watch",
+    "gh pr checks --watch --interval 10",
+    "gh pr checks 123 --watch=true",
+  ])("recognizes a single blocking CI wait: %s", (command) => {
+    const detector = new MonitorJobSuggestionDetector();
+    expect(isCiWaitCommand(command)).toBe(true);
+    expect(detector.observe({ ...record(0, command), backend: "acp:kimi" })).toBe(true);
+    expect(detector.observe({ ...record(1, command), backend: "acp:kimi" })).toBe(false);
+  });
+
+  it.each([
+    "gh pr checks 123", "gh pr checks 123 --watch=false",
+    "gh run view 123 --log", "echo gh run watch 123", "pnpm build",
+  ])("does not classify an ordinary command as a CI wait: %s", (command) => {
+    expect(isCiWaitCommand(command)).toBe(false);
+    expect(new MonitorJobSuggestionDetector().observe(record(0, command))).toBe(false);
+  });
+
   it("recognizes spaced CI polling and reminds once despite more polls", () => {
     const detector = new MonitorJobSuggestionDetector();
     expect([0, 1, 2, 3, 4].map((i) => detector.observe(record(i)))).toEqual([false, false, true, false, false]);

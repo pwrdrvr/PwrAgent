@@ -85,8 +85,9 @@ export class MonitorJobSuggestionDetector {
 
   observe(record: ThreadToolInvocationRecord): boolean {
     if (!record.turnId) return false;
+    const ciWait = isCiWaitCommand(record.normalizedCommand ?? "");
     const signal = pollingSignal(record);
-    if (!signal) return false;
+    if (!signal && !ciWait) return false;
     const threadKey = `${record.backend}:${record.threadId}`;
     const key = `${record.turnId}:${signal}`;
     let state = this.turns.get(threadKey);
@@ -95,6 +96,10 @@ export class MonitorJobSuggestionDetector {
       this.turns.set(threadKey, state);
     }
     if (state.suggested || state.seen.has(record.invocationId)) return false;
+    if (ciWait) {
+      state.suggested = true;
+      return true;
+    }
     state.seen.add(record.invocationId);
     // Bound retained evidence even if a provider never emits turn completion.
     if (state.seen.size > 100) state.seen.delete(state.seen.values().next().value!);
@@ -260,6 +265,13 @@ export function parseMonitorJobHeuristicDecision(
     decision: record.decision,
     reason: record.reason.trim(),
   };
+}
+
+/** A blocking CI watch already contains a polling loop in a single call. */
+export function isCiWaitCommand(command: string): boolean {
+  return /^gh\s+run\s+watch(?:\s|$)/.test(command)
+    || (/^gh\s+pr\s+checks(?:\s|$)/.test(command)
+      && /(?:^|\s)--watch(?:\s|$|=true(?:\s|$))/.test(command));
 }
 
 function pollingSignal(record: ThreadToolInvocationRecord): string | undefined {
