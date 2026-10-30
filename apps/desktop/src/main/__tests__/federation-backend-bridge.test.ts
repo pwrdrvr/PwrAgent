@@ -31,6 +31,29 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("round-trips versioned owner parent validation and requires thread_grouping", async () => {
+    const request = { backend: "codex" as const, threadId: "child", parentThreadId: "parent", parentBackend: "claude" as const, dryRun: true };
+    const response = { ok: false as const, error: { code: "invalid_arguments" as const, message: "Parent is archived." } };
+    const backend = { mutateThreadParentV1: vi.fn(async () => response), setThreadParent: vi.fn() };
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    let rpc: FederationRpcEndpoint;
+    const connect = (capabilities: FederationCapability[]): void => {
+      router.registerConnection({ peerId: "viewer", capabilities,
+        sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    };
+    registerFederationBackendHandlers({ router, backend: backend as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    connect(["thread_grouping"]);
+    expect(await client.mutateThreadParentV1(request)).toEqual(response);
+    expect(backend.mutateThreadParentV1).toHaveBeenCalledExactlyOnceWith(request);
+    connect(["thread_navigation", "turn_control", "thread_parent_mutation_v1"]);
+    await expect(client.mutateThreadParentV1(request)).rejects.toThrow();
+    expect(backend.mutateThreadParentV1).toHaveBeenCalledOnce();
+    expect(backend.setThreadParent).not.toHaveBeenCalled();
+  });
+
   it("round-trips owner-collated family pricing and requires thread_detail", async () => {
     const request = { backend: "codex" as const, threadId: "parent" };
     const family = { readAt: 42, members: [
@@ -3983,6 +4006,7 @@ describe("federation backend bridge", () => {
       reorderThreadPins: vi.fn(),
       mountRemoteChild: vi.fn(),
       setThreadParent: vi.fn(),
+      mutateThreadParentV1: vi.fn(),
       updateSubthreadOrder: vi.fn(),
       setSubthreadsCollapsed: vi.fn(),
       readForge: vi.fn(),
@@ -4508,6 +4532,7 @@ describe("federation backend bridge", () => {
       reorderThreadPins: vi.fn(),
         mountRemoteChild: vi.fn(),
         setThreadParent: vi.fn(),
+        mutateThreadParentV1: vi.fn(),
         updateSubthreadOrder: vi.fn(),
         setSubthreadsCollapsed: vi.fn(),
         readForge: vi.fn(),
