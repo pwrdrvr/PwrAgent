@@ -361,14 +361,25 @@ export function threadTodoItemNoun(items: readonly ThreadTodoItem[]): string {
   return items.length === 1 ? noun : `${noun}s`;
 }
 
-/** "2 of 4" for a card with steps; undefined for one without. */
+/**
+ * "2 of 4" for a card with steps; undefined for one without.
+ *
+ * A start_thread card counts its prerequisites instead. Its plain steps
+ * are the new thread's plan, sent in the prompt: nothing ticks them, so a
+ * count of them would sit at 0 until the card closes.
+ */
 export function threadTodoItemProgress(
-  todo: Pick<ThreadTodo, "items">,
-): { checked: number; total: number } | undefined {
-  const steps = threadTodoSteps(todo);
-  const total = steps.length;
+  todo: Pick<ThreadTodo, "items" | "action">,
+): { checked: number; total: number; noun: "steps" | "prerequisites" } | undefined {
+  const prerequisitesOnly = todo.action?.type === "start_thread";
+  const counted = prerequisitesOnly ? threadTodoPrerequisites(todo) : threadTodoSteps(todo);
+  const total = counted.length;
   if (total === 0) return undefined;
-  return { checked: steps.filter((item) => item.checked).length, total };
+  return {
+    checked: counted.filter((item) => item.checked).length,
+    total,
+    noun: prerequisitesOnly ? "prerequisites" : "steps",
+  };
 }
 
 export type ListThreadTodosRequest = {

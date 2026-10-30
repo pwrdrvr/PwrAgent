@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { CheckIcon, ChevronDownIcon } from "../../icons";
+import { CheckIcon, ChevronDownIcon, type IconProps } from "../../icons";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { placeTodoModelMenu } from "./todo-model-menu-placement";
 
@@ -21,7 +21,7 @@ export function useTodoFactMenuPlacement(params: {
     const trigger = triggerRef.current?.getBoundingClientRect();
     const menu = menuRef.current;
     if (!trigger || !menu) return;
-    const facts = triggerRef.current?.closest(".thread-todo-card__facts")?.getBoundingClientRect();
+    const facts = triggerRef.current?.closest(".thread-todo-card__facts, .todo-dispatch-chips")?.getBoundingClientRect();
     const next = placeTodoModelMenu({
       trigger,
       alignLeft: facts?.left,
@@ -98,7 +98,14 @@ export function TodoFactMenu(props: {
   tooltip?: string;
   footnote?: ReactNode;
   testId?: string;
+  /** Leads the chip in the collapsed row, where no label names the fact. */
+  icon?: ComponentType<IconProps>;
+  /** The icon alone, with no value or chevron: Standard speed, as in the composer. */
+  iconOnly?: boolean;
+  /** Lit like the composer's Fast toggle, for a paid speed tier. */
+  lit?: boolean;
 }) {
+  const Icon = props.icon;
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -113,7 +120,8 @@ export function TodoFactMenu(props: {
         ref={triggerRef}
         type="button"
         disabled={props.disabled}
-        className={`composer-dropdown__button todo-model-picker__chip${props.tooltip ? " tooltip-target" : ""}${props.changed ? " is-changed" : ""}`}
+        className={`composer-dropdown__button todo-model-picker__chip${props.tooltip ? " tooltip-target" : ""}${
+          props.changed ? " is-changed" : ""}${props.iconOnly && Icon ? " is-icon-only" : ""}${props.lit ? " is-lit" : ""}`}
         aria-label={`${props.label}: ${props.value}`}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -122,8 +130,13 @@ export function TodoFactMenu(props: {
         data-testid={props.testId}
         onClick={() => setOpen(!open)}
       >
-        <span className="composer-dropdown__label">{props.value}</span>
-        <span className="composer-dropdown__icon" aria-hidden="true"><ChevronDownIcon size={12} /></span>
+        {Icon ? <span className="todo-model-picker__lead" aria-hidden="true"><Icon size={12} /></span> : null}
+        {props.iconOnly && Icon ? null : (
+          <>
+            <span className="composer-dropdown__label">{props.value}</span>
+            <span className="composer-dropdown__icon" aria-hidden="true"><ChevronDownIcon size={12} /></span>
+          </>
+        )}
       </button>
       {open ? createPortal(
         <div

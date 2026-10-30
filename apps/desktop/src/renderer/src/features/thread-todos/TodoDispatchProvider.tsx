@@ -18,6 +18,8 @@ export type TodoDispatchChoices = {
   /** An environment id, or `none`. */
   environments?: Readonly<Record<string, string>>;
   workMode?: ThreadTodoWorkMode;
+  /** The start settings show as the labelled grid instead of the chip row. */
+  settingsExpanded?: boolean;
 };
 
 type DispatchContext = {

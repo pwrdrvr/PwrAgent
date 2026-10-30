@@ -24930,6 +24930,40 @@ a.button {
   text-decoration: line-through;
 }
 
+/* A start-thread card's plan: numbered, with no boxes, because the start
+   sends only the prompt and nothing on the card ticks it. The checklist's
+   row geometry, with the number in the box's column. */
+.thread-todo-plan {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: thread-todo-plan;
+}
+
+.thread-todo-card__group-label + .thread-todo-plan {
+  margin-top: 2px;
+}
+
+.thread-todo-plan__step {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: 8px;
+  padding: 2px 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 17px;
+  overflow-wrap: anywhere;
+  counter-increment: thread-todo-plan;
+}
+
+.thread-todo-plan__step::before {
+  color: var(--text-muted);
+  content: counter(thread-todo-plan) ".";
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
+}
+
 .thread-todo-card__facts {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -25036,6 +25070,12 @@ a.button {
 
 .thread-todo-card__more:hover {
   color: var(--accent-bright);
+}
+
+/* "· 3-step plan": what Show more opens on a start-thread card. */
+.thread-todo-card__more-detail {
+  color: var(--text-muted);
+  font-weight: 500;
 }
 
 .thread-todo-card__more:focus-visible {
@@ -51028,6 +51068,120 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 
 .todo-model-picker__chip.is-changed {
   border-color: var(--accent-border);
+}
+
+/* A start-thread card's settings at rest: the composer's chips, with an
+   icon in place of each grid label. Each chip opens its own menu; the
+   chevron in the corner shows the labelled grid. */
+.todo-dispatch-chips {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin: 6px 0 0;
+}
+
+.todo-model-picker__chip:has(.todo-model-picker__lead) {
+  gap: 4px;
+  padding-left: 7px;
+}
+
+.todo-model-picker__lead {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-muted);
+}
+
+/* Standard speed: the composer's bare bolt in a 22px circle. */
+.todo-model-picker__chip.is-icon-only {
+  width: 22px;
+  justify-content: center;
+  padding: 0;
+}
+
+/* A faster tier is named and lit, as the composer's Fast toggle. */
+.todo-model-picker__chip.is-lit {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.todo-model-picker__chip.is-lit .todo-model-picker__lead,
+.todo-model-picker__chip.is-lit .composer-dropdown__icon {
+  color: var(--accent-bright);
+}
+
+/* Access cannot change on the card: the chip's shape, without its control. */
+.todo-dispatch-chips__static {
+  display: inline-flex;
+  min-height: 22px;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 4px;
+  padding: 0 9px 0 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.todo-dispatch-chips__static svg {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.todo-dispatch__toggle {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  box-sizing: border-box;
+  padding: 0;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.todo-dispatch__toggle:hover {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.todo-dispatch__toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* The toggle holds the top-right corner in both layouts, beside the first
+   chip, so it never wraps onto a line of its own and does not move when
+   pressed. Both layouts start their first chip 6px down. */
+.todo-dispatch-grid {
+  position: relative;
+}
+
+.todo-dispatch-chips:has(> .todo-dispatch__toggle),
+.todo-dispatch-grid:has(> .todo-dispatch__toggle) > .thread-todo-card__facts {
+  padding-right: 28px;
+}
+
+.todo-dispatch-chips > .todo-dispatch__toggle,
+.todo-dispatch-grid > .todo-dispatch__toggle {
+  position: absolute;
+  right: 0;
+}
+
+.todo-dispatch-chips > .todo-dispatch__toggle {
+  top: 0;
+}
+
+.todo-dispatch-grid > .todo-dispatch__toggle {
+  top: 6px;
 }
 
 .todo-model-picker__menu {
