@@ -490,8 +490,8 @@ function TodoRow(props: {
     ? undefined
     : todo.result ?? (todo.status === "done" ? "Done" : "Dismissed");
   const route = describeRoute(todo, props.scope, props.projectKey);
-  // A handoff's steps went to the new thread, so a resolved one has no
-  // progress of its own to report.
+  // A handoff counts only its prerequisites, and once it has started there
+  // is nothing left to tick.
   const progress = todo.status !== "open" && todo.action?.type === "start_thread"
     ? undefined
     : threadTodoItemProgress(todo);
@@ -528,7 +528,7 @@ function TodoRow(props: {
           type="button"
           className="thread-todos-panel__row-main"
           aria-label={`Open thread: ${todo.title}, in ${view.threadTitle(todo)}${
-            progress ? `, ${progress.checked} of ${progress.total} steps checked` : ""
+            progress ? `, ${progress.checked} of ${progress.total} ${progress.noun} checked` : ""
           }${props.unread ? ", unread" : ""}`}
           onClick={() => view.openThread(todo)}
         >

@@ -74,7 +74,7 @@ export function TodoModelPicker(props: MachinePickerProps) {
     const trigger = triggerRef.current?.getBoundingClientRect();
     const menu = menuRef.current;
     if (!trigger || !menu) return;
-    const facts = triggerRef.current?.closest(".thread-todo-card__facts")?.getBoundingClientRect();
+    const facts = triggerRef.current?.closest(".thread-todo-card__facts, .todo-dispatch-chips")?.getBoundingClientRect();
     const next = placeTodoModelMenu({
       trigger,
       alignLeft: facts?.left,

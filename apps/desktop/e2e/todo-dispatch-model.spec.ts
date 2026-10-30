@@ -47,6 +47,17 @@ function expectChipHugsLabel(layout: Awaited<ReturnType<typeof measureModelChip>
   expect(layout.termCenterOffset).toBeLessThanOrEqual(1.5);
 }
 
+/**
+ * Opens the labelled grid on the first card in `scope` that is still
+ * showing the chip row. The choice is per card and shared by the stack and
+ * the To-dos panel, so a card opened in one is already open in the other.
+ */
+async function showStartSettings(scope: Locator) {
+  const toggle = scope.getByRole("button", { name: "Show start settings" }).first();
+  if (await toggle.count() > 0) await toggle.click();
+  await expect(scope.getByRole("button", { name: "Hide start settings labels" }).first()).toBeVisible();
+}
+
 /** Contrived Atlas data only; also captures the before/after PR illustrations. */
 test("picks dispatch settings with the keyboard and remembers them on the raising thread", async ({ browserName: _browserName }, testInfo) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-todo-model-"));
@@ -113,6 +124,9 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     }
     const chip = stack.getByRole("button", { name: /Model for the new thread:/ });
     await expect(chip).toHaveAccessibleName(/GPT-5.5, high/);
+    // At rest the settings are a chip row; the grid's geometry is measured open.
+    await expect(stack.getByRole("group", { name: "Start settings" })).toBeVisible();
+    await showStartSettings(stack);
     const stackLayout = await measureModelChip(chip);
     expectChipHugsLabel(stackLayout);
     await chip.click();
@@ -139,6 +153,7 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     await todosTab.click();
     const panel = app.window.getByRole("tabpanel", { name: /^To-dos/ });
     await expect(panel.locator(".thread-todo-card")).toHaveCount(2);
+    await showStartSettings(panel.locator(".thread-todo-card").first());
     const firstPanelChip = panel.getByRole("button", { name: /^Model for the new thread:/ }).first();
     // The rail's width follows the window: about 220px in CI's 1024px
     // window, which truncates the label. Either way the chip stays in its

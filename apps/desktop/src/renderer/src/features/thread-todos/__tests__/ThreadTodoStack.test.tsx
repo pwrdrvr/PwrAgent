@@ -478,6 +478,11 @@ describe("ThreadTodoStack", () => {
     );
 
     expect(screen.getByRole("button", { name: "Model for the new thread: OpenAI, gpt-6.1-sol, xhigh" })).toBeTruthy();
+    // Access cannot change on the card, so the row shows it as a plain pill.
+    const access = screen.getByRole("img", { name: "Access for the new thread: Auto" });
+    expect(access.textContent).toBe("Auto");
+    expect(access.getAttribute("data-tooltip")).toBe("Access: Auto");
+    fireEvent.click(screen.getByRole("button", { name: "Show start settings" }));
     expect(screen.getByText("Access").nextElementSibling?.textContent).toBe("Auto");
   });
 
@@ -842,8 +847,11 @@ describe("thread to-do checklists", () => {
       <ThreadTodoStack threadKey="codex:checklist-20" todos={[handoff]} view={view} onStartReview={vi.fn()} />,
     );
     expect(screen.getByRole("list", { name: "Before you start, 1 of 1 checked" })).toBeTruthy();
-    expect(screen.getByRole("list", { name: "Steps for the new thread, 0 of 2 checked" })).toBeTruthy();
-    expect(screen.getByText("0 of 2")).toBeTruthy();
+    // The count is the prerequisites'; the plan waits behind Show more.
+    expect(screen.getByText("1 of 1")).toBeTruthy();
+    expect(screen.queryByText("0 of 2")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show more · 2-step plan" }));
+    expect(screen.getByRole("list", { name: "Plan for the new thread" })).toBeTruthy();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     });

@@ -18,9 +18,13 @@ export type TodoDispatchChoices = {
   /** An environment id, or `none`. */
   environments?: Readonly<Record<string, string>>;
   workMode?: ThreadTodoWorkMode;
+  /** The start settings show as the labelled grid instead of the chip row. */
+  settingsExpanded?: boolean;
 };
 
 type DispatchContext = {
+  /** False for the default context, which keeps no choices. */
+  provided: boolean;
   api?: Pick<DesktopApi, "listBackends" | "listModelSettingsRecents" | "listThreadTodoDispatchEnvironments">;
   /** Settings → Models → Allow Fast mode, on this window's own machine. */
   localCodexFastAllowed: boolean;
@@ -38,7 +42,7 @@ const EMPTY_PICKS: ReadonlyMap<string, ThreadTodoModelSettings> = new Map();
 const EMPTY_CATALOGS: ReadonlyMap<string, BackendSummary[]> = new Map();
 const EMPTY_CHOICES: ReadonlyMap<string, TodoDispatchChoices> = new Map();
 const Context = createContext<DispatchContext>({
-  localCodexFastAllowed: true, choices: EMPTY_CHOICES, choose: () => {},
+  provided: false, localCodexFastAllowed: true, choices: EMPTY_CHOICES, choose: () => {},
   backends: [], ownerBackends: EMPTY_CATALOGS, loadOwnerBackends: () => {}, picks: EMPTY_PICKS, pick: () => {},
 });
 
@@ -86,6 +90,7 @@ export function TodoDispatchProvider(props: {
   }, []);
   const localCodexFastAllowed = props.localCodexFastAllowed !== false;
   const value = useMemo<DispatchContext>(() => ({
+    provided: true,
     api: props.api,
     localCodexFastAllowed,
     choices,
