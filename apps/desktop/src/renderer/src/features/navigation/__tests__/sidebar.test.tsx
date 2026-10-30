@@ -6652,11 +6652,11 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        directories={[{ ...directories[0]!, threadKeys: ["codex:thread-first", "codex:thread-second"] }]}
+        directories={[{ ...directories[0]!, ...{ threadKeys: ["codex:thread-first", "codex:thread-second"] } }]}
         inboxThreads={[first, second]}
         loading={false}
         creatingThread={undefined}
-        selectedItemKey={undefined}
+        selectedItemKey="codex:thread-first"
         threads={[first, second]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}

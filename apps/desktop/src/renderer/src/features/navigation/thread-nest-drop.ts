@@ -49,7 +49,7 @@ export function canNestThread(
     if (key === childKey) return false;
     if (seen.has(key)) break;
     seen.add(key);
-    const next = resolveThreadParentKey(cursor, threadByKey);
+    const next: string | undefined = resolveThreadParentKey(cursor, threadByKey);
     cursor = next ? threadByKey.get(next) : undefined;
   }
   return true;

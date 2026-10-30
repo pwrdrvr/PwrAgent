@@ -46228,7 +46228,7 @@ export class DesktopBackendRegistry {
       parentThreadId = args.parentThreadId.trim();
     }
     if (Object.hasOwn(args, "parentBackend")) {
-      if (!isAppServerBackendKind(args.parentBackend)) {
+      if (typeof args.parentBackend !== "string" || !isAppServerBackendKind(args.parentBackend)) {
         return threadInspectionFailure(
           "invalid_arguments",
           "parentBackend must be a known PwrAgent backend when provided.",
