@@ -3,6 +3,7 @@ import type {
   AppServerThreadActivityDetail, AppServerThreadActivityEntry, AppServerThreadFileDiff, AppServerThreadImagePart,
   AppServerThreadPlanStep,
 } from "@pwragent/shared";
+import { formatToolIdentifier, formatToolInvocation } from "../../shared/tool-activity";
 
 /** Claude's checklist tool. Its calls are the turn's plan, not tool rows. */
 export const CLAUDE_TODO_TOOL = "TodoWrite";
@@ -188,9 +189,84 @@ export function claudeToolResultContent(content: unknown, alt: string): {
       text.push(record.text);
       continue;
     }
+    // ToolSearch answers with the tools it loaded.
+    if (record?.type === "tool_reference" && typeof record.tool_name === "string") {
+      text.push(claudeToolIdentifier(record.tool_name).identifier);
+      continue;
+    }
     const image = record?.type === "image" ? claudeImageBlockPart(record, alt) : undefined;
     if (image) images.push(image);
     else text.push(JSON.stringify(block));
   }
   return { text: text.join("\n"), images };
+}
+
+const CLAUDE_RESULT_BLOCK_TYPES = new Set(["text", "image", "tool_reference", "document", "search_result"]);
+
+/**
+ * A saved output, split as `claudeToolResultContent` splits a live one.
+ * Rows saved before images were drawn kept a non-string result as its JSON.
+ */
+export function claudeSavedToolOutput(markdown: string | undefined, alt: string): {
+  text: string; images: AppServerThreadImagePart[];
+} {
+  if (!markdown?.startsWith("[{\"type\":")) return { text: markdown ?? "", images: [] };
+  try {
+    const blocks: unknown = JSON.parse(markdown);
+    const isResult = Array.isArray(blocks) && blocks.every((block) => block && typeof block === "object"
+      && CLAUDE_RESULT_BLOCK_TYPES.has((block as { type?: unknown }).type as string));
+    return isResult ? claudeToolResultContent(blocks, alt) : { text: markdown, images: [] };
+  } catch {
+    return { text: markdown, images: [] };
+  }
+}
+
+/**
+ * The name a tool row shows. Claude names an MCP tool `mcp__<server>__<tool>`;
+ * a connection PwrAgent manages is served as `pwragent_<name>_<hash>`, which
+ * reads as `<name>`.
+ */
+export function claudeToolIdentifier(name: string): { identifier: string; mcp: boolean } {
+  const match = /^mcp__(.+?)__(.+)$/u.exec(name);
+  if (!match) return { identifier: name, mcp: false };
+  const server = match[1].replace(/^pwragent_(.+)_[0-9a-f]{32}$/u, "$1").replace(/^builtin_/u, "");
+  return { identifier: formatToolIdentifier(server, match[2]), mcp: true };
+}
+
+/**
+ * A call of an MCP tool, or of another tool without a row of its own: named,
+ * with its arguments and result inside, as Codex shows the same calls.
+ */
+export function claudeToolCallDetail(params: {
+  id: string; name: string; input: Record<string, unknown>; status: ActivityStatus;
+  output?: string; images?: AppServerThreadImagePart[];
+}): AppServerThreadActivityDetail {
+  const { identifier, mcp } = claudeToolIdentifier(params.name);
+  return {
+    id: params.id, kind: "command", label: mcp ? `Used MCP ${identifier}` : identifier,
+    command: {
+      displayCommand: formatToolInvocation(identifier, params.input), rawCommand: identifier, source: "tool",
+      ...(params.output ? { output: params.output } : {}),
+    },
+    ...(params.images?.length ? { images: params.images } : {}),
+    status: params.status,
+  };
+}
+
+/** The arguments a tool row was built with: its invocation after the name line. */
+export function claudeToolCallArguments(detail: AppServerThreadActivityDetail): Record<string, unknown> | undefined {
+  const command = detail.command;
+  if (command?.source !== "tool" || command.rawCommand === undefined) return undefined;
+  const json = command.displayCommand.slice(command.rawCommand.length + 1);
+  try {
+    const value: unknown = json ? JSON.parse(json) : undefined;
+    return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A shell command the row ran. A tool row's command names a tool instead. */
+export function claudeShellCommand(detail: AppServerThreadActivityDetail | undefined): string | undefined {
+  return detail?.command?.source === "tool" ? undefined : detail?.command?.rawCommand;
 }

@@ -2669,11 +2669,87 @@ describe("Claude transcript fidelity", () => {
       id: "read-1:output", kind: "read", label: "Read shot.png output", status: "completed",
       images: [{ type: "image", url: pngUrl, alt: "Read shot.png" }],
     });
-    expect(detail("shot-1:output")).toMatchObject({
-      markdown: "Captured the page.", images: [{ url: "data:image/jpeg;base64,/9j/4AAQ" }],
+    expect(detail("shot-1")).toMatchObject({
+      label: "Used MCP browser/screenshot",
+      command: { rawCommand: "browser/screenshot", source: "tool", output: "Captured the page." },
+      images: [{ url: "data:image/jpeg;base64,/9j/4AAQ" }],
     });
     // No row keeps the image as text.
-    expect(JSON.stringify(details.map((candidate) => candidate.markdown))).not.toContain("base64");
+    expect(JSON.stringify(details.map((candidate) => [candidate.markdown, candidate.command?.output])))
+      .not.toContain("base64");
+  });
+
+  it("names an MCP call's tool and keeps its arguments and result inside the row", async () => {
+    const sandboxer = "mcp__pwragent_builtin_sandboxer_e96ab96f1443b1279de4ece773af16df__stop_sandbox";
+    const f = await fixture(async function* () {
+      yield init;
+      yield call("search-1", "ToolSearch", { query: "select:stop_sandbox" });
+      yield { type: "user", parent_tool_use_id: null, message: { content: [{ type: "tool_result", tool_use_id: "search-1",
+        content: [{ type: "tool_reference", tool_name: sandboxer }] }] } } as SDKMessage;
+      yield call("stop-1", sandboxer, { sandboxId: "sb_fixture" });
+      yield answer("stop-1", "{\"status\":\"archiving\"}");
+      yield result;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Stop it" }] });
+    await f.waitForTurn();
+
+    const [group] = (await f.backend.readThread(threadId)).entries.filter((entry) => entry.type === "activity");
+    if (group?.type !== "activity") throw new Error("Expected the tools' row");
+    expect(group.summary).toBe("Used 2 tools");
+    expect(group.details).toEqual([
+      expect.objectContaining({
+        id: "search-1", kind: "command", label: "ToolSearch", status: "completed",
+        command: expect.objectContaining({ rawCommand: "ToolSearch", source: "tool", output: "sandboxer/stop_sandbox" }),
+      }),
+      expect.objectContaining({
+        id: "stop-1", kind: "command", label: "Used MCP sandboxer/stop_sandbox", status: "completed",
+        command: {
+          displayCommand: "sandboxer/stop_sandbox\n{\n  \"sandboxId\": \"sb_fixture\"\n}",
+          rawCommand: "sandboxer/stop_sandbox", source: "tool", output: "{\"status\":\"archiving\"}",
+        },
+      }),
+    ]);
+    const completed = f.events.find((event) => event.notification.method === "item/completed"
+      && getNotificationItem(event.notification.params)?.id === "stop-1");
+    expect(buildLiveToolDetails(getNotificationItem(completed!.notification.params)!)).toEqual([expect.objectContaining({
+      command: expect.objectContaining({ rawCommand: "sandboxer/stop_sandbox", output: "{\"status\":\"archiving\"}" }),
+    })]);
+  });
+
+  it("shows tool rows saved as raw JSON as named rows with their images, without rewriting them", async () => {
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    const f = await fixture();
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const saved = [{
+      type: "activity" as const, id: "old-mcp", summary: "mcp__pwragent__attach_thread_pull_request",
+      status: "completed" as const, turn: { id: "old-turn" },
+      details: [
+        { id: "old-mcp", kind: "read" as const, label: "mcp__pwragent__attach_thread_pull_request", markdown: "{\"number\":140}" },
+        { id: "old-mcp:output", kind: "read" as const, label: "mcp__pwragent__attach_thread_pull_request output",
+          markdown: "{\"attached\":true}", status: "completed" as const },
+      ],
+    }, {
+      type: "activity" as const, id: "old-read", summary: "Read shot.png", status: "completed" as const, turn: { id: "old-turn" },
+      details: [
+        { id: "old-read", kind: "read" as const, label: "Read shot.png", path: "/repo/shot.png", status: "in_progress" as const },
+        { id: "old-read:output", kind: "read" as const, label: "Read shot.png output", status: "completed" as const,
+          markdown: JSON.stringify([{ type: "image", source: { type: "base64", data: png } }]) },
+      ],
+    }];
+    await f.store.append(threadId, saved);
+
+    const [group] = (await f.backend.readThread(threadId)).entries;
+    expect(group).toMatchObject({ type: "activity", summary: "Used 2 tools", details: [
+      { id: "old-mcp", label: "Used MCP pwragent/attach_thread_pull_request", command: {
+        rawCommand: "pwragent/attach_thread_pull_request", source: "tool", output: "{\"attached\":true}",
+      } },
+      { id: "old-read", path: "/repo/shot.png" },
+      { id: "old-read:output", images: [{ type: "image", url: `data:image/png;base64,${png}`, alt: "Read shot.png" }] },
+    ] });
+    if (group?.type !== "activity") throw new Error("Expected the tools' row");
+    expect(group.details[2]).not.toHaveProperty("markdown");
+    expect(await f.store.entries(threadId)).toEqual(saved);
   });
 
   it("diffs a new file's content when its patch is empty, and keeps a failed edit's error", async () => {
