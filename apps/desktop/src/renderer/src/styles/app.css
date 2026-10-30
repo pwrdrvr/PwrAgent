@@ -33600,7 +33600,9 @@ div.composer-error-row__toggle {
   box-shadow:
     0 0 10px color-mix(in srgb, var(--thinking-scanner-tint) 42%, transparent),
     0 0 18px color-mix(in srgb, var(--thinking-scanner-tint) 22%, transparent);
-  animation: pwragent-thinking-scanner-sweep 1800ms ease-in-out infinite;
+  /* Each half-sweep is 900ms: 27 steps limit changing pixels to 30Hz instead
+     of redrawing this small indicator at the display's full refresh rate. */
+  animation: pwragent-thinking-scanner-sweep 1800ms steps(27, end) infinite;
   opacity: 0.76;
   transform: translateX(0);
   will-change: opacity, transform;
