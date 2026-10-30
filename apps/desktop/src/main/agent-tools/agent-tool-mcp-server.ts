@@ -14,8 +14,15 @@ import {
 } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import {
   CallToolRequestSchema,
+  ErrorCode,
+  ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
   ListToolsRequestSchema,
+  McpError,
+  ReadResourceRequestSchema,
+  RequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 import {
   PWRAGENT_TOOL_NAMESPACE,
   type AppServerBackendKind,
@@ -29,6 +36,33 @@ import {
   type AgentMcpTool,
   type AgentMcpToolCallResponse,
 } from "./agent-tool-router.js";
+import {
+  PWRAGENT_SKILLS_EXTENSION,
+  PWRAGENT_WORKFLOW_SKILLS,
+} from "./pwragent-workflow-skills.js";
+
+// The SDK's built-in request union does not yet include the skills extension.
+const ListSkillsRequestSchema = RequestSchema.extend({
+  method: z.literal("skills/list"),
+});
+const GetSkillRequestSchema = RequestSchema.extend({
+  method: z.literal("skills/get"),
+});
+
+export function buildPwrAgentMcpInstructions(toolNames: readonly string[]): string {
+  const has = (name: string) => toolNames.includes(name);
+  return PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION
+    + (has("watch_thread_pull_request") && has("create_monitor_delegation")
+      ? " For CI, follow prAutomation.guidance; call watch_thread_pull_request and end the turn;"
+        + " for other long waits, call create_monitor_delegation."
+        + " Do not wait in sleep loops, background shells, or Monitor."
+      : "")
+    + (has("read_tool_guide")
+      ? " Read skill://waiting-on-work/SKILL.md for CI, prerequisites, and long jobs; skill://tool-guide/SKILL.md for tool selection."
+        + " Discover with skills/list or resources/list; skills/get returns metadata, resources/read returns content."
+        + " Read read_tool_guide for the short tool guide."
+      : "");
+}
 
 const LOOPBACK_HOST = "127.0.0.1";
 const MCP_PATH = "/mcp";
@@ -261,6 +295,10 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       enableJsonResponse: true,
       sessionIdGenerator: undefined,
     });
+    const toolNames = this.resolveMcpTools().map((tool) => tool.name);
+    const hasToolGuide = toolNames.includes("read_tool_guide");
+    // The PDF-only MCP surface shares this server but has no workflow tools.
+    const skills = hasToolGuide ? PWRAGENT_WORKFLOW_SKILLS : [];
     const mcpServer = new McpProtocolServer(
       {
         name: PWRAGENT_TOOL_NAMESPACE,
@@ -269,10 +307,44 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       {
         capabilities: {
           tools: {},
+          resources: {},
+          extensions: { [PWRAGENT_SKILLS_EXTENSION]: {} },
         },
-        instructions: buildPwrAgentMcpInstructions(this.resolveMcpTools().map((tool) => tool.name)),
+        instructions: buildPwrAgentMcpInstructions(toolNames),
       },
     );
+    mcpServer.setRequestHandler(ListSkillsRequestSchema, async (request) => {
+      rejectSkillCursor(request.params?.cursor);
+      return { skills: skills.map((skill) => skill.entry) };
+    });
+    mcpServer.setRequestHandler(GetSkillRequestSchema, async (request) => {
+      // The SDK maps thrown schema errors to InternalError. Validate extension
+      // arguments here so malformed skill requests return InvalidParams.
+      const uri = request.params?.uri;
+      if (typeof uri !== "string") {
+        throw new McpError(ErrorCode.InvalidParams, "skills/get requires a skill URI.");
+      }
+      const skill = skills.find((candidate) => candidate.entry.uri === uri);
+      if (!skill) {
+        throw new McpError(ErrorCode.InvalidParams, "Unknown skill URI.");
+      }
+      return { skill: skill.entry };
+    });
+    mcpServer.setRequestHandler(ListResourcesRequestSchema, async (request) => {
+      rejectSkillCursor(request.params?.cursor);
+      return { resources: skills.map((skill) => skill.resource) };
+    });
+    mcpServer.setRequestHandler(ListResourceTemplatesRequestSchema, async (request) => {
+      rejectSkillCursor(request.params?.cursor);
+      return { resourceTemplates: [] };
+    });
+    mcpServer.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+      const skill = skills.find((candidate) => candidate.content.uri === request.params.uri);
+      if (!skill) {
+        throw new McpError(-32002, "Unknown resource URI.");
+      }
+      return { contents: [skill.content] };
+    });
     mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: this.resolveMcpTools(),
     }));
@@ -426,21 +498,10 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
   }
 }
 
-/**
- * The MCP server instructions. Claude Code defers PwrAgent's tools and shows
- * only their names, so these are the one PwrAgent text it always reads. The
- * waiting rule lives here because Claude otherwise waits on CI with its own
- * Monitor and background shells, which wake the parent model for each event.
- */
-export function buildPwrAgentMcpInstructions(toolNames: readonly string[]): string {
-  const has = (name: string) => toolNames.includes(name);
-  return PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION
-    + (has("read_tool_guide") ? " Read read_tool_guide for the short tool guide." : "")
-    + (has("watch_thread_pull_request") && has("create_monitor_delegation")
-      ? " To wait for CI on this thread's PR, call watch_thread_pull_request and end the turn;"
-        + " for any other long wait, call create_monitor_delegation."
-        + " Do not wait in sleep loops, background shells, or Monitor."
-      : "");
+function rejectSkillCursor(cursor: unknown): void {
+  if (cursor !== undefined) {
+    throw new McpError(ErrorCode.InvalidParams, "Invalid cursor.");
+  }
 }
 
 function forbiddenMcpResponse(message: string): AgentMcpToolCallResponse {

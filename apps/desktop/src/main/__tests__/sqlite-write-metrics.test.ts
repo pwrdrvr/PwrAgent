@@ -47,16 +47,13 @@ import { StateDb } from "../state/state-db";
 import { createTempStateDb } from "./sqlite-test-utils";
 import { partitionFederationCollection } from "../federation/federation-collection-reads";
 
-// Keep real subprocesses by default. Only the repeated idle observations below
-// replay an already verified Git result; callback callers still use real execFile.
-const execFileAsync = vi.hoisted(() => vi.fn<typeof import("node:child_process").execFile.__promisify__>());
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  const { promisify } = await import("node:util");
-  execFileAsync.mockImplementation(promisify(actual.execFile));
-  return { ...actual, execFile: Object.assign(actual.execFile.bind(null), {
-    [promisify.custom]: execFileAsync,
-  }) };
+// Keep the real Git runner by default. Replay verified observations at its
+// boundary so fixture budgets do not depend on platform-specific launchers.
+const gitCommand = vi.hoisted(() => vi.fn<typeof import("../app-server/git-executable").runGitCommand>());
+vi.mock("../app-server/git-executable", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../app-server/git-executable")>();
+  gitCommand.mockImplementation(actual.runGitCommand);
+  return { ...actual, runGitCommand: gitCommand };
 });
 
 // Record a missing fixture seam without launching the SDK's real Git probes.
@@ -92,7 +89,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  execFileAsync.mockClear();
+  gitCommand.mockClear();
   delete process.env[SQLITE_WRITE_METRICS_ENV];
   stateDb.close();
   rmSync(tempDir, { recursive: true, force: true });
@@ -153,27 +150,27 @@ describe("sqlite write metrics", () => {
 
       const idleEvents: AgentEvent[] = [];
       registry.onEvent((event) => { idleEvents.push(event); });
-      const probeStart = execFileAsync.mock.calls.length;
+      const probeStart = gitCommand.mock.calls.length;
       const idle = await measureSqliteWrites(async () => {
         // One real unchanged observation covers the Git integration. Repeating
         // the same subprocess 100 times tests process startup cost, while this
         // budget needs 100 passes through the registry and the real SQLite store.
         await registry.refreshThreadDirectoryRelationship(identity);
-        expect(execFileAsync.mock.calls.slice(probeStart)).toEqual([
-          ["git", ["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"], { env: expect.any(Object) }],
+        expect(gitCommand.mock.calls.slice(probeStart)).toEqual([
+          [cwd, ["rev-parse", "--abbrev-ref", "HEAD"], { ownProcessTree: true }],
         ]);
-        const observation = await execFileAsync.mock.results.at(-1)!.value;
+        const observation = await gitCommand.mock.results.at(-1)!.value;
         expect(observation.stdout.trim()).toBe("fix/external-branch");
-        const run = execFileAsync.getMockImplementation()!;
+        const run = gitCommand.getMockImplementation()!;
         try {
-          execFileAsync.mockResolvedValue(observation);
+          gitCommand.mockResolvedValue(observation);
           for (let index = 1; index < 100; index++) await registry.refreshThreadDirectoryRelationship(identity);
         } finally {
-          execFileAsync.mockImplementation(run);
+          gitCommand.mockImplementation(run);
         }
       });
-      expect(execFileAsync.mock.calls.slice(probeStart)).toEqual(Array.from({ length: 100 }, () => [
-        "git", ["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"], { env: expect.any(Object) },
+      expect(gitCommand.mock.calls.slice(probeStart)).toEqual(Array.from({ length: 100 }, () => [
+        cwd, ["rev-parse", "--abbrev-ref", "HEAD"], { ownProcessTree: true },
       ]));
       expect(await store.getThreadOverlayState(identity)).toMatchObject({
         gitBranch: "fix/agent-branch", observedGitBranch: "fix/external-branch",
@@ -195,6 +192,15 @@ describe("sqlite write metrics", () => {
   });
 
   it.each([false, true])("steers Claude once per request and dispatches queued input only after completion (causal messaging=%s)", async (causal) => {
+    const run = gitCommand.getMockImplementation()!;
+    // This fixture is not a Git repository. Queue completion must wait on the
+    // fake Claude result, not on an unrelated native Windows Git startup.
+    gitCommand.mockImplementation(async (cwd, args, options) => {
+      if (cwd === tempDir && args.join(" ") === "rev-parse --abbrev-ref HEAD") {
+        return { stdout: "", stderr: "" };
+      }
+      return await run(cwd, args, options);
+    });
     const finish = Promise.withResolvers<void>();
     const prompts: SDKUserMessage[] = [];
     const queries: Array<{ resume?: string }> = [];
@@ -267,7 +273,11 @@ describe("sqlite write metrics", () => {
       const replay = await registry.readThread(identity);
       expect(replay.replay.messages.find((message) => message.text === "Focus on the PR")?.origin).toEqual(origin);
       expect(registry.getActiveTurnForThread(identity)).toBeUndefined();
-    } finally { finish.resolve(); await registry.close(); }
+    } finally {
+      finish.resolve();
+      try { await registry.close(); }
+      finally { gitCommand.mockImplementation(run); }
+    }
   });
 
   it("budgets Claude result accounting independently of context updates and preserves provider pricing", async () => {

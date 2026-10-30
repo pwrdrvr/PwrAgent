@@ -1883,11 +1883,11 @@ function resolveBranchDriftExpectedBranch(params: {
 }
 
 async function readCurrentGitBranch(sourcePath: string): Promise<string | undefined> {
-  const result = await execFile(
-    "git",
-    ["-C", sourcePath, "rev-parse", "--abbrev-ref", "HEAD"],
-    { env: buildPwrAgentChildProcessEnv(process.env) },
-  );
+  // Git for Windows can hand off to a descendant that still holds the
+  // workspace open. Wait for the owned tree before allowing its removal.
+  const result = await runGitCommand(sourcePath, ["rev-parse", "--abbrev-ref", "HEAD"], {
+    ownProcessTree: true,
+  });
   const branch = result.stdout.trim();
   return branch || undefined;
 }
