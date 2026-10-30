@@ -4,7 +4,7 @@ import { inspectClaudeInstallation } from "../claude/claude-executable";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import type { ForgePrRepositoryResolver, ForgePrToolHandler } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import { ForgeReadError, repositoryKey, validateForgeReadArgs, type ForgeReadRequest, type ForgeRepository } from "../pr-status/forge-tool-contract";
-import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
+import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation, type ForgeReviewComment } from "../pr-status/forge-pr-tool-contract";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import {
@@ -49755,18 +49755,29 @@ function forgeToolApprovalMessage(operation: ForgePrToolOperation, args: ForgePr
   }
 }
 
-/** The card's argument rows: bodies cut to a preview, attachments by file name. */
-function forgeToolParamsDisplay(args: ForgePrToolArgs): Array<{ name: string; value: string }> {
-  const rows: Array<{ name: string; value: string }> = [];
+/**
+ * The card's argument rows. Text goes out whole, because the operator is
+ * approving exactly what gets posted; the contract already caps a body at
+ * FORGE_BODY_MAX_CHARS. A body the forge renders as Markdown says so, and each
+ * inline review comment is its own row keyed by its location.
+ */
+function forgeToolParamsDisplay(args: ForgePrToolArgs): Array<{ name: string; value: string; format?: "markdown" }> {
+  const rows: Array<{ name: string; value: string; format?: "markdown" }> = [];
   for (const [name, value] of Object.entries(args)) {
     if (value === undefined || name === "repository") continue;
-    if (name === "body" || name === "commitMessage") {
-      const textValue = String(value);
-      rows.push({ name, value: textValue.length > 240 ? `${textValue.slice(0, 240)}… (${textValue.length.toLocaleString("en-US")} characters)` : textValue });
+    if (name === "body") {
+      rows.push({ name, value: String(value), format: "markdown" });
+    } else if (name === "commitMessage") {
+      rows.push({ name, value: String(value) });
     } else if (name === "attachments" && Array.isArray(value)) {
       rows.push({ name, value: value.map((item) => String((item as { path?: unknown }).path ?? "").split("/").pop()).join(", ") });
     } else if (name === "comments" && Array.isArray(value)) {
-      rows.push({ name, value: `${value.length} inline comment${value.length === 1 ? "" : "s"}` });
+      for (const comment of value as ForgeReviewComment[]) {
+        const lines = comment.startLine && comment.startLine !== comment.line ? `${comment.startLine}–${comment.line}` : String(comment.line);
+        // The location is the row's key: it always ends in a line number, so
+        // the secret-name checks that read keys never match a file name.
+        rows.push({ name: `${comment.path}:${lines}`, value: String(comment.body ?? ""), format: "markdown" });
+      }
     } else {
       rows.push({ name, value: typeof value === "string" ? value : JSON.stringify(value) });
     }

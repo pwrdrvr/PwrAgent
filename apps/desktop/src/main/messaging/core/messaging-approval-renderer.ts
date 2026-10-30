@@ -268,7 +268,11 @@ function mcpToolParamLines(request: AppServerMcpElicitationRequestNotification):
     const value = isSecretFieldName(name ?? label) || isSecretFieldLabel(label) || /^bearer\s+/i.test(raw.trim())
       ? "[redacted]"
       : redactCommandText(raw.replace(JSON_SECRET_MEMBER, "$1\"[redacted]\""));
-    return [`${label}: ${value.length > MCP_PARAM_VALUE_LIMIT ? `${value.slice(0, MCP_PARAM_VALUE_LIMIT)}…` : value}`];
+    // A chat message cannot hold a whole pull request body, so it says how
+    // much it left out rather than passing a fragment off as the value.
+    return [`${label}: ${value.length > MCP_PARAM_VALUE_LIMIT
+      ? `${value.slice(0, MCP_PARAM_VALUE_LIMIT)}… (${value.length.toLocaleString("en-US")} characters; the desktop card shows all of it)`
+      : value}`];
   });
 }
 
