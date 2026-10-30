@@ -17,7 +17,7 @@ test("reopens its selected chat, disclosed projects and loaded rows in a new pro
   let second: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
   try {
     await expect(first.window.getByRole("heading", { level: 2, name: "Directories lens thread 01" })).toBeVisible();
-    await first.window.getByRole("tab", { name: "directories", exact: true }).click();
+    await first.window.getByRole("tab", { name: "Directories", exact: true }).click();
     const project = first.window.locator(".directory-row").filter({ has: first.window.getByRole("button", { name: /^PwrAgent(,|$)/ }) });
     await project.getByRole("button", { name: /Load more threads/ }).click();
     await first.window.getByRole("button", { name: /Directories lens thread 13/ }).first().click();
@@ -29,7 +29,7 @@ test("reopens its selected chat, disclosed projects and loaded rows in a new pro
     await first.closeApplication();
     second = await launchElectronApp({ fixturePath, homeRoot: first.homeRoot });
     expect(await second.electronApp.evaluate(() => process.pid)).not.toBe(firstPid);
-    await expect(second.window.getByRole("tab", { name: "directories", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(second.window.getByRole("tab", { name: "Directories", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(second.window.getByRole("heading", { level: 2, name: "Directories lens thread 13" })).toBeVisible();
     await expect(second.window.getByRole("button", { name: /^PwrAgent(,|$)/ })).toHaveAttribute("aria-expanded", "true");
     await expect(second.window.getByRole("button", { name: /^PwrSnap(,|$)/ })).toHaveAttribute("aria-expanded", "true");
