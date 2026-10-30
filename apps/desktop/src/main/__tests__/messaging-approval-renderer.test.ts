@@ -151,7 +151,7 @@ describe("buildApprovalIntent", () => {
   });
 
   it("says how much of a long MCP parameter a chat approval leaves out", () => {
-    const body = "Moves every macOS job onto the hosted runner. ".repeat(20);
+    const body = "Moves every macOS job onto the hosted runner. ".repeat(20).trim();
     const intent = buildApprovalIntent({
       id: "mcp-tool-long",
       createdAt: 1000,
