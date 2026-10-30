@@ -499,6 +499,7 @@ function createSnapshot(
           pull_requests: { value: "auto", source: "default" },
           comments: { value: "auto", source: "default" },
           issues: { value: "auto", source: "default" },
+          ci: { value: "auto", source: "default" },
           approve_merge: { value: "ask", source: "default" },
         },
       },
@@ -588,6 +589,9 @@ describe("SettingsScreen agent forge tools", () => {
     render(<SettingsScreen initialSection="git" settings={settings} onClose={() => undefined} />);
     const section = screen.getByRole("heading", { name: "Agent forge tools" }).closest("section")!;
     expect(within(section).getByRole("combobox", { name: "Approve and merge access" })).toHaveTextContent("Ask");
+    expect(within(section).getByRole("combobox", { name: "CI reruns access" })).toHaveTextContent("Auto");
+    chooseSelectOption(within(section).getByRole("combobox", { name: "CI reruns access" }), "Off");
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ git: { agentTools: { access: { ci: "off" } } } }));
     expect(selectOptionLabels(within(section).getByRole("combobox", { name: "Read access" }))).toEqual(["Allow", "Off"]);
     chooseSelectOption(within(section).getByRole("combobox", { name: "Pull requests access" }), "Ask");
     await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ git: { agentTools: { access: { pull_requests: "ask" } } } }));

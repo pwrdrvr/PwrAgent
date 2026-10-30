@@ -272,6 +272,8 @@ export class ForgeCiClient {
     }
     if (response.status === 204) return null;
     const reader = response.body?.getReader();
+    // Actions rerun requests return 201 Created with an empty body.
+    if (!reader && method !== "GET" && response.status === 201) return null;
     if (!reader) throw new ForgeReadError("invalid_response", "The provider response has no body.");
     const chunks: Uint8Array[] = [];
     const maxBytes = raw ? FORGE_LOG_MAX_BYTES : FORGE_JSON_MAX_BYTES;

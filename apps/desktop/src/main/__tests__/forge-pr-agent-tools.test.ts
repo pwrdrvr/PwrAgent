@@ -56,6 +56,7 @@ describe("GitHub tool contract", () => {
     expect(forgePrToolGroup("submit_pull_request_review", { event: "COMMENT" })).toBe("comments");
     expect(forgePrToolGroup("submit_pull_request_review", { event: "REQUEST_CHANGES" })).toBe("approve_merge");
     expect(forgePrToolGroup("merge_pull_request", {})).toBe("approve_merge");
+    expect(forgePrToolGroup("rerun_failed_ci_jobs", {})).toBe("ci");
     expect(new Set(FORGE_PR_WRITE_OPERATIONS)).toEqual(new Set(Object.keys(FORGE_AGENT_WRITE_TOOL_GROUPS)));
   });
 
@@ -67,6 +68,23 @@ describe("GitHub tool contract", () => {
 });
 
 describe("GitHub tool catalog", () => {
+  it("advertises reruns as writes and hides them independently from CI reads", () => {
+    const definition = buildForgePrToolDefinitions().find((d) => d.name === "rerun_failed_ci_jobs")!;
+    expect(definition.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false });
+    expect(definition.inputSchema).toMatchObject({ required: ["runId"], additionalProperties: false });
+    const policy: ForgeAgentToolPolicy = { enabled: true, access: { ...DEFAULT_FORGE_AGENT_TOOL_POLICY.access, ci: "off" } };
+    const names = buildForgeToolDefinitions({ policy }).map((d) => d.name);
+    expect(names).not.toContain("rerun_failed_ci_jobs");
+    expect(names).toContain("get_ci_run");
+  });
+
+  it.each([{}, { runId: 0 }, { runId: 1.5 }, { runId: "42" }, { runId: Number.MAX_SAFE_INTEGER + 1 }, { runId: 42, threadId: "other" }, { runId: 42, instanceId: "peer" }, { runId: 42, jobId: 9 }])("rejects invalid rerun arguments %j before dispatch", async (args) => {
+    const handler = vi.fn();
+    const definition = buildForgePrToolDefinitions(handler).find((d) => d.name === "rerun_failed_ci_jobs")!;
+    expect(await definition.dispatch(args, { backend: "codex", threadId: "t", transport: "codex_dynamic_tool" })).toMatchObject({ ok: false, code: "invalid_arguments" });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("moves the forge family into its own catalog and offers what the policy allows", () => {
     const catalogs = resolveAgentToolCatalogs({});
     const forge = catalogs.find((c) => c.id === "forge")!;
@@ -83,6 +101,7 @@ describe("GitHub tool catalog", () => {
   });
 
   it.each([
+    ["rerun failed CI jobs", "rerun_failed_ci_jobs"],
     ["open a pull request with screenshots", "create_pull_request"],
     ["read back the pull request", "get_pull_request"],
     ["reply to review comment", "reply_to_review_comment"],
@@ -102,6 +121,20 @@ describe("GitHub tool catalog", () => {
 });
 
 describe("GitHub tool client", () => {
+  it.each(["github.com", "github.example.test"])("requests only failed jobs through %s and accepts an empty 201 response", async (host) => {
+    const { calls, client } = harness(() => new Response(null, { status: 201 }));
+    const result = await client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx({ repository: { ...repo, host } }));
+    const root = host === "github.com" ? "https://api.github.com" : `https://${host}/api/v3`;
+    expect(calls).toEqual([{ url: `${root}/repos/fixture/project/actions/runs/42/rerun-failed-jobs`, method: "POST", body: undefined, accept: "application/vnd.github+json" }]);
+    expect(result).toMatchObject({ requested: true, runId: 42, providerRequests: 1, scope: "failed_jobs_and_dependents", url: `https://${host}/fixture/project/actions/runs/42` });
+  });
+
+  it("returns a refused rerun without falling back to rerunning the whole workflow", async () => {
+    const { calls, client } = harness(() => json({ message: "This workflow run cannot be rerun." }, 403));
+    await expect(client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx())).rejects.toMatchObject({ code: "forbidden", message: expect.stringContaining("cannot be rerun") });
+    expect(calls).toHaveLength(1);
+  });
+
   it("opens a pull request into the default branch and returns it read back", async () => {
     const { calls, client } = harness((call) => {
       if (call.method === "GET" && call.url.endsWith("/repos/fixture/project")) return json({ default_branch: "main" });

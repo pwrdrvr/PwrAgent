@@ -32,6 +32,14 @@ function harness(reads: (endpoint: string, raw: boolean) => unknown, writes: (ca
 }
 
 describe("GitLab merge request tools", () => {
+  it("requests failed and canceled pipeline jobs through the nested project's write transport", async () => {
+    const { client, readCalls, writeCalls } = harness(() => { throw new Error("Unexpected read"); });
+    const result = await client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx());
+    expect(writeCalls).toEqual([{ method: "POST", endpoint: `${projectPath}/pipelines/42/retry`, body: {} }]);
+    expect(readCalls).toEqual([]);
+    expect(result).toMatchObject({ requested: true, runId: 42, providerRequests: 1, scope: "failed_and_canceled_jobs", url: "https://gitlab.example.test/group/sub/project/-/pipelines/42" });
+  });
+
   it("finds the thread's merge request by source branch and reads it back", async () => {
     const { client, readCalls } = harness((endpoint) => endpoint.includes("/merge_requests?") ? [mr(7)] : mr(7));
     const result = await client.execute("get_pull_request", {}, ctx()) as { pullRequest: Record<string, unknown> };
