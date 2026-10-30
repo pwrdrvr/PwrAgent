@@ -33062,7 +33062,8 @@ div.composer-error-row__toggle {
   font-size: 13px;
 }
 
-.transcript-mcp__params div {
+/* Rows only: a value's own box or rendered Markdown keeps its divs. */
+.transcript-mcp__params > div {
   display: contents;
 }
 
@@ -33203,6 +33204,7 @@ div.composer-error-row__toggle {
   max-height: 200px;
   overflow: auto;
   padding: 8px 10px 10px;
+  /* Inside the box's 1px border, so the focus ring follows its corners. */
   border-radius: 0 0 7px 7px;
   overflow-wrap: anywhere;
   color: var(--text-primary);
@@ -33222,22 +33224,6 @@ div.composer-error-row__toggle {
   font-family: var(--font-mono);
   font-size: 12px;
   white-space: pre-wrap;
-}
-
-/* Same rule-beside-text tone as the URL warning below. */
-.transcript-mcp__text-hidden {
-  margin: 0;
-  padding: 6px 10px;
-  border-top: 1px solid var(--border-subtle);
-  color: var(--text-primary);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.transcript-mcp__text-hidden strong {
-  padding-left: 8px;
-  border-left: 2px solid var(--status-warning);
-  font-weight: 600;
 }
 
 /* The full address, shown before the operator consents to open it. The

@@ -6,34 +6,21 @@ import { ThreadMarkdown } from "./ThreadMarkdown";
 const LONG_TEXT_CHARS = 280;
 const LONG_TEXT_LINES = 4;
 
-// react-markdown drops raw HTML, so a comment or tag in the source never
-// reaches Preview. The forge hides comments too, which is why the operator
-// is told: an instruction can ride in one unseen.
-const RAW_HTML = /<!--|<\/?[A-Za-z][\w-]*(?:\s[^<>]*)?\/?>/u;
-
 export function isLongMcpText(value: string): boolean {
   return value.length > LONG_TEXT_CHARS || value.split("\n").length > LONG_TEXT_LINES;
 }
 
 // A link's text can say anything; only the source shows where it goes.
+// Preview prints raw HTML as text, so links are what it hides.
 const LINK = /\]\(|\]\[|^\s*\[[^\]]+\]:/mu;
 
-// Code is drawn verbatim, so `Array<string>` in backticks hides nothing.
+// Code is drawn verbatim, so `a[0](x)` in backticks hides nothing.
 const FENCED_CODE = /^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^ {0,3}\1[ \t]*$|(?![\s\S]))/gmu;
 const INLINE_CODE = /(`+)[\s\S]*?\1/gu;
 
-function withoutCode(value: string): string {
-  return value.replace(FENCED_CODE, "").replace(INLINE_CODE, "");
-}
-
-function markdownHidesHtml(value: string): boolean {
-  return RAW_HTML.test(withoutCode(value));
-}
-
 /** Markdown whose Preview would hide part of what gets posted. */
 export function markdownNeedsSource(value: string): boolean {
-  const prose = withoutCode(value);
-  return RAW_HTML.test(prose) || LINK.test(prose);
+  return LINK.test(value.replace(FENCED_CODE, "").replace(INLINE_CODE, ""));
 }
 
 type PendingMcpLongTextProps = {
@@ -93,11 +80,6 @@ export function PendingMcpLongText(props: PendingMcpLongTextProps) {
       >
         {preview ? <ThreadMarkdown text={props.value} variant="summary" /> : props.value}
       </div>
-      {preview && markdownHidesHtml(props.value) ? (
-        <p className="transcript-mcp__text-hidden">
-          <strong>Preview hides HTML in this text.</strong> Source shows exactly what will be sent.
-        </p>
-      ) : null}
     </div>
   );
 }

@@ -85,7 +85,7 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
                   </dt>
                   {/* The operator approves exactly this value, so none of it
                       is cut: a long one scrolls in its own box, and Markdown
-                      with HTML or links keeps its source one tab away. */}
+                      with links keeps its source one tab away. */}
                   {isLongMcpText(value) || (markdown && markdownNeedsSource(value)) ? (
                     <dd className="transcript-mcp__param-text">
                       <PendingMcpLongText label={param.label} markdown={markdown} value={value} />
