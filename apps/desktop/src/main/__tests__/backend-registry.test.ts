@@ -3240,19 +3240,19 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
     },
     previousKnownThreadKeys: [`codex:${threadId}`],
     threads: [threadId, ...(params.unpinnedThreadIds ?? [])].map((id) => ({
-        id,
-        title: id,
-        titleSource: "explicit",
-        source: "codex",
-        linkedDirectories: [
-          {
-            id: params.directoryKey,
-            kind: "local",
-            label: "project",
-            path: params.directoryPath,
-          },
-        ],
-        updatedAt: 1_000,
+      id,
+      title: id === threadId ? "Pinned thread" : id,
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [
+        {
+          id: params.directoryKey,
+          kind: "local",
+          label: "project",
+          path: params.directoryPath,
+        },
+      ],
+      updatedAt: 1_000,
     })),
     unchanged: false,
   }));
@@ -14057,7 +14057,7 @@ describe("DesktopBackendRegistry", () => {
     { name: "all remaining roots are pinned", unpinnedThreadIds: [], pinned: true },
     { name: "the new root is already indexed", unpinnedThreadIds: ["thread-1"], pinned: true },
     { name: "an older unpinned root remains", unpinnedThreadIds: ["older-unpinned"], pinned: false },
-  ])("places a new thread when $name and Directory threads has no saved collapse", async ({ unpinnedThreadIds, pinned }) => {
+  ])("places a new thread when $name and Directory threads is open", async ({ unpinnedThreadIds, pinned }) => {
     const directoryPath = expectedDir(path.join(os.tmpdir(), "pwragent-all-pinned-project"));
     const directoryKey = `directory:${directoryPath}`;
     const overlayStore = createOverlayStoreMock();
@@ -14083,6 +14083,34 @@ describe("DesktopBackendRegistry", () => {
       expect(response).not.toHaveProperty("pinnedRank");
     }
     await registry.close();
+  });
+
+  it("bounds SQLite writes when creating a thread in an all-pinned project", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-all-pinned-creation-");
+    const db = StateDb.open(temp.dbPath);
+    onTestFinished(() => {
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+      vi.unstubAllEnvs();
+    });
+    const directoryPath = expectedDir(path.join(os.tmpdir(), "pwragent-all-pinned-budget"));
+    const directoryKey = `directory:${directoryPath}`;
+    const overlayStore = new SqliteOverlayStore(db);
+    await overlayStore.setThreadPin({ backend: "codex", threadId: "thread-pinned", pinnedRank: "1024" });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+    });
+    rememberCollapsedDirectoryWithPinnedThread({ directoryKey, directoryPath, registry, collapsed: false });
+    try {
+      const { result, writes } = await measureSqliteWrites(() => registry.startThread({ backend: "codex", cwd: directoryPath }));
+      expect(result).toMatchObject({ pinnedRank: "0" });
+      expectSqliteWriteBudget({ scenario: "all-pinned-project-thread-creation", writes,
+        note: "One new thread including its automatic pin, measured after seeding; no timer or idle writes." });
+    } finally {
+      await registry.close();
+    }
   });
 
   it("auto-pins a new local thread before the existing local and remote pins", async () => {

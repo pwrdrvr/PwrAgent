@@ -206,9 +206,11 @@ describe("a thread that is still starting", () => {
   });
 
   it.each([
-    { name: "Directory threads is collapsed", collapsed: true, hasUnpinned: true },
-    { name: "archiving leaves only pins", collapsed: false, hasUnpinned: false },
-  ])("keeps a starting thread in its final pin position when $name", ({ collapsed, hasUnpinned }) => {
+    { name: "Directory threads is collapsed", collapsed: true, hasUnpinned: true, hasKept: true, hasOrdinary: true },
+    { name: "archiving leaves only pins", collapsed: false, hasUnpinned: false, hasKept: true, hasOrdinary: true },
+    { name: "no pin is kept at top", collapsed: true, hasUnpinned: true, hasKept: false, hasOrdinary: true },
+    { name: "every pin is kept at top", collapsed: false, hasUnpinned: false, hasKept: true, hasOrdinary: false },
+  ])("keeps a starting thread in its final pin position when $name", ({ collapsed, hasUnpinned, hasKept, hasOrdinary }) => {
     const pinnedDirectories = [{ ...directories[0]!, directoryThreadsCollapsed: collapsed }] as NavigationDirectorySummary[];
     const starting = creation();
     const kept = thread("Kept thread", { pinnedRank: String(-(2 ** 40)) });
@@ -224,8 +226,8 @@ describe("a thread that is still starting", () => {
         pendingLaunchpadCreations={landed ? [] : [starting]}
         selectedItemKey={landed ? "codex:Add a crop tool" : starting.selectionKey}
         threads={[
-          kept,
-          pinned,
+          ...(hasKept ? [kept] : []),
+          ...(hasOrdinary ? [pinned] : []),
           ...(hasUnpinned ? [thread("Older thread")] : []),
           ...(landed ? [thread("Add a crop tool", { pinnedRank: "0" })] : []),
         ]}
@@ -238,7 +240,9 @@ describe("a thread that is still starting", () => {
     const view = render(renderStage(false));
 
     const project = screen.getByRole("list", { name: "Threads in PwrSnap" });
-    expect(rowNames(project)).toEqual(["Kept thread, pinned", "Add a crop tool, starting in PwrSnap", "Pinned thread, pinned"]);
+    const before = hasKept ? ["Kept thread, pinned"] : [];
+    const after = hasOrdinary ? ["Pinned thread, pinned"] : [];
+    expect(rowNames(project)).toEqual([...before, "Add a crop tool, starting in PwrSnap", ...after]);
     if (hasUnpinned) {
       const divider = screen.getByRole("button", { name: "Show directory threads for PwrSnap" });
       expect(within(project).getByRole("button", { name: "Add a crop tool, starting in PwrSnap" })
@@ -248,7 +252,7 @@ describe("a thread that is still starting", () => {
     }
 
     view.rerender(renderStage(true));
-    expect(rowNames(project)).toEqual(["Kept thread, pinned", "Add a crop tool, pinned", "Pinned thread, pinned"]);
+    expect(rowNames(project)).toEqual([...before, "Add a crop tool, pinned", ...after]);
     if (!hasUnpinned) expect(screen.queryByText("Directory threads")).not.toBeInTheDocument();
   });
 
