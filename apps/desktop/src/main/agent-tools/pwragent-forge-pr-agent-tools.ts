@@ -39,7 +39,7 @@ const descriptions: Record<ForgePrToolOperation, string> = {
   create_issue: `Open an issue with optional labels and image or video attachments. ${ASKS}`,
   update_issue: `Edit an issue: title, body, open or closed state, and labels. stateReason applies on GitHub only. Attachments need the full new body. ${ASKS}`,
   merge_pull_request: `Merge a pull request. expectedHeadSha must be the head SHA you checked with get_pull_request, so a later push is never merged unseen. method defaults to the operator's merge method. GitLab supports merge and squash. Does not delete the branch. ${ASKS}`,
-  rerun_failed_ci_jobs: `Request a rerun of failed jobs on a CI run. Pass runId from list_ci_runs or get_ci_run. GitHub Actions reruns failed jobs and their dependent jobs; GitLab retries failed and canceled pipeline jobs. Uses this thread's repository and configured forge authentication. Returns request acceptance, not CI completion or success. Inspect the run afterward when needed; do not retry an uncertain request automatically or duplicate Auto-fix monitoring. ${ASKS}`,
+  rerun_failed_ci_jobs: `Request a rerun of failed jobs on a CI run. Pass runId from list_ci_runs or get_ci_run. GitHub Actions reruns failed jobs and their dependent jobs. GitLab retries failed and canceled pipeline jobs. Uses this thread's repository and configured forge authentication. Returns request acceptance, not CI completion or success. Inspect the run afterward when needed. Do not retry an uncertain request automatically or duplicate Auto-fix monitoring. ${ASKS}`,
 };
 
 export function buildForgePrToolDefinitions(handler?: ForgePrToolHandler): AgentToolDefinition[] {
