@@ -221,16 +221,12 @@ export function claudeSavedToolOutput(markdown: string | undefined, alt: string)
   }
 }
 
-/**
- * The name a tool row shows. Claude names an MCP tool `mcp__<server>__<tool>`;
- * a connection PwrAgent manages is served as `pwragent_<name>_<hash>`, which
- * reads as `<name>`.
- */
+/** The name a tool row shows. Claude names an MCP tool `mcp__<server>__<tool>`. */
 export function claudeToolIdentifier(name: string): { identifier: string; mcp: boolean } {
   const match = /^mcp__(.+?)__(.+)$/u.exec(name);
-  if (!match) return { identifier: name, mcp: false };
-  const server = match[1].replace(/^pwragent_(.+)_[0-9a-f]{32}$/u, "$1").replace(/^builtin_/u, "");
-  return { identifier: formatToolIdentifier(server, match[2]), mcp: true };
+  return match
+    ? { identifier: formatToolIdentifier(match[1], match[2]), mcp: true }
+    : { identifier: name, mcp: false };
 }
 
 /**

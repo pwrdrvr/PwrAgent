@@ -2312,6 +2312,31 @@ describe("Claude SDK backend", () => {
     expect(row).toMatchObject({ status: "failed" });
   });
 
+  it("settles a completed background sub-agent's tool row with its summary", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "spawn", content: [{ type: "tool_use", id: "tool-agent", name: "Agent", input: { description: "Audit the SDK" } }],
+      } } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "agent-1", tool_use_id: "tool-agent", description: "Audit the SDK",
+        task_type: "local_agent", subagent_type: "Explore", is_backgrounded: true } as SDKMessage;
+      yield { type: "user", parent_tool_use_id: null, tool_use_result: { status: "async_launched", agentId: "agent-1" },
+        message: { content: [{ type: "tool_result", tool_use_id: "tool-agent", content: "Async agent launched." }] } } as SDKMessage;
+      yield { type: "system", subtype: "task_notification", task_id: "agent-1", tool_use_id: "tool-agent",
+        status: "completed", output_file: "", summary: "Audit done" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "done" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Audit" }] });
+    await f.waitForTurn();
+    await vi.waitFor(async () => expect((await f.backend.readThread(threadId)).entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "tool-agent", status: "completed", details: [expect.objectContaining({
+        label: "Agent", status: "completed",
+        command: expect.objectContaining({ rawCommand: "Agent", source: "tool", output: "Async agent launched.\n\nAudit done" }),
+      })] }),
+    ])));
+  });
+
   it("reports a background sub-agent as running work with its progress", async () => {
     const agentDone = Promise.withResolvers<void>();
     const f = await fixture(async function* () {
