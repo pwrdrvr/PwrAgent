@@ -98,6 +98,18 @@ describe("backend forge tool dispatch", () => {
     expect(forgeRead).toHaveBeenCalledWith("get_forge_status", {}, expect.objectContaining({ threadId: "thread-1", turnId: "turn-1" }));
   });
 
+  it("gates artifact downloads with the existing forge read access setting", async () => {
+    const args = { runId: 9, artifactId: 12 };
+    const allowed = await internals.handleServerRequest("codex", request("download_ci_artifact", args, "call-artifact"));
+    expect(allowed.success).toBe(true);
+    expect(forgeRead).toHaveBeenCalledWith("download_ci_artifact", args, expect.objectContaining({ threadId: "thread-1" }));
+    forgeRead.mockClear();
+    policy.access.read = "off";
+    const denied = await internals.handleServerRequest("codex", request("download_ci_artifact", args, "call-artifact-off"));
+    expect(text(denied)).toContain("tools_disabled");
+    expect(forgeRead).not.toHaveBeenCalled();
+  });
+
   it("refuses every forge tool, including a stale schema, while the family is off", async () => {
     policy.enabled = false;
     const read = await internals.handleServerRequest("codex", request("list_ci_runs", {}, "call-off-read"));
