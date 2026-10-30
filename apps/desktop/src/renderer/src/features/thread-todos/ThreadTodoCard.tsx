@@ -870,8 +870,10 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     >
       {resting.expanded ? <ChevronUpIcon size={11} /> : <ChevronDownIcon size={11} />}
       {resting.toggleLabel}
+      {/* The space sits outside the span, where the accessible name keeps it. */}
+      {resting.toggleDetail ? " " : null}
       {resting.toggleDetail ? (
-        <span className="thread-todo-card__more-detail">{` ${resting.toggleDetail}`}</span>
+        <span className="thread-todo-card__more-detail">{resting.toggleDetail}</span>
       ) : null}
     </button>
   ) : null;

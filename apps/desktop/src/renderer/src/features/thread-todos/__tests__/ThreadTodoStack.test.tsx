@@ -478,6 +478,11 @@ describe("ThreadTodoStack", () => {
     );
 
     expect(screen.getByRole("button", { name: "Model for the new thread: OpenAI, gpt-6.1-sol, xhigh" })).toBeTruthy();
+    // Access cannot change on the card, so the row shows it as a plain pill.
+    const access = screen.getByRole("img", { name: "Access for the new thread: Auto" });
+    expect(access.textContent).toBe("Auto");
+    expect(access.getAttribute("data-tooltip")).toBe("Access: Auto");
+    fireEvent.click(screen.getByRole("button", { name: "Show start settings" }));
     expect(screen.getByText("Access").nextElementSibling?.textContent).toBe("Auto");
   });
 
