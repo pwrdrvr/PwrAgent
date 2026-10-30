@@ -3456,7 +3456,16 @@ describe("DesktopBackendRegistry", () => {
       await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "Await approval" }] });
       await vi.waitFor(() => expect(events.some((event) => event.notification.method === "item/commandExecution/requestApproval")).toBe(true));
       closeQuery.mockClear();
-      await registry.stopRunningTurnsForShutdown({ timeoutMs: 1_000 });
+      const branchProbe = vi.spyOn(gitExecutable, "runGitCommand");
+      const stalledProbe = createDeferred<{ stdout: string; stderr: string }>();
+      branchProbe.mockImplementation(() => stalledProbe.promise);
+      try {
+        await registry.stopRunningTurnsForShutdown({ timeoutMs: 1_000 });
+        expect(branchProbe).not.toHaveBeenCalled();
+      } finally {
+        stalledProbe.resolve({ stdout: "feature/late", stderr: "" });
+        branchProbe.mockRestore();
+      }
       expect(closeQuery).toHaveBeenCalled();
       expect(events.some((event) => event.notification.method === "turn/cancelled")).toBe(true);
       expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0);
@@ -63281,6 +63290,96 @@ script = "printf setup"
         expect.objectContaining({ type: "review", id: "toolu_review", turn: expect.objectContaining({ status: "completed" }) }),
       ]);
     });
+  });
+
+  it.each(["no PATH Git", "missing selected Git", "not a repository"] as const)(
+    "checks branch drift and delivers a terminal event with %s",
+    async (scenario) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-branch-probe-"));
+      if (scenario !== "not a repository") {
+        await git(root, ["init", "-b", "feature/current"]);
+        await git(root, ["commit", "--allow-empty", "-m", "init"]);
+      }
+      const thread: AppServerThreadSummary = {
+        id: "thread-branch", source: "codex", title: "Branch probe",
+        titleSource: "explicit", gitBranch: "feature/previous", observedGitBranch: "feature/previous",
+        linkedDirectories: [{ id: root, path: root, label: "repo", kind: "local" }],
+      };
+      const identity = { backend: "codex" as const, threadId: thread.id };
+      const overlayStore = createOverlayStoreMock({ overlays: {
+        "codex:thread-branch": { ...identity, executionMode: "default", extraLinkedDirectories: [],
+          gitBranch: "feature/previous", observedGitBranch: "feature/previous" },
+      } });
+      const client = new MockBackendClient({ threads: [thread] });
+      const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+      const methods: string[] = [];
+      registry.onEvent((event) => { methods.push(event.notification.method); });
+      try {
+        vi.stubEnv("PWRAGENT_GIT_PATH", scenario === "missing selected Git" ? path.join(root, "missing-git") : "");
+        // The default must work even when no system Git can be resolved.
+        vi.stubEnv("PATH", "");
+        const expectedBranch = scenario === "no PATH Git" ? "feature/current" : "feature/previous";
+        await expect(registry.checkThreadBranchDrift(identity)).resolves.toMatchObject({
+          observedBranch: expectedBranch, drifted: scenario === "no PATH Git",
+        });
+        await client.emit({ method: "turn/started", params: {
+          threadId: thread.id, turnId: "turn-branch", turn: { id: "turn-branch", status: "in_progress" },
+        } });
+        await client.emit({ method: "turn/completed", params: {
+          threadId: thread.id, turn: { id: "turn-branch", status: "completed", output: [] },
+        } } as unknown as AppServerNotification);
+        expect(methods).toContain("turn/completed");
+        expect(await overlayStore.getThreadOverlayState(identity)).toMatchObject({
+          gitBranch: expectedBranch, observedGitBranch: expectedBranch,
+        });
+      } finally {
+        vi.unstubAllEnvs();
+        await registry.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("aborts an active-turn branch probe when shutdown starts", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "thread-branch", source: "codex", title: "Branch probe", titleSource: "explicit",
+      linkedDirectories: [{ id: "fixture", path: os.tmpdir(), label: "repo", kind: "local" }],
+    };
+    const client = new MockBackendClient({ threads: [thread] });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+    const probeStarted = createDeferred<AbortSignal>();
+    const releaseProbe = createDeferred<{ stdout: string; stderr: string }>();
+    const branchProbe = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation((_cwd, _args, options) => {
+      const signal = options!.signal!;
+      probeStarted.resolve(signal);
+      signal.addEventListener("abort", () => releaseProbe.reject(signal.reason), { once: true });
+      return releaseProbe.promise;
+    });
+    const setExpectedBranch = vi.spyOn(overlayStore, "setThreadExpectedBranch");
+    const methods: string[] = [];
+    registry.onEvent((event) => { methods.push(event.notification.method); });
+    let terminal: Promise<void> | undefined;
+    try {
+      await client.emit({ method: "turn/started", params: {
+        threadId: thread.id, turnId: "turn-branch", turn: { id: "turn-branch", status: "in_progress" },
+      } });
+      terminal = client.emit({ method: "turn/completed", params: {
+        threadId: thread.id, turn: { id: "turn-branch", status: "completed", output: [] },
+      } } as unknown as AppServerNotification);
+      await vi.waitFor(() => expect(branchProbe).toHaveBeenCalled());
+      const signal = await probeStarted.promise;
+      await registry.stopRunningTurnsForShutdown({ timeoutMs: 1_000 });
+      expect(signal.aborted).toBe(true);
+      await terminal;
+      expect(methods).toContain("turn/completed");
+      expect(setExpectedBranch).not.toHaveBeenCalled();
+    } finally {
+      releaseProbe.resolve({ stdout: "feature/late", stderr: "" });
+      await terminal;
+      branchProbe.mockRestore();
+      await registry.close();
+    }
   });
 
   it("adopts a named branch change from an active turn before notifying listeners", async () => {

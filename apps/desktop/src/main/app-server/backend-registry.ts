@@ -1882,11 +1882,12 @@ function resolveBranchDriftExpectedBranch(params: {
   };
 }
 
-async function readCurrentGitBranch(sourcePath: string): Promise<string | undefined> {
+async function readCurrentGitBranch(sourcePath: string, signal?: AbortSignal): Promise<string | undefined> {
   // Git for Windows can hand off to a descendant that still holds the
   // workspace open. Wait for the owned tree before allowing its removal.
   const result = await runGitCommand(sourcePath, ["rev-parse", "--abbrev-ref", "HEAD"], {
     ownProcessTree: true,
+    signal,
   });
   const branch = result.stdout.trim();
   return branch || undefined;
@@ -9437,6 +9438,7 @@ export class DesktopBackendRegistry {
   private runningTurnsShutdownStopSettled = false;
   /** Set once a quit starts stopping turns; the queue starts nothing after. */
   private stoppingRunningTurnsForShutdown = false;
+  private readonly activeTurnBranchProbeAbort = new AbortController();
   /** Terminal events still reaching listeners while a quit waits on them. */
   private readonly shutdownTerminalEmits = new Set<Promise<void>>();
   /**
@@ -11480,6 +11482,7 @@ export class DesktopBackendRegistry {
       return;
     }
     this.stoppingRunningTurnsForShutdown = true;
+    this.activeTurnBranchProbeAbort.abort();
     const keys = [...this.activeTurnKeys];
     if (keys.length === 0) {
       return;
@@ -26439,6 +26442,8 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<void> {
+    // Branch metadata must not hold a terminal event past the quit deadline.
+    if (this.stoppingRunningTurnsForShutdown) return;
     const overlay = await this.overlayStore.getThreadOverlayState({
       backend: params.backend,
       threadId: params.threadId,
@@ -26449,13 +26454,15 @@ export class DesktopBackendRegistry {
       freshness: "last-known",
       threadId: params.threadId,
     });
+    if (this.stoppingRunningTurnsForShutdown) return;
     const workspaceCwd = resolveThreadWorkspaceCwd(
       thread,
       overlay?.extraLinkedDirectories ?? [],
     );
     const observedBranch = workspaceCwd
-      ? await readCurrentGitBranch(workspaceCwd).catch(() => thread?.observedGitBranch)
+      ? await readCurrentGitBranch(workspaceCwd, this.activeTurnBranchProbeAbort.signal).catch(() => thread?.observedGitBranch)
       : thread?.observedGitBranch;
+    if (this.stoppingRunningTurnsForShutdown) return;
     const normalizedObservedBranch = observedBranch?.trim() || undefined;
 
     if (!normalizedObservedBranch) {
