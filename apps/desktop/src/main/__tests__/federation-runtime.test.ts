@@ -418,6 +418,21 @@ describe("DesktopFederationRuntime", () => {
     }
   });
 
+  it("runs versioned parent mutations through the owner's guarded mutation path", async () => {
+    const response = { ok: false as const, error: { code: "not_found" as const, message: "Parent was not found." } };
+    const mutateThreadParentV1 = vi.fn(async () => response);
+    const registry = vi.spyOn(await import("../app-server/backend-registry"), "getDesktopBackendRegistry")
+      .mockReturnValue({ mutateThreadParentV1 } as never);
+    try {
+      const request = { backend: "codex" as const, threadId: "child", parentThreadId: "parent", dryRun: true };
+      expect(await new DesktopFederationRuntime().localBackend().mutateThreadParentV1(request)).toEqual(response);
+      expect(mutateThreadParentV1).toHaveBeenCalledExactlyOnceWith(request);
+      expect(DEFAULT_CAPABILITIES).toContain("thread_parent_mutation_v1");
+    } finally {
+      registry.mockRestore();
+    }
+  });
+
   it("detaches owner secondary repositories while preserving primary and last-directory guards", async () => {
     const stateDb = openInMemoryStateDb();
     const overlayStore = new SqliteOverlayStore(stateDb);

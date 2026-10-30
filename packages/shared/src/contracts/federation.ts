@@ -16,6 +16,7 @@ export const FEDERATION_CAPABILITIES = [
   "navigation_snapshot_deltas",
   "navigation_group_invalidations",
   "thread_grouping",
+  "thread_parent_mutation_v1",
   "thread_detail",
   "turn_control",
   "durable_turn_requests_v1",

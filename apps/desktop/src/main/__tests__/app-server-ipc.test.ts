@@ -66,6 +66,8 @@ const withThreadLifecycleMutation = vi.hoisted(() => vi.fn(
 const overlayStoreFixture = vi.hoisted(() => ({ stable: undefined as unknown }));
 const federationMock = vi.hoisted(() => {
   const remoteBackend = {
+    continueThreadEnvironmentStartup: vi.fn(async (request: { backend: string; threadId: string }) => ({ ...request, turnId: "owner-turn" })),
+    acknowledgeThreadEnvironmentFailure: vi.fn(async (request: { backend: string; threadId: string }) => ({ ...request, acknowledged: true })),
     setThreadAgent: vi.fn(),
     setThreadTokenMiser: vi.fn(),
     inspectTokenMiserOutput: vi.fn(async () => ({ available: false })),
@@ -5709,6 +5711,19 @@ describe("app server ipc", () => {
       seenAt: 6_000,
       seenUpdatedAt: 3_000,
     });
+  });
+
+  it("routes environment continuation and acknowledgement to the remote owner", async () => {
+    const { NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL, NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "windows-owner" };
+    const identity = { backend: "codex", threadId: "failed-setup" };
+    registerAppServerIpcHandlers();
+    const continued = await handlers.get(NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL)?.({}, { ...identity, federationTarget });
+    expect(continued).toEqual({ ...identity, turnId: "owner-turn" });
+    expect(federationMock.remoteBackend.continueThreadEnvironmentStartup).toHaveBeenCalledExactlyOnceWith(identity);
+    const acknowledged = await handlers.get(NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL)?.({}, { ...identity, federationTarget });
+    expect(acknowledged).toEqual({ ...identity, acknowledged: true });
+    expect(federationMock.remoteBackend.acknowledgeThreadEnvironmentFailure).toHaveBeenCalledExactlyOnceWith(identity);
   });
 
   it("adds remote thread reactions on the owner without replacing its ordered reactions", async () => {

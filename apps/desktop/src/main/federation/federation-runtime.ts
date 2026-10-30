@@ -230,6 +230,10 @@ import {
   type ReloadCodexMcpConfigRequest,
   type SetThreadPinRequest,
   type SetThreadPinResponse,
+  type ContinueThreadEnvironmentStartupRequest,
+  type ContinueThreadEnvironmentStartupResponse,
+  type AcknowledgeThreadEnvironmentFailureRequest,
+  type AcknowledgeThreadEnvironmentFailureResponse,
   type SetThreadReactionRequest,
   type SetThreadLockRequest,
   type SetThreadLockResponse,
@@ -605,6 +609,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "remote_window",
   "thread_navigation",
   "thread_grouping",
+  "thread_parent_mutation_v1",
   "thread_detail",
   "turn_control",
   "durable_turn_requests_v1",
@@ -7215,6 +7220,12 @@ function localBackendOperations(): FederationBackendOperations {
         ...(options?.requesterInstanceId ? { sourceInstanceId: options.requesterInstanceId } : {}),
       });
     },
+    async continueThreadEnvironmentStartup(request: ContinueThreadEnvironmentStartupRequest): Promise<ContinueThreadEnvironmentStartupResponse> {
+      return await getDesktopBackendRegistry().continueThreadEnvironmentStartup(request);
+    },
+    async acknowledgeThreadEnvironmentFailure(request: AcknowledgeThreadEnvironmentFailureRequest): Promise<AcknowledgeThreadEnvironmentFailureResponse> {
+      return await getDesktopBackendRegistry().acknowledgeThreadEnvironmentFailure(request);
+    },
     async setThreadReaction(
       request: SetThreadReactionRequest,
     ): Promise<SetThreadReactionResponse> {
@@ -7325,6 +7336,9 @@ function localBackendOperations(): FederationBackendOperations {
         },
       });
       return { mounted: true };
+    },
+    async mutateThreadParentV1(request) {
+      return await getDesktopBackendRegistry().mutateThreadParentV1(request);
     },
     async setThreadParent(
       request: SetThreadParentRequest,

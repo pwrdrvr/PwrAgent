@@ -1,5 +1,6 @@
 import type { AppServerThreadActivityEntry, AppServerThreadEntry } from "@pwragent/shared";
 import { summarizeToolActivityItems } from "../app-server/thread-activity";
+import { claudeSavedToolOutput, claudeToolCallDetail } from "./claude-tool-activity";
 
 /** Use the same shell-command detail shape as the other native backends. */
 export function claudeCommandActivity(params: {
@@ -34,6 +35,48 @@ function normalizeSavedCommand(entry: AppServerThreadActivityEntry): AppServerTh
   }
 }
 
+/**
+ * Older replays kept any other tool's call as its input JSON under its raw
+ * name, and a non-string result as the result's JSON. Show both as the named
+ * tool row a new call gets, without rewriting history.
+ */
+function normalizeSavedToolCall(entry: AppServerThreadActivityEntry): AppServerThreadActivityEntry {
+  const [first] = entry.details;
+  if (!first || first.command || first.path || first.url || first.id !== entry.id
+    || first.label !== entry.summary || /\s/u.test(entry.summary)) return entry;
+  let input: unknown;
+  try { input = JSON.parse(first.markdown ?? ""); }
+  catch { return entry; }
+  if (!input || typeof input !== "object" || Array.isArray(input)) return entry;
+  const saved = entry.details.find((detail) => detail.id === `${entry.id}:output`);
+  const { text, images } = claudeSavedToolOutput(saved?.markdown, entry.summary);
+  const detail = claudeToolCallDetail({
+    id: entry.id, name: entry.summary, input: input as Record<string, unknown>, status: entry.status,
+    output: text, images: [...saved?.images ?? [], ...images],
+  });
+  return { ...entry, summary: detail.label, details: [detail] };
+}
+
+/** A built-in tool's saved output whose result kept its images as JSON. */
+function normalizeSavedOutputs(entry: AppServerThreadActivityEntry): AppServerThreadActivityEntry {
+  if (!entry.details.some((detail) => detail.id.endsWith(":output") && detail.markdown?.startsWith("[{"))) return entry;
+  return { ...entry, details: entry.details.map((detail) => {
+    if (!detail.id.endsWith(":output") || !detail.markdown?.startsWith("[{")) return detail;
+    const { text, images } = claudeSavedToolOutput(detail.markdown, entry.summary);
+    if (!images.length && text === detail.markdown) return detail;
+    const { markdown: _markdown, ...rest } = detail;
+    return {
+      ...rest,
+      ...(text || !images.length ? { markdown: text } : {}),
+      ...(images.length ? { images: [...detail.images ?? [], ...images] } : {}),
+    };
+  }) };
+}
+
+function normalizeSavedActivity(entry: AppServerThreadActivityEntry): AppServerThreadActivityEntry {
+  return normalizeSavedOutputs(normalizeSavedToolCall(normalizeSavedCommand(entry)));
+}
+
 function isClaudeNotice(entry: AppServerThreadActivityEntry): boolean {
   return entry.id.startsWith("notice:");
 }
@@ -43,7 +86,7 @@ export function groupClaudeActivities(entries: AppServerThreadEntry[]): AppServe
   const grouped: AppServerThreadEntry[] = [];
   let callCount = 0;
   for (const rawEntry of entries) {
-    const entry = rawEntry.type === "activity" ? normalizeSavedCommand(rawEntry) : rawEntry;
+    const entry = rawEntry.type === "activity" ? normalizeSavedActivity(rawEntry) : rawEntry;
     const previous = grouped.at(-1);
     // A notice, such as a compaction, is its own row, never a folded tool.
     if (entry.type !== "activity" || previous?.type !== "activity" || isClaudeNotice(entry) || isClaudeNotice(previous)

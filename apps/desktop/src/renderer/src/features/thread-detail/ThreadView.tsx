@@ -2334,6 +2334,7 @@ export function ThreadView(props: ThreadViewProps) {
   // *descriptor* from props.backends, not the thread's own backend kind.
   const selectedThreadBackendKind = selectedThread?.source;
   const selectedThreadId = selectedThread?.id;
+  const selectedThreadFederationTarget = selectedThread?.federation?.ref.target ?? readRendererFederationTarget();
   useEffect(() => {
     if (
       !selectedThreadEnvironmentFailureStale
@@ -2349,11 +2350,13 @@ export function ThreadView(props: ThreadViewProps) {
     void acknowledgeThreadEnvironmentFailure({
       backend: selectedThreadBackendKind,
       threadId: selectedThreadId,
+      ...(selectedThreadFederationTarget ? { federationTarget: selectedThreadFederationTarget } : {}),
     }).catch(() => undefined);
   }, [
     acknowledgeThreadEnvironmentFailure,
     selectedThreadBackendKind,
     selectedThreadEnvironmentFailureStale,
+    selectedThreadFederationTarget,
     selectedThreadId,
     selectedThreadKey,
   ]);
@@ -2363,7 +2366,7 @@ export function ThreadView(props: ThreadViewProps) {
    * ThreadView unmount — so the prompt came back on a thread whose failure the
    * operator had already answered.
    */
-  const dismissEnvironmentFailureChoice = (threadKey: string): void => {
+  const dismissEnvironmentFailureChoice = (threadKey: string, acknowledgedOnOwner = false): void => {
     setSetupFailureDismissedThreadKeys((current) => {
       const next = new Set(current);
       next.add(threadKey);
@@ -2373,9 +2376,11 @@ export function ThreadView(props: ThreadViewProps) {
       return;
     }
     environmentFailureAcknowledgedRef.current.add(threadKey);
+    if (acknowledgedOnOwner) return;
     void props.desktopApi?.acknowledgeThreadEnvironmentFailure?.({
       backend: selectedThread.source,
       threadId: selectedThread.id,
+      ...(selectedThreadFederationTarget ? { federationTarget: selectedThreadFederationTarget } : {}),
     })
       // The prompt is already gone from this window; a failed write only means
       // it can appear once more on a later launch, which is not worth a notice.
@@ -2389,20 +2394,11 @@ export function ThreadView(props: ThreadViewProps) {
     const input = buildInputFromOptimisticUserMessage(
       selectedThread.optimisticUserMessage,
     );
-    if (input.length === 0 || !props.desktopApi?.startTurn) {
-      dismissEnvironmentFailureChoice(selectedThreadKey);
-      return;
-    }
-
     setSetupFailureContinueError(undefined);
     setSetupFailureContinuing(true);
     props.onPendingStatusChange?.("Thinking");
     try {
-      const response = await props.desktopApi.startTurn({
-        backend: selectedThread.source,
-        federationTarget: selectedThread.federation?.ref.target ??
-          readRendererFederationTarget(),
-        threadId: selectedThread.id,
+      const fallbackTurn = {
         input,
         executionMode: selectedThread.executionMode,
         model: selectedThread.model,
@@ -2411,9 +2407,29 @@ export function ThreadView(props: ThreadViewProps) {
         fastMode: selectedThread.source === "codex"
           ? selectedThread.fastMode
           : undefined,
-      });
+      };
+      const federationTarget = selectedThreadFederationTarget;
+      const response = props.desktopApi?.continueThreadEnvironmentStartup
+        ? await props.desktopApi.continueThreadEnvironmentStartup({
+            backend: selectedThread.source,
+            federationTarget,
+            threadId: selectedThread.id,
+            ...(input.length > 0 ? { fallbackTurn } : {}),
+          })
+        : input.length > 0 && props.desktopApi?.startTurn
+          ? await props.desktopApi.startTurn({
+              ...fallbackTurn,
+              backend: selectedThread.source,
+              federationTarget,
+              threadId: selectedThread.id,
+            })
+          : undefined;
+      if (!response) {
+        throw new Error("The original request is unavailable. Send your prompt again to start this thread.");
+      }
       props.onActiveTurnIdChange?.(response.turnId);
-      dismissEnvironmentFailureChoice(selectedThreadKey);
+      if (!response.turnId) props.onPendingStatusChange?.(undefined);
+      dismissEnvironmentFailureChoice(selectedThreadKey, Boolean(props.desktopApi?.continueThreadEnvironmentStartup));
       await props.onRefreshNavigation?.();
     } catch (error) {
       props.onPendingStatusChange?.(undefined);

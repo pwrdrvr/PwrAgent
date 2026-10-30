@@ -601,6 +601,36 @@ it("rereads when the period or instances change, and on focus once the data is s
   await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(8));
 });
 
+it("does not poll an open or closed window and advances bounds only on requested refreshes", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  let now = new Date(2026, 8, 28, 12).getTime();
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  const readUsageActivity = vi.fn(async () => ({ rows: [], readAt: now, rateLimits: [], truncated: false }));
+  const mounted = render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(readUsageActivity).toHaveBeenCalledTimes(1);
+  now += HOUR;
+  await act(async () => { await vi.advanceTimersByTimeAsync(HOUR); });
+  expect(readUsageActivity).toHaveBeenCalledTimes(1);
+  await act(async () => { window.dispatchEvent(new Event("focus")); });
+  expect(readUsageActivity).toHaveBeenCalledTimes(2);
+  expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ to: now }));
+  now += 59_000;
+  await act(async () => { window.dispatchEvent(new Event("focus")); });
+  expect(readUsageActivity).toHaveBeenCalledTimes(2);
+  now += 1000;
+  await act(async () => { window.dispatchEvent(new Event("focus")); });
+  expect(readUsageActivity).toHaveBeenCalledTimes(3);
+  now += 1000;
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Refresh" })); });
+  expect(readUsageActivity).toHaveBeenCalledTimes(4);
+  expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ to: now }));
+  mounted.unmount();
+  now += HOUR;
+  await act(async () => { await vi.advanceTimersByTimeAsync(HOUR); window.dispatchEvent(new Event("focus")); });
+  expect(readUsageActivity).toHaveBeenCalledTimes(4);
+});
+
 it("filters and ranks threads without rereading or launching analysis", async () => {
   const at = new Date(2026, 8, 28, 10).getTime();
   const row = usageFixture({ createdAt: at, startedAt: at, completedAt: at + 1000 });

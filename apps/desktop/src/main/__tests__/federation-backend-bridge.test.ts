@@ -31,6 +31,96 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("continues environment startup on its owner and enforces turn control", async () => {
+    const request = { backend: "codex" as const, threadId: "failed-setup" };
+    const response = { ...request, turnId: "continued-turn" };
+    const backend = {
+      continueThreadEnvironmentStartup: vi.fn(async () => response),
+      acknowledgeThreadEnvironmentFailure: vi.fn(async () => ({ ...request, acknowledged: true })),
+    };
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    let rpc: FederationRpcEndpoint;
+    const connect = (capabilities: FederationCapability[]): void => {
+      router.registerConnection({ peerId: "viewer", capabilities,
+        sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    };
+    registerFederationBackendHandlers({ router, backend: backend as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    connect(["turn_control"]);
+    expect(await client.continueThreadEnvironmentStartup(request)).toEqual(response);
+    expect(backend.continueThreadEnvironmentStartup).toHaveBeenCalledExactlyOnceWith({ ...request, fallbackTurn: undefined });
+    connect(["thread_navigation"]);
+    await expect(client.continueThreadEnvironmentStartup(request)).rejects.toThrow();
+    expect(backend.continueThreadEnvironmentStartup).toHaveBeenCalledOnce();
+    expect(await client.acknowledgeThreadEnvironmentFailure(request)).toEqual({ ...request, acknowledged: true });
+    expect(backend.acknowledgeThreadEnvironmentFailure).toHaveBeenCalledExactlyOnceWith(request);
+  });
+
+  it.each([true, false])("authenticates continuation fallback provenance (known sender: %s)", async (knownSender) => {
+    const continueThreadEnvironmentStartup = vi.fn(async () => ({ backend: "codex", threadId: "failed-setup", turnId: "turn-1" }));
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    router.registerConnection({ peerId: "viewer", capabilities: ["turn_control"], sendEnvelope: () => undefined });
+    registerFederationBackendHandlers({
+      router,
+      backend: { continueThreadEnvironmentStartup } as unknown as FederationBackendOperations,
+      resolveSourceInstance: () => knownSender ? { label: "Viewer Mac", celestialIcon: "moon" } : undefined,
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "viewer",
+      envelope: {
+        id: "continue-1", kind: "request", protocolVersion: 1,
+        method: FEDERATION_BACKEND_METHODS.continueThreadEnvironmentStartup,
+        sourceInstanceId: "viewer", targetInstanceId: "owner", createdAt: 1_000,
+        params: {
+          backend: "codex", threadId: "failed-setup",
+          fallbackTurn: {
+            input: [{ type: "text", text: "Resume this work" }],
+            messageOrigin: { kind: "agent", sourceThread: {
+              backend: "codex", threadId: "source-thread", turnId: "source-turn", rootTurnId: "root-turn",
+              instanceId: "spoofed-instance", instanceLabel: "Spoofed Mac", celestialIcon: "black-hole",
+            } },
+          },
+        },
+      },
+    });
+    expect(continueThreadEnvironmentStartup).toHaveBeenCalledExactlyOnceWith({
+      backend: "codex", threadId: "failed-setup",
+      fallbackTurn: {
+        input: [{ type: "text", text: "Resume this work" }],
+        messageOrigin: { kind: "agent", sourceThread: {
+          backend: "codex", threadId: "source-thread", turnId: "source-turn", rootTurnId: "root-turn",
+          instanceId: "viewer",
+          ...(knownSender ? { instanceLabel: "Viewer Mac", celestialIcon: "moon" } : {}),
+        } },
+      },
+    });
+  });
+
+  it("round-trips versioned owner parent validation and requires thread_grouping", async () => {
+    const request = { backend: "codex" as const, threadId: "child", parentThreadId: "parent", parentBackend: "claude" as const, dryRun: true };
+    const response = { ok: false as const, error: { code: "invalid_arguments" as const, message: "Parent is archived." } };
+    const backend = { mutateThreadParentV1: vi.fn(async () => response), setThreadParent: vi.fn() };
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    let rpc: FederationRpcEndpoint;
+    const connect = (capabilities: FederationCapability[]): void => {
+      router.registerConnection({ peerId: "viewer", capabilities,
+        sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    };
+    registerFederationBackendHandlers({ router, backend: backend as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    connect(["thread_grouping"]);
+    expect(await client.mutateThreadParentV1(request)).toEqual(response);
+    expect(backend.mutateThreadParentV1).toHaveBeenCalledExactlyOnceWith(request);
+    connect(["thread_navigation", "turn_control", "thread_parent_mutation_v1"]);
+    await expect(client.mutateThreadParentV1(request)).rejects.toThrow();
+    expect(backend.mutateThreadParentV1).toHaveBeenCalledOnce();
+    expect(backend.setThreadParent).not.toHaveBeenCalled();
+  });
+
   it("round-trips owner-collated family pricing and requires thread_detail", async () => {
     const request = { backend: "codex" as const, threadId: "parent" };
     const family = { readAt: 42, members: [
@@ -3983,6 +4073,7 @@ describe("federation backend bridge", () => {
       reorderThreadPins: vi.fn(),
       mountRemoteChild: vi.fn(),
       setThreadParent: vi.fn(),
+      mutateThreadParentV1: vi.fn(),
       updateSubthreadOrder: vi.fn(),
       setSubthreadsCollapsed: vi.fn(),
       readForge: vi.fn(),
@@ -4508,6 +4599,7 @@ describe("federation backend bridge", () => {
       reorderThreadPins: vi.fn(),
         mountRemoteChild: vi.fn(),
         setThreadParent: vi.fn(),
+        mutateThreadParentV1: vi.fn(),
         updateSubthreadOrder: vi.fn(),
         setSubthreadsCollapsed: vi.fn(),
         readForge: vi.fn(),

@@ -1864,6 +1864,8 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   navigation_snapshot_deltas: "exchange compact navigation updates",
   navigation_group_invalidations: "receive thread group membership changes",
   thread_grouping: "reorder and collapse sub-threads",
+  // Owner-validated grouping negotiation; thread_grouping grants the action.
+  thread_parent_mutation_v1: "",
   thread_detail: "read transcripts",
   turn_control: "prompt, steer, and interrupt",
   durable_turn_requests_v1: "reconcile durable prompt receipts",

@@ -7,11 +7,28 @@ export function formatToolActivityTitle(value: string): string {
     : normalized;
 }
 
+/**
+ * The agent sees a connection PwrAgent manages as `pwragent_<name>_<hash>`
+ * (built in the backend registry), a name that appears nowhere in Settings.
+ */
+export const PWRAGENT_MCP_SERVER_PREFIX = "pwragent_";
+export const PWRAGENT_MCP_SERVER_HASH_LENGTH = 32;
+const PWRAGENT_MCP_SERVER_NAME = new RegExp(
+  `^${PWRAGENT_MCP_SERVER_PREFIX}(.+)_[0-9a-f]{${PWRAGENT_MCP_SERVER_HASH_LENGTH}}$`,
+  "u",
+);
+
+/** A managed connection reads as its own name; any other server as itself. */
+export function formatMcpServerName(server: string): string {
+  const name = PWRAGENT_MCP_SERVER_NAME.exec(server)?.[1];
+  return name ? name.replace(/^builtin_/u, "") : server;
+}
+
 export function formatToolIdentifier(
   qualifier: string | undefined,
   toolName: string,
 ): string {
-  return qualifier ? `${qualifier}/${toolName}` : toolName;
+  return qualifier ? `${formatMcpServerName(qualifier)}/${toolName}` : toolName;
 }
 
 export function formatToolInvocation(

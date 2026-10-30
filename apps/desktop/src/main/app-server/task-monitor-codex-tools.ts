@@ -196,6 +196,11 @@ export function buildTaskMonitorDynamicToolErrorResponse(params: {
   });
 }
 
+/** A PwrAgent tool's name as Claude Code's ToolSearch knows it. */
+function claudeMcpToolName(tool: string): string {
+  return `mcp__${PWRAGENT_TOOL_NAMESPACE}__${tool}`;
+}
+
 export function buildMonitorDelegationPrompt(params: {
   finalHandoffPrompt?: string;
   monitorContext?: string;
@@ -205,6 +210,8 @@ export function buildMonitorDelegationPrompt(params: {
   preferredModel?: string;
   preferredReasoningEffort?: string;
   task: string;
+  /** Claude Code defers MCP tools until ToolSearch loads them. */
+  deferredMcpTools?: boolean;
 }): string {
   const pollInterval =
     normalizePollIntervalSeconds(params.pollIntervalSeconds) ??
@@ -231,9 +238,15 @@ export function buildMonitorDelegationPrompt(params: {
     "",
     "<model_guidance>",
     "- PwrAgent should have started this monitor on a cost-efficient lightweight model.",
-    "- This monitor is already running on the parent provider with the returned preferredModel and preferredReasoningEffort values.",
+    "- This monitor is already running with the returned preferredModel and preferredReasoningEffort values.",
     "- Do not launch or hand off to a different provider runtime.",
     "</model_guidance>",
+    ...(params.deferredMcpTools
+      ? [
+          "",
+          `Before the first call, load the PwrAgent tools with ToolSearch: select:${claudeMcpToolName("inject_progress")},${claudeMcpToolName("complete_monitoring")}.`,
+        ]
+      : []),
     "",
     "<task>",
     params.task.trim(),
