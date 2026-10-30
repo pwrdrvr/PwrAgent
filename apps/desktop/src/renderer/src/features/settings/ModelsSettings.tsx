@@ -20,6 +20,7 @@ import type {
   DesktopProviderThreadModelMigration,
   DesktopSettingsSecretName,
   DesktopSettingsSnapshot,
+  DesktopTaskMonitorModelChoice,
   DesktopUpdateChannel,
   ThreadExecutionMode,
 } from "@pwragent/shared";
@@ -62,6 +63,7 @@ import { ClaudeSettings } from "./ClaudeSettings";
 import { claudeProviderStatus } from "./claude-provider-status";
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
 import { HelperModelSettings } from "./HelperModelSettings";
+import { TaskMonitorModelSettings } from "./TaskMonitorModelSettings";
 import { UsageAccountSettings } from "./UsageAccountSettings";
 import { CodexModelProvidersSettings } from "./CodexModelProvidersSettings";
 import {
@@ -170,6 +172,10 @@ export function ModelsSettings(props: {
   /** Persist the Helper model row on Settings → AI Providers. */
   onSaveHelperModels?: (
     helperModels: DesktopHelperModelSettings,
+  ) => Promise<unknown>;
+  /** Persist a provider screen's Task monitors row (the whole map). */
+  onSaveTaskMonitorModels?: (
+    taskMonitorModels: Record<string, DesktopTaskMonitorModelChoice>,
   ) => Promise<unknown>;
   onSaveUsageAccountGroups?: (groups: Record<string, string>) => Promise<unknown>;
   onSaveCodexFastAllowed: (allowed: boolean) => Promise<boolean>;
@@ -680,6 +686,18 @@ export function ModelsSettings(props: {
           error={catalogError}
           onEditDefaults={editDefaults}
         />
+        {props.onSaveTaskMonitorModels ? (
+          <TaskMonitorModelSettings
+            backendId="claude"
+            providerLabel="Claude"
+            backends={backends}
+            helperModels={props.snapshot.models.helperModels ?? { helpers: {} }}
+            choices={props.snapshot.models.taskMonitorModels ?? {}}
+            catalogReading={refreshingCatalog}
+            saving={props.saving}
+            onSave={props.onSaveTaskMonitorModels}
+          />
+        ) : null}
         <ClaudeSettings
           backend={claude}
           desktopApi={props.desktopApi}
@@ -759,6 +777,18 @@ export function ModelsSettings(props: {
           error={catalogError}
           onEditDefaults={editDefaults}
         />
+        {focusedAcpEntry && props.onSaveTaskMonitorModels ? (
+          <TaskMonitorModelSettings
+            backendId={focusedAcpEntry.backendId}
+            providerLabel={focusedAcpEntry.name}
+            backends={backends}
+            helperModels={props.snapshot.models.helperModels ?? { helpers: {} }}
+            choices={props.snapshot.models.taskMonitorModels ?? {}}
+            catalogReading={refreshingCatalog}
+            saving={props.saving}
+            onSave={props.onSaveTaskMonitorModels}
+          />
+        ) : null}
         {focusedAcpEntry && props.onSaveUsageAccountGroups ? (
           <UsageAccountSettings
             backend={focusedAcpEntry.backendId}

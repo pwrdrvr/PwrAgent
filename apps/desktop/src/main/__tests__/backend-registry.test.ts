@@ -53,6 +53,7 @@ import {
 } from "@pwragent/shared";
 import type {
   AcpBackendId,
+  DesktopTaskMonitorModelChoice,
   AgentEvent,
   McpConnectionStatus,
   AppServerBackendKind,
@@ -53515,6 +53516,249 @@ script = "printf setup"
     expect(payload.preferredReasoningEffort).toBe("high");
 
     await registry.close();
+  });
+
+  describe("a Claude parent's monitor", () => {
+    const parentThreadId = "c2222222-2222-4222-8222-222222222222";
+
+    async function createClaudeMonitorRegistry(params: {
+      taskMonitorModels?: Record<string, DesktopTaskMonitorModelChoice>;
+      /** Holds every query after the first until it settles. */
+      laterQueriesHeld?: Promise<void>;
+    }) {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-monitor-"));
+      const store = new ClaudeSessionStore(path.join(root, "sessions"));
+      await store.save({ cwd: root, thread: {
+        id: parentThreadId, source: "claude", title: "Claude parent", titleSource: "explicit",
+        linkedDirectories: [{ id: root, kind: "local", label: "repo", path: root }],
+      } });
+      const prompts: ClaudeOptions[] = [];
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+        models: TEST_TASK_MONITOR_MODELS,
+        startThreadResult: { threadId: "codex-monitor-thread" },
+      });
+      const claimedTurns = new Set<string>();
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: {
+          ...createOverlayStoreMock(),
+          claimMonitorJobSuggestion: ({ turnId }: { turnId: string }) => {
+            if (claimedTurns.has(turnId)) return false;
+            claimedTurns.add(turnId);
+            return true;
+          },
+        },
+        agentToolMcpServer: null,
+        pdfToolMcpServer: null,
+        resolveTaskMonitorModels: () => params.taskMonitorModels ?? {},
+        claudeBackendOptions: {
+          store,
+          inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+          discoverModels: async () => [
+            { id: "sonnet", label: "Sonnet", current: true },
+            { id: "haiku", label: "Haiku" },
+          ],
+          query: ({ options = {} }) => {
+            prompts.push(options);
+            async function* messages(): AsyncGenerator<ClaudeMessage> {
+              yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
+              // The monitor stays busy until the test has completed it.
+              await (prompts.length > 1 && params.laterQueriesHeld ? params.laterQueriesHeld : held);
+              yield { type: "result", subtype: "success", is_error: false, result: "Done" } as ClaudeMessage;
+            }
+            return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+          },
+        },
+      });
+      await registry.publishLocalEvent({
+        backend: "claude",
+        notification: {
+          method: "turn/started",
+          params: { threadId: parentThreadId, turnId: "parent-turn", turn: { id: "parent-turn" } },
+        },
+      });
+      const close = async () => {
+        release();
+        await registry.publishLocalEvent({
+          backend: "claude",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: parentThreadId,
+              turnId: "parent-turn",
+              turn: { id: "parent-turn", status: "completed", output: [] },
+            },
+          },
+        });
+        await registry.close();
+        await rm(root, { recursive: true, force: true });
+      };
+      return { close, codexClient, prompts, registry, release, root, store };
+    }
+
+    it("runs on Claude's lightweight model in an ephemeral thread, and can complete", async () => {
+      const { close, codexClient, prompts, registry, root } = await createClaudeMonitorRegistry({});
+      try {
+        const response = await callRegistryMcpTool({
+          registry,
+          backend: "claude",
+          threadId: parentThreadId,
+          turnId: "parent-turn",
+          tool: "create_monitor_delegation",
+          args: { task: "Watch PR #8 checks until they finish." },
+        });
+        expect(response.isError).not.toBe(true);
+        expect(response.structuredContent).toMatchObject({
+          parentThreadId,
+          preferredModel: "haiku",
+          preferredReasoningEffort: "provider-default",
+        });
+        const monitorId = String(response.structuredContent?.monitorId);
+        const monitorThreadId = String(response.structuredContent?.monitorThreadId);
+        expect(codexClient.lastStartThreadParams).toBeUndefined();
+        await vi.waitFor(() => expect(prompts).toHaveLength(1));
+        expect(prompts[0]!.model).toBe("haiku");
+        // Like a Codex ephemeral monitor, it leaves no session behind.
+        expect(prompts[0]!.persistSession).toBe(false);
+        expect(prompts[0]!.enableFileCheckpointing).toBe(false);
+        await expect(readFile(path.join(root, "sessions", `${monitorThreadId}.json`), "utf8"))
+          .rejects.toMatchObject({ code: "ENOENT" });
+        const threads = await registry.listThreads({ backend: "claude", forceRefresh: true });
+        expect(threads.map((thread) => thread.id)).toContain(parentThreadId);
+        expect(threads.map((thread) => thread.id)).not.toContain(monitorThreadId);
+
+        const completed = await callRegistryMcpTool({
+          registry,
+          backend: "claude",
+          threadId: monitorThreadId,
+          turnId: String(response.structuredContent?.monitorTurnId),
+          tool: "complete_monitoring",
+          args: { monitorId, outcome: "success", summary: "All checks passed.", triggerParentTurn: false },
+        });
+        expect(completed.isError).not.toBe(true);
+        expect(completed.structuredContent).toMatchObject({ monitorId });
+      } finally {
+        await close();
+      }
+    });
+
+    it("keeps the monitor thread for a recovery turn after its process exits", async () => {
+      let releaseRecovery!: () => void;
+      const laterQueriesHeld = new Promise<void>((resolve) => { releaseRecovery = resolve; });
+      const { close, prompts, registry, release, store } = await createClaudeMonitorRegistry({ laterQueriesHeld });
+      try {
+        const response = await callRegistryMcpTool({
+          registry,
+          backend: "claude",
+          threadId: parentThreadId,
+          turnId: "parent-turn",
+          tool: "create_monitor_delegation",
+          args: { task: "Watch PR #8 checks until they finish." },
+        });
+        expect(response.isError).not.toBe(true);
+        const monitorThreadId = String(response.structuredContent?.monitorThreadId);
+        await vi.waitFor(() => expect(prompts).toHaveLength(1));
+
+        // The first turn ends without complete_monitoring, and its process
+        // exits with it. The recovery turn must still find the thread.
+        release();
+        await vi.waitFor(() => expect(prompts.length).toBeGreaterThanOrEqual(2));
+        expect(prompts[1]!.model).toBe("haiku");
+        expect(prompts[1]!.persistSession).toBe(false);
+        // Mid-recovery, after the first process exited, the thread is held.
+        await vi.waitFor(() => expect(registry.readThread({ backend: "claude", threadId: monitorThreadId }))
+          .resolves.toHaveProperty("replay"));
+        // The recovery turn ends too, so the delegation finishes and the
+        // thread is released.
+        releaseRecovery();
+        await vi.waitFor(async () => {
+          await expect(store.read(monitorThreadId)).rejects.toBeDefined();
+        });
+      } finally {
+        releaseRecovery();
+        await close();
+      }
+    });
+
+    it("does not start a Claude monitor on a Codex model the agent asked for", async () => {
+      const { close, registry } = await createClaudeMonitorRegistry({});
+      try {
+        const response = await callRegistryMcpTool({
+          registry,
+          backend: "claude",
+          threadId: parentThreadId,
+          turnId: "parent-turn",
+          tool: "create_monitor_delegation",
+          args: { task: "Watch PR #8 checks until they finish.", preferredModel: "gpt-5.6-luna" },
+        });
+        expect(response.isError).not.toBe(true);
+        expect(response.structuredContent).toMatchObject({ preferredModel: "haiku" });
+      } finally {
+        await close();
+      }
+    });
+
+    it("points one CI wait per turn at PwrAgent's PR watch", async () => {
+      const { close, registry } = await createClaudeMonitorRegistry({});
+      const internal = registry as unknown as {
+        suggestClaudeMonitorJob(params: {
+          threadId: string; turnId: string; toolName: string; command: string; toolUseId?: string;
+        }): Promise<string | undefined>;
+      };
+      try {
+        const ask = (command: string, toolUseId: string, turnId = "parent-turn") =>
+          internal.suggestClaudeMonitorJob({ threadId: parentThreadId, turnId, toolName: "Bash", command, toolUseId });
+        await expect(ask("git status", "tool-1")).resolves.toBeUndefined();
+        await expect(ask("gh pr checks 8 -R o/r --watch --interval 30", "tool-2"))
+          .resolves.toContain("watch_thread_pull_request");
+        await expect(ask("gh run watch 12 --exit-status", "tool-3")).resolves.toBeUndefined();
+        await expect(ask("gh run watch 12 --exit-status", "tool-4", "next-turn"))
+          .resolves.toContain("create_monitor_delegation");
+      } finally {
+        await close();
+      }
+    });
+
+    it("runs on the Helper model when the operator chose it for Claude", async () => {
+      const { close, codexClient, registry } = await createClaudeMonitorRegistry({
+        taskMonitorModels: { claude: { source: "helper" } },
+      });
+      try {
+        const response = await callRegistryMcpTool({
+          registry,
+          backend: "claude",
+          threadId: parentThreadId,
+          turnId: "parent-turn",
+          tool: "create_monitor_delegation",
+          args: { task: "Watch PR #8 checks until they finish." },
+        });
+        expect(response.isError).not.toBe(true);
+        const monitorId = String(response.structuredContent?.monitorId);
+        const monitorThreadId = String(response.structuredContent?.monitorThreadId);
+        expect(monitorThreadId).toBe("codex-monitor-thread");
+        // A Codex monitor reports through its own dynamic tools.
+        expect(codexClient.lastStartThreadParams?.dynamicTools).toEqual(
+          expect.arrayContaining([expect.anything()]),
+        );
+
+        // The monitor calls back as a Codex thread; it once was refused as
+        // "another provider runtime" because the record kept the parent's.
+        const completed = await callRegistryMcpTool({
+          registry,
+          backend: "codex",
+          threadId: monitorThreadId,
+          turnId: String(response.structuredContent?.monitorTurnId),
+          tool: "complete_monitoring",
+          args: { monitorId, outcome: "success", summary: "All checks passed.", triggerParentTurn: false },
+        });
+        expect(completed.isError).not.toBe(true);
+      } finally {
+        await close();
+      }
+    });
   });
 
   it("injects task monitor progress without waking the parent and completes with one parent turn", async () => {

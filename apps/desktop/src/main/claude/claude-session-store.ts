@@ -23,6 +23,11 @@ export type ClaudeSession = {
    * `forkSession`, and the session Claude creates becomes `sdkSessionId`.
    */
   forkFromSdkSessionId?: string;
+  /**
+   * A thread PwrAgent runs for its own work, such as a task monitor. Held in
+   * memory only, never listed, and never written to disk.
+   */
+  ephemeral?: boolean;
   /** At most one native title request, including failed requests, across restarts. */
   titleGenerationAttempted?: boolean;
   modelUsage?: ClaudeUsageTotals;
@@ -98,7 +103,25 @@ export type ClaudeRateLimitsRecord = {
  * SQLite, and no Claude authentication or provider-owned files are inspected.
  */
 export class ClaudeSessionStore {
+  /** Ephemeral sessions and their entries, by thread id. */
+  private readonly memory = new Map<string, { session: string; entries: AppServerThreadEntry[] }>();
+  /** Ended ephemeral threads. A late write for one must not create a file. */
+  private readonly forgotten = new Set<string>();
+
   constructor(private readonly root: string) {}
+
+  /** Starts holding an ephemeral session in memory. */
+  holdEphemeral(session: ClaudeSession): void {
+    this.memory.set(session.thread.id, { session: JSON.stringify({ ...session, ephemeral: true }), entries: [] });
+  }
+
+  /** Drops an ephemeral session. A later save or append for it does nothing. */
+  forgetEphemeral(id: string): void {
+    if (!this.memory.delete(id)) return;
+    this.forgotten.add(id);
+    // Late writes land within seconds of the end; recent ids are enough.
+    if (this.forgotten.size > 256) this.forgotten.delete(this.forgotten.values().next().value!);
+  }
 
   private file(id: string, suffix: string): string {
     if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error("Invalid Claude thread id.");
@@ -106,6 +129,8 @@ export class ClaudeSessionStore {
   }
 
   async read(id: string): Promise<ClaudeSession> {
+    const held = this.memory.get(id);
+    if (held) return JSON.parse(held.session) as ClaudeSession;
     const session = JSON.parse(await readFile(this.file(id, "json"), "utf8")) as ClaudeSession;
     if (session.thread?.id !== id || session.thread.source !== "claude" || !session.cwd) {
       throw new Error(`Invalid Claude session metadata: ${id}`);
@@ -114,6 +139,11 @@ export class ClaudeSessionStore {
   }
 
   async save(session: ClaudeSession): Promise<void> {
+    if (session.ephemeral) {
+      const held = this.memory.get(session.thread.id);
+      if (held) held.session = JSON.stringify(session);
+      return;
+    }
     await mkdir(this.root, { recursive: true, mode: 0o700 });
     const destination = this.file(session.thread.id, "json");
     const temporary = `${destination}.${randomUUID()}.tmp`;
@@ -203,7 +233,12 @@ export class ClaudeSessionStore {
   }
 
   async append(id: string, entries: AppServerThreadEntry[]): Promise<void> {
-    if (entries.length === 0) return;
+    if (entries.length === 0 || this.forgotten.has(id)) return;
+    const held = this.memory.get(id);
+    if (held) {
+      held.entries.push(...entries.map((entry) => JSON.parse(JSON.stringify(entry)) as AppServerThreadEntry));
+      return;
+    }
     await mkdir(this.root, { recursive: true, mode: 0o700 });
     await appendFile(this.file(id, "jsonl"), entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n", { mode: 0o600 });
   }
@@ -274,6 +309,9 @@ export class ClaudeSessionStore {
   }
 
   async entries(id: string): Promise<AppServerThreadEntry[]> {
+    const held = this.memory.get(id);
+    // Revisions of a tool entry append; the latest revision keeps its first place.
+    if (held) return [...new Map(held.entries.map((entry) => [entry.id, entry])).values()];
     const lines = await this.lines(id);
     const undone = new Set(lines.flatMap((line) =>
       line.type === "pwragent_truncation_undo" ? [line.truncationId] : []));
