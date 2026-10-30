@@ -137,6 +137,9 @@ type ThreadPricingLedgerRead = {
 // shared by more than 2 lines; one migration stamp was shared by 7,251.
 const THREAD_USAGE_BULK_REWRITE_MIN_LINES = 64;
 
+// How far the loop check follows parent links. Lenses stop at 32 levels.
+const MAX_THREAD_PARENT_WALK = 64;
+
 // PwrAgent recorded no turn usage before 2026.
 const EARLIEST_USAGE_TURN_START = Date.UTC(2026, 0, 1);
 // Set once the one-time ledger turn time repair has run.
@@ -1597,14 +1600,25 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     directory: LinkedDirectorySummary;
     gitBranch?: string;
     threadId: string;
+    /** A worktree the thread is leaving on disk but still owns. */
+    retainWorktree?: LinkedDirectorySummary;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    const current = this.getThread(threadKey) ?? {
+    const { retainedWorktrees: previousRetained, ...current } = this.getThread(threadKey) ?? {
       backend: params.backend,
       threadId: params.threadId,
       executionMode: "default" as const,
       extraLinkedDirectories: [],
     };
+    // A thread that moves back into a retained worktree uses it again.
+    const retainedWorktrees = [
+      ...(previousRetained ?? []).filter((directory) =>
+        !sameWorktreeCheckout(directory, params.directory)
+        && !(params.retainWorktree && sameWorktreeCheckout(directory, params.retainWorktree))),
+      ...(params.retainWorktree && !sameWorktreeCheckout(params.retainWorktree, params.directory)
+        ? [params.retainWorktree]
+        : []),
+    ];
     const nextDirectories = [
       ...current.extraLinkedDirectories.filter((directory) => {
         if (directory.id === params.directory.id) return false;
@@ -1618,6 +1632,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       gitBranch: params.gitBranch ?? current.gitBranch,
       observedGitBranch: params.gitBranch ?? current.observedGitBranch,
       extraLinkedDirectories: nextDirectories,
+      ...(retainedWorktrees.length > 0 ? { retainedWorktrees } : {}),
       ...(params.resetProjectState ? {
         // The handoff origin remains historical provenance; these fields own
         // the current group, which ends when the conversation moves projects.
@@ -5348,6 +5363,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       const parentThreadInstanceId = parentThreadId
         ? params.parentThreadInstanceId?.trim() || undefined
         : undefined;
+      if (parentThreadId && !parentThreadInstanceId) {
+        this.assertParentIsNotDescendant(params.threadId, threadKey, buildThreadIdentityKey(parentThreadBackend!, parentThreadId));
+      }
       const nextState: ThreadOverlayState = {
         ...current,
         parentThreadId: parentThreadId || undefined,
@@ -5356,6 +5374,21 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         pinnedRank: parentThreadId ? undefined : current.pinnedRank,
       };
       this.putThread(threadKey, nextState);
+      // A move leaves no stale rank behind in the group the thread left.
+      const previousParentId = current.parentThreadId?.trim();
+      if (previousParentId && !current.parentThreadInstanceId) {
+        const previousKey = buildThreadIdentityKey(current.parentThreadBackend ?? params.backend, previousParentId);
+        const nextKey = parentThreadId && !parentThreadInstanceId
+          ? buildThreadIdentityKey(parentThreadBackend!, parentThreadId)
+          : undefined;
+        const previous = previousKey === nextKey ? undefined : this.getThread(previousKey);
+        if (previous?.subthreadOrder?.includes(params.threadId)) {
+          this.putThread(previousKey, {
+            ...previous,
+            subthreadOrder: previous.subthreadOrder.filter((id) => id !== params.threadId),
+          });
+        }
+      }
       if (parentThreadId && !parentThreadInstanceId) {
         const parentKey = buildThreadIdentityKey(parentThreadBackend!, parentThreadId);
         const parent = this.getThread(parentKey) ?? {
@@ -5364,13 +5397,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           executionMode: "default" as const,
           extraLinkedDirectories: [],
         };
-        this.putThread(parentKey, {
-          ...parent,
-          subthreadOrder: [
-            ...(parent.subthreadOrder ?? []).filter((id) => id !== params.threadId),
-            params.threadId,
-          ],
-        });
+        // Linking a child again keeps the place it already has.
+        if (!parent.subthreadOrder?.includes(params.threadId)) {
+          this.putThread(parentKey, {
+            ...parent,
+            subthreadOrder: [...(parent.subthreadOrder ?? []), params.threadId],
+          });
+        }
       }
       return nextState;
     })();
@@ -5527,6 +5560,31 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   ): boolean {
     if (child.parentThreadBackend) return child.parentThreadBackend === parentBackend;
     return ownerResolvedMembership || child.backend === parentBackend;
+  }
+
+  /**
+   * Refuse a link that would close a loop. Each lens walks a row up to its
+   * oldest ancestor, and in a loop every member names another as its root,
+   * so the whole group drops out of every list. The walk follows this
+   * owner's own links only; a parent on another instance ends it.
+   *
+   * A legacy link names no provider, and the lenses resolve it by id on
+   * any provider when its own has no such thread. The store cannot list
+   * providers, so a legacy link to this thread's id counts as a loop.
+   */
+  private assertParentIsNotDescendant(threadId: string, threadKey: string, parentKey: string): void {
+    const loop = new Error("A thread cannot become a sub-thread of its own sub-thread.");
+    const seen = new Set<string>();
+    let key: string | undefined = parentKey;
+    while (key && !seen.has(key) && seen.size < MAX_THREAD_PARENT_WALK) {
+      if (key === threadKey) throw loop;
+      seen.add(key);
+      const overlay = this.readStoredThread(key);
+      const parentId = overlay?.parentThreadId?.trim();
+      if (!parentId || overlay!.parentThreadInstanceId) return;
+      if (!overlay!.parentThreadBackend && parentId === threadId) throw loop;
+      key = buildThreadIdentityKey(overlay!.parentThreadBackend ?? overlay!.backend, parentId);
+    }
   }
 
   async setSubthreadsCollapsed(params: {
@@ -6167,6 +6225,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           'backend', json_extract(threads.payload, '$.backend'),
           'threadId', json_extract(threads.payload, '$.threadId'),
           'extraLinkedDirectories', json_extract(threads.payload, '$.extraLinkedDirectories'),
+          'retainedWorktrees', json_extract(threads.payload, '$.retainedWorktrees'),
           'parentThreadId', json_extract(threads.payload, '$.parentThreadId'),
           'parentThreadBackend', json_extract(threads.payload, '$.parentThreadBackend'),
           'parentThreadInstanceId', json_extract(threads.payload, '$.parentThreadInstanceId'),
@@ -9788,6 +9847,14 @@ function linkedDirectoriesEquivalent(
     normalizeLinkedDirectoryPath(left.worktreePath) ===
     normalizeLinkedDirectoryPath(right.worktreePath)
   );
+}
+
+function sameWorktreeCheckout(
+  left: LinkedDirectorySummary,
+  right: LinkedDirectorySummary,
+): boolean {
+  return normalizeLinkedDirectoryPath(left.worktreePath ?? left.path)
+    === normalizeLinkedDirectoryPath(right.worktreePath ?? right.path);
 }
 
 function normalizeLinkedDirectoryPath(value: string | undefined): string | undefined {

@@ -1,4 +1,5 @@
-import { TodoModelPicker, TodoModelProvenance } from "./TodoModelPicker";
+import { TodoDispatchFacts, useTodoDispatchTarget } from "./TodoDispatchFacts";
+import { TodoPullRequestChip } from "./TodoPullRequestChip";
 import { todoDispatchPickKey, useTodoDispatchContext } from "./TodoDispatchProvider";
 import {
   useEffect,
@@ -58,6 +59,7 @@ import { TodoSplitButton, type TodoSplitMenuEntry } from "./TodoSplitButton";
 import type {
   ThreadTodoDoHereOptions,
   ThreadTodoInstance,
+  ThreadTodoLocalMachine,
   ThreadTodoProjectMenu,
   ThreadTodoResolveOptions,
   ThreadTodoRunOptions,
@@ -131,6 +133,8 @@ export type ThreadTodoCardProps = ThreadTodoCardHandlers & {
   threadRunning?: boolean;
   mergeMethods?: ThreadTodoMergeMethodPreferences;
   instances?: ThreadTodoInstance[];
+  /** This window's own machine, which a peer's card can start on. */
+  localMachine?: ThreadTodoLocalMachine;
   /** Changes the project the card's action runs in. */
   projectMenu?: ThreadTodoProjectMenu;
   pager?: {
@@ -581,6 +585,13 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     dispatch.pick(todo, settings);
     setLocalPick(settings);
   };
+  const target = useTodoDispatchTarget({
+    todo,
+    ...(props.instances ? { instances: props.instances } : {}),
+    ...(props.localMachine ? { localMachine: props.localMachine } : {}),
+    ownerSelection: selection,
+    pickOwnerModel: pickModel,
+  });
   const [confirmingMerge, setConfirmingMerge] = useState<MergeConfirmation>();
   const [confirmingSteps, setConfirmingSteps] = useState<OpenStepsConfirmation>();
   const confirmCancelRef = useRef<HTMLButtonElement>(null);
@@ -600,7 +611,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const action = todo.action;
   const titleId = `thread-todo-title-${todo.id}`;
   const prompt = action?.type === "start_thread" ? action.prompt : undefined;
-  const facts = buildFacts(todo);
+  const hasFacts = action?.type === "merge_pull_request";
   const runningLabel = action?.type === "merge_pull_request" ? "Merging…" : "Starting…";
   const progress = threadTodoItemProgress(todo);
   const prerequisites = threadTodoPrerequisites(todo);
@@ -664,10 +675,10 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       (allowOpenItems) => {
         // Freeze the attempted settings too: a failed start's Retry uses them
         // even if another card changes the thread's memory in the meantime.
-        if (!options?.startOnInstanceId) pickModel(selection.settings);
+        if (target.onOwner) pickModel(selection.settings);
         props.onRun(todo, {
+          ...(action?.type === "start_thread" ? target.runOptions() : {}),
           ...options,
-          ...(!options?.startOnInstanceId ? { modelSettings: selection.settings } : {}),
           ...(allowOpenItems ? { allowOpenItems } : {}),
         });
       },
@@ -824,20 +835,6 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
             ),
           });
         }
-        const instances = props.instances ?? [];
-        if (instances.length > 0) {
-          entries.push({
-            kind: "submenu",
-            id: "instances",
-            label: "Start thread on",
-            entries: instances.map((instance) => ({
-              kind: "item",
-              id: instance.instanceId,
-              label: instance.label,
-              onSelect: () => runAction({ startOnInstanceId: instance.instanceId }),
-            })),
-          });
-        }
         if (entries.length > 0) {
           entries.push({ kind: "separator", id: "separator" });
         }
@@ -859,6 +856,22 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       }
     }
   };
+
+  // Under what it opens: the step window when steps are hidden, else the
+  // description. Below the whole body it read as the prompt's control.
+  const restingToggle = resting.toggleLabel ? (
+    <button
+      type="button"
+      className="thread-todo-card__more"
+      aria-expanded={resting.expanded}
+      aria-controls={resting.bodyId}
+      ref={resting.toggleRef}
+      onClick={resting.toggle}
+    >
+      {resting.expanded ? <ChevronUpIcon size={11} /> : <ChevronDownIcon size={11} />}
+      {resting.toggleLabel}
+    </button>
+  ) : null;
 
   return (
     <article
@@ -891,7 +904,8 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
         )}
       />
 
-      {todo.detail || progress || prerequisites.length > 0 || facts.length > 0 || prompt || todo.error ? (
+      {todo.detail || progress || prerequisites.length > 0 || hasFacts || prompt || todo.error
+        || action?.type === "start_thread" ? (
         <div
           id={resting.bodyId}
           className={`thread-todo-card__body${resting.expanded ? " is-expanded" : ""}`}
@@ -904,6 +918,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
               {todo.detail}
             </p>
           ) : null}
+          {resting.toggleAfter === "detail" ? restingToggle : null}
           {prerequisites.length > 0 ? (
             <>
               <p className="thread-todo-card__group-label" aria-hidden="true">
@@ -937,23 +952,24 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
               />
             </>
           ) : null}
-          {facts.length > 0 ? (
+          {resting.toggleAfter === "steps" ? restingToggle : null}
+          {action?.type === "start_thread" ? (
+            <TodoDispatchFacts
+              todo={todo}
+              target={target}
+              {...(action.executionMode ? { access: formatExecutionModeLabel(action.executionMode) } : {})}
+              disabled={props.running}
+            />
+          ) : action?.type === "merge_pull_request" ? (
             <dl className="thread-todo-card__facts">
-              {action?.type === "start_thread" ? (
-                <div className="thread-todo-card__fact thread-todo-card__fact--model">
-                  <dt>Model</dt>
-                  <dd><TodoModelPicker todo={todo} selection={selection} onPick={pickModel} disabled={props.running} /></dd>
-                </div>
-              ) : null}
-              {facts.map(([label, value]) => (
-                <div key={label} className="thread-todo-card__fact">
-                  <dt>{label}</dt>
-                  <dd>{value}</dd>
-                </div>
-              ))}
+              <div className="thread-todo-card__fact thread-todo-card__fact--pr">
+                <dt>PR</dt>
+                <dd>
+                  <TodoPullRequestChip todo={todo} pullRequest={action.pullRequest} />
+                </dd>
+              </div>
             </dl>
           ) : null}
-          {action?.type === "start_thread" ? <TodoModelProvenance todo={todo} selection={selection} onPick={pickModel} disabled={props.running} /> : null}
           {prompt ? (
             <div className="thread-todo-card__prompt-block">
               <div
@@ -977,7 +993,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
                   aria-label={promptExpanded ? "Collapse proposed prompt" : "Show the whole proposed prompt"}
                   onClick={() => setPromptExpanded((current) => !current)}
                 >
-                  {promptExpanded ? <ChevronUpIcon size={12} /> : <ChevronDownIcon size={12} />}
+                  {promptExpanded ? <ChevronUpIcon size={11} /> : <ChevronDownIcon size={11} />}
                   {promptExpanded ? "Show less" : "Show prompt"}
                 </button>
               </div>
@@ -996,19 +1012,6 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
             <p className="thread-todo-card__error" role="alert">{todo.error}</p>
           ) : null}
         </div>
-      ) : null}
-      {/* Outside the body, so Show less stays put while the body scrolls. */}
-      {resting.toggleLabel ? (
-        <button
-          type="button"
-          className="thread-todo-card__more"
-          aria-expanded={resting.expanded}
-          aria-controls={resting.bodyId}
-          onClick={resting.toggle}
-        >
-          {resting.expanded ? <ChevronUpIcon size={11} /> : <ChevronDownIcon size={11} />}
-          {resting.toggleLabel}
-        </button>
       ) : null}
 
       {confirmingMerge && action?.type === "merge_pull_request" ? (
@@ -1169,7 +1172,7 @@ function restingStepStart(items: ThreadTodoItem[]): number {
 /**
  * A card's resting height. Until the operator opens it, the description is
  * clamped to three lines and the checklist shows a window of steps from the
- * first open one; the toggle under the body opens the rest. A tick inside
+ * first open one; a toggle under those opens the rest. A tick inside
  * the window leaves it in place, so a mis-click can be undone where it
  * happened, and the window moves on once every step in it is checked.
  */
@@ -1181,6 +1184,8 @@ function useRestingCard(todo: ThreadTodo) {
   const [anchor, setAnchor] = useState(() => restingStepStart(items));
   const [detailCut, setDetailCut] = useState(false);
   const detailRef = useRef<HTMLParagraphElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const revealToggleRef = useRef(false);
   const bodyId = useId();
 
   let start = Math.max(0, Math.min(anchor, items.length - RESTING_STEP_ROWS));
@@ -1204,11 +1209,25 @@ function useRestingCard(todo: ThreadTodo) {
     return () => observer.disconnect();
   }, [expanded, todo.detail]);
 
+  // Opening grows the text above the toggle, and the body starts at its
+  // top. A keyboard user's focus stays on the toggle, so scroll it just
+  // into view: in the body, and in the rail panel when the card sits there.
+  // Its scroll margin leaves room for the focus ring. A click keeps the top
+  // of the text in view instead.
+  useLayoutEffect(() => {
+    if (!revealToggleRef.current) return;
+    revealToggleRef.current = false;
+    toggleRef.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [expanded]);
+
   const toggleLabel = expanded
     ? "Show less"
     : hiddenSteps > 0
       ? `Show all ${items.length} steps`
       : detailCut ? "Show more" : undefined;
+  // Set by the step count alone, not by whether the card is open, so Show
+  // less sits where Show more was.
+  const toggleAfter: "steps" | "detail" = items.length > RESTING_STEP_ROWS ? "steps" : "detail";
 
   return {
     expanded,
@@ -1216,7 +1235,13 @@ function useRestingCard(todo: ThreadTodo) {
     detailRef,
     steps: expanded ? items : items.slice(start, start + RESTING_STEP_ROWS),
     toggleLabel,
-    toggle: () => setExpanded((current) => !current),
+    toggleAfter,
+    toggleRef,
+    toggle: (event: ReactMouseEvent<HTMLButtonElement>) => {
+      // Enter and Space dispatch a click with no pointer presses.
+      revealToggleRef.current = event.detail === 0;
+      setExpanded((current) => !current);
+    },
   };
 }
 
@@ -1277,25 +1302,6 @@ function confirmMergeText(
   const target = /^\d+$/.test(pullRequest) ? `#${pullRequest}` : "this pull request";
   const where = projectLabel ? ` in ${projectLabel}` : "";
   return `${MERGE_METHOD_LABELS[method].verb} ${target}${where}? This cannot be undone here.`;
-}
-
-function buildFacts(todo: ThreadTodo): Array<[string, string]> {
-  const action = todo.action;
-  if (action?.type === "merge_pull_request") {
-    return [["PR", /^\d+$/.test(action.pullRequest) ? `#${action.pullRequest}` : action.pullRequest]];
-  }
-  if (action?.type === "start_thread") {
-    const facts: Array<[string, string]> = [];
-    if (action.executionMode) {
-      facts.push(["Access", formatExecutionModeLabel(action.executionMode)]);
-    }
-    const directory = todo.targetProject
-      ? `${todo.targetProject.label}'s directory`
-      : "This thread's directory";
-    facts.push(["Where", action.workMode === "worktree" ? "New worktree" : directory]);
-    return facts;
-  }
-  return [];
 }
 
 export function formatTodoAge(createdAt: number, now = Date.now()): string {

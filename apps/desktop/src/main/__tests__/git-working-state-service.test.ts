@@ -1140,6 +1140,80 @@ describe("GitWorkingStateService", () => {
   });
 });
 
+describe("nested linked worktrees", () => {
+  async function createCheckoutWithNestedWorktree(): Promise<{
+    root: string;
+    primary: string;
+    nested: string;
+  }> {
+    const root = await mkdtemp(makeTempPrefix());
+    const primary = path.join(root, "primary");
+    await mkdir(primary);
+    await git(primary, "init", "-b", "main");
+    await git(primary, "config", "user.email", "test@example.com");
+    await git(primary, "config", "user.name", "PwrAgent Test");
+    await writeFile(path.join(primary, "base.txt"), "base\n");
+    await git(primary, "add", "base.txt");
+    await git(primary, "commit", "-m", "base");
+    // Claude Code creates linked worktrees of the same repository here.
+    const nested = path.join(primary, ".claude", "worktrees", "agent-a14a89e0");
+    await git(primary, "worktree", "add", "-b", "agent", nested);
+    await writeFile(path.join(nested, "agent-work.txt"), "agent\n");
+    return { root, primary, nested };
+  }
+
+  async function removeRoot(root: string): Promise<void> {
+    await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  }
+
+  it("does not count a nested worktree of the same repository as an uncommitted change", async () => {
+    const { root, primary } = await createCheckoutWithNestedWorktree();
+    try {
+      // Git itself reports the nested checkout as untracked content.
+      expect(await git(primary, "status", "--porcelain")).toBe("?? .claude/\n");
+
+      const state = await probeWorktreeWorkingState(primary);
+      const changes = await new GitWorkingStateService().listOtherChanges(primary);
+
+      expect(state).toMatchObject({ dirtyFiles: 0, untrackedFiles: 0 });
+      expect(changes).toMatchObject({ changes: [], totalChanges: 0, truncated: false });
+    } finally {
+      await removeRoot(root);
+    }
+  }, 20_000);
+
+  it("still reports a stray file beside the nested worktree and an independent nested repository", async () => {
+    const { root, primary } = await createCheckoutWithNestedWorktree();
+    try {
+      await writeFile(path.join(primary, ".claude", "notes.md"), "stray\n");
+      const independent = path.join(primary, "vendor", "tool");
+      await mkdir(independent, { recursive: true });
+      await git(independent, "init", "-b", "main");
+
+      const state = await probeWorktreeWorkingState(primary);
+      const changes = await new GitWorkingStateService().listOtherChanges(primary);
+
+      // notes.md, plus the independent repository, which is not a worktree
+      // of this one and so stays visible.
+      expect(state).toMatchObject({ dirtyFiles: 2, untrackedFiles: 2 });
+      expect(changes.changes.map((change) => change.repoPath)).toEqual([".claude/notes.md"]);
+    } finally {
+      await removeRoot(root);
+    }
+  }, 20_000);
+
+  it("reads the nested worktree's own changes when it is the checkout being read", async () => {
+    const { root, nested } = await createCheckoutWithNestedWorktree();
+    try {
+      const state = await probeWorktreeWorkingState(nested);
+
+      expect(state).toMatchObject({ dirtyFiles: 1, untrackedFiles: 1 });
+    } finally {
+      await removeRoot(root);
+    }
+  }, 20_000);
+});
+
 describe("GitWorkingStateService.resolveEditCommitStates", () => {
   function respondCommitStates(args: string[]): string | undefined {
     if (args.includes("diff") && args.includes("--name-only")) {

@@ -64,6 +64,15 @@ holds `Local Storage/leveldb/LOCK`; the Electron main process then keeps the
 launcher alive after `quit`. The fixture removes the Chromium directories only
 after closing the app and cleaning up its profile helpers.
 
+On Windows, fixture close also drains each live Electron session before asking
+Playwright to quit: it closes connections and awaits the cookie store flush.
+This preparation shares the existing six-second graceful-close deadline.
+Chromium's native `BrowserProcessIOThread::ProcessHostCleanUp` otherwise waits
+for the network service to flush cookies and cache after JavaScript quit has
+finished. That service can retain the launcher's pipes while native storage
+work is still pending. The fixture must await that work while the sessions
+are still reachable over RPC; storage isolation alone does not drain it.
+
 The Windows reproduction left a suspended no-op `cmd.exe` from the startup
 Job-wrapper prewarm alive after the app exited. The app no longer starts this
 fire-and-forget prewarm. Vitest's separate prewarm setup still awaits its
@@ -105,6 +114,46 @@ and process launcher. They leave the original promises, cleanup, error handling
 and deadlines in place. The hooks are inert outside the instrumented E2E
 workers. When upgrading Playwright, port both patches and run the real-worker
 tests: a green ordinary E2E run does not validate failure capture.
+
+## Unit probe timeouts
+
+The real-worker unit tests launch a separate Playwright CLI with a generated
+config and spec. A Vitest deadline can expire before that CLI reports its
+result. On failure, the harness copies the generated probe and its evidence to
+`apps/desktop/test-results/unit-shutdown-probes/shutdown-probe-*/` before the
+temporary root is deleted. The macOS unit lanes upload this directory as
+`macos-unit-shutdown-probes-lane-<lane>`.
+
+Read `before-cleanup.json` first for an outer timeout: it freezes the CLI PID,
+exit and signal codes, observed lifecycle events, and each pipe's state and
+bounded output tail before aborting the CLI. `before-stop.json`, `completed.json`
+and `after-cleanup.json` describe later boundaries; cleanup-induced exit must
+not be mistaken for the original stall. `parent.jsonl` timestamps the spawn
+request, spawn event, observed readiness, exit, stdio end/close, and exec callback.
+
+`milestones.jsonl` records Node entry from a preload, config evaluation, spec
+evaluation and test-body progress, with PIDs and UTC timestamps. A spawn event
+alone does not prove Node reached user code. Config evaluation also runs in the
+controller; only `results/worker-shutdown/*/timeline.jsonl`'s `worker-start`
+proves worker readiness. Compare that recorded readiness with the parent's
+`worker-ready-observed` event to identify delayed filesystem notification.
+Once ready, use the worker timeline and snapshots to locate test execution or
+cleanup. A CLI `exit` without `close`, together with a pipe that has not ended,
+identifies a pipe-lifetime wait; it does not identify the retaining descendant.
+No exit event means the CLI itself has not been observed to exit.
+
+Each probe has two named budgets. Cold start, from spawn to the worker's
+`worker-start` record, has 30 seconds: it is two Node processes loading
+Playwright and the generated config. On macOS that measured 0.5 seconds idle,
+up to 3.2 seconds beside a full unit shard and 12.6 seconds at a load average
+of 36 on ten cores. Shutdown has the original 20 seconds, measured from the
+worker's own readiness record to CLI close. Playwright's generated five-second
+teardown deadline measured 5.0-5.1 seconds under every load, so a hang there
+still fails as before. Either expired budget names its phase in the error and
+freezes `before-cleanup.json` first. The `--list` probe starts no worker and has
+the cold-start budget alone. There is no retry, and cleanup is unchanged. The
+retained data contains generated test fixtures, not the environment or an
+unfiltered Node diagnostic report.
 
 ## Limits
 

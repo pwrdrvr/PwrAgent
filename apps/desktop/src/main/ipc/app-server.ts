@@ -18,7 +18,8 @@ import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../shared/ipc";
 import { archiveCandidateProtectionReason } from "../app-server/thread-archive-sweeper";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../../shared/ipc";
 import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../../shared/ipc";
-import { readThreadFamilyPricing } from "../app-server/thread-family-pricing";
+import { readFederatedThreadFamilyPricing } from "../app-server/thread-family-pricing";
+import { createLocalThreadFamilyPricingReader } from "../app-server/thread-family-pricing-source";
 import { conditionalThreadRead } from "../app-server/conditional-thread-read";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../../shared/ipc";
 import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
@@ -1871,15 +1872,25 @@ class DesktopAppServerService {
     return await getDesktopBackendRegistry().readUsageActivity(request);
   }
 
+  /**
+   * A family can span machines: each owner keeps its own threads' totals, so
+   * this machine asks each one for its part, wherever the root lives.
+   */
   async readThreadFamilyPricing(request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse> {
-    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
-      const { federationTarget, ...remoteRequest } = request;
-      return await getDesktopFederationRuntime().remoteBackend(federationTarget).readThreadFamilyPricing(remoteRequest);
-    }
-    return await readThreadFamilyPricing({
-      request,
-      loadIndex: () => loadLocalNavigationQueryIndex({ callerReason: "thread-family-pricing" }),
-      readSummaries: (threads) => getDesktopOverlayStore().readThreadPricingSummaries(threads),
+    const federation = getDesktopFederationRuntime();
+    // Without health, pins still resolve by their recorded owner; only the
+    // alias for this machine's own id is lost.
+    const health = await Promise.resolve().then(() => federation.health()).catch(() => undefined);
+    const localInstanceId = health?.instanceId;
+    const owner = request.federationTarget && isRemoteFederationTarget(request.federationTarget)
+      ? request.federationTarget.instanceId : undefined;
+    return await readFederatedThreadFamilyPricing({
+      root: { backend: request.backend, threadId: request.threadId, ...(owner ? { ownerInstanceId: owner } : {}) },
+      readLocal: createLocalThreadFamilyPricingReader(localInstanceId),
+      readRemote: (instanceId, root, deadlineAt) => federation.remoteBackend({ scope: "remote", instanceId })
+        .readThreadFamilyPricing(root, { deadlineAt }),
+      localInstanceId,
+      peerLabel: (instanceId) => health?.peers?.find((peer) => peer.id === instanceId)?.label,
     });
   }
 

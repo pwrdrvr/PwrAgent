@@ -396,6 +396,13 @@ describe("ThreadTodoService", () => {
       .toBe("done");
   });
 
+  it("records a card the thread claimed to do here", () => {
+    const service = createService();
+    service.add({ ...THREAD, input: { key: "k", title: "Mine" } });
+    expect(service.resolveFromThread({ ...THREAD, key: "k", status: "done", resolution: "sent_here" }))
+      .toMatchObject({ status: "done", result: "Sent to this thread" });
+  });
+
   it("marks a merge done with its result and keeps a failed handoff open with the error", async () => {
     const runners: ThreadTodoActionRunners = {
       mergePullRequest: vi.fn(async () => ({ summary: "Squash-merged #42" })),
@@ -813,7 +820,7 @@ describe("ThreadTodoService", () => {
       dispatchSettings: { settings: request.modelSettings ?? source, source },
     }));
     const service = createService({ startThread, mergePullRequest: vi.fn() });
-    service.setDispatchSettingsReader(async (identity) => ({ ...source, backend: identity.backend }));
+    service.setDispatchSettingsReader(async (identity) => ({ thread: { ...source, backend: identity.backend } }));
     const add = (threadId = THREAD.threadId) => service.add({ ...THREAD, threadId,
       input: { title: "Build it", action: { type: "start_thread", prompt: "Build it" } },
     }).todo;
@@ -835,7 +842,7 @@ describe("ThreadTodoService", () => {
     expect(new ThreadTodoStore(db).getThreadModelSettings(THREAD.backend, THREAD.threadId)).toEqual(source);
   });
 
-  it("leaves memory and recents unchanged on failure and ignores a local pick for a peer", async () => {
+  it("leaves memory and recents unchanged on failure and on a peer start", async () => {
     const picked = { backend: "claude" as const, model: "opus" };
     const startThread = vi.fn(async () => { throw new Error("Unavailable"); });
     const startThreadOnInstance = vi.fn(async (_request: unknown) => ({ backend: "codex" as const, threadId: "peer-child" }));
@@ -845,8 +852,29 @@ describe("ThreadTodoService", () => {
     expect(new ThreadTodoStore(db).getThreadModelSettings(THREAD.backend, THREAD.threadId)).toBeUndefined();
     expect(listModelSettingsRecents(db, "todo-dispatch")).toEqual([]);
     await service.runAction(todo.id, { startOnInstanceId: "peer", modelSettings: picked });
-    expect(startThreadOnInstance.mock.calls[0]?.[0]).not.toHaveProperty("modelSettings");
+    // The pick was made against the peer's catalog, so it goes along; it
+    // does not become this thread's memory, which is for starts here.
+    expect(startThreadOnInstance.mock.calls[0]?.[0]).toMatchObject({ modelSettings: picked });
     expect(new ThreadTodoStore(db).getThreadModelSettings(THREAD.backend, THREAD.threadId)).toBeUndefined();
+    expect(listModelSettingsRecents(db, "todo-dispatch")).toEqual([]);
+  });
+
+  it("passes the operator's Where, environment and speed to either start, and no remembered model to a peer", async () => {
+    const remembered = { backend: "claude" as const, model: "opus" };
+    const startThread = vi.fn(async (request: Parameters<ThreadTodoActionRunners["startThread"]>[0]) => ({
+      backend: "codex" as const, threadId: "child",
+      dispatchSettings: { settings: request.modelSettings ?? remembered, source: { backend: "codex" as const } },
+    }));
+    const startThreadOnInstance = vi.fn(async (_request: unknown) => ({ backend: "codex" as const, threadId: "peer-child" }));
+    const service = createService({ startThread, startThreadOnInstance, mergePullRequest: vi.fn() });
+    const add = () => service.add({ ...THREAD, input: { title: "Build it", action: { type: "start_thread", prompt: "Build it" } } }).todo;
+    await service.runAction(add().id, { modelSettings: remembered });
+    const choices = { workMode: "worktree" as const, environment: "ci", speed: "fast" as const };
+    await service.runAction(add().id, choices);
+    expect(startThread).toHaveBeenLastCalledWith(expect.objectContaining({ ...choices, modelSettings: remembered }));
+    await service.runAction(add().id, { startOnInstanceId: "peer", ...choices });
+    expect(startThreadOnInstance).toHaveBeenLastCalledWith(expect.objectContaining({ instanceId: "peer", ...choices }));
+    expect(startThreadOnInstance.mock.lastCall?.[0]).not.toHaveProperty("modelSettings");
   });
 
   it("budgets one changed preference and recent with no repeat preference writes", async () => {

@@ -16,6 +16,7 @@ export const FEDERATION_CAPABILITIES = [
   "navigation_snapshot_deltas",
   "navigation_group_invalidations",
   "thread_grouping",
+  "thread_parent_mutation_v1",
   "thread_detail",
   "turn_control",
   "durable_turn_requests_v1",
@@ -62,6 +63,13 @@ export const FEDERATION_CAPABILITIES = [
    * keeps `threadTodos.list` and the change markers without it.
    */
   "thread_todo_feed",
+  /**
+   * The owner applies a handoff card's Where, environment and speed from
+   * `threadTodos.runAction`, sends the model to a peer start, and answers
+   * `threadTodos.listDispatchEnvironments`. A viewer shows an older owner's
+   * card with its model chip only.
+   */
+  "thread_todo_dispatch_target",
   /** Owner-persisted async question dismissals and change notifications. */
   "operator_questions",
   "operator_requests",

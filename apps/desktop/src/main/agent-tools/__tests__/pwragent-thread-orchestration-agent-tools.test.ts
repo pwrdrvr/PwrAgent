@@ -98,7 +98,7 @@ describe("pwragent thread orchestration agent tools", () => {
               additionalProperties: false,
               properties: expect.objectContaining({
                 direction: expect.objectContaining({
-                  enum: ["local-to-worktree", "worktree-to-local", "to-project"],
+                  enum: ["local-to-worktree", "worktree-to-local", "worktree-to-worktree", "to-project"],
                 }),
                 targetPath: expect.objectContaining({ type: "string" }),
                 strategy: expect.objectContaining({
@@ -107,6 +107,7 @@ describe("pwragent thread orchestration agent tools", () => {
                 sourcePath: expect.objectContaining({
                   description: expect.stringContaining("multiple linked directories"),
                 }),
+                baseRef: expect.objectContaining({ type: "string" }),
               }),
             }),
           }),
@@ -707,13 +708,66 @@ describe("pwragent thread orchestration agent tools", () => {
         callId: "call-1",
         turnId: "turn-1",
       },
+      // The owner picks local-to-worktree or worktree-to-worktree from where
+      // the thread works, so an omitted direction stays omitted.
       args: {
-        direction: "local-to-worktree",
         repositoryPath: "/repo/app",
         sourcePath: "/repo/app",
         leaveLocalBranch: "main",
       },
     });
+  });
+
+  it("passes worktree-to-worktree through with its strategy", async () => {
+    const handler = vi.fn(async () => ({ ok: false as const, error: { code: "forbidden" as const, message: "stub" } }));
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+    await router.handleDynamicToolCall({
+      backend: "claude",
+      call: {
+        threadId: "thread-1", turnId: "turn-1", callId: "call-1", namespace: "pwragent",
+        tool: "move_thread_workspace",
+        arguments: { direction: "worktree-to-worktree", strategy: "new-branch", newBranchName: " fix/next " },
+      },
+    });
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+      args: { direction: "worktree-to-worktree", strategy: "new-branch", newBranchName: "fix/next" },
+    }));
+  });
+
+  it("passes a fresh-worktree baseRef through", async () => {
+    const handler = vi.fn(async () => ({ ok: false as const, error: { code: "forbidden" as const, message: "stub" } }));
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+    await router.handleDynamicToolCall({
+      backend: "claude",
+      call: {
+        threadId: "thread-1", turnId: "turn-1", callId: "call-1", namespace: "pwragent",
+        tool: "move_thread_workspace",
+        arguments: { baseRef: " origin/main ", newBranchName: "fix/fresh" },
+      },
+    });
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+      args: { baseRef: "origin/main", newBranchName: "fix/fresh" },
+    }));
+  });
+
+  it.each([
+    { baseRef: "origin/main", strategy: "move-branch" },
+    { baseRef: "origin/main", leaveLocalBranch: "main" },
+    { baseRef: "origin/main", direction: "worktree-to-local" },
+    { baseRef: "origin/main", direction: "to-project", targetPath: "/existing" },
+    { baseRef: " " },
+  ])("rejects a baseRef that cannot start a fresh worktree: %j", async (args) => {
+    const handler = vi.fn();
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+    const result = await router.handleDynamicToolCall({
+      backend: "codex",
+      call: {
+        threadId: "thread-1", turnId: "turn-1", callId: "call-1", namespace: "pwragent",
+        tool: "move_thread_workspace", arguments: args,
+      },
+    });
+    expect(result).toMatchObject({ success: false });
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it.each([

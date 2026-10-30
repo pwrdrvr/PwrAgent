@@ -73,6 +73,7 @@ import {
 } from "./star-map-orbit";
 import {
   buildInstanceClusters,
+  cloudDropParentRequest,
   computeClusterCloud,
   emptyCloudMemory,
   PROJECT_MAX_CARDS_PER_GROUP,
@@ -5479,6 +5480,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
         thread: params.thread,
       });
       if (drop.kind === "none") return false;
+      const request = cloudDropParentRequest(params.thread, drop);
+      if (!request) return false;
 
       const threadKey = buildThreadIdentityKey(
         params.thread.source,
@@ -5496,16 +5499,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         ),
       );
       void desktopApi
-        .setThreadParent({
-          backend: params.thread.source,
-          threadId: params.thread.id,
-          ...(drop.kind === "adopt"
-            ? {
-                parentThreadId: drop.parent.id,
-                parentThreadBackend: drop.parent.source,
-              }
-            : { parentThreadId: null, parentThreadBackend: null }),
-        })
+        .setThreadParent(request)
         .then(() => refreshOwner(params.instanceId))
         .catch((error: unknown) => {
           setCardError(

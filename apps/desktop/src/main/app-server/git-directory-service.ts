@@ -17,6 +17,7 @@ import type {
 import {
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
   normalizeGitOriginUrl,
+  readStatusWithoutNestedWorktrees,
 } from "@pwragent/shared";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
@@ -706,13 +707,14 @@ async function detachCleanWorktreeBranch(params: {
   runGit: GitCommandRunner;
   worktreePath: string;
 }): Promise<void> {
-  const status = await params
-    .runGit(
-      params.worktreePath,
-      ["status", "--porcelain", "--untracked-files=normal"],
-      params.gitEnv,
-    )
-    .catch(() => "");
+  // A linked worktree nested in this checkout is another checkout, not a
+  // change, so it does not block the move.
+  const status = await readStatusWithoutNestedWorktrees({
+    cwd: params.worktreePath,
+    git: (args) => params.runGit(params.worktreePath, args, params.gitEnv),
+    statusArgs: ["status", "--porcelain", "--untracked-files=normal"],
+    realpath: (value) => realpath(value),
+  }).catch(() => "");
   if (status.trim()) {
     throw new Error(
       `Cannot move branch ${params.branchName} to a destination worktree because ${params.worktreePath} has uncommitted changes.`,

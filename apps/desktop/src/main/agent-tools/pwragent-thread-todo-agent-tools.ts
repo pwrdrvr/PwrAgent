@@ -52,6 +52,12 @@ const TODO_WRITING_GUIDANCE = [
   "Use normal spacing and complete sentences, without compressed agent shorthand.",
   "Organize longer prompts with Markdown headings, lists, and tables where helpful.",
 ].join(" ");
+// Repeated on add_todo and list_todos: a backend that loads tool schemas on
+// demand may not read resolve_todo until the work is done.
+const CLAIM_GUIDANCE = [
+  "When the operator asks you to do a card's work in this thread, claim it first.",
+  "Call resolve_todo with resolution sent_here before you start, as the card's Do it here button does.",
+].join(" ");
 
 type ThreadTodoToolContext = {
   backend: AppServerBackendKind;
@@ -84,6 +90,8 @@ export type PwrAgentThreadTodoHandler = {
       id?: string;
       key?: string;
       status: Exclude<ThreadTodoStatus, "open">;
+      /** With done: the operator handed the card to this thread. */
+      resolution?: "sent_here";
       allowOpenItems?: boolean;
     },
   ) => ThreadTodo | Promise<ThreadTodo>;
@@ -203,10 +211,23 @@ async function dispatchOperation(
           message: "resolve_todo allowOpenItems must be true or false.",
         });
       }
+      if (args.resolution !== undefined && args.resolution !== "sent_here") {
+        return agentToolFailure({
+          code: "invalid_arguments",
+          message: "resolve_todo resolution must be sent_here.",
+        });
+      }
+      if (args.resolution !== undefined && status !== "done") {
+        return agentToolFailure({
+          code: "invalid_arguments",
+          message: "resolve_todo resolution applies only to done.",
+        });
+      }
       const todo = await handler.resolve(context, {
         ...(id ? { id } : {}),
         ...(key ? { key } : {}),
         status,
+        ...(args.resolution === "sent_here" ? { resolution: "sent_here" as const } : {}),
         ...(args.allowOpenItems === true ? { allowOpenItems: true } : {}),
       });
       return agentToolSuccess({ todo: summarizeTodo(todo) });
@@ -595,6 +616,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "A card with unchecked blocking steps cannot be marked done until they are checked.",
         "Re-adding a key with items keeps the id and checked state of every step whose text is unchanged.",
         "Use update_todo to change some fields of a card you already raised.",
+        CLAIM_GUIDANCE,
         "Pass project when the work is for another project, and raise one card per project.",
         "For the exact project, pass a projectKey from list_instance_projects for this machine.",
       ].join(" ");
@@ -609,11 +631,13 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "A model may be named by id or by its display name, and the card stores the id.",
       ].join(" ");
     case "list_todos":
-      return "List this thread's to-do cards. Defaults to open cards.";
+      return ["List this thread's to-do cards. Defaults to open cards.", CLAIM_GUIDANCE].join(" ");
     case "resolve_todo":
       return [
         "Mark one of this thread's to-do cards done or dismissed, by id or key.",
         "Use it when a card no longer applies.",
+        CLAIM_GUIDANCE,
+        "Otherwise the card stays open while you work, and the operator can start or dismiss it again.",
         "Marking a card done fails while any of its steps is unchecked, and the error names them.",
         "On a start_thread card only its prerequisites count.",
         "Check finished steps with update_todo first.",
@@ -816,10 +840,16 @@ function inputSchemaForOperation(
             enum: ["done", "dismissed"],
             description: "Defaults to done.",
           },
+          resolution: {
+            type: "string",
+            enum: ["sent_here"],
+            description:
+              "With done: the operator asked you to do the card's work in this thread. Resolve before you start, so the card cannot run twice.",
+          },
           allowOpenItems: {
             type: "boolean",
             description:
-              "With done: mark the card done although some steps are unchecked. Pass it only when the operator says the remaining steps no longer apply.",
+              "With done: mark the card done although some steps are unchecked. Pass it only when the operator says the remaining steps no longer apply. Also pass it with resolution sent_here when those steps are the work you take on.",
           },
         },
       };

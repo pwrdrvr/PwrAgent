@@ -533,6 +533,12 @@ describe("federation agent tools service", () => {
             path: "/Users/op/pwrgit",
             threadKeys: [],
             needsAttentionCount: 0,
+            // A caller matches its own differently named checkout by these.
+            gitStatus: {
+              originRepository: "github.com/fixture-org/pwrgit",
+              remoteRepositories: ["github.com/fixture-org/pwrgit", "github.com/fixture-user/pwrgit"],
+            },
+            localAvailability: "unconfigured",
           },
         ] as NavigationSnapshot["directories"],
       }),
@@ -584,6 +590,9 @@ describe("federation agent tools service", () => {
         label: "PwrGit",
         kind: "directory",
         path: "/Users/op/pwrgit",
+        repositoryKey: "github.com/fixture-org/pwrgit",
+        repositoryKeys: ["github.com/fixture-org/pwrgit", "github.com/fixture-user/pwrgit"],
+        localAvailability: "unconfigured",
         hasLaunchpad: false,
       },
     ]);

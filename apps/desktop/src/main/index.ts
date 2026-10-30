@@ -1733,6 +1733,8 @@ export function bootstrapApp(): void {
         await appServerService.setThreadPin(request),
       markThreadSeen: async (request) =>
         await appServerService.markThreadSeen(request),
+      setThreadParent: async (request) =>
+        await appServerService.setThreadParent(request),
     });
     // Windows and Linux: serve the painted title-bar menu bar from the live
     // application menu (idempotent; the renderer mounts the bar only where the

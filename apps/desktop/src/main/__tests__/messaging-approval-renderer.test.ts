@@ -150,6 +150,37 @@ describe("buildApprovalIntent", () => {
     );
   });
 
+  it("says how much of a long MCP parameter a chat approval leaves out", () => {
+    const body = "Moves every macOS job onto the hosted runner. ".repeat(20).trim();
+    const intent = buildApprovalIntent({
+      id: "mcp-tool-long",
+      createdAt: 1000,
+      request: {
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          requestId: "forge-tool:fixture",
+          serverName: "GitHub",
+          mode: "form",
+          message: "Allow the agent to open a pull request on GitHub?",
+          requestedSchema: { type: "object", properties: {} },
+          _meta: {
+            pwragent_approval_kind: "mcp_tool_call",
+            tool_params_display: [
+              { name: "body", value: body, format: "markdown" },
+              { name: "comment", location: "src/auth/password-reset.ts:42", value: "Check the expiry first.", format: "markdown" },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(intent.body).toContain(`body: ${body.slice(0, 300)}… (${body.length.toLocaleString("en-US")} characters; the desktop card shows all of it)`);
+    // A comment's location labels its line; a file name is not a credential.
+    expect(intent.body).toContain("src/auth/password-reset.ts:42: Check the expiry first.");
+  });
+
   it("lists MCP tool parameters with secrets withheld", () => {
     const intent = buildApprovalIntent({
       id: "mcp-tool-1",

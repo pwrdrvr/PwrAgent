@@ -764,16 +764,17 @@ describe("ensureManagedCodexRuntime", () => {
     await writeManagedCache(rootDir, { tag, version });
     const controller = new AbortController();
     let fetchAborted = false;
+    const fetchStarted = Promise.withResolvers<void>();
     const fetchMock = vi.fn(
       async (_input: string | URL | Request, init?: RequestInit) =>
         await new Promise<Response>((_resolve, reject) => {
+          fetchStarted.resolve();
           init?.signal?.addEventListener("abort", () => {
             fetchAborted = true;
             reject(init.signal?.reason);
           }, { once: true });
         }),
     );
-    let settled = false;
     const runtimePromise = ensureManagedCodexRuntime({
       arch: "x64",
       checkMode: "ttl",
@@ -783,14 +784,11 @@ describe("ensureManagedCodexRuntime", () => {
       probeVersion: versionProbe(version),
       rootDir,
       signal: controller.signal,
-    }).then((runtime) => {
-      settled = true;
-      return runtime;
     });
 
     try {
-      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-      await vi.waitFor(() => expect(settled).toBe(true));
+      await fetchStarted.promise;
+      expect(fetchMock).toHaveBeenCalledOnce();
       await expect(runtimePromise).resolves.toMatchObject({
         command: path.join(rootDir, "versions", tag, "codex"),
         metadata: { tag },

@@ -21,7 +21,7 @@ vi.mock("electron", () => ({
   },
 }));
 vi.mock("../window", () => ({
-  applyWindowSecurityHardening: vi.fn(), getPreloadPath: () => "/fixture/preload.js",
+  applyWindowSecurityHardening: vi.fn(), rendererPreloadWebPreferences: () => ({ preload: "/fixture/preload.js", nodeIntegrationInSubFrames: true }),
   getRendererEntry: () => ({ kind: "file", value: "/fixture/index.html" }),
 }));
 vi.mock("../window-channels", () => ({ WINDOW_KIND_FEDERATION_ACTIVITY: "federation-activity", registerWindowChannels: vi.fn() }));

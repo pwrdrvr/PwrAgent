@@ -100,6 +100,14 @@ function isWithin(parent: string, entry: string): boolean {
   return !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
+// Where `desktop-main` workers keep the migrated databases that new test
+// databases are copied from (see `state-db-template.ts`). Per run, like the
+// roots above; `state-db-template-dir.ts` creates and removes it.
+const STATE_DB_TEMPLATE_DIR = path.join(
+  os.tmpdir(),
+  `pwragent-vitest-state-db-template-${process.pid}`,
+);
+
 // Seeded on every desktop project so the root and the XDG homes always move
 // together; a test that overrides one and forgets the others is the bug this
 // pairing exists to prevent.
@@ -189,7 +197,10 @@ export default defineConfig({
           testTimeout: TEST_TIMEOUT_MS,
           hookTimeout: HOOK_TIMEOUT_MS,
           environment: "node",
-          env: DISPOSABLE_DESKTOP_ENV,
+          env: {
+            ...DISPOSABLE_DESKTOP_ENV,
+            PWRAGENT_TEST_STATE_DB_TEMPLATE_DIR: STATE_DB_TEMPLATE_DIR,
+          },
           include: [
             "scripts/**/*.test.mjs",
             ".agents/skills/codex-rollout-forensics/tests/**/*.test.mjs",
@@ -209,6 +220,8 @@ export default defineConfig({
             // PDF.js's 1 MB first read: 3,943ms in the first process on a
             // Windows runner against 111ms in every process after it.
             "apps/desktop/src/test-setup/pdf-runtime-prewarm.ts",
+            // Owns the directory of migrated databases used below.
+            "apps/desktop/src/test-setup/state-db-template-dir.ts",
           ],
           setupFiles: [
             // Inert unless PWRAGENT_DEV_SQLITE_WRITE_METRICS is set; see
@@ -220,6 +233,8 @@ export default defineConfig({
             // Fails a test that makes a real outbound HTTP request — the step
             // that runs *before* the probe the guard above catches.
             "apps/desktop/src/test-setup/outbound-fetch-guard.ts",
+            // Serves each new on-disk StateDb from a migrated copy.
+            "apps/desktop/src/test-setup/state-db-template.ts",
           ],
           // Inline @pwrdrvr/codex-discovery so vitest transforms it. Without
           // this, the kit's bundled `import { spawn } from "child_process"`

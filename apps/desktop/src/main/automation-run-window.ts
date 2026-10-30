@@ -3,7 +3,7 @@ import type { OpenAutomationRunWindowRequest } from "@pwragent/shared";
 import { getMainLogger } from "./log";
 import {
   applyWindowSecurityHardening,
-  getPreloadPath,
+  rendererPreloadWebPreferences,
   getRendererEntry,
 } from "./window";
 import {
@@ -79,7 +79,7 @@ export function showAutomationRunWindow(
     ...auxiliaryWindowChromeOptions(),
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
-      preload: getPreloadPath(),
+      ...rendererPreloadWebPreferences(),
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,

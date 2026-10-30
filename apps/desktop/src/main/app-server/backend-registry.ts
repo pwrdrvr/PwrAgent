@@ -5,7 +5,7 @@ import { checkAgentAccessRequest } from "../agent-tools/agent-access-ceiling";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import type { ForgePrRepositoryResolver, ForgePrToolHandler } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import { ForgeReadError, repositoryKey, validateForgeReadArgs, type ForgeReadRequest, type ForgeRepository } from "../pr-status/forge-tool-contract";
-import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
+import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation, type ForgeReviewComment } from "../pr-status/forge-pr-tool-contract";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import {
@@ -70,6 +70,7 @@ import {
 } from "./monitor-job-suggestion";
 import { resolvePullRequestReview } from "./pull-request-review";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
+import { PWRAGENT_MCP_SERVER_HASH_LENGTH, PWRAGENT_MCP_SERVER_PREFIX } from "../../shared/tool-activity";
 import { priceLocalModelUsage } from "@pwragent/shared";
 import {
   attributeCodexProviderUsageLine,
@@ -210,6 +211,8 @@ import {
   type MarkThreadSeenRequest,
   type MarkThreadSeenResponse,
   type SetThreadPinRequest,
+  type SetThreadParentRequest,
+  type SetThreadParentResponse,
   type SetThreadLockResponse,
   type FederationInstanceId,
   type ThreadLock,
@@ -396,6 +399,7 @@ import {
   type MoveThreadWorkspacePhase,
   type MoveThreadWorkspaceResult,
   type MutateThreadToolArgs,
+  type MutateThreadParentV1Request,
   type MarkProjectReadToolArgs,
   type MarkProjectReadResult,
   type PendingThreadHandoffPhase,
@@ -446,6 +450,7 @@ import {
   type TrustCodexProjectResponse,
   type ThreadExecutionMode,
   type ThreadOverlayState,
+  type ThreadWorkspaceHandoffDirection,
   type ThreadWorkspaceHandoffStrategy,
   type ThreadSubAgentSummary,
   type ThreadToolAccounting,
@@ -864,6 +869,8 @@ const ACTIVE_TURN_WORKSPACE_RECOVERY_ERROR =
   "Wait for the current turn to finish, then try again.";
 const CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING =
   "Codex workspace CWD synchronization is pending and will retry automatically.";
+const CLAUDE_WORKSPACE_MOVE_FAILED_WARNING =
+  "Claude could not switch to the new folder. Move this thread again before you send a message.";
 /**
  * Number of consecutive queued-execution-mode flush failures tolerated
  * before the queue is auto-cancelled and an explanatory `cancelled`
@@ -1266,6 +1273,19 @@ function resolveThreadWorkspaceCwd(
     resolveLinkedDirectoryWorkspaceCwd(overlayDirectories) ??
     thread.projectKey
   );
+}
+
+/** True when the thread's runtime cwd is one of its linked worktrees. */
+function threadWorkspaceIsWorktree(
+  thread: AppServerThreadSummary | undefined,
+  overlayDirectories: AppServerThreadSummary["linkedDirectories"] = [],
+): boolean {
+  const cwd = resolveThreadWorkspaceCwd(thread, overlayDirectories);
+  if (!cwd) return false;
+  const target = normalizeWorktreePathForComparison(cwd);
+  return [...overlayDirectories, ...(thread?.linkedDirectories ?? [])].some((directory) =>
+    directory.kind === "worktree"
+    && normalizeWorktreePathForComparison(directory.worktreePath ?? directory.path) === target);
 }
 
 function linkedDirectoriesHaveSameWorkspaceIdentity(
@@ -2193,6 +2213,27 @@ function linkedDirectoryWorktreePath(
 
 function normalizeWorktreePathForComparison(worktreePath: string): string {
   return path.normalize(worktreePath.trim());
+}
+
+/**
+ * Archive cleanup's view of a thread's directories: its workspace links plus
+ * the worktrees it left on disk with a fresh-start move. Those are still the
+ * thread's own, so archive checkpoints and removes them like any other.
+ */
+function withRetainedWorktrees(
+  directories: LinkedDirectorySummary[],
+  overlay: ThreadOverlayState | undefined,
+): LinkedDirectorySummary[] {
+  const retained = overlay?.retainedWorktrees ?? [];
+  if (retained.length === 0) return directories;
+  const linked = new Set(directories.flatMap((directory) => {
+    const worktreePath = linkedDirectoryWorktreePath(directory);
+    return worktreePath ? [normalizeWorktreePathForComparison(worktreePath)] : [];
+  }));
+  return [...directories, ...retained.filter((directory) => {
+    const worktreePath = linkedDirectoryWorktreePath(directory);
+    return worktreePath && !linked.has(normalizeWorktreePathForComparison(worktreePath));
+  })];
 }
 
 const BACKEND_LABELS: Record<AppServerBackendKind, string> = {
@@ -7980,8 +8021,6 @@ function buildCodexTokenMiserDynamicToolSpecs(
 }
 
 const PWRAGENT_PDF_MCP_SERVER_NAME = "pwragent_pdf";
-const PWRAGENT_CONNECTION_MCP_SERVER_PREFIX = "pwragent_";
-const PWRAGENT_CONNECTION_MCP_SERVER_HASH_LENGTH = 32;
 
 function buildCodexPdfMcpConfig(
   registration: AgentToolMcpRegistration,
@@ -8052,8 +8091,8 @@ export function buildCodexConnectionMcpServerName(
         .join("\0"),
     )
     .digest("hex")
-    .slice(0, PWRAGENT_CONNECTION_MCP_SERVER_HASH_LENGTH);
-  return `${PWRAGENT_CONNECTION_MCP_SERVER_PREFIX}${server.name}_${identity}`;
+    .slice(0, PWRAGENT_MCP_SERVER_HASH_LENGTH);
+  return `${PWRAGENT_MCP_SERVER_PREFIX}${server.name}_${identity}`;
 }
 
 /**
@@ -8101,7 +8140,7 @@ export function buildCodexConnectionMcpConfig(
         // inherited HTTP server.
         const aliases = [
           server.name,
-          `${PWRAGENT_CONNECTION_MCP_SERVER_PREFIX}${server.name}`,
+          `${PWRAGENT_MCP_SERVER_PREFIX}${server.name}`,
         ].filter((name) => inheritedNames.has(name));
         return [
           ...aliases.map((name) => [name, { enabled: false }] as const),
@@ -8356,6 +8395,8 @@ export type HandoffSourceSettings = {
   reasoningEffort?: string;
   serviceTier?: string;
   fastMode?: boolean;
+  /** The thread's environment, when it runs one locally. */
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
 };
 
 /** See `DesktopBackendRegistry.setAgentThreadActions`. */
@@ -8366,6 +8407,10 @@ export type AgentThreadActions = {
   markThreadSeen: (
     request: MarkThreadSeenRequest,
   ) => Promise<MarkThreadSeenResponse>;
+  /** The sidebar's own path, so every window hears the new grouping. */
+  setThreadParent?: (
+    request: SetThreadParentRequest,
+  ) => Promise<SetThreadParentResponse>;
 };
 
 function threadInspectionFailure(
@@ -11855,6 +11900,10 @@ export class DesktopBackendRegistry {
         : {}),
       ...(overlay?.serviceTier ? { serviceTier: overlay.serviceTier } : {}),
       ...(overlay?.fastMode !== undefined ? { fastMode: overlay.fastMode } : {}),
+      ...(overlay?.codexEnvironmentRuntime?.environmentId
+        && overlay.codexEnvironmentRuntime.executionTarget === "local"
+        ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
+        : {}),
     };
   }
 
@@ -15955,9 +16004,9 @@ export class DesktopBackendRegistry {
           const readOverlays = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
           await context.checkpoint();
           const overlays = await readOverlays.call(this.overlayStore, { backend, threadIds: [result.threadId] });
-          targetThread = { ...targetThread, linkedDirectories: mergeThreadLinkedDirectories([
+          targetThread = { ...targetThread, linkedDirectories: withRetainedWorktrees(mergeThreadLinkedDirectories([
             ...targetThread.linkedDirectories, ...(overlays[result.threadId]?.extraLinkedDirectories ?? []),
-          ]) };
+          ]), overlays[result.threadId]) };
         } else if (isAcpBackendId(backend)) {
           const session = this.acpBackend.getSession(backend, result.threadId);
           if (session?.archivedAt) targetThread = this.acpBackend.sessionToThreadSummary(session);
@@ -16315,7 +16364,6 @@ export class DesktopBackendRegistry {
   async handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> {
-    if (request.backend === "claude") throw new Error("Start a new Claude thread in the target workspace.");
     return await this.withThreadLifecycleMutation(request, async () => await this.handoffThreadWorkspaceWithoutArchiveLock(request));
   }
 
@@ -16325,6 +16373,8 @@ export class DesktopBackendRegistry {
     if (this.threadHasActiveTurn(request.threadId, request.backend)) {
       throw new Error(ACTIVE_TURN_HANDOFF_ERROR);
     }
+    // Before any file moves: Claude refuses while it runs a turn or a task.
+    if (request.backend === "claude") this.claudeBackend.assertWorkspaceMovable(request.threadId);
     if (isAcpBackendId(request.backend)) {
       await this.assertAcpWorkspaceHandoffAllowed({
         backend: request.backend,
@@ -16361,12 +16411,10 @@ export class DesktopBackendRegistry {
           ...(projectMoveOverlay?.extraLinkedDirectories ?? []),
         ]
       : undefined;
-    const sourceCwd = resolveThreadWorkspaceCwd(thread, projectMoveOverlay?.extraLinkedDirectories);
-    const sourceWorkMode: "local" | "worktree" = workspaceDirectories && mergeThreadLinkedDirectories(workspaceDirectories).some((directory) =>
-      directory.kind === "worktree"
-      && sourceCwd
-      && normalizeWorktreePathForComparison(directory.worktreePath ?? directory.path) === normalizeWorktreePathForComparison(sourceCwd),
-    ) ? "worktree" : "local";
+    const sourceWorkMode: "local" | "worktree" = workspaceDirectories
+      && threadWorkspaceIsWorktree(thread, projectMoveOverlay?.extraLinkedDirectories)
+      ? "worktree"
+      : "local";
     // PR workspace provenance survives an earlier project relink that lost
     // its directory. Git still validates every candidate against the target
     // repository's registered worktrees before it can be reused.
@@ -16375,8 +16423,12 @@ export class DesktopBackendRegistry {
         .map((directory) => directory.worktreePath ?? directory.path),
       ...(projectMoveOverlay?.prs ?? []).flatMap((pr) => pr.linkedDirectoryPaths ?? []),
     ] : undefined;
+    const sourcePath = request.sourcePath ?? candidate.sourcePath;
+    const sourceWorktreeIsExternal = request.direction === "worktree-to-worktree"
+      && await this.threadWorktreeIsExternal(request, thread, sourcePath);
     const result = await this.gitWorkspaceHandoffService.handoff({
       ...request,
+      ...(sourceWorktreeIsExternal ? { keepSourceWorktree: true } : {}),
       ...(workspacePaths ? {
         workspacePaths,
         sourceWorkMode,
@@ -16388,9 +16440,29 @@ export class DesktopBackendRegistry {
         ],
       } : {}),
       repositoryPath: request.repositoryPath ?? candidate.repositoryPath,
-      sourcePath: request.sourcePath ?? candidate.sourcePath,
+      sourcePath,
       sourceBranch: request.sourceBranch ?? candidate.sourceBranch,
     });
+    // A fresh start leaves the previous worktree on disk, and its changes may
+    // not be this thread's. Keep a worktree this thread owns tracked, so
+    // archiving the thread still checkpoints and removes it.
+    // Spell it the way the handoff service spells worktree paths, so a later
+    // move back into it matches and drops it.
+    const retainedPath = request.baseRef?.trim()
+      && request.direction === "worktree-to-worktree"
+      && !sourceWorktreeIsExternal
+      && sourcePath
+      ? toForwardSlashes(await realpath(sourcePath).catch(() => sourcePath))
+      : undefined;
+    const retainWorktree: LinkedDirectorySummary | undefined = retainedPath
+      ? {
+          id: `pwragent-retained-worktree:${request.backend}:${request.threadId}:${retainedPath}`,
+          kind: "worktree",
+          label: result.linkedDirectory.label,
+          path: result.repositoryPath,
+          worktreePath: retainedPath,
+        }
+      : undefined;
     const resultBranch =
       result.strategy === "detached-changes"
         ? (result.workMode === "local"
@@ -16404,6 +16476,7 @@ export class DesktopBackendRegistry {
       directory: result.linkedDirectory,
       gitBranch: resultBranch,
       ...(request.direction === "to-project" ? { resetProjectState: true } : {}),
+      ...(retainWorktree ? { retainWorktree } : {}),
     });
     const workspaceCwd =
       result.linkedDirectory.worktreePath ?? result.targetPath;
@@ -16413,6 +16486,7 @@ export class DesktopBackendRegistry {
         backend: request.backend,
         threadId: request.threadId,
         cwd: workspaceCwd,
+        linkedDirectory: result.linkedDirectory,
       });
     } catch (error) {
       workspaceCwdSyncPending = true;
@@ -16480,7 +16554,9 @@ export class DesktopBackendRegistry {
           ...result,
           warnings: [
             ...result.warnings,
-            CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING,
+            request.backend === "claude"
+              ? CLAUDE_WORKSPACE_MOVE_FAILED_WARNING
+              : CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING,
           ],
         }
       : result;
@@ -16555,9 +16631,9 @@ export class DesktopBackendRegistry {
   async moveThreadToMainCheckout(
     request: MoveThreadToMainCheckoutRequest,
   ): Promise<MoveThreadToMainCheckoutResponse> {
-    if (request.backend === "claude") throw new Error("Start a new Claude thread in the main checkout.");
     return await this.withThreadLifecycleMutation(request, async () => {
       await this.assertWorkspaceRecoveryAllowed(request);
+      if (request.backend === "claude") this.claudeBackend.assertWorkspaceMovable(request.threadId);
       if (isAcpBackendId(request.backend)) {
         await this.assertAcpWorkspaceHandoffAllowed({
           backend: request.backend,
@@ -16609,9 +16685,12 @@ export class DesktopBackendRegistry {
           backend: request.backend,
           threadId: request.threadId,
           cwd: repositoryPath,
+          linkedDirectory,
         });
       } catch (error) {
-        warnings.push(CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING);
+        warnings.push(request.backend === "claude"
+          ? CLAUDE_WORKSPACE_MOVE_FAILED_WARNING
+          : CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING);
         backendRegistryLog.warn(
           "Codex workspace CWD synchronization failed after moving to the main checkout; will retry",
           {
@@ -16657,6 +16736,24 @@ export class DesktopBackendRegistry {
         completedAt: Date.now(),
       };
     });
+  }
+
+  /**
+   * True when the thread's link to this worktree says PwrAgent did not create
+   * it, so moving the thread away must leave the folder on disk.
+   */
+  private async threadWorktreeIsExternal(
+    request: { backend: AppServerBackendKind; threadId: string },
+    thread: AppServerThreadSummary | undefined,
+    worktreePath: string | undefined,
+  ): Promise<boolean> {
+    if (!worktreePath) return false;
+    const overlay = await this.overlayStore.getThreadOverlayState(request);
+    const target = normalizeWorktreePathForComparison(worktreePath);
+    return [...(overlay?.extraLinkedDirectories ?? []), ...(thread?.linkedDirectories ?? [])]
+      .some((directory) => directory.kind === "worktree"
+        && directory.worktreeOwnership === "external"
+        && normalizeWorktreePathForComparison(directory.worktreePath ?? directory.path) === target);
   }
 
   private async assertWorkspaceRecoveryAllowed(request: {
@@ -30542,6 +30639,7 @@ export class DesktopBackendRegistry {
     directory: LinkedDirectorySummary;
     gitBranch?: string;
     threadId: string;
+    retainWorktree?: LinkedDirectorySummary;
   }): Promise<ThreadOverlayState> {
     const overlay =
       await this.overlayStore.replaceWorkspaceLinkedDirectory(params);
@@ -36169,12 +36267,13 @@ export class DesktopBackendRegistry {
       }
     }));
     const withWorkspaceOverlay = (thread: AppServerThreadSummary): AppServerThreadSummary => {
-      const directories = overlaysByThreadKey.get(buildThreadIdentityKey(thread.source, thread.id))?.extraLinkedDirectories ?? [];
-      if (!directories.some((directory) => directory.worktreeOwnership === "external")) return thread;
-      return {
-        ...thread,
-        linkedDirectories: mergeThreadLinkedDirectories([...thread.linkedDirectories, ...directories]),
-      };
+      const overlay = overlaysByThreadKey.get(buildThreadIdentityKey(thread.source, thread.id));
+      const directories = overlay?.extraLinkedDirectories ?? [];
+      const linkedDirectories = directories.some((directory) => directory.worktreeOwnership === "external")
+        ? mergeThreadLinkedDirectories([...thread.linkedDirectories, ...directories])
+        : thread.linkedDirectories;
+      const withRetained = withRetainedWorktrees(linkedDirectories, overlay);
+      return withRetained === thread.linkedDirectories ? thread : { ...thread, linkedDirectories: withRetained };
     };
     activeThreads = activeThreads.map(withWorkspaceOverlay);
     archivedThreads = archivedThreads.map(withWorkspaceOverlay);
@@ -36462,7 +36561,10 @@ export class DesktopBackendRegistry {
               if (directory) directories = [directory];
             }
           }
-          directories = mergeThreadLinkedDirectories([...directories, ...(overlay?.extraLinkedDirectories ?? [])]);
+          directories = withRetainedWorktrees(
+            mergeThreadLinkedDirectories([...directories, ...(overlay?.extraLinkedDirectories ?? [])]),
+            overlay,
+          );
           const thread: AppServerThreadSummary = {
             id: row.id, source: backend, title: "", titleSource: "explicit", linkedDirectories: directories,
             projectKey: row.projectKey, gitBranch: row.gitBranch, observedGitBranch: row.observedGitBranch,
@@ -36715,17 +36817,19 @@ export class DesktopBackendRegistry {
       throw new Error("Thread workspace metadata is unavailable for handoff.");
     }
 
+    const fromWorktree = request.direction === "worktree-to-local"
+      || request.direction === "worktree-to-worktree";
     const directory =
-      request.direction === "worktree-to-local"
+      fromWorktree
         ? thread.linkedDirectories.find((candidate) => candidate.kind === "worktree")
         : thread.linkedDirectories.find((candidate) => candidate.kind === "local") ??
           thread.linkedDirectories[0];
     const sourcePath =
-      request.direction === "worktree-to-local"
+      fromWorktree
         ? directory?.worktreePath ?? directory?.path
         : directory?.path ?? thread.projectKey;
     const repositoryPath =
-      request.direction === "worktree-to-local"
+      fromWorktree
         ? directory?.path ?? request.repositoryPath
         : directory?.path ?? thread.projectKey ?? request.repositoryPath;
 
@@ -37350,13 +37454,29 @@ export class DesktopBackendRegistry {
   private async updateThreadWorkspaceCwd(params: {
     backend: AppServerBackendKind;
     cwd: string;
+    /** The thread's new primary directory; Claude records it with the cwd. */
+    linkedDirectory?: LinkedDirectorySummary;
     threadId: string;
   }): Promise<void> {
+    const cwd = params.cwd.trim();
+    if (params.backend === "claude") {
+      if (!cwd || !params.linkedDirectory) {
+        throw new Error("Workspace handoff did not produce a target CWD.");
+      }
+      // Claude reads its cwd from PwrAgent's own session metadata, and the
+      // next turn resumes the same session from there.
+      await this.claudeBackend.moveWorkspace({
+        threadId: params.threadId,
+        cwd,
+        linkedDirectory: params.linkedDirectory,
+      });
+      this.invalidateThreadListCache("claude", true);
+      return;
+    }
     if (params.backend !== "codex") {
       return;
     }
 
-    const cwd = params.cwd.trim();
     if (!cwd) {
       throw new Error("Workspace handoff did not produce a target CWD.");
     }
@@ -40770,6 +40890,7 @@ export class DesktopBackendRegistry {
       ...(move.sourceBranch ? { sourceBranch: move.sourceBranch } : {}),
       ...(move.leaveLocalBranch ? { leaveLocalBranch: move.leaveLocalBranch } : {}),
       ...(move.newBranchName ? { newBranchName: move.newBranchName } : {}),
+      ...(move.baseRef ? { baseRef: move.baseRef } : {}),
       ...(move.targetPath ? { targetPath: move.targetPath } : {}),
       ...(move.branch ? { branch: move.branch } : {}),
       ...(move.linkedDirectory ? { linkedDirectory: move.linkedDirectory } : {}),
@@ -41128,16 +41249,13 @@ export class DesktopBackendRegistry {
       );
     }
 
-    const direction = request.args.direction ?? "local-to-worktree";
-    if (direction !== "local-to-worktree" && direction !== "to-project") {
+    const requestedDirection = request.args.direction;
+    if (requestedDirection === "worktree-to-local") {
       return threadOrchestrationFailure(
         "unsupported_workspace",
-        'move_thread_workspace supports direction="local-to-worktree" or "to-project".',
+        'move_thread_workspace supports direction="local-to-worktree", "worktree-to-worktree", or "to-project".',
       );
     }
-    const strategy = direction === "to-project"
-      ? undefined
-      : this.resolveMoveThreadWorkspaceStrategy(request.args);
 
     const workspaceMoveId = [
       "workspace-move",
@@ -41166,6 +41284,16 @@ export class DesktopBackendRegistry {
       }),
     ]);
 
+    // Without a direction, a new worktree comes from wherever the thread is.
+    const direction = requestedDirection ?? (
+      threadWorkspaceIsWorktree(sourceThread, sourceOverlay?.extraLinkedDirectories)
+        ? "worktree-to-worktree"
+        : "local-to-worktree"
+    );
+    const strategy = direction === "to-project"
+      ? undefined
+      : this.resolveMoveThreadWorkspaceStrategy(request.args);
+
     let targetPath: string | undefined;
     let candidate: {
       repositoryPath?: string;
@@ -41184,6 +41312,7 @@ export class DesktopBackendRegistry {
         candidate = { sourcePath: resolveThreadWorkspaceCwd(sourceThread, sourceOverlay?.extraLinkedDirectories) };
       } else {
         candidate = this.resolveThreadWorkspaceMoveCandidate({
+          direction,
           ...(sourceOverlay ? { overlay: sourceOverlay } : {}),
           request,
           ...(sourceThread ? { thread: sourceThread } : {}),
@@ -41216,6 +41345,7 @@ export class DesktopBackendRegistry {
             (request.args.leaveLocalBranch ?? "") &&
           (duplicateMove.newBranchName ?? "") ===
             (request.args.newBranchName ?? "") &&
+          (duplicateMove.baseRef ?? "") === (request.args.baseRef ?? "") &&
           path.resolve(duplicateMove.sourcePath ?? "") ===
             path.resolve(candidate.sourcePath ?? "") &&
           path.resolve(duplicateMove.repositoryPath ?? "") ===
@@ -41286,6 +41416,7 @@ export class DesktopBackendRegistry {
       ...(request.args.newBranchName
         ? { newBranchName: request.args.newBranchName }
         : {}),
+      ...(request.args.baseRef ? { baseRef: request.args.baseRef } : {}),
       createdAt: now,
       updatedAt: now,
       message:
@@ -41313,6 +41444,7 @@ export class DesktopBackendRegistry {
   }
 
   private resolveThreadWorkspaceMoveCandidate(params: {
+    direction: ThreadWorkspaceHandoffDirection;
     overlay?: ThreadOverlayState;
     request: PwrAgentThreadOrchestrationRequest<"move_thread_workspace">;
     thread?: AppServerThreadSummary;
@@ -41388,7 +41520,7 @@ export class DesktopBackendRegistry {
     const candidate = this.resolveHandoffWorkspaceCandidate(inferredThread, {
       backend: params.request.context.backend,
       threadId: params.request.context.threadId,
-      direction: args.direction ?? "local-to-worktree",
+      direction: params.direction,
       ...(args.repositoryPath ? { repositoryPath: args.repositoryPath } : {}),
       ...(args.sourceBranch ? { sourceBranch: args.sourceBranch } : {}),
       ...(args.sourcePath ? { sourcePath: args.sourcePath } : {}),
@@ -41484,6 +41616,7 @@ export class DesktopBackendRegistry {
         ...(move.sourceBranch ? { sourceBranch: move.sourceBranch } : {}),
         ...(move.leaveLocalBranch ? { leaveLocalBranch: move.leaveLocalBranch } : {}),
         ...(move.newBranchName ? { newBranchName: move.newBranchName } : {}),
+        ...(move.baseRef ? { baseRef: move.baseRef } : {}),
       });
       this.updatePendingThreadWorkspaceMove(workspaceMoveId, {
         phase: "updating_metadata",
@@ -45813,6 +45946,89 @@ export class DesktopBackendRegistry {
     return summary;
   }
 
+  /**
+   * Why `mutate_thread` would refuse a parent change, checked before anything
+   * changes and on a dry run too. No `parent` means a detach.
+   */
+  private async checkThreadParentChange(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    threadLabel: string;
+    parent?: { backend: AppServerBackendKind; threadId: string };
+  }): Promise<PwrAgentThreadInspectionResponse | undefined> {
+    if (!this.agentThreadActions?.setThreadParent) {
+      return threadInspectionFailure(
+        "internal_error",
+        "Thread grouping is not available in this process.",
+      );
+    }
+    if (!params.parent) {
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      return overlay?.parentThreadId?.trim()
+        ? undefined
+        : threadInspectionFailure(
+            "invalid_arguments",
+            `${params.threadLabel} is not a sub-thread.`,
+          );
+    }
+    const parent = params.parent;
+    const parentLabel = `Parent thread ${parent.backend}:${parent.threadId}`;
+    // Only existence and archive state matter here, so the provider's own
+    // lists answer it without an inspection summary's enrichment. A list
+    // that fails is reported as such, not as a missing parent.
+    let archived: boolean;
+    try {
+      const listed = async (archivedList: boolean) => (await this.listThreads({
+        backend: parent.backend,
+        archived: archivedList,
+        callerReason: archivedList ? "agent-thread-parent:archived" : "agent-thread-parent",
+      })).some((thread) => thread.id === parent.threadId);
+      if (await listed(false)) {
+        archived = false;
+      } else if (await listed(true)) {
+        archived = true;
+      } else {
+        return threadInspectionFailure(
+          "not_found",
+          `${parentLabel} was not found on this instance.`,
+        );
+      }
+    } catch (error) {
+      return federatedThreadInspectionFailure(error);
+    }
+    // Archiving a parent ungroups its children, so the link would not last.
+    if (archived) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        `${parentLabel} is archived.`,
+      );
+    }
+    // The same walk the store repeats inside its write.
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const seen = new Set<string>();
+    let cursor: { backend: AppServerBackendKind; threadId: string } | undefined = params.parent;
+    while (cursor && seen.size < MAX_THREAD_PARENT_CHECK_DEPTH) {
+      const key = buildThreadIdentityKey(cursor.backend, cursor.threadId);
+      if (key === threadKey) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          `${parentLabel} is a sub-thread of ${params.threadLabel}. A thread cannot become a sub-thread of its own sub-thread.`,
+        );
+      }
+      if (seen.has(key)) break;
+      seen.add(key);
+      const overlay = await this.overlayStore.getThreadOverlayState(cursor);
+      const nextId = overlay?.parentThreadId?.trim();
+      cursor = nextId && !overlay!.parentThreadInstanceId
+        ? { backend: overlay!.parentThreadBackend ?? cursor.backend, threadId: nextId }
+        : undefined;
+    }
+    return undefined;
+  }
+
   private async resolvePullRequestReferenceForThread(
     args: AttachThreadPullRequestToolArgs,
     summary: ThreadInspectionSummary,
@@ -45956,6 +46172,25 @@ export class DesktopBackendRegistry {
     }
   }
 
+  async mutateThreadParentV1(
+    request: MutateThreadParentV1Request,
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    if (typeof request.dryRun !== "boolean") {
+      return threadInspectionFailure("invalid_arguments", "dryRun must be a boolean.");
+    }
+    // Whitelist the versioned fields: an inbound peer cannot forward another
+    // mutation or a routing hint through this grouping-only method.
+    return await this.handleMutateThreadInspectionRequest({
+      backend: request.backend,
+      threadId: request.threadId,
+      ...(Object.hasOwn(request, "parentThreadId") ? { parentThreadId: request.parentThreadId } : {}),
+      ...(Object.hasOwn(request, "parentBackend") ? { parentBackend: request.parentBackend } : {}),
+      ...(Object.hasOwn(request, "detachFromParent") ? { detachFromParent: request.detachFromParent } : {}),
+      dryRun: request.dryRun,
+      includeRemote: false,
+    });
+  }
+
   private async handleMutateThreadInspectionRequest(
     args: MutateThreadToolArgs,
     context?: PwrAgentThreadInspectionRequest["context"],
@@ -46087,6 +46322,61 @@ export class DesktopBackendRegistry {
     const lockNote = lockNoteProvided ? normalizeThreadLockNote(args.lockNote) ?? "" : undefined;
     const locked = args.locked ?? (lockNoteProvided ? true : undefined);
 
+    let parentThreadId: string | undefined;
+    if (Object.hasOwn(args, "parentThreadId")) {
+      if (typeof args.parentThreadId !== "string" || !args.parentThreadId.trim()) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          "parentThreadId must be a non-empty string when provided.",
+        );
+      }
+      parentThreadId = args.parentThreadId.trim();
+    }
+    if (Object.hasOwn(args, "parentBackend")) {
+      if (typeof args.parentBackend !== "string" || !isAppServerBackendKind(args.parentBackend)) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          "parentBackend must be a known PwrAgent backend when provided.",
+        );
+      }
+      if (parentThreadId === undefined) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          "parentBackend requires parentThreadId.",
+        );
+      }
+    }
+    if (Object.hasOwn(args, "detachFromParent") && typeof args.detachFromParent !== "boolean") {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "detachFromParent must be a boolean when provided.",
+      );
+    }
+    const detachFromParent = args.detachFromParent === true;
+    const parentBackend = parentThreadId !== undefined
+      ? args.parentBackend ?? args.backend
+      : undefined;
+    if (parentThreadId !== undefined && detachFromParent) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "detachFromParent cannot be combined with parentThreadId.",
+      );
+    }
+    if (parentThreadId === threadId && parentBackend === args.backend) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "A thread cannot be its own parent.",
+      );
+    }
+    // A sub-thread carries no pin: the parent change clears it.
+    if (parentThreadId !== undefined && pinned === true) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "pinned true cannot be combined with parentThreadId. A sub-thread is not pinned.",
+      );
+    }
+    const parentChange = parentThreadId !== undefined || detachFromParent;
+
     const changes: ThreadMutationAppliedChange[] = [];
     if (title !== undefined) {
       changes.push({
@@ -46151,6 +46441,15 @@ export class DesktopBackendRegistry {
         to: lockNote,
       });
     }
+    if (parentChange) {
+      changes.push({
+        field: "parent",
+        status: dryRun ? "would_apply" : "applied",
+        to: parentThreadId !== undefined
+          ? { backend: parentBackend, threadId: parentThreadId }
+          : null,
+      });
+    }
 
     if (changes.length === 0) {
       return {
@@ -46158,7 +46457,7 @@ export class DesktopBackendRegistry {
         error: {
           code: "invalid_arguments",
           message:
-            "At least one mutation field is required: title, model, serviceTier, reasoningEffort, fastMode, executionMode, projectPath, archive, pinned, unread, locked, or lockNote.",
+            "At least one mutation field is required: title, model, serviceTier, reasoningEffort, fastMode, executionMode, projectPath, archive, pinned, unread, locked, lockNote, parentThreadId, or detachFromParent.",
         },
       };
     }
@@ -46210,6 +46509,17 @@ export class DesktopBackendRegistry {
       | { instanceId: string; instanceLabel: string }
       | undefined;
     if (!mutateLocally && includeRemote && this.federatedThreadMutationHandler) {
+      if (parentChange && context) {
+        // An omitted instanceId can still resolve to a peer. Recheck scope
+        // with the trusted invoking turn before the handler can mutate it.
+        const denied = await this.dynamicToolPermissionDenied(context.backend, "thread_inspection", {
+          threadId: context.threadId,
+          turnId: context.turnId,
+          tool: "mutate_thread",
+          arguments: { ...args, includeRemote: true },
+        });
+        if (denied) return threadInspectionFailure("forbidden", `Missing permission: ${denied}.`);
+      }
       try {
         remoteOwner = await this.federatedThreadMutationHandler({
           backend: args.backend,
@@ -46224,6 +46534,8 @@ export class DesktopBackendRegistry {
           ...(unread !== undefined ? { unread } : {}),
           ...(locked !== undefined ? { locked } : {}),
           ...(lockNote !== undefined ? { lockNote } : {}),
+          ...(parentThreadId !== undefined ? { parentThreadId, parentBackend } : {}),
+          ...(detachFromParent ? { detachFromParent: true } : {}),
           dryRun,
         });
       } catch (error) {
@@ -46286,6 +46598,17 @@ export class DesktopBackendRegistry {
           "Pinning and read state are not available in this process.",
         );
       }
+      if (parentChange) {
+        const refusal = await this.checkThreadParentChange({
+          backend: args.backend,
+          threadId,
+          threadLabel,
+          parent: parentThreadId !== undefined
+            ? { backend: parentBackend!, threadId: parentThreadId }
+            : undefined,
+        });
+        if (refusal) return refusal;
+      }
     }
 
     if (mutateLocally && archive !== undefined && !dryRun) {
@@ -46300,6 +46623,25 @@ export class DesktopBackendRegistry {
         }
       } catch (error) {
         return federatedThreadInspectionFailure(error);
+      }
+    }
+
+    // The parent lands first. The store repeats the loop check inside its
+    // write, so a link made since the check above is refused before
+    // anything else here has changed.
+    if (mutateLocally && parentChange && !dryRun) {
+      try {
+        await this.agentThreadActions!.setThreadParent!({
+          backend: args.backend,
+          threadId,
+          parentThreadId: parentThreadId ?? null,
+          parentThreadBackend: parentBackend ?? null,
+        });
+      } catch (error) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          error instanceof Error ? error.message : String(error),
+        );
       }
     }
 
@@ -48910,6 +49252,8 @@ function readThreadInspectionBackend(
 
 const DEFAULT_THREAD_INSPECTION_READ_LIMIT = 10;
 const MAX_THREAD_INSPECTION_READ_LIMIT = 20;
+/** How far `mutate_thread` follows parent links when it checks for a loop. */
+const MAX_THREAD_PARENT_CHECK_DEPTH = 64;
 const DEFAULT_THREAD_INSPECTION_READ_ENTRY_CHARS = 4_000;
 const MAX_THREAD_INSPECTION_READ_ENTRY_CHARS = 20_000;
 
@@ -49368,6 +49712,7 @@ function pendingThreadWorkspaceMoveMatchesQuery(
     move.sourceBranch,
     move.leaveLocalBranch,
     move.newBranchName,
+    move.baseRef,
     move.targetPath,
     move.branch,
     move.linkedDirectory?.label,
@@ -49695,18 +50040,30 @@ function forgeToolApprovalMessage(operation: ForgePrToolOperation, args: ForgePr
   }
 }
 
-/** The card's argument rows: bodies cut to a preview, attachments by file name. */
-function forgeToolParamsDisplay(args: ForgePrToolArgs): Array<{ name: string; value: string }> {
-  const rows: Array<{ name: string; value: string }> = [];
+/**
+ * The card's argument rows. Text goes out whole, because the operator is
+ * approving exactly what gets posted; the contract already caps a body at
+ * FORGE_BODY_MAX_CHARS. A body the forge renders as Markdown says so, and each
+ * inline review comment is its own row keyed by its location.
+ */
+function forgeToolParamsDisplay(args: ForgePrToolArgs): Array<{ name: string; value: string; format?: "markdown"; location?: string }> {
+  const rows: Array<{ name: string; value: string; format?: "markdown"; location?: string }> = [];
   for (const [name, value] of Object.entries(args)) {
     if (value === undefined || name === "repository") continue;
-    if (name === "body" || name === "commitMessage") {
-      const textValue = String(value);
-      rows.push({ name, value: textValue.length > 240 ? `${textValue.slice(0, 240)}… (${textValue.length.toLocaleString("en-US")} characters)` : textValue });
+    if (name === "body") {
+      rows.push({ name, value: String(value), format: "markdown" });
+    } else if (name === "commitMessage") {
+      rows.push({ name, value: String(value) });
     } else if (name === "attachments" && Array.isArray(value)) {
       rows.push({ name, value: value.map((item) => String((item as { path?: unknown }).path ?? "").split("/").pop()).join(", ") });
     } else if (name === "comments" && Array.isArray(value)) {
-      rows.push({ name, value: `${value.length} inline comment${value.length === 1 ? "" : "s"}` });
+      for (const comment of value as ForgeReviewComment[]) {
+        const lines = comment.startLine && comment.startLine !== comment.line ? `${comment.startLine}–${comment.line}` : String(comment.line);
+        // The card shows the location in the key column. It travels apart
+        // from the name, because the secret-name checks read the name and
+        // label, and a file such as password-reset.ts is not a credential.
+        rows.push({ name: "comment", location: `${comment.path}:${lines}`, value: String(comment.body ?? ""), format: "markdown" });
+      }
     } else {
       rows.push({ name, value: typeof value === "string" ? value : JSON.stringify(value) });
     }

@@ -87,6 +87,7 @@ import {
   threadSummaryIdentityKey,
 } from "../../lib/federated-thread-events";
 import { ThreadTodoStack } from "../thread-todos/ThreadTodoStack";
+import type { ThreadTodoRevealRequest } from "../thread-todos/thread-todo-reveal";
 import type {
   ThreadTodoDoHereOptions,
   ThreadTodoResolveOptions,
@@ -988,6 +989,8 @@ export type ThreadViewProps = {
   starMap?: StarMapToggleControls;
   /** Thread to-do cards, owned by App. Absent in a window fronting a peer. */
   threadTodos?: ThreadTodosView;
+  /** A thread row's to-do chip asked to show this thread's cards. */
+  threadTodoRevealRequest?: ThreadTodoRevealRequest;
   /** In-thread find bar (⌘F): open state + close callback, owned by App. */
   findOpen?: boolean;
   onFindOpenChange?: (open: boolean) => void;
@@ -4605,6 +4608,7 @@ export function ThreadView(props: ThreadViewProps) {
           onStartReview={startTodoReview}
           onDoHere={doTodoHere}
           findOpen={props.findOpen}
+          revealRequest={props.threadTodoRevealRequest}
         />
       ) : null}
       {props.findOpen ? (
@@ -4839,6 +4843,7 @@ export function ThreadView(props: ThreadViewProps) {
             // The card's own answer path: start, steer or queue.
             onAnswerQuestion: handleAnswerAsyncQuestions,
             sentQuestionAnswers: threadSentAsyncQuestionAnswers,
+            revealRequest: props.threadTodoRevealRequest,
           } : undefined,
         }
       : {};

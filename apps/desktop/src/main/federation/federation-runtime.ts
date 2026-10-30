@@ -295,7 +295,8 @@ import {
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
-import { readThreadFamilyPricing } from "../app-server/thread-family-pricing";
+import { threadFamilyPricingForPeer } from "../app-server/thread-family-pricing";
+import { createLocalThreadFamilyPricingReader } from "../app-server/thread-family-pricing-source";
 import { createScratchProjectDirectory, resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { dispatchStarMapIntake } from "../app-server/star-map-intake";
 import { spawnTerminalPty } from "../terminal/integrated-terminal-service";
@@ -604,6 +605,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "remote_window",
   "thread_navigation",
   "thread_grouping",
+  "thread_parent_mutation_v1",
   "thread_detail",
   "turn_control",
   "durable_turn_requests_v1",
@@ -639,6 +641,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_mcp_connections",
   "thread_todos",
   "thread_todo_feed",
+  "thread_todo_dispatch_target",
   "operator_questions",
   "operator_requests",
   "thread_display_bulk_reads",
@@ -7089,11 +7092,17 @@ function localBackendOperations(): FederationBackendOperations {
       return await getDesktopBackendRegistry().readUsageActivity(request);
     },
     async readThreadFamilyPricing(request) {
-      return await readThreadFamilyPricing({
-        request: { backend: request.backend, threadId: request.threadId },
-        loadIndex: () => loadLocalNavigationQueryIndex({ callerReason: "thread-family-pricing" }),
-        readSummaries: (threads) => getDesktopOverlayStore().readThreadPricingSummaries(threads),
-      });
+      // An owner answers for its own threads only. Its pins of other
+      // instances' sub-threads go back as referrals; the reader asks those
+      // owners itself, so a read never fans out from here.
+      let localInstanceId: string | undefined;
+      try {
+        localInstanceId = getDesktopFederationRuntime().localFederationInstanceId();
+      } catch {
+        // Pins still resolve by their recorded owner without it.
+      }
+      return threadFamilyPricingForPeer(await createLocalThreadFamilyPricingReader(localInstanceId)(
+        { backend: request.backend, threadId: request.threadId }));
     },
     async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {
       return await getDesktopBackendRegistry().analyzeUsageActivity(request);
@@ -7317,6 +7326,9 @@ function localBackendOperations(): FederationBackendOperations {
         },
       });
       return { mounted: true };
+    },
+    async mutateThreadParentV1(request) {
+      return await getDesktopBackendRegistry().mutateThreadParentV1(request);
     },
     async setThreadParent(
       request: SetThreadParentRequest,

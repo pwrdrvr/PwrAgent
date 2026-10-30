@@ -246,6 +246,17 @@ it.each(["unstaged", "staged", "untracked"])("blocks %s non-ignored changes befo
   await expect(exportGitHandoff(source)).rejects.toThrow("Commit or stash");
 });
 
+it("does not treat a nested worktree of the same repository as a workspace change", async () => {
+  const { source } = await fixture();
+  await git(source, "worktree", "add", "-b", "agent", path.join(source, ".claude", "worktrees", "agent"));
+  const snapshot = await exportGitHandoff(source);
+  expect(snapshot.head).toBe((await git(source, "rev-parse", "HEAD")).trim());
+
+  // A real file beside it still blocks the transfer.
+  await writeFile(path.join(source, ".claude", "notes.md"), "uncommitted\n");
+  await expect(exportGitHandoff(source)).rejects.toThrow("Commit or stash");
+});
+
 it("blocks unpushed commits even when the receiver has source objects", async () => {
   const { source } = await fixture();
   await git(source, "commit", "--allow-empty", "-m", "unpublished");

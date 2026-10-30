@@ -136,6 +136,36 @@ describe("backend forge tool dispatch", () => {
     expect(attach).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", url: "https://github.com/fixture/project/pull/9" });
   });
 
+  it("shows the whole body and every inline comment on the approval card", async () => {
+    const body = `## Summary\n\n${"Moves every macOS job onto the hosted runner. ".repeat(20)}\n\n<!-- end -->`;
+    const pr = nextApproval();
+    const opening = internals.handleServerRequest("codex", request("create_pull_request", { title: "ci: hosted runners", body }, "call-pr-body"));
+    const prNotification = await pr;
+    expect(prNotification.params._meta).toMatchObject({ tool_params_display: [{ name: "title", value: "ci: hosted runners" }, { name: "body", value: body, format: "markdown" }] });
+    await answer(prNotification, "decline");
+    await opening;
+
+    const review = nextApproval();
+    const reviewing = internals.handleServerRequest("codex", request("submit_pull_request_review", {
+      number: 9,
+      event: "COMMENT",
+      body: "Two notes.",
+      comments: [
+        { path: "src/auth/password-reset.ts", line: 41, body: "Rename **this**." },
+        { path: "scripts/sign.mjs", startLine: 88, line: 96, body: "Keep the unlock." },
+      ],
+    }, "call-review-comments"));
+    const reviewNotification = await review;
+    expect((reviewNotification.params._meta as { tool_params_display: unknown[] }).tool_params_display).toEqual(expect.arrayContaining([
+      { name: "body", value: "Two notes.", format: "markdown" },
+      { name: "comment", location: "src/auth/password-reset.ts:41", value: "Rename **this**.", format: "markdown" },
+      { name: "comment", location: "scripts/sign.mjs:88–96", value: "Keep the unlock.", format: "markdown" },
+    ]));
+    await answer(reviewNotification, "decline");
+    await reviewing;
+    expect(github).not.toHaveBeenCalled();
+  });
+
   it("budgets creating a pull request and attaching it through the real SQLite store", async () => {
     policy.access.pull_requests = "allow";
     internals.handleAttachThreadPullRequestInspectionRequest = realAttach;

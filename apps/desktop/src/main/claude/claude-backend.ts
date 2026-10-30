@@ -9,8 +9,9 @@ import {
 import type {
   AgentEvent, AppServerAvailableCommandSummary, AppServerBackgroundTask, AppServerCollaborationModeRequest,
   AppServerPendingRequestNotification, AppServerReviewContext,
-  AppServerThreadActivityEntry, AppServerThreadEntry, AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadPlanEntry,
-  AppServerThreadPlanStep, AppServerThreadReplay, AppServerThreadReviewEntry, AppServerThreadSummary,
+  AppServerThreadActivityEntry, AppServerThreadEntry, AppServerThreadImagePart, AppServerThreadMessageEntry,
+  AppServerThreadMessagePart, AppServerThreadPlanEntry, AppServerThreadPlanStep, AppServerThreadReplay,
+  AppServerThreadReviewEntry, AppServerThreadSummary,
   AppServerTurnInputItem, BackendModelOption, LinkedDirectorySummary, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode,
   CodexMcpServerSummary, PreviewThreadRewindResponse, SteerTurnDelivery, ThreadRewindMode, ThreadRewindTarget, UsageLimitObservation,
 } from "@pwragent/shared";
@@ -30,7 +31,10 @@ import { claudeCommandActivity, groupClaudeActivities } from "./claude-activity"
 import { backUpRewindFiles, recordRewoundFiles, restoreRewindFiles } from "./claude-rewind-backup";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 import { ClaudeTaskTracker, claudeTaskRow, type ClaudeTaskSettlement } from "./claude-tasks";
-import { CLAUDE_TODO_TOOL, claudeFileDiff, claudeTodoSteps, claudeToolDetail, claudeTurnDiff } from "./claude-tool-activity";
+import {
+  CLAUDE_TODO_TOOL, claudeFileDiff, claudeShellCommand, claudeTodoSteps, claudeToolCallArguments, claudeToolCallDetail,
+  claudeToolDetail, claudeToolResultContent, claudeTurnDiff,
+} from "./claude-tool-activity";
 import { normalizeClaudeTitle, requestClaudeTitle, type ClaudeTitleQuery } from "./claude-titles";
 import {
   CLAUDE_REPORT_FINDINGS_TOOL, claudeReportFindingsHooks, claudeReviewOutput, isClaudeOutcomeReport, matchClaudeFindingOutcomes,
@@ -508,7 +512,6 @@ export class ClaudeBackend {
         id, source: "claude", title: "Untitled thread", titleSource: "fallback",
         createdAt: now, updatedAt: now, model: params.model, executionMode: params.executionMode,
         linkedDirectories: params.linkedDirectories ?? [{ id: params.cwd, kind: "local", label: path.basename(params.cwd), path: params.cwd }],
-        workspaceHandoff: { available: false, unavailableReason: "Start a new Claude thread in the target workspace." },
       },
     });
     return { threadId: id };
@@ -541,7 +544,6 @@ export class ClaudeBackend {
         id, source: "claude", title: `${source.thread.title} (fork)`, titleSource: "derived",
         createdAt: now, updatedAt: now, model: params.model ?? source.thread.model, executionMode: params.executionMode,
         linkedDirectories: params.linkedDirectories ?? [{ id: params.cwd, kind: "local", label: path.basename(params.cwd), path: params.cwd }],
-        workspaceHandoff: { available: false, unavailableReason: "Start a new Claude thread in the target workspace." },
       },
       forkFromSdkSessionId,
       // A pending rewind point is where the source's conversation continues.
@@ -560,7 +562,9 @@ export class ClaudeBackend {
 
   async listThreads(params: { archived?: boolean; filter?: string } = {}): Promise<AppServerThreadSummary[]> {
     const filter = params.filter?.toLowerCase();
-    return (await this.store.list()).map(({ thread }) => ({
+    // Metadata from builds that could not move a Claude thread still carries
+    // their refusal; this build can, so drop it.
+    return (await this.store.list()).map(({ thread: { workspaceHandoff: _refusal, ...thread } }) => ({
       ...thread, threadStatus: this.sessions.get(thread.id)?.turn ? "active" as const : "idle" as const,
     })).filter((thread) => Boolean(thread.archivedAt) === Boolean(params.archived)
       && (!filter || thread.title.toLowerCase().includes(filter) || thread.id.includes(filter)));
@@ -599,6 +603,52 @@ export class ClaudeBackend {
     if (live) throw new Error("Stop Claude's background tasks before archiving.");
     const session = await this.store.read(threadId);
     session.thread.archivedAt = archived ? Date.now() : undefined;
+    await this.store.save(session);
+  }
+
+  /**
+   * Throws when the thread cannot change folders now. A move relaunches
+   * Claude in the new folder, and closing the old process ends its tasks.
+   * Check before moving any files, so a refusal leaves everything in place.
+   */
+  assertWorkspaceMovable(threadId: string): void {
+    if (this.rewinding.has(threadId) || this.rewindQueries.has(threadId)) {
+      throw new Error("Claude is rewinding this thread. Try again when it finishes.");
+    }
+    const live = this.sessions.get(threadId);
+    if (live?.turn || (!live && this.starting.has(threadId))) {
+      throw new Error("Wait for the active Claude turn to finish before moving this thread.");
+    }
+    if (live && live.tasks.active().length > 0) {
+      throw new Error("Stop Claude's background tasks before moving this thread.");
+    }
+  }
+
+  /**
+   * Continue the thread in another folder. The next turn resumes the same
+   * Claude session there: the conversation carries over, and Claude's tools
+   * and environment use the new folder. Claude keeps the session file under
+   * the folder that created it, which `sdkSessionDir` records.
+   */
+  async moveWorkspace(params: {
+    threadId: string; cwd: string; linkedDirectory: LinkedDirectorySummary;
+  }): Promise<void> {
+    this.assertWorkspaceMovable(params.threadId);
+    const live = this.sessions.get(params.threadId);
+    // An idle process keeps its launch folder; the next turn relaunches.
+    if (live) await this.closeSession(live);
+    const session = await this.store.read(params.threadId);
+    const previous = path.resolve(session.cwd);
+    // Replace the directory the thread worked in; keep its other links.
+    const others = session.thread.linkedDirectories.filter((directory) => {
+      const activePath = directory.kind === "worktree" ? directory.worktreePath ?? directory.path : directory.path;
+      return !activePath || path.resolve(activePath) !== previous;
+    });
+    // The session file stays under the folder that created it.
+    if (session.sdkSessionId && !session.sdkSessionDir) session.sdkSessionDir = session.cwd;
+    session.cwd = params.cwd;
+    session.thread.linkedDirectories = [params.linkedDirectory, ...others];
+    session.thread.updatedAt = Date.now();
     await this.store.save(session);
   }
 
@@ -1033,15 +1083,19 @@ export class ClaudeBackend {
           const firstInit = !live.initialized;
           live.initialized = true;
           if (firstInit || session.sdkSessionId !== message.session_id) {
+            // A new session's file is written under this query's cwd.
+            const newSession = session.sdkSessionId !== message.session_id;
             session.sdkSessionId = message.session_id;
             // The query resumed at a rewind's point; later resumes follow
             // the branch it now writes.
             session.resumeSessionAt = undefined;
             session.forkFromSdkSessionId = undefined;
+            if (newSession) session.sdkSessionDir = undefined;
             const current = await this.store.read(threadId);
             current.sdkSessionId = message.session_id;
             delete current.resumeSessionAt;
             delete current.forkFromSdkSessionId;
+            if (newSession) delete current.sdkSessionDir;
             await this.store.save(current);
             // A new turn ends every rewind's undo; drop the files kept for one.
             if (current.rewinds?.some((rewind) => rewind.fileBackup)) {
@@ -1438,7 +1492,7 @@ export class ClaudeBackend {
   private taskRows(live: LiveSession): AppServerBackgroundTask[] {
     return live.tasks.active().map((task) => {
       const row = task.toolUseId ? live.toolRows.get(task.toolUseId) : undefined;
-      const command = row?.entry.details[0]?.command?.rawCommand;
+      const command = claudeShellCommand(row?.entry.details[0]);
       return claudeTaskRow(task, { cwd: live.session.cwd, ...(command !== undefined ? { command } : {}) });
     });
   }
@@ -1455,14 +1509,19 @@ export class ClaudeBackend {
     const { entry } = row;
     const threadId = live.session.thread.id;
     entry.status = task.status === "completed" ? "completed" : task.status === "stopped" ? "cancelled" : "failed";
-    const command = entry.details[0].command?.rawCommand;
+    const command = claudeShellCommand(entry.details[0]);
+    const toolCall = entry.details[0].command?.source === "tool" ? entry.details[0].command : undefined;
     const outputId = `${entry.id}:output`;
-    const previous = command !== undefined
+    const previous = command !== undefined || toolCall
       ? entry.details[0].command?.output
       : entry.details.find((detail) => detail.id === outputId)?.markdown;
     const output = [previous, summary].filter(Boolean).join("\n\n");
     if (command !== undefined) {
       entry.details = claudeCommandActivity({ id: entry.id, command, status: entry.status, output }).details;
+    } else if (toolCall) {
+      entry.details = [{
+        ...entry.details[0], status: entry.status, command: { ...toolCall, ...(output ? { output } : {}) },
+      }, ...entry.details.slice(1)];
     } else {
       entry.details = [...entry.details.filter((detail) => detail.id !== outputId), {
         id: outputId, kind: entry.details[0].kind, label: `${entry.summary} output`, markdown: output, status: entry.status,
@@ -1527,7 +1586,9 @@ export class ClaudeBackend {
       let title: string | undefined;
       if (live.titleEnv?.CLAUDE_CONFIG_DIR === process.env.CLAUDE_CONFIG_DIR) {
         try {
-          const info = await (this.options.getSessionInfo ?? getSessionInfo)(session.sdkSessionId, { dir: session.cwd });
+          const info = await (this.options.getSessionInfo ?? getSessionInfo)(session.sdkSessionId, {
+            dir: session.sdkSessionDir ?? session.cwd,
+          });
           title = normalizeClaudeTitle(info?.customTitle);
         } catch {
           // Missing/unreadable metadata must not disable the query's native
@@ -1884,17 +1945,12 @@ export class ClaudeBackend {
         }
         const input = block.input as Record<string, unknown>;
         const command = block.name === "Bash" && typeof input.command === "string" ? input.command : undefined;
-        const detail = command === undefined
-          ? claudeToolDetail({ id: block.id, name: block.name, input, status: "in_progress" }) : undefined;
+        const params = { id: block.id, name: block.name, input, status: "in_progress" as const };
+        const detail = command === undefined ? claudeToolDetail(params) ?? claudeToolCallDetail(params) : undefined;
         const activity: AppServerThreadActivityEntry = {
           ...(command !== undefined
             ? claudeCommandActivity({ id: block.id, command, status: "in_progress" })
-            : detail
-              ? { type: "activity" as const, id: block.id, summary: detail.label, status: "in_progress" as const, details: [detail] }
-              : {
-                type: "activity" as const, id: block.id, summary: block.name, status: "in_progress" as const,
-                details: [{ id: block.id, kind: "read" as const, label: block.name, markdown: JSON.stringify(input) }],
-              }),
+            : { type: "activity" as const, id: block.id, summary: detail!.label, status: "in_progress" as const, details: [detail!] }),
           createdAt: Date.now(), turn: { id: turnId },
         };
         turn.entries.set(block.id, activity);
@@ -1904,7 +1960,8 @@ export class ClaudeBackend {
         const item = {
           id: block.id, status: "in_progress",
           ...(command !== undefined ? { type: "commandExecution", command }
-            : { type: "dynamicToolCall", toolName: block.name, arguments: input }),
+            : { type: "dynamicToolCall", arguments: input,
+              toolName: detail?.command?.source === "tool" ? detail.command.rawCommand : block.name }),
         };
         await this.emit({ method: "item/started", params: { threadId, turnId, item } });
       }
@@ -1924,13 +1981,13 @@ export class ClaudeBackend {
             continue;
           }
           // A rejected report stays visible as the failed tool call it was.
+          const detail = claudeToolCallDetail({
+            id: block.tool_use_id, name: CLAUDE_REPORT_FINDINGS_TOOL,
+            input: pendingReport.input as Record<string, unknown>, status: "in_progress",
+          });
           turn.entries.set(block.tool_use_id, {
-            type: "activity", id: block.tool_use_id, summary: CLAUDE_REPORT_FINDINGS_TOOL, status: "in_progress",
-            details: [{
-              id: block.tool_use_id, kind: "read", label: CLAUDE_REPORT_FINDINGS_TOOL,
-              markdown: JSON.stringify(pendingReport.input),
-            }],
-            createdAt: Date.now(), turn: { id: turnId },
+            type: "activity", id: block.tool_use_id, summary: detail.label, status: "in_progress",
+            details: [detail], createdAt: Date.now(), turn: { id: turnId },
           });
         }
         const entry = turn.entries.get(block.tool_use_id);
@@ -1942,13 +1999,22 @@ export class ClaudeBackend {
         if (launchedTask) live.launchedToolUseIds.add(block.tool_use_id);
         else live.tasks.settleForeground(block.tool_use_id);
         entry.status = block.is_error ? "failed" : launchedTask ? "in_progress" : "completed";
-        const output = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
-        const command = entry.details[0].command?.rawCommand;
+        // An image block is drawn on the row, never shown as its base64.
+        const { text: output, images } = claudeToolResultContent(block.content, entry.summary);
+        const command = claudeShellCommand(entry.details[0]);
+        const toolCall = entry.details[0].command?.source === "tool" ? entry.details[0] : undefined;
         // A successful edit shows its diff instead of the tool's acknowledgement.
         const edit = entry.details[0].kind === "write" && !block.is_error
           ? claudeFileDiff(message.tool_use_result, live.session.cwd) : undefined;
         if (command !== undefined) {
-          entry.details = claudeCommandActivity({ id: entry.id, command, status: entry.status, output }).details;
+          const details = claudeCommandActivity({ id: entry.id, command, status: entry.status, output }).details;
+          entry.details = images.length ? [{ ...details[0], images }, ...details.slice(1)] : details;
+        } else if (toolCall?.command) {
+          entry.details = [{
+            ...toolCall, status: entry.status,
+            command: { ...toolCall.command, ...(output ? { output } : {}) },
+            ...(images.length ? { images } : {}),
+          }, ...entry.details.slice(1)];
         } else if (edit) {
           entry.details = [{ ...entry.details[0], status: entry.status, fileDiff: edit.fileDiff }];
           if (edit.diff) {
@@ -1959,19 +2025,16 @@ export class ClaudeBackend {
           // Keep the invocation when updating generic tools, too.
           const outputId = `${entry.id}:output`;
           entry.details = [...entry.details.filter((detail) => detail.id !== outputId), {
-            id: outputId, kind: entry.details[0].kind, label: `${entry.summary} output`, markdown: output, status: entry.status,
+            id: outputId, kind: entry.details[0].kind, label: `${entry.summary} output`,
+            ...(output || !images.length ? { markdown: output } : {}),
+            ...(images.length ? { images } : {}),
+            status: entry.status,
           }];
         }
         await this.store.append(threadId, [entry]);
         turn.hasCompletedToolActivity = true;
         if (launchedTask) continue;
-        const item = {
-          id: entry.id, status: entry.status,
-          ...(command !== undefined ? { type: "commandExecution", command, aggregatedOutput: output }
-            : { type: "dynamicToolCall", toolName: entry.summary,
-              contentItems: [{ type: "inputText", text: output }] }),
-        };
-        await this.emit({ method: "item/completed", params: { threadId, turnId, item } });
+        await this.emit({ method: "item/completed", params: { threadId, turnId, item: claudeActivityItem(entry, output, images) } });
       }
     }
   }
@@ -2336,7 +2399,11 @@ export class ClaudeBackend {
   private async rewindPoint(session: ClaudeSession, target: ThreadRewindTarget): Promise<ClaudeRewindPoint> {
     if (!session.sdkSessionId) throw new Error("Claude has no conversation to rewind yet.");
     const promptUuid = target.messageId.startsWith("user:") ? target.messageId.slice("user:".length) : undefined;
-    const messages = (await (this.options.getSessionMessages ?? getSessionMessages)(session.sdkSessionId, { dir: session.cwd }))
+    const read = this.options.getSessionMessages ?? getSessionMessages;
+    const local = await read(session.sdkSessionId, { dir: session.sdkSessionDir ?? session.cwd });
+    // An undone rewind can return to a session written before an earlier
+    // move, so search every project folder when the expected one lacks it.
+    const messages = (local.length > 0 ? local : await read(session.sdkSessionId))
       .filter((message) => message.parent_tool_use_id === null);
     const index = promptUuid ? messages.findIndex((message) => message.uuid === promptUuid && message.type === "user") : -1;
     // A pending rewind already dropped the entries after its point.
@@ -2568,14 +2635,25 @@ function claudeFilesUnavailableReason(detail: string | undefined): string {
 }
 
 /** The item event for a Claude tool row. */
-function claudeActivityItem(entry: AppServerThreadActivityEntry, output?: string) {
-  const command = entry.details[0]?.command?.rawCommand;
+function claudeActivityItem(entry: AppServerThreadActivityEntry, output?: string, images: AppServerThreadImagePart[] = []) {
+  const detail = entry.details[0];
+  const command = claudeShellCommand(detail);
+  if (command !== undefined) {
+    return {
+      id: entry.id, status: entry.status, type: "commandExecution", command,
+      ...(output !== undefined ? { aggregatedOutput: output } : {}),
+    };
+  }
+  const contentItems = [
+    ...(output !== undefined && (output || !images.length) ? [{ type: "inputText", text: output }] : []),
+    ...images.map((image) => ({ type: "inputImage", imageUrl: image.url })),
+  ];
+  const tool = detail?.command?.source === "tool" ? detail.command.rawCommand : undefined;
+  const args = detail ? claudeToolCallArguments(detail) : undefined;
   return {
-    id: entry.id, status: entry.status,
-    ...(command !== undefined
-      ? { type: "commandExecution", command, ...(output !== undefined ? { aggregatedOutput: output } : {}) }
-      : { type: "dynamicToolCall", toolName: entry.summary,
-        ...(output !== undefined ? { contentItems: [{ type: "inputText", text: output }] } : {}) }),
+    id: entry.id, status: entry.status, type: "dynamicToolCall", toolName: tool ?? entry.summary,
+    ...(args ? { arguments: args } : {}),
+    ...(contentItems.length ? { contentItems } : {}),
   };
 }
 

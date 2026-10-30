@@ -1242,7 +1242,9 @@ export async function closeElectronApplication(
       );
     },
     startClose: () => {
-      const closePromise = electronApp.close();
+      const closePromise = process.platform === "win32" && !hasExited(child)
+        ? closeElectronWithSessionDrain(electronApp)
+        : electronApp.close();
       closePromise.catch(() => undefined);
       return closePromise;
     },
@@ -1259,6 +1261,25 @@ export async function closeElectronApplication(
     ),
   });
   return recordElectronCloseSummary(execution, options);
+}
+
+export async function closeElectronWithSessionDrain(
+  electronApp: ElectronApplication,
+): Promise<void> {
+  // Chromium waits for its network process after JS quit has completed. Drain
+  // the sessions while their RPC owners are still alive, within the same
+  // graceful-close deadline, instead of leaving cookie writes to native quit.
+  await electronApp.evaluate(async ({ session, webContents }) => {
+    const sessions = new Set([
+      session.defaultSession,
+      ...webContents.getAllWebContents().map((contents) => contents.session),
+    ]);
+    await Promise.all([...sessions].map(async (ownedSession) => {
+      await ownedSession.closeAllConnections();
+      await ownedSession.cookies.flushStore();
+    }));
+  });
+  await electronApp.close();
 }
 
 export async function captureElectronMainProcess(electronApp: ElectronApplication): Promise<void> {

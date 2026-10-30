@@ -189,6 +189,7 @@ export const THREAD_TODOS_RESOLVE_CHANNEL = "thread-todos:resolve";
 export const THREAD_TODOS_RUN_ACTION_CHANNEL = "thread-todos:run-action";
 export const THREAD_TODOS_LIST_PROJECTS_CHANNEL = "thread-todos:list-projects";
 export const THREAD_TODOS_SET_PROJECT_CHANNEL = "thread-todos:set-project";
+export const THREAD_TODOS_LIST_DISPATCH_ENVIRONMENTS_CHANNEL = "thread-todos:list-dispatch-environments";
 export const THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL = "thread-todos:set-item-checked";
 /**
  * Marker event: a thread's to-do cards changed. Review details refetch with

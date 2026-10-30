@@ -85,6 +85,7 @@ import type {
   LinkedDirectorySummary,
   FederationInstanceId,
   MarkThreadSeenRequest,
+  SetThreadParentRequest,
   SetThreadPinRequest,
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
@@ -461,6 +462,26 @@ async function waitForCondition(predicate: () => boolean): Promise<void> {
     await flushAsync();
   }
   expect(predicate(), "waitForCondition predicate never held").toBe(true);
+}
+
+/**
+ * Settles with the method of the next terminal turn event. Register it before
+ * the action that ends the turn. The registry runs Git before it publishes the
+ * terminal event (the branch check at turn end; a review turn first resolves
+ * its card's provenance). On a loaded Windows runner each Git round took over
+ * half a second, so a polling budget cannot fit. The test timeout bounds this
+ * wait instead.
+ */
+function nextTurnEnd(registry: DesktopBackendRegistry): Promise<string> {
+  return new Promise((resolve) => {
+    const unsubscribe = registry.onEvent((event) => {
+      const { method } = event.notification;
+      if (method === "turn/completed" || method === "turn/failed" || method === "turn/cancelled") {
+        unsubscribe();
+        resolve(method);
+      }
+    });
+  });
 }
 
 async function expectEventually<T>(
@@ -1435,11 +1456,13 @@ function createOverlayStoreMock(params?: {
       threadId,
       directory,
       gitBranch,
+      retainWorktree,
     }: {
       backend: AppServerBackendKind;
       threadId: string;
       directory: ThreadOverlayState["extraLinkedDirectories"][number];
       gitBranch?: string;
+      retainWorktree?: ThreadOverlayState["extraLinkedDirectories"][number];
     }) => {
       const key = `${backend}:${threadId}`;
       const current = overlays.get(key) ?? {
@@ -1448,11 +1471,18 @@ function createOverlayStoreMock(params?: {
         executionMode: "default",
         extraLinkedDirectories: [],
       };
+      const retainedWorktrees = [
+        ...((current as ThreadOverlayState).retainedWorktrees ?? []).filter((retained) =>
+          retained.worktreePath !== directory.worktreePath
+          && retained.worktreePath !== retainWorktree?.worktreePath),
+        ...(retainWorktree ? [retainWorktree] : []),
+      ];
       const next = {
         ...current,
         gitBranch: gitBranch ?? current.gitBranch,
         observedGitBranch: gitBranch ?? current.observedGitBranch,
         extraLinkedDirectories: [directory],
+        retainedWorktrees: retainedWorktrees.length > 0 ? retainedWorktrees : undefined,
       } as ThreadOverlayState;
       overlays.set(key, next);
       return next;
@@ -3372,8 +3402,13 @@ describe("DesktopBackendRegistry", () => {
         } finally {
           await mcp.close();
         }
+        const ended = nextTurnEnd(registry);
+        // The session closes, and revokes the grant, after it reports the turn.
+        const bridgeRevoked = Promise.withResolvers<void>();
+        revokeBridge.mockImplementationOnce(() => bridgeRevoked.resolve());
         await registry.submitServerRequest({ backend: "claude", threadId, requestId: replay.pendingRequest!.params.requestId, response: { decision: "accept" } });
-        await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+        expect(await ended).toBe("turn/completed");
+        await bridgeRevoked.promise;
       }
       expect(revokeBridge).toHaveBeenCalledTimes(2);
       // Each turn checks for a title at initialization and again at completion.
@@ -41249,6 +41284,122 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("carries a fresh-worktree baseRef through a queued move", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "ordinary-thread",
+      title: "Parent Thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/app",
+          kind: "local",
+          label: "app",
+          path: "/repo/app",
+        },
+      ],
+      gitBranch: "feature/handoff",
+      updatedAt: 1000,
+    };
+    const handoff = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "ordinary-thread",
+      direction: "local-to-worktree" as const,
+      workMode: "worktree" as const,
+      branch: "feature/handoff",
+      repositoryPath: "/repo/app",
+      targetPath: "/repo/app/.worktrees/app-feature-handoff",
+      linkedDirectory: {
+        id: "pwragent-handoff:codex:ordinary-thread",
+        kind: "worktree" as const,
+        label: "app",
+        path: "/repo/app",
+        worktreePath: "/repo/app/.worktrees/app-feature-handoff",
+      },
+      warnings: [],
+      completedAt: 1000,
+    }));
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/read", "turn/start"] },
+      threads: [thread],
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:ordinary-thread": {
+            backend: "codex",
+            threadId: "ordinary-thread",
+            executionMode: "default",
+            extraLinkedDirectories: thread.linkedDirectories ?? [],
+          },
+        },
+      }),
+      gitWorkspaceHandoffService: {
+        handoff,
+      } as never,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "move-call-1",
+        requestId: "move-call-1",
+        namespace: "pwragent",
+        tool: "move_thread_workspace",
+        arguments: {
+          sourcePath: "/repo/app",
+          baseRef: "origin/main",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/status/changed",
+        params: {
+          threadId: "ordinary-thread",
+          status: { type: "idle" },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(handoff).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "ordinary-thread",
+        direction: "local-to-worktree",
+        strategy: "detached-changes",
+        repositoryPath: "/repo/app",
+        sourcePath: "/repo/app",
+        baseRef: "origin/main",
+      });
+    });
+    await registry.close();
+  });
+
   it("reports running workspace moves as in-progress quit work", async () => {
     const handoffDeferred = createDeferred<{
       backend: "codex";
@@ -51237,6 +51388,7 @@ script = "printf setup"
         targetActive?: boolean;
         threads?: AppServerThreadSummary[];
         archivedThreads?: AppServerThreadSummary[];
+        overlays?: Record<string, MockOverlayState>;
       } = {},
     ) {
       const codexClient = new MockBackendClient({
@@ -51255,12 +51407,20 @@ script = "printf setup"
             executionMode: "default",
             extraLinkedDirectories: [],
           },
+          ...options.overlays,
         },
       });
       const registry = new DesktopBackendRegistry({
         codexClient,
         overlayStore,
       });
+      const setThreadParent = vi.fn(async (request: SetThreadParentRequest) => ({
+        backend: request.backend ?? "codex",
+        threadId: request.threadId,
+        ...(request.parentThreadId
+          ? { parentThreadId: request.parentThreadId, parentThreadBackend: request.parentThreadBackend ?? "codex" }
+          : {}),
+      }));
       const archiver = vi.fn(async (request: ArchiveThreadRequest) => ({
         backend: request.backend,
         threadId: request.threadId,
@@ -51282,6 +51442,7 @@ script = "printf setup"
         archiveThread: archiver,
         setThreadPin,
         markThreadSeen,
+        setThreadParent,
       });
       const handoff = vi
         .spyOn(registry, "handoffThreadWorkspace")
@@ -51342,9 +51503,184 @@ script = "printf setup"
         overlayStore,
         registry,
         restore,
+        setThreadParent,
         setThreadPin,
       };
     }
+
+    it.each([
+      { parentThreadId: "parent-thread", parentBackend: "claude" },
+      { detachFromParent: true },
+    ])("routes remote parent changes with explicit and discovered owners: %j", async (change) => {
+      const { call, registry, setThreadParent } = await setup();
+      const handler = vi.fn(async () => ({ instanceId: "pwr_remote", instanceLabel: "Remote Mac" }));
+      registry.setFederatedThreadMutationHandler(handler);
+      for (const target of [
+        { threadId: "target-thread", instanceId: "pwr_remote" },
+        { threadId: "remote-thread" },
+      ]) {
+        for (const dryRun of [false, true]) {
+          const result = await call({ ...target, ...change, dryRun });
+          expect(result.success).toBe(true);
+          expect(result.payload.mutation).toMatchObject({
+            ...target, instanceId: "pwr_remote", dryRun,
+            changes: [{ field: "parent", status: dryRun ? "would_apply" : "applied" }],
+          });
+          expect(handler).toHaveBeenLastCalledWith({ backend: "codex", ...target, ...change, dryRun });
+        }
+      }
+      expect(setThreadParent).not.toHaveBeenCalled();
+      const calls = handler.mock.calls.length;
+      const localOnly = await call({ threadId: "remote-thread", ...change, includeRemote: false });
+      expect(localOnly.payload.code).toBe("not_found");
+      expect(handler).toHaveBeenCalledTimes(calls);
+      await registry.close();
+    });
+
+    it("requires remote control after a parent target misses locally, while local grouping remains allowed", async () => {
+      const { call, registry, setThreadParent } = await setup({
+        threads: [listedThread("target-thread"), listedThread("parent-thread")],
+      });
+      const handler = vi.fn(async () => ({ instanceId: "pwr_remote", instanceLabel: "Remote Mac" }));
+      registry.setFederatedThreadMutationHandler(handler);
+      const checkDynamicToolPermission = vi.fn((check) => check.arguments?.includeRemote === true
+        ? { allowed: false, permission: "federation.remote_control" }
+        : { allowed: true });
+      registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: vi.fn(), checkDynamicToolPermission });
+      const local = await call({ parentThreadId: "parent-thread" });
+      expect(local.success).toBe(true);
+      expect(setThreadParent).toHaveBeenCalledOnce();
+      const remote = await call({ threadId: "remote-thread", parentThreadId: "parent-thread" });
+      expect(remote.payload).toMatchObject({ code: "forbidden", message: expect.stringContaining("federation.remote_control") });
+      expect(checkDynamicToolPermission).toHaveBeenLastCalledWith(expect.objectContaining({
+        threadId: "agent-thread", turnId: "turn-agent-thread",
+        arguments: expect.objectContaining({ includeRemote: true, parentThreadId: "parent-thread" }),
+      }));
+      expect(handler).not.toHaveBeenCalled();
+      registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: vi.fn(),
+        checkDynamicToolPermission: () => ({ allowed: false, permission: "thread.control.organize" }),
+      });
+      expect((await call({ parentThreadId: "parent-thread", instanceId: "pwr_remote" })).payload)
+        .toMatchObject({ code: "forbidden", message: expect.stringContaining("thread.control.organize") });
+      expect(handler).not.toHaveBeenCalled();
+      await registry.close();
+    });
+
+    it("validates versioned parent requests on the owner and ignores inbound routing and other mutations", async () => {
+      const { registry, setThreadParent } = await setup({
+        threads: [listedThread("target-thread"), listedThread("parent-thread"), listedThread("child-thread")],
+        archivedThreads: [listedThread("archived-parent", { archivedAt: 1_000 })],
+        overlays: { "codex:child-thread": {
+          backend: "codex", threadId: "child-thread", executionMode: "default", extraLinkedDirectories: [],
+          parentThreadId: "target-thread",
+        } },
+      });
+      const handler = vi.fn();
+      registry.setFederatedThreadMutationHandler(handler);
+      for (const dryRun of [false, true]) {
+        for (const [parentThreadId, code] of [
+          ["missing-parent", "not_found"], ["archived-parent", "invalid_arguments"],
+          ["child-thread", "invalid_arguments"], ["target-thread", "invalid_arguments"],
+        ]) {
+          expect(await registry.mutateThreadParentV1({ backend: "codex", threadId: "target-thread", parentThreadId, dryRun }))
+            .toMatchObject({ ok: false, error: { code } });
+        }
+      }
+      expect(setThreadParent).not.toHaveBeenCalled();
+      const request = { backend: "codex" as const, threadId: "target-thread", parentThreadId: "parent-thread",
+        dryRun: true, instanceId: "another-peer", includeRemote: true, title: "must not rename" };
+      expect(await registry.mutateThreadParentV1(request)).toMatchObject({ ok: true });
+      expect(setThreadParent).not.toHaveBeenCalled();
+      expect(await registry.mutateThreadParentV1({ ...request, dryRun: false })).toMatchObject({ ok: true });
+      expect(setThreadParent).toHaveBeenCalledExactlyOnceWith({
+        backend: "codex", threadId: "target-thread", parentThreadId: "parent-thread", parentThreadBackend: "codex",
+      });
+      expect(handler).not.toHaveBeenCalled();
+      await registry.close();
+    });
+
+    it("nests a thread under another and makes it top-level again through the app's own path", async () => {
+      const threads = [listedThread("target-thread"), listedThread("parent-thread")];
+      const nested = await setup({ threads });
+      const preview = await nested.call({ parentThreadId: "parent-thread", dryRun: true });
+      expect(preview.payload.mutation.changes).toEqual([
+        { field: "parent", status: "would_apply", to: { backend: "codex", threadId: "parent-thread" } },
+      ]);
+      expect(nested.setThreadParent).not.toHaveBeenCalled();
+      const result = await nested.call({ parentThreadId: "parent-thread" });
+      expect(result.success).toBe(true);
+      expect(result.payload.mutation.changes).toEqual([
+        { field: "parent", status: "applied", to: { backend: "codex", threadId: "parent-thread" } },
+      ]);
+      expect(nested.setThreadParent).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "target-thread",
+        parentThreadId: "parent-thread",
+        parentThreadBackend: "codex",
+      });
+      await nested.registry.close();
+
+      const detached = await setup({
+        threads,
+        overlays: {
+          "codex:target-thread": {
+            backend: "codex",
+            threadId: "target-thread",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            parentThreadId: "parent-thread",
+          },
+        },
+      });
+      const cleared = await detached.call({ detachFromParent: true });
+      expect(cleared.payload.mutation.changes).toEqual([{ field: "parent", status: "applied", to: null }]);
+      expect(detached.setThreadParent).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "target-thread",
+        parentThreadId: null,
+        parentThreadBackend: null,
+      });
+      await detached.registry.close();
+    });
+
+    it("refuses a parent change it cannot keep, before anything changes and on a dry run too", async () => {
+      const { call, registry, setThreadParent, setThreadPin } = await setup({
+        threads: [listedThread("target-thread"), listedThread("child-thread")],
+        archivedThreads: [listedThread("archived-parent", { archivedAt: 1_000 })],
+        overlays: {
+          // child-thread is already a sub-thread of target-thread.
+          "codex:child-thread": {
+            backend: "codex",
+            threadId: "child-thread",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            parentThreadId: "target-thread",
+          },
+        },
+      });
+      const refusals: Array<[Record<string, unknown>, string, RegExp]> = [
+        [{ parentThreadId: "target-thread" }, "invalid_arguments", /its own parent/],
+        [{ parentThreadId: "child-thread" }, "invalid_arguments", /own sub-thread/],
+        [{ parentThreadId: "child-thread", dryRun: true }, "invalid_arguments", /own sub-thread/],
+        [{ parentThreadId: "missing-thread" }, "not_found", /was not found on this instance/],
+        [{ parentThreadId: "archived-parent" }, "invalid_arguments", /is archived/],
+        [{ detachFromParent: true }, "invalid_arguments", /is not a sub-thread/],
+        [{ parentThreadId: "child-thread", detachFromParent: true }, "invalid_arguments", /cannot be combined/],
+        [{ parentThreadId: "child-thread", pinned: true }, "invalid_arguments", /not pinned/],
+        [{ parentBackend: "codex" }, "invalid_arguments", /requires parentThreadId/],
+        [{ parentThreadId: "child-thread", parentBackend: "nope" }, "invalid_arguments", /known PwrAgent backend/],
+        [{ parentThreadId: "" }, "invalid_arguments", /non-empty string/],
+        [{ detachFromParent: "yes" }, "invalid_arguments", /must be a boolean/],
+      ];
+      for (const [args, code, message] of refusals) {
+        const result = await call(args);
+        expect({ args, code: result.payload.code }).toEqual({ args, code });
+        expect(result.payload.message).toMatch(message);
+      }
+      expect(setThreadParent).not.toHaveBeenCalled();
+      expect(setThreadPin).not.toHaveBeenCalled();
+      await registry.close();
+    });
 
     it("locks a thread with a note as the agent tool, and unlocks it", async () => {
       const { call, overlayStore, registry } = await setup();
@@ -51763,6 +52099,16 @@ script = "printf setup"
         unread: false,
         dryRun: false,
       });
+      await call({ title: "Grouped", parentThreadId: "remote-parent" });
+      expect(mutationHandler).toHaveBeenNthCalledWith(5, {
+        backend: "codex", threadId: "remote-thread", title: "Grouped",
+        parentThreadId: "remote-parent", parentBackend: "codex", dryRun: false,
+      });
+      await call({ detachFromParent: true });
+      expect(mutationHandler).toHaveBeenNthCalledWith(6, {
+        backend: "codex", threadId: "remote-thread", detachFromParent: true, dryRun: false,
+      });
+      expect(mutationHandler).toHaveBeenCalledTimes(6);
       await registry.close();
     });
   });
@@ -55330,6 +55676,73 @@ script = "printf setup"
       threadId: "claude-1",
       namedPullRequests: [{ number: 2947 }, { number: 2948 }],
     }));
+    await registry.close();
+  });
+
+  it("moves a Claude thread's workspace and points its next turn at the new folder", async () => {
+    const worktreePath = "/repo/app/.worktrees/old";
+    const targetPath = "/repo/app/.worktrees/new";
+    const handoff = vi.fn(async () => ({
+      backend: "claude" as const, threadId: "claude-1", direction: "worktree-to-worktree" as const,
+      strategy: "detached-changes" as const, workMode: "worktree" as const, branch: "HEAD",
+      repositoryPath: "/repo/app", targetPath,
+      linkedDirectory: { id: "pwragent-handoff:claude:claude-1", label: "app", path: "/repo/app", worktreePath: targetPath, kind: "worktree" as const },
+      warnings: [], completedAt: 1000,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: { recordCodexWorktreeOwnerThread: vi.fn(async () => {}) } as never,
+      gitWorkspaceHandoffService: { handoff } as never,
+    });
+    const internals = registry as unknown as {
+      claudeBackend: {
+        listThreads: () => Promise<AppServerThreadSummary[]>;
+        assertWorkspaceMovable: (threadId: string) => void;
+        moveWorkspace: (params: unknown) => Promise<void>;
+      };
+    };
+    vi.spyOn(internals.claudeBackend, "listThreads").mockResolvedValue([{
+      id: "claude-1", title: "Claude", titleSource: "explicit", source: "claude", updatedAt: 1,
+      // Adopted from another agent, so this thread must not archive it.
+      linkedDirectories: [{ id: worktreePath, label: "app", path: "/repo/app", worktreePath, kind: "worktree", worktreeOwnership: "external" }],
+    }]);
+    const assertMovable = vi.spyOn(internals.claudeBackend, "assertWorkspaceMovable").mockImplementation(() => {});
+    const moveWorkspace = vi.spyOn(internals.claudeBackend, "moveWorkspace").mockResolvedValue();
+
+    const response = await registry.handoffThreadWorkspace({
+      backend: "claude", threadId: "claude-1", direction: "worktree-to-worktree",
+      repositoryPath: "/repo/app", sourcePath: worktreePath,
+    });
+
+    expect(assertMovable).toHaveBeenCalledWith("claude-1");
+    expect(handoff).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "claude", direction: "worktree-to-worktree", sourcePath: worktreePath, keepSourceWorktree: true,
+    }));
+    expect(moveWorkspace).toHaveBeenCalledWith({
+      threadId: "claude-1", cwd: targetPath, linkedDirectory: response.linkedDirectory,
+    });
+    expect(response.warnings).toEqual([]);
+    await registry.close();
+  });
+
+  it("refuses a Claude workspace move before touching any files", async () => {
+    const handoff = vi.fn();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      gitWorkspaceHandoffService: { handoff } as never,
+    });
+    const internals = registry as unknown as { claudeBackend: { assertWorkspaceMovable: (threadId: string) => void } };
+    vi.spyOn(internals.claudeBackend, "assertWorkspaceMovable").mockImplementation(() => {
+      throw new Error("Stop Claude's background tasks before moving this thread.");
+    });
+
+    await expect(registry.handoffThreadWorkspace({
+      backend: "claude", threadId: "claude-1", direction: "local-to-worktree",
+      repositoryPath: "/repo/app", sourcePath: "/repo/app",
+    })).rejects.toThrow("Stop Claude's background tasks");
+    expect(handoff).not.toHaveBeenCalled();
     await registry.close();
   });
 
@@ -60193,6 +60606,182 @@ script = "printf setup"
     }
   });
 
+  it("keeps an owned worktree after a fresh-start move and checkpoints it on archive", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-fresh-start-archive-"));
+    let registry: DesktopBackendRegistry | undefined;
+    try {
+      const repoPath = path.join(root, "PwrGit");
+      await mkdir(repoPath);
+      await git(repoPath, ["init", "-b", "main"]);
+      await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
+      await git(repoPath, ["add", "README.md"]);
+      await git(repoPath, ["commit", "-m", "initial"]);
+      const handoffService = new GitWorkspaceHandoffService({ resolveWorktreeStorage: () => "in-repo" });
+      // An earlier move created this worktree, so the thread owns it.
+      const created = await handoffService.handoff({
+        backend: "codex", threadId: "thread-1", direction: "to-project", targetPath: repoPath,
+        sourceWorkMode: "worktree", now: 1000,
+      });
+      const oldWorktree = created.targetPath;
+      await writeFile(path.join(oldWorktree, "README.md"), "uncommitted\n", "utf8");
+      const overlayStore = createOverlayStoreMock();
+      await overlayStore.replaceWorkspaceLinkedDirectory({
+        backend: "codex", threadId: "thread-1", directory: created.linkedDirectory,
+      });
+      // The provider reports no directory: only PwrAgent's records find the old worktree.
+      const thread: AppServerThreadSummary = {
+        id: "thread-1", title: "Fresh start", titleSource: "explicit", source: "codex",
+        linkedDirectories: [], gitBranch: "HEAD", updatedAt: 2,
+      };
+      registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({ threads: [thread] }), overlayStore, gitWorkspaceHandoffService: handoffService,
+      });
+
+      const moved = await registry.handoffThreadWorkspace({
+        backend: "codex", threadId: thread.id, direction: "worktree-to-worktree", baseRef: "main",
+        repositoryPath: repoPath, sourcePath: oldWorktree,
+      });
+
+      expect(moved.targetPath).not.toBe(oldWorktree);
+      expect(moved.warnings).toContain("The previous worktree stays on disk. Archiving this thread checkpoints and removes it.");
+      // Nothing was moved or discarded from the old worktree.
+      await expect(readFile(path.join(oldWorktree, "README.md"), "utf8")).resolves.toBe("uncommitted\n");
+      // Git for Windows checks the committed file out with CRLF.
+      await expect(readFile(path.join(moved.targetPath, "README.md"), "utf8")).resolves.toMatch(/^base\r?\n$/);
+      const overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId: thread.id });
+      // The new worktree is the thread's only workspace; the old one is kept aside.
+      expect(overlay?.extraLinkedDirectories).toEqual([moved.linkedDirectory]);
+      expect(overlay?.retainedWorktrees).toEqual([
+        expect.objectContaining({ kind: "worktree", path: moved.repositoryPath, worktreePath: oldWorktree }),
+      ]);
+
+      const archived = await registry.archiveThread({ backend: "codex", threadId: thread.id });
+
+      // The provider reports no directory, so the retained worktree is the
+      // only candidate. Paths are not compared: Windows can spell them differently.
+      expect(archived.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+      expect(await pathExists(oldWorktree)).toBe(false);
+      expect(await git(repoPath, ["worktree", "list", "--porcelain"])).not.toContain(oldWorktree);
+      // The old worktree's uncommitted change survives in its checkpoint.
+      const snapshots = (await overlayStore.getThreadOverlayState({ backend: "codex", threadId: thread.id }))
+        ?.worktreeSnapshots ?? [];
+      expect(snapshots).toHaveLength(1);
+      expect(await git(repoPath, ["show", `${snapshots[0]!.snapshotCommit}:README.md`])).toBe("uncommitted");
+    } finally {
+      await registry?.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { source: "an owned worktree", direction: "worktree-to-worktree", external: false, retained: true },
+    { source: "an adopted worktree", direction: "worktree-to-worktree", external: true, retained: false },
+    { source: "the local checkout", direction: "local-to-worktree", external: false, retained: false },
+  ] as const)("tracks $source after a fresh-start move only when the thread owns it", async ({ direction, external, retained }) => {
+    const sourcePath = direction === "local-to-worktree" ? "/repo/app" : "/repo/app/.worktrees/old";
+    const targetPath = "/repo/app/.worktrees/new";
+    const source: LinkedDirectorySummary = direction === "local-to-worktree"
+      ? { id: "/repo/app", label: "app", path: "/repo/app", kind: "local" }
+      : {
+          id: "pwragent-handoff:codex:thread-1", label: "app", path: "/repo/app", kind: "worktree", worktreePath: sourcePath,
+          ...(external ? { worktreeOwnership: "external" as const } : {}),
+        };
+    const handoff = vi.fn(async () => ({
+      backend: "codex" as const, threadId: "thread-1", direction, strategy: "detached-changes" as const,
+      workMode: "worktree" as const, baseSha: "abc123", repositoryPath: "/repo/app", targetPath,
+      linkedDirectory: { id: "pwragent-handoff:codex:thread-1", label: "app", path: "/repo/app", kind: "worktree" as const, worktreePath: targetPath },
+      warnings: [], completedAt: 1000,
+    }));
+    const overlayStore = createOverlayStoreMock({ overlays: { "codex:thread-1": {
+      backend: "codex", threadId: "thread-1", executionMode: "default", extraLinkedDirectories: [source],
+    } } });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [{
+        id: "thread-1", title: "Fresh start", titleSource: "explicit", source: "codex", linkedDirectories: [source], updatedAt: 1,
+      }] }),
+      overlayStore,
+      gitDirectoryService: { recordCodexWorktreeOwnerThread: vi.fn(async () => {}) } as never,
+      gitWorkspaceHandoffService: { handoff } as never,
+    });
+    try {
+      await registry.handoffThreadWorkspace({
+        backend: "codex", threadId: "thread-1", direction, baseRef: "origin/main", repositoryPath: "/repo/app", sourcePath,
+      });
+
+      expect(handoff).toHaveBeenCalledWith(expect.objectContaining({ baseRef: "origin/main", sourcePath }));
+      expect((handoff.mock.calls[0] as unknown as [{ keepSourceWorktree?: boolean }])[0].keepSourceWorktree)
+        .toBe(external ? true : undefined);
+      const overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" });
+      expect(overlay?.retainedWorktrees).toEqual(retained ? [{
+        id: `pwragent-retained-worktree:codex:thread-1:${sourcePath}`,
+        label: "app", path: "/repo/app", kind: "worktree", worktreePath: sourcePath,
+      }] : undefined);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it.each([
+    { case: "archives it when no other thread uses it", sharedWithActiveThread: false },
+    { case: "leaves it while another active thread still runs in it", sharedWithActiveThread: true },
+  ])("reads a retained worktree in paged archive discovery and $case", async ({ sharedWithActiveThread }) => {
+    const oldWorktree = "/repo/app/.worktrees/old";
+    const newWorktree = "/repo/app/.worktrees/new";
+    const thread: AppServerThreadSummary = {
+      id: "thread-1", title: "Fresh start", titleSource: "explicit", source: "codex", updatedAt: 1,
+      linkedDirectories: [{ id: "pwragent-handoff:codex:thread-1", label: "app", path: "/repo/app", kind: "worktree", worktreePath: newWorktree }],
+    };
+    // A sub-thread can still run in the worktree its parent moved away from.
+    const child: AppServerThreadSummary = {
+      id: "thread-2", title: "Child", titleSource: "explicit", source: "codex", updatedAt: 1,
+      linkedDirectories: [{ id: "directory:/repo/app", label: "app", path: "/repo/app", kind: "worktree", worktreePath: oldWorktree }],
+    };
+    const archiveWorktree = vi.fn(async (params: { worktreePath: string; repositoryPath: string }) => ({
+      id: `snapshot:${params.worktreePath}`, backend: "codex", threadId: "thread-1", worktreePath: params.worktreePath,
+      repositoryPath: params.repositoryPath, snapshotRef: "refs/pwragent/snapshot", snapshotCommit: "abc123",
+      createdAt: 1, archivedAt: 1, state: "archived", ignoredFilesExcluded: true,
+    }));
+    const codexClient = Object.assign(new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [thread],
+    }), {
+      listArchiveCleanupThreadsPage: vi.fn(async ({ archived }: { archived: boolean }) => ({
+        threads: archived ? [{ ...thread, archived: true }] : sharedWithActiveThread ? [child] : [],
+      })),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({ overlays: { "codex:thread-1": {
+        backend: "codex", threadId: "thread-1", executionMode: "default",
+        extraLinkedDirectories: [thread.linkedDirectories[0]!],
+        retainedWorktrees: [{
+          id: `pwragent-retained-worktree:codex:thread-1:${oldWorktree}`, label: "app", path: "/repo/app",
+          kind: "worktree", worktreePath: oldWorktree,
+        }],
+      } } }),
+      pdfToolMcpServer: null,
+      worktreeArchiveService: { archive: archiveWorktree } as unknown as WorktreeArchiveService,
+    });
+    try {
+      const response = await registry.archiveThread({ backend: "codex", threadId: "thread-1" });
+
+      expect(codexClient.listArchiveCleanupThreadsPage).toHaveBeenCalled();
+      const archivedPaths = archiveWorktree.mock.calls.map(([params]) => params.worktreePath);
+      expect(archivedPaths).toContain(newWorktree);
+      if (sharedWithActiveThread) {
+        expect(archivedPaths).not.toContain(oldWorktree);
+        expect(response.cleanup).toContainEqual(expect.objectContaining({
+          worktreePath: oldWorktree, removedWorktree: false,
+          skippedReason: "Worktree is still used by another active thread: thread-2.",
+        }));
+      } else {
+        expect(archivedPaths).toContain(oldWorktree);
+      }
+    } finally {
+      await registry.close();
+    }
+  });
+
   it.each(["directory", "pr", "relinked-pr", "overlay"])("passes existing worktrees and source isolation to a project move: %s", async (provenance) => {
     const directories: LinkedDirectorySummary[] = [{
       id: "source", label: "Workspaces", path: "/repo/Workspaces", kind: "worktree", worktreePath: "/worktrees/Workspaces",
@@ -62177,10 +62766,11 @@ script = "printf setup"
       const { registry, threadId, cwd, repo, pr } = await fixture();
       const events: AgentEvent[] = [];
       registry.onEvent((event) => { events.push(event); });
+      const ended = nextTurnEnd(registry);
       await registry.listBackends({ refreshModels: "claude", includeUnavailable: true },
         issueProviderDiscoveryPermit("settings-user-action"));
       await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "/code-review high" }] });
-      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+      expect(await ended).toBe("turn/completed");
 
       const review = events.find((event) => event.notification.method === "item/completed"
         && (event.notification.params.item as { type?: string }).type === "exitedReviewMode");
@@ -62198,12 +62788,11 @@ script = "printf setup"
       const { registry, threadId } = await fixture();
       const importReviews = vi.fn();
       registry.setPwrAgentThreadTodoHandler({ importReviews } as unknown as PwrAgentThreadTodoHandler);
-      const events: AgentEvent[] = [];
-      registry.onEvent((event) => { events.push(event); });
+      const ended = nextTurnEnd(registry);
       await registry.listBackends({ refreshModels: "claude", includeUnavailable: true },
         issueProviderDiscoveryPermit("settings-user-action"));
       await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "/code-review" }] });
-      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+      expect(await ended).toBe("turn/completed");
       importReviews.mockClear();
 
       await registry.readThread({ backend: "claude", threadId });
@@ -64612,9 +65201,7 @@ script = "printf setup"
     const metadataGate = new Promise<void>((resolve) => { releaseMetadata = resolve; });
     let metadataStarted!: () => void;
     const metadataPending = new Promise<void>((resolve) => { metadataStarted = resolve; });
-    const events: AgentEvent[] = [];
     registry.onEvent(async (event) => {
-      events.push(event);
       if (event.notification.method === "thread/availableCommands/updated") {
         metadataStarted();
         await metadataGate;
@@ -64650,8 +65237,9 @@ script = "printf setup"
       transport.emitSessionUpdate(threadId, {
         sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Done." },
       });
+      const ended = nextTurnEnd(registry);
       finishPrompt({ stopReason: "end_turn" });
-      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+      expect(await ended).toBe("turn/completed");
       expect(registry.getActiveTurnForThread({ backend, threadId })).toBeUndefined();
       const afterTurn = await client.callTool({ name: "search_threads", arguments: { includeRemote: false } });
       expect(afterTurn.isError).toBe(true);

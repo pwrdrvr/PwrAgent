@@ -18,7 +18,7 @@ async function measureModelChip(chip: Locator) {
     const label = element.querySelector(".composer-dropdown__label");
     const term = value?.previousElementSibling;
     const facts = element.closest(".thread-todo-card__facts");
-    if (!value || !label || !term || !facts) throw new Error("Missing Model fact parts");
+    if (!value || !label || !term || !facts) throw new Error("Missing chip fact parts");
     const chip = element.getBoundingClientRect();
     const valueBox = value.getBoundingClientRect();
     const termBox = term.getBoundingClientRect();
@@ -156,20 +156,13 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     const narrowLayout = await measureModelChip(firstPanelChip);
     expect(narrowLayout.chipRight).toBeLessThanOrEqual(narrowLayout.valueRight + 0.5);
     expect(narrowLayout.termCenterOffset).toBeLessThanOrEqual(1.5);
-    // A wrapped value keeps its label on the first line.
-    const whereFact = panel.locator(".thread-todo-card").first().locator(".thread-todo-card__fact", { hasText: "Where" });
-    const where = await whereFact.evaluate((element) => {
-      const text = (node: Element) => {
-        const range = document.createRange();
-        range.selectNodeContents(node);
-        return range.getBoundingClientRect();
-      };
-      const term = text(element.querySelector("dt")!);
-      const value = text(element.querySelector("dd")!);
-      return { termTop: term.top, termHeight: term.height, valueTop: value.top, valueHeight: value.height };
-    });
-    expect(where.valueHeight).toBeGreaterThan(where.termHeight);
-    expect(Math.abs(where.termTop - where.valueTop)).toBeLessThanOrEqual(1);
+    // Where is a chip too: it stays in its column on one line, centered on
+    // its label, and truncates instead of wrapping.
+    const whereChip = panel.getByRole("button", { name: /^Where the new thread works:/ }).first();
+    const where = await measureModelChip(whereChip);
+    expect(where.chipRight).toBeLessThanOrEqual(where.valueRight + 0.5);
+    expect(where.termCenterOffset).toBeLessThanOrEqual(1.5);
+    expect((await whereChip.boundingBox())!.height).toBeLessThanOrEqual(26);
     await panel.locator(".thread-todo-card").first().screenshot({
       path: testInfo.outputPath("todo-dispatch-panel-narrow.png"), animations: "disabled",
     });

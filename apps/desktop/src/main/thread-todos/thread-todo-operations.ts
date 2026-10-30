@@ -13,6 +13,9 @@ import type {
   ThreadTodoFeedSnapshot,
   ListThreadReviewsRequest,
   UpdateThreadReviewRequest,
+  ListThreadTodoDispatchEnvironmentsRequest,
+  ListThreadTodoDispatchEnvironmentsResponse,
+  CodexSpeed,
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
@@ -24,9 +27,11 @@ import {
 import {
   getThreadTodoFeed,
   getThreadTodoService,
+  listThreadTodoProjectCandidates,
   listThreadTodoProjects,
   setThreadTodoProject,
 } from "../thread-todos/thread-todo-runtime";
+import { listThreadTodoDispatchEnvironments } from "../thread-todos/thread-todo-dispatch";
 import { getThreadReviewService } from "../thread-reviews/thread-review-runtime";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
@@ -148,7 +153,22 @@ export const localThreadTodoOperations = {
         : {}),
       ...(request.allowOpenItems === true ? { allowOpenItems: true } : {}),
       ...(request.modelSettings ? { modelSettings: parseDispatchSettings(request.modelSettings) } : {}),
+      ...(request.workMode === "local" || request.workMode === "worktree" ? { workMode: request.workMode } : {}),
+      ...(typeof request.environment === "string" && request.environment.trim()
+        ? { environment: request.environment.trim() }
+        : {}),
+      ...(isCodexSpeed(request.speed) ? { speed: request.speed } : {}),
     }),
+  }),
+  listDispatchEnvironments: async (
+    request: ListThreadTodoDispatchEnvironmentsRequest,
+  ): Promise<ListThreadTodoDispatchEnvironmentsResponse> => await listThreadTodoDispatchEnvironments(request, {
+    getTodo: (id) => getThreadTodoService().get(id),
+    listProjects: listThreadTodoProjectCandidates,
+    readThreadEnvironmentId: async (thread) =>
+      (await getDesktopBackendRegistry().readThreadHandoffSettings(thread)).codexEnvironmentRuntime?.environmentId,
+    readProjectPresetId: async (directoryKey) =>
+      (await getDesktopOverlayStore().getDirectoryLaunchpad({ directoryKey }))?.codexEnvironmentId,
   }),
   listProjects: async (_request: ListThreadTodoProjectsRequest = {}): Promise<ListThreadTodoProjectsResponse> => ({
     projects: await listThreadTodoProjects(),
@@ -177,6 +197,10 @@ export const localThreadTodoOperations = {
     };
   },
 };
+
+function isCodexSpeed(value: unknown): value is CodexSpeed {
+  return value === "standard" || value === "fast" || value === "ultrafast";
+}
 
 function parseDispatchSettings(value: unknown): ThreadTodoModelSettings {
   if (!value || typeof value !== "object") throw new Error("Invalid dispatch model settings.");

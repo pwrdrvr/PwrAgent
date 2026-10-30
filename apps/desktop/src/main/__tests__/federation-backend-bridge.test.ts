@@ -10,6 +10,7 @@ import type {
   TrustCodexProjectRequest,
 } from "@pwragent/shared";
 import {
+  HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
   buildFederatedThreadRef,
   rankThreadJumpMatches,
 } from "@pwragent/shared";
@@ -30,6 +31,29 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("round-trips versioned owner parent validation and requires thread_grouping", async () => {
+    const request = { backend: "codex" as const, threadId: "child", parentThreadId: "parent", parentBackend: "claude" as const, dryRun: true };
+    const response = { ok: false as const, error: { code: "invalid_arguments" as const, message: "Parent is archived." } };
+    const backend = { mutateThreadParentV1: vi.fn(async () => response), setThreadParent: vi.fn() };
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    let rpc: FederationRpcEndpoint;
+    const connect = (capabilities: FederationCapability[]): void => {
+      router.registerConnection({ peerId: "viewer", capabilities,
+        sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    };
+    registerFederationBackendHandlers({ router, backend: backend as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    connect(["thread_grouping"]);
+    expect(await client.mutateThreadParentV1(request)).toEqual(response);
+    expect(backend.mutateThreadParentV1).toHaveBeenCalledExactlyOnceWith(request);
+    connect(["thread_navigation", "turn_control", "thread_parent_mutation_v1"]);
+    await expect(client.mutateThreadParentV1(request)).rejects.toThrow();
+    expect(backend.mutateThreadParentV1).toHaveBeenCalledOnce();
+    expect(backend.setThreadParent).not.toHaveBeenCalled();
+  });
+
   it("round-trips owner-collated family pricing and requires thread_detail", async () => {
     const request = { backend: "codex" as const, threadId: "parent" };
     const family = { readAt: 42, members: [
@@ -3982,6 +4006,7 @@ describe("federation backend bridge", () => {
       reorderThreadPins: vi.fn(),
       mountRemoteChild: vi.fn(),
       setThreadParent: vi.fn(),
+      mutateThreadParentV1: vi.fn(),
       updateSubthreadOrder: vi.fn(),
       setSubthreadsCollapsed: vi.fn(),
       readForge: vi.fn(),
@@ -4507,6 +4532,7 @@ describe("federation backend bridge", () => {
       reorderThreadPins: vi.fn(),
         mountRemoteChild: vi.fn(),
         setThreadParent: vi.fn(),
+        mutateThreadParentV1: vi.fn(),
         updateSubthreadOrder: vi.fn(),
         setSubthreadsCollapsed: vi.fn(),
         readForge: vi.fn(),
@@ -5024,6 +5050,55 @@ describe("federation workspace recovery methods", () => {
 
     expect(moveThreadToMainCheckout).not.toHaveBeenCalled();
     expect(reply).toMatchObject({ kind: "error" });
+  });
+
+  it("runs a new-worktree handoff on its own method and refuses other directions there", async () => {
+    const handoffThreadWorkspace = vi.fn(async () => ({ targetPath: "/wt-2" }));
+    const { request } = route({ handoffThreadWorkspace } as never, ["turn_control"]);
+
+    const moved = await request("fresh", FEDERATION_BACKEND_METHODS.handoffThreadWorkspaceToNewWorktree, {
+      backend: "claude", threadId: "t1", direction: "worktree-to-worktree", baseRef: "origin/main",
+    });
+    const refused = await request("local", FEDERATION_BACKEND_METHODS.handoffThreadWorkspaceToNewWorktree, {
+      backend: "claude", threadId: "t1", direction: "worktree-to-local",
+    });
+
+    expect(moved).toMatchObject({ kind: "response" });
+    expect(handoffThreadWorkspace).toHaveBeenCalledTimes(1);
+    expect(handoffThreadWorkspace).toHaveBeenCalledWith({
+      backend: "claude", threadId: "t1", direction: "worktree-to-worktree", baseRef: "origin/main",
+    });
+    expect(refused).toMatchObject({ kind: "error" });
+  });
+
+  it("sends only the moves an older owner would misread on the new method", async () => {
+    const rpcRequest = vi.fn(async (_call: { method: string }) => ({}));
+    const client = new FederationRemoteBackendClient({ request: rpcRequest } as unknown as FederationRpcEndpoint);
+
+    await client.handoffThreadWorkspace({ backend: "codex", threadId: "t1", direction: "worktree-to-worktree" });
+    await client.handoffThreadWorkspace({ backend: "codex", threadId: "t1", direction: "local-to-worktree", baseRef: "main" });
+    await client.handoffThreadWorkspace({ backend: "codex", threadId: "t1", direction: "local-to-worktree" });
+    await client.handoffThreadWorkspace({ backend: "codex", threadId: "t1", direction: "worktree-to-local" });
+
+    expect(rpcRequest.mock.calls.map(([call]) => call.method)).toEqual([
+      FEDERATION_BACKEND_METHODS.handoffThreadWorkspaceToNewWorktree,
+      FEDERATION_BACKEND_METHODS.handoffThreadWorkspaceToNewWorktree,
+      FEDERATION_BACKEND_METHODS.handoffThreadWorkspace,
+      FEDERATION_BACKEND_METHODS.handoffThreadWorkspace,
+    ]);
+  });
+
+  it("names an older owner that cannot move a thread into a new worktree", async () => {
+    const olderOwner = vi.fn(async () => {
+      throw Object.assign(new Error("No handler"), { code: "method_not_found" });
+    });
+    const client = new FederationRemoteBackendClient({ request: olderOwner } as unknown as FederationRpcEndpoint);
+
+    await expect(client.handoffThreadWorkspace({ backend: "codex", threadId: "t1", direction: "worktree-to-worktree" }))
+      .rejects.toThrow(HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE);
+    // The original method keeps the owner's own error.
+    await expect(client.handoffThreadWorkspace({ backend: "codex", threadId: "t1", direction: "worktree-to-local" }))
+      .rejects.toThrow("No handler");
   });
 
   it("answers method_not_found where the owner has no implementation", async () => {

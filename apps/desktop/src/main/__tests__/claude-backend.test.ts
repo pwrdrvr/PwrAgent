@@ -85,6 +85,69 @@ async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUs
 }
 
 describe("Claude SDK backend", () => {
+  it("moves a thread to another folder and resumes the same session there", async () => {
+    const f = await fixture();
+    const previous = path.join(f.root, "checkout");
+    const secondary = path.join(f.root, "other-repo");
+    const worktree = path.join(f.root, "worktrees", "checkout");
+    const { threadId } = await f.backend.startThread({
+      cwd: previous, executionMode: "default",
+      linkedDirectories: [
+        { id: previous, kind: "local", label: "checkout", path: previous },
+        { id: secondary, kind: "local", label: "other-repo", path: secondary },
+      ],
+    });
+    // Builds before this one stored a refusal on every Claude thread.
+    const stored = await f.store.read(threadId);
+    await f.store.save({ ...stored, thread: { ...stored.thread, workspaceHandoff: { available: false, unavailableReason: "old" } } });
+    expect((await f.backend.listThreads())[0]?.workspaceHandoff).toBeUndefined();
+
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Remember PINEAPPLE" }] });
+    await f.waitForTurn();
+    const linkedDirectory = {
+      id: `pwragent-handoff:claude:${threadId}`, kind: "worktree" as const, label: "checkout",
+      path: previous, worktreePath: worktree,
+    };
+    await f.backend.moveWorkspace({ threadId, cwd: worktree, linkedDirectory });
+
+    const moved = await f.store.read(threadId);
+    expect(moved.cwd).toBe(worktree);
+    expect(moved.sdkSessionId).toBe("5a85c1ad-85c1-4930-ae19-50f721ad13dd");
+    expect(moved.sdkSessionDir).toBe(previous);
+    expect(moved.thread.linkedDirectories).toEqual([
+      linkedDirectory,
+      { id: secondary, kind: "local", label: "other-repo", path: secondary },
+    ]);
+    expect(f.backend.liveSessionThreadIds()).toEqual([]);
+
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Where are you?" }] });
+    await f.waitForTurn();
+    expect(f.queries[1]).toMatchObject({ cwd: worktree, resume: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" });
+    expect(f.queries[1].additionalDirectories).toEqual([path.resolve(secondary)]);
+  });
+
+  it("refuses to move a thread while its turn runs", async () => {
+    const finish = Promise.withResolvers<void>();
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      await finish.promise;
+      yield { type: "result", subtype: "success", is_error: false, result: "Done" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Work" }] });
+    try {
+      expect(() => f.backend.assertWorkspaceMovable(threadId)).toThrow("Wait for the active Claude turn to finish");
+      await expect(f.backend.moveWorkspace({
+        threadId, cwd: path.join(f.root, "elsewhere"),
+        linkedDirectory: { id: "elsewhere", kind: "local", label: "elsewhere", path: path.join(f.root, "elsewhere") },
+      })).rejects.toThrow("Wait for the active Claude turn to finish");
+      expect((await f.store.read(threadId)).cwd).toBe(f.root);
+    } finally {
+      finish.resolve();
+      await f.waitForTurn();
+    }
+  });
+
   it("publishes a native title during the first turn without blocking assistant streaming", async () => {
     const pendingTitle = Promise.withResolvers<string>();
     const finishTurn = Promise.withResolvers<void>();
@@ -2249,6 +2312,31 @@ describe("Claude SDK backend", () => {
     expect(row).toMatchObject({ status: "failed" });
   });
 
+  it("settles a completed background sub-agent's tool row with its summary", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "spawn", content: [{ type: "tool_use", id: "tool-agent", name: "Agent", input: { description: "Audit the SDK" } }],
+      } } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "agent-1", tool_use_id: "tool-agent", description: "Audit the SDK",
+        task_type: "local_agent", subagent_type: "Explore", is_backgrounded: true } as SDKMessage;
+      yield { type: "user", parent_tool_use_id: null, tool_use_result: { status: "async_launched", agentId: "agent-1" },
+        message: { content: [{ type: "tool_result", tool_use_id: "tool-agent", content: "Async agent launched." }] } } as SDKMessage;
+      yield { type: "system", subtype: "task_notification", task_id: "agent-1", tool_use_id: "tool-agent",
+        status: "completed", output_file: "", summary: "Audit done" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "done" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Audit" }] });
+    await f.waitForTurn();
+    await vi.waitFor(async () => expect((await f.backend.readThread(threadId)).entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "tool-agent", status: "completed", details: [expect.objectContaining({
+        label: "Agent", status: "completed",
+        command: expect.objectContaining({ rawCommand: "Agent", source: "tool", output: "Async agent launched.\n\nAudit done" }),
+      })] }),
+    ])));
+  });
+
   it("reports a background sub-agent as running work with its progress", async () => {
     const agentDone = Promise.withResolvers<void>();
     const f = await fixture(async function* () {
@@ -2561,6 +2649,132 @@ describe("Claude transcript fidelity", () => {
       kind: "write", label: "Edited app.ts", path: path.join(f.root, "src", "app.ts"),
       fileDiff: { kind: "update", additions: 1, removals: 1, diff: expect.stringContaining("+b") },
     }] });
+  });
+
+  it("draws a tool result's images on its row instead of their base64, live and in the replay", async () => {
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    let cwd = "";
+    const f = await fixture(async function* () {
+      yield init;
+      // Read answers a PNG with one image block and no text; this one also
+      // omits media_type, as the transcript that reported the bug did.
+      yield call("read-1", "Read", { file_path: path.join(cwd, "shot.png") });
+      yield { type: "user", parent_tool_use_id: null, message: { content: [
+        { type: "tool_result", tool_use_id: "read-1", content: [{ type: "image", source: { type: "base64", data: png } }] },
+      ] } } as SDKMessage;
+      // An MCP screenshot tool can answer text and images in any order.
+      yield call("shot-1", "mcp__browser__screenshot", {});
+      yield { type: "user", parent_tool_use_id: null, message: { content: [{ type: "tool_result", tool_use_id: "shot-1", content: [
+        { type: "text", text: "Captured the page." },
+        { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "/9j/4AAQ" } },
+      ] }] } } as SDKMessage;
+      yield result;
+    });
+    cwd = f.root;
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Look" }] });
+    await f.waitForTurn();
+
+    const pngUrl = `data:image/png;base64,${png}`;
+    const live = (id: string) => {
+      const event = f.events.find((event) => event.notification.method === "item/completed"
+        && getNotificationItem(event.notification.params)?.id === id);
+      return buildLiveToolDetails(getNotificationItem(event!.notification.params)!);
+    };
+    expect(live("read-1")).toEqual([expect.objectContaining({ images: [expect.objectContaining({ url: pngUrl })] })]);
+    expect(live("shot-1")).toEqual([expect.objectContaining({
+      images: [expect.objectContaining({ url: "data:image/jpeg;base64,/9j/4AAQ" })],
+    })]);
+
+    // The replay groups adjacent tool rows, so look the details up across rows.
+    const details = (await f.backend.readThread(threadId)).entries
+      .flatMap((entry) => entry.type === "activity" ? entry.details : []);
+    const detail = (id: string) => details.find((candidate) => candidate.id === id);
+    expect(detail("read-1:output")).toEqual({
+      id: "read-1:output", kind: "read", label: "Read shot.png output", status: "completed",
+      images: [{ type: "image", url: pngUrl, alt: "Read shot.png" }],
+    });
+    expect(detail("shot-1")).toMatchObject({
+      label: "Used MCP browser/screenshot",
+      command: { rawCommand: "browser/screenshot", source: "tool", output: "Captured the page." },
+      images: [{ url: "data:image/jpeg;base64,/9j/4AAQ" }],
+    });
+    // No row keeps the image as text.
+    expect(JSON.stringify(details.map((candidate) => [candidate.markdown, candidate.command?.output])))
+      .not.toContain("base64");
+  });
+
+  it("names an MCP call's tool and keeps its arguments and result inside the row", async () => {
+    const sandboxer = "mcp__pwragent_builtin_sandboxer_e96ab96f1443b1279de4ece773af16df__stop_sandbox";
+    const f = await fixture(async function* () {
+      yield init;
+      yield call("search-1", "ToolSearch", { query: "select:stop_sandbox" });
+      yield { type: "user", parent_tool_use_id: null, message: { content: [{ type: "tool_result", tool_use_id: "search-1",
+        content: [{ type: "tool_reference", tool_name: sandboxer }] }] } } as SDKMessage;
+      yield call("stop-1", sandboxer, { sandboxId: "sb_fixture" });
+      yield answer("stop-1", "{\"status\":\"archiving\"}");
+      yield result;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Stop it" }] });
+    await f.waitForTurn();
+
+    const [group] = (await f.backend.readThread(threadId)).entries.filter((entry) => entry.type === "activity");
+    if (group?.type !== "activity") throw new Error("Expected the tools' row");
+    expect(group.summary).toBe("Used 2 tools");
+    expect(group.details).toEqual([
+      expect.objectContaining({
+        id: "search-1", kind: "command", label: "ToolSearch", status: "completed",
+        command: expect.objectContaining({ rawCommand: "ToolSearch", source: "tool", output: "sandboxer/stop_sandbox" }),
+      }),
+      expect.objectContaining({
+        id: "stop-1", kind: "command", label: "Used MCP sandboxer/stop_sandbox", status: "completed",
+        command: {
+          displayCommand: "sandboxer/stop_sandbox\n{\n  \"sandboxId\": \"sb_fixture\"\n}",
+          rawCommand: "sandboxer/stop_sandbox", source: "tool", output: "{\"status\":\"archiving\"}",
+        },
+      }),
+    ]);
+    const completed = f.events.find((event) => event.notification.method === "item/completed"
+      && getNotificationItem(event.notification.params)?.id === "stop-1");
+    expect(buildLiveToolDetails(getNotificationItem(completed!.notification.params)!)).toEqual([expect.objectContaining({
+      command: expect.objectContaining({ rawCommand: "sandboxer/stop_sandbox", output: "{\"status\":\"archiving\"}" }),
+    })]);
+  });
+
+  it("shows tool rows saved as raw JSON as named rows with their images, without rewriting them", async () => {
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    const f = await fixture();
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const saved = [{
+      type: "activity" as const, id: "old-mcp", summary: "mcp__pwragent__attach_thread_pull_request",
+      status: "completed" as const, turn: { id: "old-turn" },
+      details: [
+        { id: "old-mcp", kind: "read" as const, label: "mcp__pwragent__attach_thread_pull_request", markdown: "{\"number\":140}" },
+        { id: "old-mcp:output", kind: "read" as const, label: "mcp__pwragent__attach_thread_pull_request output",
+          markdown: "{\"attached\":true}", status: "completed" as const },
+      ],
+    }, {
+      type: "activity" as const, id: "old-read", summary: "Read shot.png", status: "completed" as const, turn: { id: "old-turn" },
+      details: [
+        { id: "old-read", kind: "read" as const, label: "Read shot.png", path: "/repo/shot.png", status: "in_progress" as const },
+        { id: "old-read:output", kind: "read" as const, label: "Read shot.png output", status: "completed" as const,
+          markdown: JSON.stringify([{ type: "image", source: { type: "base64", data: png } }]) },
+      ],
+    }];
+    await f.store.append(threadId, saved);
+
+    const [group] = (await f.backend.readThread(threadId)).entries;
+    expect(group).toMatchObject({ type: "activity", summary: "Used 2 tools", details: [
+      { id: "old-mcp", label: "Used MCP pwragent/attach_thread_pull_request", command: {
+        rawCommand: "pwragent/attach_thread_pull_request", source: "tool", output: "{\"attached\":true}",
+      } },
+      { id: "old-read", path: "/repo/shot.png" },
+      { id: "old-read:output", images: [{ type: "image", url: `data:image/png;base64,${png}`, alt: "Read shot.png" }] },
+    ] });
+    if (group?.type !== "activity") throw new Error("Expected the tools' row");
+    expect(group.details[2]).not.toHaveProperty("markdown");
+    expect(await f.store.entries(threadId)).toEqual(saved);
   });
 
   it("diffs a new file's content when its patch is empty, and keeps a failed edit's error", async () => {

@@ -21,12 +21,18 @@ import { GithubPrFetcher } from "../pr-status/github-pr-fetcher.js";
 import { getAppStateDb } from "../state/app-state.js";
 import {
   findPeerThreadTodoProject,
+  threadTodoProjectIdentity,
   matchThreadTodoProject,
   threadTodoProjectChoices,
   threadTodoProjectForDirectory,
   type ThreadTodoProjectCandidate,
 } from "./thread-todo-projects.js";
 import { resolveThreadTodoModel } from "./thread-todo-models.js";
+import {
+  resolveThreadTodoStartEnvironment,
+  resolveThreadTodoStartSpeed,
+  threadTodoSpeedNeedsDestination,
+} from "./thread-todo-dispatch.js";
 import {
   ThreadTodoError,
   ThreadTodoService,
@@ -85,6 +91,11 @@ export function resetThreadTodoServiceForTests(): void {
  */
 export async function listThreadTodoProjects(): Promise<ThreadTodoProject[]> {
   return threadTodoProjectChoices(await (listProjectCandidates?.() ?? []));
+}
+
+/** The local Directories rows a card's project can match. Empty before install. */
+export async function listThreadTodoProjectCandidates(): Promise<ThreadTodoProjectCandidate[]> {
+  return await (listProjectCandidates?.() ?? []);
 }
 
 /**
@@ -193,10 +204,17 @@ export function installThreadTodoRuntime(params: {
   };
   readDefaultMergeMethod = params.readDefaultMergeMethod;
   todos.setOnChanged(changed);
-  todos.setRunners(createThreadTodoRunners({ registry, federation }));
+  todos.setRunners(createThreadTodoRunners({ registry, federation, listProjects }));
   todos.setDispatchSettingsReader(async (thread) => {
     const settings = await registry.readThreadHandoffSettings(thread);
-    return { backend: thread.backend, model: settings.model, reasoningEffort: settings.reasoningEffort };
+    const threadSpeed = {
+      ...optional("serviceTier", settings.serviceTier),
+      ...optional("fastMode", settings.fastMode),
+    };
+    return {
+      thread: { backend: thread.backend, model: settings.model, reasoningEffort: settings.reasoningEffort },
+      ...(Object.keys(threadSpeed).length > 0 ? { threadSpeed } : {}),
+    };
   });
   // An archived thread's cards have nothing left to act on.
   unsubscribeArchive?.();
@@ -437,12 +455,27 @@ export type ThreadTodoRunnerRegistry = Pick<
 export function createThreadTodoRunners(params: {
   registry: ThreadTodoRunnerRegistry;
   federation?: PwrAgentFederationHandler;
+  /**
+   * This machine's Directories rows, whose origins find a card's project on
+   * a peer that files it under another name.
+   */
+  listProjects?: () => Promise<ThreadTodoProjectCandidate[]>;
 }): ThreadTodoActionRunners {
   const { registry, federation } = params;
+  // Without them the peer is matched by name, as before.
+  const listLocalProjects = async (): Promise<ThreadTodoProjectCandidate[]> =>
+    await Promise.resolve().then(() => params.listProjects?.() ?? []).catch((error: unknown) => {
+      threadTodoLog.warn("could not list projects to match a peer's copy", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    });
   return {
     mergePullRequest: async (request) =>
       await new GithubPrFetcher().mergePullRequest(request),
-    startThread: async ({ sourceBackend, sourceThreadId, cwd, crossProject, action, modelSettings }) => {
+    startThread: async ({
+      sourceBackend, sourceThreadId, cwd, crossProject, action, modelSettings, workMode: chosenWorkMode, environment, speed,
+    }) => {
       const source = await registry.readThreadHandoffSettings({
         backend: sourceBackend,
         threadId: sourceThreadId,
@@ -457,9 +490,13 @@ export function createThreadTodoRunners(params: {
       const chosen = { backend: selected.backend, model: validated.model, reasoningEffort: validated.reasoningEffort };
       const sameBackend = chosen.backend === sourceBackend;
       let executionMode = action.executionMode ?? source.executionMode;
+      const inheritedSpeed = sameBackend ? source : undefined;
+      const destination = (!sameBackend && action.executionMode === undefined)
+        || threadTodoSpeedNeedsDestination(speed, inheritedSpeed)
+        ? (await registry.listBackends({ includeUnavailable: true })).backends
+          .find((backend) => backend.kind === chosen.backend)
+        : undefined;
       if (!sameBackend && action.executionMode === undefined) {
-        const { backends } = await registry.listBackends({ includeUnavailable: true });
-        const destination = backends.find((backend) => backend.kind === chosen.backend);
         if (destination && !destination.executionModes.some((mode) => mode.mode === executionMode && mode.available)) {
           // An inherited mode must never raise access to make a provider fit.
           if (!destination.executionModes.some((mode) => mode.mode === "default" && mode.available)) {
@@ -468,26 +505,43 @@ export function createThreadTodoRunners(params: {
           executionMode = "default";
         }
       }
+      const speedSettings = resolveThreadTodoStartSpeed({
+        ...(destination ? { destination } : {}),
+        ...(catalog ? { catalog } : {}),
+        ...optional("model", chosen.model ?? catalog?.models?.find((entry) => entry.current)?.id),
+        ...optional("requested", speed),
+        ...optional("inherited", inheritedSpeed),
+      });
+      const workMode = chosenWorkMode ?? action.workMode;
+      const codexEnvironment = await resolveThreadTodoStartEnvironment({
+        requested: environment,
+        cwd,
+        source: crossProject ? undefined : source.codexEnvironmentRuntime,
+      });
       const settings = {
         executionMode,
         ...optional("model", chosen.model),
         ...optional("reasoningEffort", chosen.reasoningEffort),
-        ...(sameBackend ? {
-          ...optional("serviceTier", source.serviceTier),
-          ...optional("fastMode", source.fastMode),
-        } : {}),
+        ...speedSettings,
       };
       const started = await registry.startThread({
         backend: chosen.backend,
         ...(cwd ? { cwd } : {}),
         ...settings,
-        ...(action.workMode ? { workMode: action.workMode } : {}),
+        // startThread prepares an environment only for a named work mode.
+        ...(workMode || codexEnvironment ? { workMode: workMode ?? "local" } : {}),
+        ...(codexEnvironment
+          ? {
+              codexEnvironmentRuntime: codexEnvironment.runtime,
+              ...(codexEnvironment.rerunSetup ? { rerunCodexEnvironmentSetup: true } : {}),
+            }
+          : {}),
         // The cwd is the raising thread's checkout. Its branch carries that
         // thread's unpublished work, so a card's new worktree starts from
         // the default branch instead.
         // A card that says New worktree must not fall back to sharing the
         // raising thread's checkout.
-        ...(action.workMode === "worktree"
+        ...(workMode === "worktree"
           ? { worktreeBase: "default_branch" as const, requiredWorkMode: "worktree" as const }
           : {}),
         // Work for another project is not grouped under this thread, as
@@ -534,13 +588,20 @@ export function createThreadTodoRunners(params: {
             project,
             crossProject,
             action,
+            modelSettings,
+            workMode,
+            environment,
+            speed,
           }) => {
             if (!project) {
               throw new Error("This to-do has no project to find on the other PwrAgent.");
             }
-            // The access mode carries over. The model does not: it was
-            // checked against this machine's catalog, and the peer has its
-            // own, so the peer applies its defaults.
+            // The access mode carries over. The model goes only when the
+            // operator picked it for this peer: the card's own was checked
+            // against this machine's catalog, not the peer's.
+            if (speed === "ultrafast") {
+              throw new ThreadTodoError("invalid_arguments", "Ultrafast cannot be requested on another PwrAgent. Choose Standard or Fast.");
+            }
             const source = await registry.readThreadHandoffSettings({
               backend: sourceBackend,
               threadId: sourceThreadId,
@@ -551,6 +612,9 @@ export function createThreadTodoRunners(params: {
             };
             // Match against the complete list, including label matches that
             // take precedence over a folder-name fallback on an earlier page.
+            // Read alongside the peer's pages: this machine's row names the
+            // repository the card's project clones.
+            const localProjects = listLocalProjects();
             const candidates: ListInstanceProjectsResult["projects"] = [];
             const cursors = new Set<string>();
             let cursor: string | undefined;
@@ -572,9 +636,15 @@ export function createThreadTodoRunners(params: {
               if (cursors.has(cursor)) throw new Error("The peer project listing cursor did not advance.");
               cursors.add(cursor);
             } while (cursor);
-            const counterpart = findPeerThreadTodoProject(project, candidates);
+            // The peer may file the same checkout under another name, so
+            // match by the repository this machine's row says it clones.
+            const identity = threadTodoProjectIdentity(project, await localProjects);
+            const counterpart = findPeerThreadTodoProject(identity, candidates);
             if (!counterpart) {
-              throw new Error(`${projects.instanceLabel} has no project named ${project.label}.`);
+              const repository = identity.repositoryKey ?? identity.repositoryKeys?.[0];
+              throw new Error(repository
+                ? `${projects.instanceLabel} has no checkout of ${repository} (${project.label} here).`
+                : `${projects.instanceLabel} has no project named ${project.label}.`);
             }
             // No title: create_instance_thread has none to set, and the
             // peer names the thread from its first turn.
@@ -586,7 +656,16 @@ export function createThreadTodoRunners(params: {
                 projectKey: counterpart.key,
                 input: action.prompt,
                 executionMode: action.executionMode ?? source.executionMode,
-                ...(action.workMode ? { workMode: action.workMode } : {}),
+                ...(modelSettings
+                  ? {
+                      backend: modelSettings.backend,
+                      ...optional("model", modelSettings.model),
+                      ...optional("reasoningEffort", modelSettings.reasoningEffort),
+                    }
+                  : {}),
+                ...(speed ? { fastMode: speed === "fast" } : {}),
+                ...((workMode ?? action.workMode) ? { workMode: workMode ?? action.workMode } : {}),
+                ...(environment ? { environment } : {}),
                 groupingMode: crossProject ? "none" : "subthread",
               },
             });

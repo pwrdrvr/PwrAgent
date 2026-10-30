@@ -21,6 +21,9 @@ function operations() {
     setItemChecked: vi.fn((_request?: unknown) => ({ todo: card })),
     setProject: vi.fn(async (_request?: unknown) => ({ todo: card })),
     snapshotFeed: vi.fn(async (_request?: unknown) => ({ epoch: "owner", revision: 0, todos: [card] })),
+    listDispatchEnvironments: vi.fn(async (_request?: unknown) => ({
+      projectFound: true, environments: [], defaultSource: "none" as const,
+    })),
   };
 }
 
@@ -74,6 +77,20 @@ describe("federated To-do ownership", () => {
     const modelSettings = { backend: "claude" as const, model: "opus", reasoningEffort: "high" };
     await service.request("runAction", { id: "remote-todo:peer:same-card", modelSettings });
     expect(remoteOperations.runAction).toHaveBeenCalledWith({ id: "same-card", modelSettings });
+    expect(local.runAction).not.toHaveBeenCalled();
+  });
+
+  it("reads gateway environments explicitly without changing the remote viewer's card owner", async () => {
+    const { service, local, remote } = setup();
+    const project = { key: "directory:/atlas", label: "Atlas", path: "/atlas" };
+    await service.request("listDispatchEnvironments", { project }, target);
+    expect(remote).toHaveBeenLastCalledWith(target, "listDispatchEnvironments", { project });
+    await service.request("listDispatchEnvironments", { project, federationTarget: { scope: "local" } }, target);
+    expect(local.listDispatchEnvironments).toHaveBeenCalledExactlyOnceWith({ project });
+    await service.request("runAction", { id: "remote-todo:peer:same-card" }, target);
+    expect(remote).toHaveBeenLastCalledWith(target, "runAction", { id: card.id });
+    await service.request("runAction", { id: "remote-todo:peer:same-card", startOnInstanceId: "gateway" }, target);
+    expect(remote).toHaveBeenLastCalledWith(target, "runAction", { id: card.id, startOnInstanceId: "gateway" });
     expect(local.runAction).not.toHaveBeenCalled();
   });
 

@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
 import { once } from "node:events";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, onTestFailed } from "vitest";
 
 const require = createRequire(import.meta.url);
 const desktop = fileURLToPath(new URL("..", import.meta.url));
@@ -14,8 +14,22 @@ const core = fromPlaywright.resolve("playwright-core/lib/coreBundle");
 const diagnostics = new URL("./playwright-shutdown-diagnostics.mjs", import.meta.url).href;
 const roots = [];
 const activeProbes = new Set();
+// A probe starts two cold Node processes, the Playwright CLI and its worker,
+// and each loads Playwright and the generated config before the worker is
+// ready. On macOS that took 0.5s idle, up to 3.2s beside a full unit shard and
+// 12.6s at a load average of 36 on ten cores. The shutdown these tests exercise
+// did not vary: Playwright's five-second teardown deadline measured 5.0-5.1s
+// throughout. Cold start therefore has its own budget, and the shutdown budget
+// starts from the worker's recorded readiness.
+const COLD_START_BUDGET_MS = 30_000;
+const SHUTDOWN_BUDGET_MS = 20_000;
+// Vitest's deadline is a backstop behind the named budgets.
+const BACKSTOP_MS = 5_000;
+const PROBE_TEST_TIMEOUT_MS = COLD_START_BUDGET_MS + SHUTDOWN_BUDGET_MS + BACKSTOP_MS;
 
 afterEach(async () => {
+  // Preserve the state at the outer deadline, before abort changes the evidence.
+  for (const probe of activeProbes) probe.capture("before-cleanup");
   await Promise.all([...activeProbes].map(stopProbe));
 });
 
@@ -24,17 +38,46 @@ afterAll(async () => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
-function workerStarted(output) {
+// The worker's own readiness time, in epoch milliseconds, or undefined.
+function workerStartedAt(output) {
   const directory = path.join(output, "worker-shutdown");
-  if (!existsSync(directory)) return false;
-  return readdirSync(directory, { recursive: true })
-    .filter((file) => path.basename(file) === "timeline.jsonl")
-    .some((file) => readFileSync(path.join(directory, file), "utf8").includes('"kind":"worker-start"'));
+  if (!existsSync(directory)) return undefined;
+  for (const file of readdirSync(directory, { recursive: true })) {
+    if (path.basename(file) !== "timeline.jsonl") continue;
+    // Only newline-terminated lines are complete; the worker may be appending.
+    const start = readFileSync(path.join(directory, file), "utf8").split("\n").slice(0, -1)
+      .find((line) => line.includes('"kind":"worker-start"'));
+    if (start) return Date.parse(JSON.parse(start).time);
+  }
+  return undefined;
+}
+
+function workerStarted(output) {
+  return workerStartedAt(output) !== undefined;
+}
+
+// Rejects with the named budget if the work outlives it. The probe's state is
+// captured first, so abort and cleanup cannot replace the evidence.
+function withinBudget(probe, promise, ms, message) {
+  let timer;
+  // The losing promise can still reject during cleanup; that is not a new failure.
+  promise.catch(() => {});
+  const expired = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      probe.capture("before-cleanup");
+      reject(new Error(message));
+    }, Math.max(0, ms));
+  });
+  return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
 }
 
 function waitForWorkerStart(root, output) {
   let watcher;
-  const close = () => watcher?.close();
+  let poll;
+  const close = () => {
+    watcher?.close();
+    clearInterval(poll);
+  };
   const promise = new Promise((resolve, reject) => {
     const check = () => {
       try {
@@ -47,29 +90,107 @@ function waitForWorkerStart(root, output) {
       }
     };
     watcher = watch(root, { recursive: true }, check);
+    // File notifications can be coalesced or dropped. Without this, a worker
+    // that became ready unobserved would fail as a cold start, not shutdown.
+    poll = setInterval(check, 1_000);
     check();
   });
   return { close, promise };
 }
 
-function startProbe(args, options) {
+function createProbeRoot() {
+  mkdirSync(path.join(desktop, ".local"), { recursive: true });
+  const root = mkdtempSync(path.join(desktop, ".local/shutdown-probe-"));
+  roots.push(root);
+  return root;
+}
+
+function milestone(root, kind) {
+  return `require('node:fs').appendFileSync(${JSON.stringify(path.join(root, "milestones.jsonl"))}, JSON.stringify({ kind: ${JSON.stringify(kind)}, pid: process.pid, time: new Date().toISOString() }) + '\\n');`;
+}
+
+function startProbe(args, options, root = createProbeRoot()) {
   const controller = new AbortController();
+  const startedAt = performance.now();
+  const events = [];
+  const tails = { stdout: "", stderr: "" };
+  const bytes = { stdout: 0, stderr: 0 };
+  const note = (kind, details = {}) => {
+    const event = { kind, time: new Date().toISOString(), elapsedMs: performance.now() - startedAt, ...details };
+    events.push(event);
+    if (existsSync(root)) appendFileSync(path.join(root, "parent.jsonl"), `${JSON.stringify(event)}\n`);
+  };
+  // Unlike spawn, this proves Node reached user code. Playwright's forked
+  // workers inherit the preload, so each entry carries its own PID.
+  const bootstrap = path.join(root, "bootstrap.cjs");
+  writeFileSync(bootstrap, milestone(root, "node-start"));
   let child;
+  note("exec-requested");
   const result = new Promise((resolve) => {
-    child = execFile(process.execPath, args, { ...options, signal: controller.signal }, (error, stdout, stderr) => {
+    child = execFile(process.execPath, ["--require", bootstrap, ...args], { ...options, signal: controller.signal }, (error, stdout, stderr) => {
+      note("exec-callback", { code: error?.code ?? 0, signal: error?.signal });
       resolve(error ? { code: error.code, stderr, stdout } : { code: 0, stderr, stdout });
     });
   });
-  const probe = { child, controller, result };
+  child.once("spawn", () => note("spawn", { pid: child.pid }));
+  child.on("error", (error) => note("error", { code: error.code }));
+  child.once("exit", (code, signal) => note("exit", { code, signal }));
+  child.once("close", (code, signal) => note("close", { code, signal }));
+  for (const name of ["stdout", "stderr"]) {
+    child[name].on("data", (chunk) => {
+      bytes[name] += Buffer.byteLength(chunk);
+      tails[name] = (tails[name] + chunk.toString()).slice(-8192);
+    });
+    child[name].once("end", () => note(`${name}-end`));
+    child[name].once("close", () => note(`${name}-close`));
+  }
+  const snapshot = () => ({
+    pid: child.pid, elapsedMs: performance.now() - startedAt, node: process.version, platform: process.platform, arch: process.arch,
+    exitCode: child.exitCode, signalCode: child.signalCode, events: [...events],
+    stdio: ["stdout", "stderr"].map((name) => ({
+      name, bytes: bytes[name], destroyed: child[name].destroyed,
+      readableEnded: child[name].readableEnded,
+      tail: tails[name].replaceAll("must-not-appear-in-artifacts", "[redacted]"),
+    })),
+  });
+  const capture = (boundary) => {
+    const file = path.join(root, `${boundary}.json`);
+    // Late close events may follow afterAll's temporary-directory removal.
+    // The first observation of a boundary wins; later cleanup passes reach
+    // the same boundary after abort has changed the state.
+    if (existsSync(root) && !existsSync(file)) writeFileSync(file, JSON.stringify(snapshot(), null, 2));
+  };
+  const elapsedMs = () => performance.now() - startedAt;
+  const probe = { child, controller, result, root, note, snapshot, capture, elapsedMs };
+  onTestFailed(() => {
+    capture("after-cleanup");
+    const destination = path.join(desktop, "test-results/unit-shutdown-probes", path.basename(root));
+    // Keep the CI log bounded; full timelines and pipe tails are in the artifact.
+    // Log before copying so a failed copy cannot also lose this summary.
+    const beforeCleanup = path.join(root, "before-cleanup.json");
+    const state = existsSync(beforeCleanup) ? JSON.parse(readFileSync(beforeCleanup, "utf8")) : snapshot();
+    console.error(`[shutdown-probe] evidence=${destination}; boundary=${existsSync(beforeCleanup) ? "before-cleanup" : "completed"}; pid=${state.pid}; exit=${state.exitCode}; signal=${state.signalCode}; events=${state.events.map(({ kind }) => kind).join(",")}; pipes=${JSON.stringify(state.stdio.map(({ tail: _tail, ...pipe }) => pipe))}`);
+    cpSync(root, destination, { recursive: true });
+  });
   activeProbes.add(probe);
-  void result.finally(() => activeProbes.delete(probe));
+  void result.then(() => {
+    activeProbes.delete(probe);
+    capture("completed");
+  });
   return probe;
 }
 
 async function stopProbe(probe) {
+  // After an outer timeout, afterEach and probe()'s finally both stop the
+  // probe. Keep the first stop's evidence and request one abort.
+  const stopping = probe.controller.signal.aborted;
+  if (!stopping) probe.capture("before-stop");
   const exited = () => probe.child.exitCode !== null || probe.child.signalCode !== null;
   if (exited()) return;
-  probe.controller.abort();
+  if (!stopping) {
+    probe.note("abort-requested");
+    probe.controller.abort();
+  }
   await Promise.race([
     once(probe.child, "close").catch(() => undefined),
     new Promise((resolve) => setTimeout(resolve, 500)),
@@ -78,9 +199,7 @@ async function stopProbe(probe) {
 }
 
 async function probe(mode, { captureAfterMs = 100 } = {}) {
-  mkdirSync(path.join(desktop, ".local"), { recursive: true });
-  const root = mkdtempSync(path.join(desktop, ".local/shutdown-probe-"));
-  roots.push(root);
+  const root = createProbeRoot();
   const output = path.join(root, "results");
   const descendantPidFile = path.join(root, "descendant.pid");
   const childSource = mode === "pipe"
@@ -90,14 +209,19 @@ async function probe(mode, { captureAfterMs = 100 } = {}) {
     import playwright from ${JSON.stringify(pathToFileURL(require.resolve("@playwright/test")).href)};
     const { test } = playwright;
     import { installShutdownDiagnostics } from ${JSON.stringify(diagnostics)};
+    import { createRequire } from 'node:module';
+    const require = createRequire(import.meta.url);
+    ${milestone(root, "config-evaluated")}
     installShutdownDiagnostics({ outputDir: ${JSON.stringify(output)}, currentTest: () => test.info(), captureAfterMs: ${captureAfterMs} });
     export default { testDir: '.', testMatch: '*.spec.cjs', outputDir: ${JSON.stringify(output)}, timeout: 5000, workers: 1, retries: 0, reporter: 'list' };
   `);
   writeFileSync(path.join(root, "probe.spec.cjs"), `
     const { test: base, expect } = require(${JSON.stringify(require.resolve("@playwright/test"))});
     const { utils } = require(${JSON.stringify(core)});
+    ${milestone(root, "spec-evaluated")}
     const test = ${mode === "fixture" ? `base.extend({ stuck: [async ({}, use) => { await use(); await new Promise(() => {}); }, { scope: 'worker', auto: true }] })` : "base"};
     test('identifiable shutdown probe', async () => {
+      ${milestone(root, "test-body")}
       ${mode === "fixture" ? "expect(true).toBe(true);" : `
       const launched = await utils.launchProcess({
         command: process.execPath, args: ['-e', ${JSON.stringify(childSource)}],
@@ -106,30 +230,38 @@ async function probe(mode, { captureAfterMs = 100 } = {}) {
         attemptToGracefullyClose: () => ${mode === "pipe" ? "Promise.resolve()" : "new Promise(() => {})"},
       });
       expect(launched.launchedProcess.pid).toBeGreaterThan(0);
+      ${milestone(root, "test-process-launched")}
       ${mode === "pipe" ? "await new Promise(resolve => launched.launchedProcess.once('exit', resolve));" : ""}
       ${mode === "healthy" ? "await launched.kill();" : ""}
       `}
+      ${milestone(root, "test-body-end")}
     });
   `);
   const started = startProbe([cli, "test", "-c", path.join(root, "playwright.config.mjs")], {
     cwd: desktop,
     env: { ...process.env, PWRAGENT_E2E_WORKER_DIAGNOSTICS: "1", SHUTDOWN_PROBE_SECRET: "must-not-appear-in-artifacts" },
     maxBuffer: 1024 * 1024,
-  });
+  }, root);
   const readiness = waitForWorkerStart(root, output);
   let result;
   try {
-    // Startup is governed by the test's own deadline and afterEach owns the
-    // child if it fails. Worker config evaluation precedes the test and
-    // cleanup lifecycle, so worker-start is not a cleanup deadline.
-    await Promise.race([
+    // Cold start ends at worker readiness; the finally block owns the child if
+    // either budget expires.
+    await withinBudget(started, Promise.race([
       readiness.promise,
       started.result.then((completed) => {
         if (workerStarted(output)) return completed;
         throw new Error(`Playwright exited before the worker shutdown recorder became ready.\n${completed.stdout}${completed.stderr}`);
       }),
-    ]);
-    result = await started.result;
+    ]), COLD_START_BUDGET_MS, `Playwright did not reach worker readiness within the ${COLD_START_BUDGET_MS}ms cold-start budget.`);
+    started.note("worker-ready-observed");
+    // Measured from the worker's record, so a late observation cannot extend
+    // the shutdown budget. The record is wall-clock time, so the lag is bounded
+    // by the probe's monotonic age; a clock step cannot exceed that bound.
+    const readyAt = workerStartedAt(output) ?? Date.now();
+    const lagMs = Math.min(Math.max(0, Date.now() - readyAt), started.elapsedMs());
+    result = await withinBudget(started, started.result, SHUTDOWN_BUDGET_MS - lagMs,
+      `Playwright did not finish within ${SHUTDOWN_BUDGET_MS}ms of worker readiness.`);
   } finally {
     readiness.close();
     await stopProbe(started);
@@ -145,14 +277,12 @@ async function probe(mode, { captureAfterMs = 100 } = {}) {
   const artifacts = files.map((file) => ({ file, text: readFileSync(path.join(diagnosticsRoot, file), "utf8") }));
   expect(artifacts.map(({ text }) => text).join("\n")).not.toContain("must-not-appear-in-artifacts");
   expect(artifacts.find(({ file }) => file.endsWith("timeline.jsonl"))?.text).toContain('"kind":"worker-start"');
-  return { ...result, artifacts, snapshots: artifacts.filter(({ file }) => file.includes("snapshot-")).map(({ text }) => JSON.parse(text)) };
+  return { ...result, parent: started.snapshot(), artifacts, snapshots: artifacts.filter(({ file }) => file.includes("snapshot-")).map(({ text }) => JSON.parse(text)) };
 }
 
 describe("real Playwright worker shutdown diagnostics", () => {
   it("does not report worker readiness from a controller with an inherited worker index", async () => {
-    mkdirSync(path.join(desktop, ".local"), { recursive: true });
-    const root = mkdtempSync(path.join(desktop, ".local/shutdown-probe-"));
-    roots.push(root);
+    const root = createProbeRoot();
     const output = path.join(root, "results");
     writeFileSync(path.join(root, "playwright.config.mjs"), `
       import { installShutdownDiagnostics } from ${JSON.stringify(diagnostics)};
@@ -167,20 +297,26 @@ describe("real Playwright worker shutdown diagnostics", () => {
       cwd: desktop,
       env: { ...process.env, TEST_WORKER_INDEX: "7", PWRAGENT_E2E_WORKER_DIAGNOSTICS: "1" },
       maxBuffer: 1024 * 1024,
-    });
-    const result = await started.result;
+    }, root);
+    // Listing starts no worker, so the whole run is cold start.
+    const result = await withinBudget(started, started.result, COLD_START_BUDGET_MS,
+      `Playwright did not list tests within the ${COLD_START_BUDGET_MS}ms cold-start budget.`);
     expect(result.code, result.stdout + result.stderr).toBe(0);
     expect(existsSync(path.join(output, "worker-shutdown"))).toBe(false);
-  });
+  }, COLD_START_BUDGET_MS + BACKSTOP_MS);
 
   it("terminates a probe that stalls before worker readiness", async () => {
     const started = startProbe(["-e", "setInterval(() => {}, 1_000)"], {
       cwd: desktop,
       maxBuffer: 1024 * 1024,
     });
+    await once(started.child, "spawn");
+    expect(started.snapshot()).toMatchObject({ exitCode: null, signalCode: null });
+    expect(started.snapshot().events.map(({ kind }) => kind)).toEqual(["exec-requested", "spawn"]);
     await stopProbe(started);
     await started.result;
     expect(started.child.exitCode !== null || started.child.signalCode !== null).toBe(true);
+    expect(started.snapshot().events.map(({ kind }) => kind)).toContain("close");
   });
 
   it("names the process, originating test and unresolved close before Playwright times out", async () => {
@@ -221,14 +357,14 @@ describe("real Playwright worker shutdown diagnostics", () => {
       expect(tree.error, record).toBeUndefined();
       expect(tree.processes.some(({ pid }) => pid === pending.pid)).toBe(true);
     }
-  }, 20_000);
+  }, PROBE_TEST_TIMEOUT_MS);
 
   it("distinguishes a worker fixture hang from process cleanup", async () => {
     const result = await probe("fixture");
     expect(result.code, result.stdout + result.stderr).toBe(1);
     expect(result.stdout).toContain("1 passed");
     expect(result.snapshots.find(({ reason }) => reason === "slow-worker-cleanup").phase).toBe("worker-fixtures");
-  }, 20_000);
+  }, PROBE_TEST_TIMEOUT_MS);
 
   it("records an interrupted query when capture starts at the worker exit boundary", async () => {
     // Trigger capture only from workerEnd after the existing teardown deadline.
@@ -254,7 +390,7 @@ describe("real Playwright worker shutdown diagnostics", () => {
         return true;
       }
     }).toBe(true);
-  }, 20_000);
+  }, PROBE_TEST_TIMEOUT_MS);
 
   // This fixture relies on POSIX inherited-fd lifetime: the grandchild keeps
   // the worker's pipe open after its parent exits. Windows CI closes it and
@@ -271,13 +407,17 @@ describe("real Playwright worker shutdown diagnostics", () => {
     expect(pending.exitCode).toBe(0);
     expect(pending.stage).toBe("wait-for-process-close-and-cleanup");
     expect(pending.stdio.some(({ fd, destroyed }) => fd === 1 && !destroyed)).toBe(true);
-  }, 20_000);
+  }, PROBE_TEST_TIMEOUT_MS);
 
   it("leaves healthy cleanup green without expensive snapshots", async () => {
     const result = await probe("healthy");
     expect(result.code, result.stdout + result.stderr).toBe(0);
     expect(result.snapshots).toHaveLength(0);
+    const events = result.parent.events.map(({ kind }) => kind);
+    expect(events).toEqual(expect.arrayContaining(["spawn", "worker-ready-observed", "exit", "close", "exec-callback"]));
+    expect(events.indexOf("exit")).toBeLessThan(events.indexOf("close"));
+    expect(result.parent.stdio.every(({ destroyed, readableEnded }) => destroyed && readableEnded)).toBe(true);
     const timeline = result.artifacts.find(({ file }) => file.endsWith("timeline.jsonl")).text;
     expect(timeline).toContain('"kind":"worker-end","failed":false');
-  }, 20_000);
+  }, PROBE_TEST_TIMEOUT_MS);
 });
