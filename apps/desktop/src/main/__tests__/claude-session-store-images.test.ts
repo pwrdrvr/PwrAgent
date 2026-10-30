@@ -113,6 +113,17 @@ describe("Claude history image persistence", () => {
     await expect(readFile(imagePath(entryImages(await f.store.entries(id))[0]!))).resolves.toEqual(png);
   });
 
+  it("keeps a fork's cached images after the source thread's image directory is removed", async () => {
+    const f = await fixture();
+    const forkId = "f3333333-3333-4333-8333-333333333333";
+    await f.store.append(id, [activity()]);
+    await f.store.append(forkId, await f.store.entries(id));
+    await rm(path.join(f.images, id), { recursive: true });
+    const forkPath = imagePath(entryImages(await f.store.entries(forkId))[0]!);
+    expect(path.dirname(forkPath)).toBe(path.join(f.images, forkId));
+    await expect(readFile(forkPath)).resolves.toEqual(png);
+  });
+
   it("preserves remote and existing file URLs, malformed images, and text", async () => {
     const f = await fixture();
     const entry: AppServerThreadEntry = {

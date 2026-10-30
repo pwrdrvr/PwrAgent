@@ -785,7 +785,7 @@ describe("Claude SDK backend", () => {
       .toMatchObject({ params: { tokenUsage: { claudeCostUSD: 0.3, last: { inputTokens: 30, outputTokens: 5 } } } });
     expect((await f.backend.readThread(threadId)).messages).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: steered.messageId, text: "Focus on the PR", parts: [
-        { type: "text", text: "Focus on the PR" }, { type: "image", url: "data:image/png;base64,aGVsbG8=" },
+        { type: "text", text: "Focus on the PR" }, { type: "image", url: expect.stringMatching(/^pwragent-image:/) },
       ], turn: expect.objectContaining({ id: started.turnId, status: "completed" }) }),
     ]));
     expect(await iterator.next()).toMatchObject({ done: true });

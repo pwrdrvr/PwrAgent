@@ -199,14 +199,35 @@ async function writeCachedTranscriptImage(filePath: string, data: Buffer): Promi
  * a failed write rejects the append so history never references a missing image.
  * Only image fields are visited; text and remote URLs keep their original form.
  */
-export async function persistTranscriptEntryDataImages(
+export async function persistTranscriptEntryImages(
   entries: readonly AppServerThreadEntry[],
   root: string,
 ): Promise<AppServerThreadEntry[]> {
   const writes = new Map<string, Promise<void>>();
   const retain = async (part: AppServerThreadImagePart): Promise<AppServerThreadImagePart> => {
     const image = parseSupportedImageDataUrl(part.url);
-    if (!image) return part;
+    if (!image) {
+      // Forks copy history containing cache URLs. Give the fork its own hard
+      // link so deleting the source thread cannot remove the fork's image.
+      let sourcePath: string | undefined;
+      try {
+        sourcePath = decodeTranscriptImageProtocolRequest(part.url);
+      } catch {
+        return part;
+      }
+      if (!sourcePath || path.dirname(sourcePath) === root) return part;
+      const cacheRoot = path.dirname(root);
+      if (path.dirname(path.dirname(sourcePath)) !== cacheRoot
+        || !/^[a-f0-9]{64}\.[a-z]+$/.test(path.basename(sourcePath))) return part;
+      const filePath = path.join(root, path.basename(sourcePath));
+      await mkdir(root, { recursive: true, mode: 0o700 });
+      try {
+        await link(sourcePath, filePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+      return { ...part, url: toTranscriptImageProtocolUrl(pathToFileURL(filePath).toString()) };
+    }
     const filePath = path.join(root, `${image.sha256}.${image.extension}`);
     let write = writes.get(filePath);
     if (!write) {

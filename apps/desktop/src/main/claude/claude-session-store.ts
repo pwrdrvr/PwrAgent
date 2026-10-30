@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AppServerThreadEntry, AppServerThreadSummary, BackendRateLimitSummary } from "@pwragent/shared";
-import { persistTranscriptEntryDataImages } from "../transcript-image-protocol";
+import { persistTranscriptEntryImages } from "../transcript-image-protocol";
 
 /** Not a thread id, so list() never reads it as session metadata. */
 const RATE_LIMITS_FILE = "rate-limits.json";
@@ -244,7 +244,7 @@ export class ClaudeSessionStore {
       return;
     }
     const destination = this.file(id, "jsonl");
-    const retained = await persistTranscriptEntryDataImages(
+    const retained = await persistTranscriptEntryImages(
       entries, path.join(this.imageRoot, id),
     );
     await mkdir(this.root, { recursive: true, mode: 0o700 });
