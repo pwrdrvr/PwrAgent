@@ -3954,7 +3954,6 @@ class DesktopAppServerService {
           }
           const liveDirectories = new Set(index.directories.map((directory) => directory.key));
           for (const key of this.lastDirectoriesByKey.keys()) if (!liveDirectories.has(key)) this.lastDirectoriesByKey.delete(key);
-          getDesktopBackendRegistry().rememberNavigationVisibilityIndex(index);
         }
         await this.getPrAutoDispatchCoordinator().resume();
         if (isCurrent()) return;

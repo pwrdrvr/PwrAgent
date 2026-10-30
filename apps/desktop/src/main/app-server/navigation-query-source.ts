@@ -68,6 +68,12 @@ export async function loadLocalNavigationQueryIndex(params: {
     // reflects every boundary observed before this value.
     const observedAt = nextNavigationObservation();
     const index = { ...await buildLocalNavigationQueryIndex({ ...params, registry, signal, checkpoint }), observedAt };
+    // Creation uses the same complete membership that the sidebar just read.
+    // Waiting for owner PR metadata work can leave visibility uninitialized
+    // even after the directory and its pins have appeared in the window.
+    if (backend === "all" && index.coverage?.state === "complete") {
+      registry.rememberNavigationVisibilityIndex?.(index);
+    }
     // Only the whole-owner index is what viewers read as its directory set.
     if (backend === "all" && !params.registry) {
       getNavigationDirectorySetAnnouncer().observe(index.directories);

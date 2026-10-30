@@ -31,11 +31,12 @@ import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-so
 import { NavigationQueryPool } from "../app-server/navigation-query-pool";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 
-function createSource() {
+function createSource(coverage: "complete" | "checking" | "degraded" = "complete") {
   let finish!: () => void;
   const gate = new Promise<void>((resolve) => { finish = resolve; });
   const listeners = new Set<(event: AgentEvent) => void>();
   const listThreads = vi.fn(async (_params?: { forceRefresh?: boolean }) => { await gate; return []; });
+  const rememberNavigationVisibilityIndex = vi.fn();
   const registry = {
     listThreads,
     onEvent: (listener: (event: AgentEvent) => void) => {
@@ -46,9 +47,12 @@ function createSource() {
     hydrateThreadGitWorkingStates: async (threads: []) => threads,
     withNavigationSubAgentActivity: (threads: []) => threads,
     getNavigationInputRequestThreadKeys: () => new Set<string>(),
+    rememberNavigationVisibilityIndex,
+    getStartupProviderRefreshStatus: () => ({ state: coverage === "checking" ? "checking" : "ready" }),
+    isIncompleteThreadList: () => coverage === "degraded",
   } as unknown as DesktopBackendRegistry;
   return {
-    finish, listThreads, listeners,
+    finish, listThreads, listeners, rememberNavigationVisibilityIndex,
     read: (backend?: AppServerBackendScope) => loadLocalNavigationQueryIndex({ registry, backend, callerReason: "source-event-regression" }),
     refresh: () => loadLocalNavigationQueryIndex({ registry, callerReason: "source-event-regression", refreshProviders: true }),
     emit: (method: string) => {
@@ -59,6 +63,23 @@ function createSource() {
 }
 
 describe("owner index source event admission", () => {
+  it.each([
+    { backend: "all", coverage: "complete", remembers: true },
+    { backend: "codex", coverage: "complete", remembers: false },
+    { backend: "all", coverage: "checking", remembers: false },
+    { backend: "all", coverage: "degraded", remembers: false },
+  ] as const)("publishes creation visibility before returning a $backend $coverage index", async ({ backend, coverage, remembers }) => {
+    const source = createSource(coverage);
+    source.finish();
+    try {
+      const index = await source.read(backend);
+      if (remembers) expect(source.rememberNavigationVisibilityIndex).toHaveBeenCalledExactlyOnceWith(index);
+      else expect(source.rememberNavigationVisibilityIndex).not.toHaveBeenCalled();
+    } finally {
+      source.emit("thread/name/updated");
+    }
+  });
+
   it("shares pending index work across transcript-only events", async () => {
     const source = createSource();
     const first = source.read();
