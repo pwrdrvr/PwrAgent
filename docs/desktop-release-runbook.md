@@ -268,13 +268,14 @@ git push origin v1.0.0-alpha.7
 
 The `Release Desktop (macOS universal + arm64 + Windows + Linux DEB)` workflow contains
 ten job definitions (unit tests fan out across two lanes and Linux packaging
-across two architectures). Every macOS job, including signing, uses the
-restricted `[self-hosted, macOS, ARM64, pwrdrvr-macos]` runner pool. These
-persistent guests must supply macOS 26 and stable Xcode 26 or newer:
+across two architectures). macOS dependency setup, lint/typecheck, and unit
+tests use the restricted `[self-hosted, macOS, ARM64, pwrdrvr-macos]` runner
+pool. Preparation and signing use GitHub-hosted `macos-26`, restoring the
+working release environment from before the signing migration:
 
 1. `Install macOS dependencies` seeds or reuses the guest's persistent pnpm,
    Corepack, and Electron caches under `~/Library/Caches/pwragent-ci`. Every
-   source job installs its own workspace links against that store. A warm
+   self-hosted source job installs its own workspace links against that store. A warm
    store skips the GitHub dependency-cache download; cold guests seed it
    through the pinned `configure-nodejs` action. This mode replaces lookup-only
    setup, which cannot be combined with a persistent store.
@@ -286,7 +287,9 @@ persistent guests must supply macOS 26 and stable Xcode 26 or newer:
    with `pnpm test --shard=<lane>/2`. Both lanes select Xcode with actool 26 and
    set `PWRAGENT_REQUIRE_ACTOOL=1`, so the icon compile test cannot silently skip.
 4. `Prepare macOS signing input` runs
-   `apps/desktop/scripts/release.mjs --prepare-only` for both architectures.
+   `apps/desktop/scripts/release.mjs --prepare-only` for both architectures
+   on GitHub-hosted `macos-26`, with the standard dependency cache rather than
+   a persistent guest store.
    It runs alongside lint/typecheck and the unit test lanes after cache setup.
    These jobs have `contents: read`, explicit `id-token: none`, no Apple secrets,
    and checkout credentials disabled. macOS signing, Linux packaging, and
@@ -295,18 +298,12 @@ persistent guests must supply macOS 26 and stable Xcode 26 or newer:
 5. `Sign, notarize, package macOS`, gated by the protected `apple-signing`
    environment, with `contents: read` and explicit `id-token: none`. It does
    not check out the repository or run dependency installation/postinstall
-   scripts. A SHA-pinned `actions/setup-node` selects Node.js `^24.22.1`
-   with `package-manager-cache: false`; it only installs the runtime into the
-   runner tool cache and adds it to this job's PATH. No system Node install or
-   package-manager setup is required. It starts with a fresh `release-signing`
-   directory and removes it even on failure, so a prior runner checkout cannot
-   supply extra signing files. It downloads the prepared artifact, verifies its SHA-256 digest,
-   expands it, and runs `apps/desktop/scripts/release.mjs --sign-stage-only
-   --no-publish`
-   with the environment-scoped Apple secrets. Before those secrets are passed
-   to packaging, a preflight checks the Node runtime, Apple signing/notarization
-   tools and the staged electron-builder/YAML dependency, and reports available
-   disk space.
+   scripts. It uses a fresh GitHub-hosted `macos-26` runner, downloads the
+   prepared artifact into `.release-input`, verifies its SHA-256 digest,
+   expands it into the workspace, and runs
+   `apps/desktop/scripts/release.mjs --sign-stage-only --no-publish` with the
+   environment-scoped Apple secrets. Node and the Apple certificate/toolchain
+   baseline come from the hosted image, as in the earlier working releases.
 6. `Package Linux`, running on native Ubuntu x64 and arm64 GitHub-hosted
    runners. Each job runs `apps/desktop/scripts/release.mjs --linux
    --no-publish`, verifies the packaged ASAR, writes a stable download alias,
@@ -344,17 +341,17 @@ persistent guests must supply macOS 26 and stable Xcode 26 or newer:
    GitHub Release body, and fails the workflow if the body still reads back as
    empty.
 
-Both signing jobs and both publication jobs explicitly select the same Node.js
+Windows signing and both publication jobs explicitly select the same Node.js
 runtime with `actions/setup-node`, with package-manager caching disabled. They
 do not depend on a prior job's PATH or the hosted image's preinstalled Node.
 Signing dependencies arrive in the verified archive; publication scripts use
 Node's standard library and do not install project dependencies.
 
-The macOS no-secret prepare job runs on the restricted self-hosted Apple Silicon
-pool. Icon Composer's Xcode 26 `AssetCatalogAgent` loads macOS 26 frameworks,
+The macOS no-secret prepare job runs on GitHub-hosted `macos-26`.
+Icon Composer's Xcode 26 `AssetCatalogAgent` loads macOS 26 frameworks,
 so selecting Xcode 26 on `macos-15` crashes during the icon compile even when
-`actool --version` passes. The protected macOS signing job uses the same host
-pool for its electron-builder packaging step.
+`actool --version` passes. The protected macOS signing job uses the same
+GitHub-hosted image for its electron-builder packaging step.
 
 The macOS no-secret prepare job:
 
@@ -370,10 +367,8 @@ The macOS no-secret prepare job:
 The macOS environment-gated signing job:
 
 1. Verifies the prepared artifact SHA-256 from the build job output.
-2. Decodes `APPLE_API_KEY_BASE64` from the env to a temp `.p8` file. The job
-   sets `TMPDIR` to a private, job-specific directory for decoded keys,
-   certificates and temporary keychains. An always-run cleanup removes it
-   immediately after signing, including when signing fails or is cancelled.
+2. Decodes `APPLE_API_KEY_BASE64` from the env to a temp `.p8` file on the
+   disposable GitHub-hosted runner.
 3. Imports `CSC_LINK` into a generated temporary keychain, verifies its
    Developer ID identity, and makes that keychain first in the user search
    list. It then clears `CSC_KEYCHAIN`, `CSC_LINK`, and `CSC_KEY_PASSWORD`

@@ -431,10 +431,14 @@ assertWorkflowJobOrdersText(
   "node apps/desktop/scripts/release.mjs --linux --no-publish",
   "Upload Linux package artifact",
 );
-for (const jobName of ["install-deps", "lint", "test", "prepare", "sign"]) {
+for (const jobName of ["install-deps", "lint", "test"]) {
   assertWorkflowJobRunner(releaseWorkflow, ".github/workflows/release.yml", jobName, macosRunner);
 }
-for (const jobName of ["install-deps", "lint", "test", "prepare"]) {
+for (const jobName of ["prepare", "sign"]) {
+  assertWorkflowJobRunner(releaseWorkflow, ".github/workflows/release.yml", jobName, "macos-26");
+  assertWorkflowJobExcludesText(releaseWorkflow, ".github/workflows/release.yml", jobName, "persistent-store-dir:");
+}
+for (const jobName of ["install-deps", "lint", "test"]) {
   assertWorkflowStepContainsText(
     releaseWorkflow, ".github/workflows/release.yml", jobName,
     "Install Node.js and dependencies", "persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}",
@@ -447,23 +451,18 @@ for (const expected of ["lane: [1, 2]", "run: pnpm test --shard=${{ matrix.lane 
 }
 for (const expected of [
   "environment: apple-signing",
-  "working-directory: release-signing",
-  "Initialize isolated signing workspace",
-  "path: release-signing/.release-input",
-  "uses: ./release-signing/.github/actions/select-xcode-for-actool",
-  "Remove isolated signing workspace",
+  "path: .release-input",
+  "uses: ./.github/actions/select-xcode-for-actool",
 ]) {
   assertWorkflowJobContainsText(releaseWorkflow, ".github/workflows/release.yml", "sign", expected);
 }
-assertWorkflowJobOrdersText(
-  releaseWorkflow, ".github/workflows/release.yml", "sign",
-  "Initialize isolated signing workspace", "Download signing input",
-);
-for (const unexpected of ["actions/checkout@", "configure-nodejs@", "pnpm install"]) {
+for (const unexpected of [
+  "actions/checkout@", "configure-nodejs@", "pnpm install",
+  "working-directory: release-signing", "PWRAGENT_SIGNING_TEMP_DIR",
+]) {
   assertWorkflowJobExcludesText(releaseWorkflow, ".github/workflows/release.yml", "sign", unexpected);
 }
 for (const [jobName, firstNodeStep] of [
-  ["sign", "Check macOS signing prerequisites"],
   ["windows-sign", "      - name: Sign and package Windows installer"],
   ["publish-release-assets", "Verify debug artifact targets, identities, and checksums"],
   ["publish-release-notes", "Publish changelog notes to GitHub Release"],
@@ -483,21 +482,6 @@ for (const [jobName, firstNodeStep] of [
     "Set up Node.js runtime only", firstNodeStep,
   );
 }
-for (const expected of [
-  "command -v",
-  "actool notarytool stapler",
-  "test -f apps/desktop/node_modules/electron-builder/cli.js",
-  'await import("./apps/desktop/scripts/assemble-mac-release.mjs")',
-]) {
-  assertWorkflowStepContainsText(
-    releaseWorkflow, ".github/workflows/release.yml", "sign",
-    "Check macOS signing prerequisites", expected,
-  );
-}
-assertWorkflowJobOrdersText(
-  releaseWorkflow, ".github/workflows/release.yml", "sign",
-  "Check macOS signing prerequisites", "node apps/desktop/scripts/release.mjs --sign-stage-only",
-);
 for (const jobName of ["lint", "test", "prepare"]) {
   assertWorkflowJobNeeds(releaseWorkflow, ".github/workflows/release.yml", jobName, "install-deps");
 }
