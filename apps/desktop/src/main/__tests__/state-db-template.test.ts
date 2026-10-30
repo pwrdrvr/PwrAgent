@@ -40,6 +40,13 @@ describe("desktop-main StateDb template", () => {
   it("is installed for this project", () => {
     const templateDir = process.env.PWRAGENT_TEST_STATE_DB_TEMPLATE_DIR;
     expect(templateDir).toBeTruthy();
+    // The patch keeps the real open on the class. Without it, `served` below
+    // would be a fresh database and every assertion here would hold anyway.
+    expect(
+      (StateDb as unknown as Record<symbol, unknown>)[
+        Symbol.for("pwragent.test.stateDbOriginalOpen")
+      ],
+    ).toBeTypeOf("function");
 
     StateDb.open(path.join(tempDir, "served.db")).close();
 

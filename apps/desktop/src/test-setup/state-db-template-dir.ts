@@ -11,6 +11,12 @@ export default function setup(project: TestProject): () => void {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
   return () => {
-    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    // Best effort: a file Windows still holds must not fail a run whose
+    // tests passed. The directory is under the OS temp dir and named per run.
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch {
+      // Left for the OS temp cleanup.
+    }
   };
 }

@@ -72,7 +72,8 @@ function serveNewFilesFromTemplate(stateDb: StateDbClass, dir: string): void {
   const original = stateDb.open.bind(stateDb);
   stateDb[ORIGINAL_OPEN] = original;
   stateDb.open = function openFromTemplate(dbPath, options) {
-    if (dbPath !== ":memory:" && !fs.existsSync(dbPath)) {
+    // `""` is SQLite's anonymous temporary database, like `:memory:`.
+    if (dbPath !== ":memory:" && dbPath !== "" && !fs.existsSync(dbPath)) {
       const template = templatePathFor(dir, original, options?.profileName ?? "");
       fs.mkdirSync(path.dirname(dbPath), { recursive: true });
       fs.copyFileSync(template, dbPath, fs.constants.COPYFILE_EXCL);
