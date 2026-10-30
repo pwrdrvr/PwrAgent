@@ -2626,6 +2626,55 @@ describe("Claude transcript fidelity", () => {
     }] });
   });
 
+  it("draws a tool result's images on its row instead of their base64, live and in the replay", async () => {
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    let cwd = "";
+    const f = await fixture(async function* () {
+      yield init;
+      // Read answers a PNG with one image block and no text; this one also
+      // omits media_type, as the transcript that reported the bug did.
+      yield call("read-1", "Read", { file_path: path.join(cwd, "shot.png") });
+      yield { type: "user", parent_tool_use_id: null, message: { content: [
+        { type: "tool_result", tool_use_id: "read-1", content: [{ type: "image", source: { type: "base64", data: png } }] },
+      ] } } as SDKMessage;
+      // An MCP screenshot tool can answer text and images in any order.
+      yield call("shot-1", "mcp__browser__screenshot", {});
+      yield { type: "user", parent_tool_use_id: null, message: { content: [{ type: "tool_result", tool_use_id: "shot-1", content: [
+        { type: "text", text: "Captured the page." },
+        { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "/9j/4AAQ" } },
+      ] }] } } as SDKMessage;
+      yield result;
+    });
+    cwd = f.root;
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Look" }] });
+    await f.waitForTurn();
+
+    const pngUrl = `data:image/png;base64,${png}`;
+    const live = (id: string) => {
+      const event = f.events.find((event) => event.notification.method === "item/completed"
+        && getNotificationItem(event.notification.params)?.id === id);
+      return buildLiveToolDetails(getNotificationItem(event!.notification.params)!);
+    };
+    expect(live("read-1")).toEqual([expect.objectContaining({ images: [expect.objectContaining({ url: pngUrl })] })]);
+    expect(live("shot-1")).toEqual([expect.objectContaining({
+      images: [expect.objectContaining({ url: "data:image/jpeg;base64,/9j/4AAQ" })],
+    })]);
+
+    const entries = (await f.backend.readThread(threadId)).entries;
+    const row = (id: string) => entries.find((entry) => entry.type === "activity" && entry.id === id);
+    expect(row("read-1")).toMatchObject({ summary: "Read shot.png", status: "completed", details: [
+      { kind: "read", path: path.join(f.root, "shot.png") },
+      { id: "read-1:output", images: [{ type: "image", url: pngUrl, alt: "Read shot.png" }] },
+    ] });
+    expect(row("shot-1")).toMatchObject({ details: [
+      {}, { markdown: "Captured the page.", images: [{ url: "data:image/jpeg;base64,/9j/4AAQ" }] },
+    ] });
+    // No row keeps the image as text.
+    expect(JSON.stringify(entries.map((entry) => entry.type === "activity"
+      ? entry.details.map((detail) => detail.markdown) : []))).not.toContain("base64");
+  });
+
   it("diffs a new file's content when its patch is empty, and keeps a failed edit's error", async () => {
     let cwd = "";
     const f = await fixture(async function* () {

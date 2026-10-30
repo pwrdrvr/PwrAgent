@@ -1,6 +1,7 @@
 import path from "node:path";
 import type {
-  AppServerThreadActivityDetail, AppServerThreadActivityEntry, AppServerThreadFileDiff, AppServerThreadPlanStep,
+  AppServerThreadActivityDetail, AppServerThreadActivityEntry, AppServerThreadFileDiff, AppServerThreadImagePart,
+  AppServerThreadPlanStep,
 } from "@pwragent/shared";
 
 /** Claude's checklist tool. Its calls are the turn's plan, not tool rows. */
@@ -142,4 +143,54 @@ export function claudeTodoSteps(input: unknown): AppServerThreadPlanStep[] | und
       status: status === "completed" || status === "in_progress" ? status : "pending",
     }];
   });
+}
+
+const CLAUDE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+/** The media type a base64 image's leading bytes name, for a block that omits it. */
+function sniffBase64ImageType(data: string): string | undefined {
+  if (data.startsWith("iVBORw0KGgo")) return "image/png";
+  if (data.startsWith("/9j/")) return "image/jpeg";
+  if (data.startsWith("R0lGOD")) return "image/gif";
+  if (data.startsWith("UklGR")) return "image/webp";
+  return undefined;
+}
+
+function claudeImageBlockPart(block: Record<string, unknown>, alt: string): AppServerThreadImagePart | undefined {
+  const source = block.source as Record<string, unknown> | undefined;
+  if (!source || typeof source !== "object") return undefined;
+  if (source.type === "url" && typeof source.url === "string" && /^https:\/\//iu.test(source.url)) {
+    return { type: "image", url: source.url, alt };
+  }
+  if (source.type !== "base64" || typeof source.data !== "string" || !source.data) return undefined;
+  const data = source.data.replace(/\s+/gu, "");
+  const declared = typeof source.media_type === "string" ? source.media_type.toLowerCase() : undefined;
+  const mediaType = declared && CLAUDE_IMAGE_TYPES.has(declared) ? declared : sniffBase64ImageType(data);
+  return mediaType ? { type: "image", url: `data:${mediaType};base64,${data}`, alt } : undefined;
+}
+
+/**
+ * Splits a tool result's content into the text the row shows and the images
+ * it draws. Claude's replies carry no images of their own: a picture reaches
+ * the transcript as an `image` block of a tool result, as when Read opens a
+ * PNG or an MCP tool returns a screenshot. Other blocks stay as JSON.
+ */
+export function claudeToolResultContent(content: unknown, alt: string): {
+  text: string; images: AppServerThreadImagePart[];
+} {
+  if (typeof content === "string") return { text: content, images: [] };
+  if (!Array.isArray(content)) return { text: content === undefined ? "" : JSON.stringify(content), images: [] };
+  const text: string[] = [];
+  const images: AppServerThreadImagePart[] = [];
+  for (const block of content as unknown[]) {
+    const record = block && typeof block === "object" ? block as Record<string, unknown> : undefined;
+    if (record?.type === "text" && typeof record.text === "string") {
+      text.push(record.text);
+      continue;
+    }
+    const image = record?.type === "image" ? claudeImageBlockPart(record, alt) : undefined;
+    if (image) images.push(image);
+    else text.push(JSON.stringify(block));
+  }
+  return { text: text.join("\n"), images };
 }

@@ -30,7 +30,9 @@ import { claudeCommandActivity, groupClaudeActivities } from "./claude-activity"
 import { backUpRewindFiles, recordRewoundFiles, restoreRewindFiles } from "./claude-rewind-backup";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 import { ClaudeTaskTracker, claudeTaskRow, type ClaudeTaskSettlement } from "./claude-tasks";
-import { CLAUDE_TODO_TOOL, claudeFileDiff, claudeTodoSteps, claudeToolDetail, claudeTurnDiff } from "./claude-tool-activity";
+import {
+  CLAUDE_TODO_TOOL, claudeFileDiff, claudeTodoSteps, claudeToolDetail, claudeToolResultContent, claudeTurnDiff,
+} from "./claude-tool-activity";
 import { normalizeClaudeTitle, requestClaudeTitle, type ClaudeTitleQuery } from "./claude-titles";
 import {
   CLAUDE_REPORT_FINDINGS_TOOL, claudeReportFindingsHooks, claudeReviewOutput, isClaudeOutcomeReport, matchClaudeFindingOutcomes,
@@ -1994,13 +1996,15 @@ export class ClaudeBackend {
         if (launchedTask) live.launchedToolUseIds.add(block.tool_use_id);
         else live.tasks.settleForeground(block.tool_use_id);
         entry.status = block.is_error ? "failed" : launchedTask ? "in_progress" : "completed";
-        const output = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
+        // An image block is drawn on the row, never shown as its base64.
+        const { text: output, images } = claudeToolResultContent(block.content, entry.summary);
         const command = entry.details[0].command?.rawCommand;
         // A successful edit shows its diff instead of the tool's acknowledgement.
         const edit = entry.details[0].kind === "write" && !block.is_error
           ? claudeFileDiff(message.tool_use_result, live.session.cwd) : undefined;
         if (command !== undefined) {
-          entry.details = claudeCommandActivity({ id: entry.id, command, status: entry.status, output }).details;
+          const details = claudeCommandActivity({ id: entry.id, command, status: entry.status, output }).details;
+          entry.details = images.length ? [{ ...details[0], images }, ...details.slice(1)] : details;
         } else if (edit) {
           entry.details = [{ ...entry.details[0], status: entry.status, fileDiff: edit.fileDiff }];
           if (edit.diff) {
@@ -2011,7 +2015,10 @@ export class ClaudeBackend {
           // Keep the invocation when updating generic tools, too.
           const outputId = `${entry.id}:output`;
           entry.details = [...entry.details.filter((detail) => detail.id !== outputId), {
-            id: outputId, kind: entry.details[0].kind, label: `${entry.summary} output`, markdown: output, status: entry.status,
+            id: outputId, kind: entry.details[0].kind, label: `${entry.summary} output`,
+            ...(output || !images.length ? { markdown: output } : {}),
+            ...(images.length ? { images } : {}),
+            status: entry.status,
           }];
         }
         await this.store.append(threadId, [entry]);
@@ -2021,7 +2028,10 @@ export class ClaudeBackend {
           id: entry.id, status: entry.status,
           ...(command !== undefined ? { type: "commandExecution", command, aggregatedOutput: output }
             : { type: "dynamicToolCall", toolName: entry.summary,
-              contentItems: [{ type: "inputText", text: output }] }),
+              contentItems: [
+                ...(output || !images.length ? [{ type: "inputText", text: output }] : []),
+                ...images.map((image) => ({ type: "inputImage", imageUrl: image.url })),
+              ] }),
         };
         await this.emit({ method: "item/completed", params: { threadId, turnId, item } });
       }
