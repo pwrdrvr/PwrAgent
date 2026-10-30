@@ -775,6 +775,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     pricing: ThreadPricingLedgerRead;
   }>();
 
+  private usageActivityCache?: {
+    from: number; to: number; dataVersion: number; changes: number;
+    activity: { rows: UsageActivityRow[]; truncated: boolean; limitHistory: UsageLimitObservation[] };
+  };
+
   private navigationUnreadBaseline?: NavigationUnreadBaseline;
   private readonly directoryLaunchpadListeners = new Set<() => void>();
   private transactionNavigationRead = 0;
@@ -2477,17 +2482,24 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     /** The owner's account limits at completion; rides the same UPDATE. */
     limitObservation?: UsageLimitObservation;
   }): Promise<boolean> {
+    // Most lines share their turn's identity, so existing thread indexes can
+    // answer this without a new write-maintained index. The fallback preserves
+    // the original usage_turn_id-only relationship for every other ledger row.
     const turn = this.stateDb.raw.prepare(
       `SELECT turn.completed_at, turn.completed_at_inferred FROM thread_usage_turns AS turn
         WHERE turn.backend = ? AND turn.thread_id = ? AND turn.turn_id = ?
-          AND EXISTS (
+          AND CASE WHEN EXISTS (
+            SELECT 1 FROM thread_usage_lines AS line
+             WHERE line.backend = turn.backend AND line.thread_id = turn.thread_id
+               AND line.usage_turn_id = turn.usage_turn_id
+               AND line.source = 'live' AND line.scope = 'turn'
+               AND line.parent_thread_id IS NULL AND line.status != 'superseded'
+          ) THEN 1 ELSE EXISTS (
             SELECT 1 FROM thread_usage_lines AS line
              WHERE line.usage_turn_id = turn.usage_turn_id
-               AND line.source = 'live'
-               AND line.scope = 'turn'
-               AND line.parent_thread_id IS NULL
-               AND line.status != 'superseded'
-          )`,
+               AND line.source = 'live' AND line.scope = 'turn'
+               AND line.parent_thread_id IS NULL AND line.status != 'superseded'
+          ) END`,
     ).get(params.backend, params.threadId, params.turnId) as {
       completed_at: number | null;
       completed_at_inferred: number | null;
@@ -2762,6 +2774,28 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     rows: UsageActivityRow[]; truncated: boolean; limitHistory: UsageLimitObservation[];
   }> {
     validateUsageActivityWindow(request);
+    const db = this.stateDb.raw;
+    // total_changes catches local SQL, including title and automation writes;
+    // data_version catches every other connection, including older builds.
+    // Never cache a transaction's snapshot or expose a cached object to callers.
+    const dataVersion = db.pragma("data_version", { simple: true }) as number;
+    const { changes } = db.prepare("SELECT total_changes() AS changes").get() as { changes: number };
+    const cached = this.usageActivityCache;
+    if (!db.inTransaction && cached && cached.from === request.from && cached.to === request.to
+      && cached.dataVersion === dataVersion && cached.changes === changes) {
+      return structuredClone(cached.activity);
+    }
+    // The version checks and all dependent reads share one read snapshot.
+    // A writer committing between the checks and BEGIN only invalidates the
+    // cache early on the next read; it cannot leave stale data cached as current.
+    const activity = db.transaction(() => this.materializeUsageActivity(request))();
+    if (!db.inTransaction) this.usageActivityCache = { ...request, dataVersion, changes, activity };
+    return structuredClone(activity);
+  }
+
+  private materializeUsageActivity(request: ReadUsageActivityRequest): {
+    rows: UsageActivityRow[]; truncated: boolean; limitHistory: UsageLimitObservation[];
+  } {
     type ActivityRow = ThreadUsageLineRow & {
       activity_started_at: number | null; activity_completed_at: number | null;
       activity_rate_limit_snapshot: string | null;
@@ -2778,32 +2812,62 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     // line per run, hundreds a day, each worth a fraction of a cent. The
     // contained ones are read separately and rolled up per parent thread, so
     // they cannot spend the row bound meant for turns.
-    const bounds = `
-        FROM thread_usage_lines l
-        LEFT JOIN thread_usage_turns t ON t.usage_turn_id = l.usage_turn_id`;
-    const started = "COALESCE(t.started_at, l.created_at)";
-    const completed = `COALESCE(t.completed_at, l.completed_at,
-      CASE WHEN l.scope = 'monitor' AND l.status = 'finalized' THEN l.created_at END)`;
-    const backgroundHelper = `(l.scope = 'monitor' AND l.status = 'finalized'
-      AND COALESCE(l.source_item_id, '') LIKE 'system:%'
-      AND ${started} >= @from AND ${completed} < @to)`;
-    const columns = `SELECT l.*, ${started} AS activity_started_at,
-             ${completed} AS activity_completed_at,
-             t.rate_limit_snapshot AS activity_rate_limit_snapshot`;
     const rows = this.stateDb.raw.prepare(`
-      ${columns}${bounds}
+      SELECT l.*, COALESCE(t.started_at, l.created_at) AS activity_started_at,
+        COALESCE(t.completed_at, l.completed_at,
+          CASE WHEN l.scope = 'monitor' AND l.status = 'finalized' THEN l.created_at END) AS activity_completed_at,
+        t.rate_limit_snapshot AS activity_rate_limit_snapshot
+      FROM thread_usage_lines l
+        LEFT JOIN thread_usage_turns t ON t.usage_turn_id = l.usage_turn_id
        WHERE l.status != 'superseded'
-         AND ${started} < @to
-         AND CASE WHEN ${completed} IS NULL THEN l.updated_at >= @from
-                  ELSE ${completed} >= @from END
-         AND NOT ${backgroundHelper}
+         AND activity_started_at < @to
+         AND CASE WHEN activity_completed_at IS NULL THEN l.updated_at >= @from
+                  ELSE activity_completed_at >= @from END
+         AND NOT (l.scope = 'monitor' AND l.status = 'finalized'
+           AND COALESCE(l.source_item_id, '') LIKE 'system:%'
+           AND activity_started_at >= @from AND activity_completed_at < @to)
        ORDER BY l.updated_at DESC, l.usage_line_id
        LIMIT 5001
     `).all({ from: request.from, to: request.to }) as ActivityRow[];
+    // Aggregate in SQLite. Only one representative ledger row per group
+    // crosses into JS, including in a window containing thousands of helpers.
     const helperRows = this.stateDb.raw.prepare(`
-      ${columns}${bounds}
-       WHERE ${backgroundHelper}
-    `).all({ from: request.from, to: request.to }) as ActivityRow[];
+      WITH candidates AS (
+        SELECT l.*,
+          COALESCE(t.started_at, l.created_at) AS activity_started_at,
+          COALESCE(t.completed_at, l.completed_at, l.created_at) AS activity_completed_at
+        FROM thread_usage_lines l
+          LEFT JOIN thread_usage_turns t ON t.usage_turn_id = l.usage_turn_id
+        WHERE l.scope = 'monitor' AND l.status = 'finalized'
+          AND COALESCE(l.source_item_id, '') LIKE 'system:%'
+          AND activity_started_at >= @from AND activity_completed_at < @to
+      ), groups AS (
+        SELECT MIN(l.usage_line_id) AS representative,
+          MIN(l.activity_started_at) AS activity_started_at, MAX(l.activity_completed_at) AS activity_completed_at,
+          MAX(l.updated_at) AS updated_at, COUNT(*) AS rollup_count,
+          SUM(l.input_tokens) AS input_tokens, SUM(l.cached_input_tokens) AS cached_input_tokens,
+          SUM(l.uncached_input_tokens) AS uncached_input_tokens,
+          SUM(l.cache_write_input_tokens) AS cache_write_input_tokens,
+          SUM(l.output_tokens) AS output_tokens, SUM(l.reasoning_output_tokens) AS reasoning_output_tokens,
+          SUM(l.total_tokens) AS total_tokens,
+          SUM(l.cached_input_cost_micros) AS cached_input_cost_micros,
+          SUM(l.uncached_input_cost_micros) AS uncached_input_cost_micros,
+          SUM(l.cache_write_input_cost_micros) AS cache_write_input_cost_micros,
+          SUM(l.output_cost_micros) AS output_cost_micros, SUM(l.total_cost_micros) AS total_cost_micros
+        FROM candidates l
+        GROUP BY l.backend, l.provider,
+          COALESCE(NULLIF(CASE WHEN instr(substr(l.source_item_id, 8), ':') > 0
+            THEN substr(l.source_item_id, 8, instr(substr(l.source_item_id, 8), ':') - 1)
+            ELSE substr(l.source_item_id, 8) END, ''), 'helper'),
+          COALESCE(l.parent_thread_id, l.thread_id), COALESCE(l.model, ''), l.price_status, l.currency,
+          COALESCE(l.account_key, ''),
+          CAST(l.activity_completed_at / @step AS INTEGER)
+            - (l.activity_completed_at < 0 AND l.activity_completed_at % @step != 0)
+      )
+      SELECT l.*, g.* FROM groups g
+        JOIN thread_usage_lines l ON l.usage_line_id = g.representative
+      ORDER BY g.representative
+    `).all({ from: request.from, to: request.to, step: usageRollupStep(request.from, request.to) }) as ActivityRow[];
     const visibleRows = rows.slice(0, 5000);
     const identityFor = (row: { backend: string; thread_id: string }) => buildLegacyEncodedThreadIdentityKey(
       row.backend as AppServerBackendKind, row.thread_id,
@@ -10731,7 +10795,9 @@ function toThreadToolInvocationAlertRowParams(
  * produce the same rollup and the viewer counts it once.
  */
 function rollUpBackgroundHelperRows(
-  rows: Array<ThreadUsageLineRow & { activity_started_at: number | null; activity_completed_at: number | null }>,
+  rows: Array<ThreadUsageLineRow & {
+    activity_started_at: number | null; activity_completed_at: number | null; rollup_count?: number;
+  }>,
   window: { from: number; to: number },
 ): Array<{ line: ThreadUsageLineRecord; rollup: UsageActivityRollup; updatedAt: number }> {
   const step = usageRollupStep(window.from, window.to);
@@ -10742,13 +10808,17 @@ function rollUpBackgroundHelperRows(
     const kind = (row.source_item_id ?? "").split(":")[1] || "helper";
     const threadId = row.parent_thread_id ?? row.thread_id;
     const bucket = Math.floor(completed / step) * step;
+    // Keep the wire ids compatible with older owners sharing this ledger.
+    // Backend belongs in the local grouping key too; viewers already include
+    // it when deduplicating the wire id across owners.
     const groupKey = ["monitor-rollup", row.provider, kind, threadId, row.model ?? "",
       row.price_status, row.currency, window.from, window.to, bucket].join(":");
     const usageLineId = row.account_key ? `${groupKey}:${row.account_key}` : groupKey;
+    const identity = JSON.stringify([row.backend, usageLineId]);
     const line = threadUsageLineFromRow(row);
-    const existing = groups.get(usageLineId);
+    const existing = groups.get(identity);
     if (!existing) {
-      groups.set(usageLineId, {
+      groups.set(identity, {
         line: {
           backend: line.backend, provider: line.provider, threadId, usageLineId,
           ...(line.accountKey ? { accountKey: line.accountKey } : {}),
@@ -10765,7 +10835,7 @@ function rollUpBackgroundHelperRows(
           cacheWriteInputCostMicros: line.cacheWriteInputCostMicros, outputCostMicros: line.outputCostMicros,
           totalCostMicros: line.totalCostMicros,
         } as ThreadUsageLineRecord,
-        rollup: { kind, count: 1, groupKey },
+        rollup: { kind, count: row.rollup_count ?? 1, groupKey },
         updatedAt: row.updated_at,
       });
       continue;
@@ -10786,7 +10856,7 @@ function rollUpBackgroundHelperRows(
     sum.cacheWriteInputCostMicros = (sum.cacheWriteInputCostMicros ?? 0) + (line.cacheWriteInputCostMicros ?? 0);
     sum.outputCostMicros += line.outputCostMicros;
     sum.totalCostMicros += line.totalCostMicros;
-    existing.rollup.count += 1;
+    existing.rollup.count += row.rollup_count ?? 1;
     existing.updatedAt = Math.max(existing.updatedAt, row.updated_at);
   }
   return [...groups.values()];

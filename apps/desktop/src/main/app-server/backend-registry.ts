@@ -8781,12 +8781,11 @@ const CODEX_INVALID_ID_RECOVERY_COOLDOWN_MS = 5 * 60 * 1000;
 const TOOL_INVOCATION_DELTA_FLUSH_INTERVAL_MS = 250;
 
 // Token-usage updates are cumulative snapshots, so repeated observations for
-// one turn replace each other in memory. The write budget measures ~64 KiB of
-// WAL for a ten-turn batch: at this one-second ceiling, a pathological nonstop
-// stream is capped near 225 MiB/hour instead of ~900 MiB/hour at 250ms. In
-// practice app-server emits usage at model-request boundaries, not per token,
-// and turn terminals flush immediately; one second keeps pricing UI responsive
-// while allowing concurrent turns to share one sqlite transaction.
+// one turn replace each other in memory. The window bounds the delay, not the
+// global commit rate: terminal, hydration, reconciliation and shutdown paths
+// drain it early. Concurrent lines share one transaction; no pending lines
+// means no writes. usage-activity-cadence.test.ts budgets busy, sparse, boundary
+// and idle protocol replays, including WAL projections at explicit rates.
 const LIVE_THREAD_USAGE_FLUSH_INTERVAL_MS = 1_000;
 // A turn owned by another live runtime is left open until it has written no
 // usage for this long. Every model response writes usage, so a quiet turn is

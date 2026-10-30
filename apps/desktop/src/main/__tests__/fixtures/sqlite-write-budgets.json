@@ -359,8 +359,8 @@
     "statements": 1001
   },
   "federation-star-map-unchanged-reconnect": {
-    "commits": 11,
-    "note": "11 identical arrangement pages on reconnect; no changed rows or WAL",
+    "commits": 0,
+    "note": "11 identical arrangement pages on reconnect; read-only transactions flush no pages and count as zero write commits",
     "observedWalBytes": 0,
     "rowsChanged": 0,
     "statements": 0
@@ -597,8 +597,8 @@
     "statements": 10
   },
   "messaging-project-move-picker": {
-    "commits": 6,
-    "note": "one bounded project-picker page through the shared messaging controller, excluding binding setup",
+    "commits": 5,
+    "note": "one bounded project-picker page through the shared messaging controller, excluding binding setup; five write commits, read-only transactions excluded",
     "observedWalBytes": 78280,
     "rowsChanged": 5,
     "statements": 5
@@ -858,8 +858,8 @@
     "statements": 0
   },
   "pr-activity-unchanged-observations": {
-    "commits": 200,
-    "note": "100 unchanged conflict observations after dispatch plus activity reads: 200 read-only transaction commits, zero write statements/rows/WAL bytes; 0 MB/day additional WAL",
+    "commits": 0,
+    "note": "100 unchanged conflict observations after dispatch plus activity reads: read-only transactions, zero write commits/statements/rows/WAL bytes; 0 MB/day additional WAL",
     "observedWalBytes": 0,
     "rowsChanged": 0,
     "statements": 0
@@ -1356,6 +1356,55 @@
     "rowsChanged": 26,
     "statements": 27
   },
+  "usage-activity-helper-write": {
+    "commits": 1,
+    "note": "One real finalized helper line with parent summaries: one existing commit, 65,920 bytes (~33.0 MB/day at 500/day), no persistent interval maintenance",
+    "observedWalBytes": 65920,
+    "rowsChanged": 3,
+    "statements": 3
+  },
+  "usage-activity-minute-boundaries": {
+    "commits": 100,
+    "note": "100 existing live-row commits, one minute apart: 412,000 bytes WAL (~5.9 MB/day at 1/minute), no additional activity-index writes",
+    "observedWalBytes": 412000,
+    "rowsChanged": 100,
+    "statements": 100
+  },
+  "usage-activity-turn-lifecycle": {
+    "commits": 2,
+    "note": "One real pending turn insert and authoritative completion: two existing commits, existing thread-index lookup, no persistent interval maintenance; measured 70,040 bytes (~7.0 MB/day at 100 turns/day)",
+    "observedWalBytes": 70040,
+    "rowsChanged": 4,
+    "statements": 4
+  },
+  "usage-activity-within-minute": {
+    "commits": 100,
+    "note": "100 existing live-row commits within ten seconds: 412,000 bytes WAL, no additional activity-index writes",
+    "observedWalBytes": 412000,
+    "rowsChanged": 100,
+    "statements": 100
+  },
+  "usage-cadence-burst-active": {"commits":1,"note":"Contrived burst protocol replay: 500 observations, 1 existing bulk flushes, active phase; idle is 30 minutes with zero writes; no persistence cadence change; 6.6 MB/day at 100 such bursts/day","observedWalBytes":65952,"rowsChanged":3,"statements":3},
+  "usage-cadence-burst-idle": {"commits":0,"note":"Contrived burst protocol replay: 500 observations, 1 existing bulk flushes, idle phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.0 MB/day at idle","observedWalBytes":0,"rowsChanged":0,"statements":0},
+  "usage-cadence-burst-terminal": {"commits":1,"note":"Contrived burst protocol replay: 500 observations, 1 existing bulk flushes, terminal phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.4 MB/day at 100 turn completions/day","observedWalBytes":4120,"rowsChanged":1,"statements":1},
+  "usage-cadence-duplicate-10hz-active": {"commits":60,"note":"Contrived duplicate-10hz protocol replay: 600 observations, 60 existing bulk flushes, active phase; idle is 30 minutes with zero writes; no persistence cadence change; 4645.4 MB/day at continuous 60-second replay windows for 24 hours","observedWalBytes":3225992,"rowsChanged":180,"statements":180},
+  "usage-cadence-duplicate-10hz-idle": {"commits":0,"note":"Contrived duplicate-10hz protocol replay: 600 observations, 60 existing bulk flushes, idle phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.0 MB/day at idle","observedWalBytes":0,"rowsChanged":0,"statements":0},
+  "usage-cadence-duplicate-10hz-terminal": {"commits":1,"note":"Contrived duplicate-10hz protocol replay: 600 observations, 60 existing bulk flushes, terminal phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.4 MB/day at 100 turn completions/day","observedWalBytes":4120,"rowsChanged":1,"statements":1},
+  "usage-cadence-request-boundaries-active": {"commits":12,"note":"Contrived request-boundaries protocol replay: 12 observations, 12 existing bulk flushes, active phase; idle is 30 minutes with zero writes; no persistence cadence change; 943.4 MB/day at continuous 60-second replay windows for 24 hours","observedWalBytes":655112,"rowsChanged":36,"statements":36},
+  "usage-cadence-request-boundaries-idle": {"commits":0,"note":"Contrived request-boundaries protocol replay: 12 observations, 12 existing bulk flushes, idle phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.0 MB/day at idle","observedWalBytes":0,"rowsChanged":0,"statements":0},
+  "usage-cadence-request-boundaries-terminal": {"commits":1,"note":"Contrived request-boundaries protocol replay: 12 observations, 12 existing bulk flushes, terminal phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.4 MB/day at 100 turn completions/day","observedWalBytes":4120,"rowsChanged":1,"statements":1},
+  "usage-cadence-steady-10hz-active": {"commits":60,"note":"Contrived steady-10hz protocol replay: 600 observations, 60 existing bulk flushes, active phase; idle is 30 minutes with zero writes; no persistence cadence change; 4645.4 MB/day at continuous 60-second replay windows for 24 hours","observedWalBytes":3225992,"rowsChanged":180,"statements":180},
+  "usage-cadence-steady-10hz-idle": {"commits":0,"note":"Contrived steady-10hz protocol replay: 600 observations, 60 existing bulk flushes, idle phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.0 MB/day at idle","observedWalBytes":0,"rowsChanged":0,"statements":0},
+  "usage-cadence-steady-10hz-terminal": {"commits":1,"note":"Contrived steady-10hz protocol replay: 600 observations, 60 existing bulk flushes, terminal phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.4 MB/day at 100 turn completions/day","observedWalBytes":4120,"rowsChanged":1,"statements":1},
+  "usage-cadence-steady-with-focus-active": {"commits":60,"note":"Contrived steady-with-focus protocol replay: 600 observations, 60 existing bulk flushes, active phase; idle is 30 minutes with zero writes; no persistence cadence change; 4645.4 MB/day at continuous 60-second replay windows for 24 hours","observedWalBytes":3225992,"rowsChanged":180,"statements":180},
+  "usage-cadence-steady-with-focus-idle": {"commits":0,"note":"Contrived steady-with-focus protocol replay: 600 observations, 60 existing bulk flushes, idle phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.0 MB/day at idle","observedWalBytes":0,"rowsChanged":0,"statements":0},
+  "usage-cadence-steady-with-focus-terminal": {"commits":1,"note":"Contrived steady-with-focus protocol replay: 600 observations, 60 existing bulk flushes, terminal phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.4 MB/day at 100 turn completions/day","observedWalBytes":4120,"rowsChanged":1,"statements":1},
+  "usage-cadence-ten-turns-10hz-active": {"commits":6,"note":"Contrived ten-turns-10hz protocol replay: 600 observations, 6 existing bulk flushes, active phase; idle is 30 minutes with zero writes; no persistence cadence change","observedWalBytes":333752,"rowsChanged":180,"statements":180},
+  "usage-cadence-ten-turns-10hz-idle": {"commits":0,"note":"Contrived ten-turns-10hz protocol replay: 600 observations, 6 existing bulk flushes, idle phase; idle is 30 minutes with zero writes; no persistence cadence change","observedWalBytes":0,"rowsChanged":0,"statements":0},
+  "usage-cadence-ten-turns-10hz-terminal": {"commits":10,"note":"Contrived ten-turns-10hz protocol replay: 600 observations, 6 existing bulk flushes, terminal phase; idle is 30 minutes with zero writes; no persistence cadence change","observedWalBytes":41200,"rowsChanged":10,"statements":10},
+  "usage-cadence-terminal-burst-active": {"commits":20,"note":"Contrived terminal-burst protocol replay: 20 observations, 20 existing bulk flushes, active phase; idle is 30 minutes with zero writes; no persistence cadence change; 6.7 MB/day at 100 short turns/day","observedWalBytes":1334912,"rowsChanged":60,"statements":60},
+  "usage-cadence-terminal-burst-idle": {"commits":0,"note":"Contrived terminal-burst protocol replay: 20 observations, 20 existing bulk flushes, idle phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.0 MB/day at idle","observedWalBytes":0,"rowsChanged":0,"statements":0},
+  "usage-cadence-terminal-burst-terminal": {"commits":0,"note":"Contrived terminal-burst protocol replay: 20 observations, 20 existing bulk flushes, terminal phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.0 MB/day at 100 turn completions/day","observedWalBytes":0,"rowsChanged":0,"statements":0},
   "usage-line-account-attribution": {
     "commits": 1,
     "note": "Identity rides the existing line transaction: zero additional commits and observed WAL bytes versus the baseline; ~6.6 MB/day existing ledger cost at 100 new lines/day, 0 MB/day measured attribution overhead",
