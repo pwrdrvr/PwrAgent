@@ -1742,7 +1742,7 @@ function mimeTypeForImagePath(filePath: string): string | undefined {
 function parseSupportedImageDataUrl(
   url: string,
 ): MaterializedTranscriptImage | undefined {
-  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/]+={0,2})$/iu.exec(
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)$/iu.exec(
     url,
   );
   if (!match) {
@@ -1751,8 +1751,8 @@ function parseSupportedImageDataUrl(
 
   const mimeType = match[1]?.toLowerCase();
   const extension = mimeType ? DATA_IMAGE_EXTENSIONS.get(mimeType) : undefined;
-  const payload = match[2] ?? "";
-  if (!mimeType || !extension || payload.length % 4 === 1) {
+  const payload = (match[2] ?? "").replace(/\s+/gu, "");
+  if (!mimeType || !extension || !/^[a-z0-9+/]+={0,2}$/iu.test(payload) || payload.length % 4 === 1) {
     return undefined;
   }
 

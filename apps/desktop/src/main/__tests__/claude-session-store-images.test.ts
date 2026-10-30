@@ -124,6 +124,18 @@ describe("Claude history image persistence", () => {
     await expect(readFile(forkPath)).resolves.toEqual(png);
   });
 
+  it("repairs a truncated legacy cache file and publishes complete images during concurrent appends", async () => {
+    const f = await fixture();
+    const root = path.join(f.images, id);
+    const cached = path.join(root, `${createHash("sha256").update(png).digest("hex")}.png`);
+    await mkdir(root, { recursive: true });
+    await writeFile(cached, png.subarray(0, 8));
+    await Promise.all([f.store.append(id, [activity()]), f.store.append(id, [activity()])]);
+    await expect(readFile(cached)).resolves.toEqual(png);
+    expect(await readdir(root)).toEqual([path.basename(cached)]);
+    expect(await f.store.entries(id)).toHaveLength(1);
+  });
+
   it("preserves remote and existing file URLs, malformed images, and text", async () => {
     const f = await fixture();
     const entry: AppServerThreadEntry = {
@@ -149,6 +161,16 @@ describe("Claude history image persistence", () => {
     f.store.forgetEphemeral(id);
     await f.store.append(id, [activity()]);
     expect(await readdir(f.root)).toEqual([]);
+  });
+
+  it("externalizes user image inputs with line-wrapped base64 accepted by the Claude SDK", async () => {
+    const f = await fixture();
+    const data = png.toString("base64");
+    await f.store.append(id, [{ type: "message", id: "user-1", role: "user", text: "Look", parts: [
+      { type: "image", url: `data:image/png;base64,${data.slice(0, 40)}\n${data.slice(40)}\n` },
+    ] }]);
+    await expect(readFile(imagePath(entryImages(await f.store.entries(id))[0]!))).resolves.toEqual(png);
+    expect(await readFile(f.history, "utf8")).not.toContain("data:image/");
   });
 
   it("measures JSONL for one Read of a 2 MiB PNG at completion, turn end, and background settlement", async () => {
