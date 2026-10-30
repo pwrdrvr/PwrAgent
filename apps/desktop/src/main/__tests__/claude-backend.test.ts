@@ -956,6 +956,8 @@ describe("Claude SDK backend", () => {
       yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
       yield { type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "seven_day",
         utilization: 0.55, resetsAt: Math.round(resetsAt / 1000) + 3600 } } as SDKMessage;
+      yield { type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "seven_day_overage_included",
+        utilization: 0.95, resetsAt: Math.round(resetsAt / 1000) + 3600 } } as SDKMessage;
       yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
     }, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: usage });
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
@@ -967,7 +969,7 @@ describe("Claude SDK backend", () => {
     const expected = [
       expect.objectContaining({ limitId: "seven_day", usedPercent: 56, resetAt: resetsAt }),
       expect.objectContaining({ limitId: "iguana_necktie", usedPercent: 30 }),
-      expect.objectContaining({ limitId: "model_scoped:Fable", usedPercent: 96 }),
+      expect.objectContaining({ name: "Weekly Fable limit", limitId: "seven_day_overage_included", usedPercent: 96 }),
     ];
     expect(f.backend.summary().rateLimits).toEqual(expected);
 

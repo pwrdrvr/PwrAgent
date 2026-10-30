@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ModelUsage, SDKControlGetUsageResponse } from "@anthropic-ai/claude-agent-sdk";
 import {
-  claudeRateLimits, claudeStreamRateLimits, claudeTurnUsage, mergeClaudeStreamRateLimits, nextClaudeRateLimitReset,
+  claudeRateLimits, claudeStreamRateLimits, claudeTurnUsage, liveClaudeRateLimits,
+  mergeClaudeStreamRateLimits, nextClaudeRateLimitReset,
 } from "../claude/claude-usage";
 
 const model: ModelUsage = {
@@ -62,7 +63,7 @@ describe("Claude usage normalization", () => {
       { name: "Cloud session credits", limitId: "iguana_necktie", usedPercent: 30,
         resetAt: Date.parse("2026-11-05T07:59:00Z"), expires: true },
       { name: "Other plan limit", limitId: "walrus_monocle", limitName: "walrus_monocle", usedPercent: 5 },
-      { name: "Weekly Fable limit", limitId: "model_scoped:Fable", usedPercent: 40,
+      { name: "Weekly Fable limit", limitId: "seven_day_overage_included", usedPercent: 40,
         resetAt: Date.parse("2026-10-27T11:00:00Z"), windowMinutes: 10_080 },
     ]);
   });
@@ -70,9 +71,33 @@ describe("Claude usage normalization", () => {
     const names = claudeStreamRateLimits({ status: "allowed", unifiedWindows: {
       seven_day_overage_included: { utilization: 0.1, resetsAt: 1789005600 },
     } } as never).map((limit) => limit.name);
-    expect(names).toEqual(["Weekly limit with extra usage"]);
+    expect(names).toEqual(["Weekly Fable limit"]);
     expect(claudeStreamRateLimits({ status: "allowed", rateLimitType: "overage", utilization: 0.2 })[0].name)
       .toBe("Extra usage");
+  });
+  it("merges Fable snapshots and stream readings into one weekly allowance", () => {
+    const now = Date.parse("2026-10-21T14:30:00Z");
+    const snapshot = claudeRateLimits({ rate_limits_available: true, rate_limits: {
+      seven_day: { utilization: 11, resets_at: "2026-10-27T11:00:00Z" },
+      model_scoped: [{ display_name: "Fable", utilization: 10.8, resets_at: "2026-10-27T10:20:00Z" }],
+    } } as SDKControlGetUsageResponse);
+    const stream = claudeStreamRateLimits({ status: "allowed", rateLimitType: "seven_day_overage_included",
+      utilization: 0.11, resetsAt: Date.parse("2026-10-27T11:00:00Z") / 1000 });
+    const merged = mergeClaudeStreamRateLimits(snapshot, stream, now);
+    expect(merged).toEqual([snapshot[0], { ...snapshot[1], usedPercent: 11 }]);
+    expect(mergeClaudeStreamRateLimits(merged, stream, now)).toEqual(merged);
+    const next = { ...stream[0], usedPercent: 1, resetAt: Date.parse("2026-11-03T11:00:00Z") };
+    expect(mergeClaudeStreamRateLimits(merged, [next], now)).toEqual([snapshot[0], next]);
+  });
+  it("collapses already cached Fable aliases before displaying limits", () => {
+    const named = { name: "Weekly Fable limit", limitId: "model_scoped:Fable", usedPercent: 10.8,
+      resetAt: 10_000, windowMinutes: 10_080 };
+    const streamed = { ...named, name: "Weekly limit with extra usage", limitId: "seven_day_overage_included",
+      usedPercent: 11 };
+    const expected = [{ ...named, limitId: "seven_day_overage_included", usedPercent: 11 }];
+    expect(liveClaudeRateLimits([named, streamed], 1_000)).toEqual(expected);
+    expect(mergeClaudeStreamRateLimits([named, streamed], [], 1_000)).toEqual(expected);
+    expect(liveClaudeRateLimits([named, streamed], 10_000)).toEqual([]);
   });
   it("raises a live window from the stream but takes a reading from the next window", () => {
     const hour = 3_600_000;
