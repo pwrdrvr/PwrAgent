@@ -44325,7 +44325,7 @@ export class DesktopBackendRegistry {
         cwd: cwd ?? os.homedir(),
         executionMode,
         model: params.runtimeModel ?? params.preferredModel,
-        hidden: { title: "Task monitor" },
+        ephemeral: { title: "Task monitor" },
       });
       const turn = await this.startTurnWithoutHandoff({
         backend: "claude",

@@ -508,22 +508,27 @@ export class ClaudeBackend {
   async startThread(params: {
     cwd: string; model?: string; executionMode: ThreadExecutionMode;
     linkedDirectories?: AppServerThreadSummary["linkedDirectories"];
-    /** A thread PwrAgent runs for its own work, such as a task monitor: never listed, never titled. */
-    hidden?: { title: string };
+    /**
+     * A thread PwrAgent runs for its own work, such as a task monitor. Like a
+     * Codex ephemeral thread, it is never listed, titled, or written to disk.
+     */
+    ephemeral?: { title: string };
   }): Promise<{ threadId: string }> {
     await this.requireInstallation();
     const id = randomUUID();
     const now = Date.now();
-    await this.store.save({
+    const session: ClaudeSession = {
       cwd: params.cwd,
       thread: {
         id, source: "claude",
-        title: params.hidden?.title ?? "Untitled thread", titleSource: params.hidden ? "explicit" : "fallback",
+        title: params.ephemeral?.title ?? "Untitled thread", titleSource: params.ephemeral ? "explicit" : "fallback",
         createdAt: now, updatedAt: now, model: params.model, executionMode: params.executionMode,
         linkedDirectories: params.linkedDirectories ?? [{ id: params.cwd, kind: "local", label: path.basename(params.cwd), path: params.cwd }],
       },
-      ...(params.hidden ? { hidden: true, titleGenerationAttempted: true } : {}),
-    });
+      ...(params.ephemeral ? { ephemeral: true, titleGenerationAttempted: true } : {}),
+    };
+    if (params.ephemeral) this.store.holdEphemeral(session);
+    else await this.store.save(session);
     return { threadId: id };
   }
 
@@ -574,7 +579,7 @@ export class ClaudeBackend {
     const filter = params.filter?.toLowerCase();
     // Metadata from builds that could not move a Claude thread still carries
     // their refusal; this build can, so drop it.
-    return (await this.store.list()).filter((session) => !session.hidden).map(({ thread: { workspaceHandoff: _refusal, ...thread } }) => ({
+    return (await this.store.list()).map(({ thread: { workspaceHandoff: _refusal, ...thread } }) => ({
       ...thread, threadStatus: this.sessions.get(thread.id)?.turn ? "active" as const : "idle" as const,
     })).filter((thread) => Boolean(thread.archivedAt) === Boolean(params.archived)
       && (!filter || thread.title.toLowerCase().includes(filter) || thread.id.includes(filter)));
@@ -761,11 +766,12 @@ export class ClaudeBackend {
       // The thread id names its first SDK session. A rewind past the first
       // prompt leaves the thread with no session to resume, and that id is
       // taken, so the next session gets its own.
-      const freshSdkSessionId = session.rewinds?.length ? randomUUID() : threadId;
+      // An ephemeral session has no file to resume, so each launch starts fresh.
+      const freshSdkSessionId = session.rewinds?.length || session.ephemeral ? randomUUID() : threadId;
       const sdkOptions: Options = {
         ...claudeHarnessOptions(executable, env),
         cwd: session.cwd,
-        ...(session.sdkSessionId ?? session.forkFromSdkSessionId
+        ...(!session.ephemeral && (session.sdkSessionId ?? session.forkFromSdkSessionId)
           ? {
             resume: session.sdkSessionId ?? session.forkFromSdkSessionId,
             ...(session.resumeSessionAt ? { resumeSessionAt: session.resumeSessionAt } : {}),
@@ -774,9 +780,9 @@ export class ClaudeBackend {
           }
           : { sessionId: freshSdkSessionId }),
         // Checkpoints each prompt's files, so a rewind can restore them.
-        enableFileCheckpointing: true,
+        enableFileCheckpointing: !session.ephemeral,
         systemPrompt: { type: "preset", preset: "claude_code", ...(config.instructions ? { append: config.instructions } : {}) },
-        persistSession: true,
+        persistSession: !session.ephemeral,
         ...(session.thread.titleSource === "explicit" ? { title: session.thread.title } : {}),
         includePartialMessages: true,
         permissionMode: config.permissionMode,
@@ -1348,6 +1354,8 @@ export class ClaudeBackend {
 
   private runSessionClosed(live: LiveSession): void {
     live.closed = true;
+    // An ephemeral thread ends with its session, as a Codex one does.
+    if (live.session.ephemeral) this.store.forgetEphemeral(live.session.thread.id);
     live.accountChecked.resolve();
     for (const release of live.onClosed.splice(0)) {
       try { release(); }

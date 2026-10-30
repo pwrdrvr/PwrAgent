@@ -53373,11 +53373,11 @@ script = "printf setup"
         await registry.close();
         await rm(root, { recursive: true, force: true });
       };
-      return { close, codexClient, prompts, registry };
+      return { close, codexClient, prompts, registry, root };
     }
 
-    it("runs on Claude's lightweight model in a hidden thread, and can complete", async () => {
-      const { close, codexClient, prompts, registry } = await createClaudeMonitorRegistry({});
+    it("runs on Claude's lightweight model in an ephemeral thread, and can complete", async () => {
+      const { close, codexClient, prompts, registry, root } = await createClaudeMonitorRegistry({});
       try {
         const response = await callRegistryMcpTool({
           registry,
@@ -53398,6 +53398,11 @@ script = "printf setup"
         expect(codexClient.lastStartThreadParams).toBeUndefined();
         await vi.waitFor(() => expect(prompts).toHaveLength(1));
         expect(prompts[0]!.model).toBe("haiku");
+        // Like a Codex ephemeral monitor, it leaves no session behind.
+        expect(prompts[0]!.persistSession).toBe(false);
+        expect(prompts[0]!.enableFileCheckpointing).toBe(false);
+        await expect(readFile(path.join(root, "sessions", `${monitorThreadId}.json`), "utf8"))
+          .rejects.toMatchObject({ code: "ENOENT" });
         const threads = await registry.listThreads({ backend: "claude", forceRefresh: true });
         expect(threads.map((thread) => thread.id)).toContain(parentThreadId);
         expect(threads.map((thread) => thread.id)).not.toContain(monitorThreadId);
