@@ -59,6 +59,8 @@ function setup(options: {
   instances?: ThreadTodoInstance[];
   localCodexFastAllowed?: boolean;
   backendsTarget?: FederationTarget;
+  /** Mounted copies of the card, as the stack and the To-dos panel both show it. */
+  copies?: number;
 } = {}) {
   const todo = options.todo ?? card;
   const onRun = vi.fn();
@@ -78,11 +80,11 @@ function setup(options: {
       backends={options.backendsTarget?.scope === "remote" ? options.win ?? [codex()] : options.local ?? [claude, codex()]}
       backendsTarget={options.backendsTarget} todos={[value]}
       {...(options.localCodexFastAllowed === undefined ? {} : { localCodexFastAllowed: options.localCodexFastAllowed })}>
-      {visible ? (
-        <ThreadTodoCard todo={value} running={false} now={0} onRun={onRun} onResolve={vi.fn()}
+      {visible ? Array.from({ length: options.copies ?? 1 }, (_, index) => (
+        <ThreadTodoCard key={index} todo={value} running={false} now={0} onRun={onRun} onResolve={vi.fn()}
           onStartReview={vi.fn()} onSetItemChecked={vi.fn()}
           instances={options.instances ?? [WIN]} localMachine={MAC} />
-      ) : null}
+      )) : null}
     </TodoDispatchProvider>
   );
   const result = render(tree(todo));
@@ -124,6 +126,15 @@ describe("to-do dispatch target", () => {
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Hide start settings labels" })); });
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Show start settings" }));
     expect(container.querySelector("dt")).toBeNull();
+  });
+
+  it("keeps the stack's and the To-dos panel's copies of a card in step", async () => {
+    setup({ copies: 2 });
+    await settle();
+    await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: "Show start settings" })[0]!); });
+    expect(screen.getAllByRole("button", { name: "Hide start settings labels" })).toHaveLength(2);
+    await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: "Hide start settings labels" })[1]!); });
+    expect(screen.getAllByRole("button", { name: "Show start settings" })).toHaveLength(2);
   });
 
   it("shows every choice on the card, defaulting to the thread's machine, checkout and environment", async () => {

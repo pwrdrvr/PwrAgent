@@ -180,7 +180,7 @@ describe("to-do card resting height", () => {
   it("keeps a handoff's plan behind Show more, read-only, above its prompt", () => {
     // The start sends only the prompt, so the plan has nothing to tick and
     // no place at rest: the toggle says it is there.
-    const { container } = render(<ThreadTodoCard {...props(card([], { kind: "handoff", action: HANDOFF }))} />);
+    const { container } = render(<ThreadTodoCard {...props(card([true], { kind: "handoff", action: HANDOFF }))} />);
     const detail = screen.getByText(LONG_DETAIL.trim(), { exact: false });
     const prompt = screen.getByRole("region", { name: "Proposed prompt" });
     expect(screen.queryByRole("list", { name: "Plan for the new thread" })).toBeNull();
@@ -192,7 +192,11 @@ describe("to-do card resting height", () => {
 
     fireEvent.click(toggle);
     const plan = screen.getByRole("list", { name: "Plan for the new thread" });
-    expect(within(plan).getAllByRole("listitem")).toHaveLength(8);
+    const planSteps = within(plan).getAllByRole("listitem");
+    expect(planSteps).toHaveLength(8);
+    // A step an agent ticked with update_todo still reads as done.
+    expect(planSteps.map((step) => step.classList.contains("is-checked")))
+      .toEqual([true, false, false, false, false, false, false, false]);
     expect(container.querySelectorAll("input[type=checkbox]")).toHaveLength(0);
     const less = screen.getByRole("button", { name: "Show less" });
     expect(precedes(less, plan)).toBe(true);

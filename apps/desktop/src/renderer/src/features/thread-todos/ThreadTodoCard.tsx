@@ -1315,7 +1315,11 @@ function ThreadTodoPlan(props: { items: ThreadTodoItem[] }) {
   return (
     <ol className="thread-todo-plan" aria-label="Plan for the new thread">
       {props.items.map((item) => (
-        <li key={item.id} className="thread-todo-plan__step" data-todo-item-id={item.id}>
+        <li
+          key={item.id}
+          className={`thread-todo-plan__step${item.checked ? " is-checked" : ""}`}
+          data-todo-item-id={item.id}
+        >
           {item.text}
         </li>
       ))}

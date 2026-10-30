@@ -70,6 +70,8 @@ export type TodoDispatchTarget = {
   setSpeed: (speed: CodexSpeed) => void;
   setWorkMode: (workMode: ThreadTodoWorkMode) => void;
   setEnvironment: (environment: string) => void;
+  /** A dispatch provider holds the choices, so every mounted copy of the card shares them. */
+  choicesShared: boolean;
   /** The labelled grid is open instead of the chip row. Window-local, per card. */
   settingsExpanded: boolean;
   setSettingsExpanded: (expanded: boolean) => void;
@@ -166,6 +168,7 @@ export function useTodoDispatchTarget(params: {
       setSpeed: () => {},
       setWorkMode: () => {},
       setEnvironment: () => {},
+      choicesShared: context.provided,
       // Model and Where alone already fit the grid.
       settingsExpanded: true,
       setSettingsExpanded: () => {},
@@ -202,6 +205,7 @@ export function useTodoDispatchTarget(params: {
     setEnvironment: (next) => choose((current) => ({
       ...current, environments: { ...current.environments, [machine.key]: next },
     })),
+    choicesShared: context.provided,
     settingsExpanded: choices.settingsExpanded === true,
     setSettingsExpanded: (next) => choose((current) => ({ ...current, settingsExpanded: next })),
     runOptions: () => ({
@@ -389,11 +393,12 @@ export function TodoDispatchFacts(props: {
       )
     : undefined;
 
-  // The window's choice survives a remount; this copy keeps the toggle
-  // working where no dispatch provider holds choices, as the card keeps its
-  // own copy of a model pick.
-  const [localExpanded, setLocalExpanded] = useState<boolean>();
-  const expanded = target.legacy || (localExpanded ?? target.settingsExpanded);
+  // The provider's choice survives a remount and is shared by the stack's
+  // and the To-dos panel's copy of the card. Without a provider, which
+  // keeps no choices, the card holds its own.
+  const [localExpanded, setLocalExpanded] = useState(false);
+  // An older owner's card has only Model and Where, which fit the grid.
+  const expanded = target.legacy || (target.choicesShared ? target.settingsExpanded : localExpanded);
   // A toggle moves focus to its counterpart, which mounts in the other layout.
   const toggleRef = useRef<HTMLButtonElement>(null);
   const focusToggleRef = useRef(false);
@@ -412,8 +417,8 @@ export function TodoDispatchFacts(props: {
       data-tooltip={expanded ? "Collapse" : "Show labels"}
       onClick={() => {
         focusToggleRef.current = true;
-        setLocalExpanded(!expanded);
-        target.setSettingsExpanded(!expanded);
+        if (target.choicesShared) target.setSettingsExpanded(!expanded);
+        else setLocalExpanded(!expanded);
       }}
     >
       {expanded ? <ChevronUpIcon size={12} /> : <ChevronDownIcon size={12} />}

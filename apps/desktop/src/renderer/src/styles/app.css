@@ -24956,6 +24956,11 @@ a.button {
   counter-increment: thread-todo-plan;
 }
 
+.thread-todo-plan__step.is-checked {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
 .thread-todo-plan__step::before {
   color: var(--text-muted);
   content: counter(thread-todo-plan) ".";
