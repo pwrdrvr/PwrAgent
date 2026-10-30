@@ -260,12 +260,16 @@ function mcpToolParamLines(request: AppServerMcpElicitationRequestNotification):
   return rows.flatMap((row) => {
     const record = objectField(row);
     const name = stringField(record?.name) ?? stringField(record?.key);
-    const label = stringField(record?.label) ?? stringField(record?.display_name) ?? name;
+    const fieldLabel = stringField(record?.label) ?? stringField(record?.display_name) ?? name;
+    // An inline review comment is labelled by its file and line, which the
+    // secret checks below never read.
+    const location = stringField(record?.location);
+    const label = location ?? fieldLabel;
     if (!record || !label) {
       return [];
     }
     const raw = typeof record.value === "string" ? record.value : JSON.stringify(record.value) ?? "";
-    const value = isSecretFieldName(name ?? label) || isSecretFieldLabel(label) || /^bearer\s+/i.test(raw.trim())
+    const value = isSecretFieldName(name ?? fieldLabel ?? "") || isSecretFieldLabel(fieldLabel ?? "") || /^bearer\s+/i.test(raw.trim())
       ? "[redacted]"
       : redactCommandText(raw.replace(JSON_SECRET_MEMBER, "$1\"[redacted]\""));
     // A chat message cannot hold a whole pull request body, so it says how

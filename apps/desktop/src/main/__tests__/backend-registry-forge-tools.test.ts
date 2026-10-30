@@ -151,15 +151,15 @@ describe("backend forge tool dispatch", () => {
       event: "COMMENT",
       body: "Two notes.",
       comments: [
-        { path: "src/token-store.ts", line: 41, body: "Rename **this**." },
+        { path: "src/auth/password-reset.ts", line: 41, body: "Rename **this**." },
         { path: "scripts/sign.mjs", startLine: 88, line: 96, body: "Keep the unlock." },
       ],
     }, "call-review-comments"));
     const reviewNotification = await review;
     expect((reviewNotification.params._meta as { tool_params_display: unknown[] }).tool_params_display).toEqual(expect.arrayContaining([
       { name: "body", value: "Two notes.", format: "markdown" },
-      { name: "src/token-store.ts:41", value: "Rename **this**.", format: "markdown" },
-      { name: "scripts/sign.mjs:88–96", value: "Keep the unlock.", format: "markdown" },
+      { name: "comment", location: "src/auth/password-reset.ts:41", value: "Rename **this**.", format: "markdown" },
+      { name: "comment", location: "scripts/sign.mjs:88–96", value: "Keep the unlock.", format: "markdown" },
     ]));
     await answer(reviewNotification, "decline");
     await reviewing;

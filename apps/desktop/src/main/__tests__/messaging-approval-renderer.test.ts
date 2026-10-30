@@ -167,13 +167,18 @@ describe("buildApprovalIntent", () => {
           requestedSchema: { type: "object", properties: {} },
           _meta: {
             pwragent_approval_kind: "mcp_tool_call",
-            tool_params_display: [{ name: "body", value: body, format: "markdown" }],
+            tool_params_display: [
+              { name: "body", value: body, format: "markdown" },
+              { name: "comment", location: "src/auth/password-reset.ts:42", value: "Check the expiry first.", format: "markdown" },
+            ],
           },
         },
       },
     });
 
     expect(intent.body).toContain(`body: ${body.slice(0, 300)}… (${body.length.toLocaleString("en-US")} characters; the desktop card shows all of it)`);
+    // A comment's location labels its line; a file name is not a credential.
+    expect(intent.body).toContain("src/auth/password-reset.ts:42: Check the expiry first.");
   });
 
   it("lists MCP tool parameters with secrets withheld", () => {

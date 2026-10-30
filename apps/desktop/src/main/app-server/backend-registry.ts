@@ -49761,8 +49761,8 @@ function forgeToolApprovalMessage(operation: ForgePrToolOperation, args: ForgePr
  * FORGE_BODY_MAX_CHARS. A body the forge renders as Markdown says so, and each
  * inline review comment is its own row keyed by its location.
  */
-function forgeToolParamsDisplay(args: ForgePrToolArgs): Array<{ name: string; value: string; format?: "markdown" }> {
-  const rows: Array<{ name: string; value: string; format?: "markdown" }> = [];
+function forgeToolParamsDisplay(args: ForgePrToolArgs): Array<{ name: string; value: string; format?: "markdown"; location?: string }> {
+  const rows: Array<{ name: string; value: string; format?: "markdown"; location?: string }> = [];
   for (const [name, value] of Object.entries(args)) {
     if (value === undefined || name === "repository") continue;
     if (name === "body") {
@@ -49774,9 +49774,10 @@ function forgeToolParamsDisplay(args: ForgePrToolArgs): Array<{ name: string; va
     } else if (name === "comments" && Array.isArray(value)) {
       for (const comment of value as ForgeReviewComment[]) {
         const lines = comment.startLine && comment.startLine !== comment.line ? `${comment.startLine}–${comment.line}` : String(comment.line);
-        // The location is the row's key: it always ends in a line number, so
-        // the secret-name checks that read keys never match a file name.
-        rows.push({ name: `${comment.path}:${lines}`, value: String(comment.body ?? ""), format: "markdown" });
+        // The card shows the location in the key column. It travels apart
+        // from the name, because the secret-name checks read the name and
+        // label, and a file such as password-reset.ts is not a credential.
+        rows.push({ name: "comment", location: `${comment.path}:${lines}`, value: String(comment.body ?? ""), format: "markdown" });
       }
     } else {
       rows.push({ name, value: typeof value === "string" ? value : JSON.stringify(value) });

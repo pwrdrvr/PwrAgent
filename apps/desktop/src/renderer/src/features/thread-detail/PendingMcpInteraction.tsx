@@ -75,11 +75,14 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
         {toolParams.length > 0 ? (
           <dl className="transcript-mcp__params">
             {toolParams.map((param, index) => {
-              const value = redactDisplayValue(param.value, { key: param.key, label: param.label });
+              // A location labels the row; the field it names is the comment.
+              const value = redactDisplayValue(param.value, { key: param.key, label: param.location ? undefined : param.label });
               const markdown = param.format === "markdown";
               return (
                 // Display names can repeat, so a label is not a stable key.
-                <div key={index}>
+                // The request id remounts each row for the next approval, so
+                // a long value never opens scrolled or in the last one's view.
+                <div key={`${props.state.requestId}:${index}`}>
                   <dt className={param.named ? undefined : "transcript-mcp__param-key"}>
                     {param.label}
                   </dt>
@@ -436,7 +439,7 @@ function readStringMeta(
 
 function readToolParamsDisplay(
   meta: Record<string, unknown> | null
-): Array<{ format?: "markdown"; key: string; label: string; named: boolean; value: unknown }> {
+): Array<{ format?: "markdown"; key: string; label: string; location: boolean; named: boolean; value: unknown }> {
   const raw = meta?.tool_params_display;
   if (!Array.isArray(raw)) {
     return [];
@@ -451,7 +454,9 @@ function readToolParamsDisplay(
     // `{ name: "app", display_name: "App" }`); `name` and `key` are the raw
     // parameter key, drawn verbatim in mono.
     const named = readStringMeta(record, "label") ?? readStringMeta(record, "display_name");
-    const label = named ?? readStringMeta(record, "name") ?? readStringMeta(record, "key");
+    // PwrAgent's inline review comments are labelled `path:line`, verbatim.
+    const location = readStringMeta(record, "location");
+    const label = location ?? named ?? readStringMeta(record, "name") ?? readStringMeta(record, "key");
     if (!label) {
       return [];
     }
@@ -460,7 +465,8 @@ function readToolParamsDisplay(
       ...(record.format === "markdown" ? { format: "markdown" as const } : {}),
       key: readStringMeta(record, "name") ?? readStringMeta(record, "key") ?? label,
       label,
-      named: named !== undefined,
+      location: location !== undefined,
+      named: location === undefined && named !== undefined,
       value: record.value,
     }];
   });

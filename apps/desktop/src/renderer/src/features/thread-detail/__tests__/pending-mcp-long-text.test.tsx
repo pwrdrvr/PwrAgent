@@ -22,11 +22,11 @@ const BODY = [
   "- Release dry run signed and notarized, with the last line past 240 characters",
 ].join("\n");
 
-function forgeState(rows: Array<Record<string, unknown>>) {
+function forgeState(rows: Array<Record<string, unknown>>, requestId = "forge-1") {
   return createMcpElicitationState({
     method: "mcpServer/elicitation/request",
     params: {
-      threadId: "thread-1", turnId: "turn-1", requestId: "forge-1", serverName: "GitHub",
+      threadId: "thread-1", turnId: "turn-1", requestId, serverName: "GitHub",
       mode: "form", message: "Allow the agent to open a pull request on GitHub?",
       requestedSchema: { type: "object", properties: {} },
       _meta: { pwragent_approval_kind: "mcp_tool_call", connector_name: "acme/atlas", tool_params_display: rows },
@@ -84,13 +84,38 @@ describe("PendingMcpInteraction long values", () => {
     // Code is drawn verbatim, so it hides no target.
     renderCard([{ name: "body", value: "Index with `items[0](x)` here.", format: "markdown" }]);
     expect(screen.queryByRole("region")).toBeNull();
+    cleanup();
+
+    // Unequal backtick runs make no code span, so the link still renders.
+    renderCard([{ name: "body", value: "See ` [the docs](https://example.com/docs) `` here.", format: "markdown" }]);
+    expect(screen.getByRole("region", { name: "body, full text" })).toBeInTheDocument();
   });
 
   it("renders a short Markdown comment inline under its location", () => {
-    renderCard([{ name: ".github/workflows/ci.yml:41", value: "Use **macos-15** for now.", format: "markdown" }]);
+    renderCard([{ name: "comment", location: ".github/workflows/ci.yml:41", value: "Use **macos-15** for now.", format: "markdown" }]);
     expect(screen.getByText(".github/workflows/ci.yml:41")).toHaveClass("transcript-mcp__param-key");
     expect(screen.getByText("macos-15").tagName).toBe("STRONG");
     expect(screen.queryByRole("region")).toBeNull();
+  });
+
+  it("does not take a file named like a credential for one", () => {
+    renderCard([{ name: "comment", location: "src/auth/password-reset.ts:42", value: "Check the expiry first.", format: "markdown" }]);
+    expect(screen.getByText("src/auth/password-reset.ts:42")).toBeInTheDocument();
+    expect(screen.getByText("Check the expiry first.")).toBeInTheDocument();
+    expect(screen.queryByText("[redacted]")).toBeNull();
+  });
+
+  it("opens the next approval's body at the top, in Preview", () => {
+    const rows = [{ name: "body", value: BODY, format: "markdown" }];
+    const view = render(<PendingMcpInteraction state={forgeState(rows, "forge-1")} onChange={vi.fn()} onSubmit={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Source" }));
+    fireEvent.click(screen.getByRole("button", { name: "Expand body" }));
+    const first = screen.getByRole("region", { name: "body, full text" });
+    view.rerender(<PendingMcpInteraction state={forgeState(rows, "forge-2")} onChange={vi.fn()} onSubmit={vi.fn()} />);
+    const next = screen.getByRole("region", { name: "body, full text" });
+    expect(next).not.toBe(first);
+    expect(screen.getByRole("button", { name: "Preview" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Expand body" })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("shows other long values as source only", () => {
@@ -102,9 +127,13 @@ describe("PendingMcpInteraction long values", () => {
     expect(screen.getByText(`${description.length} characters`)).toBeInTheDocument();
   });
 
-  it("still redacts a credential before either view draws it", () => {
-    renderCard([{ name: "body", value: `${BODY}\n\napi_key=fixture-private-value`, format: "markdown" }]);
-    expect(screen.queryByText(/fixture-private-value/)).toBeNull();
-    expect(screen.getByText("[redacted]")).toBeInTheDocument();
+  it("hides only the credential in a body, before either view draws it", () => {
+    renderCard([{ name: "body", value: `${BODY}\n\nSet DEPLOY_SECRET=fixture-private-value first.`, format: "markdown" }]);
+    const region = screen.getByRole("region", { name: "body, full text" });
+    expect(region).not.toHaveTextContent("fixture-private-value");
+    expect(within(region).getByRole("heading", { name: "Summary" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Source" }));
+    expect(region).toHaveTextContent("Set DEPLOY_SECRET=[redacted] first.");
+    expect(region).not.toHaveTextContent("fixture-private-value");
   });
 });

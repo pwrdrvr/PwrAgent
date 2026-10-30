@@ -7,16 +7,24 @@ const LONG_TEXT_CHARS = 280;
 const LONG_TEXT_LINES = 4;
 
 export function isLongMcpText(value: string): boolean {
-  return value.length > LONG_TEXT_CHARS || value.split("\n").length > LONG_TEXT_LINES;
+  if (value.length > LONG_TEXT_CHARS) return true;
+  // Stop at the first newline past the limit rather than splitting it all.
+  let lines = 1;
+  for (let index = value.indexOf("\n"); index !== -1; index = value.indexOf("\n", index + 1)) {
+    if (++lines > LONG_TEXT_LINES) return true;
+  }
+  return false;
 }
 
 // A link's text can say anything; only the source shows where it goes.
 // Preview prints raw HTML as text, so links are what it hides.
 const LINK = /\]\(|\]\[|^\s*\[[^\]]+\]:/mu;
 
-// Code is drawn verbatim, so `a[0](x)` in backticks hides nothing.
+// Code is drawn verbatim, so `a[0](x)` in backticks hides nothing. A code
+// span closes only on a backtick run of its opener's length, as CommonMark
+// requires; pairing unequal runs would strip a real link from the check.
 const FENCED_CODE = /^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^ {0,3}\1[ \t]*$|(?![\s\S]))/gmu;
-const INLINE_CODE = /(`+)[\s\S]*?\1/gu;
+const INLINE_CODE = /(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/gu;
 
 /** Markdown whose Preview would hide part of what gets posted. */
 export function markdownNeedsSource(value: string): boolean {

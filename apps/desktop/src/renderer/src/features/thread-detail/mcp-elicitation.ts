@@ -302,7 +302,22 @@ export function redactDisplayValue(
   return String(value ?? "");
 }
 
+// The same credentials looksSecret finds, matched in place.
+const SECRET_ASSIGNMENT = /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password)=)(?:"[^"\n]*"|'[^'\n]*'|\S+)/giu;
+const BEARER_CREDENTIAL = /(\bbearer\s+)\S+/giu;
+
 function redactDisplayString(value: string, key?: string): string {
+  // Multi-line text is something to read, such as a pull request body, so
+  // only the credential in it is hidden. Hiding the whole body for one
+  // `SECRET=` line would leave the operator approving text they cannot see.
+  if (value.includes("\n")) {
+    return value
+      .split("\n")
+      .map((line) => (looksSecretToken(line) ? "[redacted]" : line))
+      .join("\n")
+      .replace(SECRET_ASSIGNMENT, "$1[redacted]")
+      .replace(BEARER_CREDENTIAL, "$1[redacted]");
+  }
   // A tool's display-name argument is not a credential merely because it is
   // long. Explicit bearer/credential assignments remain hidden in any field.
   if (looksSecret(value, key === "name")) return "[redacted]";
@@ -682,9 +697,14 @@ function looksSecret(value: string, displayName = false): boolean {
   const trimmed = value.trim();
   return (
     /^bearer\s+/i.test(trimmed) ||
-    (!displayName && /^[A-Za-z0-9_-]{32,}$/.test(trimmed)) ||
+    (!displayName && looksSecretToken(trimmed)) ||
     /(api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password)=/i.test(trimmed)
   );
+}
+
+/** A bare token: one long run of key characters and nothing else. */
+function looksSecretToken(value: string): boolean {
+  return /^[A-Za-z0-9_-]{32,}$/.test(value.trim());
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
