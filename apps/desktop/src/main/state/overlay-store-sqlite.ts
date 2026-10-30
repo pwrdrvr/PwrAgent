@@ -1597,14 +1597,25 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     directory: LinkedDirectorySummary;
     gitBranch?: string;
     threadId: string;
+    /** A worktree the thread is leaving on disk but still owns. */
+    retainWorktree?: LinkedDirectorySummary;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    const current = this.getThread(threadKey) ?? {
+    const { retainedWorktrees: previousRetained, ...current } = this.getThread(threadKey) ?? {
       backend: params.backend,
       threadId: params.threadId,
       executionMode: "default" as const,
       extraLinkedDirectories: [],
     };
+    // A thread that moves back into a retained worktree uses it again.
+    const retainedWorktrees = [
+      ...(previousRetained ?? []).filter((directory) =>
+        !sameWorktreeCheckout(directory, params.directory)
+        && !(params.retainWorktree && sameWorktreeCheckout(directory, params.retainWorktree))),
+      ...(params.retainWorktree && !sameWorktreeCheckout(params.retainWorktree, params.directory)
+        ? [params.retainWorktree]
+        : []),
+    ];
     const nextDirectories = [
       ...current.extraLinkedDirectories.filter((directory) => {
         if (directory.id === params.directory.id) return false;
@@ -1618,6 +1629,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       gitBranch: params.gitBranch ?? current.gitBranch,
       observedGitBranch: params.gitBranch ?? current.observedGitBranch,
       extraLinkedDirectories: nextDirectories,
+      ...(retainedWorktrees.length > 0 ? { retainedWorktrees } : {}),
       ...(params.resetProjectState ? {
         // The handoff origin remains historical provenance; these fields own
         // the current group, which ends when the conversation moves projects.
@@ -6167,6 +6179,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           'backend', json_extract(threads.payload, '$.backend'),
           'threadId', json_extract(threads.payload, '$.threadId'),
           'extraLinkedDirectories', json_extract(threads.payload, '$.extraLinkedDirectories'),
+          'retainedWorktrees', json_extract(threads.payload, '$.retainedWorktrees'),
           'parentThreadId', json_extract(threads.payload, '$.parentThreadId'),
           'parentThreadBackend', json_extract(threads.payload, '$.parentThreadBackend'),
           'parentThreadInstanceId', json_extract(threads.payload, '$.parentThreadInstanceId'),
@@ -9788,6 +9801,14 @@ function linkedDirectoriesEquivalent(
     normalizeLinkedDirectoryPath(left.worktreePath) ===
     normalizeLinkedDirectoryPath(right.worktreePath)
   );
+}
+
+function sameWorktreeCheckout(
+  left: LinkedDirectorySummary,
+  right: LinkedDirectorySummary,
+): boolean {
+  return normalizeLinkedDirectoryPath(left.worktreePath ?? left.path)
+    === normalizeLinkedDirectoryPath(right.worktreePath ?? right.path);
 }
 
 function normalizeLinkedDirectoryPath(value: string | undefined): string | undefined {

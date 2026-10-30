@@ -1435,11 +1435,13 @@ function createOverlayStoreMock(params?: {
       threadId,
       directory,
       gitBranch,
+      retainWorktree,
     }: {
       backend: AppServerBackendKind;
       threadId: string;
       directory: ThreadOverlayState["extraLinkedDirectories"][number];
       gitBranch?: string;
+      retainWorktree?: ThreadOverlayState["extraLinkedDirectories"][number];
     }) => {
       const key = `${backend}:${threadId}`;
       const current = overlays.get(key) ?? {
@@ -1448,11 +1450,18 @@ function createOverlayStoreMock(params?: {
         executionMode: "default",
         extraLinkedDirectories: [],
       };
+      const retainedWorktrees = [
+        ...((current as ThreadOverlayState).retainedWorktrees ?? []).filter((retained) =>
+          retained.worktreePath !== directory.worktreePath
+          && retained.worktreePath !== retainWorktree?.worktreePath),
+        ...(retainWorktree ? [retainWorktree] : []),
+      ];
       const next = {
         ...current,
         gitBranch: gitBranch ?? current.gitBranch,
         observedGitBranch: gitBranch ?? current.observedGitBranch,
         extraLinkedDirectories: [directory],
+        retainedWorktrees: retainedWorktrees.length > 0 ? retainedWorktrees : undefined,
       } as ThreadOverlayState;
       overlays.set(key, next);
       return next;
@@ -60357,6 +60366,182 @@ script = "printf setup"
     } finally {
       await registry?.close();
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an owned worktree after a fresh-start move and checkpoints it on archive", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-fresh-start-archive-"));
+    let registry: DesktopBackendRegistry | undefined;
+    try {
+      const repoPath = path.join(root, "PwrGit");
+      await mkdir(repoPath);
+      await git(repoPath, ["init", "-b", "main"]);
+      await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
+      await git(repoPath, ["add", "README.md"]);
+      await git(repoPath, ["commit", "-m", "initial"]);
+      const handoffService = new GitWorkspaceHandoffService({ resolveWorktreeStorage: () => "in-repo" });
+      // An earlier move created this worktree, so the thread owns it.
+      const created = await handoffService.handoff({
+        backend: "codex", threadId: "thread-1", direction: "to-project", targetPath: repoPath,
+        sourceWorkMode: "worktree", now: 1000,
+      });
+      const oldWorktree = created.targetPath;
+      await writeFile(path.join(oldWorktree, "README.md"), "uncommitted\n", "utf8");
+      const overlayStore = createOverlayStoreMock();
+      await overlayStore.replaceWorkspaceLinkedDirectory({
+        backend: "codex", threadId: "thread-1", directory: created.linkedDirectory,
+      });
+      // The provider reports no directory: only PwrAgent's records find the old worktree.
+      const thread: AppServerThreadSummary = {
+        id: "thread-1", title: "Fresh start", titleSource: "explicit", source: "codex",
+        linkedDirectories: [], gitBranch: "HEAD", updatedAt: 2,
+      };
+      registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({ threads: [thread] }), overlayStore, gitWorkspaceHandoffService: handoffService,
+      });
+
+      const moved = await registry.handoffThreadWorkspace({
+        backend: "codex", threadId: thread.id, direction: "worktree-to-worktree", baseRef: "main",
+        repositoryPath: repoPath, sourcePath: oldWorktree,
+      });
+
+      expect(moved.targetPath).not.toBe(oldWorktree);
+      expect(moved.warnings).toContain("The previous worktree stays on disk. Archiving this thread checkpoints and removes it.");
+      // Nothing was moved or discarded from the old worktree.
+      await expect(readFile(path.join(oldWorktree, "README.md"), "utf8")).resolves.toBe("uncommitted\n");
+      // Git for Windows checks the committed file out with CRLF.
+      await expect(readFile(path.join(moved.targetPath, "README.md"), "utf8")).resolves.toMatch(/^base\r?\n$/);
+      const overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId: thread.id });
+      // The new worktree is the thread's only workspace; the old one is kept aside.
+      expect(overlay?.extraLinkedDirectories).toEqual([moved.linkedDirectory]);
+      expect(overlay?.retainedWorktrees).toEqual([
+        expect.objectContaining({ kind: "worktree", path: moved.repositoryPath, worktreePath: oldWorktree }),
+      ]);
+
+      const archived = await registry.archiveThread({ backend: "codex", threadId: thread.id });
+
+      // The provider reports no directory, so the retained worktree is the
+      // only candidate. Paths are not compared: Windows can spell them differently.
+      expect(archived.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+      expect(await pathExists(oldWorktree)).toBe(false);
+      expect(await git(repoPath, ["worktree", "list", "--porcelain"])).not.toContain(oldWorktree);
+      // The old worktree's uncommitted change survives in its checkpoint.
+      const snapshots = (await overlayStore.getThreadOverlayState({ backend: "codex", threadId: thread.id }))
+        ?.worktreeSnapshots ?? [];
+      expect(snapshots).toHaveLength(1);
+      expect(await git(repoPath, ["show", `${snapshots[0]!.snapshotCommit}:README.md`])).toBe("uncommitted");
+    } finally {
+      await registry?.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { source: "an owned worktree", direction: "worktree-to-worktree", external: false, retained: true },
+    { source: "an adopted worktree", direction: "worktree-to-worktree", external: true, retained: false },
+    { source: "the local checkout", direction: "local-to-worktree", external: false, retained: false },
+  ] as const)("tracks $source after a fresh-start move only when the thread owns it", async ({ direction, external, retained }) => {
+    const sourcePath = direction === "local-to-worktree" ? "/repo/app" : "/repo/app/.worktrees/old";
+    const targetPath = "/repo/app/.worktrees/new";
+    const source: LinkedDirectorySummary = direction === "local-to-worktree"
+      ? { id: "/repo/app", label: "app", path: "/repo/app", kind: "local" }
+      : {
+          id: "pwragent-handoff:codex:thread-1", label: "app", path: "/repo/app", kind: "worktree", worktreePath: sourcePath,
+          ...(external ? { worktreeOwnership: "external" as const } : {}),
+        };
+    const handoff = vi.fn(async () => ({
+      backend: "codex" as const, threadId: "thread-1", direction, strategy: "detached-changes" as const,
+      workMode: "worktree" as const, baseSha: "abc123", repositoryPath: "/repo/app", targetPath,
+      linkedDirectory: { id: "pwragent-handoff:codex:thread-1", label: "app", path: "/repo/app", kind: "worktree" as const, worktreePath: targetPath },
+      warnings: [], completedAt: 1000,
+    }));
+    const overlayStore = createOverlayStoreMock({ overlays: { "codex:thread-1": {
+      backend: "codex", threadId: "thread-1", executionMode: "default", extraLinkedDirectories: [source],
+    } } });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [{
+        id: "thread-1", title: "Fresh start", titleSource: "explicit", source: "codex", linkedDirectories: [source], updatedAt: 1,
+      }] }),
+      overlayStore,
+      gitDirectoryService: { recordCodexWorktreeOwnerThread: vi.fn(async () => {}) } as never,
+      gitWorkspaceHandoffService: { handoff } as never,
+    });
+    try {
+      await registry.handoffThreadWorkspace({
+        backend: "codex", threadId: "thread-1", direction, baseRef: "origin/main", repositoryPath: "/repo/app", sourcePath,
+      });
+
+      expect(handoff).toHaveBeenCalledWith(expect.objectContaining({ baseRef: "origin/main", sourcePath }));
+      expect((handoff.mock.calls[0] as unknown as [{ keepSourceWorktree?: boolean }])[0].keepSourceWorktree)
+        .toBe(external ? true : undefined);
+      const overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" });
+      expect(overlay?.retainedWorktrees).toEqual(retained ? [{
+        id: `pwragent-retained-worktree:codex:thread-1:${sourcePath}`,
+        label: "app", path: "/repo/app", kind: "worktree", worktreePath: sourcePath,
+      }] : undefined);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it.each([
+    { case: "archives it when no other thread uses it", sharedWithActiveThread: false },
+    { case: "leaves it while another active thread still runs in it", sharedWithActiveThread: true },
+  ])("reads a retained worktree in paged archive discovery and $case", async ({ sharedWithActiveThread }) => {
+    const oldWorktree = "/repo/app/.worktrees/old";
+    const newWorktree = "/repo/app/.worktrees/new";
+    const thread: AppServerThreadSummary = {
+      id: "thread-1", title: "Fresh start", titleSource: "explicit", source: "codex", updatedAt: 1,
+      linkedDirectories: [{ id: "pwragent-handoff:codex:thread-1", label: "app", path: "/repo/app", kind: "worktree", worktreePath: newWorktree }],
+    };
+    // A sub-thread can still run in the worktree its parent moved away from.
+    const child: AppServerThreadSummary = {
+      id: "thread-2", title: "Child", titleSource: "explicit", source: "codex", updatedAt: 1,
+      linkedDirectories: [{ id: "directory:/repo/app", label: "app", path: "/repo/app", kind: "worktree", worktreePath: oldWorktree }],
+    };
+    const archiveWorktree = vi.fn(async (params: { worktreePath: string; repositoryPath: string }) => ({
+      id: `snapshot:${params.worktreePath}`, backend: "codex", threadId: "thread-1", worktreePath: params.worktreePath,
+      repositoryPath: params.repositoryPath, snapshotRef: "refs/pwragent/snapshot", snapshotCommit: "abc123",
+      createdAt: 1, archivedAt: 1, state: "archived", ignoredFilesExcluded: true,
+    }));
+    const codexClient = Object.assign(new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [thread],
+    }), {
+      listArchiveCleanupThreadsPage: vi.fn(async ({ archived }: { archived: boolean }) => ({
+        threads: archived ? [{ ...thread, archived: true }] : sharedWithActiveThread ? [child] : [],
+      })),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({ overlays: { "codex:thread-1": {
+        backend: "codex", threadId: "thread-1", executionMode: "default",
+        extraLinkedDirectories: [thread.linkedDirectories[0]!],
+        retainedWorktrees: [{
+          id: `pwragent-retained-worktree:codex:thread-1:${oldWorktree}`, label: "app", path: "/repo/app",
+          kind: "worktree", worktreePath: oldWorktree,
+        }],
+      } } }),
+      pdfToolMcpServer: null,
+      worktreeArchiveService: { archive: archiveWorktree } as unknown as WorktreeArchiveService,
+    });
+    try {
+      const response = await registry.archiveThread({ backend: "codex", threadId: "thread-1" });
+
+      expect(codexClient.listArchiveCleanupThreadsPage).toHaveBeenCalled();
+      const archivedPaths = archiveWorktree.mock.calls.map(([params]) => params.worktreePath);
+      expect(archivedPaths).toContain(newWorktree);
+      if (sharedWithActiveThread) {
+        expect(archivedPaths).not.toContain(oldWorktree);
+        expect(response.cleanup).toContainEqual(expect.objectContaining({
+          worktreePath: oldWorktree, removedWorktree: false,
+          skippedReason: "Worktree is still used by another active thread: thread-2.",
+        }));
+      } else {
+        expect(archivedPaths).toContain(oldWorktree);
+      }
+    } finally {
+      await registry.close();
     }
   });
 

@@ -827,7 +827,8 @@ export class GitWorkspaceHandoffService {
   /**
    * Starts a new worktree at `baseRef` and moves only the thread. The source
    * checkout or worktree keeps its branch and its uncommitted changes, and
-   * nothing is archived: they may belong to someone else.
+   * nothing is archived now: they may belong to someone else. The registry
+   * keeps a source worktree the thread owns tracked until thread archive.
    */
   private async handoffToFreshWorktree(
     params: HandoffParams,
@@ -904,6 +905,13 @@ export class GitWorkspaceHandoffService {
       warnings: [
         `The new worktree starts at ${baseRef}.`,
         ...(sourceDirty ? [`Uncommitted changes stayed in ${context.sourcePath}.`] : []),
+        ...(!fromWorktree ? []
+          : params.keepSourceWorktree
+            ? ["The previous worktree was created outside PwrAgent, so it was left on disk."]
+            // Claude and ACP thread archive keeps every worktree.
+            : context.backend !== "codex"
+              ? ["The previous worktree stays on disk."]
+              : ["The previous worktree stays on disk. Archiving this thread checkpoints and removes it."]),
       ],
       completedAt: context.now,
     };

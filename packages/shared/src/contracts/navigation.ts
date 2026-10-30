@@ -3112,6 +3112,12 @@ export type ThreadOverlayState = {
   archiveRetentionStartedAt?: number;
   retainedBranchDriftPairs?: ThreadBranchDriftPair[];
   extraLinkedDirectories: LinkedDirectorySummary[];
+  /**
+   * Worktrees this thread created and then left with a fresh-start move.
+   * They stay on disk and are not the thread's workspace. Only thread
+   * archive reads them, so it can checkpoint and remove them as before.
+   */
+  retainedWorktrees?: LinkedDirectorySummary[];
   worktreeSnapshots?: WorktreeSnapshotSummary[];
   /**
    * Cached repository resolution for an ACP worktree thread. ACP sessions
