@@ -43,12 +43,11 @@ test("ci.yml pins one reviewed configure-nodejs revision", () => {
 });
 
 describe.each([
-  ["install-deps", ["lint", "build", "test", "desktop-e2e"]],
+  ["install-deps", ["lint", "build", "desktop-e2e"]],
   [
     "windows-install-deps",
     [
       "windows-verify",
-      "windows-desktop-main",
       "windows-renderer-packages",
       "windows-e2e",
     ],
@@ -88,6 +87,17 @@ describe.each([
     expect(consumerJob).toContain('PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false"');
     expect(consumerJob).not.toMatch(/run:.*pnpm (?:i|install|rebuild)\b|--ignore-scripts/);
   });
+});
+
+// desktop-main runs release-deploy-isolation.test.mjs, which installs offline
+// from the job's pnpm store. Completed trees carry no store, so these lanes
+// keep the store-backed install.
+test.each(["test", "windows-desktop-main"])("%s keeps a pnpm store", (name) => {
+  const body = job(name);
+  const step = setup(body);
+  expect(step).not.toMatch(/dependency-cache|cache-mode|lookup-only/);
+  expect(input(step, "cache-electron")).toBe('"true"');
+  expect(body).not.toContain("PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN");
 });
 
 test("cache inputs cover the install lifecycle and its local imports", () => {

@@ -267,32 +267,20 @@ jobs:
       fail-fast: false
       matrix:
         lane: [1, 2]
-    env:
-      # Completed-tree consumers must never let pnpm reinstall implicitly.
-      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
+        # Not a completed-tree consumer: desktop-main includes
+        # release-deploy-isolation.test.mjs, which runs an offline pnpm
+        # install against this job's store. Completed trees carry no store.
         uses: pwrdrvr/configure-nodejs@d416c1c78119b25fe03ee3ef78b75af0d69b10a7 # v1.7.1
         timeout-minutes: 10
         with:
           node-version: "^24.22.1"
           cache-electron: "true"
-          dependency-cache: node-modules
-          cache-mode: restore
-          cache-key-suffix: pwragent-tree-d416c1c78119b25fe03ee3ef78b75af0d69b10a7-v1
-          cache-inputs: |
-            .nvmrc
-            scripts/linux-sandbox.mjs
-            apps/desktop/scripts/ensure-electron-runtime.mjs
-            patches/@sigstore__core@4.0.1.patch
-            patches/@tufjs__models@5.0.0.patch
-            patches/khroma@2.1.0.patch
-            patches/playwright-core@1.63.0.patch
-            patches/playwright@1.63.0.patch
 
       - name: Install ripgrep
         uses: ./.github/actions/install-ripgrep
@@ -418,33 +406,21 @@ jobs:
       matrix:
         lane: [1, 2]
     timeout-minutes: 30
-    env:
-      # Completed-tree consumers must never let pnpm reinstall implicitly.
-      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
+        # Not a completed-tree consumer: desktop-main includes
+        # release-deploy-isolation.test.mjs, which runs an offline pnpm
+        # install against this job's store. Completed trees carry no store.
         uses: pwrdrvr/configure-nodejs@d416c1c78119b25fe03ee3ef78b75af0d69b10a7 # v1.7.1
         timeout-minutes: 10
         with:
           node-version: "^24.22.1"
           working-directory: .
           cache-electron: "true"
-          dependency-cache: node-modules
-          cache-mode: restore
-          cache-key-suffix: pwragent-tree-d416c1c78119b25fe03ee3ef78b75af0d69b10a7-v1
-          cache-inputs: |
-            .nvmrc
-            scripts/linux-sandbox.mjs
-            apps/desktop/scripts/ensure-electron-runtime.mjs
-            patches/@sigstore__core@4.0.1.patch
-            patches/@tufjs__models@5.0.0.patch
-            patches/khroma@2.1.0.patch
-            patches/playwright-core@1.63.0.patch
-            patches/playwright@1.63.0.patch
 
       - name: Test
         timeout-minutes: 20
