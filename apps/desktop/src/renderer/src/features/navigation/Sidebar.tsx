@@ -444,11 +444,12 @@ type SidebarProps = {
     pinned: boolean,
   ) => Promise<void>;
   onReorderThreadPins?: (orderedThreadKeys: string[], move?: NavigationRelativePinMove) => Promise<void>;
+  /** Resolves false when the owner refused the change. */
   onSetThreadParent?: (
     thread: NavigationThreadSummary,
     parentThreadId?: string,
     parentThreadBackend?: NavigationThreadSummary["source"],
-  ) => Promise<void>;
+  ) => Promise<boolean | void>;
   onUnlinkThreads?: (
     threads: NavigationThreadSummary[],
   ) => Promise<void>;
@@ -1051,15 +1052,19 @@ export function Sidebar(props: SidebarProps) {
     props.onUpdateSubthreadOrder,
   );
   // A drop on a row. The tray the thread lands in opens, so the drop shows
-  // where the thread went rather than making it vanish.
+  // where the thread went rather than making it vanish. A refused drop
+  // closes it again.
   const nestThread = useRevealListChange(
     revealHoverStableSnapshot,
     props.onSetThreadParent
       ? (thread: NavigationThreadSummary, parent: NavigationThreadSummary): void => {
-          if (parent.subthreadsCollapsed === true) {
-            void props.onSetSubthreadsCollapsed?.(parent, false);
-          }
-          void props.onSetThreadParent!(thread, parent.id, parent.source);
+          const setCollapsed = parent.subthreadsCollapsed === true
+            ? props.onSetSubthreadsCollapsed
+            : undefined;
+          void setCollapsed?.(parent, false);
+          void props.onSetThreadParent!(thread, parent.id, parent.source).then((saved) => {
+            if (saved === false) void setCollapsed?.(parent, true);
+          });
         }
       : undefined,
   );

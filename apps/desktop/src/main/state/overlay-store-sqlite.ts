@@ -5364,7 +5364,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         ? params.parentThreadInstanceId?.trim() || undefined
         : undefined;
       if (parentThreadId && !parentThreadInstanceId) {
-        this.assertParentIsNotDescendant(threadKey, buildThreadIdentityKey(parentThreadBackend!, parentThreadId));
+        this.assertParentIsNotDescendant(params.threadId, threadKey, buildThreadIdentityKey(parentThreadBackend!, parentThreadId));
       }
       const nextState: ThreadOverlayState = {
         ...current,
@@ -5567,20 +5567,23 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
    * oldest ancestor, and in a loop every member names another as its root,
    * so the whole group drops out of every list. The walk follows this
    * owner's own links only; a parent on another instance ends it.
+   *
+   * A legacy link names no provider, and the lenses resolve it by id on
+   * any provider when its own has no such thread. The store cannot list
+   * providers, so a legacy link to this thread's id counts as a loop.
    */
-  private assertParentIsNotDescendant(threadKey: string, parentKey: string): void {
+  private assertParentIsNotDescendant(threadId: string, threadKey: string, parentKey: string): void {
+    const loop = new Error("A thread cannot become a sub-thread of its own sub-thread.");
     const seen = new Set<string>();
     let key: string | undefined = parentKey;
     while (key && !seen.has(key) && seen.size < MAX_THREAD_PARENT_WALK) {
-      if (key === threadKey) {
-        throw new Error("A thread cannot become a sub-thread of its own sub-thread.");
-      }
+      if (key === threadKey) throw loop;
       seen.add(key);
       const overlay = this.readStoredThread(key);
       const parentId = overlay?.parentThreadId?.trim();
-      key = parentId && !overlay!.parentThreadInstanceId
-        ? buildThreadIdentityKey(overlay!.parentThreadBackend ?? overlay!.backend, parentId)
-        : undefined;
+      if (!parentId || overlay!.parentThreadInstanceId) return;
+      if (!overlay!.parentThreadBackend && parentId === threadId) throw loop;
+      key = buildThreadIdentityKey(overlay!.parentThreadBackend ?? overlay!.backend, parentId);
     }
   }
 

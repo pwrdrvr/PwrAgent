@@ -45912,21 +45912,33 @@ export class DesktopBackendRegistry {
             `${params.threadLabel} is not a sub-thread.`,
           );
     }
-    const parentLabel = `Parent thread ${params.parent.backend}:${params.parent.threadId}`;
-    let parentSummary: ThreadInspectionSummary | undefined;
+    const parent = params.parent;
+    const parentLabel = `Parent thread ${parent.backend}:${parent.threadId}`;
+    // Only existence and archive state matter here, so the provider's own
+    // lists answer it without an inspection summary's enrichment. A list
+    // that fails is reported as such, not as a missing parent.
+    let archived: boolean;
     try {
-      parentSummary = await this.readThreadInspectionSummaryForMutation(params.parent);
-    } catch {
-      parentSummary = undefined;
-    }
-    if (!parentSummary) {
-      return threadInspectionFailure(
-        "not_found",
-        `${parentLabel} was not found on this instance.`,
-      );
+      const listed = async (archivedList: boolean) => (await this.listThreads({
+        backend: parent.backend,
+        archived: archivedList,
+        callerReason: archivedList ? "agent-thread-parent:archived" : "agent-thread-parent",
+      })).some((thread) => thread.id === parent.threadId);
+      if (await listed(false)) {
+        archived = false;
+      } else if (await listed(true)) {
+        archived = true;
+      } else {
+        return threadInspectionFailure(
+          "not_found",
+          `${parentLabel} was not found on this instance.`,
+        );
+      }
+    } catch (error) {
+      return federatedThreadInspectionFailure(error);
     }
     // Archiving a parent ungroups its children, so the link would not last.
-    if (parentSummary.archivedAt !== undefined) {
+    if (archived) {
       return threadInspectionFailure(
         "invalid_arguments",
         `${parentLabel} is archived.`,

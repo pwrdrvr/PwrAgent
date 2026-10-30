@@ -360,11 +360,13 @@ export function RecentsList(props: RecentsListProps) {
           }
           const child = entry.thread;
           const childKey = threadSummaryIdentityKey(child);
-          const reorderable =
+          // Any row in the tray drags to nest it under another row, a sole
+          // child or a grandchild too; only direct children also reorder.
+          const draggable =
             canManageSubthreads
-            && directChildKeySet.has(childKey)
-            && ((directChildKeys.length > 1 && Boolean(props.onUpdateSubthreadOrder))
-              || Boolean(props.onNestThread));
+            && (Boolean(props.onNestThread)
+              || (directChildKeySet.has(childKey) && directChildKeys.length > 1
+                && Boolean(props.onUpdateSubthreadOrder)));
           // A row plus its own worker group, as siblings of this list. A
           // wrapping element would break the tray's flat list semantics.
           return [
@@ -380,7 +382,7 @@ export function RecentsList(props: RecentsListProps) {
               renaming={isRenamingRow(props.renamingRow, childKey, undefined)}
               onRequestRename={props.onRequestRenameThread}
               onCommitRename={props.onCommitRenameThread}
-              pointerDraggable={reorderable}
+              pointerDraggable={draggable}
               includeLinkedDirectories
               nested
               nestedDepth={trays.depth(childKey)}
@@ -390,7 +392,7 @@ export function RecentsList(props: RecentsListProps) {
               thinkingThreadKeys={props.thinkingThreadKeys}
               agentCommandThreadKeys={props.agentCommandThreadKeys}
               thread={child}
-              onPointerDownThread={reorderable ? pointerDownSubthread : undefined}
+              onPointerDownThread={draggable ? pointerDownSubthread : undefined}
               onOpenContextMenu={props.onOpenThreadContextMenu}
               onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
               onDetachPullRequest={props.onDetachPullRequest}

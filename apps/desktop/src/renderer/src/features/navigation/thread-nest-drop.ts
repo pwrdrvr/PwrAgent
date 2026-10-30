@@ -5,9 +5,25 @@ import {
   threadSummaryIdentityKey,
   threadSupportsFederationCapability,
 } from "../../lib/federated-thread-events";
+import type { PointerReorderTarget } from "./pointer-reorder-drag";
 
 /** Printed on the held card while a drop would nest it. */
 export const NEST_DROP_LABEL = "Make sub-thread";
+
+/** The scrolling list a sidebar drag runs in: every lens's dense lane. */
+export function threadDragLane(source: HTMLElement): HTMLElement | undefined {
+  return source.closest<HTMLElement>(".sidebar-list--dense") ?? undefined;
+}
+
+/** The drop indicator key for a nest onto `element`'s row. */
+export function nestDropKey(element: HTMLElement): string {
+  return `nest:${element.dataset.threadKey ?? ""}`;
+}
+
+/** A nest drop as a pointer drag target: the ring and the held card's label. */
+export function nestDropTarget<T>(element: HTMLElement, value: T): PointerReorderTarget<T> {
+  return { element, key: nestDropKey(element), position: "inside", label: NEST_DROP_LABEL, value };
+}
 
 /** Mirrors the owner's own loop check, which has the final word. */
 const MAX_PARENT_WALK = 64;

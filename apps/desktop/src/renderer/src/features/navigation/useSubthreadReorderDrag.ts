@@ -3,7 +3,7 @@ import type { NavigationRelativeChildMove, NavigationThreadSummary } from "@pwra
 import { useEventCallback } from "../../lib/useEventCallback";
 import { useDropIndicatorController } from "./drag-drop";
 import { beginPointerReorderDrag, type Point, type PointerReorderTarget } from "./pointer-reorder-drag";
-import { isInNestBand, NEST_DROP_LABEL, resolveThreadNestTarget } from "./thread-nest-drop";
+import { isInNestBand, nestDropTarget, resolveThreadNestTarget, threadDragLane } from "./thread-nest-drop";
 import type { ThreadRowRef } from "./ThreadRow";
 
 /** How far above or below its tray the pointer can stray and still drop. */
@@ -19,9 +19,10 @@ type SubthreadDrop =
  *
  * The tray element carries `data-subthread-tray` (its owner's key) and each
  * row `data-nested-depth`, so one stable callback serves every row and the
- * memoized rows keep their props. Only direct children move: a parent's
+ * memoized rows keep their props. Only direct children reorder: a parent's
  * `subthreadOrder` ranks its own children, and a grandchild travels with the
- * child that owns it, so the line is drawn between whole subtrees.
+ * child that owns it, so the line is drawn between whole subtrees. A deeper
+ * row is not among `siblings()`, so it only nests.
  *
  * A child dropped on another row becomes that row's sub-thread instead:
  * anywhere on a row outside its tray, or on the middle third of a sibling,
@@ -49,16 +50,14 @@ export function useSubthreadReorderDrag(params: {
     if (event.button !== 0 || (!update && !nestThread) || !tray || !parent || !child) return;
     disposeDragRef.current?.();
 
-    const nestRoot = source.closest<HTMLElement>(".sidebar-list--dense") ?? tray;
+    const lane = threadDragLane(source);
+    const nestRoot = lane ?? tray;
     const siblings = (): HTMLElement[] =>
       Array.from(tray.querySelectorAll<HTMLElement>(".thread-row-shell[data-nested-depth=\"1\"]"));
     const resolveNest = (point: Point): PointerReorderTarget<SubthreadDrop> | undefined => {
       if (!nestThread) return undefined;
       const nest = resolveThreadNestTarget({ point, root: nestRoot, childKey: row.threadKey, threadByKey: params.threadByKey });
-      return nest
-        ? { element: nest.element, key: `nest:${nest.element.dataset.threadKey ?? ""}`, position: "inside",
-            label: NEST_DROP_LABEL, value: { kind: "nest", parent: nest.parent } }
-        : undefined;
+      return nest ? nestDropTarget<SubthreadDrop>(nest.element, { kind: "nest", parent: nest.parent }) : undefined;
     };
     const resolveTarget = (point: Point): PointerReorderTarget<SubthreadDrop> | undefined => {
       const bounds = tray.getBoundingClientRect();
@@ -102,7 +101,7 @@ export function useSubthreadReorderDrag(params: {
       sourceElement: source,
       previewSource: source,
       clickSuppressionRoot: nestRoot,
-      scrollElement: source.closest<HTMLElement>(".sidebar-list--dense") ?? undefined,
+      scrollElement: lane,
       dropIndicator,
       resolveTarget,
       onDrop: ({ value }) => {

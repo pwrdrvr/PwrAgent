@@ -220,6 +220,17 @@ describe("SqliteOverlayStore — thread pins", () => {
       .toBe("remote-linked");
   });
 
+  it("treats a legacy link that names no provider as able to reach any provider's thread", async () => {
+    // The lenses resolve a legacy link by id on any provider when its own
+    // has no such thread, so codex:x may be gemini:p's sub-thread.
+    await store.setThreadParent({ backend: "codex", threadId: "x", parentThreadId: "p" });
+    const legacy = stateDb.raw.prepare("UPDATE threads SET payload = json_remove(payload, '$.parentThreadBackend')"
+      + " WHERE json_extract(payload, '$.threadId') = ?").run("x");
+    expect(legacy.changes).toBe(1);
+    await expect(store.setThreadParent({ backend: "acp:gemini", threadId: "p", parentThreadId: "x",
+      parentThreadBackend: "codex" })).rejects.toThrow(/its own/);
+  });
+
   it("drops a moved thread from the group it left and keeps its place when linked again", async () => {
     for (const threadId of ["a", "b", "c"]) {
       await store.setThreadParent({ backend: "codex", threadId, parentThreadId: "old" });

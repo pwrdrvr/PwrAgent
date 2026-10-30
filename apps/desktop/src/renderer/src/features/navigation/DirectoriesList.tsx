@@ -1144,11 +1144,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
       // direct children reorder with `useSubthreadReorderDrag`, the same
       // pointer drag RecentsList uses.
       const directChildKeySet = new Set(directChildKeys);
-      // A sole child still drags, to nest it under another row.
-      const reorderable =
-        threadSupportsFederationCapability(parent, "thread_grouping")
-        && ((directChildKeys.length > 1 && Boolean(props.onUpdateSubthreadOrder))
-          || Boolean(props.onNestThread));
+      // Any row in the tray drags to nest it under another row, a sole
+      // child or a grandchild too; only direct children also reorder.
+      const groupable = threadSupportsFederationCapability(parent, "thread_grouping");
+      const draggable = (childKey: string) => groupable
+        && (Boolean(props.onNestThread)
+          || (directChildKeySet.has(childKey) && directChildKeys.length > 1 && Boolean(props.onUpdateSubthreadOrder)));
       return (
         // `listitem` box because this list is a SIBLING of its parent row
         // rather than a child of it: `renderStaticSubthreads` is called from a
@@ -1200,7 +1201,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 directoryKey={directory.key}
                 parentThreadKey={parentKey}
                 revealThreadRowKey={revealThreadRowKey}
-                pointerDraggable={reorderable && directChildKeySet.has(childKey)}
+                pointerDraggable={draggable(childKey)}
                 includeLinkedDirectories
                 linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(child)}
                 nested
@@ -1212,7 +1213,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 agentCommandThreadKeys={props.agentCommandThreadKeys}
                 thread={child}
                 onPointerDownThread={
-                  reorderable && directChildKeySet.has(childKey) ? pointerDownSubthread : undefined
+                  draggable(childKey) ? pointerDownSubthread : undefined
                 }
                 onOpenContextMenu={props.onOpenThreadContextMenu}
                 onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}

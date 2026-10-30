@@ -4,7 +4,7 @@ import { comparePinnedThreads, isKeptAtTopThread, isPinnedThread, moveThreadKey 
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { beginNativeDragInteraction, endNativeDragInteraction } from "../../lib/native-drag-interaction";
 import type { DropIndicatorController } from "./drag-drop";
-import { isInNestBand, NEST_DROP_LABEL, resolveThreadNestTarget } from "./thread-nest-drop";
+import { isInNestBand, NEST_DROP_LABEL, nestDropKey, resolveThreadNestTarget, threadDragLane } from "./thread-nest-drop";
 import { createThreadRowPointerDragPreview, type ThreadRowPointerDragPreview } from "./thread-row-drag-preview";
 
 const POST_DRAG_CLICK_SUPPRESS_MS = 150;
@@ -410,7 +410,7 @@ export function useThreadPinOrdering(params: {
         session.target.kind === "row"
           ? `${session.scope.key}:${session.target.threadKey}`
           : session.target.kind === "nest"
-            ? `nest:${session.target.element.dataset.threadKey ?? ""}`
+            ? nestDropKey(session.target.element)
             : session.target.kind === "keepAtTop"
               ? `pinned-keep-top:${session.scope.key}`
               : `pinned-append:${session.scope.key}`,
@@ -454,7 +454,8 @@ export function useThreadPinOrdering(params: {
     const startPoint = { x: event.clientX, y: event.clientY };
     // Rows anywhere in the lane can take the held thread, not only this
     // scope's pins: a project's other rows, or the list below the group.
-    const nestRoot = sourceElement.closest<HTMLElement>(".sidebar-list--dense") ?? scopeElement;
+    const lane = threadDragLane(sourceElement);
+    const nestRoot = lane ?? scopeElement;
     const onNestThread = params.onNestThread;
     const session: ThreadPinDragSession = {
       activated: false,
@@ -474,8 +475,7 @@ export function useThreadPinOrdering(params: {
       pointerId: event.pointerId,
       // Both lenses scroll their dense lane (the Directories list carries
       // the same class), never the non-scrolling region around it.
-      scrollElement:
-        sourceElement.closest<HTMLElement>(".sidebar-list--dense") ?? undefined,
+      scrollElement: lane,
       sourceElement,
       sourceWasPinned,
       threadKey,

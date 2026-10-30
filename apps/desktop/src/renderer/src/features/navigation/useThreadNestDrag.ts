@@ -3,7 +3,7 @@ import type { NavigationThreadSummary } from "@pwragent/shared";
 import { useEventCallback } from "../../lib/useEventCallback";
 import { useDropIndicatorController } from "./drag-drop";
 import { beginPointerReorderDrag } from "./pointer-reorder-drag";
-import { NEST_DROP_LABEL, resolveThreadNestTarget } from "./thread-nest-drop";
+import { nestDropTarget, resolveThreadNestTarget, threadDragLane } from "./thread-nest-drop";
 import type { ThreadRowRef } from "./ThreadRow";
 
 /**
@@ -26,20 +26,18 @@ export function useThreadNestDrag(params: {
     disposeDragRef.current?.();
 
     const source = event.currentTarget;
-    const lane = source.closest<HTMLElement>(".sidebar-list--dense") ?? source.parentElement ?? source;
+    const scrollElement = threadDragLane(source);
+    const lane = scrollElement ?? source.parentElement ?? source;
     disposeDragRef.current = beginPointerReorderDrag({
       event,
       sourceElement: source,
       previewSource: source,
       clickSuppressionRoot: lane,
-      scrollElement: source.closest<HTMLElement>(".sidebar-list--dense") ?? undefined,
+      scrollElement,
       dropIndicator,
       resolveTarget: (point) => {
         const nest = resolveThreadNestTarget({ point, root: lane, childKey: row.threadKey, threadByKey: params.threadByKey });
-        return nest
-          ? { element: nest.element, key: `nest:${nest.element.dataset.threadKey ?? ""}`, position: "inside",
-              label: NEST_DROP_LABEL, value: nest.parent }
-          : undefined;
+        return nest ? nestDropTarget(nest.element, nest.parent) : undefined;
       },
       onDrop: ({ value }) => nestThread(thread, value),
     });
