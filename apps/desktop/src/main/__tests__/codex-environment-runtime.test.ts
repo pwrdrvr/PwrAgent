@@ -213,6 +213,30 @@ describe("codex environment runtime", () => {
     }
   });
 
+  it("yields for exit events without rediscovering a terminated process tree", async () => {
+    const processTree = await import("../process-tree");
+    let alive = true;
+    const liveness = vi.spyOn(processTree, "isProcessIdAlive").mockImplementation(() => alive);
+    const discovery = vi.spyOn(processTree, "collectProcessTreeIds").mockImplementation(() => {
+      throw new Error("Post-stop CIM discovery blocks exit events");
+    });
+    try {
+      setImmediate(() => { alive = false; });
+      await expect(waitForCodexEnvironmentDetachedCommandGone({
+        knownPids: [123, 124],
+        pid: 123,
+        runId: "terminated-run",
+        timeoutMs: 200,
+      })).resolves.toBeUndefined();
+      expect(liveness).toHaveBeenCalledWith(123);
+      expect(liveness).toHaveBeenCalledWith(124);
+      expect(discovery).not.toHaveBeenCalled();
+    } finally {
+      liveness.mockRestore();
+      discovery.mockRestore();
+    }
+  });
+
   it("rejects detached actions with a clear missing-cwd error before spawn", async () => {
     await expect(
       startLocalCodexEnvironmentAction({
