@@ -97,15 +97,18 @@ describe("desktop-main StateDb template", () => {
 
   it("gives each in-memory open its own database", () => {
     const first = StateDb.open(":memory:");
-    const second = StateDb.open(":memory:");
+    let second: StateDb | undefined;
     try {
       first.raw.prepare("INSERT INTO meta(key, value) VALUES ('probe', '1')").run();
+      // Opened after the write, so a write that reached the shared image
+      // would show here.
+      second = StateDb.open(":memory:");
       expect(
         second.raw.prepare("SELECT value FROM meta WHERE key = 'probe'").get(),
       ).toBeUndefined();
     } finally {
       first.close();
-      second.close();
+      second?.close();
     }
   });
 
