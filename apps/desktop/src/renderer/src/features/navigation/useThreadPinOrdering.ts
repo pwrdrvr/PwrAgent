@@ -4,6 +4,7 @@ import { comparePinnedThreads, isKeptAtTopThread, isPinnedThread, moveThreadKey 
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { beginNativeDragInteraction, endNativeDragInteraction } from "../../lib/native-drag-interaction";
 import type { DropIndicatorController } from "./drag-drop";
+import { isInNestBand, NEST_DROP_LABEL, nestDropKey, resolveThreadNestTarget, threadDragLane } from "./thread-nest-drop";
 import { createThreadRowPointerDragPreview, type ThreadRowPointerDragPreview } from "./thread-row-drag-preview";
 
 const POST_DRAG_CLICK_SUPPRESS_MS = 150;
@@ -40,6 +41,10 @@ type ThreadPinDragSession = {
   pointerId: number;
   preview?: ThreadRowPointerDragPreview;
   releaseClickSuppression?: () => void;
+  /** The row the held thread would nest under, when nesting is offered. */
+  resolveNest?: (point: { x: number; y: number }) =>
+    | { element: HTMLElement; parent: NavigationThreadSummary }
+    | undefined;
   removeListeners?: () => void;
   scrollElement?: HTMLElement;
   sourceElement: HTMLDivElement;
@@ -62,6 +67,11 @@ type ThreadPinPointerDropTarget =
       kind: "row";
       position: "before" | "after";
       threadKey: string;
+    }
+  | {
+      element: HTMLElement;
+      kind: "nest";
+      parent: NavigationThreadSummary;
     };
 
 function setThreadPinAppendTargetActive(
@@ -130,6 +140,18 @@ function resolveThreadPinPointerDropTarget(
     && getPointInsideElement(session.keepAtTopTargetElement, session.lastPoint)
   ) {
     return { element: session.keepAtTopTargetElement, kind: "keepAtTop" };
+  }
+
+  // A row nests the held thread. A pinned row of this scope is also an
+  // order target, so only its middle third nests and its edges keep the
+  // line (or, for an unpinned thread, the pin it always meant).
+  const nest = session.resolveNest?.(session.lastPoint);
+  if (nest) {
+    const orderRow = nest.element.dataset.threadPinState === "pinned"
+      && session.scopeElement.contains(nest.element);
+    if (!orderRow || isInNestBand(nest.element, session.lastPoint.y)) {
+      return { element: nest.element, kind: "nest", parent: nest.parent };
+    }
   }
 
   if (!session.sourceWasPinned) {
@@ -217,6 +239,8 @@ export function useThreadPinOrdering(params: {
   dropIndicator: DropIndicatorController;
   onReorderThreadPins?: (orderedThreadKeys: string[], move?: NavigationRelativePinMove) => Promise<void>;
   onSetThreadPin?: (thread: NavigationThreadSummary, pinned: boolean) => Promise<void>;
+  /** Makes the held thread a sub-thread of the row it was dropped on. */
+  onNestThread?: (thread: NavigationThreadSummary, parent: NavigationThreadSummary) => void;
   /** A drop landed; callers suppress the click a browser synthesizes after it. */
   onDrop?: () => void;
 }) {
@@ -371,7 +395,11 @@ export function useThreadPinOrdering(params: {
     session.preview?.move(session.lastPoint);
     session.target = resolveThreadPinPointerDropTarget(session);
     session.preview?.setDropLabel(
-      session.target?.kind === "keepAtTop" ? "Keep at top" : undefined,
+      session.target?.kind === "keepAtTop"
+        ? "Keep at top"
+        : session.target?.kind === "nest"
+          ? NEST_DROP_LABEL
+          : undefined,
     );
     if (!session.target) {
       dropIndicator.clear();
@@ -381,11 +409,15 @@ export function useThreadPinOrdering(params: {
       targetKey:
         session.target.kind === "row"
           ? `${session.scope.key}:${session.target.threadKey}`
-          : session.target.kind === "keepAtTop"
-            ? `pinned-keep-top:${session.scope.key}`
-            : `pinned-append:${session.scope.key}`,
+          : session.target.kind === "nest"
+            ? nestDropKey(session.target.element)
+            : session.target.kind === "keepAtTop"
+              ? `pinned-keep-top:${session.scope.key}`
+              : `pinned-append:${session.scope.key}`,
       position:
-        session.target.kind === "row" ? session.target.position : "before",
+        session.target.kind === "row"
+          ? session.target.position
+          : session.target.kind === "nest" ? "inside" : "before",
     });
   };
 
@@ -420,6 +452,11 @@ export function useThreadPinOrdering(params: {
     if (!(scopeElement instanceof HTMLElement)) return;
 
     const startPoint = { x: event.clientX, y: event.clientY };
+    // Rows anywhere in the lane can take the held thread, not only this
+    // scope's pins: a project's other rows, or the list below the group.
+    const lane = threadDragLane(sourceElement);
+    const nestRoot = lane ?? scopeElement;
+    const onNestThread = params.onNestThread;
     const session: ThreadPinDragSession = {
       activated: false,
       appendTargetElement:
@@ -438,11 +475,13 @@ export function useThreadPinOrdering(params: {
       pointerId: event.pointerId,
       // Both lenses scroll their dense lane (the Directories list carries
       // the same class), never the non-scrolling region around it.
-      scrollElement:
-        sourceElement.closest<HTMLElement>(".sidebar-list--dense") ?? undefined,
+      scrollElement: lane,
       sourceElement,
       sourceWasPinned,
       threadKey,
+      resolveNest: onNestThread
+        ? (point) => resolveThreadNestTarget({ point, root: nestRoot, childKey: threadKey, threadByKey: threadsByKey })
+        : undefined,
     };
     threadPinDragSessionRef.current = session;
 
@@ -536,6 +575,11 @@ export function useThreadPinOrdering(params: {
       if (!target || session.canceled || !wasActivated) return;
 
       params.onDrop?.();
+      if (target.kind === "nest") {
+        const thread = threadsByKey.get(session.threadKey);
+        if (thread) onNestThread?.(thread, target.parent);
+        return;
+      }
       if (target.kind === "append") {
         dropThreadAfterScopePins(session.scope, session.threadKey);
         return;

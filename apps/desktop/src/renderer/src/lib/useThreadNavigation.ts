@@ -3224,10 +3224,12 @@ export function useThreadNavigation(
    * pinned order across all backends (thread identity keys), top first.
    */
   reorderThreadPins: (orderedThreadKeys: string[], move?: NavigationRelativePinMove) => Promise<void>;
+  /** Resolves false when the owner refused the change. */
   setThreadParent: (
     thread: NavigationThreadSummary,
     parentThreadId?: string,
-  ) => Promise<void>;
+    parentThreadBackend?: AppServerBackendKind,
+  ) => Promise<boolean>;
   unlinkThreads: (threads: NavigationThreadSummary[]) => Promise<void>;
   updateSubthreadOrder: (
     parent: NavigationThreadSummary,
@@ -8975,9 +8977,9 @@ export function useThreadNavigation(
       thread: NavigationThreadSummary,
       parentThreadId?: string,
       parentThreadBackend?: AppServerBackendKind,
-    ): Promise<void> => {
+    ): Promise<boolean> => {
       if (!setThreadParentRequest) {
-        return;
+        return false;
       }
       const federationTarget = thread.federation?.ref.target
         ?? readRendererFederationTarget();
@@ -9012,6 +9014,7 @@ export function useThreadNavigation(
             parentThreadInstanceId: result.parentThreadInstanceId,
           }),
         }));
+        return true;
       } catch (error) {
         // Not cleared at the start: the sidebar's fallback unlinks a
         // selection one call per thread, like a bulk pin.
@@ -9020,6 +9023,7 @@ export function useThreadNavigation(
           error,
         );
         await refresh(threadSummaryIdentityKey(thread));
+        return false;
       }
     },
     [refresh, publishThreadActionError, setThreadParentRequest],

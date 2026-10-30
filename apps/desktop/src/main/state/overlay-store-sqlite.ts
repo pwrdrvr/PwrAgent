@@ -137,6 +137,9 @@ type ThreadPricingLedgerRead = {
 // shared by more than 2 lines; one migration stamp was shared by 7,251.
 const THREAD_USAGE_BULK_REWRITE_MIN_LINES = 64;
 
+// How far the loop check follows parent links. Lenses stop at 32 levels.
+const MAX_THREAD_PARENT_WALK = 64;
+
 // PwrAgent recorded no turn usage before 2026.
 const EARLIEST_USAGE_TURN_START = Date.UTC(2026, 0, 1);
 // Set once the one-time ledger turn time repair has run.
@@ -5360,6 +5363,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       const parentThreadInstanceId = parentThreadId
         ? params.parentThreadInstanceId?.trim() || undefined
         : undefined;
+      if (parentThreadId && !parentThreadInstanceId) {
+        this.assertParentIsNotDescendant(params.threadId, threadKey, buildThreadIdentityKey(parentThreadBackend!, parentThreadId));
+      }
       const nextState: ThreadOverlayState = {
         ...current,
         parentThreadId: parentThreadId || undefined,
@@ -5368,6 +5374,21 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         pinnedRank: parentThreadId ? undefined : current.pinnedRank,
       };
       this.putThread(threadKey, nextState);
+      // A move leaves no stale rank behind in the group the thread left.
+      const previousParentId = current.parentThreadId?.trim();
+      if (previousParentId && !current.parentThreadInstanceId) {
+        const previousKey = buildThreadIdentityKey(current.parentThreadBackend ?? params.backend, previousParentId);
+        const nextKey = parentThreadId && !parentThreadInstanceId
+          ? buildThreadIdentityKey(parentThreadBackend!, parentThreadId)
+          : undefined;
+        const previous = previousKey === nextKey ? undefined : this.getThread(previousKey);
+        if (previous?.subthreadOrder?.includes(params.threadId)) {
+          this.putThread(previousKey, {
+            ...previous,
+            subthreadOrder: previous.subthreadOrder.filter((id) => id !== params.threadId),
+          });
+        }
+      }
       if (parentThreadId && !parentThreadInstanceId) {
         const parentKey = buildThreadIdentityKey(parentThreadBackend!, parentThreadId);
         const parent = this.getThread(parentKey) ?? {
@@ -5376,13 +5397,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           executionMode: "default" as const,
           extraLinkedDirectories: [],
         };
-        this.putThread(parentKey, {
-          ...parent,
-          subthreadOrder: [
-            ...(parent.subthreadOrder ?? []).filter((id) => id !== params.threadId),
-            params.threadId,
-          ],
-        });
+        // Linking a child again keeps the place it already has.
+        if (!parent.subthreadOrder?.includes(params.threadId)) {
+          this.putThread(parentKey, {
+            ...parent,
+            subthreadOrder: [...(parent.subthreadOrder ?? []), params.threadId],
+          });
+        }
       }
       return nextState;
     })();
@@ -5539,6 +5560,31 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   ): boolean {
     if (child.parentThreadBackend) return child.parentThreadBackend === parentBackend;
     return ownerResolvedMembership || child.backend === parentBackend;
+  }
+
+  /**
+   * Refuse a link that would close a loop. Each lens walks a row up to its
+   * oldest ancestor, and in a loop every member names another as its root,
+   * so the whole group drops out of every list. The walk follows this
+   * owner's own links only; a parent on another instance ends it.
+   *
+   * A legacy link names no provider, and the lenses resolve it by id on
+   * any provider when its own has no such thread. The store cannot list
+   * providers, so a legacy link to this thread's id counts as a loop.
+   */
+  private assertParentIsNotDescendant(threadId: string, threadKey: string, parentKey: string): void {
+    const loop = new Error("A thread cannot become a sub-thread of its own sub-thread.");
+    const seen = new Set<string>();
+    let key: string | undefined = parentKey;
+    while (key && !seen.has(key) && seen.size < MAX_THREAD_PARENT_WALK) {
+      if (key === threadKey) throw loop;
+      seen.add(key);
+      const overlay = this.readStoredThread(key);
+      const parentId = overlay?.parentThreadId?.trim();
+      if (!parentId || overlay!.parentThreadInstanceId) return;
+      if (!overlay!.parentThreadBackend && parentId === threadId) throw loop;
+      key = buildThreadIdentityKey(overlay!.parentThreadBackend ?? overlay!.backend, parentId);
+    }
   }
 
   async setSubthreadsCollapsed(params: {
