@@ -1,4 +1,5 @@
 import { TodoDispatchFacts, useTodoDispatchTarget } from "./TodoDispatchFacts";
+import { TodoPullRequestChip } from "./TodoPullRequestChip";
 import { todoDispatchPickKey, useTodoDispatchContext } from "./TodoDispatchProvider";
 import {
   useEffect,
@@ -610,7 +611,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const action = todo.action;
   const titleId = `thread-todo-title-${todo.id}`;
   const prompt = action?.type === "start_thread" ? action.prompt : undefined;
-  const facts = buildFacts(todo);
+  const hasFacts = action?.type === "merge_pull_request";
   const runningLabel = action?.type === "merge_pull_request" ? "Merging…" : "Starting…";
   const progress = threadTodoItemProgress(todo);
   const prerequisites = threadTodoPrerequisites(todo);
@@ -903,7 +904,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
         )}
       />
 
-      {todo.detail || progress || prerequisites.length > 0 || facts.length > 0 || prompt || todo.error
+      {todo.detail || progress || prerequisites.length > 0 || hasFacts || prompt || todo.error
         || action?.type === "start_thread" ? (
         <div
           id={resting.bodyId}
@@ -959,14 +960,14 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
               {...(action.executionMode ? { access: formatExecutionModeLabel(action.executionMode) } : {})}
               disabled={props.running}
             />
-          ) : facts.length > 0 ? (
+          ) : action?.type === "merge_pull_request" ? (
             <dl className="thread-todo-card__facts">
-              {facts.map(([label, value]) => (
-                <div key={label} className="thread-todo-card__fact">
-                  <dt>{label}</dt>
-                  <dd>{value}</dd>
-                </div>
-              ))}
+              <div className="thread-todo-card__fact thread-todo-card__fact--pr">
+                <dt>PR</dt>
+                <dd>
+                  <TodoPullRequestChip todo={todo} pullRequest={action.pullRequest} />
+                </dd>
+              </div>
             </dl>
           ) : null}
           {prompt ? (
@@ -1301,15 +1302,6 @@ function confirmMergeText(
   const target = /^\d+$/.test(pullRequest) ? `#${pullRequest}` : "this pull request";
   const where = projectLabel ? ` in ${projectLabel}` : "";
   return `${MERGE_METHOD_LABELS[method].verb} ${target}${where}? This cannot be undone here.`;
-}
-
-function buildFacts(todo: ThreadTodo): Array<[string, string]> {
-  const action = todo.action;
-  if (action?.type === "merge_pull_request") {
-    return [["PR", /^\d+$/.test(action.pullRequest) ? `#${action.pullRequest}` : action.pullRequest]];
-  }
-  // A start-thread card's facts are its dispatch chips (TodoDispatchFacts).
-  return [];
 }
 
 export function formatTodoAge(createdAt: number, now = Date.now()): string {
