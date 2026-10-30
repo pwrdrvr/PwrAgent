@@ -6548,6 +6548,20 @@ a.button {
   bottom: -3px;
 }
 
+/* A drop that nests the held thread under this row: the row's own card
+   box, ringed in the insertion line's accent and glow. */
+.thread-row-shell.is-drop-target-inside::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  border: 2px solid var(--accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: 0 0 14px var(--accent-shadow);
+  pointer-events: none;
+}
+
 .recents-pinned-divider {
   display: flex;
   align-items: center;

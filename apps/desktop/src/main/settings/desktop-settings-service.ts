@@ -31,6 +31,7 @@ import type {
   DesktopCodexAuthProfileDiscoverySnapshot,
   DesktopCodexCandidateSource,
   DesktopHelperModelSettings,
+  DesktopTaskMonitorModelChoice,
   DesktopDecisionModelSettings,
   DecisionProviderId,
   DesktopCodexDiscoverySnapshot,
@@ -1604,6 +1605,7 @@ export class DesktopSettingsService {
         providerThreadMigrations:
           config.models?.providerThreadMigrations ?? {},
         helperModels: config.models?.helperModels ?? { helpers: {} },
+        taskMonitorModels: config.models?.taskMonitorModels ?? {},
         decisionModels: config.models?.decisionModels ?? {},
         decisionSecrets: { localApiKey: decisionLocalApiKey, jevApiKey: typesafeJevApiKey },
         codex: {
@@ -3148,6 +3150,10 @@ export class DesktopSettingsService {
 
   resolveHelperModelSettings(): DesktopHelperModelSettings {
     return this.readModelsConfig().helperModels ?? { helpers: {} };
+  }
+
+  resolveTaskMonitorModels(): Record<string, DesktopTaskMonitorModelChoice> {
+    return this.readModelsConfig().taskMonitorModels ?? {};
   }
 
   resolveUsageAccountGroups(): Record<string, string> {

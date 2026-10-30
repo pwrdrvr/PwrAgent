@@ -195,6 +195,8 @@ import type {
   SetThreadTokenMiserResponse,
   SetThreadModelSettingsRequest,
   SetThreadModelSettingsResponse,
+  MutateThreadParentV1Request,
+  PwrAgentThreadInspectionResponse,
   SetThreadParentRequest,
   SetThreadParentResponse,
   SetSubthreadsCollapsedRequest,
@@ -549,6 +551,7 @@ export const FEDERATION_BACKEND_METHODS = {
   reorderThreadPins: "backend.reorderThreadPins",
   mountRemoteChild: "backend.mountRemoteChild",
   setThreadParent: "backend.setThreadParent",
+  mutateThreadParentV1: "backend.mutateThreadParentV1",
   updateSubthreadOrder: "backend.updateSubthreadOrder",
   setSubthreadsCollapsed: "backend.setSubthreadsCollapsed",
   readForge: "backend.readForge",
@@ -705,6 +708,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.reorderThreadPins]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.mountRemoteChild]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.setThreadParent]: "thread_grouping",
+  [FEDERATION_BACKEND_METHODS.mutateThreadParentV1]: "thread_grouping",
   [FEDERATION_BACKEND_METHODS.updateSubthreadOrder]: "thread_grouping",
   [FEDERATION_BACKEND_METHODS.setSubthreadsCollapsed]: "thread_grouping",
   // PR detach cancels pending auto-dispatch work and auto-dispatch arms
@@ -937,6 +941,7 @@ export type FederationBackendOperations = {
   mountRemoteChild(
     request: FederationMountRemoteChildRequest,
   ): Promise<FederationMountRemoteChildResponse>;
+  mutateThreadParentV1(request: MutateThreadParentV1Request): Promise<PwrAgentThreadInspectionResponse>;
   setThreadParent(
     request: SetThreadParentRequest,
   ): Promise<SetThreadParentResponse>;
@@ -1527,6 +1532,10 @@ export function registerFederationBackendHandlers(params: {
       await params.backend.mountRemoteChild(
         envelope.params as FederationMountRemoteChildRequest,
       ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.mutateThreadParentV1,
+    async (envelope) => await params.backend.mutateThreadParentV1(envelope.params as MutateThreadParentV1Request),
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.setThreadParent,
@@ -2647,6 +2656,13 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<FederationMountRemoteChildResponse> {
     return await this.rpc.request<FederationMountRemoteChildResponse>({
       method: FEDERATION_BACKEND_METHODS.mountRemoteChild,
+      params: request,
+    });
+  }
+
+  async mutateThreadParentV1(request: MutateThreadParentV1Request): Promise<PwrAgentThreadInspectionResponse> {
+    return await this.rpc.request<PwrAgentThreadInspectionResponse>({
+      method: FEDERATION_BACKEND_METHODS.mutateThreadParentV1,
       params: request,
     });
   }

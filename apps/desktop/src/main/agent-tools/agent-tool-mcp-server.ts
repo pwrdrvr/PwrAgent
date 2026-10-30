@@ -49,15 +49,19 @@ const GetSkillRequestSchema = RequestSchema.extend({
   method: z.literal("skills/get"),
 });
 
-export function buildPwrAgentMcpInstructions(hasToolGuide: boolean): string {
-  if (!hasToolGuide) {
-    return PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION;
-  }
+export function buildPwrAgentMcpInstructions(toolNames: readonly string[]): string {
+  const has = (name: string) => toolNames.includes(name);
   return PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION
-    + " For CI, follow prAutomation.guidance; use watch_thread_pull_request and end the turn; avoid shell polling and Claude Code's Monitor."
-    + " Read skill://waiting-on-work/SKILL.md for CI, prerequisites, and long jobs; skill://tool-guide/SKILL.md for tool selection."
-    + " Discover with skills/list or resources/list; skills/get returns metadata, resources/read returns content."
-    + " Without resource reading, call read_tool_guide.";
+    + (has("watch_thread_pull_request") && has("create_monitor_delegation")
+      ? " For CI, follow prAutomation.guidance; call watch_thread_pull_request and end the turn;"
+        + " for other long waits, call create_monitor_delegation."
+        + " Do not wait in sleep loops, background shells, or Monitor."
+      : "")
+    + (has("read_tool_guide")
+      ? " Read skill://waiting-on-work/SKILL.md for CI, prerequisites, and long jobs; skill://tool-guide/SKILL.md for tool selection."
+        + " Discover with skills/list or resources/list; skills/get returns metadata, resources/read returns content."
+        + " Read read_tool_guide for the short tool guide."
+      : "");
 }
 
 const LOOPBACK_HOST = "127.0.0.1";
@@ -291,7 +295,8 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       enableJsonResponse: true,
       sessionIdGenerator: undefined,
     });
-    const hasToolGuide = this.resolveMcpTools().some((tool) => tool.name === "read_tool_guide");
+    const toolNames = this.resolveMcpTools().map((tool) => tool.name);
+    const hasToolGuide = toolNames.includes("read_tool_guide");
     // The PDF-only MCP surface shares this server but has no workflow tools.
     const skills = hasToolGuide ? PWRAGENT_WORKFLOW_SKILLS : [];
     const mcpServer = new McpProtocolServer(
@@ -305,7 +310,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           resources: {},
           extensions: { [PWRAGENT_SKILLS_EXTENSION]: {} },
         },
-        instructions: buildPwrAgentMcpInstructions(hasToolGuide),
+        instructions: buildPwrAgentMcpInstructions(toolNames),
       },
     );
     mcpServer.setRequestHandler(ListSkillsRequestSchema, async (request) => {

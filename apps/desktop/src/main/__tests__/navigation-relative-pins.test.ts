@@ -46,7 +46,7 @@ it("unlinks and places one child without rewriting unloaded pins, with a bounded
       await store.reorderThreadPins({ move: { key: "codex:child", anchorKey: "codex:parent-100", placement: "before" } });
     });
     expectSqliteWriteBudget({ scenario: "navigation-unlink-relative-pin", writes,
-      note: "One explicit unlink plus owner pin and relative placement: three commits; 100 children/day at ~4 KiB/commit is ~1.2 MB/day; no idle writes" });
+      note: "One explicit unlink (child row plus the old parent's order) plus owner pin and relative placement: three commits; 100 children/day at ~4 KiB/commit is ~1.2 MB/day; no idle writes" });
     const rows = db.raw.prepare("SELECT json_extract(payload, '$.pinnedRank') AS rank FROM threads WHERE json_extract(payload, '$.threadId') != 'child'").all() as { rank: string }[];
     expect(rows.map((row) => Number(row.rank)).sort((a, b) => a - b)).toEqual(Array.from({ length: 101 }, (_, index) => (index + 1) * 1024));
     expect(Number((await store.getThreadOverlayState({ backend: "codex", threadId: "child" }))?.pinnedRank)).toBeGreaterThan(100 * 1024);

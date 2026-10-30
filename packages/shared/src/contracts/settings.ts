@@ -2,7 +2,10 @@ import type { DesktopThreadArchivePolicy } from "../thread-archive-policy";
 import type { MessagingToolUpdateMode } from "./messaging";
 import type { AppServerBackendKind, ThreadExecutionMode } from "./normalized-app-server";
 import type { FederationTarget } from "./federation";
-import type { DesktopHelperModelSettings } from "../helper-models";
+import type {
+  DesktopHelperModelSettings,
+  DesktopTaskMonitorModelChoice,
+} from "../helper-models";
 import type { DesktopDecisionModelSettings } from "../decision-models";
 import type {
   CodexModelProviderSettings,
@@ -1497,6 +1500,8 @@ export type DesktopSettingsSnapshot = {
     >;
     /** Models for work PwrAgent starts on its own. Absent on older builds. */
     helperModels?: DesktopHelperModelSettings;
+    /** Task monitor model per parent provider. Absent = Automatic for every provider. */
+    taskMonitorModels?: Record<string, DesktopTaskMonitorModelChoice>;
     /** The decision model and its providers. Absent on older builds. */
     decisionModels?: DesktopDecisionModelSettings;
     decisionSecrets?: {
@@ -1839,6 +1844,8 @@ export type DesktopSettingsConfigPatch = {
     >;
     /** Replaces every helper model choice; omit a helper to use Helper default. */
     helperModels?: DesktopHelperModelSettings;
+    /** Replaces every provider's task monitor choice; omit a provider for Automatic. */
+    taskMonitorModels?: Record<string, DesktopTaskMonitorModelChoice>;
     /** Replaces the whole decision model section. */
     decisionModels?: DesktopDecisionModelSettings;
     codex?: {

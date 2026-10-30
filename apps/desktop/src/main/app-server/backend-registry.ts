@@ -62,11 +62,14 @@ import {
   MONITOR_JOB_HEURISTIC_SYSTEM,
   MonitorJobSuggestionDetector,
   MONITOR_JOB_SUGGESTION,
+  CLAUDE_MONITOR_JOB_SUGGESTION,
+  isCiWaitCommand,
   parseMonitorJobHeuristicDecision,
   type MonitorJobHeuristicEvidence,
 } from "./monitor-job-suggestion";
 import { resolvePullRequestReview } from "./pull-request-review";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
+import { PWRAGENT_MCP_SERVER_HASH_LENGTH, PWRAGENT_MCP_SERVER_PREFIX } from "../../shared/tool-activity";
 import { priceLocalModelUsage } from "@pwragent/shared";
 import {
   attributeCodexProviderUsageLine,
@@ -207,6 +210,8 @@ import {
   type MarkThreadSeenRequest,
   type MarkThreadSeenResponse,
   type SetThreadPinRequest,
+  type SetThreadParentRequest,
+  type SetThreadParentResponse,
   type SetThreadLockResponse,
   type FederationInstanceId,
   type ThreadLock,
@@ -393,6 +398,7 @@ import {
   type MoveThreadWorkspacePhase,
   type MoveThreadWorkspaceResult,
   type MutateThreadToolArgs,
+  type MutateThreadParentV1Request,
   type MarkProjectReadToolArgs,
   type MarkProjectReadResult,
   type PendingThreadHandoffPhase,
@@ -488,7 +494,10 @@ import {
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
   resolveHelperModel,
+  automaticProviderMonitorModel,
+  isLightweightHelperModel,
   type DesktopHelperModelSettings,
+  type DesktopTaskMonitorModelChoice,
   type HelperModelId,
   type HelperModelResolution,
   DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
@@ -720,6 +729,7 @@ import {
   mergeToolInvocationLifecycleWithStreamedOutput,
   toolAccountingLookbackSince,
   toolInvocationFromNotification,
+  normalizeToolInvocationCommand,
   toolInvocationReviewInputFromNotification,
   type ToolOutputIncidentAggregate,
 } from "./tool-invocation-accounting";
@@ -7609,12 +7619,6 @@ const MONITOR_REASONING_EFFORT_ORDER = [
   "xhigh",
 ] as const;
 
-// Whole name segments only: "gemini-3-pro" must not pass as "mini".
-function isLightweightMonitorModel(modelId: string): boolean {
-  return /(?:^|[^a-z])(?:mini|lite|flash|haiku|small|nano|luna)(?:$|[^a-z])/iu
-    .test(modelId);
-}
-
 /**
  * The highest effort an agent may request for a Codex monitor. An effort
  * this list does not know, such as `max`, is never accepted.
@@ -8014,8 +8018,6 @@ function buildCodexTokenMiserDynamicToolSpecs(
 }
 
 const PWRAGENT_PDF_MCP_SERVER_NAME = "pwragent_pdf";
-const PWRAGENT_CONNECTION_MCP_SERVER_PREFIX = "pwragent_";
-const PWRAGENT_CONNECTION_MCP_SERVER_HASH_LENGTH = 32;
 
 function buildCodexPdfMcpConfig(
   registration: AgentToolMcpRegistration,
@@ -8086,8 +8088,8 @@ export function buildCodexConnectionMcpServerName(
         .join("\0"),
     )
     .digest("hex")
-    .slice(0, PWRAGENT_CONNECTION_MCP_SERVER_HASH_LENGTH);
-  return `${PWRAGENT_CONNECTION_MCP_SERVER_PREFIX}${server.name}_${identity}`;
+    .slice(0, PWRAGENT_MCP_SERVER_HASH_LENGTH);
+  return `${PWRAGENT_MCP_SERVER_PREFIX}${server.name}_${identity}`;
 }
 
 /**
@@ -8135,7 +8137,7 @@ export function buildCodexConnectionMcpConfig(
         // inherited HTTP server.
         const aliases = [
           server.name,
-          `${PWRAGENT_CONNECTION_MCP_SERVER_PREFIX}${server.name}`,
+          `${PWRAGENT_MCP_SERVER_PREFIX}${server.name}`,
         ].filter((name) => inheritedNames.has(name));
         return [
           ...aliases.map((name) => [name, { enabled: false }] as const),
@@ -8402,6 +8404,10 @@ export type AgentThreadActions = {
   markThreadSeen: (
     request: MarkThreadSeenRequest,
   ) => Promise<MarkThreadSeenResponse>;
+  /** The sidebar's own path, so every window hears the new grouping. */
+  setThreadParent?: (
+    request: SetThreadParentRequest,
+  ) => Promise<SetThreadParentResponse>;
 };
 
 function threadInspectionFailure(
@@ -10027,6 +10033,8 @@ export class DesktopBackendRegistry {
     DesktopProviderModelDefaults
   >;
   private readonly resolveHelperModelSettingsFn: () => DesktopHelperModelSettings;
+  /** `[[models.task_monitor_models]]`, keyed by the parent thread's provider. */
+  private readonly resolveTaskMonitorModelsFn: () => Record<string, DesktopTaskMonitorModelChoice>;
   /** `general.pass_setup_variables_to_agents`, read at each agent start. */
   private readonly resolvePassSetupVariablesToAgentsFn: () => boolean;
   private readonly resolveUsageAccountGroupsFn: () => Record<string, string>;
@@ -10172,6 +10180,7 @@ export class DesktopBackendRegistry {
       DesktopProviderModelDefaults
     >;
     resolveHelperModelSettings?: () => DesktopHelperModelSettings;
+    resolveTaskMonitorModels?: () => Record<string, DesktopTaskMonitorModelChoice>;
     resolvePassSetupVariablesToAgents?: () => boolean;
     resolveUsageAccountGroups?: () => Record<string, string>;
     resolveProviderThreadModelMigrations?: () => Record<
@@ -10340,6 +10349,9 @@ export class DesktopBackendRegistry {
     this.resolveHelperModelSettingsFn =
       options?.resolveHelperModelSettings ??
       (() => settingsService?.resolveHelperModelSettings?.() ?? { helpers: {} });
+    this.resolveTaskMonitorModelsFn =
+      options?.resolveTaskMonitorModels ??
+      (() => settingsService?.resolveTaskMonitorModels?.() ?? {});
     this.resolvePassSetupVariablesToAgentsFn =
       options?.resolvePassSetupVariablesToAgents ??
       (() => settingsService?.resolvePassSetupVariablesToAgents?.() ?? true);
@@ -10920,6 +10932,7 @@ export class DesktopBackendRegistry {
         target: { type: "custom", instructions: "/code-review" },
         ...(pullRequests ? { namedPullRequests: pullRequests } : {}),
       }),
+      suggestMonitorJob: async (request) => await this.suggestClaudeMonitorJob(request),
       ...options?.claudeBackendOptions,
     });
     this.acpBackend = new AcpBackendAdapter({
@@ -23588,6 +23601,7 @@ export class DesktopBackendRegistry {
       this.taskMonitorDelegations.delete(params.monitorId);
       try {
         await this.interruptManagedTaskMonitor(taskMonitor);
+        this.releaseTaskMonitorThread(taskMonitor);
       } catch (error) {
         this.taskMonitorDelegations.set(params.monitorId, taskMonitor);
         throw error;
@@ -35267,6 +35281,51 @@ export class DesktopBackendRegistry {
     }, { kind: "pwragent", systemReason: "monitor-job-suggestion" });
   }
 
+  /**
+   * The Claude form of the monitor suggestion, appended to the Bash or Monitor
+   * result that earned it. Claude waits on CI in one background shell or one
+   * Monitor watcher, so a single CI wait qualifies; repeated foreground checks
+   * qualify through the same detector Codex uses. At most once per turn.
+   */
+  private async suggestClaudeMonitorJob(params: {
+    threadId: string;
+    turnId: string;
+    toolName: string;
+    command: string;
+    toolUseId?: string;
+  }): Promise<string | undefined> {
+    const backend = "claude";
+    const { threadId, turnId } = params;
+    const normalized = normalizeToolInvocationCommand({
+      toolName: params.toolName,
+      command: params.command,
+    });
+    const repeated = this.monitorJobSuggestionDetector.observe({
+      backend,
+      threadId,
+      turnId,
+      invocationId: params.toolUseId ?? randomUUID(),
+      toolName: params.toolName,
+      category: normalized.category,
+      normalizedCommand: normalized.normalizedCommand,
+      observedAt: Date.now(),
+    });
+    if (!repeated && !isCiWaitCommand(params.command)) return undefined;
+    if (this.resolveSubAgentThreadOwner({ backend, threadId }).isSubAgent) return undefined;
+    if (Array.from(this.taskMonitorDelegations.values()).some(
+      (record) => record.backend === backend && record.monitorThreadId === threadId,
+    ) || this.completedTaskMonitorsByThread.has(taskMonitorThreadKey(backend, threadId))) return undefined;
+    if (!await this.monitorJobSuggestionEnabledForThread(backend, threadId)) return undefined;
+    if (!this.overlayStore.claimMonitorJobSuggestion({ backend, threadId, turnId })) return undefined;
+    backendRegistryLog.info("monitor job suggestion appended to Claude tool result", {
+      threadId,
+      turnId,
+      toolName: params.toolName,
+      reason: repeated ? "repeated-check" : "ci-wait",
+    });
+    return CLAUDE_MONITOR_JOB_SUGGESTION;
+  }
+
   private async monitorJobSuggestionEnabledForThread(
     backend: AppServerBackendKind,
     threadId: string,
@@ -43638,6 +43697,7 @@ export class DesktopBackendRegistry {
     const requestedModel = args.preferredModel?.trim() || undefined;
     const requestedReasoningEffort =
       args.preferredReasoningEffort?.trim() || undefined;
+    let monitorBackend: AppServerBackendKind;
     let preferredModel: string;
     let preferredReasoningEffort: string;
     let runtimeModel: string | undefined;
@@ -43648,6 +43708,7 @@ export class DesktopBackendRegistry {
         preferredModel: requestedModel,
         preferredReasoningEffort: requestedReasoningEffort,
       });
+      monitorBackend = resolved.monitorBackend;
       preferredModel = resolved.preferredModel;
       preferredReasoningEffort = resolved.preferredReasoningEffort;
       runtimeModel = resolved.runtimeModel;
@@ -43666,6 +43727,7 @@ export class DesktopBackendRegistry {
       startupTimeoutSeconds,
     });
     const prompt = buildMonitorDelegationPrompt({
+      deferredMcpTools: monitorBackend === "claude",
       finalHandoffPrompt: args.finalHandoffPrompt,
       monitorContext: args.monitorContext,
       monitorId,
@@ -43679,15 +43741,16 @@ export class DesktopBackendRegistry {
       preferredModel !== requestedModel ||
       preferredReasoningEffort !== requestedReasoningEffort
     ) {
-      const codexMonitor = !isAcpBackendId(context.backend);
+      const codexMonitor = monitorBackend === "codex";
       backendRegistryLog.info("adjusted task monitor model settings", {
+        monitorBackend,
         monitorId,
         parentThreadId,
         preferredModel,
         preferredReasoningEffort,
         requestedModel,
         requestedReasoningEffort,
-        ...(codexMonitor && requestedModel && !isLightweightMonitorModel(requestedModel)
+        ...(codexMonitor && requestedModel && !isLightweightHelperModel(requestedModel)
           ? { declinedRequestedModel: true }
           : {}),
         ...(codexMonitor
@@ -43702,7 +43765,9 @@ export class DesktopBackendRegistry {
       causalContext,
       ...(ancestry.rootTurnId ? { rootTurnId: ancestry.rootTurnId } : {}),
       activeCommandCount: 0,
-      backend: context.backend,
+      // The monitor thread's provider. A Claude parent's monitor may run on
+      // Codex, and every lookup by monitor thread matches this backend.
+      backend: monitorBackend,
       createdAt: Date.now(),
       finalHandoffPrompt: args.finalHandoffPrompt?.trim() || undefined,
       heartbeatIntervalSeconds,
@@ -43722,7 +43787,7 @@ export class DesktopBackendRegistry {
     backendRegistryLog.info("created task monitor delegation", {
       heartbeatIntervalSeconds,
       monitorId,
-      monitorBackend: context.backend,
+      monitorBackend,
       parentThreadId,
       pollIntervalSeconds,
       startupTimeoutSeconds,
@@ -43740,6 +43805,7 @@ export class DesktopBackendRegistry {
         ...(record.rootTurnId ? { rootTurnId: record.rootTurnId } : {}),
         causalContext,
         cwd: args.cwd,
+        monitorBackend,
         monitorId,
         preferredModel,
         preferredReasoningEffort,
@@ -44003,21 +44069,43 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * Where a monitor runs and on which model. A Codex parent's monitor runs on
+   * the Helper model. Another provider's runs on its own lightweight model
+   * (Automatic), on a model the operator chose for that provider, or on the
+   * Helper model when the operator chose it.
+   */
   private async resolveTaskMonitorModelSettings(params: {
     backend: AppServerBackendKind;
     parentThreadId: string;
     preferredModel?: string;
     preferredReasoningEffort?: string;
   }): Promise<{
+    monitorBackend: AppServerBackendKind;
     preferredModel: string;
     preferredReasoningEffort: string;
     runtimeModel?: string;
   }> {
-    if (isAcpBackendId(params.backend)) {
-      return this.resolveAcpTaskMonitorModelSettings({
-        ...params,
-        backend: params.backend,
-      });
+    const choice = params.backend === "codex"
+      ? undefined
+      : this.resolveTaskMonitorModelsFn()[params.backend];
+    if (choice?.source !== "helper" && isAcpBackendId(params.backend)) {
+      return {
+        monitorBackend: params.backend,
+        ...this.resolveAcpTaskMonitorModelSettings({
+          ...params,
+          backend: params.backend,
+          // The operator's choice outranks the agent's request.
+          preferredModel: choice?.model ?? params.preferredModel,
+          preferredReasoningEffort: choice?.reasoningEffort ?? params.preferredReasoningEffort,
+        }),
+      };
+    }
+    if (choice?.source !== "helper" && params.backend === "claude") {
+      return {
+        monitorBackend: "claude",
+        ...this.resolveClaudeTaskMonitorModelSettings({ ...params, choice }),
+      };
     }
 
     const discoveredModels = await this.readCodexDefaultModelsOnce("task-monitor");
@@ -44036,7 +44124,7 @@ export class DesktopBackendRegistry {
     // request Codex offers wins; otherwise the Helper model setting decides,
     // and the operator's Task monitors row may still name any model.
     const requestedModel =
-      params.preferredModel && isLightweightMonitorModel(params.preferredModel)
+      params.preferredModel && isLightweightHelperModel(params.preferredModel)
         ? params.preferredModel
         : undefined;
     const requestedReasoningEffort =
@@ -44058,9 +44146,51 @@ export class DesktopBackendRegistry {
     });
 
     return {
+      monitorBackend: "codex",
       preferredModel: selection.model ?? models[0].id,
       preferredReasoningEffort: selection.reasoningEffort ?? "provider-default",
     };
+  }
+
+  /**
+   * A Claude parent's monitor: the operator's model, else a lightweight model
+   * the agent asked for, else Claude's newest lightweight model. The `haiku`
+   * alias stands in until model discovery has run.
+   */
+  private resolveClaudeTaskMonitorModelSettings(params: {
+    choice?: DesktopTaskMonitorModelChoice;
+    preferredModel?: string;
+    preferredReasoningEffort?: string;
+  }): { preferredModel: string; preferredReasoningEffort: string; runtimeModel: string } {
+    const models = this.claudeBackend.summary().launchpadOptions?.models ?? [];
+    // A model Claude offers. Before discovery, only a Claude name: an agent
+    // may ask for a Codex model it read about.
+    const offered = (id: string | undefined): string | undefined =>
+      id && (models.length > 0
+        ? models.some((candidate) => candidate.id === id)
+        : /(?:^|[^a-z])(?:claude|haiku|sonnet|opus)(?:$|[^a-z])/iu.test(id))
+        ? id
+        : undefined;
+    const chosenModel = offered(params.choice?.model);
+    const requestedModel =
+      params.preferredModel && isLightweightHelperModel(params.preferredModel)
+        ? offered(params.preferredModel)
+        : undefined;
+    const model = chosenModel
+      ?? requestedModel
+      ?? automaticProviderMonitorModel(models)
+      ?? "haiku";
+    const entry = models.find((candidate) => candidate.id === model);
+    const requestedEffort = (chosenModel ? params.choice?.reasoningEffort : undefined)
+      ?? (params.preferredReasoningEffort
+        && isLightweightMonitorReasoningEffort(params.preferredReasoningEffort)
+        ? params.preferredReasoningEffort
+        : undefined);
+    const preferredReasoningEffort =
+      requestedEffort && entry?.reasoningEfforts?.includes(requestedEffort)
+        ? requestedEffort
+        : "provider-default";
+    return { preferredModel: model, preferredReasoningEffort, runtimeModel: model };
   }
 
   private resolveAcpTaskMonitorModelSettings(params: {
@@ -44084,7 +44214,8 @@ export class DesktopBackendRegistry {
       (requestedModel
         ? models.find((model) => model.id === requestedModel)
         : undefined) ??
-      models.find((model) => isLightweightMonitorModel(model.id)) ??
+      // Settings labels Automatic with this same pick.
+      models.find((model) => model.id === automaticProviderMonitorModel(models)) ??
       models.find(
         (model) => model.id === parentSession?.acpRuntime?.currentModelId,
       ) ??
@@ -44133,6 +44264,8 @@ export class DesktopBackendRegistry {
     causalContext?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
     context: TaskMonitorRequest<"create_monitor_delegation">["context"];
     cwd?: string;
+    /** The provider the monitor thread runs on. */
+    monitorBackend: AppServerBackendKind;
     monitorId: string;
     preferredModel: string;
     preferredReasoningEffort: string;
@@ -44173,8 +44306,10 @@ export class DesktopBackendRegistry {
         params.context.threadId,
         sourceOverlay,
       ));
+    // A Codex monitor reports through its dynamic tools whatever provider
+    // its parent runs on. Claude and ACP monitors use PwrAgent's MCP server.
     const dynamicTools =
-      params.context.backend === "codex"
+      params.monitorBackend === "codex"
         ? buildTaskMonitorDynamicToolSpecs("monitor")
         : [];
 
@@ -44190,6 +44325,7 @@ export class DesktopBackendRegistry {
               sourceOverlay.codexEnvironmentRuntime.shellEnvironment,
             ).length
           : 0,
+      monitorBackend: params.monitorBackend,
       monitorId: params.monitorId,
       model: params.preferredModel,
       parentThreadId: params.context.threadId,
@@ -44198,7 +44334,33 @@ export class DesktopBackendRegistry {
       toolCount: dynamicTools.length,
     });
 
-    if (isAcpBackendId(params.context.backend)) {
+    if (params.monitorBackend === "claude") {
+      const thread = await this.claudeBackend.startThread({
+        cwd: cwd ?? os.homedir(),
+        executionMode,
+        model: params.runtimeModel ?? params.preferredModel,
+        ephemeral: { title: "Task monitor" },
+      });
+      const turn = await this.startTurnWithoutHandoff({
+        backend: "claude",
+        threadId: thread.threadId,
+        input: [{ type: "text", text: params.prompt }],
+        executionMode,
+        model: params.runtimeModel ?? params.preferredModel,
+        ...(params.preferredReasoningEffort === "provider-default"
+          ? {}
+          : { reasoningEffort: params.preferredReasoningEffort }),
+        ...(params.causalContext?.causalMessagingSource || params.causalContext?.causalMessagingAmbiguous
+          ? { messageOrigin: { kind: "sub-agent" as const, ...params.causalContext } }
+          : {}),
+      }).catch((error: unknown) => {
+        this.claudeBackend.releaseEphemeralThread(thread.threadId);
+        throw error;
+      });
+      return { cwd, executionMode, threadId: turn.threadId, turnId: turn.turnId };
+    }
+
+    if (isAcpBackendId(params.monitorBackend) && isAcpBackendId(params.context.backend)) {
       const parentSession = this.acpBackend.getSession(
         params.context.backend,
         params.context.threadId,
@@ -44576,6 +44738,7 @@ export class DesktopBackendRegistry {
     }
 
     this.taskMonitorDelegations.delete(params.record.monitorId);
+    this.releaseTaskMonitorThread(params.record);
     if (
       params.completionSource.type === "monitor_tool"
       && params.record.monitorThreadId
@@ -44738,6 +44901,16 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * A Claude monitor thread lives in memory until its delegation ends; its
+   * process exits after each turn, and a recovery turn reuses the thread.
+   */
+  private releaseTaskMonitorThread(record: TaskMonitorDelegationRecord): void {
+    if (record.backend === "claude" && record.monitorThreadId) {
+      this.claudeBackend.releaseEphemeralThread(record.monitorThreadId);
+    }
+  }
+
   private async startTaskMonitorRecoveryTurn(params: {
     record: TaskMonitorDelegationRecord;
     terminalStatus: "completed" | "failed" | "cancelled";
@@ -44764,6 +44937,35 @@ export class DesktopBackendRegistry {
     });
 
     try {
+      if (record.backend === "claude") {
+        const turn = await this.startTurnWithoutHandoff({
+          backend: "claude",
+          threadId: record.monitorThreadId,
+          input: [{
+            type: "text",
+            text: buildTaskMonitorRecoveryPrompt({
+              monitorId: record.monitorId,
+              task: record.task,
+              terminalStatus: params.terminalStatus,
+            }),
+          }],
+          executionMode,
+          model: record.runtimeModel ?? record.preferredModel,
+          ...(record.preferredReasoningEffort === "provider-default"
+            ? {}
+            : { reasoningEffort: record.preferredReasoningEffort }),
+        });
+        record.monitorTurnId = turn.turnId;
+        record.lastActivityAt = Date.now();
+        backendRegistryLog.warn("started Claude task monitor recovery turn", {
+          monitorId: record.monitorId,
+          monitorThreadId: record.monitorThreadId,
+          monitorTurnId: record.monitorTurnId,
+          parentThreadId: record.parentThreadId,
+          terminalStatus: params.terminalStatus,
+        });
+        return;
+      }
       if (isAcpBackendId(record.backend)) {
         const turn = await this.startAcpTurn({
           backend: record.backend,
@@ -44852,7 +45054,7 @@ export class DesktopBackendRegistry {
     if (!record.monitorThreadId || !record.monitorTurnId) {
       throw new Error("Task monitor does not expose an active turn.");
     }
-    if (isAcpBackendId(record.backend)) {
+    if (isAcpBackendId(record.backend) || record.backend === "claude") {
       await this.interruptTurn({
         backend: record.backend,
         threadId: record.monitorThreadId,
@@ -45878,6 +46080,89 @@ export class DesktopBackendRegistry {
     return summary;
   }
 
+  /**
+   * Why `mutate_thread` would refuse a parent change, checked before anything
+   * changes and on a dry run too. No `parent` means a detach.
+   */
+  private async checkThreadParentChange(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    threadLabel: string;
+    parent?: { backend: AppServerBackendKind; threadId: string };
+  }): Promise<PwrAgentThreadInspectionResponse | undefined> {
+    if (!this.agentThreadActions?.setThreadParent) {
+      return threadInspectionFailure(
+        "internal_error",
+        "Thread grouping is not available in this process.",
+      );
+    }
+    if (!params.parent) {
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      return overlay?.parentThreadId?.trim()
+        ? undefined
+        : threadInspectionFailure(
+            "invalid_arguments",
+            `${params.threadLabel} is not a sub-thread.`,
+          );
+    }
+    const parent = params.parent;
+    const parentLabel = `Parent thread ${parent.backend}:${parent.threadId}`;
+    // Only existence and archive state matter here, so the provider's own
+    // lists answer it without an inspection summary's enrichment. A list
+    // that fails is reported as such, not as a missing parent.
+    let archived: boolean;
+    try {
+      const listed = async (archivedList: boolean) => (await this.listThreads({
+        backend: parent.backend,
+        archived: archivedList,
+        callerReason: archivedList ? "agent-thread-parent:archived" : "agent-thread-parent",
+      })).some((thread) => thread.id === parent.threadId);
+      if (await listed(false)) {
+        archived = false;
+      } else if (await listed(true)) {
+        archived = true;
+      } else {
+        return threadInspectionFailure(
+          "not_found",
+          `${parentLabel} was not found on this instance.`,
+        );
+      }
+    } catch (error) {
+      return federatedThreadInspectionFailure(error);
+    }
+    // Archiving a parent ungroups its children, so the link would not last.
+    if (archived) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        `${parentLabel} is archived.`,
+      );
+    }
+    // The same walk the store repeats inside its write.
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const seen = new Set<string>();
+    let cursor: { backend: AppServerBackendKind; threadId: string } | undefined = params.parent;
+    while (cursor && seen.size < MAX_THREAD_PARENT_CHECK_DEPTH) {
+      const key = buildThreadIdentityKey(cursor.backend, cursor.threadId);
+      if (key === threadKey) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          `${parentLabel} is a sub-thread of ${params.threadLabel}. A thread cannot become a sub-thread of its own sub-thread.`,
+        );
+      }
+      if (seen.has(key)) break;
+      seen.add(key);
+      const overlay = await this.overlayStore.getThreadOverlayState(cursor);
+      const nextId = overlay?.parentThreadId?.trim();
+      cursor = nextId && !overlay!.parentThreadInstanceId
+        ? { backend: overlay!.parentThreadBackend ?? cursor.backend, threadId: nextId }
+        : undefined;
+    }
+    return undefined;
+  }
+
   private async resolvePullRequestReferenceForThread(
     args: AttachThreadPullRequestToolArgs,
     summary: ThreadInspectionSummary,
@@ -46021,6 +46306,25 @@ export class DesktopBackendRegistry {
     }
   }
 
+  async mutateThreadParentV1(
+    request: MutateThreadParentV1Request,
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    if (typeof request.dryRun !== "boolean") {
+      return threadInspectionFailure("invalid_arguments", "dryRun must be a boolean.");
+    }
+    // Whitelist the versioned fields: an inbound peer cannot forward another
+    // mutation or a routing hint through this grouping-only method.
+    return await this.handleMutateThreadInspectionRequest({
+      backend: request.backend,
+      threadId: request.threadId,
+      ...(Object.hasOwn(request, "parentThreadId") ? { parentThreadId: request.parentThreadId } : {}),
+      ...(Object.hasOwn(request, "parentBackend") ? { parentBackend: request.parentBackend } : {}),
+      ...(Object.hasOwn(request, "detachFromParent") ? { detachFromParent: request.detachFromParent } : {}),
+      dryRun: request.dryRun,
+      includeRemote: false,
+    });
+  }
+
   private async handleMutateThreadInspectionRequest(
     args: MutateThreadToolArgs,
     context?: PwrAgentThreadInspectionRequest["context"],
@@ -46140,6 +46444,61 @@ export class DesktopBackendRegistry {
     const lockNote = lockNoteProvided ? normalizeThreadLockNote(args.lockNote) ?? "" : undefined;
     const locked = args.locked ?? (lockNoteProvided ? true : undefined);
 
+    let parentThreadId: string | undefined;
+    if (Object.hasOwn(args, "parentThreadId")) {
+      if (typeof args.parentThreadId !== "string" || !args.parentThreadId.trim()) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          "parentThreadId must be a non-empty string when provided.",
+        );
+      }
+      parentThreadId = args.parentThreadId.trim();
+    }
+    if (Object.hasOwn(args, "parentBackend")) {
+      if (typeof args.parentBackend !== "string" || !isAppServerBackendKind(args.parentBackend)) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          "parentBackend must be a known PwrAgent backend when provided.",
+        );
+      }
+      if (parentThreadId === undefined) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          "parentBackend requires parentThreadId.",
+        );
+      }
+    }
+    if (Object.hasOwn(args, "detachFromParent") && typeof args.detachFromParent !== "boolean") {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "detachFromParent must be a boolean when provided.",
+      );
+    }
+    const detachFromParent = args.detachFromParent === true;
+    const parentBackend = parentThreadId !== undefined
+      ? args.parentBackend ?? args.backend
+      : undefined;
+    if (parentThreadId !== undefined && detachFromParent) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "detachFromParent cannot be combined with parentThreadId.",
+      );
+    }
+    if (parentThreadId === threadId && parentBackend === args.backend) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "A thread cannot be its own parent.",
+      );
+    }
+    // A sub-thread carries no pin: the parent change clears it.
+    if (parentThreadId !== undefined && pinned === true) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "pinned true cannot be combined with parentThreadId. A sub-thread is not pinned.",
+      );
+    }
+    const parentChange = parentThreadId !== undefined || detachFromParent;
+
     const changes: ThreadMutationAppliedChange[] = [];
     if (title !== undefined) {
       changes.push({
@@ -46204,6 +46563,15 @@ export class DesktopBackendRegistry {
         to: lockNote,
       });
     }
+    if (parentChange) {
+      changes.push({
+        field: "parent",
+        status: dryRun ? "would_apply" : "applied",
+        to: parentThreadId !== undefined
+          ? { backend: parentBackend, threadId: parentThreadId }
+          : null,
+      });
+    }
 
     if (changes.length === 0) {
       return {
@@ -46211,7 +46579,7 @@ export class DesktopBackendRegistry {
         error: {
           code: "invalid_arguments",
           message:
-            "At least one mutation field is required: title, model, serviceTier, reasoningEffort, fastMode, executionMode, projectPath, archive, pinned, unread, locked, or lockNote.",
+            "At least one mutation field is required: title, model, serviceTier, reasoningEffort, fastMode, executionMode, projectPath, archive, pinned, unread, locked, lockNote, parentThreadId, or detachFromParent.",
         },
       };
     }
@@ -46263,6 +46631,17 @@ export class DesktopBackendRegistry {
       | { instanceId: string; instanceLabel: string }
       | undefined;
     if (!mutateLocally && includeRemote && this.federatedThreadMutationHandler) {
+      if (parentChange && context) {
+        // An omitted instanceId can still resolve to a peer. Recheck scope
+        // with the trusted invoking turn before the handler can mutate it.
+        const denied = await this.dynamicToolPermissionDenied(context.backend, "thread_inspection", {
+          threadId: context.threadId,
+          turnId: context.turnId,
+          tool: "mutate_thread",
+          arguments: { ...args, includeRemote: true },
+        });
+        if (denied) return threadInspectionFailure("forbidden", `Missing permission: ${denied}.`);
+      }
       try {
         remoteOwner = await this.federatedThreadMutationHandler({
           backend: args.backend,
@@ -46277,6 +46656,8 @@ export class DesktopBackendRegistry {
           ...(unread !== undefined ? { unread } : {}),
           ...(locked !== undefined ? { locked } : {}),
           ...(lockNote !== undefined ? { lockNote } : {}),
+          ...(parentThreadId !== undefined ? { parentThreadId, parentBackend } : {}),
+          ...(detachFromParent ? { detachFromParent: true } : {}),
           dryRun,
         });
       } catch (error) {
@@ -46339,6 +46720,17 @@ export class DesktopBackendRegistry {
           "Pinning and read state are not available in this process.",
         );
       }
+      if (parentChange) {
+        const refusal = await this.checkThreadParentChange({
+          backend: args.backend,
+          threadId,
+          threadLabel,
+          parent: parentThreadId !== undefined
+            ? { backend: parentBackend!, threadId: parentThreadId }
+            : undefined,
+        });
+        if (refusal) return refusal;
+      }
     }
 
     if (mutateLocally && archive !== undefined && !dryRun) {
@@ -46353,6 +46745,25 @@ export class DesktopBackendRegistry {
         }
       } catch (error) {
         return federatedThreadInspectionFailure(error);
+      }
+    }
+
+    // The parent lands first. The store repeats the loop check inside its
+    // write, so a link made since the check above is refused before
+    // anything else here has changed.
+    if (mutateLocally && parentChange && !dryRun) {
+      try {
+        await this.agentThreadActions!.setThreadParent!({
+          backend: args.backend,
+          threadId,
+          parentThreadId: parentThreadId ?? null,
+          parentThreadBackend: parentBackend ?? null,
+        });
+      } catch (error) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          error instanceof Error ? error.message : String(error),
+        );
       }
     }
 
@@ -48963,6 +49374,8 @@ function readThreadInspectionBackend(
 
 const DEFAULT_THREAD_INSPECTION_READ_LIMIT = 10;
 const MAX_THREAD_INSPECTION_READ_LIMIT = 20;
+/** How far `mutate_thread` follows parent links when it checks for a loop. */
+const MAX_THREAD_PARENT_CHECK_DEPTH = 64;
 const DEFAULT_THREAD_INSPECTION_READ_ENTRY_CHARS = 4_000;
 const MAX_THREAD_INSPECTION_READ_ENTRY_CHARS = 20_000;
 

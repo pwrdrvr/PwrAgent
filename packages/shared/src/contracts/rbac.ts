@@ -868,6 +868,10 @@ const THREAD_MUTATION_FIELD_PERMISSIONS: Record<
   // handoff decision, not organizing, so it takes the handoff permission.
   locked: () => ["thread.control.handoff"],
   lockNote: () => ["thread.control.handoff"],
+  // Grouping is sidebar organization, like a pin.
+  parentThreadId: () => ["thread.control.organize"],
+  parentBackend: () => ["thread.control.organize"],
+  detachFromParent: () => ["thread.control.organize"],
 };
 
 /**

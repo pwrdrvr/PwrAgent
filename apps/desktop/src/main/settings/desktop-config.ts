@@ -4,9 +4,11 @@ import {
   isAcpBackendId,
   isForgeAgentToolAccess,
   isThreadTodoMergeMethod,
+  normalizeTaskMonitorModelChoice,
   validateCodexModelProviders,
   validateLocalModelIds,
   type CodexModelProviderSettings,
+  type DesktopTaskMonitorModelChoice,
   type ForgeAgentToolAccess,
   type ForgeAgentToolGroup,
 } from "@pwragent/shared";
@@ -324,6 +326,7 @@ export type DesktopSettingsConfig = {
       DesktopProviderThreadModelMigration
     >;
     helperModels?: DesktopHelperModelSettings;
+    taskMonitorModels?: Record<string, DesktopTaskMonitorModelChoice>;
     decisionModels?: DesktopDecisionModelSettings;
     codex?: {
       path?: string;
@@ -1892,6 +1895,23 @@ export function desktopSettingsPatchToEdits(
       });
     }
   }
+  if (patch.models?.taskMonitorModels !== undefined) {
+    const entries = Object.entries(
+      normalizeTaskMonitorModels(patch.models.taskMonitorModels),
+    )
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([provider, choice]) => ({
+        provider,
+        source: choice.source,
+        ...(choice.model ? { model: choice.model } : {}),
+        ...(choice.reasoningEffort
+          ? { reasoning_effort: choice.reasoningEffort }
+          : {}),
+      }));
+    edits.push(entries.length
+      ? { op: "setTableArray", path: ["models", "task_monitor_models"], value: entries }
+      : { op: "deleteTableArray", path: ["models", "task_monitor_models"] });
+  }
   if (patch.models?.decisionModels !== undefined) {
     // `[models.decision]`: new keys with no legacy shape. A key left at its
     // default is removed rather than written.
@@ -2518,6 +2538,7 @@ function normalizeDesktopConfig(
         models?.helper_default_reasoning_effort,
         models?.helper_models,
       ),
+      taskMonitorModels: readTaskMonitorModels(models?.task_monitor_models),
       decisionModels: normalizeDecisionModelSettings({
         model: decision?.model,
         cameraCues: decision?.camera_cues,
@@ -2873,6 +2894,10 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const providerDefaults = config.models?.providerDefaults;
   const providerThreadMigrations = config.models?.providerThreadMigrations;
   const helperModels = config.models?.helperModels;
+  const taskMonitorModels = config.models?.taskMonitorModels;
+  const hasTaskMonitorModels = Boolean(
+    taskMonitorModels && Object.keys(taskMonitorModels).length > 0,
+  );
   const usageAccountGroups = config.models?.usageAccountGroups;
   const usageAccountNames = config.models?.usageAccountNames;
   const decisionModels = config.models?.decisionModels;
@@ -2892,6 +2917,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
       && Object.keys(providerThreadMigrations).length > 0
     )
     || hasHelperModels
+    || hasTaskMonitorModels
     || (usageAccountGroups && Object.keys(usageAccountGroups).length > 0)
     || (usageAccountNames && Object.keys(usageAccountNames).length > 0)
     || decisionModels
@@ -2900,6 +2926,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
       ...(usageAccountGroups && Object.keys(usageAccountGroups).length > 0 ? { usageAccountGroups } : {}),
       ...(usageAccountNames && Object.keys(usageAccountNames).length > 0 ? { usageAccountNames } : {}),
       ...(hasHelperModels ? { helperModels } : {}),
+      ...(hasTaskMonitorModels ? { taskMonitorModels } : {}),
       ...(decisionModels ? { decisionModels } : {}),
       ...(providerDefaults && Object.keys(providerDefaults).length > 0
         ? { providerDefaults }
@@ -3504,6 +3531,39 @@ function readHelperModelSettings(
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     helpers,
   };
+}
+
+function normalizeTaskMonitorModels(
+  value: Record<string, DesktopTaskMonitorModelChoice>,
+): Record<string, DesktopTaskMonitorModelChoice> {
+  return Object.fromEntries(Object.entries(value).flatMap(([provider, choice]) => {
+    const normalizedProvider = provider.trim();
+    const normalized = normalizeTaskMonitorModelChoice(choice);
+    return normalizedProvider && normalized ? [[normalizedProvider, normalized]] : [];
+  }));
+}
+
+/**
+ * `[[models.task_monitor_models]]` rows. A new key with no legacy shape: a
+ * malformed row is skipped, never the section.
+ */
+function readTaskMonitorModels(
+  value: TomlScalar | undefined,
+): Record<string, DesktopTaskMonitorModelChoice> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const choices: Record<string, DesktopTaskMonitorModelChoice> = {};
+  for (const item of value) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+    const provider = typeof item.provider === "string" ? item.provider.trim() : "";
+    if (!provider || choices[provider]) continue;
+    const choice = normalizeTaskMonitorModelChoice({
+      source: item.source,
+      model: item.model,
+      reasoningEffort: item.reasoning_effort,
+    });
+    if (choice) choices[provider] = choice;
+  }
+  return Object.keys(choices).length > 0 ? choices : undefined;
 }
 
 function normalizeProviderModelDefaults(

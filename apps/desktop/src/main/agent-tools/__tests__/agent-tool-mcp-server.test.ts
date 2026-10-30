@@ -76,7 +76,7 @@ describe("AgentToolMcpServer", () => {
       expect(tools.map((tool) => tool.name)).not.toContain("get_current_location");
       expect(tools.map((tool) => tool.name)).not.toContain("render_messaging_pdf_pages");
 
-      expect(client.getInstructions()).toBe(buildPwrAgentMcpInstructions(true));
+      expect(client.getInstructions()).toBe(buildPwrAgentMcpInstructions(tools.map((tool) => tool.name)));
       expect(client.getInstructions()).toContain("skill://waiting-on-work/SKILL.md");
       expect(client.getInstructions()).toContain("watch_thread_pull_request and end the turn");
       expect(client.getInstructions()!.length).toBeLessThan(700);
