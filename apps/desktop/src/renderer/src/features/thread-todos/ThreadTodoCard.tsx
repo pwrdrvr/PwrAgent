@@ -1309,7 +1309,8 @@ function ThreadTodoChecklist(props: {
 
 /**
  * A start-thread card's steps: the plan the new thread is asked to carry
- * out. The start sends only the prompt, so nothing here can be ticked.
+ * out. The start closes this card, so nothing here can be ticked; the new
+ * thread gets the steps as its own `plan` card and ticks them there.
  */
 function ThreadTodoPlan(props: { items: ThreadTodoItem[] }) {
   return (

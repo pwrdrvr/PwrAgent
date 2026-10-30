@@ -4,6 +4,7 @@ import type {
   CreateInstanceThreadResult,
   ListInstanceProjectsResult,
   PwrAgentFederationContext,
+  RaiseThreadTodoPlanRequest,
   ThreadReviewIdentity,
   ThreadTodo,
   ThreadTodoMergeMethod,
@@ -41,6 +42,7 @@ import {
   type ThreadTodoActionRunners,
 } from "./thread-todo-service.js";
 import { ThreadTodoStore } from "./thread-todo-store.js";
+import { withThreadTodoPlanNote, type ThreadTodoPlan } from "./thread-todo-plan.js";
 import { ThreadTodoFeed, type ThreadTodoFeedOwner } from "./thread-todo-feed.js";
 import {
   getThreadReviewService,
@@ -146,6 +148,27 @@ export async function readThreadTodoPlacement(
 }
 
 /**
+ * Raises a started thread's plan card on this owner, filed where add_todo
+ * would file a card the thread raised itself.
+ */
+export async function raiseThreadTodoPlan(
+  registry: Pick<DesktopBackendRegistry, "resolveThreadWorkspaceCwd" | "resolveThreadPrimaryDirectory">,
+  thread: { backend: AppServerBackendKind; threadId: string },
+  plan: ThreadTodoPlan,
+  todos: Pick<ThreadTodoService, "raisePlan"> = getThreadTodoService(),
+): Promise<ThreadTodo> {
+  const placement = await readThreadTodoPlacement(registry, thread);
+  return todos.raisePlan({ ...thread, ...placement, plan });
+}
+
+/** A peer's plan cards, through `threadTodos.raisePlan`. */
+export type ThreadTodoPeerPlans = {
+  /** The peer advertises `thread_todo_plan`. */
+  supports: (instanceId: string) => boolean;
+  raise: (instanceId: string, request: RaiseThreadTodoPlanRequest) => Promise<unknown>;
+};
+
+/**
  * Connects the service to the registry: the agent tools raise cards through
  * it, and its main-process actions run through the registry, gh, and the
  * federation tools for a peer.
@@ -159,6 +182,8 @@ export function installThreadTodoRuntime(params: {
   readDefaultMergeMethod: () => ThreadTodoMergeMethod;
   /** The federation agent tools, which start threads on peers. */
   federation?: PwrAgentFederationHandler;
+  /** Plan cards for threads started on a peer. */
+  peerPlans?: ThreadTodoPeerPlans;
   /** What the live card feed reads besides the services, and where it publishes. */
   feed: {
     loadOwners: () => Promise<readonly ThreadTodoFeedOwner[]>;
@@ -204,7 +229,15 @@ export function installThreadTodoRuntime(params: {
   };
   readDefaultMergeMethod = params.readDefaultMergeMethod;
   todos.setOnChanged(changed);
-  todos.setRunners(createThreadTodoRunners({ registry, federation, listProjects }));
+  todos.setRunners(createThreadTodoRunners({
+    registry,
+    federation,
+    listProjects,
+    plans: {
+      raiseHere: (thread, plan) => raiseThreadTodoPlan(registry, thread, plan, todos),
+      ...(params.peerPlans ? { peer: params.peerPlans } : {}),
+    },
+  }));
   todos.setDispatchSettingsReader(async (thread) => {
     const settings = await registry.readThreadHandoffSettings(thread);
     const threadSpeed = {
@@ -460,8 +493,34 @@ export function createThreadTodoRunners(params: {
    * a peer that files it under another name.
    */
   listProjects?: () => Promise<ThreadTodoProjectCandidate[]>;
+  /**
+   * Where a card's steps become the started thread's own `plan` card. A
+   * start without them, or whose raise fails, sends the prompt alone.
+   */
+  plans?: {
+    raiseHere: (thread: { backend: AppServerBackendKind; threadId: string }, plan: ThreadTodoPlan) => Promise<unknown>;
+    peer?: ThreadTodoPeerPlans;
+  };
 }): ThreadTodoActionRunners {
-  const { registry, federation } = params;
+  const { registry, federation, plans } = params;
+  // A failed plan card leaves the start as it was before plan cards: the
+  // prompt alone, which add_todo asks to carry the steps too.
+  const raisePlan = async (
+    raise: () => Promise<unknown>,
+    thread: { threadId: string; instanceId?: string },
+  ): Promise<boolean> => {
+    try {
+      await raise();
+      return true;
+    } catch (error) {
+      threadTodoLog.warn("could not raise the started thread's plan card", {
+        error: error instanceof Error ? error.message : String(error),
+        threadId: thread.threadId,
+        ...(thread.instanceId ? { instanceId: thread.instanceId } : {}),
+      });
+      return false;
+    }
+  };
   // Without them the peer is matched by name, as before.
   const listLocalProjects = async (): Promise<ThreadTodoProjectCandidate[]> =>
     await Promise.resolve().then(() => params.listProjects?.() ?? []).catch((error: unknown) => {
@@ -474,7 +533,7 @@ export function createThreadTodoRunners(params: {
     mergePullRequest: async (request) =>
       await new GithubPrFetcher().mergePullRequest(request),
     startThread: async ({
-      sourceBackend, sourceThreadId, cwd, crossProject, action, modelSettings, workMode: chosenWorkMode, environment, speed,
+      sourceBackend, sourceThreadId, cwd, crossProject, action, modelSettings, workMode: chosenWorkMode, environment, speed, plan,
     }) => {
       const source = await registry.readThreadHandoffSettings({
         backend: sourceBackend,
@@ -568,10 +627,15 @@ export function createThreadTodoRunners(params: {
           });
         }
       }
+      // Raised before the first turn, so the thread's first list_todos
+      // finds it, and the prompt names it only once it exists.
+      const planned = plan && plans
+        ? await raisePlan(() => plans.raiseHere({ backend: started.backend, threadId: started.threadId }, plan), started)
+        : false;
       await registry.startTurn({
         backend: started.backend,
         threadId: started.threadId,
-        input: [{ type: "text", text: action.prompt }],
+        input: [{ type: "text", text: planned ? withThreadTodoPlanNote(action.prompt) : action.prompt }],
         ...settings,
       });
       return {
@@ -592,6 +656,7 @@ export function createThreadTodoRunners(params: {
             workMode,
             environment,
             speed,
+            plan,
           }) => {
             if (!project) {
               throw new Error("This to-do has no project to find on the other PwrAgent.");
@@ -646,6 +711,12 @@ export function createThreadTodoRunners(params: {
                 ? `${projects.instanceLabel} has no checkout of ${repository} (${project.label} here).`
                 : `${projects.instanceLabel} has no project named ${project.label}.`);
             }
+            // create_instance_thread's signed shape carries no steps, so a
+            // peer that answers threadTodos.raisePlan gets them right after
+            // the start; the thread's first tool call comes seconds later.
+            // An older peer gets the prompt alone.
+            const peerPlans = plans?.peer;
+            const plannable = plan !== undefined && peerPlans?.supports(instanceId) === true;
             // No title: create_instance_thread has none to set, and the
             // peer names the thread from its first turn.
             const created = await federation({
@@ -654,7 +725,7 @@ export function createThreadTodoRunners(params: {
               args: {
                 instanceId,
                 projectKey: counterpart.key,
-                input: action.prompt,
+                input: plannable ? withThreadTodoPlanNote(action.prompt) : action.prompt,
                 executionMode: action.executionMode ?? source.executionMode,
                 ...(modelSettings
                   ? {
@@ -671,6 +742,14 @@ export function createThreadTodoRunners(params: {
             });
             if (!created.ok) throw new Error(created.error.message);
             const thread = created.data as CreateInstanceThreadResult;
+            if (plannable && plan && plans && peerPlans) {
+              // The instance picked can be this one, which raises its own.
+              const started = { backend: thread.backend, threadId: thread.threadId };
+              await raisePlan(() => thread.isLocal
+                ? plans.raiseHere(started, plan)
+                : peerPlans.raise(thread.instanceId, { ...started, title: plan.title, items: plan.items }),
+              { threadId: thread.threadId, instanceId: thread.instanceId });
+            }
             return {
               backend: thread.backend,
               threadId: thread.threadId,
