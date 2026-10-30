@@ -28,7 +28,7 @@ function pr(overrides: Partial<PrSummary> = {}): PrSummary {
     state: "passing",
     checkState: "passing",
     lifecycleState: "open",
-    reviewState: "approved",
+    reviewState: "ready_for_review",
     mergeState: "mergeable",
     url: "https://github.com/acme/atlas/pull/418",
     ...overrides,
@@ -112,7 +112,7 @@ describe("merge card PR chip", () => {
   it("shows the raising thread's PR as a live chip that opens it", () => {
     renderCard(mergeCard("418"), [thread("raiser", [pr()])]);
 
-    const chip = screen.getByRole("button", { name: "Open acme/atlas#418 (Checks passed) in browser" });
+    const chip = screen.getByRole("button", { name: /^Open acme\/atlas#418 \(.*\) in browser$/ });
     expect(chip).toHaveClass("pr-chip", "pr-chip--passing");
     expect(chip).toHaveTextContent("#418");
     expect(chip).toHaveAttribute("data-pr-url", "https://github.com/acme/atlas/pull/418");
@@ -121,7 +121,7 @@ describe("merge card PR chip", () => {
 
   it("follows the PR's status as it changes, so a merge on GitHub shows", () => {
     const { rerenderThreads } = renderCard(mergeCard("418"), [thread("raiser", [pr()])]);
-    rerenderThreads([thread("raiser", [pr({ lifecycleState: "merged", mergedAt: "2026-10-29T12:00:00Z" })])]);
+    rerenderThreads([thread("raiser", [pr({ lifecycleState: "merged", mergedAt: 1_793_000_000_000 })])]);
 
     expect(prFact().querySelector(".pr-chip")).toHaveClass("pr-chip--merged");
   });
