@@ -1484,13 +1484,15 @@ describe("Claude SDK backend", () => {
     const parts = [
       { type: "text", text: "Read these" },
       { type: "image", url: expect.stringMatching(/^pwragent-image:/), alt: "local.png" },
-      { type: "image", url: "data:image/png;base64,aW1hZ2U=", alt: "inline.png" },
+      { type: "image", url: expect.stringMatching(/^pwragent-image:/), alt: "inline.png" },
       { type: "file", name: "Report.txt", mimeType: "text/plain", sizeBytes: 12 },
     ];
     expect(replay.messages[0]).toMatchObject({ text: "Read these", parts });
     expect(replay.entries[0]).toMatchObject({ text: "Read these", parts });
     expect(f.events).toEqual(expect.arrayContaining([expect.objectContaining({ notification: expect.objectContaining({
-      method: "item/completed", params: expect.objectContaining({ item: expect.objectContaining({ type: "userMessage", content: parts }) }),
+      method: "item/completed", params: expect.objectContaining({ item: expect.objectContaining({ type: "userMessage", content: [
+        parts[0], parts[1], { type: "image", url: "data:image/png;base64,aW1hZ2U=", alt: "inline.png" }, parts[3],
+      ] }) }),
     }) })]));
   });
 
@@ -2693,16 +2695,17 @@ describe("Claude transcript fidelity", () => {
     const detail = (id: string) => details.find((candidate) => candidate.id === id);
     expect(detail("read-1:output")).toEqual({
       id: "read-1:output", kind: "read", label: "Read shot.png output", status: "completed",
-      images: [{ type: "image", url: pngUrl, alt: "Read shot.png" }],
+      images: [{ type: "image", url: expect.stringMatching(/^pwragent-image:/), alt: "Read shot.png" }],
     });
     expect(detail("shot-1")).toMatchObject({
       label: "Used MCP browser/screenshot",
       command: { rawCommand: "browser/screenshot", source: "tool", output: "Captured the page." },
-      images: [{ url: "data:image/jpeg;base64,/9j/4AAQ" }],
+      images: [{ url: expect.stringMatching(/^pwragent-image:/) }],
     });
     // No row keeps the image as text.
     expect(JSON.stringify(details.map((candidate) => [candidate.markdown, candidate.command?.output])))
       .not.toContain("base64");
+    expect(await readFile(path.join(f.root, `${threadId}.jsonl`), "utf8")).not.toContain("data:image/");
   });
 
   it("names an MCP call's tool and keeps its arguments and result inside the row", async () => {

@@ -9,9 +9,9 @@ import type {
   AppServerThreadMessagePart,
   FederationInstanceId,
 } from "@pwragent/shared";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { copyFile, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -163,8 +163,76 @@ const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies =
   },
   mkdir,
   resolveLocalImageLink: resolveTranscriptImageFile,
-  writeFile,
+  writeFile: writeCachedTranscriptImage,
 };
+
+/** Publish complete cache files, reusing images retained by an earlier write or read. */
+async function writeCachedTranscriptImage(filePath: string, data: Buffer): Promise<void> {
+  let existingSize: number | undefined;
+  try {
+    existingSize = (await stat(filePath)).size;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  if (existingSize === data.byteLength) return;
+
+  const temporary = `${filePath}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, data, { mode: 0o600, flag: "wx" });
+    if (existingSize !== undefined) {
+      // Repair an incomplete file left by an older cache writer.
+      await rename(temporary, filePath);
+    } else {
+      try {
+        await link(temporary, filePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+    }
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+/**
+ * Retain inline images before appending history. Unlike renderer materialization,
+ * a failed write rejects the append so history never references a missing image.
+ * Only image fields are visited; text and remote URLs keep their original form.
+ */
+export async function persistTranscriptEntryDataImages(
+  entries: readonly AppServerThreadEntry[],
+  root: string,
+): Promise<AppServerThreadEntry[]> {
+  const writes = new Map<string, Promise<void>>();
+  const retain = async (part: AppServerThreadImagePart): Promise<AppServerThreadImagePart> => {
+    const image = parseSupportedImageDataUrl(part.url);
+    if (!image) return part;
+    const filePath = path.join(root, `${image.sha256}.${image.extension}`);
+    let write = writes.get(filePath);
+    if (!write) {
+      write = (async () => {
+        await mkdir(root, { recursive: true, mode: 0o700 });
+        await writeCachedTranscriptImage(filePath, image.buffer);
+      })();
+      writes.set(filePath, write);
+    }
+    await write;
+    return { ...part, url: toTranscriptImageProtocolUrl(pathToFileURL(filePath).toString()) };
+  };
+  return await Promise.all(entries.map(async (entry) => {
+    if (entry.type === "activity") {
+      return { ...entry, details: await Promise.all(entry.details.map(async (detail) => ({
+        ...detail,
+        ...(detail.images ? { images: await Promise.all(detail.images.map(retain)) } : {}),
+      }))) };
+    }
+    if (entry.type === "message" && entry.parts) {
+      return { ...entry, parts: await Promise.all(entry.parts.map((part) =>
+        part.type === "image" ? retain(part) : part)) };
+    }
+    return entry;
+  }));
+}
 
 async function retainLegacyThreadImage(sourcePath: string, owner: ThreadAssetOwner): Promise<string | undefined> {
   if (isThreadAssetPath(sourcePath, owner)) return sourcePath;
