@@ -24961,7 +24961,8 @@ a.button {
   row-gap: 3px;
 }
 
-.thread-todo-card__fact--model dt {
+.thread-todo-card__fact--model dt,
+.thread-todo-card__fact--pr:has(.pr-chip) dt {
   align-self: center;
 }
 

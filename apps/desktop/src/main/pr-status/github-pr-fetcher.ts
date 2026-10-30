@@ -39,6 +39,16 @@ const MERGE_METHOD_RESULTS: Record<ThreadTodoMergeMethod, string> = {
   rebase: "Rebased and merged",
   merge: "Merged",
 };
+
+/**
+ * GitHub refuses, for a token without `workflow`, any merge that changes
+ * `.github/workflows/`. A retry fails the same way, so name the fix.
+ */
+export function mergeScopeHint(message: string): string {
+  return /without [`'"]?workflow[`'"]? scope/i.test(message)
+    ? ". Run `gh auth refresh -s workflow`, then retry."
+    : "";
+}
 const fetcherLog = getMainLogger("pwragent:pr-fetcher");
 
 /** Default re-probe cadence for `gh --version`. */
@@ -224,7 +234,8 @@ export class GithubPrFetcher {
     } catch (error) {
       const err = error as { stderr?: string; message?: string };
       const detail = err.stderr?.trim() || err.message || String(error);
-      throw new Error(`gh pr merge failed: ${detail.split("\n")[0]}`);
+      const firstLine = detail.split("\n")[0];
+      throw new Error(`gh pr merge failed: ${firstLine}${mergeScopeHint(firstLine)}`);
     }
     const verb = MERGE_METHOD_RESULTS[params.method];
     return {
