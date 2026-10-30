@@ -86,6 +86,8 @@ class PullRequestLinkMetadataStore {
   private shorthandPrs = new Map<number, PrSummary>();
   private threads: NavigationThreadSummary[];
   private threadNumberListeners = new Set<() => void>();
+  /** Resolutions for the current `threads`, keyed by request. */
+  private threadNumberSnapshots = new Map<string, PrSummary | undefined>();
 
   constructor(
     threads: NavigationThreadSummary[],
@@ -168,6 +170,21 @@ class PullRequestLinkMetadataStore {
    * referentially equal until that PR's row changes.
    */
   getThreadNumberSnapshot(
+    request: ThreadPullRequestNumberRequest,
+  ): PrSummary | undefined {
+    // useSyncExternalStore reads on every render and every wake; scan the
+    // thread list once per navigation update instead.
+    const cacheKey = [request.backend, request.threadId, request.number, request.projectPath ?? ""]
+      .join("\u0000");
+    if (this.threadNumberSnapshots.has(cacheKey)) {
+      return this.threadNumberSnapshots.get(cacheKey);
+    }
+    const resolved = this.resolveThreadNumber(request);
+    this.threadNumberSnapshots.set(cacheKey, resolved);
+    return resolved;
+  }
+
+  private resolveThreadNumber(
     request: ThreadPullRequestNumberRequest,
   ): PrSummary | undefined {
     const thread = this.threads.find((candidate) =>
@@ -263,6 +280,9 @@ class PullRequestLinkMetadataStore {
     this.peerOwnedKeys = nextPeerOwnedKeys;
     this.shorthandPrs = nextShorthandPrs;
     this.threads = threads;
+    if (threadsChanged) {
+      this.threadNumberSnapshots.clear();
+    }
     for (const key of changedKeys) {
       for (const listener of this.listeners.get(key) ?? []) {
         listener();
@@ -275,7 +295,7 @@ class PullRequestLinkMetadataStore {
     }
     // Few cards subscribe, and each re-read returns the same object unless
     // its PR changed, so a broad wake costs no render.
-    if (threadsChanged || changedKeys.size > 0) {
+    if (threadsChanged) {
       for (const listener of this.threadNumberListeners) {
         listener();
       }
