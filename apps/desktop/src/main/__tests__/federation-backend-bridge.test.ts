@@ -31,6 +31,33 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("continues environment startup on its owner and enforces turn control", async () => {
+    const request = { backend: "codex" as const, threadId: "failed-setup" };
+    const response = { ...request, turnId: "continued-turn" };
+    const backend = {
+      continueThreadEnvironmentStartup: vi.fn(async () => response),
+      acknowledgeThreadEnvironmentFailure: vi.fn(async () => ({ ...request, acknowledged: true })),
+    };
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    let rpc: FederationRpcEndpoint;
+    const connect = (capabilities: FederationCapability[]): void => {
+      router.registerConnection({ peerId: "viewer", capabilities,
+        sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    };
+    registerFederationBackendHandlers({ router, backend: backend as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    connect(["turn_control"]);
+    expect(await client.continueThreadEnvironmentStartup(request)).toEqual(response);
+    expect(backend.continueThreadEnvironmentStartup).toHaveBeenCalledExactlyOnceWith({ ...request, fallbackTurn: undefined });
+    connect(["thread_navigation"]);
+    await expect(client.continueThreadEnvironmentStartup(request)).rejects.toThrow();
+    expect(backend.continueThreadEnvironmentStartup).toHaveBeenCalledOnce();
+    expect(await client.acknowledgeThreadEnvironmentFailure(request)).toEqual({ ...request, acknowledged: true });
+    expect(backend.acknowledgeThreadEnvironmentFailure).toHaveBeenCalledExactlyOnceWith(request);
+  });
+
   it("round-trips owner-collated family pricing and requires thread_detail", async () => {
     const request = { backend: "codex" as const, threadId: "parent" };
     const family = { readAt: 42, members: [

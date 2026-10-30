@@ -296,6 +296,19 @@ export type StartTurnRequest = {
   acpRuntime?: BackendAcpSessionRuntimeState;
 };
 
+export type ContinueThreadEnvironmentStartupRequest = {
+  backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
+  threadId: ThreadIdentifier;
+  /** Recovery for a failed launch created before the owner retained requests. */
+  fallbackTurn?: Omit<StartTurnRequest, "backend" | "threadId" | "federationTarget">;
+};
+
+export type ContinueThreadEnvironmentStartupResponse = Pick<
+  MaterializeDirectoryLaunchpadResponse,
+  "backend" | "threadId" | "turnId" | "scheduledAction" | "turnStartFailure"
+>;
+
 export type StartTurnResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;

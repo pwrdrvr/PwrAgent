@@ -66,6 +66,7 @@ export type AcknowledgeThreadSpendAlertResponse = {
 };
 
 export type AcknowledgeThreadEnvironmentFailureRequest = {
+  federationTarget?: FederationTarget;
   acknowledgedAt?: number;
   backend?: AppServerBackendKind;
   threadId: string;

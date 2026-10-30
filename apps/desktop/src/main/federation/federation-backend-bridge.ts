@@ -121,6 +121,10 @@ import type {
   MarkThreadSeenResponse,
   MessagingPlatformStatus,
   PwrSnapConnectionStatus,
+  ContinueThreadEnvironmentStartupRequest,
+  ContinueThreadEnvironmentStartupResponse,
+  AcknowledgeThreadEnvironmentFailureRequest,
+  AcknowledgeThreadEnvironmentFailureResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
   SetThreadLockRequest,
@@ -543,6 +547,8 @@ export const FEDERATION_BACKEND_METHODS = {
   supportsMessagingPdfTools: "backend.supportsMessagingPdfTools",
   listBackends: "backend.listBackends",
   markThreadSeen: "backend.markThreadSeen",
+  continueThreadEnvironmentStartup: "backend.continueThreadEnvironmentStartup",
+  acknowledgeThreadEnvironmentFailure: "backend.acknowledgeThreadEnvironmentFailure",
   setThreadReaction: "backend.setThreadReaction",
   setThreadLock: "backend.setThreadLock",
   setThreadPin: "backend.setThreadPin",
@@ -697,6 +703,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.supportsMessagingPdfTools]: "messaging_route",
   [FEDERATION_BACKEND_METHODS.listBackends]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.markThreadSeen]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.continueThreadEnvironmentStartup]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.acknowledgeThreadEnvironmentFailure]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.setThreadReaction]: "thread_navigation",
   // A lock refuses every turn on the owner's thread, so it takes the same
   // capability as starting one.
@@ -923,6 +931,8 @@ export type FederationBackendOperations = {
   ): Promise<AppServerListSkillsResponse>;
   listBackends(request?: ListBackendsRequest): Promise<ListBackendsResponse>;
   markThreadSeen(request: MarkThreadSeenRequest): Promise<MarkThreadSeenResponse>;
+  continueThreadEnvironmentStartup?(request: ContinueThreadEnvironmentStartupRequest): Promise<ContinueThreadEnvironmentStartupResponse>;
+  acknowledgeThreadEnvironmentFailure?(request: AcknowledgeThreadEnvironmentFailureRequest): Promise<AcknowledgeThreadEnvironmentFailureResponse>;
   setThreadReaction(
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse>;
@@ -1491,6 +1501,26 @@ export function registerFederationBackendHandlers(params: {
       await params.backend.markThreadSeen(
         envelope.params as MarkThreadSeenRequest,
       ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.continueThreadEnvironmentStartup,
+    async (envelope) => {
+      if (!params.backend.continueThreadEnvironmentStartup) throw new Error("Upgrade the thread owner to continue environment startup.");
+      const request = envelope.params as Omit<ContinueThreadEnvironmentStartupRequest, "fallbackTurn"> & {
+        fallbackTurn?: Omit<NonNullable<ContinueThreadEnvironmentStartupRequest["fallbackTurn"]>, "input"> & { input: FederationWireTurnInputItem[] };
+      };
+      const fallbackTurn = request.fallbackTurn
+        ? { ...request.fallbackTurn, input: await resolveFederationTurnInput(params.resolveTurnInput, request.fallbackTurn.input, envelope.sourceInstanceId) }
+        : undefined;
+      return await params.backend.continueThreadEnvironmentStartup({ ...request, fallbackTurn });
+    },
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.acknowledgeThreadEnvironmentFailure,
+    async (envelope) => {
+      if (!params.backend.acknowledgeThreadEnvironmentFailure) throw new Error("Upgrade the thread owner to acknowledge environment failures.");
+      return await params.backend.acknowledgeThreadEnvironmentFailure(envelope.params as AcknowledgeThreadEnvironmentFailureRequest);
+    },
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.setThreadReaction,
@@ -2611,6 +2641,22 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<SetThreadPinResponse> {
     return await this.rpc.request<SetThreadPinResponse>({
       method: FEDERATION_BACKEND_METHODS.setThreadPin,
+      params: request,
+    });
+  }
+
+  async continueThreadEnvironmentStartup(request: ContinueThreadEnvironmentStartupRequest): Promise<ContinueThreadEnvironmentStartupResponse> {
+    const qualified = request.fallbackTurn ? this.qualifyThreadLinks(request.fallbackTurn.input) : undefined;
+    const input = qualified && this.prepareTurnInput ? await this.prepareTurnInput(qualified) : qualified;
+    return await this.rpc.request<ContinueThreadEnvironmentStartupResponse>({
+      method: FEDERATION_BACKEND_METHODS.continueThreadEnvironmentStartup,
+      params: { ...request, ...(request.fallbackTurn && input ? { fallbackTurn: { ...request.fallbackTurn, input } } : {}) },
+    });
+  }
+
+  async acknowledgeThreadEnvironmentFailure(request: AcknowledgeThreadEnvironmentFailureRequest): Promise<AcknowledgeThreadEnvironmentFailureResponse> {
+    return await this.rpc.request<AcknowledgeThreadEnvironmentFailureResponse>({
+      method: FEDERATION_BACKEND_METHODS.acknowledgeThreadEnvironmentFailure,
       params: request,
     });
   }

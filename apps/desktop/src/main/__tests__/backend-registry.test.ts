@@ -1,3 +1,4 @@
+import { PendingEnvironmentLaunchStore } from "../app-server/pending-environment-launch-store";
 import type { Options as ClaudeOptions, Query as ClaudeQuery, SDKMessage as ClaudeMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -25854,6 +25855,7 @@ script = "printf setup-failed && exit 42"
     const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
+      startTurnErrors: [new Error("temporary start failure"), undefined],
     });
     const commandRunner: CodexEnvironmentCommandRunner = vi.fn(async (params) => {
       expect(params).toMatchObject({
@@ -25870,10 +25872,14 @@ script = "printf setup-failed && exit 42"
         },
       );
     });
+    const pendingDirectory = path.join(root, "pending-launches");
+    const acknowledgeThreadEnvironmentFailure = vi.fn(async () => true);
+    const overlayStore = { ...createOverlayStoreMock(), acknowledgeThreadEnvironmentFailure };
     const registry = new DesktopBackendRegistry({
+      pendingEnvironmentLaunchStore: new PendingEnvironmentLaunchStore(pendingDirectory),
       codexClient,
       codexEnvironmentCommandRunner: commandRunner,
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
       gitDirectoryService: {
         prepareLaunchpadWorkspace: vi.fn(async () => ({
           cwd: worktreePath,
@@ -25925,6 +25931,38 @@ script = "printf setup-failed && exit 42"
         threadId: "thread-1",
       });
       expect(codexClient.lastStartTurnParams).toBeUndefined();
+      // A fresh registry and store model an owner restart. The viewer supplies
+      // only a thread identity; the owner recovers the original request.
+      const recovered = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore,
+        pendingEnvironmentLaunchStore: new PendingEnvironmentLaunchStore(pendingDirectory),
+      });
+      try {
+        const request = { backend: "codex" as const, threadId: response.threadId };
+        await expect(recovered.continueThreadEnvironmentStartup(request)).rejects.toThrow("temporary start failure");
+        expect(acknowledgeThreadEnvironmentFailure).not.toHaveBeenCalled();
+        expect(new PendingEnvironmentLaunchStore(pendingDirectory).get(request)?.request.input)
+          .toEqual([{ type: "text", text: "start after setup" }]);
+        const [first, second] = await Promise.all([
+          recovered.continueThreadEnvironmentStartup(request),
+          recovered.continueThreadEnvironmentStartup(request),
+        ]);
+        expect(first.turnId).toBe("turn-1");
+        expect(second).toEqual(first);
+        expect(codexClient.startTurnCallCount).toBe(2);
+        expect(codexClient.lastStartTurnParams).toMatchObject({
+          input: [{ type: "text", text: "start after setup" }],
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+        });
+        expect(commandRunner).toHaveBeenCalledTimes(1);
+        expect(acknowledgeThreadEnvironmentFailure).toHaveBeenCalledOnce();
+        expect(new PendingEnvironmentLaunchStore(pendingDirectory).get(request)).toBeUndefined();
+      } finally {
+        await recovered.close();
+      }
+
     } finally {
       await registry.close();
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
