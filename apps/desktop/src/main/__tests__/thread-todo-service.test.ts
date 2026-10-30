@@ -1000,7 +1000,7 @@ describe("ThreadTodoService", () => {
       expectSqliteWriteBudget({
         note: "one Start thread from a card with a 3-step plan: one commit for the new thread's "
           + "plan card and one for marking the start card done; only on an operator's Start click, "
-          + "never per turn or event, ~0.4 MB/day at 50 starts",
+          + "never per turn or event; ~24 KB WAL per start, ~1.2 MB/day at 50 starts, half of it the plan card",
         scenario: "thread-todo-start-with-plan",
         writes,
       });
