@@ -53302,6 +53302,8 @@ script = "printf setup"
 
     async function createClaudeMonitorRegistry(params: {
       taskMonitorModels?: Record<string, DesktopTaskMonitorModelChoice>;
+      /** Holds every query after the first until it settles. */
+      laterQueriesHeld?: Promise<void>;
     }) {
       const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-monitor-"));
       const store = new ClaudeSessionStore(path.join(root, "sessions"));
@@ -53343,7 +53345,7 @@ script = "printf setup"
             async function* messages(): AsyncGenerator<ClaudeMessage> {
               yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
               // The monitor stays busy until the test has completed it.
-              await held;
+              await (prompts.length > 1 && params.laterQueriesHeld ? params.laterQueriesHeld : held);
               yield { type: "result", subtype: "success", is_error: false, result: "Done" } as ClaudeMessage;
             }
             return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
@@ -53423,7 +53425,9 @@ script = "printf setup"
     });
 
     it("keeps the monitor thread for a recovery turn after its process exits", async () => {
-      const { close, prompts, registry, release, store } = await createClaudeMonitorRegistry({});
+      let releaseRecovery!: () => void;
+      const laterQueriesHeld = new Promise<void>((resolve) => { releaseRecovery = resolve; });
+      const { close, prompts, registry, release, store } = await createClaudeMonitorRegistry({ laterQueriesHeld });
       try {
         const response = await callRegistryMcpTool({
           registry,
@@ -53443,12 +53447,17 @@ script = "printf setup"
         await vi.waitFor(() => expect(prompts.length).toBeGreaterThanOrEqual(2));
         expect(prompts[1]!.model).toBe("haiku");
         expect(prompts[1]!.persistSession).toBe(false);
+        // Mid-recovery, after the first process exited, the thread is held.
+        await vi.waitFor(() => expect(registry.readThread({ backend: "claude", threadId: monitorThreadId }))
+          .resolves.toHaveProperty("replay"));
         // The recovery turn ends too, so the delegation finishes and the
         // thread is released.
+        releaseRecovery();
         await vi.waitFor(async () => {
           await expect(store.read(monitorThreadId)).rejects.toBeDefined();
         });
       } finally {
+        releaseRecovery();
         await close();
       }
     });
