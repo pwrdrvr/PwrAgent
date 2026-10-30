@@ -53334,6 +53334,10 @@ script = "printf setup"
         claudeBackendOptions: {
           store,
           inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+          discoverModels: async () => [
+            { id: "sonnet", label: "Sonnet", current: true },
+            { id: "haiku", label: "Haiku" },
+          ],
           query: ({ options = {} }) => {
             prompts.push(options);
             async function* messages(): AsyncGenerator<ClaudeMessage> {
@@ -53353,11 +53357,27 @@ script = "printf setup"
           params: { threadId: parentThreadId, turnId: "parent-turn", turn: { id: "parent-turn" } },
         },
       });
-      return { codexClient, prompts, registry, release, root };
+      const close = async () => {
+        release();
+        await registry.publishLocalEvent({
+          backend: "claude",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: parentThreadId,
+              turnId: "parent-turn",
+              turn: { id: "parent-turn", status: "completed", output: [] },
+            },
+          },
+        });
+        await registry.close();
+        await rm(root, { recursive: true, force: true });
+      };
+      return { close, codexClient, prompts, registry };
     }
 
     it("runs on Claude's lightweight model in a hidden thread, and can complete", async () => {
-      const { codexClient, prompts, registry, release, root } = await createClaudeMonitorRegistry({});
+      const { close, codexClient, prompts, registry } = await createClaudeMonitorRegistry({});
       try {
         const response = await callRegistryMcpTool({
           registry,
@@ -53393,14 +53413,12 @@ script = "printf setup"
         expect(completed.isError).not.toBe(true);
         expect(completed.structuredContent).toMatchObject({ monitorId });
       } finally {
-        release();
-        await registry.close();
-        await rm(root, { recursive: true, force: true });
+        await close();
       }
     });
 
     it("points one CI wait per turn at PwrAgent's PR watch", async () => {
-      const { registry, release, root } = await createClaudeMonitorRegistry({});
+      const { close, registry } = await createClaudeMonitorRegistry({});
       const internal = registry as unknown as {
         suggestClaudeMonitorJob(params: {
           threadId: string; turnId: string; toolName: string; command: string; toolUseId?: string;
@@ -53416,14 +53434,12 @@ script = "printf setup"
         await expect(ask("gh run watch 12 --exit-status", "tool-4", "next-turn"))
           .resolves.toContain("create_monitor_delegation");
       } finally {
-        release();
-        await registry.close();
-        await rm(root, { recursive: true, force: true });
+        await close();
       }
     });
 
     it("runs on the Helper model when the operator chose it for Claude", async () => {
-      const { codexClient, registry, release, root } = await createClaudeMonitorRegistry({
+      const { close, codexClient, registry } = await createClaudeMonitorRegistry({
         taskMonitorModels: { claude: { source: "helper" } },
       });
       try {
@@ -53456,9 +53472,7 @@ script = "printf setup"
         });
         expect(completed.isError).not.toBe(true);
       } finally {
-        release();
-        await registry.close();
-        await rm(root, { recursive: true, force: true });
+        await close();
       }
     });
   });
