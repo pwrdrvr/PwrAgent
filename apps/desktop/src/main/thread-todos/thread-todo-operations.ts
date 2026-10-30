@@ -193,7 +193,7 @@ export const localThreadTodoOperations = {
   raisePlan: async (request: RaiseThreadTodoPlanRequest): Promise<ThreadTodoMutationResponse> => {
     const { backend, threadId, title } = request;
     if (!isBackendKind(backend) || typeof threadId !== "string" || !threadId.trim()
-      || typeof title !== "string" || !title.trim() || title.length > THREAD_TODO_TITLE_MAX_LENGTH) {
+      || typeof title !== "string" || !title.trim()) {
       throw new Error("A plan needs the started thread and its card's title.");
     }
     const items = parseThreadTodoItemTexts(request.items);
@@ -201,7 +201,8 @@ export const localThreadTodoOperations = {
     if (items.value.length === 0) throw new Error("A plan needs at least one step.");
     return {
       todo: await raiseThreadTodoPlan(getDesktopBackendRegistry(), { backend, threadId },
-        { title: title.trim(), items: items.value }),
+        // Clipped, not refused: the viewer has already told the thread its plan card exists.
+        { title: title.trim().slice(0, THREAD_TODO_TITLE_MAX_LENGTH), items: items.value }),
     };
   },
   setProject: async (

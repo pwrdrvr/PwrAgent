@@ -2458,7 +2458,9 @@ export class DesktopFederationRuntime {
         return { todos: [], unavailableInstances: [unavailable] } as ThreadTodoOperationResponse<K>;
       }
       if (unavailable.reason === "disconnected") throw new Error(`${unavailable.label} is disconnected.`);
-      throw new Error("This Federation owner does not support To-dos. Update that PwrAgent instance.");
+      throw new Error(operation === "raisePlan" && this.todoQueueUnavailableInstance(target, "thread_todos") === undefined
+        ? "This Federation owner does not support plan cards. Update that PwrAgent instance."
+        : "This Federation owner does not support To-dos. Update that PwrAgent instance.");
     }
     return await this.rpcFor(target).request({ method: FEDERATION_THREAD_TODO_METHODS[operation], params: request,
       ...(operation === "runAction" ? { timeoutMs: null } : {}),

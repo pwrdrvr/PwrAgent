@@ -78,6 +78,11 @@ describe("raising a started thread's plan for a peer", () => {
       { title: "Smoke test", items: ["Run lint", "Ship"] });
   });
 
+  it("clips an overlong title instead of refusing a plan the thread was already told about", async () => {
+    await localThreadTodoOperations.raisePlan({ ...valid, title: "x".repeat(200) });
+    expect(fixture.raisePlan.mock.lastCall?.[2]).toMatchObject({ title: "x".repeat(120) });
+  });
+
   it.each([
     ["an unknown backend", { backend: "other" }],
     ["no thread", { threadId: " " }],
