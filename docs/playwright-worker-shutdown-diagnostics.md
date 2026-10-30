@@ -15,6 +15,19 @@ cleanup phase takes five seconds, it captures a snapshot before Playwright's
 three snapshots per worker). The existing CI artifact upload includes these
 files under `test-results/worker-shutdown/worker-<index>-<pid>/`.
 
+If cancellation skips that upload, search the job log for
+`[worker-shutdown-evidence]`. Each failure snapshot synchronously emits a compact
+JSON record with pending process owners, exit/close and stdio state, and
+referenced native handles. The ancestry query also logs its result or explicit
+failure/interruption. Each record is capped at 16 KiB of JSON; snapshots include
+at most 16 pending processes, eight stdio entries per process and 32 handles;
+trees include at most 64 processes. Total counts expose omitted entries, and
+`byteLimitReached` marks further clipping to the byte cap. There are at most
+three snapshots and one query result per worker. Full artifacts retain their
+existing detail. This adds no wait or cancellation handler and cannot preserve
+evidence if the worker never reaches capture or the runner stops forwarding its
+output.
+
 ## Reading a failure
 
 Start with `snapshot-1.json`, then use `timeline.jsonl` to reconstruct events:
