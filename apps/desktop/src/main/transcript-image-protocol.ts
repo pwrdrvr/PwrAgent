@@ -168,27 +168,18 @@ const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies =
 
 /** Publish complete cache files, reusing images retained by an earlier write or read. */
 async function writeCachedTranscriptImage(filePath: string, data: Buffer): Promise<void> {
-  let existingSize: number | undefined;
   try {
-    existingSize = (await stat(filePath)).size;
+    if ((await stat(filePath)).size === data.byteLength) return;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  if (existingSize === data.byteLength) return;
 
   const temporary = `${filePath}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, data, { mode: 0o600, flag: "wx" });
-    if (existingSize !== undefined) {
-      // Repair an incomplete file left by an older cache writer.
-      await rename(temporary, filePath);
-    } else {
-      try {
-        await link(temporary, filePath);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      }
-    }
+    // Concurrent publishers have identical content-addressed bytes. Rename
+    // publishes a complete file even on filesystems without hard links.
+    await rename(temporary, filePath);
   } finally {
     await rm(temporary, { force: true });
   }
@@ -207,8 +198,8 @@ export async function persistTranscriptEntryImages(
   const retain = async (part: AppServerThreadImagePart): Promise<AppServerThreadImagePart> => {
     const image = parseSupportedImageDataUrl(part.url);
     if (!image) {
-      // Forks copy history containing cache URLs. Give the fork its own hard
-      // link so deleting the source thread cannot remove the fork's image.
+      // Forks copy history containing cache URLs. Retain the image in the fork
+      // so deleting the source thread cannot remove the fork's image.
       let sourcePath: string | undefined;
       try {
         sourcePath = decodeTranscriptImageProtocolRequest(part.url);
@@ -220,12 +211,29 @@ export async function persistTranscriptEntryImages(
       if (path.dirname(path.dirname(sourcePath)) !== cacheRoot
         || !/^[a-f0-9]{64}\.[a-z]+$/.test(path.basename(sourcePath))) return part;
       const filePath = path.join(root, path.basename(sourcePath));
-      await mkdir(root, { recursive: true, mode: 0o700 });
-      try {
-        await link(sourcePath, filePath);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      let write = writes.get(filePath);
+      if (!write) {
+        write = (async () => {
+          await mkdir(root, { recursive: true, mode: 0o700 });
+          try {
+            await link(sourcePath, filePath);
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code ?? "";
+            if (code !== "EEXIST") {
+              if (!["EXDEV", "EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "EMLINK"].includes(code)) throw error;
+              const temporary = `${filePath}.${randomUUID()}.tmp`;
+              try {
+                await copyFile(sourcePath, temporary, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+                await rename(temporary, filePath);
+              } finally {
+                await rm(temporary, { force: true });
+              }
+            }
+          }
+        })();
+        writes.set(filePath, write);
       }
+      await write;
       return { ...part, url: toTranscriptImageProtocolUrl(pathToFileURL(filePath).toString()) };
     }
     const filePath = path.join(root, `${image.sha256}.${image.extension}`);

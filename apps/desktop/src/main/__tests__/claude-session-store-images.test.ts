@@ -1,14 +1,19 @@
 import { createHash } from "node:crypto";
-import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, link, mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { crc32 } from "node:zlib";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadActivityEntry, AppServerThreadEntry, AppServerThreadImagePart } from "@pwragent/shared";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { claudeToolResultContent } from "../claude/claude-tool-activity";
 import { materializeTranscriptImageUrlsForRenderer, toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, link: vi.fn(actual.link), copyFile: vi.fn(actual.copyFile) };
+});
 
 const id = "e3333333-3333-4333-8333-333333333333";
 const roots: string[] = [];
@@ -43,6 +48,8 @@ function entryImages(entries: AppServerThreadEntry[]): AppServerThreadImagePart[
 }
 
 afterEach(async () => {
+  vi.mocked(link).mockReset();
+  vi.mocked(copyFile).mockReset();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -122,6 +129,58 @@ describe("Claude history image persistence", () => {
     const forkPath = imagePath(entryImages(await f.store.entries(forkId))[0]!);
     expect(path.dirname(forkPath)).toBe(path.join(f.images, forkId));
     await expect(readFile(forkPath)).resolves.toEqual(png);
+  });
+
+  it.each(["EXDEV", "EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "EMLINK"])(
+    "persists user/tool images and retains forks when hard links fail with %s", async (code) => {
+      const f = await fixture();
+      vi.mocked(link).mockRejectedValue(Object.assign(new Error("No hard links"), { code }));
+      const forkId = "f3333333-3333-4333-8333-333333333333";
+      const user: AppServerThreadEntry = {
+        type: "message", id: "user-1", role: "user", text: "Look",
+        parts: [{ type: "image", url: `data:image/png;base64,${png.toString("base64")}` }],
+      };
+      await f.store.append(id, [user, activity()]);
+      expect(link).not.toHaveBeenCalled();
+      const source = await f.store.entries(id);
+      await expect(readFile(imagePath(entryImages(source)[0]!))).resolves.toEqual(png);
+      await f.store.append(forkId, source);
+      expect(link).toHaveBeenCalled();
+      expect(copyFile).toHaveBeenCalledTimes(1);
+      await rm(path.join(f.images, id), { recursive: true });
+      const forkImages = entryImages(await f.store.entries(forkId));
+      expect(forkImages).toHaveLength(2);
+      for (const image of forkImages) {
+        expect(path.dirname(imagePath(image))).toBe(path.join(f.images, forkId));
+        await expect(readFile(imagePath(image))).resolves.toEqual(png);
+      }
+      expect(await readdir(path.join(f.images, forkId))).toHaveLength(1);
+      expect(await readFile(path.join(f.sessions, `${forkId}.jsonl`), "utf8")).not.toContain("data:image/");
+    },
+  );
+
+  it("propagates unexpected fork-link errors without appending history", async () => {
+    const f = await fixture();
+    const forkId = "f3333333-3333-4333-8333-333333333333";
+    await f.store.append(id, [activity()]);
+    vi.mocked(link).mockRejectedValue(Object.assign(new Error("I/O error"), { code: "EIO" }));
+    await expect(f.store.append(forkId, await f.store.entries(id))).rejects.toMatchObject({ code: "EIO" });
+    expect(copyFile).not.toHaveBeenCalled();
+    await expect(readFile(path.join(f.sessions, `${forkId}.jsonl`))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("removes an incomplete fork copy when fallback copying fails", async () => {
+    const f = await fixture();
+    const forkId = "f3333333-3333-4333-8333-333333333333";
+    await f.store.append(id, [activity()]);
+    vi.mocked(link).mockRejectedValue(Object.assign(new Error("No hard links"), { code: "ENOTSUP" }));
+    vi.mocked(copyFile).mockImplementationOnce(async (_source, destination) => {
+      await writeFile(destination, "partial copy");
+      throw Object.assign(new Error("Disk full"), { code: "ENOSPC" });
+    });
+    await expect(f.store.append(forkId, await f.store.entries(id))).rejects.toMatchObject({ code: "ENOSPC" });
+    expect(await readdir(path.join(f.images, forkId))).toEqual([]);
+    await expect(readFile(path.join(f.sessions, `${forkId}.jsonl`))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("repairs a truncated legacy cache file and publishes complete images during concurrent appends", async () => {
