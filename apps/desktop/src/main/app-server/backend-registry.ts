@@ -10065,6 +10065,7 @@ export class DesktopBackendRegistry {
   private readonly resolveToolOutputAlertPolicyFn: () => DesktopToolOutputAlertPolicy;
   private spendAlertPolicy = DESKTOP_SPEND_ALERT_POLICY_DEFAULT;
   private readonly monitorJobSuggestionDetector = new MonitorJobSuggestionDetector();
+  private readonly pendingAcpMonitorJobSuggestions = new Map<string, string>();
   private readonly monitorJobHeuristicDetector = new MonitorJobHeuristicDetector();
   private toolOutputAlertPolicy = DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT;
   private readonly localFilePrivateStorageRoots: readonly string[];
@@ -10896,6 +10897,8 @@ export class DesktopBackendRegistry {
               }, { taskMonitorRole: "all" }),
             authorizeToolCall: (params) =>
               this.authorizeAgentToolMcpCall(params),
+            resolveToolResultReminder: (context) =>
+              this.takeAcpMonitorJobSuggestion(context),
           });
     this.pdfToolMcpServer =
       options?.pdfToolMcpServer === null
@@ -35368,16 +35371,14 @@ export class DesktopBackendRegistry {
 
   private async suggestMonitorJob(invocation: ThreadToolInvocationRecord): Promise<void> {
     const { backend, threadId, turnId } = invocation;
-    // ACP may implement steering as a queued next turn. A cost reminder must
-    // never wake a finished parent, so use native Codex active-turn steering.
+    if (isAcpBackendId(backend) && turnId) {
+      this.pendingAcpMonitorJobSuggestions.set(taskMonitorThreadKey(backend, threadId), turnId);
+      return;
+    }
+    // Only Codex uses native active-turn steering. ACP reminders ride an
+    // existing MCP response, because ACP steering may queue a new turn.
     if (backend !== "codex" || !turnId) return;
-    if (this.resolveSubAgentThreadOwner({ backend, threadId }).isSubAgent) return;
-    if (Array.from(this.taskMonitorDelegations.values()).some(
-      (record) => record.backend === backend && record.monitorThreadId === threadId,
-    ) || this.completedTaskMonitorsByThread.has(taskMonitorThreadKey(backend, threadId))) return;
-    if (!await this.monitorJobSuggestionEnabledForThread(backend, threadId)) return;
-    if (this.getActiveTurnForThread({ backend, threadId })?.turnId !== turnId) return;
-    if (!this.overlayStore.claimMonitorJobSuggestion({ backend, threadId, turnId })) return;
+    if (!await this.claimEligibleMonitorJobSuggestion({ backend, threadId, turnId })) return;
     await this.steerTurn({
       backend,
       threadId,
@@ -35385,6 +35386,29 @@ export class DesktopBackendRegistry {
       requestId: `monitor-job-suggestion:${backend}:${threadId}:${turnId}`,
       input: [{ type: "text", text: MONITOR_JOB_SUGGESTION }],
     }, { kind: "pwragent", systemReason: "monitor-job-suggestion" });
+  }
+
+  private async takeAcpMonitorJobSuggestion(
+    context: ResolvedAgentToolMcpCallContext,
+  ): Promise<string | undefined> {
+    const { backend, threadId, turnId } = context;
+    const key = taskMonitorThreadKey(backend, threadId);
+    if (!isAcpBackendId(backend) || this.pendingAcpMonitorJobSuggestions.get(key) !== turnId) return;
+    if (!await this.claimEligibleMonitorJobSuggestion(context)) return;
+    this.pendingAcpMonitorJobSuggestions.delete(key);
+    return MONITOR_JOB_SUGGESTION;
+  }
+
+  private async claimEligibleMonitorJobSuggestion(
+    { backend, threadId, turnId }: ResolvedAgentToolMcpCallContext,
+  ): Promise<boolean> {
+    if (this.resolveSubAgentThreadOwner({ backend, threadId }).isSubAgent) return false;
+    if (Array.from(this.taskMonitorDelegations.values()).some(
+      (record) => record.backend === backend && record.monitorThreadId === threadId,
+    ) || this.completedTaskMonitorsByThread.has(taskMonitorThreadKey(backend, threadId))) return false;
+    if (!await this.monitorJobSuggestionEnabledForThread(backend, threadId)) return false;
+    if (this.getActiveTurnForThread({ backend, threadId })?.turnId !== turnId) return false;
+    return this.overlayStore.claimMonitorJobSuggestion({ backend, threadId, turnId });
   }
 
   /**
@@ -35534,7 +35558,8 @@ export class DesktopBackendRegistry {
 
   private async recordToolInvocationAccounting(event: AgentEvent): Promise<void> {
     this.rememberMonitorJobHeuristicMessage(event);
-    if (event.notification.method === "item/completed" && event.backend === "codex") {
+    if (event.notification.method === "item/completed"
+      && (event.backend === "codex" || isAcpBackendId(event.backend))) {
       const observed = toolInvocationFromNotification({
         backend: event.backend,
         notification: event.notification,
@@ -35550,7 +35575,7 @@ export class DesktopBackendRegistry {
               error: error instanceof Error ? error.message : String(error),
             });
           });
-        } else if (this.monitorJobHeuristicEnabled()) {
+        } else if (event.backend === "codex" && this.monitorJobHeuristicEnabled()) {
           const evidence = this.monitorJobHeuristicDetector.observeInvocation({
             invocation: observed,
             inputPreview: toolInvocationReviewInputFromNotification(
@@ -35572,12 +35597,17 @@ export class DesktopBackendRegistry {
     if (
       event.notification.method === "turn/completed"
       || event.notification.method === "turn/failed"
+      || event.notification.method === "turn/cancelled"
       || event.notification.method === "turn/interrupted"
     ) {
       const params = readRecord(event.notification.params);
       const threadId = readNonEmptyString(params?.threadId);
       const turnId = readNonEmptyString(params?.turnId);
       if (threadId && turnId) {
+        const key = taskMonitorThreadKey(event.backend, threadId);
+        if (this.pendingAcpMonitorJobSuggestions.get(key) === turnId) {
+          this.pendingAcpMonitorJobSuggestions.delete(key);
+        }
         this.monitorJobSuggestionDetector.clear(event.backend, threadId);
         this.monitorJobHeuristicDetector.clear(event.backend, threadId);
         this.liveToolOutputIncidents.delete(

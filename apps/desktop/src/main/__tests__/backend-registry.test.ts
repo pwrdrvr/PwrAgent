@@ -2,6 +2,7 @@ import { PendingEnvironmentLaunchStore } from "../app-server/pending-environment
 import type { Options as ClaudeOptions, Query as ClaudeQuery, SDKMessage as ClaudeMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { AcpLiveToolUpdateResolver, acpToolUpdateNotifications } from "../acp/acp-live-notifications";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
 import { threadLockRefusalMessage } from "@pwragent/shared";
@@ -29304,6 +29305,122 @@ command = "pnpm dev"
       }
     } finally {
       vi.restoreAllMocks();
+      await registry.close();
+    }
+  });
+
+  it.each([
+    { name: "repeated status checks", command: "gh run view 123 --json status", count: 3, expected: 1 },
+    { name: "single run watch", command: "gh run watch 123 --exit-status", count: 1, expected: 1 },
+    { name: "single PR watch", command: "gh pr checks 123 --watch", count: 1, expected: 1 },
+    { name: "brief check", command: "gh pr checks 123", count: 1, expected: 0 },
+    { name: "thread opt-out", command: "gh run watch 123", count: 1, expected: 0, disabled: true },
+    { name: "already claimed", command: "gh run watch 123", count: 1, expected: 0, claimed: true },
+    { name: "monitor child", command: "gh run watch 123", count: 1, expected: 0, monitor: true },
+    { name: "finished turn", command: "gh run watch 123", count: 1, expected: 0, terminal: "turn/completed" },
+    { name: "failed turn", command: "gh run watch 123", count: 1, expected: 0, terminal: "turn/failed" },
+    { name: "cancelled turn", command: "gh run watch 123", count: 1, expected: 0, terminal: "turn/cancelled" },
+    { name: "turn ends during response", command: "gh run watch 123", count: 1, expected: 0, duringResult: true },
+  ])("delivers ACP monitor reminders only on an existing same-turn MCP response: $name", async (scenario) => {
+    const backend = "acp:kimi" as const;
+    const threadId = "kimi-session-1";
+    const overlayStore = createOverlayStoreMock();
+    const readOverlay = overlayStore.getThreadOverlayState.bind(overlayStore);
+    vi.spyOn(overlayStore, "getThreadOverlayState").mockImplementation(async (params) => ({
+      ...await readOverlay(params), backend, threadId, extraLinkedDirectories: [],
+      monitorJobSuggestionsEnabled: !scenario.disabled,
+    }));
+    let claimed = scenario.claimed ?? false;
+    const claim = vi.fn(() => {
+      if (claimed) return false;
+      claimed = true;
+      return true;
+    });
+    Object.assign(overlayStore, { claimMonitorJobSuggestion: claim });
+    const { registry, startPrompt, steerSession } = createKimiAcpRegistry({
+      overlayStore,
+      startPrompt: vi.fn((params) => ({ sessionId: params.sessionId, turnId: params.turnId! })),
+    });
+    const client = new McpClient({ name: "acp-monitor-fixture", version: "1.0.0" });
+    try {
+      await registry.startThread({ backend, cwd: "/repo", executionMode: "default" });
+      const turn = await registry.startTurn({ backend, threadId, input: [{ type: "text", text: "Wait for CI" }] });
+      expect(registry.getActiveTurnForThread({ backend, threadId })?.turnId).toBe(turn.turnId);
+      const steer = vi.spyOn(registry, "steerTurn");
+      if (scenario.monitor) {
+        (registry as unknown as { completedTaskMonitorsByThread: Map<string, unknown> })
+          .completedTaskMonitorsByThread.set(`${backend}:${threadId}`, {});
+      }
+      const server = (registry as unknown as { claudeAgentToolMcpServer: AgentToolMcpServerLike }).claudeAgentToolMcpServer;
+      const registration = await server.registerClient({ backend, threadId });
+      await client.connect(new StreamableHTTPClientTransport(new URL(registration.server.url), {
+        requestInit: { headers: Object.fromEntries(registration.server.headers.map(({ name, value }) => [name, value])) },
+      }));
+      const resolver = new AcpLiveToolUpdateResolver();
+      const now = vi.spyOn(Date, "now");
+      for (let index = 0; index < scenario.count; index++) {
+        now.mockReturnValue(1_000_000 + index * 20_000);
+        // Providers commonly finish with just an id and status. Preserve the
+        // command from tool_call through the same ACP boundary as live sessions.
+        for (const update of [
+          { sessionUpdate: "tool_call", toolCallId: `poll-${index}`, kind: "execute", title: "Bash", rawInput: { command: scenario.command }, status: "in_progress" },
+          { sessionUpdate: "tool_call_update", toolCallId: `poll-${index}`, status: "completed" },
+        ]) {
+          const resolved = resolver.resolve({ backendId: backend, threadId, turnId: turn.turnId, update })!;
+          for (const notification of acpToolUpdateNotifications({ threadId, turnId: turn.turnId, update: resolved })) {
+            await registry.publishLocalEvent({ backend, notification });
+          }
+        }
+      }
+      now.mockRestore();
+      expect(claim).not.toHaveBeenCalled();
+      if (scenario.terminal) {
+        await registry.publishLocalEvent({ backend, notification: {
+          method: scenario.terminal, params: {
+            threadId, turnId: turn.turnId,
+            turn: { id: turn.turnId, status: "failed", error: { message: "fixture failure" } },
+          },
+        } } as AgentEvent);
+        // A later active turn must not inherit the old reminder.
+        await emitStartedTurn(registry, backend, threadId, "turn-2");
+      }
+      let response;
+      if (scenario.duringResult) {
+        const overlay = await overlayStore.getThreadOverlayState({ backend, threadId });
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => { release = resolve; });
+        let entered!: () => void;
+        const reading = new Promise<void>((resolve) => { entered = resolve; });
+        vi.mocked(overlayStore.getThreadOverlayState).mockImplementationOnce(async () => {
+          entered();
+          await gate;
+          return overlay;
+        });
+        const pendingResponse = client.callTool({ name: "read_tool_guide", arguments: {} });
+        await reading;
+        await emitCompletedTurn(registry, backend, threadId, turn.turnId);
+        release();
+        response = await pendingResponse;
+        expect(claim).not.toHaveBeenCalled();
+      } else {
+        response = await client.callTool({ name: "read_tool_guide", arguments: {} });
+      }
+      const reminders = (response.content as Array<{ text?: string }>).filter((item) => item.text?.includes("Monitor Job Suggestion"));
+      expect(reminders).toHaveLength(scenario.expected);
+      if (!scenario.duringResult) {
+        expect(response.isError).not.toBe(true);
+        expect(response.structuredContent).toHaveProperty("guide");
+      }
+      const repeated = await client.callTool({ name: "read_tool_guide", arguments: {} });
+      expect(JSON.stringify(repeated)).not.toContain("Monitor Job Suggestion");
+      expect(steer).not.toHaveBeenCalled();
+      expect(steerSession).not.toHaveBeenCalled();
+      expect(startPrompt).toHaveBeenCalledTimes(1);
+      if (scenario.expected) expect(claim).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.restoreAllMocks();
+      await client.close();
+      await emitCompletedTurn(registry, backend, threadId, registry.getActiveTurnForThread({ backend, threadId })?.turnId ?? "turn-1");
       await registry.close();
     }
   });

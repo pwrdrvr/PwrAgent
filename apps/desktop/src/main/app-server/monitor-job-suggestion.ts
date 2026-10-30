@@ -96,8 +96,8 @@ export const CLAUDE_MONITOR_JOB_SUGGESTION =
  */
 export function isCiWaitCommand(command: string): boolean {
   const text = command.replace(/\s+/g, " ");
-  if (/\bgh\s+pr\s+checks\b[^|;&]*--watch\b/.test(text)) return true;
-  if (/\bgh\s+run\s+watch\b/.test(text)) return true;
+  if (/(?:^|[;&|])\s*gh\s+pr\s+checks\b[^|;&]*\s--watch(?:\s|$|=true(?:\s|$))/.test(text)) return true;
+  if (/(?:^|[;&|])\s*gh\s+run\s+watch(?:\s|$)/.test(text)) return true;
   return /\b(?:while|until)\b/.test(text)
     && /\bsleep\s+\d/.test(text)
     && (/\bgh\s+(?:pr\s+(?:checks|view)|run\s+(?:view|list))\b/.test(text)
@@ -119,8 +119,9 @@ export class MonitorJobSuggestionDetector {
 
   observe(record: MonitorJobObservation): boolean {
     if (!record.turnId) return false;
+    const ciWait = isCiWaitCommand(record.normalizedCommand ?? "");
     const signal = pollingSignal(record);
-    if (!signal) return false;
+    if (!signal && !ciWait) return false;
     const threadKey = `${record.backend}:${record.threadId}`;
     const key = `${record.turnId}:${signal}`;
     let state = this.turns.get(threadKey);
@@ -129,6 +130,10 @@ export class MonitorJobSuggestionDetector {
       this.turns.set(threadKey, state);
     }
     if (state.suggested || state.seen.has(record.invocationId)) return false;
+    if (ciWait) {
+      state.suggested = true;
+      return true;
+    }
     state.seen.add(record.invocationId);
     // Bound retained evidence even if a provider never emits turn completion.
     if (state.seen.size > 100) state.seen.delete(state.seen.values().next().value!);
