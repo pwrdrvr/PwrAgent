@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
 import { once } from "node:events";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, onTestFailed } from "vitest";
 
 const require = createRequire(import.meta.url);
 const desktop = fileURLToPath(new URL("..", import.meta.url));
@@ -16,6 +16,8 @@ const roots = [];
 const activeProbes = new Set();
 
 afterEach(async () => {
+  // Preserve the state at the outer deadline, before abort changes the evidence.
+  for (const probe of activeProbes) probe.capture("before-cleanup");
   await Promise.all([...activeProbes].map(stopProbe));
 });
 
@@ -52,24 +54,95 @@ function waitForWorkerStart(root, output) {
   return { close, promise };
 }
 
-function startProbe(args, options) {
+function createProbeRoot() {
+  mkdirSync(path.join(desktop, ".local"), { recursive: true });
+  const root = mkdtempSync(path.join(desktop, ".local/shutdown-probe-"));
+  roots.push(root);
+  return root;
+}
+
+function milestone(root, kind) {
+  return `require('node:fs').appendFileSync(${JSON.stringify(path.join(root, "milestones.jsonl"))}, JSON.stringify({ kind: ${JSON.stringify(kind)}, pid: process.pid, time: new Date().toISOString() }) + '\\n');`;
+}
+
+function startProbe(args, options, root = createProbeRoot()) {
   const controller = new AbortController();
+  const startedAt = performance.now();
+  const events = [];
+  const tails = { stdout: "", stderr: "" };
+  const bytes = { stdout: 0, stderr: 0 };
+  const note = (kind, details = {}) => {
+    const event = { kind, time: new Date().toISOString(), elapsedMs: performance.now() - startedAt, ...details };
+    events.push(event);
+    if (existsSync(root)) appendFileSync(path.join(root, "parent.jsonl"), `${JSON.stringify(event)}\n`);
+  };
+  // Unlike spawn, this proves Node reached user code. Playwright's forked
+  // workers inherit the preload, so each entry carries its own PID.
+  const bootstrap = path.join(root, "bootstrap.cjs");
+  writeFileSync(bootstrap, milestone(root, "node-start"));
   let child;
+  note("exec-requested");
   const result = new Promise((resolve) => {
-    child = execFile(process.execPath, args, { ...options, signal: controller.signal }, (error, stdout, stderr) => {
+    child = execFile(process.execPath, ["--require", bootstrap, ...args], { ...options, signal: controller.signal }, (error, stdout, stderr) => {
+      note("exec-callback", { code: error?.code ?? 0, signal: error?.signal });
       resolve(error ? { code: error.code, stderr, stdout } : { code: 0, stderr, stdout });
     });
   });
-  const probe = { child, controller, result };
+  child.once("spawn", () => note("spawn", { pid: child.pid }));
+  child.on("error", (error) => note("error", { code: error.code }));
+  child.once("exit", (code, signal) => note("exit", { code, signal }));
+  child.once("close", (code, signal) => note("close", { code, signal }));
+  for (const name of ["stdout", "stderr"]) {
+    child[name].on("data", (chunk) => {
+      bytes[name] += Buffer.byteLength(chunk);
+      tails[name] = (tails[name] + chunk.toString()).slice(-8192);
+    });
+    child[name].once("end", () => note(`${name}-end`));
+    child[name].once("close", () => note(`${name}-close`));
+  }
+  const snapshot = () => ({
+    pid: child.pid, elapsedMs: performance.now() - startedAt, node: process.version, platform: process.platform, arch: process.arch,
+    exitCode: child.exitCode, signalCode: child.signalCode, events: [...events],
+    stdio: ["stdout", "stderr"].map((name) => ({
+      name, bytes: bytes[name], destroyed: child[name].destroyed,
+      readableEnded: child[name].readableEnded,
+      tail: tails[name].replaceAll("must-not-appear-in-artifacts", "[redacted]"),
+    })),
+  });
+  const capture = (boundary) => {
+    // Late close events may follow afterAll's temporary-directory removal.
+    if (existsSync(root)) writeFileSync(path.join(root, `${boundary}.json`), JSON.stringify(snapshot(), null, 2));
+  };
+  const probe = { child, controller, result, root, note, snapshot, capture };
+  onTestFailed(() => {
+    capture("after-cleanup");
+    const destination = path.join(desktop, "test-results/unit-shutdown-probes", path.basename(root));
+    // Keep the CI log bounded; full timelines and pipe tails are in the artifact.
+    // Log before copying so a failed copy cannot also lose this summary.
+    const beforeCleanup = path.join(root, "before-cleanup.json");
+    const state = existsSync(beforeCleanup) ? JSON.parse(readFileSync(beforeCleanup, "utf8")) : snapshot();
+    console.error(`[shutdown-probe] evidence=${destination}; boundary=${existsSync(beforeCleanup) ? "before-cleanup" : "completed"}; pid=${state.pid}; exit=${state.exitCode}; signal=${state.signalCode}; events=${state.events.map(({ kind }) => kind).join(",")}; pipes=${JSON.stringify(state.stdio.map(({ tail: _tail, ...pipe }) => pipe))}`);
+    cpSync(root, destination, { recursive: true });
+  });
   activeProbes.add(probe);
-  void result.finally(() => activeProbes.delete(probe));
+  void result.then(() => {
+    activeProbes.delete(probe);
+    capture("completed");
+  });
   return probe;
 }
 
 async function stopProbe(probe) {
+  // After an outer timeout, afterEach and probe()'s finally both stop the
+  // probe. Keep the first stop's evidence and request one abort.
+  const stopping = probe.controller.signal.aborted;
+  if (!stopping) probe.capture("before-stop");
   const exited = () => probe.child.exitCode !== null || probe.child.signalCode !== null;
   if (exited()) return;
-  probe.controller.abort();
+  if (!stopping) {
+    probe.note("abort-requested");
+    probe.controller.abort();
+  }
   await Promise.race([
     once(probe.child, "close").catch(() => undefined),
     new Promise((resolve) => setTimeout(resolve, 500)),
@@ -78,9 +151,7 @@ async function stopProbe(probe) {
 }
 
 async function probe(mode, { captureAfterMs = 100 } = {}) {
-  mkdirSync(path.join(desktop, ".local"), { recursive: true });
-  const root = mkdtempSync(path.join(desktop, ".local/shutdown-probe-"));
-  roots.push(root);
+  const root = createProbeRoot();
   const output = path.join(root, "results");
   const descendantPidFile = path.join(root, "descendant.pid");
   const childSource = mode === "pipe"
@@ -90,14 +161,19 @@ async function probe(mode, { captureAfterMs = 100 } = {}) {
     import playwright from ${JSON.stringify(pathToFileURL(require.resolve("@playwright/test")).href)};
     const { test } = playwright;
     import { installShutdownDiagnostics } from ${JSON.stringify(diagnostics)};
+    import { createRequire } from 'node:module';
+    const require = createRequire(import.meta.url);
+    ${milestone(root, "config-evaluated")}
     installShutdownDiagnostics({ outputDir: ${JSON.stringify(output)}, currentTest: () => test.info(), captureAfterMs: ${captureAfterMs} });
     export default { testDir: '.', testMatch: '*.spec.cjs', outputDir: ${JSON.stringify(output)}, timeout: 5000, workers: 1, retries: 0, reporter: 'list' };
   `);
   writeFileSync(path.join(root, "probe.spec.cjs"), `
     const { test: base, expect } = require(${JSON.stringify(require.resolve("@playwright/test"))});
     const { utils } = require(${JSON.stringify(core)});
+    ${milestone(root, "spec-evaluated")}
     const test = ${mode === "fixture" ? `base.extend({ stuck: [async ({}, use) => { await use(); await new Promise(() => {}); }, { scope: 'worker', auto: true }] })` : "base"};
     test('identifiable shutdown probe', async () => {
+      ${milestone(root, "test-body")}
       ${mode === "fixture" ? "expect(true).toBe(true);" : `
       const launched = await utils.launchProcess({
         command: process.execPath, args: ['-e', ${JSON.stringify(childSource)}],
@@ -106,16 +182,18 @@ async function probe(mode, { captureAfterMs = 100 } = {}) {
         attemptToGracefullyClose: () => ${mode === "pipe" ? "Promise.resolve()" : "new Promise(() => {})"},
       });
       expect(launched.launchedProcess.pid).toBeGreaterThan(0);
+      ${milestone(root, "test-process-launched")}
       ${mode === "pipe" ? "await new Promise(resolve => launched.launchedProcess.once('exit', resolve));" : ""}
       ${mode === "healthy" ? "await launched.kill();" : ""}
       `}
+      ${milestone(root, "test-body-end")}
     });
   `);
   const started = startProbe([cli, "test", "-c", path.join(root, "playwright.config.mjs")], {
     cwd: desktop,
     env: { ...process.env, PWRAGENT_E2E_WORKER_DIAGNOSTICS: "1", SHUTDOWN_PROBE_SECRET: "must-not-appear-in-artifacts" },
     maxBuffer: 1024 * 1024,
-  });
+  }, root);
   const readiness = waitForWorkerStart(root, output);
   let result;
   try {
@@ -129,6 +207,7 @@ async function probe(mode, { captureAfterMs = 100 } = {}) {
         throw new Error(`Playwright exited before the worker shutdown recorder became ready.\n${completed.stdout}${completed.stderr}`);
       }),
     ]);
+    started.note("worker-ready-observed");
     result = await started.result;
   } finally {
     readiness.close();
@@ -145,14 +224,12 @@ async function probe(mode, { captureAfterMs = 100 } = {}) {
   const artifacts = files.map((file) => ({ file, text: readFileSync(path.join(diagnosticsRoot, file), "utf8") }));
   expect(artifacts.map(({ text }) => text).join("\n")).not.toContain("must-not-appear-in-artifacts");
   expect(artifacts.find(({ file }) => file.endsWith("timeline.jsonl"))?.text).toContain('"kind":"worker-start"');
-  return { ...result, artifacts, snapshots: artifacts.filter(({ file }) => file.includes("snapshot-")).map(({ text }) => JSON.parse(text)) };
+  return { ...result, parent: started.snapshot(), artifacts, snapshots: artifacts.filter(({ file }) => file.includes("snapshot-")).map(({ text }) => JSON.parse(text)) };
 }
 
 describe("real Playwright worker shutdown diagnostics", () => {
   it("does not report worker readiness from a controller with an inherited worker index", async () => {
-    mkdirSync(path.join(desktop, ".local"), { recursive: true });
-    const root = mkdtempSync(path.join(desktop, ".local/shutdown-probe-"));
-    roots.push(root);
+    const root = createProbeRoot();
     const output = path.join(root, "results");
     writeFileSync(path.join(root, "playwright.config.mjs"), `
       import { installShutdownDiagnostics } from ${JSON.stringify(diagnostics)};
@@ -167,7 +244,7 @@ describe("real Playwright worker shutdown diagnostics", () => {
       cwd: desktop,
       env: { ...process.env, TEST_WORKER_INDEX: "7", PWRAGENT_E2E_WORKER_DIAGNOSTICS: "1" },
       maxBuffer: 1024 * 1024,
-    });
+    }, root);
     const result = await started.result;
     expect(result.code, result.stdout + result.stderr).toBe(0);
     expect(existsSync(path.join(output, "worker-shutdown"))).toBe(false);
@@ -178,9 +255,13 @@ describe("real Playwright worker shutdown diagnostics", () => {
       cwd: desktop,
       maxBuffer: 1024 * 1024,
     });
+    await once(started.child, "spawn");
+    expect(started.snapshot()).toMatchObject({ exitCode: null, signalCode: null });
+    expect(started.snapshot().events.map(({ kind }) => kind)).toEqual(["exec-requested", "spawn"]);
     await stopProbe(started);
     await started.result;
     expect(started.child.exitCode !== null || started.child.signalCode !== null).toBe(true);
+    expect(started.snapshot().events.map(({ kind }) => kind)).toContain("close");
   });
 
   it("names the process, originating test and unresolved close before Playwright times out", async () => {
@@ -277,6 +358,10 @@ describe("real Playwright worker shutdown diagnostics", () => {
     const result = await probe("healthy");
     expect(result.code, result.stdout + result.stderr).toBe(0);
     expect(result.snapshots).toHaveLength(0);
+    const events = result.parent.events.map(({ kind }) => kind);
+    expect(events).toEqual(expect.arrayContaining(["spawn", "worker-ready-observed", "exit", "close", "exec-callback"]));
+    expect(events.indexOf("exit")).toBeLessThan(events.indexOf("close"));
+    expect(result.parent.stdio.every(({ destroyed, readableEnded }) => destroyed && readableEnded)).toBe(true);
     const timeline = result.artifacts.find(({ file }) => file.endsWith("timeline.jsonl")).text;
     expect(timeline).toContain('"kind":"worker-end","failed":false');
   }, 20_000);

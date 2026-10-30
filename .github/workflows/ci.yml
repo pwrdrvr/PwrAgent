@@ -741,6 +741,15 @@ jobs:
           PWRAGENT_REQUIRE_ACTOOL: "1"
         run: pnpm test --shard=${{ matrix.lane }}/2
 
+      - name: Upload failed unit shutdown probes
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-unit-shutdown-probes-lane-${{ matrix.lane }}
+          path: apps/desktop/test-results/unit-shutdown-probes/
+          if-no-files-found: ignore
+          retention-days: 7
+
   desktop-e2e-macos:
     name: macOS Desktop E2E (lane ${{ matrix.lane }} of 4)
     # The restricted PwrDrvr organization runner group exposes this label only
