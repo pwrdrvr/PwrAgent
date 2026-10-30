@@ -33062,7 +33062,8 @@ div.composer-error-row__toggle {
   font-size: 13px;
 }
 
-.transcript-mcp__params div {
+/* Rows only: a value's own box or rendered Markdown keeps its divs. */
+.transcript-mcp__params > div {
   display: contents;
 }
 
@@ -33085,6 +33086,143 @@ div.composer-error-row__toggle {
   overflow-wrap: anywhere;
   color: var(--text-primary);
   line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+/* A box or rendered Markdown sets its own wrapping. The box starts at the
+   row's top, so its key reads beside the bar rather than the baseline. */
+.transcript-mcp__params dd.transcript-mcp__param-text,
+.transcript-mcp__params dd.transcript-mcp__param-markdown {
+  white-space: normal;
+}
+
+.transcript-mcp__params dd.transcript-mcp__param-text {
+  align-self: start;
+}
+
+.transcript-mcp__params dt:has(+ .transcript-mcp__param-text) {
+  align-self: start;
+  padding-top: 7px;
+}
+
+.transcript-mcp__param-markdown .thread-markdown,
+.transcript-mcp__text-body .thread-markdown {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.transcript-mcp__param-markdown .thread-markdown > :first-child,
+.transcript-mcp__text-body .thread-markdown > :first-child {
+  margin-top: 0;
+}
+
+.transcript-mcp__param-markdown .thread-markdown > :last-child,
+.transcript-mcp__text-body .thread-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+/* The whole of a long value: a bar naming its format and size, then a box
+   that scrolls inside the card so Allow stays in reach. Expand raises the
+   cap; it never removes it, because a body can run to 65,000 characters. */
+.transcript-mcp__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-overlay-subtle);
+}
+
+.transcript-mcp__text-bar {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px 3px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.transcript-mcp__text-meta {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.transcript-mcp__text-views {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+}
+
+.transcript-mcp__text-views button,
+.transcript-mcp__text-toggle {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.transcript-mcp__text-views button {
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 4px;
+}
+
+.transcript-mcp__text-views button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.transcript-mcp__text-toggle {
+  height: 24px;
+  gap: 4px;
+  padding: 0 7px;
+  border-radius: 4px;
+}
+
+.transcript-mcp__text-views button:hover,
+.transcript-mcp__text-toggle:hover {
+  color: var(--text-primary);
+}
+
+.transcript-mcp__text-views button:focus-visible,
+.transcript-mcp__text-toggle:focus-visible,
+.transcript-mcp__text-body:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.transcript-mcp__text-body {
+  max-height: 200px;
+  overflow: auto;
+  padding: 8px 10px 10px;
+  /* Inside the box's 1px border, so the focus ring follows its corners. */
+  border-radius: 0 0 7px 7px;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.transcript-mcp__text.is-expanded .transcript-mcp__text-body {
+  max-height: min(520px, 60vh);
+}
+
+.transcript-mcp__text-body:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.transcript-mcp__text-body--source {
+  font-family: var(--font-mono);
+  font-size: 12px;
   white-space: pre-wrap;
 }
 
