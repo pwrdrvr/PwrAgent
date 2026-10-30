@@ -14107,7 +14107,7 @@ describe("DesktopBackendRegistry", () => {
       const { result, writes } = await measureSqliteWrites(() => registry.startThread({ backend: "codex", cwd: directoryPath }));
       expect(result).toMatchObject({ pinnedRank: "0" });
       expectSqliteWriteBudget({ scenario: "all-pinned-project-thread-creation", writes,
-        note: "One new thread including its automatic pin, measured after seeding; no timer or idle writes." });
+        note: "One new thread including its automatic pin: 4 commits, ~0.054 MB/thread and ~5.4 MB/day at 100 starts/day; 0 MB/day idle." });
     } finally {
       await registry.close();
     }
