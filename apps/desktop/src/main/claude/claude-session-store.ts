@@ -105,6 +105,8 @@ export type ClaudeRateLimitsRecord = {
 export class ClaudeSessionStore {
   /** Ephemeral sessions and their entries, by thread id. */
   private readonly memory = new Map<string, { session: string; entries: AppServerThreadEntry[] }>();
+  /** Ended ephemeral threads. A late write for one must not create a file. */
+  private readonly forgotten = new Set<string>();
 
   constructor(private readonly root: string) {}
 
@@ -115,7 +117,7 @@ export class ClaudeSessionStore {
 
   /** Drops an ephemeral session. A later save or append for it does nothing. */
   forgetEphemeral(id: string): void {
-    this.memory.delete(id);
+    if (this.memory.delete(id)) this.forgotten.add(id);
   }
 
   private file(id: string, suffix: string): string {
@@ -228,7 +230,7 @@ export class ClaudeSessionStore {
   }
 
   async append(id: string, entries: AppServerThreadEntry[]): Promise<void> {
-    if (entries.length === 0) return;
+    if (entries.length === 0 || this.forgotten.has(id)) return;
     const held = this.memory.get(id);
     if (held) {
       held.entries.push(...entries.map((entry) => JSON.parse(JSON.stringify(entry)) as AppServerThreadEntry));
