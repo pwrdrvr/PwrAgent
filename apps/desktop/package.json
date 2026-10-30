@@ -119,6 +119,7 @@
     "tar": "^7.5.22",
     "unist-util-visit": "5.1.0",
     "ws": "8.22.0",
+    "zod": "4.4.3",
     "@pwragent/agent-tools": "workspace:*"
   },
   "devDependencies": {

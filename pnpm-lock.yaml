@@ -436,6 +436,9 @@ importers:
       ws:
         specifier: 8.22.0
         version: 8.22.0
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
     devDependencies:
       '@agentclientprotocol/sdk':
         specifier: 1.9.0
