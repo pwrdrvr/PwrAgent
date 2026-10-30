@@ -132,6 +132,9 @@ minimumReleaseAgeExclude:
 # Ignore user-level pnpmfiles so the project git policy and lockfile checksum
 # are identical for contributors and CI.
 globalPnpmfile: null
+# CI caches completed node_modules trees; they need portable files and
+# relative workspace links. `auto` is pnpm's default, pinned so it cannot drift.
+packageImportMethod: auto
 ignoreScripts: false
 allowBuilds:
   # better-sqlite3 13 and node-pty ship Node-API prebuilds that load in Node
