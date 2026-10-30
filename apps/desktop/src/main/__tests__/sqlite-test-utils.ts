@@ -83,6 +83,26 @@ export function createTempStateDb(prefix: string): {
   };
 }
 
+/**
+ * Opens through the real `StateDb.open`, building a new file's schema from
+ * empty.
+ *
+ * `desktop-main` serves every other new file from a migrated copy (see
+ * `test-setup/state-db-template.ts`). Use this only in a test that asserts
+ * how creation itself behaves, such as its commit count.
+ */
+export function openFreshStateDb(
+  dbPath: string,
+  options?: { profileName?: string },
+): StateDb {
+  const original = (StateDb as typeof StateDb & {
+    [ORIGINAL_STATE_DB_OPEN]?: typeof StateDb.open;
+  })[ORIGINAL_STATE_DB_OPEN];
+  return original ? original(dbPath, options) : StateDb.open(dbPath, options);
+}
+
+const ORIGINAL_STATE_DB_OPEN = Symbol.for("pwragent.test.stateDbOriginalOpen");
+
 export function removeTempStateDbDir(tempDir: string): void {
   rmSync(tempDir, {
     recursive: true,
