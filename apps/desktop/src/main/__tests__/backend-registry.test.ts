@@ -2107,6 +2107,10 @@ class MockBackendClient {
     };
   }
 
+  async readConfiguredMcpServerNames(): Promise<string[]> {
+    return [];
+  }
+
   async readCodexHome(): Promise<string> {
     return this.options.codexHome ?? "/home/example/.codex";
   }

@@ -21,6 +21,8 @@ export type McpGatewayToolServiceOptions = {
   connections: Pick<McpConnectionGatewayService, "requestGatewayToolOperation">;
   /** Must check active turn, actor permissions and the latest saved selection. */
   selectedConnections: (context: AgentToolCallContext) => Promise<string[]>;
+  /** A host policy can narrow discovery and invocation independently of approval. */
+  toolAllowed?: (tool: McpGatewayTool, context: AgentToolCallContext) => boolean;
   /** `annotations` are the listed tool's own hints, under its exact schema revision. */
   approve: (invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, annotations: Tool["annotations"], catalogRevision: string) => Promise<McpGatewayApproval>;
 };
@@ -68,6 +70,7 @@ export class McpGatewayToolService {
             if (candidateBytes + bytes > 8 * 1024 * 1024) throw new Error("Search a specific connectionId to stay within the catalog memory budget.");
             candidateBytes += bytes;
             for (const { serverInstructions, ...tool } of tools) {
+              if (this.options.toolAllowed?.(tool, context) === false) continue;
               if (serverInstructions) {
                 instructions.set(connectionId, { serverName: tool.serverName, instructions: serverInstructions });
               }
@@ -118,6 +121,7 @@ export class McpGatewayToolService {
       }) as McpGatewayTool[];
       const tool = tools.find((entry) => entry.toolName === args.toolName);
       if (!tool || tool.schemaRevision !== args.schemaRevision) throw new Error("The tool schema or authorization changed. Search again.");
+      if (this.options.toolAllowed?.(tool, context) === false) throw new Error("This MCP tool is not permitted for the calling thread.");
       validateGatewayArguments(tool.definition, args.arguments);
       await this.requireSelected(args.connectionId, context, signal);
       const source: McpGatewaySource = {
@@ -128,6 +132,7 @@ export class McpGatewayToolService {
       const approval = await this.options.approve(invocation, context, signal, tool.definition.annotations, gatewayCatalogRevision(tools));
       if (!approval) throw new Error("The MCP tool invocation was not approved.");
       await this.requireSelected(args.connectionId, context, signal);
+      if (this.options.toolAllowed?.(tool, context) === false) throw new Error("This MCP tool is no longer permitted for the calling thread.");
       // The owner lists and validates again, preventing schema/auth changes while
       // approval was pending from executing a different operation under that grant.
       const result = await this.options.connections.requestGatewayToolOperation({

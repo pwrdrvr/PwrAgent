@@ -69,7 +69,7 @@ export const MONITOR_JOB_SUGGESTION =
   "PwrAgent System - Monitor Job Suggestion: You appear to be repeatedly checking a long-running task. "
   + "Consider using create_monitor_delegation to avoid repeatedly waking this parent model and paying for its accumulated context. "
   + "Give the monitor the target, check interval, completion conditions, and problems to watch for. "
-  + "For a cloud task, include the selected MCP connectionId, sandbox/process IDs, durable paths, and exact status tools. The worker uses search_mcp_tools/call_mcp_tool for those selected connections; verify that the needed tools are discoverable before delegating. "
+  + "For a cloud task, include the selected MCP connectionId, sandbox/process IDs, durable paths, and exact read-only status tools (Sandboxer command_status/read_file, never exec). The worker uses search_mcp_tools/call_mcp_tool for those selected connections; verify that the needed tools are discoverable before delegating. "
   + "It will stop and report back when the task finishes or a specified problem occurs. "
   + "For an attached PR, first check PwrAgent's PR automation guidance and use watch_thread_pull_request when applicable. "
   + "For another thread's turn completion or PR prerequisite, use manage_thread_dependencies instead of polling or creating a monitor; it can wait before the PR exists. "
@@ -85,7 +85,7 @@ export const CLAUDE_MONITOR_JOB_SUGGESTION =
   "PwrAgent System - Monitor Job Suggestion: This command waits on CI or polls a long-running task. "
   + "Each Monitor event or background-task notification wakes this model with its whole context. "
   + "For this thread's PR, call PwrAgent's watch_thread_pull_request instead; it wakes this thread once, on success or failure. "
-  + "For any other long wait, call create_monitor_delegation; a lightweight monitor polls and reports back. For cloud work, first verify the needed tools through search_mcp_tools, then include the selected connectionId and durable cloud identifiers in the task. "
+  + "For any other long wait, call create_monitor_delegation; a lightweight monitor polls and reports back. For cloud work, first verify read-only status tools through search_mcp_tools (Sandboxer command_status/read_file, never exec), then include the selected connectionId and durable cloud identifiers in the task. "
   + `Load them with ToolSearch: select:mcp__${PWRAGENT_TOOL_NAMESPACE}__watch_thread_pull_request,`
   + `mcp__${PWRAGENT_TOOL_NAMESPACE}__create_monitor_delegation. `
   + "Then stop the watcher you started (TaskStop) and end this turn if no unrelated work remains. "

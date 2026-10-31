@@ -85,6 +85,15 @@ async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUs
 }
 
 describe("Claude SDK backend", () => {
+  it("isolates a monitor's MCP configuration from inherited native servers", async () => {
+    const f = await fixture();
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "full-access", ephemeral: { title: "Task monitor" } });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Inspect status" }], strictMcpConfig: true, mcpServers: {} });
+    await f.waitForTurn();
+    expect(f.queries[0]).toMatchObject({ strictMcpConfig: true, mcpServers: {} });
+    await f.backend.close();
+  });
+
   it("moves a thread to another folder and resumes the same session there", async () => {
     const f = await fixture();
     const previous = path.join(f.root, "checkout");

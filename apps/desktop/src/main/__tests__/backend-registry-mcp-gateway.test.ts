@@ -29,7 +29,8 @@ describe("backend MCP gateway dispatch", () => {
   let registry: DesktopBackendRegistry;
   let operation: ReturnType<typeof vi.fn<McpConnectionGatewayService["requestGatewayToolOperation"]>>;
   let startTurn: ReturnType<typeof vi.fn<() => Promise<{ threadId: string; turnId: string }>>>;
-  let startThread: ReturnType<typeof vi.fn<(params: { dynamicTools?: DynamicToolSpec[] }) => Promise<{ threadId: string }>>>;
+  let readConfiguredMcpServerNames: ReturnType<typeof vi.fn<() => Promise<string[]>>>;
+  let startThread: ReturnType<typeof vi.fn<(params: { config?: Record<string, unknown>; dynamicTools?: DynamicToolSpec[] }) => Promise<{ threadId: string }>>>;
   let registerBridge: ReturnType<typeof vi.fn<McpConnectionGatewayService["registerBridge"]>>;
   const brokers: McpConnectionGatewayService[] = [];
   let internals: {
@@ -67,6 +68,7 @@ describe("backend MCP gateway dispatch", () => {
           name: "lookup", inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
         } }]
       : { content: [{ type: "text", text: "fixture result" }] });
+    readConfiguredMcpServerNames = vi.fn(async () => []);
     startThread = vi.fn(async () => ({ threadId: "headless-1" }));
     startTurn = vi.fn(async () => ({ threadId: "headless-1", turnId: "turn-1" }));
     registerBridge = vi.fn<McpConnectionGatewayService["registerBridge"]>(async () => ({
@@ -81,7 +83,7 @@ describe("backend MCP gateway dispatch", () => {
       codexClient: {
         close: async () => {}, getInitializeResult: async () => ({ methods: [] }), listThreads: async () => [],
         onNotification: () => () => {}, onPendingRequest: () => () => {},
-        readConfiguredMcpServerNames: async () => [], startThread,
+        readConfiguredMcpServerNames, startThread,
         listModels: async () => [{ id: "gpt-6-luna", label: "Luna", supportsReasoning: true }],
         startTurn,
       } as never,
@@ -135,7 +137,18 @@ describe("backend MCP gateway dispatch", () => {
     return events;
   }
 
-  async function createMonitor() {
+  async function createMonitor(readOnlyFixtures = true) {
+    if (readOnlyFixtures) {
+      const implementation = operation.getMockImplementation()!;
+      operation.mockImplementation(async (params) => {
+        const result = await implementation(params);
+        return params.operation === "gateway/tools/list"
+          ? (result as McpGatewayTool[]).map((tool) => ({ ...tool,
+              definition: { ...tool.definition, annotations: { readOnlyHint: true, ...tool.definition.annotations } },
+            }))
+          : result;
+      });
+    }
     const response = await internals.handleServerRequest("codex", request("create_monitor_delegation", {
       task: "Use the selected MCP connection to inspect durable cloud status and report its exit code.",
       cwd: directory,
@@ -152,6 +165,19 @@ describe("backend MCP gateway dispatch", () => {
     await createMonitor();
     const tools = startThread.mock.calls[0][0].dynamicTools?.flatMap((spec) => spec.type === "namespace" ? spec.tools.map((tool) => tool.name) : [spec.name]);
     expect(tools).toEqual(["inject_progress", "complete_monitoring", "search_mcp_tools", "call_mcp_tool"]);
+  });
+
+  it("disables inherited native MCP servers so they cannot bypass the monitor gateway", async () => {
+    readConfiguredMcpServerNames.mockResolvedValue(["unrestricted-native"]);
+    await createMonitor();
+    expect(startThread.mock.calls[0][0].config).toMatchObject({ mcp_servers: { "unrestricted-native": { enabled: false } } });
+  });
+
+  it("refuses a monitor when inherited native MCP servers cannot be inventoried", async () => {
+    readConfiguredMcpServerNames.mockRejectedValue(new Error("inventory unavailable"));
+    const response = await internals.handleServerRequest("codex", request("create_monitor_delegation", { task: "Inspect cloud status." }));
+    expect(response.success).toBe(false);
+    expect(startThread).not.toHaveBeenCalled();
   });
 
   it("lets the delegated monitor discover and invoke only its parent's selected connections", async () => {
@@ -177,21 +203,25 @@ describe("backend MCP gateway dispatch", () => {
     await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["builtin:sandboxer"] });
     internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
     operation.mockImplementation(async (params) => params.operation === "gateway/tools/list"
-      ? [{ connectionId: "builtin:sandboxer", serverName: "Sandboxer", toolName: "exec", schemaRevision: "sandboxer-r1", definition: {
-          name: "exec", inputSchema: { type: "object", properties: { sandboxId: { type: "string" }, command: { type: "string" } }, required: ["sandboxId", "command"] },
+      ? [{ connectionId: "builtin:sandboxer", serverName: "Sandboxer", toolName: "read_file", schemaRevision: "sandboxer-r1", definition: {
+          name: "read_file", inputSchema: { type: "object", properties: { sandboxId: { type: "string" }, path: { type: "string" } }, required: ["sandboxId", "path"] },
         } }]
       : { content: [{ type: "text", text: "unit exit=0\nlint exit=0" }] });
     const call = await createMonitor();
-    const discovered = await call("search_mcp_tools", { query: "exec", connectionId: "builtin:sandboxer" });
+    const discovered = await call("search_mcp_tools", { query: "read_file", connectionId: "builtin:sandboxer" });
     expect(discovered.success).toBe(true);
     const tool = JSON.parse((discovered.contentItems[0] as { text: string }).text).tools[0];
     const response = await call("call_mcp_tool", { connectionId: tool.connectionId, toolName: tool.toolName,
-      schemaRevision: tool.schemaRevision, arguments: { sandboxId: "sb_fixture", command: "cat /home/user/pwragent/wt/fixture/.local/sandboxer/status" } });
+      schemaRevision: tool.schemaRevision, arguments: { sandboxId: "sb_fixture", path: "/home/user/pwragent/wt/fixture/.local/sandboxer/status" } });
     expect(response.success).toBe(true);
     expect(JSON.stringify(response)).toContain("unit exit=0");
   });
 
-  it("keeps connection approval on the visible parent without granting the monitor all tools", async () => {
+  it.each(["accept", "decline"] as const)("routes read-only monitor approval to the parent and obeys %s", async (action) => {
+    await registry.close();
+    createRegistry({ registerBridge, requestGatewayToolOperation: operation,
+      listConnections: async () => [{ id: "one", toolApproval: "prompt" }],
+    } as unknown as McpConnectionGatewayService);
     const call = await createMonitor();
     const events: AgentEvent[] = [];
     registry.onEvent(async (event) => {
@@ -199,15 +229,19 @@ describe("backend MCP gateway dispatch", () => {
       events.push(event);
       expect(event.notification.params.threadId).toBe("thread-1");
       await registry.submitServerRequest({ backend: "codex", threadId: "thread-1", turnId: "turn-1",
-        requestId: String(event.notification.params.requestId), response: { action: "decline", content: null, _meta: null } });
+        requestId: String(event.notification.params.requestId), response: { action, content: null, _meta: null } });
     });
     expect((await call("search_mcp_tools", { query: "lookup" })).success).toBe(true);
-    expect((await call("call_mcp_tool", args)).success).toBe(false);
+    expect((await call("call_mcp_tool", args)).success).toBe(action === "accept");
     expect(events).toHaveLength(1);
-    expect(operation.mock.calls.some(([entry]) => entry.operation === "gateway/tools/call")).toBe(false);
+    expect(operation.mock.calls.some(([entry]) => entry.operation === "gateway/tools/call")).toBe(action === "accept");
   });
 
   it("cancels the worker's pending approval when the parent removes its connection", async () => {
+    await registry.close();
+    createRegistry({ registerBridge, requestGatewayToolOperation: operation,
+      listConnections: async () => [{ id: "one", toolApproval: "prompt" }],
+    } as unknown as McpConnectionGatewayService);
     const call = await createMonitor();
     const event = approval();
     const pending = call("call_mcp_tool", args);
@@ -261,6 +295,49 @@ describe("backend MCP gateway dispatch", () => {
     expect(response.success).toBe(false);
     expect(JSON.stringify(response)).toContain("MCP gateway is unavailable");
     expect(startThread).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, false, true])("restricts Full Access monitors to explicitly read-only tools (readOnlyHint=%s)", async (readOnlyHint) => {
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+    operation.mockImplementation(async (params) => params.operation === "gateway/tools/list"
+      ? [{ connectionId: "one", serverName: "Fixture", toolName: "lookup", schemaRevision: "r1", definition: {
+          name: "lookup", annotations: { readOnlyHint }, inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+        } }]
+      : { content: [{ type: "text", text: "fixture result" }] });
+    const call = await createMonitor(false);
+    const discovered = await call("search_mcp_tools", { query: "lookup" });
+    expect(JSON.parse((discovered.contentItems[0] as { text: string }).text).tools).toHaveLength(readOnlyHint === true ? 1 : 0);
+    expect((await call("call_mcp_tool", args)).success).toBe(readOnlyHint === true);
+    // The parent retains its own authority to call mutating or unclassified tools.
+    expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args, "parent-call"))).success).toBe(true);
+  });
+
+  it.each(["full-access", "connection-approval", "automation"])("hides Sandboxer exec and denies guessed monitor calls under %s", async (authority) => {
+    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["builtin:sandboxer"] });
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+    if (authority === "connection-approval") {
+      await registry.close();
+      createRegistry({ registerBridge, requestGatewayToolOperation: operation,
+        listConnections: async () => [{ id: "builtin:sandboxer", toolApproval: "approve" }],
+      } as unknown as McpConnectionGatewayService);
+    }
+    if (authority === "automation") {
+      internals.headlessAutomationTurns.set("codex:thread-1:turn-1", {
+        agentThreadId: "thread-1", backend: "codex", automationRunId: "run-1", executionMode: "full-access",
+        executionThreadId: "thread-1", queueEntryId: "queue-1", startedAt: 1,
+        mcpConnectionIds: ["builtin:sandboxer"], toolAllowlist: ["exec"],
+      });
+    }
+    operation.mockImplementation(async (params) => params.operation === "gateway/tools/list"
+      ? [{ connectionId: "builtin:sandboxer", serverName: "Sandboxer", toolName: "exec", schemaRevision: "exec-r1", definition: {
+          name: "exec", annotations: { readOnlyHint: false, destructiveHint: true }, inputSchema: { type: "object" },
+        } }]
+      : { content: [{ type: "text", text: "must not run" }] });
+    const call = await createMonitor();
+    const discovered = await call("search_mcp_tools", { query: "exec", connectionId: "builtin:sandboxer" });
+    expect(JSON.parse((discovered.contentItems[0] as { text: string }).text).tools).toEqual([]);
+    expect((await call("call_mcp_tool", { connectionId: "builtin:sandboxer", toolName: "exec", schemaRevision: "exec-r1", arguments: {} })).success).toBe(false);
+    expect(operation.mock.calls.some(([entry]) => entry.operation === "gateway/tools/call")).toBe(false);
   });
 
   it.each(["disabled", "cold", "expired"] as const)(

@@ -246,6 +246,7 @@ type ClaudeSessionConfig = {
   instructions?: string;
   mcpServers?: Options["mcpServers"];
   mcpKey: string;
+  strictMcpConfig?: boolean;
   /** The thread's other linked directories, fixed when the process starts. */
   additionalDirectories: string[];
   /** The thread environment's captured toolchain variables. */
@@ -316,6 +317,7 @@ type ClaudeTurnParams = {
   threadId: string; input: AppServerTurnInputItem[]; model?: string; reasoningEffort?: string;
   executionMode?: ThreadExecutionMode; instructions?: string;
   mcpServers?: Options["mcpServers"];
+  strictMcpConfig?: boolean;
   /** Plan runs this turn in Claude's read-only plan mode. */
   collaborationMode?: AppServerCollaborationModeRequest;
   /** Directories attached to the thread after it was created. */
@@ -348,6 +350,7 @@ function claudeSessionConfig(params: ClaudeTurnParams, session: ClaudeSession): 
     instructions: params.instructions,
     mcpServers: params.mcpServers,
     mcpKey: JSON.stringify(params.mcpServers ?? {}),
+    strictMcpConfig: params.strictMcpConfig,
     additionalDirectories: claudeAdditionalDirectories(session, params.attachedDirectories),
     shellEnvironment: params.shellEnvironment,
     shellEnvironmentKey: JSON.stringify(
@@ -816,6 +819,7 @@ export class ClaudeBackend {
         abortController: controller,
         stderr: (data) => { current.stderr = (current.stderr + data).slice(-MAX_TURN_STDERR_LENGTH); },
         mcpServers: config.mcpServers,
+        ...(config.strictMcpConfig ? { strictMcpConfig: true } : {}),
         ...(config.additionalDirectories.length ? { additionalDirectories: config.additionalDirectories } : {}),
         canUseTool: createClaudePermissionHandler({
           threadId, turnId: () => current.turn?.turnId ?? current.lastTurnId,
@@ -969,6 +973,7 @@ export class ClaudeBackend {
         threadId: live.session.thread.id, taskCount: live.tasks.active().length,
       });
     }
+    if (config.strictMcpConfig !== live.config.strictMcpConfig) return false;
     try {
       if (config.model !== live.config.model) {
         await query.setModel(config.model);

@@ -19,6 +19,7 @@ import {
   findAcpPermissionModeConfigOption,
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
   PWRAGENT_TOOL_NAMESPACE,
+  TASK_MONITOR_TOOL_NAMESPACE,
   DEFAULT_THREAD_ARCHIVE_POLICY,
   FORGE_AGENT_TOOL_GROUP_LABELS,
   isTokenMiserSubAgent,
@@ -10851,6 +10852,8 @@ export class DesktopBackendRegistry {
           if (denied) throw new Error(`The messaging actor lacks permission for MCP gateway tools (${denied}).`);
           return await this.readMcpGatewaySelection(context);
         },
+        toolAllowed: (tool, context) => !this.taskMonitorForThread(context)
+          || (tool.definition.annotations?.readOnlyHint === true && tool.definition.annotations.destructiveHint !== true),
         approve: (invocation, context, signal, annotations, catalogRevision) => this.approveGatewayInvocation(invocation, context, signal, annotations, catalogRevision),
       });
     }
@@ -10882,8 +10885,14 @@ export class DesktopBackendRegistry {
           new AgentToolMcpServer({
             resolveCallContext: (context) =>
               this.resolveAgentToolMcpCallContext(context),
-            resolveCatalogs: () =>
-              resolveAgentToolCatalogs({
+            resolveCatalogs: (context) => context.threadId && this.taskMonitorForThread({ ...context, threadId: context.threadId })
+              ? [
+                  { id: "thread_orchestration", router: new AgentToolRouter(buildPwrAgentTaskMonitorToolDefinitions(
+                    async (request) => await this.handleAgentTaskMonitorRequest(request), "monitor",
+                  )) },
+                  { id: "mcp_connections", router: new AgentToolRouter(buildMcpGatewayToolDefinitions(this.mcpGatewayTools)) },
+                ]
+              : resolveAgentToolCatalogs({
                 appManagementHandler: this.appManagementHandler,
                 automationInspectionHandler: this.automationInspectionHandler,
                 federationHandler: this.federationHandler,
@@ -21342,6 +21351,7 @@ export class DesktopBackendRegistry {
           executionMode: params.executionMode ?? overlay?.executionMode,
           instructions,
           mcpServers,
+          ...(this.taskMonitorForThread(params) ? { strictMcpConfig: true } : {}),
           // Directories attached to the thread, so Claude can work in them too.
           attachedDirectories: overlay?.extraLinkedDirectories,
           shellEnvironment: setupVariablesForAgent(
@@ -39949,6 +39959,13 @@ export class DesktopBackendRegistry {
       method: request.method,
       params: request.params,
     });
+    if (hostToolCall && this.taskMonitorForThread({ backend, threadId: hostToolCall.threadId })
+      && ((!(["inject_progress", "complete_monitoring"].includes(hostToolCall.tool)
+          && hostToolCall.namespace === TASK_MONITOR_TOOL_NAMESPACE)
+          && hostToolCall.namespace !== PWRAGENT_TOOL_NAMESPACE)
+        || !["inject_progress", "complete_monitoring", "search_mcp_tools", "call_mcp_tool"].includes(hostToolCall.tool))) {
+      return toDynamicToolResponse({ ok: false, code: "forbidden", message: "Job Monitors may use only their lifecycle and read-only MCP gateway tools." });
+    }
     // Keep dispatch available after disabling the experiment: older runtimes
     // can retain the previously advertised schema until a new thread starts.
     const toolSearchRouter = new AgentToolRouter([buildPwrAgentToolSearchDefinition([])]);
@@ -40303,6 +40320,7 @@ export class DesktopBackendRegistry {
     const sessionKey = JSON.stringify([context.backend, context.threadId]);
     const sourceKey = JSON.stringify([invocation.connectionId, invocation.serverName, invocation.toolName]);
     const monitor = this.taskMonitorForThread(context);
+    if (monitor && (annotations?.readOnlyHint !== true || annotations.destructiveHint === true)) return false;
     const selectionOwner = monitor?.mcpAccess?.selectionOwner ?? context;
     const approvalContext = monitor
       ? { backend: monitor.parentBackend, threadId: monitor.parentThreadId, turnId: monitor.parentTurnId }
@@ -44660,7 +44678,11 @@ export class DesktopBackendRegistry {
     }
 
     const client = this.getClient("codex", executionMode);
+    const inheritedNames = await this.readConfiguredCodexMcpServerNames(cwd);
+    if (inheritedNames === undefined) throw codexMcpIsolationUnavailableError();
+    const config = buildCodexConnectionMcpConfig([], inheritedNames, { isolateFromInherited: true });
     const thread = await client.startThread({
+      config,
       ...(cwd ? { cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
       dynamicTools,
