@@ -1518,6 +1518,24 @@ describe("ThreadMarkdown", () => {
     expect(container.querySelector("img")).toBeNull();
   });
 
+  it.each([
+    { destination: String.raw`D:\a\PwrAgent\mockup.png`, sourceUrl: "file:///D:/a/PwrAgent/mockup.png" },
+    { destination: "D:%5Ca%5CPwrAgent%5Cmockup.png", sourceUrl: "file:///D:/a/PwrAgent/mockup.png" },
+    { destination: "D:/a/PwrAgent/mockup.png", sourceUrl: "file:///D:/a/PwrAgent/mockup.png" },
+    { destination: "file:///D:/a/PwrAgent/mockup.png", sourceUrl: "file:///D:/a/PwrAgent/mockup.png" },
+    { destination: "file://server/share/mockup.png", sourceUrl: "file://server/share/mockup.png" },
+    { destination: "file:///D:/a/mockup%20%2350%25.png", sourceUrl: "file:///D:/a/mockup%20%2350%25.png" },
+  ])("hides materialized Windows image markup for $destination", ({ destination, sourceUrl }) => {
+    const { container } = render(<ThreadMarkdown
+      text={`![Preview](${destination})\n\n![Missing](D:/a/missing.png)\n\n\`![Example](${destination})\``}
+      imageParts={[{ type: "image", url: "pwragent-image://file/cached", sourceUrl }]}
+    />);
+    expect(container.querySelectorAll(".thread-markdown__image-literal")).toHaveLength(1);
+    expect(container.querySelector(".thread-markdown__image-literal")?.textContent).toContain("![Missing]");
+    expect(container.textContent).toContain("![Example]");
+    expect(container.textContent).not.toContain("![Preview]");
+  });
+
   it("renders wide review-style markdown tables with transcript table chrome", () => {
     const { container } = render(
       <ThreadMarkdown text={`## Findings\n\n${sanitizedReviewFindingsTable}`} />

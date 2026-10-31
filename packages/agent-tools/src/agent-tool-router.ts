@@ -41,10 +41,10 @@ export type AgentMcpToolCallResponse = {
 };
 
 export const PWRAGENT_IMAGE_REPLY_GUIDANCE =
-  "Show screenshots and mockups with explicit Markdown images like ![Preview](/absolute/path/image.png), or image tool results. PwrAgent previews approved worktree and temporary images automatically. Code-formatted paths do not preview. Do not ask the operator to run shell open commands.";
+  "Show images as ![Preview](/absolute/path/image.png) or image tool results. Approved worktree/temp images preview. Code paths do not. Avoid shell open commands.";
 
 export const PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION =
-  "PwrAgent tools manage threads, delegated work, messaging, apps, automations, and connected instances. Prefer these tools to backend tools when both can do the task. "
+  "PwrAgent manages threads, delegation, messaging, apps, automations, and instances. Prefer its tools to backend tools. "
   + PWRAGENT_IMAGE_REPLY_GUIDANCE;
 
 export class AgentToolRouter {

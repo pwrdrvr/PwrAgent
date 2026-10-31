@@ -444,7 +444,7 @@ const markdownComponents: Components = {
     );
     const skillPath = localTarget?.path;
     const label = extractTextContent(anchorProps.children).trim();
-    const linkedImage = findMarkdownLinkedImagePart(props.imageParts, localTarget);
+    const linkedImage = findMarkdownLinkedImagePart(props.imageParts, href);
     const source = sourceForNode(markdownText, anchorProps.node);
     const linkedChildren = (
       <MarkdownLinkContext.Provider value={true}>
@@ -699,7 +699,7 @@ const markdownComponents: Components = {
 
     // The message's image strip owns previews and gallery navigation. Hide
     // markup only for a reference that main successfully materialized.
-    if (findMarkdownLinkedImagePart(props.imageParts, localFileTargetFromHref(src))) {
+    if (findMarkdownLinkedImagePart(props.imageParts, typeof imageProps.src === "string" ? imageProps.src : "")) {
       return null;
     }
 
@@ -1367,11 +1367,39 @@ function localFileTargetFromHref(
   return undefined;
 }
 
+function markdownImagePathFromHref(href: string): string | undefined {
+  let imagePath = href;
+  if (href.startsWith("file://")) {
+    // Markdown encodes backslashes. The renderer's file:// wrapper can
+    // therefore contain a drive path rather than a standard file URL.
+    const localPath = decodeMarkdownDestination(href.slice("file://".length));
+    if (isWindowsFilesystemPath(localPath)) {
+      imagePath = localPath;
+    } else {
+      try {
+        const url = new URL(href);
+        const host = url.hostname && url.hostname !== "localhost" ? `//${url.hostname}` : "";
+        imagePath = decodeURIComponent(`${host}${url.pathname}`);
+      } catch {
+        return undefined;
+      }
+    }
+  }
+  // File URLs prefix drive paths with '/', and Windows uses either separator.
+  // Infer the owning platform from the path, including for federated images.
+  if (/^\/[a-z]:[\\/]/i.test(imagePath)) imagePath = imagePath.slice(1);
+  if (isWindowsFilesystemPath(imagePath)) {
+    return splitFileLineSuffix(imagePath.replace(/\\/g, "/")).path;
+  }
+  return imagePath.startsWith("/") ? splitFileLineSuffix(imagePath).path : undefined;
+}
+
 function findMarkdownLinkedImagePart(
   imageParts: AppServerThreadImagePart[] | undefined,
-  target: LocalFileTarget | undefined,
+  href: string,
 ): AppServerThreadImagePart | undefined {
-  if (!target) {
+  const targetPath = markdownImagePathFromHref(href);
+  if (!targetPath) {
     return undefined;
   }
 
@@ -1380,7 +1408,7 @@ function findMarkdownLinkedImagePart(
       return false;
     }
 
-    return localFileTargetFromHref(imagePart.sourceUrl)?.path === target.path;
+    return markdownImagePathFromHref(imagePart.sourceUrl) === targetPath;
   });
 }
 
