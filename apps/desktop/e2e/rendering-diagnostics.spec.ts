@@ -190,3 +190,36 @@ test("HotCpuProfiler co-records through rendering capture on one debugger attach
     await app.close();
   }
 });
+
+test("rendering capture refuses existing DevTools and unknown debugger attachments", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/smoke/replay.fixture.json"),
+  });
+  const capture = () => app.window.evaluate(() => (window as unknown as { pwragent: {
+    captureRenderingDiagnostics: (seconds: number) => Promise<RenderingCaptureResult>;
+  } }).pwragent.captureRenderingDiagnostics(1));
+  try {
+    await app.electronApp.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.debugger.attach("1.3");
+    });
+    await expect(capture()).rejects.toThrow("Rendering capture failed");
+    const intact = await app.electronApp.evaluate(async ({ BrowserWindow }) => {
+      const debuggerApi = BrowserWindow.getAllWindows()[0].webContents.debugger;
+      const result = await debuggerApi.sendCommand("Runtime.evaluate", { expression: "40 + 2" });
+      debuggerApi.detach();
+      return result.result.value;
+    });
+    expect(intact).toBe(42);
+    await app.electronApp.evaluate(async ({ BrowserWindow }) => {
+      const contents = BrowserWindow.getAllWindows()[0].webContents;
+      const opened = new Promise<void>((resolve) => contents.once("devtools-opened", () => resolve()));
+      contents.openDevTools({ mode: "detach", activate: false });
+      await opened;
+    });
+    await expect(capture()).rejects.toThrow("Rendering capture failed");
+    expect(await app.electronApp.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.isDevToolsOpened())).toBe(true);
+  } finally {
+    await app.close();
+  }
+});

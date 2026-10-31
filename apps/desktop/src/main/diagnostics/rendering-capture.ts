@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { app, BrowserWindow } from "electron";
 import { readRenderingSnapshot, type RenderingCaptureResult } from "../../shared/rendering-diagnostics";
 import { RENDERER_UPDATE_EVENT_NAMES } from "../../shared/renderer-update-diagnostics";
-
 import { RenderingTrace } from "./rendering-trace";
 
 const EVENTS = [

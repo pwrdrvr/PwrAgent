@@ -90,7 +90,7 @@ export class RenderingTrace {
       if (this.lost || !this.lease.valid) throw new Error("Trace target lost");
     } finally {
       if (stream && !this.lost && this.lease?.valid) {
-        await this.target.debugger.sendCommand("IO.close", { handle: stream }).catch(() => {});
+        await this.target.debugger.sendCommand("IO.close", { handle: stream });
       }
     }
   }

@@ -5,7 +5,7 @@ import { acquireDebuggerLease } from "../diagnostics/debugger-lease";
 function connection() {
   let attached = false;
   const api = Object.assign(new EventEmitter(), {
-    attach: vi.fn(() => { attached = true; }),
+    attach: vi.fn((_version: string) => { attached = true; }),
     detach: vi.fn(() => { attached = false; api.emit("detach", {}, "test"); }),
     isAttached: vi.fn(() => attached),
     sendCommand: vi.fn(async () => ({})),

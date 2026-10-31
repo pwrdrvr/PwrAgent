@@ -17,7 +17,7 @@ function createTarget() {
   let attached = false;
   let destroyed = false;
   const debuggerApi = Object.assign(new EventEmitter(), {
-    attach: vi.fn(() => { attached = true; }),
+    attach: vi.fn((_version: string) => { attached = true; }),
     detach: vi.fn(() => { attached = false; debuggerApi.emit("detach", {}, "test"); }),
     isAttached: vi.fn(() => attached),
     sendCommand: vi.fn(async (method: string, _params?: Record<string, unknown>): Promise<unknown> => {
@@ -232,6 +232,24 @@ describe("opt-in rendering capture", () => {
     await failed;
     expect(calls("Tracing.end")).toHaveLength(0);
     expect(target.debuggerApi.detach).toHaveBeenCalledOnce();
+  });
+
+  it("reports a sanitized failure if the native stream cannot be closed", async () => {
+    const cpu = acquireDebuggerLease(target.debuggerApi, "Profiler");
+    const send = target.debuggerApi.sendCommand.getMockImplementation()!;
+    target.debuggerApi.sendCommand.mockImplementation(async (method, params) => {
+      if (method === "IO.close") throw new Error("private-native-path");
+      return send(method, params);
+    });
+    const pending = captureRenderingDiagnostics(root, 30);
+    const failed = expect(pending).rejects.toThrow("Rendering capture failed");
+    await startCalled();
+    await stopRenderingDiagnostics().catch(() => {});
+    await failed;
+    const directories = await readdir(root);
+    expect(await readdir(join(root, directories[0]))).toEqual([]);
+    expect(cpu.valid).toBe(true);
+    cpu.release();
   });
 
   it("separates activity by process and second, without counting span ends twice", () => {
