@@ -183,6 +183,7 @@ function createSnapshot(
       messagingAcknowledgment: { value: null, source: "default" },
       interactiveSvgSkipNotice: { value: false, source: "default" },
       interactiveSvgAutoOpen: { value: false, source: "default" },
+      htmlPreviewRunScripts: { value: false, source: "default" },
     },
     onboarding: {
       completed: { value: true, source: "default" },
@@ -255,6 +256,8 @@ function createSnapshot(
     ui: {
       sidebarHidden: { value: false, source: "default" },
       contextRailPinned: { value: false, source: "default" },
+      projectIndexHidden: { value: false, source: "default" },
+      projectIndexWidth: { value: null, source: "default" },
       activeContextTab: { value: "info", source: "default" },
       editedFilesDock: { value: "above", source: "default" },
       actionRunsDock: { value: "above", source: "default" },
@@ -496,6 +499,7 @@ function createSnapshot(
           pull_requests: { value: "auto", source: "default" },
           comments: { value: "auto", source: "default" },
           issues: { value: "auto", source: "default" },
+          ci: { value: "auto", source: "default" },
           approve_merge: { value: "ask", source: "default" },
         },
       },
@@ -585,6 +589,9 @@ describe("SettingsScreen agent forge tools", () => {
     render(<SettingsScreen initialSection="git" settings={settings} onClose={() => undefined} />);
     const section = screen.getByRole("heading", { name: "Agent forge tools" }).closest("section")!;
     expect(within(section).getByRole("combobox", { name: "Approve and merge access" })).toHaveTextContent("Ask");
+    expect(within(section).getByRole("combobox", { name: "CI reruns access" })).toHaveTextContent("Auto");
+    chooseSelectOption(within(section).getByRole("combobox", { name: "CI reruns access" }), "Off");
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ git: { agentTools: { access: { ci: "off" } } } }));
     expect(selectOptionLabels(within(section).getByRole("combobox", { name: "Read access" }))).toEqual(["Allow", "Off"]);
     chooseSelectOption(within(section).getByRole("combobox", { name: "Pull requests access" }), "Ask");
     await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ git: { agentTools: { access: { pull_requests: "ask" } } } }));
@@ -1550,6 +1557,26 @@ describe("SettingsScreen", () => {
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: { appearance: { terminalMinimumContrast: true } },
+      });
+    });
+  });
+
+  it("saves the HTML preview scripts setting", async () => {
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        initialSection="general"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const toggle = screen.getByRole("switch", { name: "Run scripts in HTML previews" });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { htmlPreviewRunScripts: true },
       });
     });
   });

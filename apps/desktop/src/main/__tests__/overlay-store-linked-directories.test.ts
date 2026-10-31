@@ -71,6 +71,33 @@ describe("SqliteOverlayStore — linked directories", () => {
     expect(overlay.parentThreadId).toBe("parent");
   });
 
+  it("keeps a retained worktree out of the workspace until the thread moves back into it", async () => {
+    const worktree = (name: string) => ({
+      id: "pwragent-handoff:codex:thread-1", label: "app", path: "/repo/app", kind: "worktree" as const,
+      worktreePath: `/worktrees/${name}`,
+    });
+    const retained = {
+      id: "pwragent-retained-worktree:codex:thread-1:/worktrees/old", label: "app", path: "/repo/app",
+      kind: "worktree" as const, worktreePath: "/worktrees/old",
+    };
+    await store.replaceWorkspaceLinkedDirectory({ backend: "codex", threadId: "thread-1", directory: worktree("old") });
+    const moved = await store.replaceWorkspaceLinkedDirectory({
+      backend: "codex", threadId: "thread-1", directory: worktree("new"), retainWorktree: retained,
+    });
+    expect(moved.extraLinkedDirectories).toEqual([worktree("new")]);
+    expect(moved.retainedWorktrees).toEqual([retained]);
+    // Thread archive reads it through its narrow projection.
+    const archiveView = await store.getArchiveCleanupOverlayStates({ backend: "codex", threadIds: ["thread-1"] });
+    expect(archiveView["thread-1"]?.retainedWorktrees).toEqual([retained]);
+    // A later move keeps it tracked.
+    const later = await store.replaceWorkspaceLinkedDirectory({ backend: "codex", threadId: "thread-1", directory: worktree("later") });
+    expect(later.retainedWorktrees).toEqual([retained]);
+    // Moving back into it makes it the workspace again.
+    const back = await store.replaceWorkspaceLinkedDirectory({ backend: "codex", threadId: "thread-1", directory: worktree("old") });
+    expect(back.retainedWorktrees).toBeUndefined();
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))?.retainedWorktrees).toBeUndefined();
+  });
+
   it("replaces same-path local directories even when their IDs use different shapes", async () => {
     await store.addLinkedDirectory({
       backend: "codex",

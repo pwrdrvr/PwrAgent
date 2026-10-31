@@ -13,9 +13,22 @@ import type {
 import type { OperatorWait } from "../operator-requests/operator-waits";
 import type { OperatorQuestionTarget } from "../operator-requests/useOperatorRequests";
 
-/** A connected federation peer that can host a handoff thread. */
+/** A federation peer a handoff card can name, with whether it can host a thread now. */
 export type ThreadTodoInstance = {
   instanceId: string;
+  label: string;
+  /** Absent: available. */
+  availability?: "available" | "offline" | "unsupported";
+  /**
+   * The peer advertises `thread_todo_dispatch_target`: as a card's owner it
+   * applies Where, environment and speed, and it lists its environments.
+   */
+  dispatchTarget?: boolean;
+};
+
+/** This window's own machine. Without an instance id, a card cannot start here from a peer. */
+export type ThreadTodoLocalMachine = {
+  instanceId?: string;
   label: string;
 };
 
@@ -54,6 +67,7 @@ export type ThreadTodosView = {
   mergeMethods?: ThreadTodoMergeMethodPreferences;
   /** Peers a handoff can start on. Empty without federation. */
   instances: ThreadTodoInstance[];
+  localMachine?: ThreadTodoLocalMachine;
   /** The cards' project menu. Absent where a card's project cannot change. */
   projectMenu?: ThreadTodoProjectMenu;
   /** Name of the thread a card belongs to. */

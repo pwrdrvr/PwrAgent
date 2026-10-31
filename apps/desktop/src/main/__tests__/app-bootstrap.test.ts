@@ -34,6 +34,16 @@ const hotRendererStop = vi.fn();
 const hotMainStart = vi.fn();
 const hotMainStop = vi.fn();
 const mainHotTarget = {};
+const appBuildMetadata = {
+  applicationVersion: "0.1.0",
+  buildIdentity: { kind: "packaged" as const },
+};
+const resolveAppBuildMetadataMock = vi.fn(async () => appBuildMetadata);
+vi.mock("../app-build-metadata", () => ({
+  // Build identity runs Git in development. These tests own profiler lifecycle,
+  // so metadata must not depend on child-process startup on the host.
+  resolveAppBuildMetadata: resolveAppBuildMetadataMock,
+}));
 vi.mock("../diagnostics/hot-cpu-profile-config", () => ({
   resolveHotCpuProfileConfig: resolveHotCpuProfileConfigMock,
 }));
@@ -257,12 +267,33 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
 }));
 
 describe("createMainWindow", () => {
+  let stopDiagnostics: typeof import("../window").stopWindowDiagnostics | undefined;
+  const releaseDiagnostics: Array<() => void> = [];
+
+  async function loadWindowModule() {
+    const windowModule = await import("../window");
+    // Capture this module's registry before the next test resets the cache.
+    stopDiagnostics = windowModule.stopWindowDiagnostics;
+    return windowModule;
+  }
+
+  function deferDiagnosticWork<T>(result: T) {
+    let release!: () => void;
+    const promise = new Promise<T>((resolve) => {
+      release = () => resolve(result);
+    });
+    // Register immediately: an assertion can fail before the test releases it.
+    releaseDiagnostics.push(release);
+    return { promise, release };
+  }
+
   beforeEach(() => {
     vi.resetModules();
     BrowserWindowMock.mockClear();
     resolveHeapMonitorConfigMock.mockReset();
     resolveHeapMonitorConfigMock.mockReturnValue({ enabled: false });
     createHeapSessionMock.mockReset();
+    resolveAppBuildMetadataMock.mockReset().mockResolvedValue(appBuildMetadata);
     resolveHotCpuProfileConfigMock.mockReset().mockReturnValue({ enabled: false });
     createHotCpuProfileSessionMock.mockReset().mockResolvedValue({
       ok: true, session: { directoryPath: "/fixture/hot-cpu" },
@@ -296,15 +327,21 @@ describe("createMainWindow", () => {
     browserWindowState.deferReadyToShow = false;
   });
 
-  afterEach(() => {
-    delete process.env.ELECTRON_RENDERER_URL;
-    vi.useRealTimers();
+  afterEach(async () => {
+    try {
+      for (const release of releaseDiagnostics.splice(0)) release();
+      await stopDiagnostics?.("test-cleanup");
+    } finally {
+      stopDiagnostics = undefined;
+      delete process.env.ELECTRON_RENDERER_URL;
+      vi.useRealTimers();
+    }
   });
 
   it("reloads a stalled first load, then shows the window and sends its initial thread", async () => {
     const { MAIN_WINDOW_APPEAR_TIMEOUT_MS } = await import("../main-window-startup-watchdog");
     const { WINDOW_SHOW_THREAD_CHANNEL } = await import("../../shared/ipc");
-    const { createMainWindow } = await import("../window");
+    const { createMainWindow } = await loadWindowModule();
     vi.useFakeTimers();
     browserWindowState.deferReadyToShow = true;
     const onShown = vi.fn(() => {
@@ -339,7 +376,7 @@ describe("createMainWindow", () => {
   it("creates a BrowserWindow with a preload script and loads the dev renderer URL", async () => {
     process.env.ELECTRON_RENDERER_URL = "http://127.0.0.1:5173";
 
-    const { createMainWindow } = await import("../window");
+    const { createMainWindow } = await loadWindowModule();
     createMainWindow();
 
     expect(BrowserWindowMock).toHaveBeenCalledTimes(1);
@@ -356,6 +393,13 @@ describe("createMainWindow", () => {
       true
     );
     expect(browserWindowState.options?.webPreferences?.sandbox).toBe(true);
+    // The preload removes WebRTC from HTML previews, which are subframes.
+    expect(
+      browserWindowState.options?.webPreferences?.nodeIntegrationInSubFrames
+    ).toBe(true);
+    expect(browserWindowState.options?.webPreferences?.nodeIntegration).toBe(
+      false
+    );
     expect(browserWindowState.loadURL).toHaveBeenCalledWith(
       "http://127.0.0.1:5173"
     );
@@ -364,7 +408,7 @@ describe("createMainWindow", () => {
   });
 
   it("titles the shell window and refuses the renderer's document title", async () => {
-    const { createMainWindow } = await import("../window");
+    const { createMainWindow } = await loadWindowModule();
     createMainWindow();
 
     expect(browserWindowState.options?.title).toBe("PwrAgent");
@@ -382,7 +426,7 @@ describe("createMainWindow", () => {
   });
 
   it("titles a federated window with its peer label", async () => {
-    const { createMainWindow } = await import("../window");
+    const { createMainWindow } = await loadWindowModule();
     createMainWindow({ federationLabel: "Harold-MBP-2018" });
 
     expect(browserWindowState.options?.title).toBe(
@@ -401,7 +445,7 @@ describe("createMainWindow", () => {
       workArea: { x: 0, y: 0, width: 1152, height: 696 },
     });
 
-    const { createMainWindow } = await import("../window");
+    const { createMainWindow } = await loadWindowModule();
     createMainWindow();
 
     expect(browserWindowState.options).toMatchObject({
@@ -415,7 +459,7 @@ describe("createMainWindow", () => {
   });
 
   it("registers the main window for messaging push-event channels", async () => {
-    const { createMainWindow } = await import("../window");
+    const { createMainWindow } = await loadWindowModule();
     const { debugListRegisteredWindows } = await import("../window-channels");
     const {
       AGENT_EVENT_CHANNEL,
@@ -440,7 +484,7 @@ describe("createMainWindow", () => {
   });
 
   it("only opens safe external URLs requested by the renderer", async () => {
-    const { createMainWindow } = await import("../window");
+    const { createMainWindow } = await loadWindowModule();
     createMainWindow();
 
     const openHandler = browserWindowState.setWindowOpenHandler?.mock.calls[0]?.[0];
@@ -477,7 +521,7 @@ describe("createMainWindow", () => {
   });
 
   it("blocks unsafe external URLs requested by the renderer", async () => {
-    const { createMainWindow } = await import("../window");
+    const { createMainWindow } = await loadWindowModule();
     createMainWindow();
 
     const openHandler = browserWindowState.setWindowOpenHandler?.mock.calls[0]?.[0];
@@ -496,7 +540,7 @@ describe("createMainWindow", () => {
   });
 
   it("blocks navigation from an interactive SVG subframe", async () => {
-    const { createMainWindow } = await import("../window");
+    const { createMainWindow } = await loadWindowModule();
     createMainWindow();
 
     const preventDefault = vi.fn();
@@ -516,8 +560,53 @@ describe("createMainWindow", () => {
     expect(preventDefault).not.toHaveBeenCalled();
   });
 
+  it("hands a blocked HTML preview link back to its window", async () => {
+    const { createMainWindow } = await loadWindowModule();
+    const { HTML_PREVIEW_FRAME_NAME, HTML_PREVIEW_NAVIGATION_CHANNEL } =
+      await import("../../shared/html-preview");
+    createMainWindow();
+
+    const preventDefault = vi.fn();
+    emitWebContentsEvent("will-frame-navigate", {
+      isMainFrame: false,
+      url: "https://example.com/next",
+      frame: { name: HTML_PREVIEW_FRAME_NAME },
+      preventDefault,
+    });
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(browserWindowState.send).toHaveBeenCalledWith(
+      HTML_PREVIEW_NAVIGATION_CHANNEL,
+      { url: "https://example.com/next" },
+    );
+
+    // Another frame's navigation is blocked without telling the preview.
+    preventDefault.mockClear();
+    browserWindowState.send?.mockClear();
+    emitWebContentsEvent("will-frame-navigate", {
+      isMainFrame: false,
+      url: "https://example.com/collect",
+      frame: { name: "" },
+      preventDefault,
+    });
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(browserWindowState.send).not.toHaveBeenCalledWith(
+      HTML_PREVIEW_NAVIGATION_CHANNEL,
+      expect.anything(),
+    );
+
+    // A fragment link scrolls the srcdoc page itself.
+    preventDefault.mockClear();
+    emitWebContentsEvent("will-frame-navigate", {
+      isMainFrame: false,
+      url: "about:srcdoc#section-2",
+      frame: { name: HTML_PREVIEW_FRAME_NAME },
+      preventDefault,
+    });
+    expect(preventDefault).not.toHaveBeenCalled();
+  });
+
   it("shows a native copy action when a renderer link is right-clicked", async () => {
-    const { createMainWindow } = await import("../window");
+    const { createMainWindow } = await loadWindowModule();
     createMainWindow();
 
     emitWebContentsEvent(
@@ -553,7 +642,7 @@ describe("createMainWindow", () => {
   });
 
   it("copies loaded images through the native context menu, including linked images", async () => {
-    const { createMainWindow } = await import("../window");
+    const { createMainWindow } = await loadWindowModule();
     createMainWindow();
 
     emitWebContentsEvent("context-menu", {}, {
@@ -586,7 +675,7 @@ describe("createMainWindow", () => {
     { mediaType: "none", hasImageContents: false },
     { mediaType: "video", hasImageContents: true },
   ])("omits image copying for unavailable or non-image content: %j", async (params) => {
-    const { createMainWindow } = await import("../window");
+    const { createMainWindow } = await loadWindowModule();
     createMainWindow();
 
     emitWebContentsEvent("context-menu", {}, { ...params, x: 12, y: 34 });
@@ -596,7 +685,7 @@ describe("createMainWindow", () => {
   });
 
   it("shows native spelling suggestions when editable text is right-clicked", async () => {
-    const { createMainWindow } = await import("../window");
+    const { createMainWindow } = await loadWindowModule();
     createMainWindow();
 
     emitWebContentsEvent(
@@ -666,7 +755,7 @@ describe("createMainWindow", () => {
   });
 
   it("falls back to the built renderer index in packaged mode", async () => {
-    const { createMainWindow } = await import("../window");
+    const { createMainWindow } = await loadWindowModule();
     createMainWindow();
 
     const loadedPath = browserWindowState.loadFile?.mock.calls[0]?.[0] ?? "";
@@ -682,7 +771,7 @@ describe("createMainWindow", () => {
       }),
     };
 
-    const { createMainWindow } = await import("../window");
+    const { createMainWindow } = await loadWindowModule();
     createMainWindow({
       startupCpuProfiler,
     });
@@ -694,7 +783,7 @@ describe("createMainWindow", () => {
   it("reports an early show event before createMainWindow returns", async () => {
     const onShown = vi.fn();
 
-    const { createMainWindow } = await import("../window");
+    const { createMainWindow } = await loadWindowModule();
     createMainWindow({ onShown });
 
     expect(browserWindowState.show).toHaveBeenCalledTimes(1);
@@ -703,27 +792,44 @@ describe("createMainWindow", () => {
 
   it("drains renderer and shared main captures, including an already closed window", async () => {
     resolveHotCpuProfileConfigMock.mockReturnValue({ enabled: true });
-    let finishRenderer!: () => void;
-    let finishMain!: () => void;
-    hotRendererStop.mockReturnValue(new Promise<void>((resolve) => { finishRenderer = resolve; }));
-    hotMainStop.mockReturnValue(new Promise<void>((resolve) => { finishMain = resolve; }));
-    const { createMainWindow, stopWindowDiagnostics, syncHotCpuProfilersFromSettings } = await import("../window");
+    const renderersStarted = deferDiagnosticWork(undefined);
+    const mainStarted = deferDiagnosticWork(undefined);
+    const renderersStopping = deferDiagnosticWork(undefined);
+    const mainStopping = deferDiagnosticWork(undefined);
+    const rendererStopped = deferDiagnosticWork(undefined);
+    const mainStopped = deferDiagnosticWork(undefined);
+    hotRendererStart.mockImplementation(async () => {
+      if (hotRendererStart.mock.calls.length === 2) renderersStarted.release();
+    });
+    hotMainStart.mockImplementation(async () => { mainStarted.release(); });
+    hotRendererStop.mockImplementation(() => {
+      if (hotRendererStop.mock.calls.length === 2) renderersStopping.release();
+      return rendererStopped.promise;
+    });
+    hotMainStop.mockImplementation(() => {
+      mainStopping.release();
+      return mainStopped.promise;
+    });
+    const { createMainWindow, stopWindowDiagnostics, syncHotCpuProfilersFromSettings } = await loadWindowModule();
     createMainWindow();
     const firstLoad = webContentsOnceHandlers.get("did-finish-load")!;
+    const firstClosed = windowEventHandlers.get("closed")!.at(-1)!;
     createMainWindow();
     firstLoad();
     emitWebContentsEvent("did-finish-load");
-    await vi.waitFor(() => expect(hotRendererStart).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(hotMainStart).toHaveBeenCalledOnce());
-    emitWindowEvent("closed");
+    await Promise.all([renderersStarted.promise, mainStarted.promise]);
+    expect(hotRendererStart).toHaveBeenCalledTimes(2);
+    expect(hotMainStart).toHaveBeenCalledOnce();
+    firstClosed();
     const finished = vi.fn();
     const flush = stopWindowDiagnostics("app-quit").then(finished);
-    await vi.waitFor(() => expect(hotRendererStop).toHaveBeenCalledTimes(2));
+    await Promise.all([renderersStopping.promise, mainStopping.promise]);
+    expect(hotRendererStop).toHaveBeenCalledTimes(2);
     expect(hotMainStop).toHaveBeenCalledOnce();
-    finishRenderer();
+    rendererStopped.release();
     await Promise.resolve();
     expect(finished).not.toHaveBeenCalled();
-    finishMain();
+    mainStopped.release();
     await flush;
     syncHotCpuProfilersFromSettings("settings-changed");
     await stopWindowDiagnostics("app-quit");
@@ -734,22 +840,56 @@ describe("createMainWindow", () => {
 
   it("waits for profiler creation already queued when quit starts", async () => {
     resolveHotCpuProfileConfigMock.mockReturnValue({ enabled: true });
-    let finishCreation!: (result: unknown) => void;
-    createHotCpuProfileSessionMock.mockReturnValueOnce(new Promise((resolve) => { finishCreation = resolve; }));
-    const { createMainWindow, stopWindowDiagnostics, syncHotCpuProfilersFromSettings } = await import("../window");
+    const creationStarted = deferDiagnosticWork(undefined);
+    const creation = deferDiagnosticWork({
+      ok: true, session: { directoryPath: "/fixture/hot-cpu" },
+    });
+    createHotCpuProfileSessionMock.mockImplementationOnce(() => {
+      creationStarted.release();
+      return creation.promise;
+    });
+    const { createMainWindow, stopWindowDiagnostics, syncHotCpuProfilersFromSettings } = await loadWindowModule();
     createMainWindow();
     emitWebContentsEvent("did-finish-load");
-    await vi.waitFor(() => expect(createHotCpuProfileSessionMock).toHaveBeenCalledOnce());
+    await creationStarted.promise;
+    expect(createHotCpuProfileSessionMock).toHaveBeenCalledOnce();
     const finished = vi.fn();
     const flush = stopWindowDiagnostics("app-quit").then(finished);
     syncHotCpuProfilersFromSettings("settings-changed");
     expect(finished).not.toHaveBeenCalled();
-    finishCreation({ ok: true, session: { directoryPath: "/fixture/hot-cpu" } });
+    creation.release();
     await flush;
     expect(hotRendererStop).toHaveBeenCalledOnce();
     expect(hotMainStop).toHaveBeenCalledOnce();
     expect(hotMainStart).toHaveBeenCalledOnce();
     expect(hotRendererStart).toHaveBeenCalledOnce();
+  });
+
+  it("drains profiler startup waiting for build metadata when quit starts", async () => {
+    resolveHotCpuProfileConfigMock.mockReturnValue({ enabled: true });
+    const metadataRequested = deferDiagnosticWork(undefined);
+    const metadata = deferDiagnosticWork(appBuildMetadata);
+    resolveAppBuildMetadataMock.mockImplementationOnce(() => {
+      metadataRequested.release();
+      return metadata.promise;
+    });
+    const { createMainWindow, stopWindowDiagnostics } = await loadWindowModule();
+    createMainWindow();
+    emitWebContentsEvent("did-finish-load");
+    await metadataRequested.promise;
+    expect(createHotCpuProfileSessionMock).not.toHaveBeenCalled();
+    expect(hotRendererStart).not.toHaveBeenCalled();
+
+    const finished = vi.fn();
+    const flush = stopWindowDiagnostics("app-quit").then(finished);
+    await Promise.resolve();
+    expect(finished).not.toHaveBeenCalled();
+    metadata.release();
+    await flush;
+    expect(hotRendererStart).toHaveBeenCalledOnce();
+    expect(hotMainStart).toHaveBeenCalledOnce();
+    expect(hotRendererStop).toHaveBeenCalledOnce();
+    expect(hotMainStop).toHaveBeenCalledOnce();
   });
 
   it("starts and stops heap diagnostics when enabled", async () => {
@@ -777,7 +917,7 @@ describe("createMainWindow", () => {
       }
     });
 
-    const { createMainWindow } = await import("../window");
+    const { createMainWindow } = await loadWindowModule();
     createMainWindow();
 
     emitWebContentsEvent("did-finish-load");

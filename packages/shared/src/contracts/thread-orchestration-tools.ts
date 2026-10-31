@@ -210,6 +210,8 @@ export type MoveThreadWorkspaceToolArgs = {
   sourceBranch?: string;
   leaveLocalBranch?: string;
   newBranchName?: string;
+  /** Start the new worktree at this ref and leave the source untouched. */
+  baseRef?: string;
 };
 
 export type AttachThreadDirectoryWorkspaceMode = "local" | "new_worktree";
@@ -312,6 +314,7 @@ export type MoveThreadWorkspaceResult = {
   sourceBranch?: string;
   leaveLocalBranch?: string;
   newBranchName?: string;
+  baseRef?: string;
   targetPath?: string;
   branch?: string;
   linkedDirectory?: LinkedDirectorySummary;

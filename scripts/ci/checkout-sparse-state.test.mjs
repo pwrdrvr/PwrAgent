@@ -12,7 +12,6 @@ test.each([
   ["ci.yml", "desktop-e2e-macos"],
   ["release.yml", "lint"],
   ["release.yml", "test"],
-  ["release.yml", "prepare"],
   ["preview-build.yml", "preview"],
   ["check-performance.yml", "compare"],
 ])("%s %s restores source after a persistent non-cone checkout", (file, job) => {

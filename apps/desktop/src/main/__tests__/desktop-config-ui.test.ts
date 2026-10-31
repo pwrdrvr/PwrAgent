@@ -233,6 +233,40 @@ describe("desktop config [ui] section", () => {
     });
   });
 
+  it("persists the project index's hide and dragged width, and drops both at their defaults", () => {
+    const written = applyTomlEdits(
+      "",
+      desktopSettingsPatchToEdits({
+        ui: { projectIndexHidden: true, projectIndexWidth: 131.6 },
+      }),
+    );
+    expect(written).toContain("project_index_hidden = true");
+    expect(written).toContain("project_index_width = 132");
+    expect(parseDesktopSettingsToml(written, "test.toml").ui).toEqual({
+      projectIndexHidden: true,
+      projectIndexWidth: 132,
+    });
+
+    // Shown is the default, and a null width (double-click on the grip)
+    // returns the column to its longest name, so neither key remains.
+    const reverted = applyTomlEdits(
+      written,
+      desktopSettingsPatchToEdits(
+        { ui: { projectIndexHidden: false, projectIndexWidth: null } },
+        parseTomlTables(written, "test.toml"),
+      ),
+    );
+    expect(parseDesktopSettingsToml(reverted, "test.toml").ui).toBeUndefined();
+  });
+
+  it("ignores a project index width that is not a positive number", () => {
+    const config = parseDesktopSettingsToml(
+      "[ui]\nproject_index_width = -12\n",
+      "test.toml",
+    );
+    expect(config.ui?.projectIndexWidth).toBeUndefined();
+  });
+
   it("deletes default-valued [ui] keys on write (off/pinned/info/above are absent on disk)", () => {
     const existing = [
       "[ui]",

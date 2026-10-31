@@ -1,3 +1,4 @@
+import { removeUsageActivityIndex } from "./usage-activity-index";
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -1543,10 +1544,19 @@ export class StateDb {
     // end of `cleanupExpired` a no-op, so pages freed by the retention sweeps
     // were never returned to the filesystem and `state.db` only ever grew.
     //
-    // Unconditional on purpose: on a fresh file it takes, and on an existing
-    // file it is exactly the silent no-op described above. Databases created
-    // before the fix are converted by `ensureIncrementalAutoVacuum`.
-    db.pragma("auto_vacuum = INCREMENTAL");
+    // On a fresh file it takes; on an existing NONE file it is the silent
+    // no-op described above, and `ensureIncrementalAutoVacuum` converts those.
+    //
+    // Read first and assign only on a mismatch. Assigning the mode a file
+    // already has still rewrites page 1, which made every open of a current
+    // database commit one page to the WAL and checkpoint it again on close.
+    // Reading the mode writes no header, so this stays first.
+    if (
+      (db.pragma("auto_vacuum", { simple: true }) as number)
+      !== SQLITE_AUTO_VACUUM_INCREMENTAL
+    ) {
+      db.pragma("auto_vacuum = INCREMENTAL");
+    }
     db.pragma("journal_mode = WAL");
     db.pragma("synchronous = NORMAL");
     db.pragma(`wal_autocheckpoint = ${STATE_DB_WAL_AUTOCHECKPOINT_PAGES}`);
@@ -2168,6 +2178,7 @@ export class StateDb {
       // current profile every statement is IF NOT EXISTS and writes nothing.
       ensureThreadSubAgentSchema(db);
       ensureThreadUsageActivitySchema(db);
+      removeUsageActivityIndex(db);
       db.exec(THREAD_TODO_THREAD_PREFS_SCHEMA);
       // Additive columns on the card tables, with no version of their own so
       // no branch can claim it: one immediate transaction the first time,

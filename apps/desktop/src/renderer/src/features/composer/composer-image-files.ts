@@ -195,3 +195,20 @@ export function formatPastedImageAlt(
 ): string {
   return attachment.name || `Pasted image ${index + 1}`;
 }
+
+/** An image fetched by the main process, as a file the composer can attach. */
+export function composerImageFileFromBase64(image: {
+  name: string;
+  mimeType: string;
+  dataBase64: string;
+}): ComposerImageFile {
+  const binary = atob(image.dataBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return {
+    file: new File([bytes], image.name, { type: image.mimeType }),
+    type: image.mimeType,
+  };
+}

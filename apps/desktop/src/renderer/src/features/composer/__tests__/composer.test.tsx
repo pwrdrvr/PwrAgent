@@ -22,6 +22,7 @@ import {
   type StartReviewRequest,
   type ModelSettingsRecent,
   type FederationCapability,
+  HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
   type MoveQueuedTurnResponse,
   type SetQueuedTurnPausedRequest,
   type SetQueuedTurnPausedResponse,
@@ -48,6 +49,7 @@ import { Composer as ProductionComposer } from "../Composer";
 import { ImageGalleryLayer } from "../../thread-detail/ImageGalleryLayer";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
+import { settleFakeTimers } from "../../../test/settle-fake-timers";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
 import { useComposerDraftStore } from "../useComposerDraftStore";
 import { useNavigationLaunchpadConfiguration } from "../../../lib/useNavigationLaunchpadConfiguration";
@@ -117,9 +119,7 @@ beforeAll(() => {
  * makes the same proof instant and exact.
  */
 async function settleFederatedSearch(): Promise<void> {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(FEDERATED_THREAD_SEARCH_DEBOUNCE_MS * 2);
-  });
+  await settleFakeTimers(FEDERATED_THREAD_SEARCH_DEBOUNCE_MS * 2);
 }
 
 async function flushReactUpdates(): Promise<void> {
@@ -858,6 +858,131 @@ describe("Composer", () => {
     expect(store.get(buildThreadComposerScopeKey("codex", "materialized"))?.imageAttachments).toHaveLength(1);
     expect(store.get(buildThreadComposerScopeKey("codex", "materialized"))?.draft).toBe("Follow-up image");
     expect(store.get(`launchpad:${launchpad.directoryKey}`)).toBeUndefined();
+  });
+
+  it("attaches the images in text pasted from Linear", async () => {
+    const pasted = `<issue identifier="PWR-5"><linear-image>${JSON.stringify({
+      type: "image",
+      attrs: { src: "https://uploads.linear.app/org/issue/file?signature=old", alt: "shot.png" },
+    })}</linear-image></issue>`;
+    const fetchLinearPastedImages = vi.fn(async () => ({
+      status: "fetched" as const,
+      failed: 0,
+      images: [{ name: "shot.png", mimeType: "image/png", dataBase64: "AQID" }],
+    }));
+    render(<Composer desktopApi={{ fetchLinearPastedImages }} skills={[]} thread={{
+      id: "thread-1", title: "Linear paste", titleSource: "explicit", source: "codex",
+      linkedDirectories: [], inbox: { inInbox: false },
+    }} />);
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [],
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+      },
+    });
+
+    expect(await screen.findByAltText("shot.png")).toBeInTheDocument();
+    expect(fetchLinearPastedImages).toHaveBeenCalledWith({ text: pasted });
+  });
+
+  it("says how to attach expired Linear images when there is no connection", async () => {
+    const pasted = `<linear-image>${JSON.stringify({
+      type: "image",
+      attrs: { src: "https://uploads.linear.app/org/issue/file", alt: "old.png" },
+    })}</linear-image>`;
+    const onShowNotice = vi.fn();
+    const fetchLinearPastedImages = vi.fn(async () => ({ status: "unavailable" as const }));
+    render(<Composer desktopApi={{ fetchLinearPastedImages }} onShowNotice={onShowNotice} skills={[]} thread={{
+      id: "thread-1", title: "Linear paste", titleSource: "explicit", source: "codex",
+      linkedDirectories: [], inbox: { inInbox: false },
+    }} />);
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [],
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+      },
+    });
+
+    await waitFor(() => expect(onShowNotice).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Linear images not attached",
+      message: expect.stringContaining("Connect Linear in Settings → Plugins"),
+    })));
+  });
+
+  it("holds Send while Linear images download", async () => {
+    const pasted = `<linear-image>${JSON.stringify({
+      type: "image",
+      attrs: { src: "https://uploads.linear.app/org/issue/file", alt: "held.png" },
+    })}</linear-image>`;
+    const response = createDeferred<{
+      status: "fetched"; failed: number;
+      images: Array<{ name: string; mimeType: string; dataBase64: string }>;
+    }>();
+    render(<Composer desktopApi={{ fetchLinearPastedImages: () => response.promise }} skills={[]} thread={{
+      id: "thread-1", title: "Linear paste", titleSource: "explicit", source: "codex",
+      linkedDirectories: [], inbox: { inInbox: false },
+    }} />);
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [],
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+      },
+    });
+
+    expect(await screen.findByText("Preparing image attachments…")).toBeInTheDocument();
+    await act(async () => {
+      response.resolve({
+        status: "fetched",
+        failed: 0,
+        images: [{ name: "held.png", mimeType: "image/png", dataBase64: "AQID" }],
+      });
+      await response.promise;
+    });
+    expect(await screen.findByAltText("held.png")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Preparing image attachments…")).toBeNull());
+  });
+
+  it("drops Linear images that arrive after the thread changes", async () => {
+    const pasted = `<linear-image>${JSON.stringify({
+      type: "image",
+      attrs: { src: "https://uploads.linear.app/org/issue/file", alt: "late.png" },
+    })}</linear-image>`;
+    const response = createDeferred<{
+      status: "fetched"; failed: number;
+      images: Array<{ name: string; mimeType: string; dataBase64: string }>;
+    }>();
+    const desktopApi = { fetchLinearPastedImages: vi.fn(() => response.promise) };
+    const thread = (id: string): NavigationThreadSummary => ({
+      id, title: id, titleSource: "explicit", source: "codex",
+      linkedDirectories: [], inbox: { inInbox: false },
+    });
+    const view = render(<Composer desktopApi={desktopApi} skills={[]} thread={thread("first")} />);
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [],
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+      },
+    });
+    await waitFor(() => expect(desktopApi.fetchLinearPastedImages).toHaveBeenCalledTimes(1));
+
+    view.rerender(<Composer desktopApi={desktopApi} skills={[]} thread={thread("second")} />);
+    await act(async () => {
+      response.resolve({
+        status: "fetched",
+        failed: 0,
+        images: [{ name: "late.png", mimeType: "image/png", dataBase64: "AQID" }],
+      });
+      await response.promise;
+    });
+
+    expect(screen.queryByAltText("late.png")).not.toBeInTheDocument();
+    expect(normalizeImageFile).not.toHaveBeenCalled();
   });
 
   it("keeps follow-ups and steering intent when a starting launchpad is remounted", async () => {
@@ -19160,6 +19285,160 @@ describe("Composer", () => {
         sourceBranch: "feature/handoff",
       });
     });
+  });
+
+  it("hands a Claude worktree thread to a new worktree", async () => {
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backends={[backendSummary("claude")]}
+        directory={{ key: "directory:/repo", kind: "directory", label: "PwrAgent", path: "/repo", gitStatus: { currentBranch: "main", branches: ["main", "feature/handoff"] } }}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Worktree thread", titleSource: "explicit", source: "claude",
+          executionMode: "default", gitBranch: "feature/handoff",
+          linkedDirectories: [{ id: "dir-1", label: "PwrAgent", path: "/repo", worktreePath: "/repo/.worktrees/pwragent-feature", kind: "worktree" }],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
+    expect(screen.getByRole("menuitem", { name: "Handoff to Local" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
+    expect(within(dialog).getByRole("radio", { name: /^Handoff to Detached HEAD/ })).toHaveAttribute("aria-checked", "true");
+    expect(within(dialog).getByText(/current worktree is archived with a checkpoint/)).toBeInTheDocument();
+    // Leaving a worktree needs no branch for Local.
+    fireEvent.click(within(dialog).getByRole("radio", { name: /^Handoff Current Branch/ }));
+    expect(within(dialog).queryByLabelText("Leave current checkout on")).toBeNull();
+    fireEvent.click(within(dialog).getByRole("radio", { name: /^Handoff to New Branch/ }));
+    fireEvent.change(within(dialog).getByLabelText("New branch name"), { target: { value: "feature/next" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Handoff" }));
+
+    await waitFor(() => {
+      expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+        direction: "worktree-to-worktree",
+        strategy: "new-branch",
+        repositoryPath: "/repo",
+        sourcePath: "/repo/.worktrees/pwragent-feature",
+        sourceBranch: "feature/handoff",
+        newBranchName: "feature/next",
+      });
+    });
+  });
+
+  it("starts a fresh worktree from a base branch and moves nothing", async () => {
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backends={[backendSummary("claude")]}
+        directory={{
+          key: "directory:/repo", kind: "directory", label: "PwrAgent", path: "/repo",
+          gitStatus: { currentBranch: "main", defaultBranch: "main", branches: ["main", "feature/handoff"], baseBranches: ["feature/handoff", "main", "origin/main"] },
+        }}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Worktree thread", titleSource: "explicit", source: "claude",
+          executionMode: "default", gitBranch: "feature/handoff",
+          linkedDirectories: [{ id: "dir-1", label: "PwrAgent", path: "/repo", worktreePath: "/repo/.worktrees/pwragent-feature", kind: "worktree" }],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
+    fireEvent.click(within(dialog).getByRole("radio", { name: /^Start Fresh from a Branch/ }));
+    // The remote copy of the default branch is picked first.
+    expect(within(dialog).getByLabelText(/^Base branch:/)).toHaveAttribute("data-value", "origin/main");
+    // Claude thread archive keeps its worktrees, so the note promises no cleanup.
+    expect(within(dialog).getByText(/current worktree stays on disk/)).not.toHaveTextContent(/Archiving/);
+    expect(within(dialog).queryByText(/archived with a checkpoint/)).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Handoff" }));
+
+    await waitFor(() => {
+      expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+        direction: "worktree-to-worktree",
+        strategy: "detached-changes",
+        repositoryPath: "/repo",
+        sourcePath: "/repo/.worktrees/pwragent-feature",
+        sourceBranch: "feature/handoff",
+        baseRef: "origin/main",
+      });
+    });
+  });
+
+  it("names a branch for a fresh worktree from Local", async () => {
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo", kind: "directory", label: "PwrAgent", path: "/repo",
+          gitStatus: { currentBranch: "feature/handoff", defaultBranch: "main", branches: ["main", "feature/handoff"], baseBranches: ["main", "feature/handoff"] },
+        }}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Local thread", titleSource: "explicit", source: "codex",
+          executionMode: "default", gitBranch: "feature/handoff",
+          linkedDirectories: [{ id: "dir-1", label: "PwrAgent", path: "/repo", kind: "local" }],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
+    fireEvent.click(within(dialog).getByRole("radio", { name: /^Start Fresh from a Branch/ }));
+    expect(within(dialog).getByLabelText(/^Base branch:/)).toHaveAttribute("data-value", "main");
+    fireEvent.change(within(dialog).getByLabelText("New branch name"), { target: { value: " fix/clean " } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Handoff" }));
+
+    await waitFor(() => {
+      expect(onHandoffThreadWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+        direction: "local-to-worktree",
+        strategy: "new-branch",
+        newBranchName: "fix/clean",
+        baseRef: "main",
+      }));
+    });
+  });
+
+  it("offers a new worktree on a peer's thread and names an owner too old for it", async () => {
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{ key: "directory:/repo", kind: "directory", label: "PwrAgent", path: "/repo", gitStatus: { currentBranch: "main", branches: ["main"] } }}
+        onHandoffThreadWorkspace={async () => {
+          throw new Error(`Error invoking remote method: Error: ${HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE}`);
+        }}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Worktree thread", titleSource: "explicit", source: "codex",
+          executionMode: "default", gitBranch: "feature/handoff",
+          linkedDirectories: [{ id: "dir-1", label: "PwrAgent", path: "/repo", worktreePath: "/repo/.worktrees/pwragent-feature", kind: "worktree" }],
+          inbox: { inInbox: false },
+          federation: {
+            ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "studio" } },
+            instanceLabel: "studio-mac",
+            peerStatus: "connected",
+          },
+        } as ComponentProps<typeof Composer>["thread"]}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
+
+    expect(await screen.findByText("studio-mac runs an older PwrAgent that cannot make this move. Update PwrAgent on studio-mac. Nothing moved."))
+      .toBeInTheDocument();
   });
 
   it("names the machine to update when its owner cannot keep Local's branch", async () => {

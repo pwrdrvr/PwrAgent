@@ -66,6 +66,8 @@ const withThreadLifecycleMutation = vi.hoisted(() => vi.fn(
 const overlayStoreFixture = vi.hoisted(() => ({ stable: undefined as unknown }));
 const federationMock = vi.hoisted(() => {
   const remoteBackend = {
+    continueThreadEnvironmentStartup: vi.fn(async (request: { backend: string; threadId: string }) => ({ ...request, turnId: "owner-turn" })),
+    acknowledgeThreadEnvironmentFailure: vi.fn(async (request: { backend: string; threadId: string }) => ({ ...request, acknowledged: true })),
     setThreadAgent: vi.fn(),
     setThreadTokenMiser: vi.fn(),
     inspectTokenMiserOutput: vi.fn(async () => ({ available: false })),
@@ -5251,7 +5253,7 @@ describe("app server ipc", () => {
     expect(backendRegistryLifecycle.get).not.toHaveBeenCalled();
   });
 
-  it("routes family pricing IPC to the owner and propagates failure without a local fallback", async () => {
+  it("reads a remote thread's family from its owner and propagates the owner's failure", async () => {
     const { THREAD_FAMILY_PRICING_READ_CHANNEL } = await import("../../shared/ipc");
     const target = { scope: "remote" as const, instanceId: "owner-one" };
     const request = { backend: "codex" as const, threadId: "parent" };
@@ -5261,18 +5263,29 @@ describe("app server ipc", () => {
       { backend: "codex", threadId: "child", title: "Child", self: false, active: true,
         totalCostMicros: 2_000_000, usageLineCount: 2, unpricedUsageLineCount: 1 },
     ] };
-    const readLocalIndex = vi.fn();
-    const readLocalSummaries = vi.fn();
-    overlayStoreFixture.stable = { readNavigationQueryIndex: readLocalIndex, readThreadPricingSummaries: readLocalSummaries };
+    const readLocalSummaries = vi.fn(async () => []);
+    overlayStoreFixture.stable = {
+      readNavigationQueryIndex: vi.fn(),
+      readRemoteThreadPinNavigationRows: vi.fn(async () => []),
+      readThreadPricingSummaries: readLocalSummaries,
+    };
     federationMock.remoteBackend.readThreadFamilyPricing.mockReset().mockResolvedValueOnce(family)
       .mockRejectedValueOnce(new Error("Owner disconnected"));
     registerAppServerIpcHandlers();
     const read = () => handlers.get(THREAD_FAMILY_PRICING_READ_CHANNEL)!({}, { ...request, federationTarget: target });
-    expect(await read()).toEqual(family);
+    const result = await read() as { members: Array<Record<string, unknown>> };
     expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(target);
-    expect(federationMock.remoteBackend.readThreadFamilyPricing).toHaveBeenCalledExactlyOnceWith(request);
+    // One bounded budget covers the owner read; a hung owner cannot hold the card.
+    expect(federationMock.remoteBackend.readThreadFamilyPricing)
+      .toHaveBeenCalledExactlyOnceWith(request, { deadlineAt: expect.any(Number) });
+    // Every member is stamped with the owner that keeps its total.
+    expect(result.members.map(({ threadId, self, ownerInstanceId, totalCostMicros }) =>
+      ({ threadId, self, ownerInstanceId, totalCostMicros }))).toEqual([
+      { threadId: "parent", self: true, ownerInstanceId: "owner-one", totalCostMicros: 1_000_000 },
+      { threadId: "child", self: false, ownerInstanceId: "owner-one", totalCostMicros: 2_000_000 },
+    ]);
     await expect(read()).rejects.toThrow("Owner disconnected");
-    expect(readLocalIndex).not.toHaveBeenCalled();
+    // This machine keeps no threads in that family, so nothing local is priced.
     expect(readLocalSummaries).not.toHaveBeenCalled();
   });
 
@@ -5698,6 +5711,19 @@ describe("app server ipc", () => {
       seenAt: 6_000,
       seenUpdatedAt: 3_000,
     });
+  });
+
+  it("routes environment continuation and acknowledgement to the remote owner", async () => {
+    const { NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL, NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "windows-owner" };
+    const identity = { backend: "codex", threadId: "failed-setup" };
+    registerAppServerIpcHandlers();
+    const continued = await handlers.get(NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL)?.({}, { ...identity, federationTarget });
+    expect(continued).toEqual({ ...identity, turnId: "owner-turn" });
+    expect(federationMock.remoteBackend.continueThreadEnvironmentStartup).toHaveBeenCalledExactlyOnceWith(identity);
+    const acknowledged = await handlers.get(NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL)?.({}, { ...identity, federationTarget });
+    expect(acknowledged).toEqual({ ...identity, acknowledged: true });
+    expect(federationMock.remoteBackend.acknowledgeThreadEnvironmentFailure).toHaveBeenCalledExactlyOnceWith(identity);
   });
 
   it("adds remote thread reactions on the owner without replacing its ordered reactions", async () => {

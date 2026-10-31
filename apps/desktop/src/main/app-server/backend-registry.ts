@@ -4,7 +4,7 @@ import { inspectClaudeInstallation } from "../claude/claude-executable";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import type { ForgePrRepositoryResolver, ForgePrToolHandler } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import { ForgeReadError, repositoryKey, validateForgeReadArgs, type ForgeReadRequest, type ForgeRepository } from "../pr-status/forge-tool-contract";
-import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
+import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation, type ForgeReviewComment } from "../pr-status/forge-pr-tool-contract";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import {
@@ -62,11 +62,14 @@ import {
   MONITOR_JOB_HEURISTIC_SYSTEM,
   MonitorJobSuggestionDetector,
   MONITOR_JOB_SUGGESTION,
+  CLAUDE_MONITOR_JOB_SUGGESTION,
+  isCiWaitCommand,
   parseMonitorJobHeuristicDecision,
   type MonitorJobHeuristicEvidence,
 } from "./monitor-job-suggestion";
 import { resolvePullRequestReview } from "./pull-request-review";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
+import { PWRAGENT_MCP_SERVER_HASH_LENGTH, PWRAGENT_MCP_SERVER_PREFIX } from "../../shared/tool-activity";
 import { priceLocalModelUsage } from "@pwragent/shared";
 import {
   attributeCodexProviderUsageLine,
@@ -102,6 +105,7 @@ import {
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
 import { buildIncomingWorkSummary } from "./thread-work-notification";
 import { ThreadCorrespondenceStore } from "./thread-correspondence-store";
+import { PendingEnvironmentLaunchStore, type PendingEnvironmentLaunch } from "./pending-environment-launch-store";
 import { mergeCausalMessagingContext } from "./causal-messaging-context";
 import { rememberBoundedMap } from "../bounded-map";
 import { app } from "electron";
@@ -207,6 +211,8 @@ import {
   type MarkThreadSeenRequest,
   type MarkThreadSeenResponse,
   type SetThreadPinRequest,
+  type SetThreadParentRequest,
+  type SetThreadParentResponse,
   type SetThreadLockResponse,
   type FederationInstanceId,
   type ThreadLock,
@@ -393,6 +399,7 @@ import {
   type MoveThreadWorkspacePhase,
   type MoveThreadWorkspaceResult,
   type MutateThreadToolArgs,
+  type MutateThreadParentV1Request,
   type MarkProjectReadToolArgs,
   type MarkProjectReadResult,
   type PendingThreadHandoffPhase,
@@ -430,6 +437,10 @@ import {
   type SteerTurnRequest,
   type SteerTurnResponse,
   type StartTurnResponse,
+  type AcknowledgeThreadEnvironmentFailureRequest,
+  type AcknowledgeThreadEnvironmentFailureResponse,
+  type ContinueThreadEnvironmentStartupRequest,
+  type ContinueThreadEnvironmentStartupResponse,
   type StartReviewRequest,
   type StartReviewResponse,
   type StartReviewToolResult,
@@ -443,6 +454,7 @@ import {
   type TrustCodexProjectResponse,
   type ThreadExecutionMode,
   type ThreadOverlayState,
+  type ThreadWorkspaceHandoffDirection,
   type ThreadWorkspaceHandoffStrategy,
   type ThreadSubAgentSummary,
   type ThreadToolAccounting,
@@ -487,7 +499,10 @@ import {
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
   resolveHelperModel,
+  automaticProviderMonitorModel,
+  isLightweightHelperModel,
   type DesktopHelperModelSettings,
+  type DesktopTaskMonitorModelChoice,
   type HelperModelId,
   type HelperModelResolution,
   DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
@@ -719,6 +734,7 @@ import {
   mergeToolInvocationLifecycleWithStreamedOutput,
   toolAccountingLookbackSince,
   toolInvocationFromNotification,
+  normalizeToolInvocationCommand,
   toolInvocationReviewInputFromNotification,
   type ToolOutputIncidentAggregate,
 } from "./tool-invocation-accounting";
@@ -861,6 +877,8 @@ const ACTIVE_TURN_WORKSPACE_RECOVERY_ERROR =
   "Wait for the current turn to finish, then try again.";
 const CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING =
   "Codex workspace CWD synchronization is pending and will retry automatically.";
+const CLAUDE_WORKSPACE_MOVE_FAILED_WARNING =
+  "Claude could not switch to the new folder. Move this thread again before you send a message.";
 /**
  * Number of consecutive queued-execution-mode flush failures tolerated
  * before the queue is auto-cancelled and an explanatory `cancelled`
@@ -1263,6 +1281,19 @@ function resolveThreadWorkspaceCwd(
     resolveLinkedDirectoryWorkspaceCwd(overlayDirectories) ??
     thread.projectKey
   );
+}
+
+/** True when the thread's runtime cwd is one of its linked worktrees. */
+function threadWorkspaceIsWorktree(
+  thread: AppServerThreadSummary | undefined,
+  overlayDirectories: AppServerThreadSummary["linkedDirectories"] = [],
+): boolean {
+  const cwd = resolveThreadWorkspaceCwd(thread, overlayDirectories);
+  if (!cwd) return false;
+  const target = normalizeWorktreePathForComparison(cwd);
+  return [...overlayDirectories, ...(thread?.linkedDirectories ?? [])].some((directory) =>
+    directory.kind === "worktree"
+    && normalizeWorktreePathForComparison(directory.worktreePath ?? directory.path) === target);
 }
 
 function linkedDirectoriesHaveSameWorkspaceIdentity(
@@ -1851,12 +1882,13 @@ function resolveBranchDriftExpectedBranch(params: {
   };
 }
 
-async function readCurrentGitBranch(sourcePath: string): Promise<string | undefined> {
-  const result = await execFile(
-    "git",
-    ["-C", sourcePath, "rev-parse", "--abbrev-ref", "HEAD"],
-    { env: buildPwrAgentChildProcessEnv(process.env) },
-  );
+async function readCurrentGitBranch(sourcePath: string, signal?: AbortSignal): Promise<string | undefined> {
+  // Git for Windows can hand off to a descendant that still holds the
+  // workspace open. Wait for the owned tree before allowing its removal.
+  const result = await runGitCommand(sourcePath, ["rev-parse", "--abbrev-ref", "HEAD"], {
+    ownProcessTree: true,
+    signal,
+  });
   const branch = result.stdout.trim();
   return branch || undefined;
 }
@@ -2190,6 +2222,27 @@ function linkedDirectoryWorktreePath(
 
 function normalizeWorktreePathForComparison(worktreePath: string): string {
   return path.normalize(worktreePath.trim());
+}
+
+/**
+ * Archive cleanup's view of a thread's directories: its workspace links plus
+ * the worktrees it left on disk with a fresh-start move. Those are still the
+ * thread's own, so archive checkpoints and removes them like any other.
+ */
+function withRetainedWorktrees(
+  directories: LinkedDirectorySummary[],
+  overlay: ThreadOverlayState | undefined,
+): LinkedDirectorySummary[] {
+  const retained = overlay?.retainedWorktrees ?? [];
+  if (retained.length === 0) return directories;
+  const linked = new Set(directories.flatMap((directory) => {
+    const worktreePath = linkedDirectoryWorktreePath(directory);
+    return worktreePath ? [normalizeWorktreePathForComparison(worktreePath)] : [];
+  }));
+  return [...directories, ...retained.filter((directory) => {
+    const worktreePath = linkedDirectoryWorktreePath(directory);
+    return worktreePath && !linked.has(normalizeWorktreePathForComparison(worktreePath));
+  })];
 }
 
 const BACKEND_LABELS: Record<AppServerBackendKind, string> = {
@@ -7572,12 +7625,6 @@ const MONITOR_REASONING_EFFORT_ORDER = [
   "xhigh",
 ] as const;
 
-// Whole name segments only: "gemini-3-pro" must not pass as "mini".
-function isLightweightMonitorModel(modelId: string): boolean {
-  return /(?:^|[^a-z])(?:mini|lite|flash|haiku|small|nano|luna)(?:$|[^a-z])/iu
-    .test(modelId);
-}
-
 /**
  * The highest effort an agent may request for a Codex monitor. An effort
  * this list does not know, such as `max`, is never accepted.
@@ -7977,8 +8024,6 @@ function buildCodexTokenMiserDynamicToolSpecs(
 }
 
 const PWRAGENT_PDF_MCP_SERVER_NAME = "pwragent_pdf";
-const PWRAGENT_CONNECTION_MCP_SERVER_PREFIX = "pwragent_";
-const PWRAGENT_CONNECTION_MCP_SERVER_HASH_LENGTH = 32;
 
 function buildCodexPdfMcpConfig(
   registration: AgentToolMcpRegistration,
@@ -8049,8 +8094,8 @@ export function buildCodexConnectionMcpServerName(
         .join("\0"),
     )
     .digest("hex")
-    .slice(0, PWRAGENT_CONNECTION_MCP_SERVER_HASH_LENGTH);
-  return `${PWRAGENT_CONNECTION_MCP_SERVER_PREFIX}${server.name}_${identity}`;
+    .slice(0, PWRAGENT_MCP_SERVER_HASH_LENGTH);
+  return `${PWRAGENT_MCP_SERVER_PREFIX}${server.name}_${identity}`;
 }
 
 /**
@@ -8098,7 +8143,7 @@ export function buildCodexConnectionMcpConfig(
         // inherited HTTP server.
         const aliases = [
           server.name,
-          `${PWRAGENT_CONNECTION_MCP_SERVER_PREFIX}${server.name}`,
+          `${PWRAGENT_MCP_SERVER_PREFIX}${server.name}`,
         ].filter((name) => inheritedNames.has(name));
         return [
           ...aliases.map((name) => [name, { enabled: false }] as const),
@@ -8353,6 +8398,8 @@ export type HandoffSourceSettings = {
   reasoningEffort?: string;
   serviceTier?: string;
   fastMode?: boolean;
+  /** The thread's environment, when it runs one locally. */
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
 };
 
 /** See `DesktopBackendRegistry.setAgentThreadActions`. */
@@ -8363,6 +8410,10 @@ export type AgentThreadActions = {
   markThreadSeen: (
     request: MarkThreadSeenRequest,
   ) => Promise<MarkThreadSeenResponse>;
+  /** The sidebar's own path, so every window hears the new grouping. */
+  setThreadParent?: (
+    request: SetThreadParentRequest,
+  ) => Promise<SetThreadParentResponse>;
 };
 
 function threadInspectionFailure(
@@ -8659,6 +8710,7 @@ type CodexRetryableTurnStart = {
 type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
   Pick<
     SqliteOverlayStore,
+    | "acknowledgeThreadEnvironmentFailure"
     | "adoptLegacyRemoteDirectoryLaunchpad"
     | "readThreadGitWorkingStateCache"
     | "completeThreadUsageTurn"
@@ -8730,12 +8782,11 @@ const CODEX_INVALID_ID_RECOVERY_COOLDOWN_MS = 5 * 60 * 1000;
 const TOOL_INVOCATION_DELTA_FLUSH_INTERVAL_MS = 250;
 
 // Token-usage updates are cumulative snapshots, so repeated observations for
-// one turn replace each other in memory. The write budget measures ~64 KiB of
-// WAL for a ten-turn batch: at this one-second ceiling, a pathological nonstop
-// stream is capped near 225 MiB/hour instead of ~900 MiB/hour at 250ms. In
-// practice app-server emits usage at model-request boundaries, not per token,
-// and turn terminals flush immediately; one second keeps pricing UI responsive
-// while allowing concurrent turns to share one sqlite transaction.
+// one turn replace each other in memory. The window bounds the delay, not the
+// global commit rate: terminal, hydration, reconciliation and shutdown paths
+// drain it early. Concurrent lines share one transaction; no pending lines
+// means no writes. usage-activity-cadence.test.ts budgets busy, sparse, boundary
+// and idle protocol replays, including WAL projections at explicit rates.
 const LIVE_THREAD_USAGE_FLUSH_INTERVAL_MS = 1_000;
 // A turn owned by another live runtime is left open until it has written no
 // usage for this long. Every model response writes usage, so a quiet turn is
@@ -8944,6 +8995,8 @@ export class DesktopBackendRegistry {
   private providerRuntimeFingerprints?: Readonly<Record<ProviderId, string>>;
   private providerRuntimeInvalidationPromise?: Promise<void>;
   private readonly correspondenceStore: ThreadCorrespondenceStore;
+  private readonly pendingEnvironmentLaunchStore: PendingEnvironmentLaunchStore;
+  private readonly environmentLaunchContinuations = new Map<string, Promise<ContinueThreadEnvironmentStartupResponse>>();
   private readonly overlayStore: BackendRegistryOverlayStoreLike;
   private readonly gitDirectoryService: GitDirectoryService;
   private readonly gitWorkingStateService: GitWorkingStateService;
@@ -9385,6 +9438,7 @@ export class DesktopBackendRegistry {
   private runningTurnsShutdownStopSettled = false;
   /** Set once a quit starts stopping turns; the queue starts nothing after. */
   private stoppingRunningTurnsForShutdown = false;
+  private readonly activeTurnBranchProbeAbort = new AbortController();
   /** Terminal events still reaching listeners while a quit waits on them. */
   private readonly shutdownTerminalEmits = new Set<Promise<void>>();
   /**
@@ -9988,6 +10042,8 @@ export class DesktopBackendRegistry {
     DesktopProviderModelDefaults
   >;
   private readonly resolveHelperModelSettingsFn: () => DesktopHelperModelSettings;
+  /** `[[models.task_monitor_models]]`, keyed by the parent thread's provider. */
+  private readonly resolveTaskMonitorModelsFn: () => Record<string, DesktopTaskMonitorModelChoice>;
   /** `general.pass_setup_variables_to_agents`, read at each agent start. */
   private readonly resolvePassSetupVariablesToAgentsFn: () => boolean;
   private readonly resolveUsageAccountGroupsFn: () => Record<string, string>;
@@ -10011,6 +10067,7 @@ export class DesktopBackendRegistry {
   private readonly resolveToolOutputAlertPolicyFn: () => DesktopToolOutputAlertPolicy;
   private spendAlertPolicy = DESKTOP_SPEND_ALERT_POLICY_DEFAULT;
   private readonly monitorJobSuggestionDetector = new MonitorJobSuggestionDetector();
+  private readonly pendingAcpMonitorJobSuggestions = new Map<string, string>();
   private readonly monitorJobHeuristicDetector = new MonitorJobHeuristicDetector();
   private toolOutputAlertPolicy = DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT;
   private readonly localFilePrivateStorageRoots: readonly string[];
@@ -10075,6 +10132,7 @@ export class DesktopBackendRegistry {
     codexClient?: BackendClient;
     overlayStore?: BackendRegistryOverlayStoreLike;
     correspondenceStore?: ThreadCorrespondenceStore;
+    pendingEnvironmentLaunchStore?: PendingEnvironmentLaunchStore;
     gitDirectoryService?: GitDirectoryService;
     gitWorkingStateService?: GitWorkingStateService;
     gitWorkspaceHandoffService?: GitWorkspaceHandoffService;
@@ -10133,6 +10191,7 @@ export class DesktopBackendRegistry {
       DesktopProviderModelDefaults
     >;
     resolveHelperModelSettings?: () => DesktopHelperModelSettings;
+    resolveTaskMonitorModels?: () => Record<string, DesktopTaskMonitorModelChoice>;
     resolvePassSetupVariablesToAgents?: () => boolean;
     resolveUsageAccountGroups?: () => Record<string, string>;
     resolveProviderThreadModelMigrations?: () => Record<
@@ -10237,6 +10296,10 @@ export class DesktopBackendRegistry {
       ?? new ThreadCorrespondenceStore(isAppStateInitialized()
         ? resolveActiveProfilePath("state/thread-correspondence")
         : undefined);
+    this.pendingEnvironmentLaunchStore = options?.pendingEnvironmentLaunchStore
+      ?? new PendingEnvironmentLaunchStore(isAppStateInitialized()
+        ? resolveActiveProfilePath("state/pending-environment-launches")
+        : undefined);
     const tokenMiserStateDir =
       createsLiveCodexClient && isAppStateInitialized()
         ? resolveActiveProfilePath("state/token-miser")
@@ -10301,6 +10364,9 @@ export class DesktopBackendRegistry {
     this.resolveHelperModelSettingsFn =
       options?.resolveHelperModelSettings ??
       (() => settingsService?.resolveHelperModelSettings?.() ?? { helpers: {} });
+    this.resolveTaskMonitorModelsFn =
+      options?.resolveTaskMonitorModels ??
+      (() => settingsService?.resolveTaskMonitorModels?.() ?? {});
     this.resolvePassSetupVariablesToAgentsFn =
       options?.resolvePassSetupVariablesToAgents ??
       (() => settingsService?.resolvePassSetupVariablesToAgents?.() ?? true);
@@ -10833,6 +10899,8 @@ export class DesktopBackendRegistry {
               }, { taskMonitorRole: "all" }),
             authorizeToolCall: (params) =>
               this.authorizeAgentToolMcpCall(params),
+            resolveToolResultReminder: (context) =>
+              this.takeAcpMonitorJobSuggestion(context),
           });
     this.pdfToolMcpServer =
       options?.pdfToolMcpServer === null
@@ -10881,6 +10949,7 @@ export class DesktopBackendRegistry {
         target: { type: "custom", instructions: "/code-review" },
         ...(pullRequests ? { namedPullRequests: pullRequests } : {}),
       }),
+      suggestMonitorJob: async (request) => await this.suggestClaudeMonitorJob(request),
       ...options?.claudeBackendOptions,
     });
     this.acpBackend = new AcpBackendAdapter({
@@ -11413,6 +11482,7 @@ export class DesktopBackendRegistry {
       return;
     }
     this.stoppingRunningTurnsForShutdown = true;
+    this.activeTurnBranchProbeAbort.abort();
     const keys = [...this.activeTurnKeys];
     if (keys.length === 0) {
       return;
@@ -11852,6 +11922,10 @@ export class DesktopBackendRegistry {
         : {}),
       ...(overlay?.serviceTier ? { serviceTier: overlay.serviceTier } : {}),
       ...(overlay?.fastMode !== undefined ? { fastMode: overlay.fastMode } : {}),
+      ...(overlay?.codexEnvironmentRuntime?.environmentId
+        && overlay.codexEnvironmentRuntime.executionTarget === "local"
+        ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
+        : {}),
     };
   }
 
@@ -15632,7 +15706,11 @@ export class DesktopBackendRegistry {
       await this.archiveThreadWithoutLifecycleLock(request, undefined, finishMutation),
     );
     this.threadArchiveOperations.set(key, operation);
-    try { return await operation; }
+    try {
+      const result = await operation;
+      this.pendingEnvironmentLaunchStore.delete({ backend: request.backend ?? "codex", threadId: request.threadId });
+      return result;
+    }
     catch (error) {
       backendRegistryLog.warn("thread archive failed", { ...logFields, durationMs: Date.now() - requestedAt, error: error instanceof Error ? error.message : String(error) });
       throw error;
@@ -15925,9 +16003,9 @@ export class DesktopBackendRegistry {
           const readOverlays = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
           await context.checkpoint();
           const overlays = await readOverlays.call(this.overlayStore, { backend, threadIds: [result.threadId] });
-          targetThread = { ...targetThread, linkedDirectories: mergeThreadLinkedDirectories([
+          targetThread = { ...targetThread, linkedDirectories: withRetainedWorktrees(mergeThreadLinkedDirectories([
             ...targetThread.linkedDirectories, ...(overlays[result.threadId]?.extraLinkedDirectories ?? []),
-          ]) };
+          ]), overlays[result.threadId]) };
         } else if (isAcpBackendId(backend)) {
           const session = this.acpBackend.getSession(backend, result.threadId);
           if (session?.archivedAt) targetThread = this.acpBackend.sessionToThreadSummary(session);
@@ -16285,7 +16363,6 @@ export class DesktopBackendRegistry {
   async handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> {
-    if (request.backend === "claude") throw new Error("Start a new Claude thread in the target workspace.");
     return await this.withThreadLifecycleMutation(request, async () => await this.handoffThreadWorkspaceWithoutArchiveLock(request));
   }
 
@@ -16295,6 +16372,8 @@ export class DesktopBackendRegistry {
     if (this.threadHasActiveTurn(request.threadId, request.backend)) {
       throw new Error(ACTIVE_TURN_HANDOFF_ERROR);
     }
+    // Before any file moves: Claude refuses while it runs a turn or a task.
+    if (request.backend === "claude") this.claudeBackend.assertWorkspaceMovable(request.threadId);
     if (isAcpBackendId(request.backend)) {
       await this.assertAcpWorkspaceHandoffAllowed({
         backend: request.backend,
@@ -16331,12 +16410,10 @@ export class DesktopBackendRegistry {
           ...(projectMoveOverlay?.extraLinkedDirectories ?? []),
         ]
       : undefined;
-    const sourceCwd = resolveThreadWorkspaceCwd(thread, projectMoveOverlay?.extraLinkedDirectories);
-    const sourceWorkMode: "local" | "worktree" = workspaceDirectories && mergeThreadLinkedDirectories(workspaceDirectories).some((directory) =>
-      directory.kind === "worktree"
-      && sourceCwd
-      && normalizeWorktreePathForComparison(directory.worktreePath ?? directory.path) === normalizeWorktreePathForComparison(sourceCwd),
-    ) ? "worktree" : "local";
+    const sourceWorkMode: "local" | "worktree" = workspaceDirectories
+      && threadWorkspaceIsWorktree(thread, projectMoveOverlay?.extraLinkedDirectories)
+      ? "worktree"
+      : "local";
     // PR workspace provenance survives an earlier project relink that lost
     // its directory. Git still validates every candidate against the target
     // repository's registered worktrees before it can be reused.
@@ -16345,8 +16422,12 @@ export class DesktopBackendRegistry {
         .map((directory) => directory.worktreePath ?? directory.path),
       ...(projectMoveOverlay?.prs ?? []).flatMap((pr) => pr.linkedDirectoryPaths ?? []),
     ] : undefined;
+    const sourcePath = request.sourcePath ?? candidate.sourcePath;
+    const sourceWorktreeIsExternal = request.direction === "worktree-to-worktree"
+      && await this.threadWorktreeIsExternal(request, thread, sourcePath);
     const result = await this.gitWorkspaceHandoffService.handoff({
       ...request,
+      ...(sourceWorktreeIsExternal ? { keepSourceWorktree: true } : {}),
       ...(workspacePaths ? {
         workspacePaths,
         sourceWorkMode,
@@ -16358,9 +16439,29 @@ export class DesktopBackendRegistry {
         ],
       } : {}),
       repositoryPath: request.repositoryPath ?? candidate.repositoryPath,
-      sourcePath: request.sourcePath ?? candidate.sourcePath,
+      sourcePath,
       sourceBranch: request.sourceBranch ?? candidate.sourceBranch,
     });
+    // A fresh start leaves the previous worktree on disk, and its changes may
+    // not be this thread's. Keep a worktree this thread owns tracked, so
+    // archiving the thread still checkpoints and removes it.
+    // Spell it the way the handoff service spells worktree paths, so a later
+    // move back into it matches and drops it.
+    const retainedPath = request.baseRef?.trim()
+      && request.direction === "worktree-to-worktree"
+      && !sourceWorktreeIsExternal
+      && sourcePath
+      ? toForwardSlashes(await realpath(sourcePath).catch(() => sourcePath))
+      : undefined;
+    const retainWorktree: LinkedDirectorySummary | undefined = retainedPath
+      ? {
+          id: `pwragent-retained-worktree:${request.backend}:${request.threadId}:${retainedPath}`,
+          kind: "worktree",
+          label: result.linkedDirectory.label,
+          path: result.repositoryPath,
+          worktreePath: retainedPath,
+        }
+      : undefined;
     const resultBranch =
       result.strategy === "detached-changes"
         ? (result.workMode === "local"
@@ -16374,6 +16475,7 @@ export class DesktopBackendRegistry {
       directory: result.linkedDirectory,
       gitBranch: resultBranch,
       ...(request.direction === "to-project" ? { resetProjectState: true } : {}),
+      ...(retainWorktree ? { retainWorktree } : {}),
     });
     const workspaceCwd =
       result.linkedDirectory.worktreePath ?? result.targetPath;
@@ -16383,6 +16485,7 @@ export class DesktopBackendRegistry {
         backend: request.backend,
         threadId: request.threadId,
         cwd: workspaceCwd,
+        linkedDirectory: result.linkedDirectory,
       });
     } catch (error) {
       workspaceCwdSyncPending = true;
@@ -16450,7 +16553,9 @@ export class DesktopBackendRegistry {
           ...result,
           warnings: [
             ...result.warnings,
-            CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING,
+            request.backend === "claude"
+              ? CLAUDE_WORKSPACE_MOVE_FAILED_WARNING
+              : CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING,
           ],
         }
       : result;
@@ -16525,9 +16630,9 @@ export class DesktopBackendRegistry {
   async moveThreadToMainCheckout(
     request: MoveThreadToMainCheckoutRequest,
   ): Promise<MoveThreadToMainCheckoutResponse> {
-    if (request.backend === "claude") throw new Error("Start a new Claude thread in the main checkout.");
     return await this.withThreadLifecycleMutation(request, async () => {
       await this.assertWorkspaceRecoveryAllowed(request);
+      if (request.backend === "claude") this.claudeBackend.assertWorkspaceMovable(request.threadId);
       if (isAcpBackendId(request.backend)) {
         await this.assertAcpWorkspaceHandoffAllowed({
           backend: request.backend,
@@ -16579,9 +16684,12 @@ export class DesktopBackendRegistry {
           backend: request.backend,
           threadId: request.threadId,
           cwd: repositoryPath,
+          linkedDirectory,
         });
       } catch (error) {
-        warnings.push(CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING);
+        warnings.push(request.backend === "claude"
+          ? CLAUDE_WORKSPACE_MOVE_FAILED_WARNING
+          : CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING);
         backendRegistryLog.warn(
           "Codex workspace CWD synchronization failed after moving to the main checkout; will retry",
           {
@@ -16627,6 +16735,24 @@ export class DesktopBackendRegistry {
         completedAt: Date.now(),
       };
     });
+  }
+
+  /**
+   * True when the thread's link to this worktree says PwrAgent did not create
+   * it, so moving the thread away must leave the folder on disk.
+   */
+  private async threadWorktreeIsExternal(
+    request: { backend: AppServerBackendKind; threadId: string },
+    thread: AppServerThreadSummary | undefined,
+    worktreePath: string | undefined,
+  ): Promise<boolean> {
+    if (!worktreePath) return false;
+    const overlay = await this.overlayStore.getThreadOverlayState(request);
+    const target = normalizeWorktreePathForComparison(worktreePath);
+    return [...(overlay?.extraLinkedDirectories ?? []), ...(thread?.linkedDirectories ?? [])]
+      .some((directory) => directory.kind === "worktree"
+        && directory.worktreeOwnership === "external"
+        && normalizeWorktreePathForComparison(directory.worktreePath ?? directory.path) === target);
   }
 
   private async assertWorkspaceRecoveryAllowed(request: {
@@ -18805,11 +18931,19 @@ export class DesktopBackendRegistry {
     threadId: string;
   }): Promise<Pick<StartThreadResponse, "pinnedRank" | "autoPinFailure">> {
     const directory = this.resolveCreatedThreadDirectoryVisibility(params);
-    if (
-      !directory?.directoryThreadsCollapsed
-      || !directory.hasPinnedTopLevelThread
-    ) {
+    if (!directory?.hasPinnedTopLevelThread) {
       return {};
+    }
+    if (!directory.directoryThreadsCollapsed) {
+      // With only pins left, Directory threads has no disclosure to close.
+      // Treat that empty section as closed too. A refresh may already include
+      // this creation; it must not count as pre-existing unpinned overflow.
+      for (const row of directory.rowsByThreadKey.values()) {
+        if (!row.parentKey && !row.pinned
+          && (row.remote || row.backend !== params.backend || row.threadId !== params.threadId)) {
+          return {};
+        }
+      }
     }
 
     // A sub-thread renders inside its group, so what has to be visible is the
@@ -23497,6 +23631,7 @@ export class DesktopBackendRegistry {
       this.taskMonitorDelegations.delete(params.monitorId);
       try {
         await this.interruptManagedTaskMonitor(taskMonitor);
+        this.releaseTaskMonitorThread(taskMonitor);
       } catch (error) {
         this.taskMonitorDelegations.set(params.monitorId, taskMonitor);
         throw error;
@@ -26315,6 +26450,8 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<void> {
+    // Branch metadata must not hold a terminal event past the quit deadline.
+    if (this.stoppingRunningTurnsForShutdown) return;
     const overlay = await this.overlayStore.getThreadOverlayState({
       backend: params.backend,
       threadId: params.threadId,
@@ -26325,13 +26462,15 @@ export class DesktopBackendRegistry {
       freshness: "last-known",
       threadId: params.threadId,
     });
+    if (this.stoppingRunningTurnsForShutdown) return;
     const workspaceCwd = resolveThreadWorkspaceCwd(
       thread,
       overlay?.extraLinkedDirectories ?? [],
     );
     const observedBranch = workspaceCwd
-      ? await readCurrentGitBranch(workspaceCwd).catch(() => thread?.observedGitBranch)
+      ? await readCurrentGitBranch(workspaceCwd, this.activeTurnBranchProbeAbort.signal).catch(() => thread?.observedGitBranch)
       : thread?.observedGitBranch;
+    if (this.stoppingRunningTurnsForShutdown) return;
     const normalizedObservedBranch = observedBranch?.trim() || undefined;
 
     if (!normalizedObservedBranch) {
@@ -28199,8 +28338,56 @@ export class DesktopBackendRegistry {
       codexEnvironmentRuntime,
       codexEnvironmentStartupFailure,
     } satisfies MaterializedDirectoryLaunchpadThread;
+    const pendingLaunch: PendingEnvironmentLaunch = {
+      backend: startThreadResponse.backend,
+      threadId: startThreadResponse.threadId,
+      request,
+      launchpad,
+      messageOrigin: options?.messageOrigin,
+    };
+    let continuation: ContinueThreadEnvironmentStartupResponse = {
+      backend: startThreadResponse.backend,
+      threadId: startThreadResponse.threadId,
+    };
+    if (codexEnvironmentStartupFailure) {
+      const retainedInput = await ownThreadInputAttachments(
+        request.input ?? (launchpad.prompt.trim() ? [{ type: "text", text: launchpad.prompt }] : []),
+        pendingLaunch,
+        this.localFilePrivateStorageRoots,
+      );
+      this.pendingEnvironmentLaunchStore.put({ ...pendingLaunch, request: { ...request, input: retainedInput } });
+    }
     await options?.onThreadMaterialized?.(materializedThread);
+    if (!codexEnvironmentStartupFailure) {
+      continuation = await this.startMaterializedLaunchpadRequest(pendingLaunch);
+    }
 
+    if (!request.releaseLaunchpadOnSubmit) {
+      await this.resetLaunchpadDraft(launchpad);
+    } else if (launchpad.prompt.trim()) {
+      // Released at submit. A draft save the renderer sent just before
+      // submitting can still land after that release and bring the sent
+      // prompt back. Clear it again only if it is still that prompt, so a
+      // new draft the operator started meanwhile survives.
+      const current = await this.overlayStore.getDirectoryLaunchpad({
+        directoryKey: launchpad.directoryKey,
+      });
+      if (current?.prompt === launchpad.prompt) {
+        await this.resetLaunchpadDraft(launchpad);
+      }
+    }
+
+    return {
+      ...materializedThread,
+      ...continuation,
+    };
+  }
+
+  private async startMaterializedLaunchpadRequest(
+    pending: PendingEnvironmentLaunch,
+  ): Promise<ContinueThreadEnvironmentStartupResponse> {
+    const { request, launchpad, messageOrigin } = pending;
+    const startThreadResponse = pending;
     const input =
       request.input ??
       (launchpad.prompt.trim()
@@ -28213,9 +28400,7 @@ export class DesktopBackendRegistry {
     let turnStartFailure:
       | MaterializeDirectoryLaunchpadResponse["turnStartFailure"]
       | undefined;
-    if (codexEnvironmentStartupFailure) {
-      turnId = undefined;
-    } else if (request.scheduledFor !== undefined) {
+    if (request.scheduledFor !== undefined) {
       const actionId = `scheduled-action:${randomUUID()}`;
       await this.overlayStore.setThreadScheduledStart({
         backend: launchpad.backend,
@@ -28272,7 +28457,7 @@ export class DesktopBackendRegistry {
                       launchpad.backend === "codex"
                         ? launchpad.fastMode
                         : undefined,
-                    messageOrigin: options?.messageOrigin,
+                    messageOrigin,
                   },
                 }),
           },
@@ -28344,7 +28529,7 @@ export class DesktopBackendRegistry {
           backend: launchpad.backend,
           threadId: startThreadResponse.threadId,
           input,
-          messageOrigin: options?.messageOrigin,
+          messageOrigin,
           model: launchpad.model,
           reasoningEffort: launchpad.reasoningEffort,
           serviceTier: launchpad.serviceTier,
@@ -28360,27 +28545,71 @@ export class DesktopBackendRegistry {
       }
     }
 
-    if (!request.releaseLaunchpadOnSubmit) {
-      await this.resetLaunchpadDraft(launchpad);
-    } else if (launchpad.prompt.trim()) {
-      // Released at submit. A draft save the renderer sent just before
-      // submitting can still land after that release and bring the sent
-      // prompt back. Clear it again only if it is still that prompt, so a
-      // new draft the operator started meanwhile survives.
-      const current = await this.overlayStore.getDirectoryLaunchpad({
-        directoryKey: launchpad.directoryKey,
-      });
-      if (current?.prompt === launchpad.prompt) {
-        await this.resetLaunchpadDraft(launchpad);
-      }
-    }
-
     return {
-      ...materializedThread,
+      backend: pending.backend,
+      threadId: pending.threadId,
       turnId,
       scheduledAction,
       turnStartFailure,
     };
+  }
+
+  async acknowledgeThreadEnvironmentFailure(
+    request: AcknowledgeThreadEnvironmentFailureRequest,
+  ): Promise<AcknowledgeThreadEnvironmentFailureResponse> {
+    const backend = request.backend ?? "codex";
+    return await this.withCodexEnvironmentRuntimeLock(backend, request.threadId, async () => {
+      const acknowledged = await this.overlayStore.acknowledgeThreadEnvironmentFailure?.({ ...request, backend }) ?? false;
+      this.pendingEnvironmentLaunchStore.delete({ backend, threadId: request.threadId });
+      if (acknowledged) {
+        const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId: request.threadId });
+        this.invalidateThreadListCache(backend);
+        await this.emitCodexEnvironmentRuntimeUpdated({ backend, threadId: request.threadId, codexEnvironmentRuntime: overlay?.codexEnvironmentRuntime });
+      }
+      return { backend, threadId: request.threadId, acknowledged };
+    });
+  }
+
+  async continueThreadEnvironmentStartup(
+    request: ContinueThreadEnvironmentStartupRequest,
+  ): Promise<ContinueThreadEnvironmentStartupResponse> {
+    const key = buildThreadIdentityKey(request.backend, request.threadId);
+    const existing = this.environmentLaunchContinuations.get(key);
+    if (existing) return await existing;
+    const continuation = this.resumeEnvironmentLaunch(request);
+    this.environmentLaunchContinuations.set(key, continuation);
+    try { return await continuation; }
+    finally { this.environmentLaunchContinuations.delete(key); }
+  }
+
+  private async resumeEnvironmentLaunch(
+    request: ContinueThreadEnvironmentStartupRequest,
+  ): Promise<ContinueThreadEnvironmentStartupResponse> {
+    if (this.threadHasActiveTurn(request.threadId, request.backend)) {
+      throw new Error("This thread already has an active turn. Refresh it to view the conversation.");
+    }
+    const pending = this.pendingEnvironmentLaunchStore.get(request);
+    const history = await this.readThread({ backend: request.backend, threadId: request.threadId, limit: 1 });
+    if (history.replay.messages.length > 0 || history.replay.entries.some((entry) => entry.type === "message")) {
+      this.pendingEnvironmentLaunchStore.delete(request);
+      throw new Error("This thread has already started. Refresh it to view the conversation.");
+    }
+    let result: ContinueThreadEnvironmentStartupResponse;
+    if (pending) {
+      result = await this.startMaterializedLaunchpadRequest(pending);
+      if (result.turnStartFailure) throw new Error(result.turnStartFailure.message);
+    } else if (request.fallbackTurn?.input.length) {
+      const overlay = await this.overlayStore.getThreadOverlayState(request);
+      if (overlay?.scheduledStart || typeof overlay?.codexEnvironmentRuntime?.setupFailureAcknowledgedAt === "number") {
+        throw new Error("This thread's environment startup has already been continued. Refresh it to view its state.");
+      }
+      result = await this.startTurn({ ...request.fallbackTurn, backend: request.backend, threadId: request.threadId });
+    } else {
+      throw new Error("The original request is unavailable. Send your prompt again to start this thread.");
+    }
+    this.pendingEnvironmentLaunchStore.delete(request);
+    await this.acknowledgeThreadEnvironmentFailure(request);
+    return result;
   }
 
   async markScheduledThreadBorn(params: {
@@ -30512,6 +30741,7 @@ export class DesktopBackendRegistry {
     directory: LinkedDirectorySummary;
     gitBranch?: string;
     threadId: string;
+    retainWorktree?: LinkedDirectorySummary;
   }): Promise<ThreadOverlayState> {
     const overlay =
       await this.overlayStore.replaceWorkspaceLinkedDirectory(params);
@@ -35156,16 +35386,14 @@ export class DesktopBackendRegistry {
 
   private async suggestMonitorJob(invocation: ThreadToolInvocationRecord): Promise<void> {
     const { backend, threadId, turnId } = invocation;
-    // ACP may implement steering as a queued next turn. A cost reminder must
-    // never wake a finished parent, so use native Codex active-turn steering.
+    if (isAcpBackendId(backend) && turnId) {
+      this.pendingAcpMonitorJobSuggestions.set(taskMonitorThreadKey(backend, threadId), turnId);
+      return;
+    }
+    // Only Codex uses native active-turn steering. ACP reminders ride an
+    // existing MCP response, because ACP steering may queue a new turn.
     if (backend !== "codex" || !turnId) return;
-    if (this.resolveSubAgentThreadOwner({ backend, threadId }).isSubAgent) return;
-    if (Array.from(this.taskMonitorDelegations.values()).some(
-      (record) => record.backend === backend && record.monitorThreadId === threadId,
-    ) || this.completedTaskMonitorsByThread.has(taskMonitorThreadKey(backend, threadId))) return;
-    if (!await this.monitorJobSuggestionEnabledForThread(backend, threadId)) return;
-    if (this.getActiveTurnForThread({ backend, threadId })?.turnId !== turnId) return;
-    if (!this.overlayStore.claimMonitorJobSuggestion({ backend, threadId, turnId })) return;
+    if (!await this.claimEligibleMonitorJobSuggestion({ backend, threadId, turnId })) return;
     await this.steerTurn({
       backend,
       threadId,
@@ -35173,6 +35401,74 @@ export class DesktopBackendRegistry {
       requestId: `monitor-job-suggestion:${backend}:${threadId}:${turnId}`,
       input: [{ type: "text", text: MONITOR_JOB_SUGGESTION }],
     }, { kind: "pwragent", systemReason: "monitor-job-suggestion" });
+  }
+
+  private async takeAcpMonitorJobSuggestion(
+    context: ResolvedAgentToolMcpCallContext,
+  ): Promise<string | undefined> {
+    const { backend, threadId, turnId } = context;
+    const key = taskMonitorThreadKey(backend, threadId);
+    if (!isAcpBackendId(backend) || this.pendingAcpMonitorJobSuggestions.get(key) !== turnId) return;
+    if (!await this.claimEligibleMonitorJobSuggestion(context)) return;
+    this.pendingAcpMonitorJobSuggestions.delete(key);
+    return MONITOR_JOB_SUGGESTION;
+  }
+
+  private async claimEligibleMonitorJobSuggestion(
+    { backend, threadId, turnId }: ResolvedAgentToolMcpCallContext,
+  ): Promise<boolean> {
+    if (this.resolveSubAgentThreadOwner({ backend, threadId }).isSubAgent) return false;
+    if (Array.from(this.taskMonitorDelegations.values()).some(
+      (record) => record.backend === backend && record.monitorThreadId === threadId,
+    ) || this.completedTaskMonitorsByThread.has(taskMonitorThreadKey(backend, threadId))) return false;
+    if (!await this.monitorJobSuggestionEnabledForThread(backend, threadId)) return false;
+    if (this.getActiveTurnForThread({ backend, threadId })?.turnId !== turnId) return false;
+    return this.overlayStore.claimMonitorJobSuggestion({ backend, threadId, turnId });
+  }
+
+  /**
+   * The Claude form of the monitor suggestion, appended to the Bash or Monitor
+   * result that earned it. Claude waits on CI in one background shell or one
+   * Monitor watcher, so a single CI wait qualifies; repeated foreground checks
+   * qualify through the same detector Codex uses. At most once per turn.
+   */
+  private async suggestClaudeMonitorJob(params: {
+    threadId: string;
+    turnId: string;
+    toolName: string;
+    command: string;
+    toolUseId?: string;
+  }): Promise<string | undefined> {
+    const backend = "claude";
+    const { threadId, turnId } = params;
+    const normalized = normalizeToolInvocationCommand({
+      toolName: params.toolName,
+      command: params.command,
+    });
+    const repeated = this.monitorJobSuggestionDetector.observe({
+      backend,
+      threadId,
+      turnId,
+      invocationId: params.toolUseId ?? randomUUID(),
+      toolName: params.toolName,
+      category: normalized.category,
+      normalizedCommand: normalized.normalizedCommand,
+      observedAt: Date.now(),
+    });
+    if (!repeated && !isCiWaitCommand(params.command)) return undefined;
+    if (this.resolveSubAgentThreadOwner({ backend, threadId }).isSubAgent) return undefined;
+    if (Array.from(this.taskMonitorDelegations.values()).some(
+      (record) => record.backend === backend && record.monitorThreadId === threadId,
+    ) || this.completedTaskMonitorsByThread.has(taskMonitorThreadKey(backend, threadId))) return undefined;
+    if (!await this.monitorJobSuggestionEnabledForThread(backend, threadId)) return undefined;
+    if (!this.overlayStore.claimMonitorJobSuggestion({ backend, threadId, turnId })) return undefined;
+    backendRegistryLog.info("monitor job suggestion appended to Claude tool result", {
+      threadId,
+      turnId,
+      toolName: params.toolName,
+      reason: repeated ? "repeated-check" : "ci-wait",
+    });
+    return CLAUDE_MONITOR_JOB_SUGGESTION;
   }
 
   private async monitorJobSuggestionEnabledForThread(
@@ -35277,7 +35573,8 @@ export class DesktopBackendRegistry {
 
   private async recordToolInvocationAccounting(event: AgentEvent): Promise<void> {
     this.rememberMonitorJobHeuristicMessage(event);
-    if (event.notification.method === "item/completed" && event.backend === "codex") {
+    if (event.notification.method === "item/completed"
+      && (event.backend === "codex" || isAcpBackendId(event.backend))) {
       const observed = toolInvocationFromNotification({
         backend: event.backend,
         notification: event.notification,
@@ -35293,7 +35590,7 @@ export class DesktopBackendRegistry {
               error: error instanceof Error ? error.message : String(error),
             });
           });
-        } else if (this.monitorJobHeuristicEnabled()) {
+        } else if (event.backend === "codex" && this.monitorJobHeuristicEnabled()) {
           const evidence = this.monitorJobHeuristicDetector.observeInvocation({
             invocation: observed,
             inputPreview: toolInvocationReviewInputFromNotification(
@@ -35315,12 +35612,17 @@ export class DesktopBackendRegistry {
     if (
       event.notification.method === "turn/completed"
       || event.notification.method === "turn/failed"
+      || event.notification.method === "turn/cancelled"
       || event.notification.method === "turn/interrupted"
     ) {
       const params = readRecord(event.notification.params);
       const threadId = readNonEmptyString(params?.threadId);
       const turnId = readNonEmptyString(params?.turnId);
       if (threadId && turnId) {
+        const key = taskMonitorThreadKey(event.backend, threadId);
+        if (this.pendingAcpMonitorJobSuggestions.get(key) === turnId) {
+          this.pendingAcpMonitorJobSuggestions.delete(key);
+        }
         this.monitorJobSuggestionDetector.clear(event.backend, threadId);
         this.monitorJobHeuristicDetector.clear(event.backend, threadId);
         this.liveToolOutputIncidents.delete(
@@ -36139,12 +36441,13 @@ export class DesktopBackendRegistry {
       }
     }));
     const withWorkspaceOverlay = (thread: AppServerThreadSummary): AppServerThreadSummary => {
-      const directories = overlaysByThreadKey.get(buildThreadIdentityKey(thread.source, thread.id))?.extraLinkedDirectories ?? [];
-      if (!directories.some((directory) => directory.worktreeOwnership === "external")) return thread;
-      return {
-        ...thread,
-        linkedDirectories: mergeThreadLinkedDirectories([...thread.linkedDirectories, ...directories]),
-      };
+      const overlay = overlaysByThreadKey.get(buildThreadIdentityKey(thread.source, thread.id));
+      const directories = overlay?.extraLinkedDirectories ?? [];
+      const linkedDirectories = directories.some((directory) => directory.worktreeOwnership === "external")
+        ? mergeThreadLinkedDirectories([...thread.linkedDirectories, ...directories])
+        : thread.linkedDirectories;
+      const withRetained = withRetainedWorktrees(linkedDirectories, overlay);
+      return withRetained === thread.linkedDirectories ? thread : { ...thread, linkedDirectories: withRetained };
     };
     activeThreads = activeThreads.map(withWorkspaceOverlay);
     archivedThreads = archivedThreads.map(withWorkspaceOverlay);
@@ -36432,7 +36735,10 @@ export class DesktopBackendRegistry {
               if (directory) directories = [directory];
             }
           }
-          directories = mergeThreadLinkedDirectories([...directories, ...(overlay?.extraLinkedDirectories ?? [])]);
+          directories = withRetainedWorktrees(
+            mergeThreadLinkedDirectories([...directories, ...(overlay?.extraLinkedDirectories ?? [])]),
+            overlay,
+          );
           const thread: AppServerThreadSummary = {
             id: row.id, source: backend, title: "", titleSource: "explicit", linkedDirectories: directories,
             projectKey: row.projectKey, gitBranch: row.gitBranch, observedGitBranch: row.observedGitBranch,
@@ -36685,17 +36991,19 @@ export class DesktopBackendRegistry {
       throw new Error("Thread workspace metadata is unavailable for handoff.");
     }
 
+    const fromWorktree = request.direction === "worktree-to-local"
+      || request.direction === "worktree-to-worktree";
     const directory =
-      request.direction === "worktree-to-local"
+      fromWorktree
         ? thread.linkedDirectories.find((candidate) => candidate.kind === "worktree")
         : thread.linkedDirectories.find((candidate) => candidate.kind === "local") ??
           thread.linkedDirectories[0];
     const sourcePath =
-      request.direction === "worktree-to-local"
+      fromWorktree
         ? directory?.worktreePath ?? directory?.path
         : directory?.path ?? thread.projectKey;
     const repositoryPath =
-      request.direction === "worktree-to-local"
+      fromWorktree
         ? directory?.path ?? request.repositoryPath
         : directory?.path ?? thread.projectKey ?? request.repositoryPath;
 
@@ -37320,13 +37628,29 @@ export class DesktopBackendRegistry {
   private async updateThreadWorkspaceCwd(params: {
     backend: AppServerBackendKind;
     cwd: string;
+    /** The thread's new primary directory; Claude records it with the cwd. */
+    linkedDirectory?: LinkedDirectorySummary;
     threadId: string;
   }): Promise<void> {
+    const cwd = params.cwd.trim();
+    if (params.backend === "claude") {
+      if (!cwd || !params.linkedDirectory) {
+        throw new Error("Workspace handoff did not produce a target CWD.");
+      }
+      // Claude reads its cwd from PwrAgent's own session metadata, and the
+      // next turn resumes the same session from there.
+      await this.claudeBackend.moveWorkspace({
+        threadId: params.threadId,
+        cwd,
+        linkedDirectory: params.linkedDirectory,
+      });
+      this.invalidateThreadListCache("claude", true);
+      return;
+    }
     if (params.backend !== "codex") {
       return;
     }
 
-    const cwd = params.cwd.trim();
     if (!cwd) {
       throw new Error("Workspace handoff did not produce a target CWD.");
     }
@@ -40740,6 +41064,7 @@ export class DesktopBackendRegistry {
       ...(move.sourceBranch ? { sourceBranch: move.sourceBranch } : {}),
       ...(move.leaveLocalBranch ? { leaveLocalBranch: move.leaveLocalBranch } : {}),
       ...(move.newBranchName ? { newBranchName: move.newBranchName } : {}),
+      ...(move.baseRef ? { baseRef: move.baseRef } : {}),
       ...(move.targetPath ? { targetPath: move.targetPath } : {}),
       ...(move.branch ? { branch: move.branch } : {}),
       ...(move.linkedDirectory ? { linkedDirectory: move.linkedDirectory } : {}),
@@ -41098,16 +41423,13 @@ export class DesktopBackendRegistry {
       );
     }
 
-    const direction = request.args.direction ?? "local-to-worktree";
-    if (direction !== "local-to-worktree" && direction !== "to-project") {
+    const requestedDirection = request.args.direction;
+    if (requestedDirection === "worktree-to-local") {
       return threadOrchestrationFailure(
         "unsupported_workspace",
-        'move_thread_workspace supports direction="local-to-worktree" or "to-project".',
+        'move_thread_workspace supports direction="local-to-worktree", "worktree-to-worktree", or "to-project".',
       );
     }
-    const strategy = direction === "to-project"
-      ? undefined
-      : this.resolveMoveThreadWorkspaceStrategy(request.args);
 
     const workspaceMoveId = [
       "workspace-move",
@@ -41136,6 +41458,16 @@ export class DesktopBackendRegistry {
       }),
     ]);
 
+    // Without a direction, a new worktree comes from wherever the thread is.
+    const direction = requestedDirection ?? (
+      threadWorkspaceIsWorktree(sourceThread, sourceOverlay?.extraLinkedDirectories)
+        ? "worktree-to-worktree"
+        : "local-to-worktree"
+    );
+    const strategy = direction === "to-project"
+      ? undefined
+      : this.resolveMoveThreadWorkspaceStrategy(request.args);
+
     let targetPath: string | undefined;
     let candidate: {
       repositoryPath?: string;
@@ -41154,6 +41486,7 @@ export class DesktopBackendRegistry {
         candidate = { sourcePath: resolveThreadWorkspaceCwd(sourceThread, sourceOverlay?.extraLinkedDirectories) };
       } else {
         candidate = this.resolveThreadWorkspaceMoveCandidate({
+          direction,
           ...(sourceOverlay ? { overlay: sourceOverlay } : {}),
           request,
           ...(sourceThread ? { thread: sourceThread } : {}),
@@ -41186,6 +41519,7 @@ export class DesktopBackendRegistry {
             (request.args.leaveLocalBranch ?? "") &&
           (duplicateMove.newBranchName ?? "") ===
             (request.args.newBranchName ?? "") &&
+          (duplicateMove.baseRef ?? "") === (request.args.baseRef ?? "") &&
           path.resolve(duplicateMove.sourcePath ?? "") ===
             path.resolve(candidate.sourcePath ?? "") &&
           path.resolve(duplicateMove.repositoryPath ?? "") ===
@@ -41256,6 +41590,7 @@ export class DesktopBackendRegistry {
       ...(request.args.newBranchName
         ? { newBranchName: request.args.newBranchName }
         : {}),
+      ...(request.args.baseRef ? { baseRef: request.args.baseRef } : {}),
       createdAt: now,
       updatedAt: now,
       message:
@@ -41283,6 +41618,7 @@ export class DesktopBackendRegistry {
   }
 
   private resolveThreadWorkspaceMoveCandidate(params: {
+    direction: ThreadWorkspaceHandoffDirection;
     overlay?: ThreadOverlayState;
     request: PwrAgentThreadOrchestrationRequest<"move_thread_workspace">;
     thread?: AppServerThreadSummary;
@@ -41358,7 +41694,7 @@ export class DesktopBackendRegistry {
     const candidate = this.resolveHandoffWorkspaceCandidate(inferredThread, {
       backend: params.request.context.backend,
       threadId: params.request.context.threadId,
-      direction: args.direction ?? "local-to-worktree",
+      direction: params.direction,
       ...(args.repositoryPath ? { repositoryPath: args.repositoryPath } : {}),
       ...(args.sourceBranch ? { sourceBranch: args.sourceBranch } : {}),
       ...(args.sourcePath ? { sourcePath: args.sourcePath } : {}),
@@ -41454,6 +41790,7 @@ export class DesktopBackendRegistry {
         ...(move.sourceBranch ? { sourceBranch: move.sourceBranch } : {}),
         ...(move.leaveLocalBranch ? { leaveLocalBranch: move.leaveLocalBranch } : {}),
         ...(move.newBranchName ? { newBranchName: move.newBranchName } : {}),
+        ...(move.baseRef ? { baseRef: move.baseRef } : {}),
       });
       this.updatePendingThreadWorkspaceMove(workspaceMoveId, {
         phase: "updating_metadata",
@@ -43511,6 +43848,7 @@ export class DesktopBackendRegistry {
     const requestedModel = args.preferredModel?.trim() || undefined;
     const requestedReasoningEffort =
       args.preferredReasoningEffort?.trim() || undefined;
+    let monitorBackend: AppServerBackendKind;
     let preferredModel: string;
     let preferredReasoningEffort: string;
     let runtimeModel: string | undefined;
@@ -43521,6 +43859,7 @@ export class DesktopBackendRegistry {
         preferredModel: requestedModel,
         preferredReasoningEffort: requestedReasoningEffort,
       });
+      monitorBackend = resolved.monitorBackend;
       preferredModel = resolved.preferredModel;
       preferredReasoningEffort = resolved.preferredReasoningEffort;
       runtimeModel = resolved.runtimeModel;
@@ -43539,6 +43878,7 @@ export class DesktopBackendRegistry {
       startupTimeoutSeconds,
     });
     const prompt = buildMonitorDelegationPrompt({
+      deferredMcpTools: monitorBackend === "claude",
       finalHandoffPrompt: args.finalHandoffPrompt,
       monitorContext: args.monitorContext,
       monitorId,
@@ -43552,15 +43892,16 @@ export class DesktopBackendRegistry {
       preferredModel !== requestedModel ||
       preferredReasoningEffort !== requestedReasoningEffort
     ) {
-      const codexMonitor = !isAcpBackendId(context.backend);
+      const codexMonitor = monitorBackend === "codex";
       backendRegistryLog.info("adjusted task monitor model settings", {
+        monitorBackend,
         monitorId,
         parentThreadId,
         preferredModel,
         preferredReasoningEffort,
         requestedModel,
         requestedReasoningEffort,
-        ...(codexMonitor && requestedModel && !isLightweightMonitorModel(requestedModel)
+        ...(codexMonitor && requestedModel && !isLightweightHelperModel(requestedModel)
           ? { declinedRequestedModel: true }
           : {}),
         ...(codexMonitor
@@ -43575,7 +43916,9 @@ export class DesktopBackendRegistry {
       causalContext,
       ...(ancestry.rootTurnId ? { rootTurnId: ancestry.rootTurnId } : {}),
       activeCommandCount: 0,
-      backend: context.backend,
+      // The monitor thread's provider. A Claude parent's monitor may run on
+      // Codex, and every lookup by monitor thread matches this backend.
+      backend: monitorBackend,
       createdAt: Date.now(),
       finalHandoffPrompt: args.finalHandoffPrompt?.trim() || undefined,
       heartbeatIntervalSeconds,
@@ -43595,7 +43938,7 @@ export class DesktopBackendRegistry {
     backendRegistryLog.info("created task monitor delegation", {
       heartbeatIntervalSeconds,
       monitorId,
-      monitorBackend: context.backend,
+      monitorBackend,
       parentThreadId,
       pollIntervalSeconds,
       startupTimeoutSeconds,
@@ -43613,6 +43956,7 @@ export class DesktopBackendRegistry {
         ...(record.rootTurnId ? { rootTurnId: record.rootTurnId } : {}),
         causalContext,
         cwd: args.cwd,
+        monitorBackend,
         monitorId,
         preferredModel,
         preferredReasoningEffort,
@@ -43876,21 +44220,43 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * Where a monitor runs and on which model. A Codex parent's monitor runs on
+   * the Helper model. Another provider's runs on its own lightweight model
+   * (Automatic), on a model the operator chose for that provider, or on the
+   * Helper model when the operator chose it.
+   */
   private async resolveTaskMonitorModelSettings(params: {
     backend: AppServerBackendKind;
     parentThreadId: string;
     preferredModel?: string;
     preferredReasoningEffort?: string;
   }): Promise<{
+    monitorBackend: AppServerBackendKind;
     preferredModel: string;
     preferredReasoningEffort: string;
     runtimeModel?: string;
   }> {
-    if (isAcpBackendId(params.backend)) {
-      return this.resolveAcpTaskMonitorModelSettings({
-        ...params,
-        backend: params.backend,
-      });
+    const choice = params.backend === "codex"
+      ? undefined
+      : this.resolveTaskMonitorModelsFn()[params.backend];
+    if (choice?.source !== "helper" && isAcpBackendId(params.backend)) {
+      return {
+        monitorBackend: params.backend,
+        ...this.resolveAcpTaskMonitorModelSettings({
+          ...params,
+          backend: params.backend,
+          // The operator's choice outranks the agent's request.
+          preferredModel: choice?.model ?? params.preferredModel,
+          preferredReasoningEffort: choice?.reasoningEffort ?? params.preferredReasoningEffort,
+        }),
+      };
+    }
+    if (choice?.source !== "helper" && params.backend === "claude") {
+      return {
+        monitorBackend: "claude",
+        ...this.resolveClaudeTaskMonitorModelSettings({ ...params, choice }),
+      };
     }
 
     const discoveredModels = await this.readCodexDefaultModelsOnce("task-monitor");
@@ -43909,7 +44275,7 @@ export class DesktopBackendRegistry {
     // request Codex offers wins; otherwise the Helper model setting decides,
     // and the operator's Task monitors row may still name any model.
     const requestedModel =
-      params.preferredModel && isLightweightMonitorModel(params.preferredModel)
+      params.preferredModel && isLightweightHelperModel(params.preferredModel)
         ? params.preferredModel
         : undefined;
     const requestedReasoningEffort =
@@ -43931,9 +44297,51 @@ export class DesktopBackendRegistry {
     });
 
     return {
+      monitorBackend: "codex",
       preferredModel: selection.model ?? models[0].id,
       preferredReasoningEffort: selection.reasoningEffort ?? "provider-default",
     };
+  }
+
+  /**
+   * A Claude parent's monitor: the operator's model, else a lightweight model
+   * the agent asked for, else Claude's newest lightweight model. The `haiku`
+   * alias stands in until model discovery has run.
+   */
+  private resolveClaudeTaskMonitorModelSettings(params: {
+    choice?: DesktopTaskMonitorModelChoice;
+    preferredModel?: string;
+    preferredReasoningEffort?: string;
+  }): { preferredModel: string; preferredReasoningEffort: string; runtimeModel: string } {
+    const models = this.claudeBackend.summary().launchpadOptions?.models ?? [];
+    // A model Claude offers. Before discovery, only a Claude name: an agent
+    // may ask for a Codex model it read about.
+    const offered = (id: string | undefined): string | undefined =>
+      id && (models.length > 0
+        ? models.some((candidate) => candidate.id === id)
+        : /(?:^|[^a-z])(?:claude|haiku|sonnet|opus)(?:$|[^a-z])/iu.test(id))
+        ? id
+        : undefined;
+    const chosenModel = offered(params.choice?.model);
+    const requestedModel =
+      params.preferredModel && isLightweightHelperModel(params.preferredModel)
+        ? offered(params.preferredModel)
+        : undefined;
+    const model = chosenModel
+      ?? requestedModel
+      ?? automaticProviderMonitorModel(models)
+      ?? "haiku";
+    const entry = models.find((candidate) => candidate.id === model);
+    const requestedEffort = (chosenModel ? params.choice?.reasoningEffort : undefined)
+      ?? (params.preferredReasoningEffort
+        && isLightweightMonitorReasoningEffort(params.preferredReasoningEffort)
+        ? params.preferredReasoningEffort
+        : undefined);
+    const preferredReasoningEffort =
+      requestedEffort && entry?.reasoningEfforts?.includes(requestedEffort)
+        ? requestedEffort
+        : "provider-default";
+    return { preferredModel: model, preferredReasoningEffort, runtimeModel: model };
   }
 
   private resolveAcpTaskMonitorModelSettings(params: {
@@ -43957,7 +44365,8 @@ export class DesktopBackendRegistry {
       (requestedModel
         ? models.find((model) => model.id === requestedModel)
         : undefined) ??
-      models.find((model) => isLightweightMonitorModel(model.id)) ??
+      // Settings labels Automatic with this same pick.
+      models.find((model) => model.id === automaticProviderMonitorModel(models)) ??
       models.find(
         (model) => model.id === parentSession?.acpRuntime?.currentModelId,
       ) ??
@@ -44006,6 +44415,8 @@ export class DesktopBackendRegistry {
     causalContext?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
     context: TaskMonitorRequest<"create_monitor_delegation">["context"];
     cwd?: string;
+    /** The provider the monitor thread runs on. */
+    monitorBackend: AppServerBackendKind;
     monitorId: string;
     preferredModel: string;
     preferredReasoningEffort: string;
@@ -44046,8 +44457,10 @@ export class DesktopBackendRegistry {
         params.context.threadId,
         sourceOverlay,
       ));
+    // A Codex monitor reports through its dynamic tools whatever provider
+    // its parent runs on. Claude and ACP monitors use PwrAgent's MCP server.
     const dynamicTools =
-      params.context.backend === "codex"
+      params.monitorBackend === "codex"
         ? buildTaskMonitorDynamicToolSpecs("monitor")
         : [];
 
@@ -44063,6 +44476,7 @@ export class DesktopBackendRegistry {
               sourceOverlay.codexEnvironmentRuntime.shellEnvironment,
             ).length
           : 0,
+      monitorBackend: params.monitorBackend,
       monitorId: params.monitorId,
       model: params.preferredModel,
       parentThreadId: params.context.threadId,
@@ -44071,7 +44485,33 @@ export class DesktopBackendRegistry {
       toolCount: dynamicTools.length,
     });
 
-    if (isAcpBackendId(params.context.backend)) {
+    if (params.monitorBackend === "claude") {
+      const thread = await this.claudeBackend.startThread({
+        cwd: cwd ?? os.homedir(),
+        executionMode,
+        model: params.runtimeModel ?? params.preferredModel,
+        ephemeral: { title: "Task monitor" },
+      });
+      const turn = await this.startTurnWithoutHandoff({
+        backend: "claude",
+        threadId: thread.threadId,
+        input: [{ type: "text", text: params.prompt }],
+        executionMode,
+        model: params.runtimeModel ?? params.preferredModel,
+        ...(params.preferredReasoningEffort === "provider-default"
+          ? {}
+          : { reasoningEffort: params.preferredReasoningEffort }),
+        ...(params.causalContext?.causalMessagingSource || params.causalContext?.causalMessagingAmbiguous
+          ? { messageOrigin: { kind: "sub-agent" as const, ...params.causalContext } }
+          : {}),
+      }).catch((error: unknown) => {
+        this.claudeBackend.releaseEphemeralThread(thread.threadId);
+        throw error;
+      });
+      return { cwd, executionMode, threadId: turn.threadId, turnId: turn.turnId };
+    }
+
+    if (isAcpBackendId(params.monitorBackend) && isAcpBackendId(params.context.backend)) {
       const parentSession = this.acpBackend.getSession(
         params.context.backend,
         params.context.threadId,
@@ -44449,6 +44889,7 @@ export class DesktopBackendRegistry {
     }
 
     this.taskMonitorDelegations.delete(params.record.monitorId);
+    this.releaseTaskMonitorThread(params.record);
     if (
       params.completionSource.type === "monitor_tool"
       && params.record.monitorThreadId
@@ -44611,6 +45052,16 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * A Claude monitor thread lives in memory until its delegation ends; its
+   * process exits after each turn, and a recovery turn reuses the thread.
+   */
+  private releaseTaskMonitorThread(record: TaskMonitorDelegationRecord): void {
+    if (record.backend === "claude" && record.monitorThreadId) {
+      this.claudeBackend.releaseEphemeralThread(record.monitorThreadId);
+    }
+  }
+
   private async startTaskMonitorRecoveryTurn(params: {
     record: TaskMonitorDelegationRecord;
     terminalStatus: "completed" | "failed" | "cancelled";
@@ -44637,6 +45088,35 @@ export class DesktopBackendRegistry {
     });
 
     try {
+      if (record.backend === "claude") {
+        const turn = await this.startTurnWithoutHandoff({
+          backend: "claude",
+          threadId: record.monitorThreadId,
+          input: [{
+            type: "text",
+            text: buildTaskMonitorRecoveryPrompt({
+              monitorId: record.monitorId,
+              task: record.task,
+              terminalStatus: params.terminalStatus,
+            }),
+          }],
+          executionMode,
+          model: record.runtimeModel ?? record.preferredModel,
+          ...(record.preferredReasoningEffort === "provider-default"
+            ? {}
+            : { reasoningEffort: record.preferredReasoningEffort }),
+        });
+        record.monitorTurnId = turn.turnId;
+        record.lastActivityAt = Date.now();
+        backendRegistryLog.warn("started Claude task monitor recovery turn", {
+          monitorId: record.monitorId,
+          monitorThreadId: record.monitorThreadId,
+          monitorTurnId: record.monitorTurnId,
+          parentThreadId: record.parentThreadId,
+          terminalStatus: params.terminalStatus,
+        });
+        return;
+      }
       if (isAcpBackendId(record.backend)) {
         const turn = await this.startAcpTurn({
           backend: record.backend,
@@ -44725,7 +45205,7 @@ export class DesktopBackendRegistry {
     if (!record.monitorThreadId || !record.monitorTurnId) {
       throw new Error("Task monitor does not expose an active turn.");
     }
-    if (isAcpBackendId(record.backend)) {
+    if (isAcpBackendId(record.backend) || record.backend === "claude") {
       await this.interruptTurn({
         backend: record.backend,
         threadId: record.monitorThreadId,
@@ -45751,6 +46231,89 @@ export class DesktopBackendRegistry {
     return summary;
   }
 
+  /**
+   * Why `mutate_thread` would refuse a parent change, checked before anything
+   * changes and on a dry run too. No `parent` means a detach.
+   */
+  private async checkThreadParentChange(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    threadLabel: string;
+    parent?: { backend: AppServerBackendKind; threadId: string };
+  }): Promise<PwrAgentThreadInspectionResponse | undefined> {
+    if (!this.agentThreadActions?.setThreadParent) {
+      return threadInspectionFailure(
+        "internal_error",
+        "Thread grouping is not available in this process.",
+      );
+    }
+    if (!params.parent) {
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      return overlay?.parentThreadId?.trim()
+        ? undefined
+        : threadInspectionFailure(
+            "invalid_arguments",
+            `${params.threadLabel} is not a sub-thread.`,
+          );
+    }
+    const parent = params.parent;
+    const parentLabel = `Parent thread ${parent.backend}:${parent.threadId}`;
+    // Only existence and archive state matter here, so the provider's own
+    // lists answer it without an inspection summary's enrichment. A list
+    // that fails is reported as such, not as a missing parent.
+    let archived: boolean;
+    try {
+      const listed = async (archivedList: boolean) => (await this.listThreads({
+        backend: parent.backend,
+        archived: archivedList,
+        callerReason: archivedList ? "agent-thread-parent:archived" : "agent-thread-parent",
+      })).some((thread) => thread.id === parent.threadId);
+      if (await listed(false)) {
+        archived = false;
+      } else if (await listed(true)) {
+        archived = true;
+      } else {
+        return threadInspectionFailure(
+          "not_found",
+          `${parentLabel} was not found on this instance.`,
+        );
+      }
+    } catch (error) {
+      return federatedThreadInspectionFailure(error);
+    }
+    // Archiving a parent ungroups its children, so the link would not last.
+    if (archived) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        `${parentLabel} is archived.`,
+      );
+    }
+    // The same walk the store repeats inside its write.
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const seen = new Set<string>();
+    let cursor: { backend: AppServerBackendKind; threadId: string } | undefined = params.parent;
+    while (cursor && seen.size < MAX_THREAD_PARENT_CHECK_DEPTH) {
+      const key = buildThreadIdentityKey(cursor.backend, cursor.threadId);
+      if (key === threadKey) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          `${parentLabel} is a sub-thread of ${params.threadLabel}. A thread cannot become a sub-thread of its own sub-thread.`,
+        );
+      }
+      if (seen.has(key)) break;
+      seen.add(key);
+      const overlay = await this.overlayStore.getThreadOverlayState(cursor);
+      const nextId = overlay?.parentThreadId?.trim();
+      cursor = nextId && !overlay!.parentThreadInstanceId
+        ? { backend: overlay!.parentThreadBackend ?? cursor.backend, threadId: nextId }
+        : undefined;
+    }
+    return undefined;
+  }
+
   private async resolvePullRequestReferenceForThread(
     args: AttachThreadPullRequestToolArgs,
     summary: ThreadInspectionSummary,
@@ -45894,6 +46457,25 @@ export class DesktopBackendRegistry {
     }
   }
 
+  async mutateThreadParentV1(
+    request: MutateThreadParentV1Request,
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    if (typeof request.dryRun !== "boolean") {
+      return threadInspectionFailure("invalid_arguments", "dryRun must be a boolean.");
+    }
+    // Whitelist the versioned fields: an inbound peer cannot forward another
+    // mutation or a routing hint through this grouping-only method.
+    return await this.handleMutateThreadInspectionRequest({
+      backend: request.backend,
+      threadId: request.threadId,
+      ...(Object.hasOwn(request, "parentThreadId") ? { parentThreadId: request.parentThreadId } : {}),
+      ...(Object.hasOwn(request, "parentBackend") ? { parentBackend: request.parentBackend } : {}),
+      ...(Object.hasOwn(request, "detachFromParent") ? { detachFromParent: request.detachFromParent } : {}),
+      dryRun: request.dryRun,
+      includeRemote: false,
+    });
+  }
+
   private async handleMutateThreadInspectionRequest(
     args: MutateThreadToolArgs,
     context?: PwrAgentThreadInspectionRequest["context"],
@@ -46013,6 +46595,61 @@ export class DesktopBackendRegistry {
     const lockNote = lockNoteProvided ? normalizeThreadLockNote(args.lockNote) ?? "" : undefined;
     const locked = args.locked ?? (lockNoteProvided ? true : undefined);
 
+    let parentThreadId: string | undefined;
+    if (Object.hasOwn(args, "parentThreadId")) {
+      if (typeof args.parentThreadId !== "string" || !args.parentThreadId.trim()) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          "parentThreadId must be a non-empty string when provided.",
+        );
+      }
+      parentThreadId = args.parentThreadId.trim();
+    }
+    if (Object.hasOwn(args, "parentBackend")) {
+      if (typeof args.parentBackend !== "string" || !isAppServerBackendKind(args.parentBackend)) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          "parentBackend must be a known PwrAgent backend when provided.",
+        );
+      }
+      if (parentThreadId === undefined) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          "parentBackend requires parentThreadId.",
+        );
+      }
+    }
+    if (Object.hasOwn(args, "detachFromParent") && typeof args.detachFromParent !== "boolean") {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "detachFromParent must be a boolean when provided.",
+      );
+    }
+    const detachFromParent = args.detachFromParent === true;
+    const parentBackend = parentThreadId !== undefined
+      ? args.parentBackend ?? args.backend
+      : undefined;
+    if (parentThreadId !== undefined && detachFromParent) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "detachFromParent cannot be combined with parentThreadId.",
+      );
+    }
+    if (parentThreadId === threadId && parentBackend === args.backend) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "A thread cannot be its own parent.",
+      );
+    }
+    // A sub-thread carries no pin: the parent change clears it.
+    if (parentThreadId !== undefined && pinned === true) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "pinned true cannot be combined with parentThreadId. A sub-thread is not pinned.",
+      );
+    }
+    const parentChange = parentThreadId !== undefined || detachFromParent;
+
     const changes: ThreadMutationAppliedChange[] = [];
     if (title !== undefined) {
       changes.push({
@@ -46077,6 +46714,15 @@ export class DesktopBackendRegistry {
         to: lockNote,
       });
     }
+    if (parentChange) {
+      changes.push({
+        field: "parent",
+        status: dryRun ? "would_apply" : "applied",
+        to: parentThreadId !== undefined
+          ? { backend: parentBackend, threadId: parentThreadId }
+          : null,
+      });
+    }
 
     if (changes.length === 0) {
       return {
@@ -46084,7 +46730,7 @@ export class DesktopBackendRegistry {
         error: {
           code: "invalid_arguments",
           message:
-            "At least one mutation field is required: title, model, serviceTier, reasoningEffort, fastMode, executionMode, projectPath, archive, pinned, unread, locked, or lockNote.",
+            "At least one mutation field is required: title, model, serviceTier, reasoningEffort, fastMode, executionMode, projectPath, archive, pinned, unread, locked, lockNote, parentThreadId, or detachFromParent.",
         },
       };
     }
@@ -46136,6 +46782,17 @@ export class DesktopBackendRegistry {
       | { instanceId: string; instanceLabel: string }
       | undefined;
     if (!mutateLocally && includeRemote && this.federatedThreadMutationHandler) {
+      if (parentChange && context) {
+        // An omitted instanceId can still resolve to a peer. Recheck scope
+        // with the trusted invoking turn before the handler can mutate it.
+        const denied = await this.dynamicToolPermissionDenied(context.backend, "thread_inspection", {
+          threadId: context.threadId,
+          turnId: context.turnId,
+          tool: "mutate_thread",
+          arguments: { ...args, includeRemote: true },
+        });
+        if (denied) return threadInspectionFailure("forbidden", `Missing permission: ${denied}.`);
+      }
       try {
         remoteOwner = await this.federatedThreadMutationHandler({
           backend: args.backend,
@@ -46150,6 +46807,8 @@ export class DesktopBackendRegistry {
           ...(unread !== undefined ? { unread } : {}),
           ...(locked !== undefined ? { locked } : {}),
           ...(lockNote !== undefined ? { lockNote } : {}),
+          ...(parentThreadId !== undefined ? { parentThreadId, parentBackend } : {}),
+          ...(detachFromParent ? { detachFromParent: true } : {}),
           dryRun,
         });
       } catch (error) {
@@ -46212,6 +46871,17 @@ export class DesktopBackendRegistry {
           "Pinning and read state are not available in this process.",
         );
       }
+      if (parentChange) {
+        const refusal = await this.checkThreadParentChange({
+          backend: args.backend,
+          threadId,
+          threadLabel,
+          parent: parentThreadId !== undefined
+            ? { backend: parentBackend!, threadId: parentThreadId }
+            : undefined,
+        });
+        if (refusal) return refusal;
+      }
     }
 
     if (mutateLocally && archive !== undefined && !dryRun) {
@@ -46226,6 +46896,25 @@ export class DesktopBackendRegistry {
         }
       } catch (error) {
         return federatedThreadInspectionFailure(error);
+      }
+    }
+
+    // The parent lands first. The store repeats the loop check inside its
+    // write, so a link made since the check above is refused before
+    // anything else here has changed.
+    if (mutateLocally && parentChange && !dryRun) {
+      try {
+        await this.agentThreadActions!.setThreadParent!({
+          backend: args.backend,
+          threadId,
+          parentThreadId: parentThreadId ?? null,
+          parentThreadBackend: parentBackend ?? null,
+        });
+      } catch (error) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          error instanceof Error ? error.message : String(error),
+        );
       }
     }
 
@@ -48836,6 +49525,8 @@ function readThreadInspectionBackend(
 
 const DEFAULT_THREAD_INSPECTION_READ_LIMIT = 10;
 const MAX_THREAD_INSPECTION_READ_LIMIT = 20;
+/** How far `mutate_thread` follows parent links when it checks for a loop. */
+const MAX_THREAD_PARENT_CHECK_DEPTH = 64;
 const DEFAULT_THREAD_INSPECTION_READ_ENTRY_CHARS = 4_000;
 const MAX_THREAD_INSPECTION_READ_ENTRY_CHARS = 20_000;
 
@@ -49300,6 +49991,7 @@ function pendingThreadWorkspaceMoveMatchesQuery(
     move.sourceBranch,
     move.leaveLocalBranch,
     move.newBranchName,
+    move.baseRef,
     move.targetPath,
     move.branch,
     move.linkedDirectory?.label,
@@ -49611,6 +50303,9 @@ function forgeToolApprovalMessage(operation: ForgePrToolOperation, args: ForgePr
   const issue = args.number ? ` #${args.number}` : "";
   const commentTarget = gitlab && args.kind === "pr" ? pr : issue;
   switch (operation) {
+    case "rerun_failed_ci_jobs": return gitlab
+      ? `Allow the agent to retry failed and canceled jobs in GitLab pipeline ${args.runId}?`
+      : `Allow the agent to rerun failed jobs and their dependents in GitHub Actions run ${args.runId}?`;
     case "create_pull_request": return `Allow the agent to open a ${request} on ${forge}?`;
     case "update_pull_request": return `Allow the agent to edit ${request}${pr} on ${forge}?`;
     case "merge_pull_request": return `Allow the agent to merge ${request}${pr} on ${forge}?`;
@@ -49627,18 +50322,30 @@ function forgeToolApprovalMessage(operation: ForgePrToolOperation, args: ForgePr
   }
 }
 
-/** The card's argument rows: bodies cut to a preview, attachments by file name. */
-function forgeToolParamsDisplay(args: ForgePrToolArgs): Array<{ name: string; value: string }> {
-  const rows: Array<{ name: string; value: string }> = [];
+/**
+ * The card's argument rows. Text goes out whole, because the operator is
+ * approving exactly what gets posted; the contract already caps a body at
+ * FORGE_BODY_MAX_CHARS. A body the forge renders as Markdown says so, and each
+ * inline review comment is its own row keyed by its location.
+ */
+function forgeToolParamsDisplay(args: ForgePrToolArgs): Array<{ name: string; value: string; format?: "markdown"; location?: string }> {
+  const rows: Array<{ name: string; value: string; format?: "markdown"; location?: string }> = [];
   for (const [name, value] of Object.entries(args)) {
     if (value === undefined || name === "repository") continue;
-    if (name === "body" || name === "commitMessage") {
-      const textValue = String(value);
-      rows.push({ name, value: textValue.length > 240 ? `${textValue.slice(0, 240)}… (${textValue.length.toLocaleString("en-US")} characters)` : textValue });
+    if (name === "body") {
+      rows.push({ name, value: String(value), format: "markdown" });
+    } else if (name === "commitMessage") {
+      rows.push({ name, value: String(value) });
     } else if (name === "attachments" && Array.isArray(value)) {
       rows.push({ name, value: value.map((item) => String((item as { path?: unknown }).path ?? "").split("/").pop()).join(", ") });
     } else if (name === "comments" && Array.isArray(value)) {
-      rows.push({ name, value: `${value.length} inline comment${value.length === 1 ? "" : "s"}` });
+      for (const comment of value as ForgeReviewComment[]) {
+        const lines = comment.startLine && comment.startLine !== comment.line ? `${comment.startLine}–${comment.line}` : String(comment.line);
+        // The card shows the location in the key column. It travels apart
+        // from the name, because the secret-name checks read the name and
+        // label, and a file such as password-reset.ts is not a credential.
+        rows.push({ name: "comment", location: `${comment.path}:${lines}`, value: String(comment.body ?? ""), format: "markdown" });
+      }
     } else {
       rows.push({ name, value: typeof value === "string" ? value : JSON.stringify(value) });
     }

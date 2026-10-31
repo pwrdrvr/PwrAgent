@@ -67,7 +67,13 @@ describe("closeElectronApplication", () => {
     });
   });
 
-  it.each([true, false])("lets Playwright prepare close before the owned shutdown signal (%s)", async (installed) => {
+  it.each([
+    { platform: "win32", installed: true },
+    { platform: "win32", installed: false },
+    { platform: "linux", installed: true },
+    { platform: "linux", installed: false },
+  ] as const)("lets Playwright prepare close before the owned shutdown signal ($platform, $installed)", async ({ platform, installed }) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const order: string[] = [];
     let rendererClosed = false;
@@ -106,10 +112,24 @@ describe("closeElectronApplication", () => {
       order.push("detach-inspector");
       child.exitCode = 0;
     });
+    const ownedSession = {
+      closeAllConnections: vi.fn(async () => {
+        expect(rendererClosed).toBe(false);
+        order.push("close-session-connections");
+      }),
+      cookies: {
+        flushStore: vi.fn(async () => {
+          expect(rendererClosed).toBe(false);
+          order.push("flush-session-cookies");
+        }),
+      },
+    };
+    const session = { defaultSession: ownedSession };
+    const webContents = { getAllWebContents: () => [{ session: ownedSession }] };
     const electronApp = {
       process: () => child,
-      evaluate: async (callback: unknown) => runInNewContext(`(${String(callback)})({ app })`, {
-        app, process: { emit, listenerCount },
+      evaluate: async (callback: unknown) => runInNewContext(`(${String(callback)})({ app, session, webContents })`, {
+        app, session, webContents, process: { pid: 120, uptime: () => 10, emit, listenerCount },
       }),
       close,
     } as unknown as ElectronApplication;
@@ -120,7 +140,10 @@ describe("closeElectronApplication", () => {
     expect(quit).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
     expect(child.kill).not.toHaveBeenCalled();
+    expect(ownedSession.closeAllConnections).toHaveBeenCalledTimes(platform === "win32" ? 1 : 0);
+    expect(ownedSession.cookies.flushStore).toHaveBeenCalledTimes(platform === "win32" ? 1 : 0);
     expect(order).toEqual([
+      ...(platform === "win32" ? ["close-session-connections", "flush-session-cookies"] : []),
       "prepare-playwright-close",
       "native-quit",
       ...(installed ? ["owned-shutdown"] : []),

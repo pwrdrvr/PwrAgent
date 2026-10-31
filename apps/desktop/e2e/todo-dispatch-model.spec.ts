@@ -18,7 +18,7 @@ async function measureModelChip(chip: Locator) {
     const label = element.querySelector(".composer-dropdown__label");
     const term = value?.previousElementSibling;
     const facts = element.closest(".thread-todo-card__facts");
-    if (!value || !label || !term || !facts) throw new Error("Missing Model fact parts");
+    if (!value || !label || !term || !facts) throw new Error("Missing chip fact parts");
     const chip = element.getBoundingClientRect();
     const valueBox = value.getBoundingClientRect();
     const termBox = term.getBoundingClientRect();
@@ -45,6 +45,17 @@ function expectChipHugsLabel(layout: Awaited<ReturnType<typeof measureModelChip>
   expect(layout.chipWidth).toBeLessThanOrEqual(layout.labelWidth + 40);
   expect(layout.chipWidth).toBeLessThan(layout.valueWidth - 40);
   expect(layout.termCenterOffset).toBeLessThanOrEqual(1.5);
+}
+
+/**
+ * Opens the labelled grid on the first card in `scope` that is still
+ * showing the chip row. The choice is per card and shared by the stack and
+ * the To-dos panel, so a card opened in one is already open in the other.
+ */
+async function showStartSettings(scope: Locator) {
+  const toggle = scope.getByRole("button", { name: "Show start settings" }).first();
+  if (await toggle.count() > 0) await toggle.click();
+  await expect(scope.getByRole("button", { name: "Hide start settings labels" }).first()).toBeVisible();
 }
 
 /** Contrived Atlas data only; also captures the before/after PR illustrations. */
@@ -113,6 +124,9 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     }
     const chip = stack.getByRole("button", { name: /Model for the new thread:/ });
     await expect(chip).toHaveAccessibleName(/GPT-5.5, high/);
+    // At rest the settings are a chip row; the grid's geometry is measured open.
+    await expect(stack.getByRole("group", { name: "Start settings" })).toBeVisible();
+    await showStartSettings(stack);
     const stackLayout = await measureModelChip(chip);
     expectChipHugsLabel(stackLayout);
     await chip.click();
@@ -139,6 +153,7 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     await todosTab.click();
     const panel = app.window.getByRole("tabpanel", { name: /^To-dos/ });
     await expect(panel.locator(".thread-todo-card")).toHaveCount(2);
+    await showStartSettings(panel.locator(".thread-todo-card").first());
     const firstPanelChip = panel.getByRole("button", { name: /^Model for the new thread:/ }).first();
     // The rail's width follows the window: about 220px in CI's 1024px
     // window, which truncates the label. Either way the chip stays in its
@@ -156,20 +171,13 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     const narrowLayout = await measureModelChip(firstPanelChip);
     expect(narrowLayout.chipRight).toBeLessThanOrEqual(narrowLayout.valueRight + 0.5);
     expect(narrowLayout.termCenterOffset).toBeLessThanOrEqual(1.5);
-    // A wrapped value keeps its label on the first line.
-    const whereFact = panel.locator(".thread-todo-card").first().locator(".thread-todo-card__fact", { hasText: "Where" });
-    const where = await whereFact.evaluate((element) => {
-      const text = (node: Element) => {
-        const range = document.createRange();
-        range.selectNodeContents(node);
-        return range.getBoundingClientRect();
-      };
-      const term = text(element.querySelector("dt")!);
-      const value = text(element.querySelector("dd")!);
-      return { termTop: term.top, termHeight: term.height, valueTop: value.top, valueHeight: value.height };
-    });
-    expect(where.valueHeight).toBeGreaterThan(where.termHeight);
-    expect(Math.abs(where.termTop - where.valueTop)).toBeLessThanOrEqual(1);
+    // Where is a chip too: it stays in its column on one line, centered on
+    // its label, and truncates instead of wrapping.
+    const whereChip = panel.getByRole("button", { name: /^Where the new thread works:/ }).first();
+    const where = await measureModelChip(whereChip);
+    expect(where.chipRight).toBeLessThanOrEqual(where.valueRight + 0.5);
+    expect(where.termCenterOffset).toBeLessThanOrEqual(1.5);
+    expect((await whereChip.boundingBox())!.height).toBeLessThanOrEqual(26);
     await panel.locator(".thread-todo-card").first().screenshot({
       path: testInfo.outputPath("todo-dispatch-panel-narrow.png"), animations: "disabled",
     });

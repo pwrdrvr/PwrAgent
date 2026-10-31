@@ -125,6 +125,7 @@ const connectedPeerTargetsMock = vi.fn(() => [] as Array<{
   >;
 }>);
 const federationPeerStatusChangedMock = vi.fn(() => () => {});
+const federationShortNamesChangedMock = vi.fn(() => () => {});
 const rendererEventSubscriptions = new Map<number, Array<{
   sourceInstanceId: string;
   eventClasses: string[];
@@ -601,6 +602,7 @@ vi.mock("../federation/federation-runtime", () => ({
     restart: federationRuntimeRestartMock,
     connectedPeerTargets: connectedPeerTargetsMock,
     onPeerStatusChanged: federationPeerStatusChangedMock,
+    onShortNamesChanged: federationShortNamesChangedMock,
     setRemoteWindowEventSubscription: setRemoteWindowEventSubscriptionMock,
     clearRendererEventSubscriptions: clearRendererEventSubscriptionsMock,
     rendererWantsRemoteEvent: rendererWantsRemoteEventMock,
@@ -878,6 +880,7 @@ describe("bootstrapApp", () => {
     connectedPeerTargetsMock.mockReset();
     connectedPeerTargetsMock.mockReturnValue([]);
     federationPeerStatusChangedMock.mockClear();
+    federationShortNamesChangedMock.mockClear();
     rendererEventSubscriptions.clear();
     setRemoteWindowEventSubscriptionMock.mockClear();
     clearRendererEventSubscriptionsMock.mockClear();

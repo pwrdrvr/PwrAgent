@@ -7,7 +7,7 @@ const LIMIT_LABELS: Record<string, string> = {
   five_hour: "5-hour limit", seven_day: "Weekly limit",
   seven_day_opus: "Weekly Opus limit", seven_day_sonnet: "Weekly Sonnet limit",
   seven_day_oauth_apps: "Weekly app limit",
-  seven_day_overage_included: "Weekly limit with extra usage",
+  seven_day_overage_included: "Weekly Fable limit",
   overage: "Extra usage",
   // Undocumented. Matched to Claude's "Cloud session credits" by its
   // utilization and expiry; the SDK types and CLI never name it.
@@ -22,6 +22,13 @@ const LIMIT_WINDOW_MINUTES: Record<string, number> = {
 const EXPIRING_LIMITS = new Set(["iguana_necktie"]);
 /** Handled on their own: a per-model array, and a credit balance that is not a limit. */
 const NON_WINDOW_KEYS = new Set(["model_scoped", "extra_usage"]);
+
+/** Fable's named snapshot and stream window describe the same allowance. */
+function canonicalClaudeRateLimit(limit: BackendRateLimitSummary): BackendRateLimitSummary {
+  return limit.limitId === "model_scoped:Fable" || limit.limitId === "seven_day_overage_included"
+    ? { ...limit, limitId: "seven_day_overage_included", name: LIMIT_LABELS.seven_day_overage_included }
+    : limit;
+}
 
 function limitRow(key: string, usedPercent: number, resetAt: number | undefined): BackendRateLimitSummary {
   const label = LIMIT_LABELS[key];
@@ -84,13 +91,13 @@ export function claudeRateLimits(usage: SDKControlGetUsageResponse): BackendRate
     if (!entry || typeof entry.display_name !== "string" || !entry.display_name.trim()
       || typeof entry.utilization !== "number" || !Number.isFinite(entry.utilization)) continue;
     const resetAt = parseReset(entry.resets_at);
-    windows.push({
+    windows.push(canonicalClaudeRateLimit({
       name: `Weekly ${entry.display_name.trim()} limit`,
       limitId: `model_scoped:${entry.display_name.trim()}`,
       usedPercent: entry.utilization,
       ...(resetAt !== undefined && Number.isFinite(resetAt) ? { resetAt } : {}),
       windowMinutes: 10_080,
-    });
+    }));
   }
   return windows;
 }
@@ -128,8 +135,9 @@ const SAME_WINDOW_RESET_TOLERANCE_MS = 2 * 60 * 60 * 1000;
 export function mergeClaudeStreamRateLimits(
   current: BackendRateLimitSummary[], update: BackendRateLimitSummary[], now: number,
 ): BackendRateLimitSummary[] {
-  const limits = new Map(current.map((limit) => [limit.limitId, limit]));
-  for (const limit of update) {
+  const limits = new Map<string | undefined, BackendRateLimitSummary>();
+  for (const raw of [...current, ...update]) {
+    const limit = canonicalClaudeRateLimit(raw);
     const known = limits.get(limit.limitId);
     const live = known?.resetAt !== undefined && known.resetAt > now
       && !(limit.resetAt !== undefined && limit.resetAt > known.resetAt + SAME_WINDOW_RESET_TOLERANCE_MS);
@@ -152,7 +160,7 @@ export function nextClaudeRateLimitReset(limits: BackendRateLimitSummary[], now:
 
 /** A window past its reset no longer describes the account; hide it until Claude reports again. */
 export function liveClaudeRateLimits(limits: BackendRateLimitSummary[], now: number): BackendRateLimitSummary[] {
-  return limits.filter((limit) => limit.resetAt === undefined || limit.resetAt > now);
+  return mergeClaudeStreamRateLimits([], limits.filter((limit) => limit.resetAt === undefined || limit.resetAt > now), now);
 }
 
 /** Optional control methods must never prevent a turn from completing. */

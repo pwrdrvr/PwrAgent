@@ -1,5 +1,5 @@
 import path from "node:path";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import type {
   AppServerThreadActivityDetail,
@@ -11,6 +11,7 @@ import type {
   WorktreeOtherChangeEntry,
   WorktreeOtherChangeStatus,
 } from "@pwragent/shared";
+import { readStatusWithoutNestedWorktrees } from "@pwragent/shared";
 import { GitReadCache, type GitReadRequest } from "../git-info/read-cache";
 import { streamGitCommand, runGitCommand } from "./git-executable";
 
@@ -99,6 +100,23 @@ function buildWorkingStateCacheKey(
     .sort()
     .join(",");
   return accepted ? `${worktreePath}\0${accepted}` : worktreePath;
+}
+
+/**
+ * `git status --porcelain=v1 -z` that does not report a linked worktree of
+ * the same repository nested inside this checkout (`.claude/worktrees/…`) as
+ * an untracked change. It is another checkout, not content of this one.
+ */
+function readWorktreeStatus(
+  cwd: string,
+  runGitNoLocks: (args: string[]) => Promise<string>,
+): Promise<string> {
+  return readStatusWithoutNestedWorktrees({
+    cwd,
+    git: runGitNoLocks,
+    statusArgs: ["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
+    realpath: (value) => realpath(value),
+  });
 }
 
 function buildRevisionExclusionInput(
@@ -957,12 +975,7 @@ export async function probeWorktreeWorkingState(
     // Staged + unstaged line counts vs HEAD. Fails on an unborn HEAD
     // (fresh repo with no commits) — treated as "no tracked changes".
     runGitNoLocks(["diff", "--numstat", "HEAD"]).catch(() => undefined),
-    runGitNoLocks([
-      "status",
-      "--porcelain=v1",
-      "-z",
-      "--untracked-files=normal",
-    ]).catch(() => undefined),
+    readWorktreeStatus(worktreePath, runGitNoLocks).catch(() => undefined),
     runGitNoLocks(["remote"]).catch(() => undefined),
     resolveWorktreeBaseState(runGitNoLocks).catch(() => undefined),
   ]);
@@ -1136,12 +1149,7 @@ export class GitWorkingStateService {
 
     const noLocks = (args: string[]): Promise<string> =>
       this.runGit(cwd, ["--no-optional-locks", ...args], this.gitEnv);
-    const output = await noLocks([
-      "status",
-      "--porcelain=v1",
-      "-z",
-      "--untracked-files=normal",
-    ]).catch(() => "");
+    const output = await readWorktreeStatus(cwd, noLocks).catch(() => "");
     const excluded = new Set(
       (options.excludePaths ?? [])
         .map((value) => value.trim())

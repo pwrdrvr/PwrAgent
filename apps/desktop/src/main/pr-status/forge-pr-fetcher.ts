@@ -10,6 +10,7 @@ import { parseGithubTerminalDetails, parseGitLabTerminalDetails } from "./pr-ter
 export { parseForgePrRefFromUrl, type ForgePrRef } from "./forge-pr-ref";
 
 type BranchLookup = { providers?: ForgeKind[]; cwd: string; branch: string; allowPrimed?: boolean; onProviderFailure?: () => void };
+type CommitLookup = { cwd: string; sha: string; onProviderFailure?: () => void };
 type UrlLookup = { cwd: string; url: string; onProviderFailure?: () => void };
 type PollOptions = { reconnect?: boolean; requestTokenTaken?: boolean };
 
@@ -20,6 +21,8 @@ export type ForgePrProvider = {
   isAvailable: () => Promise<boolean>;
   availabilityError: (host: string, available: boolean) => string | undefined;
   fetchForBranch: (params: BranchLookup) => Promise<PrSummary[]>;
+  /** PRs/MRs the forge associates with one commit. */
+  fetchForCommit?: (params: CommitLookup) => Promise<PrSummary[]>;
   fetchByUrl: (params: UrlLookup, ref: ForgePrRef) => Promise<PrSummary | undefined>;
   fetchRefs: (refs: ForgePrRef[], options: PollOptions) => Promise<PrSummary[]>;
   /** Undefined when the forge gave no answer or the PR is not terminal. */
@@ -52,6 +55,7 @@ export class ForgePrFetcher {
         isAvailable: () => this.github.isGhAvailable(),
         availabilityError: () => undefined,
         fetchForBranch: (params) => this.github.fetchAllPullRequestsForBranch(params),
+        fetchForCommit: (params) => this.github.fetchPullRequestsForCommit(params),
         fetchByUrl: (params) => this.github.fetchPullRequestByUrl(params),
         fetchRefs: (refs, poll) => poll.reconnect && graphql.fetchPullRequestsAfterReconnect
           ? graphql.fetchPullRequestsAfterReconnect(refs)
@@ -68,6 +72,7 @@ export class ForgePrFetcher {
           ? gitlab.getLastError(host)
           : "Install glab or select its path in Settings → Git.",
         fetchForBranch: (params) => gitlab.fetchForBranch(params.cwd, params.branch),
+        fetchForCommit: (params) => gitlab.fetchForCommit(params.cwd, params.sha),
         fetchByUrl: (_params, ref) => gitlab.fetchByRef(ref),
         fetchRefs: async (refs, poll) => {
           const results: PrSummary[] = [];
@@ -121,6 +126,21 @@ export class ForgePrFetcher {
       if (!this.isProviderEnabled(kind) || (params.providers && !params.providers.includes(kind))) continue;
       try {
         results.push(...await this.providers[kind].fetchForBranch(params));
+      } catch {
+        params.onProviderFailure?.();
+      }
+    }
+    return results;
+  }
+
+  async fetchPullRequestsForCommit(params: CommitLookup): Promise<PrSummary[]> {
+    const results: PrSummary[] = [];
+    for (const kind of FORGE_KINDS) {
+      if (!this.isProviderEnabled(kind)) continue;
+      const fetchForCommit = this.providers[kind].fetchForCommit;
+      if (!fetchForCommit) continue;
+      try {
+        results.push(...await fetchForCommit(params));
       } catch {
         params.onProviderFailure?.();
       }

@@ -13,8 +13,10 @@ import {
 import { copyTextWithHtml } from "../../../lib/copy-text";
 import { ThreadMetaChips } from "../../navigation/ThreadMetaChips";
 import { ThreadTodoStack } from "../ThreadTodoStack";
+import { TodoDispatchProvider } from "../TodoDispatchProvider";
 import { ThreadTodosPanel } from "../ThreadTodosPanel";
 import { ThreadTodoCountsContext } from "../useThreadTodos";
+import { ThreadTodoRevealContext } from "../thread-todo-reveal";
 import { unwrapNavigationRead } from "../../../../../shared/navigation-ipc-result";
 import type { ThreadTodosView } from "../thread-todos-view";
 import { buildOperatorWaits, type OperatorWait } from "../../operator-requests/operator-waits";
@@ -172,6 +174,41 @@ describe("ThreadTodoStack", () => {
       <ThreadTodoStack threadKey="codex:collapse" todos={second} view={view} onStartReview={vi.fn()} />,
     );
     expect(screen.getByRole("heading", { name: "Card c2" })).toBeTruthy();
+  });
+
+  it("expands a collapsed stack once when a thread row's chip asks", () => {
+    const todos = [todo({ id: "r1" })];
+    const view = createView(todos);
+    const { rerender } = render(
+      <ThreadTodoStack threadKey="codex:reveal" todos={todos} view={view} onStartReview={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Collapse to-dos" }));
+
+    // A request for another thread waits until that thread is on screen.
+    const request = { threadKey: "codex:reveal" };
+    rerender(
+      <ThreadTodoStack threadKey="codex:other" todos={todos} view={view} onStartReview={vi.fn()}
+        revealRequest={request} />,
+    );
+    rerender(
+      <ThreadTodoStack threadKey="codex:reveal" todos={todos} view={view} onStartReview={vi.fn()}
+        revealRequest={request} />,
+    );
+    expect(screen.getByRole("heading", { name: "Card r1" })).toBeTruthy();
+
+    // The same click does not reopen a stack collapsed after it.
+    fireEvent.click(screen.getByRole("button", { name: "Collapse to-dos" }));
+    rerender(
+      <ThreadTodoStack threadKey="codex:reveal" todos={[...todos]} view={view} onStartReview={vi.fn()}
+        revealRequest={request} />,
+    );
+    expect(screen.getByRole("button", { name: "Show to-dos: 1 open" })).toBeTruthy();
+
+    rerender(
+      <ThreadTodoStack threadKey="codex:reveal" todos={todos} view={view} onStartReview={vi.fn()}
+        revealRequest={{ threadKey: "codex:reveal" }} />,
+    );
+    expect(screen.getByRole("heading", { name: "Card r1" })).toBeTruthy();
   });
 
   it("asks before a squash merge", async () => {
@@ -384,31 +421,38 @@ describe("ThreadTodoStack", () => {
     const handoff = todo({
       id: "h2",
       kind: "handoff",
+      sourceProject: AGENT,
       action: { type: "start_thread", prompt: "Build it" },
     });
     const view = createView([handoff], {
       instances: [{ instanceId: "peer-1", label: "Studio Mac" }],
     });
     const onDoHere = vi.fn(async () => true);
+    // The app keeps a card's dispatch choices in this window's provider.
     render(
-      <ThreadTodoStack
-        threadKey="codex:thread-a"
-        todos={[handoff]}
-        view={view}
-        onStartReview={vi.fn()}
-        onDoHere={onDoHere}
-      />,
+      <TodoDispatchProvider backends={[]} todos={[handoff]}>
+        <ThreadTodoStack
+          threadKey="codex:thread-a"
+          todos={[handoff]}
+          view={view}
+          onStartReview={vi.fn()}
+          onDoHere={onDoHere}
+        />
+      </TodoDispatchProvider>,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Do it here" }));
     expect(onDoHere).toHaveBeenCalledWith(handoff, undefined);
 
+    // The peer is the card's Machine now, not a submenu of the split.
     fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Start thread on" }));
-    expect(screen.getByRole("menu", { name: "Start thread on" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Studio Mac" }));
-    expect(view.run).toHaveBeenCalledWith(handoff, { startOnInstanceId: "peer-1" });
+    expect(screen.queryByRole("menuitem", { name: "Start thread on" })).toBeNull();
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Machine for the new thread: This machine" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Studio Mac" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    expect(view.run).toHaveBeenCalledWith(handoff, { startOnInstanceId: "peer-1", workMode: "local" });
 
     fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
     await act(async () => {
@@ -434,6 +478,11 @@ describe("ThreadTodoStack", () => {
     );
 
     expect(screen.getByRole("button", { name: "Model for the new thread: OpenAI, gpt-6.1-sol, xhigh" })).toBeTruthy();
+    // Access cannot change on the card, so the row shows it as a plain pill.
+    const access = screen.getByRole("img", { name: "Access for the new thread: Auto" });
+    expect(access.textContent).toBe("Auto");
+    expect(access.getAttribute("data-tooltip")).toBe("Access: Auto");
+    fireEvent.click(screen.getByRole("button", { name: "Show start settings" }));
     expect(screen.getByText("Access").nextElementSibling?.textContent).toBe("Auto");
   });
 
@@ -798,8 +847,11 @@ describe("thread to-do checklists", () => {
       <ThreadTodoStack threadKey="codex:checklist-20" todos={[handoff]} view={view} onStartReview={vi.fn()} />,
     );
     expect(screen.getByRole("list", { name: "Before you start, 1 of 1 checked" })).toBeTruthy();
-    expect(screen.getByRole("list", { name: "Steps for the new thread, 0 of 2 checked" })).toBeTruthy();
-    expect(screen.getByText("0 of 2")).toBeTruthy();
+    // The count is the prerequisites'; the plan waits behind Show more.
+    expect(screen.getByText("1 of 1")).toBeTruthy();
+    expect(screen.queryByText("0 of 2")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show more · 2-step plan" }));
+    expect(screen.getByRole("list", { name: "Plan for the new thread" })).toBeTruthy();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     });
@@ -921,6 +973,19 @@ describe("thread to-do checklists", () => {
 });
 
 describe("ThreadTodosPanel", () => {
+  it("switches to the Thread lens when a thread row's chip asks", () => {
+    const view = createView([todo({ id: "mine", title: "Mine" }), todo({ id: "theirs", threadId: "thread-b", title: "Theirs" })]);
+    const { rerender } = render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+    fireEvent.click(screen.getByRole("tab", { name: /All/ }));
+
+    rerender(
+      <ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()}
+        revealRequest={{ threadKey: "codex:thread-a" }} />,
+    );
+    expect(screen.getByRole("tab", { name: /^Thread/ }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByText("Theirs")).toBeNull();
+  });
+
   it("keeps missing instance coverage in a quiet, deduplicated footnote and clears it after recovery", async () => {
     const disconnected = { instanceId: "studio", label: "Studio Mac", reason: "disconnected" as const };
     const unsupported = { instanceId: "mini", label: "Build Mini", reason: "unsupported" as const };
@@ -1210,6 +1275,29 @@ describe("thread row to-do chip", () => {
     expect(screen.getByRole("img", { name: "2 open items, 1 unread" })).toBeTruthy();
     // The wait chip replaces the session's own approval flag.
     expect(screen.queryByText("Waiting for approval")).toBeNull();
+  });
+
+  it("opens the thread with its cards in view when clicked", () => {
+    const counts = new Map([["codex:thread-a", [todo({ id: "1" })]]]);
+    const reveal = vi.fn();
+    const rowClick = vi.fn();
+    render(
+      <ThreadTodoCountsContext.Provider value={counts}>
+        <ThreadTodoRevealContext.Provider value={reveal}>
+          <div onClick={rowClick}>
+            <ThreadMetaChips thread={thread} />
+          </div>
+        </ThreadTodoRevealContext.Provider>
+      </ThreadTodoCountsContext.Provider>,
+    );
+    const chip = screen.getByRole("button", { name: "1 open to-do" });
+    fireEvent.click(chip);
+    expect(reveal).toHaveBeenCalledWith(thread);
+    // The chip opens the thread itself, so the row's own select does not run too.
+    expect(rowClick).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(chip, { key: "Enter" });
+    expect(reveal).toHaveBeenCalledTimes(2);
   });
 
   it("names a question a thread asked", () => {

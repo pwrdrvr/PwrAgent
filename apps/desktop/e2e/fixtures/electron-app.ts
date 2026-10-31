@@ -356,6 +356,9 @@ export async function launchElectronApp(
   }
   configureElectronE2eReleaseEnv(env);
   anchorWindowsPwragentRoot(env);
+  // Native Chromium storage must be owned by this fixture, including any
+  // detached profile helpers that inherit its environment.
+  env.PWRAGENT_E2E_CHROMIUM_ROOT = path.join(homeRoot, "chromium");
   env[E2E_SHUTDOWN_LAUNCH_ID_ENV] = launchId;
   if (diagnosticsFile) {
     env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV] = diagnosticsFile;
@@ -1239,7 +1242,9 @@ export async function closeElectronApplication(
       );
     },
     startClose: () => {
-      const closePromise = electronApp.close();
+      const closePromise = process.platform === "win32" && !hasExited(child)
+        ? closeElectronWithSessionDrain(electronApp)
+        : electronApp.close();
       closePromise.catch(() => undefined);
       return closePromise;
     },
@@ -1256,6 +1261,25 @@ export async function closeElectronApplication(
     ),
   });
   return recordElectronCloseSummary(execution, options);
+}
+
+export async function closeElectronWithSessionDrain(
+  electronApp: ElectronApplication,
+): Promise<void> {
+  // Chromium waits for its network process after JS quit has completed. Drain
+  // the sessions while their RPC owners are still alive, within the same
+  // graceful-close deadline, instead of leaving cookie writes to native quit.
+  await electronApp.evaluate(async ({ session, webContents }) => {
+    const sessions = new Set([
+      session.defaultSession,
+      ...webContents.getAllWebContents().map((contents) => contents.session),
+    ]);
+    await Promise.all([...sessions].map(async (ownedSession) => {
+      await ownedSession.closeAllConnections();
+      await ownedSession.cookies.flushStore();
+    }));
+  });
+  await electronApp.close();
 }
 
 export async function captureElectronMainProcess(electronApp: ElectronApplication): Promise<void> {
@@ -1376,7 +1400,7 @@ async function killProcessTree(
       await taskkillTree(pid);
     }
     if (mainProcess && quitStartedAt !== undefined) {
-      // The Playwright child is cmd.exe. Its exit does not prove that Electron
+      // A custom Windows batch launcher can exit before its Electron
       // descendants have released the launcher's inherited pipes.
       const rows = await listWindowsMainAndChildren(mainProcess.pid);
       const pids = selectWindowsElectronCleanupPids(

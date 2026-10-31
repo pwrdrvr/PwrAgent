@@ -121,6 +121,11 @@ export class GitlabPrToolClient {
     const paging = new URLSearchParams({ page: String(page), per_page: String(perPage) });
     const done = <T extends Record<string, unknown>>(result: T) => ({ repository: r, source: "provider", fetchedAt: Date.now(), providerRequests, ...result });
     const pageInfo = (rows: unknown[]) => ({ page, perPage, nextPage: rows.length >= perPage ? page + 1 : null });
+
+    if (operation === "rerun_failed_ci_jobs") {
+      await write("POST", `/pipelines/${args.runId}/retry`);
+      return done({ requested: true, runId: args.runId, scope: "failed_and_canceled_jobs", url: `${repositoryUrl(r)}/-/pipelines/${args.runId}` });
+    }
     const notes: string[] = [];
     const writeResult = <T extends Record<string, unknown>>(result: T) => done({ ...result, ...(notes.length ? { notes } : {}) });
 

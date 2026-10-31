@@ -47,6 +47,17 @@ function ghPage(endpoint, optional = false, projection = null, runtime = readRun
   let waited = 0;
   for (let attempt = 0; attempt < 3; attempt++) {
     const result = runtime.run("gh", args, { encoding: "utf8", env, timeout: 45_000, maxBuffer: 16 * 1024 * 1024 });
+    if (result.error) {
+      // Never expose stderr, spawn arguments or error.message: they can contain
+      // credentials. Process errors are distinct from an HTTP rejection.
+      const reasons = {
+        ENOENT: "gh executable not found on PATH",
+        EACCES: "gh executable is not executable",
+        ETIMEDOUT: "gh command timed out",
+        ENOBUFS: "gh response exceeded the output buffer",
+      };
+      throw new Error(`GitHub CLI at ${endpoint.split("?")[0]}: ${reasons[result.error.code] ?? "gh subprocess failed"}; read incomplete, do not infer absence`);
+    }
     const response = (result.stdout ?? "").split(/\r?\n\r?\n/);
     const headers = response.shift() ?? "";
     const header = (name) => headers.match(new RegExp(`^${name}:\\s*(.+)$`, "im"))?.[1].trim();
@@ -78,7 +89,8 @@ function ghPage(endpoint, optional = false, projection = null, runtime = readRun
         continue;
       }
     }
-    throw new Error(`GitHub API ${endpoint.split("?")[0]}: HTTP ${status || "unavailable"}${limited ? "; bounded rate-limit retries exhausted; retry later, do not infer absence" : "; read incomplete, do not infer absence"}`);
+    const processStatus = !status ? ` (gh exit ${Number.isInteger(result.status) ? result.status : "unavailable"}${result.signal ? "; terminated by signal" : ""})` : "";
+    throw new Error(`GitHub API ${endpoint.split("?")[0]}: HTTP ${status || "unavailable"}${processStatus}${limited ? "; bounded rate-limit retries exhausted; retry later, do not infer absence" : "; read incomplete, do not infer absence"}`);
   }
 }
 

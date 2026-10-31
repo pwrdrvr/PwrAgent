@@ -1006,6 +1006,40 @@ describe("McpConnectionGatewayService", () => {
     ).rejects.toThrow("Invalid Sandboxer cleanup on PR close request.");
   });
 
+  it("offers pasted Linear images through enabled Linear connections until the profile turns it off", async () => {
+    const registry = temporaryRegistry();
+    const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
+      registry,
+      settings: createSettings(),
+      leaseManager: null,
+    });
+    services.push(service);
+    const broker = service as unknown as {
+      dispatchBrokerOperation: (op: unknown, params: unknown) => Promise<unknown>;
+    };
+    expect(service.linearPasteConnectionIds()).toEqual([]);
+    // Off holds with no Linear connection: a fresh signed link needs none.
+    await service.setLinearPasteImages(false);
+    expect(service.linearPasteConnectionIds()).toBeUndefined();
+    await service.setLinearPasteImages(true);
+    const linear = registry.create({ displayName: "Linear", serverUrl: "https://mcp.linear.app/mcp" });
+    const parked = registry.create({ displayName: "Linear Two", serverUrl: "https://mcp.linear.app/sse" });
+    registry.create({ displayName: "Other", serverUrl: "https://example.com/mcp" });
+    registry.setEnabled(parked.id, false);
+
+    expect(service.linearPasteConnectionIds()).toEqual([linear.id]);
+    await service.setLinearPasteImages(false);
+    expect(service.linearPasteConnectionIds()).toBeUndefined();
+    await expect(
+      broker.dispatchBrokerOperation("broker/set-linear-paste-images", { enabled: true }),
+    ).resolves.toBeNull();
+    expect(service.linearPasteConnectionIds()).toEqual([linear.id]);
+    await expect(
+      broker.dispatchBrokerOperation("broker/set-linear-paste-images", {}),
+    ).rejects.toThrow("Invalid Linear paste images request.");
+  });
+
   it("announces each change to this instance's windows, including a Sandboxer answer that changed", async () => {
     const registry = temporaryRegistry();
     const connection = registry.create({

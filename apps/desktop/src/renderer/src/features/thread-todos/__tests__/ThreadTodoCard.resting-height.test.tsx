@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ThreadTodo } from "@pwragent/shared";
 import { ThreadTodoCard, type ThreadTodoCardProps } from "../ThreadTodoCard";
@@ -14,6 +14,11 @@ import { ThreadTodoCard, type ThreadTodoCardProps } from "../ThreadTodoCard";
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  if (nativeScrollIntoView) {
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", nativeScrollIntoView);
+  } else {
+    delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+  }
 });
 
 const STEPS = [
@@ -55,6 +60,38 @@ function props(todo: ThreadTodo): ThreadTodoCardProps {
     onResolve: vi.fn(),
     onSetItemChecked: vi.fn(),
   };
+}
+
+const HANDOFF: ThreadTodo["action"] = {
+  type: "start_thread",
+  prompt: "Add stdio server support to the gateway.",
+};
+
+/** jsdom has no layout; report the clamped paragraph as overflowing. */
+function reportClampedDetailAsCut(): void {
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("is-clamped") ? 120 : 0;
+  });
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("is-clamped") ? 51 : 0;
+  });
+}
+
+const nativeScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+
+/** jsdom has no scrollIntoView; install a spy, removed after each test. */
+function stubScrollIntoView() {
+  const scrollIntoView = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    writable: true,
+    value: scrollIntoView,
+  });
+  return scrollIntoView;
+}
+
+function precedes(first: Node, second: Node): boolean {
+  return (first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
 }
 
 function visibleSteps(): string[] {
@@ -114,18 +151,100 @@ describe("to-do card resting height", () => {
   });
 
   it("offers Show more when only the description is cut", () => {
-    // jsdom has no layout; report the clamped paragraph as overflowing.
-    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
-      return this.classList.contains("is-clamped") ? 120 : 0;
-    });
-    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) {
-      return this.classList.contains("is-clamped") ? 51 : 0;
-    });
+    reportClampedDetailAsCut();
     render(<ThreadTodoCard {...props(card([], { items: undefined }))} />);
 
     const toggle = screen.getByRole("button", { name: "Show more" });
     fireEvent.click(toggle);
     expect(screen.getByRole("button", { name: "Show less" }).getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("puts Show more under the description, above a handoff's prompt", () => {
+    // The toggle used to sit under the whole body, below the prompt's own
+    // Show less, and read as the prompt's control.
+    reportClampedDetailAsCut();
+    render(<ThreadTodoCard {...props(card([], { kind: "handoff", items: undefined, action: HANDOFF }))} />);
+    const detail = screen.getByText(LONG_DETAIL.trim(), { exact: false });
+    const prompt = screen.getByRole("region", { name: "Proposed prompt" });
+
+    const more = screen.getByRole("button", { name: "Show more" });
+    expect(precedes(detail, more)).toBe(true);
+    expect(precedes(more, prompt)).toBe(true);
+
+    fireEvent.click(more);
+    const less = screen.getByRole("button", { name: "Show less" });
+    expect(precedes(detail, less)).toBe(true);
+    expect(precedes(less, prompt)).toBe(true);
+  });
+
+  it("keeps a handoff's plan behind Show more, read-only, above its prompt", () => {
+    // The start sends only the prompt, so the plan has nothing to tick and
+    // no place at rest: the toggle says it is there.
+    const { container } = render(<ThreadTodoCard {...props(card([true], { kind: "handoff", action: HANDOFF }))} />);
+    const detail = screen.getByText(LONG_DETAIL.trim(), { exact: false });
+    const prompt = screen.getByRole("region", { name: "Proposed prompt" });
+    expect(screen.queryByRole("list", { name: "Plan for the new thread" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Show all/ })).toBeNull();
+
+    const toggle = screen.getByRole("button", { name: "Show more · 8-step plan" });
+    expect(precedes(detail, toggle)).toBe(true);
+    expect(precedes(toggle, prompt)).toBe(true);
+
+    fireEvent.click(toggle);
+    const plan = screen.getByRole("list", { name: "Plan for the new thread" });
+    const planSteps = within(plan).getAllByRole("listitem");
+    expect(planSteps).toHaveLength(8);
+    // A step an agent ticked with update_todo still reads as done.
+    expect(planSteps.map((step) => step.classList.contains("is-checked")))
+      .toEqual([true, false, false, false, false, false, false, false]);
+    expect(container.querySelectorAll("input[type=checkbox]")).toHaveLength(0);
+    const less = screen.getByRole("button", { name: "Show less" });
+    expect(precedes(less, plan)).toBe(true);
+    expect(precedes(plan, prompt)).toBe(true);
+  });
+
+  it("puts Show more above a card's prerequisites", () => {
+    reportClampedDetailAsCut();
+    render(
+      <ThreadTodoCard
+        {...props(card([], {
+          kind: "handoff",
+          action: HANDOFF,
+          items: [
+            { id: "p1", text: "Merge the protocol change", checked: false, prerequisite: true },
+            { id: "s1", text: "Read the owner's version", checked: false },
+          ],
+        }))}
+      />,
+    );
+    const detail = screen.getByText(LONG_DETAIL.trim(), { exact: false });
+    const prerequisites = screen.getByRole("list", { name: /^Before you start/ });
+
+    const more = screen.getByRole("button", { name: "Show more · 1-step plan" });
+    expect(precedes(detail, more)).toBe(true);
+    expect(precedes(more, prerequisites)).toBe(true);
+  });
+
+  it("scrolls a keyboard-opened toggle into view", () => {
+    const scrollIntoView = stubScrollIntoView();
+    render(<ThreadTodoCard {...props(card())} />);
+    const toggle = screen.getByRole("button", { name: "Show all 8 steps" });
+
+    // Enter and Space dispatch a click with detail 0.
+    fireEvent.click(toggle, { detail: 0 });
+    expect(screen.getByRole("button", { name: "Show less" })).toBe(toggle);
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView.mock.contexts[0]).toBe(toggle);
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
+  });
+
+  it("leaves a clicked-open card where it is", () => {
+    const scrollIntoView = stubScrollIntoView();
+    render(<ThreadTodoCard {...props(card())} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Show all 8 steps" }), { detail: 1 });
+    expect(screen.getByRole("button", { name: "Show less" })).toBeTruthy();
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
   it("scrolls the opened body instead of growing the card", () => {

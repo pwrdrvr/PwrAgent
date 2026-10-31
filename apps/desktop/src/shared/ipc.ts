@@ -189,6 +189,7 @@ export const THREAD_TODOS_RESOLVE_CHANNEL = "thread-todos:resolve";
 export const THREAD_TODOS_RUN_ACTION_CHANNEL = "thread-todos:run-action";
 export const THREAD_TODOS_LIST_PROJECTS_CHANNEL = "thread-todos:list-projects";
 export const THREAD_TODOS_SET_PROJECT_CHANNEL = "thread-todos:set-project";
+export const THREAD_TODOS_LIST_DISPATCH_ENVIRONMENTS_CHANNEL = "thread-todos:list-dispatch-environments";
 export const THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL = "thread-todos:set-item-checked";
 /**
  * Marker event: a thread's to-do cards changed. Review details refetch with
@@ -321,6 +322,10 @@ export const MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL =
   "mcp-connection:set-sandboxer-transport";
 export const MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL =
   "mcp-connection:set-sandboxer-cleanup-on-pr-close";
+export const MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL =
+  "mcp-connection:set-linear-paste-images";
+export const MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL =
+  "mcp-connection:fetch-linear-pasted-images";
 export const MCP_CONNECTION_LIST_TOOLS_CHANNEL = "mcp-connection:list-tools";
 export const MCP_CONNECTION_SET_THREAD_CHANNEL =
   "mcp-connection:set-thread";
@@ -338,6 +343,7 @@ export const NAVIGATION_QUEUE_PROJECTION_CHANNEL =
   "navigation:get-queue-projection";
 export const NAVIGATION_SET_BROWSE_MODE_CHANNEL =
   "navigation:set-browse-mode";
+export const NAVIGATION_SET_RESUME_STATE_CHANNEL = "navigation:set-resume-state";
 export const NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL =
   "navigation:set-pinned-group-collapsed";
 export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen";
@@ -799,6 +805,7 @@ export const APPLICATION_OPEN_CHANNEL = "application:open";
 export const PATH_OPEN_CHANNEL = "path:open";
 export const PATH_REVEAL_CHANNEL = "path:reveal";
 export const MARKDOWN_FILE_READ_CHANNEL = "markdown-file:read";
+export const HTML_PREVIEW_ASSETS_READ_CHANNEL = "html-preview:assets:read";
 export const TRANSCRIPT_FILES_RESOLVE_CHANNEL = "transcript-files:resolve";
 export const MARKDOWN_FILE_VIEWER_OPEN_CHANNEL = "markdown-file-viewer:open";
 export const MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL =
@@ -940,3 +947,6 @@ export const KEYBINDINGS_WRITE_CHANNEL = "keybindings:write";
 export const KEYBINDINGS_CHANGED_CHANNEL = "keybindings:changed";
 
 export const INTEGRATED_TERMINAL_RENAME_CHANNEL = "integrated-terminal:rename";
+
+export const NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL =
+  "navigation:continue-thread-environment-startup";

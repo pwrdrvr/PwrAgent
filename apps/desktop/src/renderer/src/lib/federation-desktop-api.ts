@@ -125,6 +125,9 @@ export function scopeDesktopApiToFederationTarget(
           },
         })
       : undefined,
+    // A peer's HTML preview shows without the files beside it: nothing on
+    // the federation wire serves them.
+    readHtmlPreviewAssets: undefined,
     readMarkdownFileViewerSnapshot: undefined,
     onMarkdownFileViewerSnapshotChanged: undefined,
   };

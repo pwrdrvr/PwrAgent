@@ -342,6 +342,25 @@ describe("thread to-do tool dispatch", () => {
       .toMatchObject({ ok: false, code: "invalid_arguments" });
   });
 
+  it("lets a thread claim a card it was asked to do here", async () => {
+    const handler = createHandler();
+    await tool("resolve_todo", handler).dispatch({ id: "todo-1", resolution: "sent_here" }, CONTEXT);
+    expect(handler.resolve).toHaveBeenLastCalledWith(
+      { backend: "codex", threadId: "thread-a" },
+      { id: "todo-1", status: "done", resolution: "sent_here" },
+    );
+    expect(await tool("resolve_todo", handler).dispatch({ id: "todo-1", resolution: "handled_elsewhere" }, CONTEXT))
+      .toMatchObject({ ok: false, code: "invalid_arguments" });
+    expect(await tool("resolve_todo", handler).dispatch(
+      { id: "todo-1", status: "dismissed", resolution: "sent_here" },
+      CONTEXT,
+    )).toMatchObject({ ok: false, code: "invalid_arguments" });
+    // Read before resolve_todo, on a backend that loads schemas on demand.
+    for (const operation of ["add_todo", "list_todos", "resolve_todo"] as const) {
+      expect(tool(operation, handler).description).toContain("resolution sent_here");
+    }
+  });
+
   it("raises, ticks, re-raises and resolves a checklist card end to end", async () => {
     const db = openInMemoryStateDb();
     try {

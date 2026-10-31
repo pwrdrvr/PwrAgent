@@ -178,6 +178,7 @@ import {
   isFederationEventClass,
   isAppServerBackendKind,
   formatFederationPeerDisplayLabel,
+  formatFederationPeerShortDisplayLabel,
   isRemoteFederationTarget,
   mergeCelestialIconAssignments,
   pickCelestialIcon,
@@ -229,6 +230,10 @@ import {
   type ReloadCodexMcpConfigRequest,
   type SetThreadPinRequest,
   type SetThreadPinResponse,
+  type ContinueThreadEnvironmentStartupRequest,
+  type ContinueThreadEnvironmentStartupResponse,
+  type AcknowledgeThreadEnvironmentFailureRequest,
+  type AcknowledgeThreadEnvironmentFailureResponse,
   type SetThreadReactionRequest,
   type SetThreadLockRequest,
   type SetThreadLockResponse,
@@ -294,7 +299,8 @@ import {
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
-import { readThreadFamilyPricing } from "../app-server/thread-family-pricing";
+import { threadFamilyPricingForPeer } from "../app-server/thread-family-pricing";
+import { createLocalThreadFamilyPricingReader } from "../app-server/thread-family-pricing-source";
 import { createScratchProjectDirectory, resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { dispatchStarMapIntake } from "../app-server/star-map-intake";
 import { spawnTerminalPty } from "../terminal/integrated-terminal-service";
@@ -603,6 +609,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "remote_window",
   "thread_navigation",
   "thread_grouping",
+  "thread_parent_mutation_v1",
   "thread_detail",
   "turn_control",
   "durable_turn_requests_v1",
@@ -638,6 +645,8 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_mcp_connections",
   "thread_todos",
   "thread_todo_feed",
+  "thread_todo_dispatch_target",
+  "thread_todo_plan",
   "operator_questions",
   "operator_requests",
   "thread_display_bulk_reads",
@@ -1273,6 +1282,7 @@ export class DesktopFederationRuntime {
     (event: AgentEvent) => void | Promise<void>
   >();
   private readonly peerStatusListeners = new Set<() => void>();
+  private readonly shortNameListeners = new Set<() => void>();
   private readonly desiredEventSubscriptions = new Map<
     string,
     Map<FederationInstanceId, DesiredEventSubscription>
@@ -1577,9 +1587,26 @@ export class DesktopFederationRuntime {
     };
   }
 
+  /**
+   * Fires whenever the short-name map changes, so the application menu and
+   * remote window titles can redraw with the new names.
+   */
+  onShortNamesChanged(listener: () => void): () => void {
+    this.shortNameListeners.add(listener);
+    return () => {
+      this.shortNameListeners.delete(listener);
+    };
+  }
+
   connectedPeerTargets(): Array<{
     target: FederationRemoteTarget;
     label: string;
+    /**
+     * `label` with the federation's short name for the machine, for window
+     * titles and the Remote Instances menu. Absent when the machine has no
+     * short name. `label` stays the full name for tooltips and agents.
+     */
+    shortLabel?: string;
     capabilities: FederationCapability[];
     navigationQueryProtocol?: 2;
   }> {
@@ -1590,12 +1617,23 @@ export class DesktopFederationRuntime {
     const visible = this.visiblePeers();
     return visible
       .filter((peer) => peer.status === "connected")
-      .map((peer) => ({
-        target: { scope: "remote", instanceId: peer.id },
-        label: formatFederationPeerDisplayLabel(peer, visible),
-        capabilities: [...peer.capabilities],
-        navigationQueryProtocol: peer.navigationQueryProtocol,
-      }));
+      .map((peer) => {
+        const shortLabel = this.shortNames.shortLabelFor(peer.id, peer.label);
+        return {
+          target: { scope: "remote", instanceId: peer.id },
+          label: formatFederationPeerDisplayLabel(peer, visible),
+          ...(shortLabel
+            ? {
+                shortLabel: formatFederationPeerShortDisplayLabel(
+                  { ...peer, shortLabel },
+                  visible,
+                ),
+              }
+            : {}),
+          capabilities: [...peer.capabilities],
+          navigationQueryProtocol: peer.navigationQueryProtocol,
+        };
+      });
   }
 
   assertRemoteNavigationQueryProtocol(
@@ -2413,13 +2451,16 @@ export class DesktopFederationRuntime {
   async requestThreadTodoOperation<K extends ThreadTodoOperation>(
     target: FederationRemoteTarget, operation: K, request: ThreadTodoOperationRequest<K>,
   ): Promise<ThreadTodoOperationResponse<K>> {
-    const unavailable = this.todoQueueUnavailableInstance(target, "thread_todos");
+    const unavailable = this.todoQueueUnavailableInstance(target, "thread_todos")
+      ?? (operation === "raisePlan" ? this.todoQueueUnavailableInstance(target, "thread_todo_plan") : undefined);
     if (unavailable) {
       if (operation === "listTodos") {
         return { todos: [], unavailableInstances: [unavailable] } as ThreadTodoOperationResponse<K>;
       }
       if (unavailable.reason === "disconnected") throw new Error(`${unavailable.label} is disconnected.`);
-      throw new Error("This Federation owner does not support To-dos. Update that PwrAgent instance.");
+      throw new Error(operation === "raisePlan" && this.todoQueueUnavailableInstance(target, "thread_todos") === undefined
+        ? "This Federation owner does not support plan cards. Update that PwrAgent instance."
+        : "This Federation owner does not support To-dos. Update that PwrAgent instance.");
     }
     return await this.rpcFor(target).request({ method: FEDERATION_THREAD_TODO_METHODS[operation], params: request,
       ...(operation === "runAction" ? { timeoutMs: null } : {}),
@@ -2463,6 +2504,15 @@ export class DesktopFederationRuntime {
   publishThreadTodoDelta(delta: ThreadTodoFeedDelta): void {
     this.forwardLocalBackendEvent({ backend: delta.backend ?? "codex",
       notification: { method: "thread/todos/delta", params: delta } });
+  }
+
+  /**
+   * The owner answers `threadTodos.raisePlan`, so a thread started there
+   * from a card gets the card's steps as its own `plan` card.
+   */
+  remotePeerSupportsTodoPlan(target: FederationRemoteTarget): boolean {
+    return this.todoQueueUnavailableInstance(target, "thread_todos") === undefined
+      && this.todoQueueUnavailableInstance(target, "thread_todo_plan") === undefined;
   }
 
   /**
@@ -5871,6 +5921,15 @@ export class DesktopFederationRuntime {
         params: {},
       },
     });
+    for (const listener of this.shortNameListeners) {
+      try {
+        listener();
+      } catch (error) {
+        log.warn("federation short name listener failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   /**
@@ -7050,11 +7109,17 @@ function localBackendOperations(): FederationBackendOperations {
       return await getDesktopBackendRegistry().readUsageActivity(request);
     },
     async readThreadFamilyPricing(request) {
-      return await readThreadFamilyPricing({
-        request: { backend: request.backend, threadId: request.threadId },
-        loadIndex: () => loadLocalNavigationQueryIndex({ callerReason: "thread-family-pricing" }),
-        readSummaries: (threads) => getDesktopOverlayStore().readThreadPricingSummaries(threads),
-      });
+      // An owner answers for its own threads only. Its pins of other
+      // instances' sub-threads go back as referrals; the reader asks those
+      // owners itself, so a read never fans out from here.
+      let localInstanceId: string | undefined;
+      try {
+        localInstanceId = getDesktopFederationRuntime().localFederationInstanceId();
+      } catch {
+        // Pins still resolve by their recorded owner without it.
+      }
+      return threadFamilyPricingForPeer(await createLocalThreadFamilyPricingReader(localInstanceId)(
+        { backend: request.backend, threadId: request.threadId }));
     },
     async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {
       return await getDesktopBackendRegistry().analyzeUsageActivity(request);
@@ -7168,6 +7233,12 @@ function localBackendOperations(): FederationBackendOperations {
         ...(options?.requesterInstanceId ? { sourceInstanceId: options.requesterInstanceId } : {}),
       });
     },
+    async continueThreadEnvironmentStartup(request: ContinueThreadEnvironmentStartupRequest): Promise<ContinueThreadEnvironmentStartupResponse> {
+      return await getDesktopBackendRegistry().continueThreadEnvironmentStartup(request);
+    },
+    async acknowledgeThreadEnvironmentFailure(request: AcknowledgeThreadEnvironmentFailureRequest): Promise<AcknowledgeThreadEnvironmentFailureResponse> {
+      return await getDesktopBackendRegistry().acknowledgeThreadEnvironmentFailure(request);
+    },
     async setThreadReaction(
       request: SetThreadReactionRequest,
     ): Promise<SetThreadReactionResponse> {
@@ -7278,6 +7349,9 @@ function localBackendOperations(): FederationBackendOperations {
         },
       });
       return { mounted: true };
+    },
+    async mutateThreadParentV1(request) {
+      return await getDesktopBackendRegistry().mutateThreadParentV1(request);
     },
     async setThreadParent(
       request: SetThreadParentRequest,

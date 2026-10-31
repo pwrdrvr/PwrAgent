@@ -85,6 +85,69 @@ async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUs
 }
 
 describe("Claude SDK backend", () => {
+  it("moves a thread to another folder and resumes the same session there", async () => {
+    const f = await fixture();
+    const previous = path.join(f.root, "checkout");
+    const secondary = path.join(f.root, "other-repo");
+    const worktree = path.join(f.root, "worktrees", "checkout");
+    const { threadId } = await f.backend.startThread({
+      cwd: previous, executionMode: "default",
+      linkedDirectories: [
+        { id: previous, kind: "local", label: "checkout", path: previous },
+        { id: secondary, kind: "local", label: "other-repo", path: secondary },
+      ],
+    });
+    // Builds before this one stored a refusal on every Claude thread.
+    const stored = await f.store.read(threadId);
+    await f.store.save({ ...stored, thread: { ...stored.thread, workspaceHandoff: { available: false, unavailableReason: "old" } } });
+    expect((await f.backend.listThreads())[0]?.workspaceHandoff).toBeUndefined();
+
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Remember PINEAPPLE" }] });
+    await f.waitForTurn();
+    const linkedDirectory = {
+      id: `pwragent-handoff:claude:${threadId}`, kind: "worktree" as const, label: "checkout",
+      path: previous, worktreePath: worktree,
+    };
+    await f.backend.moveWorkspace({ threadId, cwd: worktree, linkedDirectory });
+
+    const moved = await f.store.read(threadId);
+    expect(moved.cwd).toBe(worktree);
+    expect(moved.sdkSessionId).toBe("5a85c1ad-85c1-4930-ae19-50f721ad13dd");
+    expect(moved.sdkSessionDir).toBe(previous);
+    expect(moved.thread.linkedDirectories).toEqual([
+      linkedDirectory,
+      { id: secondary, kind: "local", label: "other-repo", path: secondary },
+    ]);
+    expect(f.backend.liveSessionThreadIds()).toEqual([]);
+
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Where are you?" }] });
+    await f.waitForTurn();
+    expect(f.queries[1]).toMatchObject({ cwd: worktree, resume: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" });
+    expect(f.queries[1].additionalDirectories).toEqual([path.resolve(secondary)]);
+  });
+
+  it("refuses to move a thread while its turn runs", async () => {
+    const finish = Promise.withResolvers<void>();
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      await finish.promise;
+      yield { type: "result", subtype: "success", is_error: false, result: "Done" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Work" }] });
+    try {
+      expect(() => f.backend.assertWorkspaceMovable(threadId)).toThrow("Wait for the active Claude turn to finish");
+      await expect(f.backend.moveWorkspace({
+        threadId, cwd: path.join(f.root, "elsewhere"),
+        linkedDirectory: { id: "elsewhere", kind: "local", label: "elsewhere", path: path.join(f.root, "elsewhere") },
+      })).rejects.toThrow("Wait for the active Claude turn to finish");
+      expect((await f.store.read(threadId)).cwd).toBe(f.root);
+    } finally {
+      finish.resolve();
+      await f.waitForTurn();
+    }
+  });
+
   it("publishes a native title during the first turn without blocking assistant streaming", async () => {
     const pendingTitle = Promise.withResolvers<string>();
     const finishTurn = Promise.withResolvers<void>();
@@ -463,12 +526,13 @@ describe("Claude SDK backend", () => {
       return item?.type === "exitedReviewMode" ? [item] : [];
     });
 
-    it("registers the hook that tells the agent skipped findings stay open", async () => {
+    it("registers the hooks for skipped findings and for CI waits", async () => {
       const f = await fixture();
       const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
       await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review high" }] });
       await f.waitForTurn();
-      expect(f.queries[0]!.hooks?.PostToolUse?.map((matcher) => matcher.matcher)).toEqual(["ReportFindings"]);
+      expect(f.queries[0]!.hooks?.PostToolUse?.map((matcher) => matcher.matcher))
+        .toEqual(["ReportFindings", "Bash|Monitor"]);
     });
 
     it("turns a ReportFindings call into a review card instead of a tool row", async () => {
@@ -721,7 +785,7 @@ describe("Claude SDK backend", () => {
       .toMatchObject({ params: { tokenUsage: { claudeCostUSD: 0.3, last: { inputTokens: 30, outputTokens: 5 } } } });
     expect((await f.backend.readThread(threadId)).messages).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: steered.messageId, text: "Focus on the PR", parts: [
-        { type: "text", text: "Focus on the PR" }, { type: "image", url: "data:image/png;base64,aGVsbG8=" },
+        { type: "text", text: "Focus on the PR" }, { type: "image", url: expect.stringMatching(/^pwragent-image:/) },
       ], turn: expect.objectContaining({ id: started.turnId, status: "completed" }) }),
     ]));
     expect(await iterator.next()).toMatchObject({ done: true });
@@ -892,6 +956,8 @@ describe("Claude SDK backend", () => {
       yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
       yield { type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "seven_day",
         utilization: 0.55, resetsAt: Math.round(resetsAt / 1000) + 3600 } } as SDKMessage;
+      yield { type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "seven_day_overage_included",
+        utilization: 0.95, resetsAt: Math.round(resetsAt / 1000) + 3600 } } as SDKMessage;
       yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
     }, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: usage });
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
@@ -903,7 +969,7 @@ describe("Claude SDK backend", () => {
     const expected = [
       expect.objectContaining({ limitId: "seven_day", usedPercent: 56, resetAt: resetsAt }),
       expect.objectContaining({ limitId: "iguana_necktie", usedPercent: 30 }),
-      expect.objectContaining({ limitId: "model_scoped:Fable", usedPercent: 96 }),
+      expect.objectContaining({ name: "Weekly Fable limit", limitId: "seven_day_overage_included", usedPercent: 96 }),
     ];
     expect(f.backend.summary().rateLimits).toEqual(expected);
 
@@ -1420,13 +1486,15 @@ describe("Claude SDK backend", () => {
     const parts = [
       { type: "text", text: "Read these" },
       { type: "image", url: expect.stringMatching(/^pwragent-image:/), alt: "local.png" },
-      { type: "image", url: "data:image/png;base64,aW1hZ2U=", alt: "inline.png" },
+      { type: "image", url: expect.stringMatching(/^pwragent-image:/), alt: "inline.png" },
       { type: "file", name: "Report.txt", mimeType: "text/plain", sizeBytes: 12 },
     ];
     expect(replay.messages[0]).toMatchObject({ text: "Read these", parts });
     expect(replay.entries[0]).toMatchObject({ text: "Read these", parts });
     expect(f.events).toEqual(expect.arrayContaining([expect.objectContaining({ notification: expect.objectContaining({
-      method: "item/completed", params: expect.objectContaining({ item: expect.objectContaining({ type: "userMessage", content: parts }) }),
+      method: "item/completed", params: expect.objectContaining({ item: expect.objectContaining({ type: "userMessage", content: [
+        parts[0], parts[1], { type: "image", url: "data:image/png;base64,aW1hZ2U=", alt: "inline.png" }, parts[3],
+      ] }) }),
     }) })]));
   });
 
@@ -1524,6 +1592,38 @@ describe("Claude SDK backend", () => {
     await f.waitForTurn();
     expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
       turn: { error: { message: "Claude completed without a response or any tool activity. Try sending the message again." } },
+    } });
+  });
+
+  it.each(["refusal", "max_tokens"])("fails a success result stopped by %s and permits a later send", async (stopReason) => {
+    let attempts = 0;
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false,
+        stop_reason: attempts++ === 0 ? stopReason : "end_turn", result: "Response" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Continue" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
+      turn: { error: { message: stopReason === "refusal" ? "Response"
+        : "Claude reached the output token limit before completing the response. Send another message to continue." } },
+    } });
+    expect((await f.backend.readThread(threadId)).threadStatus).toBe("idle");
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Try this revised request" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+  });
+
+  it("provides a reason for an empty refusal result", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "result", subtype: "success", is_error: false, stop_reason: "refusal", result: "" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Continue" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
+      turn: { error: { message: "Claude declined the request. Review the request before continuing." } },
     } });
   });
 
@@ -2249,6 +2349,31 @@ describe("Claude SDK backend", () => {
     expect(row).toMatchObject({ status: "failed" });
   });
 
+  it("settles a completed background sub-agent's tool row with its summary", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "spawn", content: [{ type: "tool_use", id: "tool-agent", name: "Agent", input: { description: "Audit the SDK" } }],
+      } } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "agent-1", tool_use_id: "tool-agent", description: "Audit the SDK",
+        task_type: "local_agent", subagent_type: "Explore", is_backgrounded: true } as SDKMessage;
+      yield { type: "user", parent_tool_use_id: null, tool_use_result: { status: "async_launched", agentId: "agent-1" },
+        message: { content: [{ type: "tool_result", tool_use_id: "tool-agent", content: "Async agent launched." }] } } as SDKMessage;
+      yield { type: "system", subtype: "task_notification", task_id: "agent-1", tool_use_id: "tool-agent",
+        status: "completed", output_file: "", summary: "Audit done" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "done" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Audit" }] });
+    await f.waitForTurn();
+    await vi.waitFor(async () => expect((await f.backend.readThread(threadId)).entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "tool-agent", status: "completed", details: [expect.objectContaining({
+        label: "Agent", status: "completed",
+        command: expect.objectContaining({ rawCommand: "Agent", source: "tool", output: "Async agent launched.\n\nAudit done" }),
+      })] }),
+    ])));
+  });
+
   it("reports a background sub-agent as running work with its progress", async () => {
     const agentDone = Promise.withResolvers<void>();
     const f = await fixture(async function* () {
@@ -2563,6 +2688,133 @@ describe("Claude transcript fidelity", () => {
     }] });
   });
 
+  it("draws a tool result's images on its row instead of their base64, live and in the replay", async () => {
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    let cwd = "";
+    const f = await fixture(async function* () {
+      yield init;
+      // Read answers a PNG with one image block and no text; this one also
+      // omits media_type, as the transcript that reported the bug did.
+      yield call("read-1", "Read", { file_path: path.join(cwd, "shot.png") });
+      yield { type: "user", parent_tool_use_id: null, message: { content: [
+        { type: "tool_result", tool_use_id: "read-1", content: [{ type: "image", source: { type: "base64", data: png } }] },
+      ] } } as SDKMessage;
+      // An MCP screenshot tool can answer text and images in any order.
+      yield call("shot-1", "mcp__browser__screenshot", {});
+      yield { type: "user", parent_tool_use_id: null, message: { content: [{ type: "tool_result", tool_use_id: "shot-1", content: [
+        { type: "text", text: "Captured the page." },
+        { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "/9j/4AAQ" } },
+      ] }] } } as SDKMessage;
+      yield result;
+    });
+    cwd = f.root;
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Look" }] });
+    await f.waitForTurn();
+
+    const pngUrl = `data:image/png;base64,${png}`;
+    const live = (id: string) => {
+      const event = f.events.find((event) => event.notification.method === "item/completed"
+        && getNotificationItem(event.notification.params)?.id === id);
+      return buildLiveToolDetails(getNotificationItem(event!.notification.params)!);
+    };
+    expect(live("read-1")).toEqual([expect.objectContaining({ images: [expect.objectContaining({ url: pngUrl })] })]);
+    expect(live("shot-1")).toEqual([expect.objectContaining({
+      images: [expect.objectContaining({ url: "data:image/jpeg;base64,/9j/4AAQ" })],
+    })]);
+
+    // The replay groups adjacent tool rows, so look the details up across rows.
+    const details = (await f.backend.readThread(threadId)).entries
+      .flatMap((entry) => entry.type === "activity" ? entry.details : []);
+    const detail = (id: string) => details.find((candidate) => candidate.id === id);
+    expect(detail("read-1:output")).toEqual({
+      id: "read-1:output", kind: "read", label: "Read shot.png output", status: "completed",
+      images: [{ type: "image", url: expect.stringMatching(/^pwragent-image:/), alt: "Read shot.png" }],
+    });
+    expect(detail("shot-1")).toMatchObject({
+      label: "Used MCP browser/screenshot",
+      command: { rawCommand: "browser/screenshot", source: "tool", output: "Captured the page." },
+      images: [{ url: expect.stringMatching(/^pwragent-image:/) }],
+    });
+    // No row keeps the image as text.
+    expect(JSON.stringify(details.map((candidate) => [candidate.markdown, candidate.command?.output])))
+      .not.toContain("base64");
+    expect(await readFile(path.join(f.root, `${threadId}.jsonl`), "utf8")).not.toContain("data:image/");
+  });
+
+  it("names an MCP call's tool and keeps its arguments and result inside the row", async () => {
+    const sandboxer = "mcp__pwragent_builtin_sandboxer_e96ab96f1443b1279de4ece773af16df__stop_sandbox";
+    const f = await fixture(async function* () {
+      yield init;
+      yield call("search-1", "ToolSearch", { query: "select:stop_sandbox" });
+      yield { type: "user", parent_tool_use_id: null, message: { content: [{ type: "tool_result", tool_use_id: "search-1",
+        content: [{ type: "tool_reference", tool_name: sandboxer }] }] } } as SDKMessage;
+      yield call("stop-1", sandboxer, { sandboxId: "sb_fixture" });
+      yield answer("stop-1", "{\"status\":\"archiving\"}");
+      yield result;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Stop it" }] });
+    await f.waitForTurn();
+
+    const [group] = (await f.backend.readThread(threadId)).entries.filter((entry) => entry.type === "activity");
+    if (group?.type !== "activity") throw new Error("Expected the tools' row");
+    expect(group.summary).toBe("Used 2 tools");
+    expect(group.details).toEqual([
+      expect.objectContaining({
+        id: "search-1", kind: "command", label: "ToolSearch", status: "completed",
+        command: expect.objectContaining({ rawCommand: "ToolSearch", source: "tool", output: "sandboxer/stop_sandbox" }),
+      }),
+      expect.objectContaining({
+        id: "stop-1", kind: "command", label: "Used MCP sandboxer/stop_sandbox", status: "completed",
+        command: {
+          displayCommand: "sandboxer/stop_sandbox\n{\n  \"sandboxId\": \"sb_fixture\"\n}",
+          rawCommand: "sandboxer/stop_sandbox", source: "tool", output: "{\"status\":\"archiving\"}",
+        },
+      }),
+    ]);
+    const completed = f.events.find((event) => event.notification.method === "item/completed"
+      && getNotificationItem(event.notification.params)?.id === "stop-1");
+    expect(buildLiveToolDetails(getNotificationItem(completed!.notification.params)!)).toEqual([expect.objectContaining({
+      command: expect.objectContaining({ rawCommand: "sandboxer/stop_sandbox", output: "{\"status\":\"archiving\"}" }),
+    })]);
+  });
+
+  it("shows tool rows saved as raw JSON as named rows with their images, without rewriting them", async () => {
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    const f = await fixture();
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const saved = [{
+      type: "activity" as const, id: "old-mcp", summary: "mcp__pwragent__attach_thread_pull_request",
+      status: "completed" as const, turn: { id: "old-turn" },
+      details: [
+        { id: "old-mcp", kind: "read" as const, label: "mcp__pwragent__attach_thread_pull_request", markdown: "{\"number\":140}" },
+        { id: "old-mcp:output", kind: "read" as const, label: "mcp__pwragent__attach_thread_pull_request output",
+          markdown: "{\"attached\":true}", status: "completed" as const },
+      ],
+    }, {
+      type: "activity" as const, id: "old-read", summary: "Read shot.png", status: "completed" as const, turn: { id: "old-turn" },
+      details: [
+        { id: "old-read", kind: "read" as const, label: "Read shot.png", path: "/repo/shot.png", status: "in_progress" as const },
+        { id: "old-read:output", kind: "read" as const, label: "Read shot.png output", status: "completed" as const,
+          markdown: JSON.stringify([{ type: "image", source: { type: "base64", data: png } }]) },
+      ],
+    }];
+    await f.store.append(threadId, saved);
+
+    const [group] = (await f.backend.readThread(threadId)).entries;
+    expect(group).toMatchObject({ type: "activity", summary: "Used 2 tools", details: [
+      { id: "old-mcp", label: "Used MCP pwragent/attach_thread_pull_request", command: {
+        rawCommand: "pwragent/attach_thread_pull_request", source: "tool", output: "{\"attached\":true}",
+      } },
+      { id: "old-read", path: "/repo/shot.png" },
+      { id: "old-read:output", images: [{ type: "image", url: `data:image/png;base64,${png}`, alt: "Read shot.png" }] },
+    ] });
+    if (group?.type !== "activity") throw new Error("Expected the tools' row");
+    expect(group.details[2]).not.toHaveProperty("markdown");
+    expect(await f.store.entries(threadId)).toEqual(saved);
+  });
+
   it("diffs a new file's content when its patch is empty, and keeps a failed edit's error", async () => {
     let cwd = "";
     const f = await fixture(async function* () {
@@ -2708,6 +2960,153 @@ describe("Claude transcript fidelity", () => {
     expect((await f.backend.readThread(threadId)).entries.find((entry) => entry.type === "activity")).toMatchObject({
       id: "notice:refusal-1", summary: "Switched to claude-sonnet-5-5", tone: "warning",
     });
+  });
+
+  it("shows and persists an output-limit recovery banner while the turn continues", async () => {
+    const resume = Promise.withResolvers<void>();
+    const banner = Promise.withResolvers<void>();
+    const text = "Output token limit hit. Retrying with a smaller response.";
+    const f = await fixture(async function* () {
+      yield init;
+      yield { type: "system", subtype: "informational", uuid: "00000000-0000-4000-8000-000000000001",
+        session_id: "session", content: text, level: "notice" } as SDKMessage;
+      banner.resolve();
+      await resume.promise;
+      yield result;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Work" }] });
+    try {
+      await banner.promise;
+      expect(f.events.find((event) => event.notification.method === "warning")?.notification).toMatchObject({
+        params: { message: text, presentation: "activity-only" },
+      });
+      expect((await f.store.entries(threadId)).find((entry) => entry.id === "notice:00000000-0000-4000-8000-000000000001"))
+        .toMatchObject({ summary: text, status: "completed" });
+      expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(false);
+    } finally {
+      resume.resolve();
+    }
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+  });
+
+  it.each(["informational", "output-limit", "compaction"])("fails an empty successful result after only a %s notice", async (notice) => {
+    const f = await fixture(async function* () {
+      yield init;
+      if (notice === "informational") {
+        yield { type: "system", subtype: "informational", uuid: "00000000-0000-4000-8000-000000000001",
+          session_id: "session", content: "Retrying the response", level: "notice" } as SDKMessage;
+      } else if (notice === "output-limit") {
+        yield { type: "assistant", parent_tool_use_id: null, message: {
+          id: "limited", stop_reason: "max_tokens", content: [],
+        } } as unknown as SDKMessage;
+      } else {
+        yield { type: "system", subtype: "compact_boundary", uuid: "00000000-0000-4000-8000-000000000002",
+          session_id: "session", compact_metadata: { trigger: "auto", pre_tokens: 100 } } as SDKMessage;
+      }
+      yield { ...result, result: "" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Work" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
+      turn: { error: { message: "Claude completed without a response or any tool activity. Try sending the message again." } },
+    } });
+    expect((await f.store.entries(threadId)).filter((entry) => entry.id.startsWith("notice:"))).toHaveLength(1);
+  });
+
+  it("accepts assistant output after a notice even when the result text is empty", async () => {
+    const f = await fixture(async function* () {
+      yield init;
+      yield { type: "system", subtype: "informational", uuid: "00000000-0000-4000-8000-000000000001",
+        session_id: "session", content: "Retrying the response", level: "notice" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "answer", content: [{ type: "text", text: "Finished" }],
+      } } as SDKMessage;
+      yield { ...result, result: "" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Work" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+  });
+
+  it("retains the latest informational progress per tool use across replay", async () => {
+    const f = await fixture(async function* () {
+      yield init;
+      const notices = [
+        { uuid: "00000000-0000-4000-8000-000000000001", tool_use_id: "tool-1", content: "Preparing" },
+        { uuid: "00000000-0000-4000-8000-000000000002", tool_use_id: "tool-2", content: "Other progress" },
+        { uuid: "00000000-0000-4000-8000-000000000003", tool_use_id: "tool-1", content: "Ready" },
+        { uuid: "00000000-0000-4000-8000-000000000004", content: "Status" },
+        { uuid: "00000000-0000-4000-8000-000000000005", content: "Status" },
+      ] as const;
+      for (const notice of notices) {
+        yield { type: "system", subtype: "informational", session_id: "session", level: "notice", ...notice } as SDKMessage;
+      }
+      yield result;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Work" }] });
+    await f.waitForTurn();
+    const replay = await new ClaudeSessionStore(f.root).entries(threadId);
+    const notices = replay.filter((entry) => entry.type === "activity");
+    expect(notices.map((entry) => ({ id: entry.id, summary: entry.summary }))).toEqual([
+      { id: "notice:informational:tool:tool-1", summary: "Ready" },
+      { id: "notice:informational:tool:tool-2", summary: "Other progress" },
+      { id: "notice:00000000-0000-4000-8000-000000000004", summary: "Status" },
+      { id: "notice:00000000-0000-4000-8000-000000000005", summary: "Status" },
+    ]);
+  });
+
+  it.each(["A hook stopped continuation", ""])("ends a stopped turn without waiting for a result (%s)", async (content) => {
+    const f = await fixture(async function* () {
+      yield init;
+      yield { type: "system", subtype: "session_state_changed", state: "running" } as SDKMessage;
+      yield { type: "system", subtype: "informational", uuid: "00000000-0000-4000-8000-000000000002", session_id: "session", content,
+        level: "warning", prevent_continuation: true } as SDKMessage;
+      // An interactive query may remain open waiting for its next input.
+      await new Promise<void>(() => {});
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Work" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
+      turn: { error: { message: content || "Claude stopped execution without providing a reason." } },
+    } });
+    expect(f.close).toHaveBeenCalledOnce();
+    expect((await f.backend.readThread(threadId)).threadStatus).toBe("idle");
+  });
+
+  it("reports an intermediate output limit without ending the recovering turn", async () => {
+    const f = await fixture(async function* () {
+      yield init;
+      yield { type: "stream_event", parent_tool_use_id: null, event: {
+        type: "message_start", message: { id: "limited" },
+      } } as SDKMessage;
+      yield { type: "stream_event", parent_tool_use_id: null, event: {
+        type: "message_delta", delta: { stop_reason: "max_tokens" },
+      } } as SDKMessage;
+      yield { type: "assistant", uuid: "00000000-0000-4000-8000-000000000003", session_id: "session", parent_tool_use_id: null, message: {
+        id: "limited", stop_reason: "max_tokens", content: [{ type: "thinking", thinking: "", signature: "" }],
+      } } as unknown as SDKMessage;
+      expect(f.events.some((event) => event.notification.method === "turn/failed")).toBe(false);
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "recovered", content: [{ type: "text", text: "Finished after retry" }],
+      } } as SDKMessage;
+      yield { ...result, stop_reason: "end_turn", result: "Finished after retry" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Work" }] });
+    await f.waitForTurn();
+    expect(f.events.find((event) => event.notification.method === "warning")?.notification).toMatchObject({
+      params: { message: expect.stringContaining("Waiting for Claude to continue"), presentation: "activity-only" },
+    });
+    expect(f.events.filter((event) => event.notification.method === "warning")).toHaveLength(1);
+    expect((await f.store.entries(threadId)).find((entry) => entry.id === "notice:output-limit:limited"))
+      .toMatchObject({ summary: "Reached output token limit", tone: "warning" });
+    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
   });
 
   it("records compaction as its own row and a compaction boundary, and reports retries without a toast", async () => {

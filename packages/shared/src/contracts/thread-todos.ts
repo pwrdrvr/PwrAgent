@@ -1,4 +1,6 @@
-import type { FederationRemoteTarget } from "./federation";
+import type { CodexSpeed } from "../codex-speed";
+import type { ProjectRepositoryIdentity } from "../federation-project-match";
+import type { FederationRemoteTarget, FederationTarget } from "./federation";
 import { federatedThreadIdentityKey } from "./federation";
 import { buildThreadIdentityKey } from "./navigation";
 
@@ -170,6 +172,8 @@ export type ThreadTodo = {
   dispatchDefaults?: {
     thread: ThreadTodoModelSettings;
     lastDispatch?: ThreadTodoModelSettings;
+    /** The raising thread's speed, which a same-provider start inherits. */
+    threadSpeed?: { serviceTier?: string; fastMode?: boolean };
   };
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
@@ -357,14 +361,26 @@ export function threadTodoItemNoun(items: readonly ThreadTodoItem[]): string {
   return items.length === 1 ? noun : `${noun}s`;
 }
 
-/** "2 of 4" for a card with steps; undefined for one without. */
+/**
+ * "2 of 4" for a card with steps; undefined for one without.
+ *
+ * A start_thread card counts its prerequisites instead. Its plain steps
+ * are the new thread's plan: nothing ticks them on this card, which closes
+ * at the start, so a count of them would sit at 0. The started thread gets
+ * them as its own card keyed `plan`, and ticks them there.
+ */
 export function threadTodoItemProgress(
-  todo: Pick<ThreadTodo, "items">,
-): { checked: number; total: number } | undefined {
-  const steps = threadTodoSteps(todo);
-  const total = steps.length;
+  todo: Pick<ThreadTodo, "items" | "action">,
+): { checked: number; total: number; noun: "steps" | "prerequisites" } | undefined {
+  const prerequisitesOnly = todo.action?.type === "start_thread";
+  const counted = prerequisitesOnly ? threadTodoPrerequisites(todo) : threadTodoSteps(todo);
+  const total = counted.length;
   if (total === 0) return undefined;
-  return { checked: steps.filter((item) => item.checked).length, total };
+  return {
+    checked: counted.filter((item) => item.checked).length,
+    total,
+    noun: prerequisitesOnly ? "prerequisites" : "steps",
+  };
 }
 
 export type ListThreadTodosRequest = {
@@ -458,6 +474,19 @@ export type SetThreadTodoItemCheckedRequest = {
   checked: boolean;
 };
 
+/**
+ * A start_thread card's plain steps, sent to the thread it started. The owner
+ * raises them as that thread's own card, keyed `plan`, which the thread ticks
+ * with update_todo. Needs `thread_todo_plan` on the owner.
+ */
+export type RaiseThreadTodoPlanRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** The starting card's title. The owner names the card "Plan: <title>". */
+  title: string;
+  items: string[];
+};
+
 export type ThreadTodoResolution = "handled_elsewhere" | "sent_here";
 
 export const THREAD_TODO_RESOLUTION_RESULTS: Record<ThreadTodoResolution, string> = {
@@ -479,15 +508,78 @@ export type RunThreadTodoActionRequest = {
   mergeMethod?: ThreadTodoMergeMethod;
   /** Remember `mergeMethod` for the card's project: a pick from the menu. */
   rememberMergeMethod?: boolean;
-  /** Handoff cards only: start the thread on this federation peer. */
+  /**
+   * Handoff cards only: start the thread on this federation instance
+   * instead of the card's owner.
+   */
   startOnInstanceId?: string;
-  /** Local starts only; a peer uses its own defaults. */
+  /**
+   * Handoff cards only: the provider, model and effort, checked against the
+   * catalog of the instance that starts the thread.
+   */
   modelSettings?: ThreadTodoModelSettings;
+  /** Handoff cards only: the operator's Where, replacing the card's. */
+  workMode?: ThreadTodoWorkMode;
+  /**
+   * Handoff cards only: an environment id on the instance that starts the
+   * thread, or `none`. Absent keeps that instance's default.
+   */
+  environment?: string;
+  /**
+   * Handoff cards only, Codex: the new thread's speed. Absent inherits the
+   * raising thread's on a same-provider start on the card's owner.
+   */
+  speed?: CodexSpeed;
   /**
    * Run although some steps are unchecked. A run that succeeds marks the
    * card done, so it follows the same rule as resolving it.
    */
   allowOpenItems?: boolean;
+};
+
+/**
+ * The environments a handoff can start with on one instance. Ask the card's
+ * owner with the card's `id`; ask any other instance with the card's
+ * `project`, which that instance matches to its own copy.
+ */
+export type ListThreadTodoDispatchEnvironmentsRequest = {
+  /** Explicit `local` reads the gateway even in a remote viewer window. */
+  federationTarget?: FederationTarget;
+  id?: string;
+  /**
+   * The card's project, asked of another machine. Its repository identity,
+   * from the card's owner, finds a copy filed under another name: PwrAgnt
+   * here and PwrAgent there clone one origin.
+   */
+  project?: ThreadTodoProject & ProjectRepositoryIdentity;
+  /**
+   * With `id`: answer only the repository the card's project clones, without
+   * reading environments. Another machine is then asked by origin.
+   */
+  repositoryOnly?: boolean;
+};
+
+export type ThreadTodoDispatchEnvironment = { id: string; name: string };
+
+export type ListThreadTodoDispatchEnvironmentsResponse = {
+  /** False when the instance has no copy of the card's project. */
+  projectFound: boolean;
+  /** The instance's own name for the project. */
+  projectLabel?: string;
+  environments: ThreadTodoDispatchEnvironment[];
+  /**
+   * What a start uses unless the operator picks: the raising thread's
+   * environment in the same project on its owner, else the project's preset.
+   */
+  defaultEnvironmentId?: string;
+  defaultSource: "thread" | "project" | "none";
+  /**
+   * Asked by card id with `repositoryOnly`: the repository the card's
+   * project clones, so another machine can be asked for its copy by origin
+   * rather than by name.
+   */
+  repositoryKey?: string;
+  repositoryKeys?: string[];
 };
 
 export type ThreadTodoMutationResponse = {

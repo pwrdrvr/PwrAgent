@@ -4,6 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
+import { StateDb } from "../src/main/state/state-db";
+import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 
 async function createDirectoryLaunchpadTranscriptFixture(): Promise<{
   cleanup: () => Promise<void>;
@@ -260,14 +263,24 @@ async function createDirectoryLaunchpadTranscriptFixture(): Promise<{
   };
 }
 
-test("directory launchpad rereads the created thread after completion when the first transcript read was empty", async () => {
+test("directory launchpad preserves all-pinned placement and rereads an initially empty transcript after completion", async () => {
+  const testInfo = test.info();
   const fixture = await createDirectoryLaunchpadTranscriptFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
+    preLaunchHook: async (homeRoot) => {
+      const db = StateDb.open(stateDbPathForHomeRoot(homeRoot), { profileName: "default" });
+      try {
+        await new SqliteOverlayStore(db).setThreadPin({ backend: "codex", threadId: "thread-existing", pinnedRank: "1024" });
+      } finally {
+        db.close();
+      }
+    },
   });
 
   try {
     await app.window.getByRole("tab", { name: "directories" }).click();
+    await expect(app.window.getByText("Directory threads", { exact: true })).toHaveCount(0);
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
@@ -304,6 +317,15 @@ test("directory launchpad rereads the created thread after completion when the f
         .getByRole("region", { name: "Transcript" })
         .getByText("captured after refresh"),
     ).toBeVisible();
+    const directory = app.window.locator(".directory-row").filter({
+      has: app.window.getByRole("button", { name: /^FixtureRepo(,|$)/ }),
+    });
+    // Capture the final state even against the regression, where the new
+    // thread appears below a newly created Directory threads disclosure.
+    await directory.screenshot({ path: testInfo.outputPath("all-pinned-creation.png") });
+    await expect(directory.locator('.thread-row-shell[data-thread-pin-state="pinned"] .thread-row__title'))
+      .toHaveText(["hello from launchpad", "Existing directory thread"]);
+    await expect(directory.getByText("Directory threads", { exact: true })).toHaveCount(0);
   } finally {
     await app.close();
     await fixture.cleanup();

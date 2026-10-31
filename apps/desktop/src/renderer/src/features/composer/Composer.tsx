@@ -1,7 +1,13 @@
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
 import { codexProviderIdOfModel, formatModelOptionLabel } from "@pwragent/shared";
+import { mayContainLinearPastedImages } from "@pwragent/shared";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
+import {
+  hasLinearPastedImages,
+  readLinearPastedImagesResponse,
+  requestLinearPastedImages,
+} from "./linear-pasted-images";
 import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-update-diagnostics";
 import {
   EXPLICIT_REVIEW_PULL_REQUEST_URL,
@@ -105,6 +111,7 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
+  HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
   buildThreadIdentityKey,
   buildReviewBranchOptions,
   federatedThreadIdentityKey,
@@ -645,7 +652,8 @@ async function refreshProviderCatalogOnFirstSelection(
   }
 }
 
-type LocalHandoffStrategy = ThreadWorkspaceHandoffStrategy;
+// "fresh-from-base" starts a new worktree at another branch and moves nothing.
+type LocalHandoffStrategy = ThreadWorkspaceHandoffStrategy | "fresh-from-base";
 
 type ComposerImageAttachment = NavigationLaunchpadImageAttachment;
 
@@ -3304,6 +3312,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     useState<"keep-local-branch" | "move-branch">("keep-local-branch");
   const [leaveLocalBranch, setLeaveLocalBranch] = useState("");
   const [newLocalBranch, setNewLocalBranch] = useState("");
+  // Empty until the operator picks one; the default follows the branch list.
+  const [pickedFreshBaseRef, setFreshBaseRef] = useState("");
+  const [freshBranchName, setFreshBranchName] = useState("");
   const [projectTargetPath, setProjectTargetPath] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
   const projectDestinations = useNavigationQueryResource({
@@ -10106,6 +10117,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       applyThreadReference(pastedThread);
       return;
     }
+    if (mayContainLinearPastedImages(pastedText)) {
+      // The text pastes as usual; its images follow once they download.
+      void attachLinearPastedImages(pastedText);
+    }
 
     const { images: pastedFiles, files: pastedNonImageFiles, readMs } =
       getComposerFilesFromDataTransfer(event.clipboardData);
@@ -10126,6 +10141,38 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
     void attachImages(accepted, readMs);
+  };
+
+  /**
+   * Text copied from Linear names its images by a link that expires five
+   * minutes after the copy. Main fetches a link that is still valid and reads
+   * an expired one through the Linear connection, and the images join the
+   * tray of the composer the text was pasted into. A thread switch before
+   * they arrive drops them.
+   */
+  const attachLinearPastedImages = async (text: string): Promise<void> => {
+    const fetchImages = props.desktopApi?.fetchLinearPastedImages;
+    if (!fetchImages || !imagesSupported || !hasLinearPastedImages(text)) return;
+    const pasteScope = pasteScopeRef.current;
+    // Hold Send while they download, as a pasted screenshot does while it
+    // resizes; otherwise a quick Enter sends the text without them.
+    // `attachImages` takes over the hold synchronously once they arrive.
+    const destination = getLaunchpadComposerDestination(draftStore, pasteScope.key);
+    updatePendingImageBatches(destination, 1);
+    let response: Awaited<ReturnType<typeof fetchImages>>;
+    try {
+      response = await requestLinearPastedImages(fetchImages, text);
+    } finally {
+      updatePendingImageBatches(destination, -1);
+    }
+    if (pasteScopeRef.current.key !== pasteScope.key) return;
+    const outcome = readLinearPastedImagesResponse(response);
+    if (!outcome) return;
+    if (outcome.notice) showComposerNotice(outcome.notice);
+    if (outcome.files.length === 0) return;
+    const accepted = gateImageFilesForAttachment(outcome.files);
+    if (!accepted || accepted.length === 0) return;
+    await attachImages(accepted, outcome.decodeMs);
   };
 
   const handleDragOver = (event: DragEvent<HTMLElement>): void => {
@@ -11155,7 +11202,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const launchpadBranchPickerOptions = useMemo(
     () =>
       props.launchpad
-        ? buildLaunchpadBranchPickerOptions(props.launchpad, props.directory)
+        ? buildLaunchpadBranchPickerOptions(props.launchpad.branchName, props.directory)
         : [],
     [props.launchpad, props.directory],
   );
@@ -11370,6 +11417,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     [sourceBranch, props.directory],
   );
   const branchOptions = leaveLocalBranchOptions.map((option) => option.name);
+  const freshBaseOptions = useMemo(
+    () => buildLaunchpadBranchPickerOptions(undefined, props.directory),
+    [props.directory],
+  );
+  const defaultFreshBaseRef = useMemo(
+    () => pickFreshHandoffBaseRef(freshBaseOptions, props.directory),
+    [freshBaseOptions, props.directory],
+  );
+  const freshBaseRef = pickedFreshBaseRef || defaultFreshBaseRef;
   const canMoveThreadProject = Boolean(
     props.thread &&
       !props.workspaceActionsBlocked &&
@@ -11395,6 +11451,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
   }, [activeTurnId]);
 
+  // Both directions create a new worktree and offer the same strategies.
+  const toNewWorktree = handoffDialog === "local-to-worktree"
+    || handoffDialog === "worktree-to-worktree";
+  const fromWorktreeToNew = handoffDialog === "worktree-to-worktree";
   const openHandoffDialog = (
     direction: HandoffThreadWorkspaceRequest["direction"]
   ): void => {
@@ -11408,10 +11468,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         props.onMoveThreadToMainCheckout ? "keep-local-branch" : "move-branch",
       );
     }
-    if (direction === "local-to-worktree") {
+    if (direction === "local-to-worktree" || direction === "worktree-to-worktree") {
       setLocalHandoffStrategy("detached-changes");
       setLeaveLocalBranch(branchOptions[0] ?? "");
       setNewLocalBranch(buildHandoffBranchSuggestion(sourceBranch));
+      setFreshBaseRef("");
+      setFreshBranchName("");
     }
   };
   const handoffDialogRef = useModalDialog({
@@ -11429,10 +11491,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     setHandoffSubmitting(true);
     setHandoffError(undefined);
     try {
-      const handoffStrategy =
-        handoffDialog === "local-to-worktree"
-          ? localHandoffStrategy
-          : undefined;
+      const freshFromBase = toNewWorktree && localHandoffStrategy === "fresh-from-base";
+      const handoffStrategy = !toNewWorktree
+        ? undefined
+        : freshFromBase
+          ? (freshBranchName.trim() ? "new-branch" : "detached-changes")
+          : localHandoffStrategy as ThreadWorkspaceHandoffStrategy;
       if (handoffDialog === "to-project") {
         await props.onHandoffThreadWorkspace({
           direction: "to-project",
@@ -11455,20 +11519,23 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         ...(handoffDialog === "local-to-worktree" && handoffStrategy === "move-branch"
           ? { leaveLocalBranch: leaveLocalBranch || undefined }
           : {}),
-        ...(handoffDialog === "local-to-worktree" && handoffStrategy === "new-branch"
-          ? { newBranchName: newLocalBranch || undefined }
+        ...(toNewWorktree && handoffStrategy === "new-branch"
+          ? { newBranchName: (freshFromBase ? freshBranchName.trim() : newLocalBranch) || undefined }
           : {}),
+        ...(freshFromBase ? { baseRef: freshBaseRef } : {}),
       });
       setHandoffDialog(undefined);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       // An owner that predates the keep-branch handoff answers
       // method_not_found; nothing moved. The text survives IPC, the code does not.
-      const outdated = keepLocalBranchSelected && isOutdatedOwnerError(message);
       const owner = props.thread?.federation?.instanceLabel ?? "the other machine";
-      setHandoffError(outdated
+      // New-worktree moves use their own method; the bridge names its refusal.
+      setHandoffError(keepLocalBranchSelected && isOutdatedOwnerError(message)
         ? `${owner} runs an older PwrAgent that can only hand off by switching Local’s branch. Update PwrAgent on ${owner}, or choose Move ${sourceBranch ?? "the branch"} to Local.`
-        : message);
+        : message.includes(HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE)
+          ? `${owner} runs an older PwrAgent that cannot make this move. Update PwrAgent on ${owner}. Nothing moved.`
+          : message);
     } finally {
       setHandoffSubmitting(false);
     }
@@ -11511,8 +11578,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       ? !projectTargetPath.trim()
       : !keepLocalBranchSelected && !sourceBranch) ||
     (handoffDialog === "local-to-worktree" &&
-      ((localHandoffStrategy === "move-branch" && !leaveLocalBranch) ||
-        (localHandoffStrategy === "new-branch" && !newLocalBranch.trim())));
+      localHandoffStrategy === "move-branch" && !leaveLocalBranch) ||
+    (fromWorktreeToNew &&
+      localHandoffStrategy === "move-branch" && (!sourceBranch || sourceBranch === "HEAD")) ||
+    (toNewWorktree &&
+      localHandoffStrategy === "new-branch" && !newLocalBranch.trim()) ||
+    (toNewWorktree &&
+      localHandoffStrategy === "fresh-from-base" && !freshBaseRef.trim());
 
   const commitActiveAutocomplete = (): void => {
     if (autocompleteKind === "skills") {
@@ -12008,7 +12080,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               aria-label={
                 handoffDialog === "to-project"
                   ? "Move to Project"
-                  : handoffDialog === "local-to-worktree"
+                  : toNewWorktree
                     ? "Handoff to New Worktree"
                     : "Handoff to Local"
               }
@@ -12019,14 +12091,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               <h2>
                 {handoffDialog === "to-project"
                   ? "Move to Project"
-                  : handoffDialog === "local-to-worktree"
+                  : toNewWorktree
                     ? "Handoff to New Worktree"
                     : "Handoff to Local"}
               </h2>
               <p>
                 {handoffDialog === "to-project"
                   ? "Continue this conversation in another Git project. Files and branches stay in their current locations."
-                  : handoffDialog === "local-to-worktree"
+                  : toNewWorktree
                     ? "Choose how this thread should move into a new worktree."
                     : keepLocalBranchAvailable
                       ? <>Continue this thread in the main checkout, <code>{threadWorkspace.repositoryPath}</code>.</>
@@ -12109,8 +12181,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     <dt>
                       {handoffDialog === "worktree-to-local" && sourceBranch === "HEAD"
                         ? "Detached HEAD to move"
-                        : handoffDialog === "local-to-worktree" &&
-                            localHandoffStrategy === "detached-changes"
+                        : (handoffDialog === "local-to-worktree" &&
+                            (localHandoffStrategy === "detached-changes"
+                              || localHandoffStrategy === "fresh-from-base"))
+                          || (fromWorktreeToNew && localHandoffStrategy !== "move-branch")
                           ? "Current branch"
                           : "Branch to move"}
                     </dt>
@@ -12118,7 +12192,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   </div>
                 </dl>
               )}
-              {handoffDialog === "local-to-worktree" ? (
+              {toNewWorktree ? (
                 <>
                   <div
                     aria-label="Handoff strategy"
@@ -12137,8 +12211,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                         Handoff to Detached HEAD
                       </span>
                       <span>
-                        Keep Local on the current branch. Create a detached worktree at
-                        the current branch tip and move dirty non-ignored changes on top.
+                        {fromWorktreeToNew
+                          ? "Create a detached worktree at the current commit and move dirty non-ignored changes on top."
+                          : "Keep Local on the current branch. Create a detached worktree at the current branch tip and move dirty non-ignored changes on top."}
                       </span>
                     </button>
                     <button
@@ -12153,14 +12228,17 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                         Handoff to New Branch
                       </span>
                       <span>
-                        Keep Local on this branch. Create a named branch in the new
-                        worktree and move dirty non-ignored changes on top.
+                        {fromWorktreeToNew
+                          ? "Create a named branch in the new worktree and move dirty non-ignored changes on top."
+                          : "Keep Local on this branch. Create a named branch in the new worktree and move dirty non-ignored changes on top."}
                       </span>
                     </button>
                     <button
                       aria-checked={localHandoffStrategy === "move-branch"}
                       className="workspace-handoff-dialog__strategy"
-                      disabled={handoffSubmitting || branchOptions.length === 0}
+                      disabled={handoffSubmitting || (fromWorktreeToNew
+                        ? !sourceBranch || sourceBranch === "HEAD"
+                        : branchOptions.length === 0)}
                       role="radio"
                       type="button"
                       onClick={() => setLocalHandoffStrategy("move-branch")}
@@ -12169,12 +12247,56 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                         Handoff Current Branch
                       </span>
                       <span>
-                        Move this branch into the new worktree, then switch this checkout to
-                        a selected branch.
+                        {fromWorktreeToNew
+                          ? "Move this branch into the new worktree. The old worktree lets go of it first."
+                          : "Move this branch into the new worktree, then switch this checkout to a selected branch."}
+                      </span>
+                    </button>
+                    <button
+                      aria-checked={localHandoffStrategy === "fresh-from-base"}
+                      className="workspace-handoff-dialog__strategy"
+                      disabled={handoffSubmitting || freshBaseOptions.length === 0}
+                      role="radio"
+                      type="button"
+                      onClick={() => setLocalHandoffStrategy("fresh-from-base")}
+                    >
+                      <span className="workspace-handoff-dialog__strategy-title">
+                        Start Fresh from a Branch
+                      </span>
+                      <span>
+                        Create a new worktree from another branch, such as origin/main. Uncommitted changes stay here.
                       </span>
                     </button>
                   </div>
-                  {localHandoffStrategy === "move-branch" ? (
+                  {localHandoffStrategy === "fresh-from-base" ? (
+                    <>
+                      <div className="workspace-handoff-dialog__field">
+                        <span aria-hidden="true">Base branch</span>
+                        <BranchPicker
+                          ariaLabel="Base branch"
+                          className="branch-picker--dialog"
+                          disabled={handoffSubmitting}
+                          options={freshBaseOptions}
+                          value={freshBaseRef}
+                          onChange={setFreshBaseRef}
+                        />
+                      </div>
+                      <label className="workspace-handoff-dialog__field">
+                        New branch name (optional)
+                        <input
+                          aria-label="New branch name"
+                          className="workspace-handoff-dialog__text-input"
+                          disabled={handoffSubmitting}
+                          placeholder="Leave empty for a detached HEAD"
+                          spellCheck={false}
+                          type="text"
+                          value={freshBranchName}
+                          onChange={(event) => setFreshBranchName(event.target.value)}
+                        />
+                      </label>
+                    </>
+                  ) : null}
+                  {handoffDialog === "local-to-worktree" && localHandoffStrategy === "move-branch" ? (
                     <div className="workspace-handoff-dialog__field">
                       <span aria-hidden="true">Leave current checkout on</span>
                       <BranchPicker
@@ -12210,7 +12332,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   No available local branch can be checked out before moving this branch.
                 </p>
               ) : null}
-              {handoffDialog === "local-to-worktree" &&
+              {toNewWorktree &&
               localHandoffStrategy === "detached-changes" ? (
                 <p className="workspace-handoff-dialog__note">
                   The new worktree starts at the current tip of{" "}
@@ -12218,7 +12340,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   top.
                 </p>
               ) : null}
-              {handoffDialog === "local-to-worktree" &&
+              {toNewWorktree &&
               localHandoffStrategy === "new-branch" ? (
                 <p className="workspace-handoff-dialog__note">
                   The new worktree creates{" "}
@@ -12231,7 +12353,29 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   dirty non-ignored changes on top.
                 </p>
               ) : null}
-              {keepLocalBranchSelected ? (
+              {toNewWorktree &&
+              localHandoffStrategy === "fresh-from-base" ? (
+                <>
+                  <p className="workspace-handoff-dialog__note">
+                    The new worktree starts at{" "}
+                    {freshBaseRef.trim() ? <code>{freshBaseRef.trim()}</code> : "the base branch"}{" "}
+                    with no changes from here.
+                  </p>
+                  <p className="workspace-handoff-dialog__note">
+                    {!fromWorktreeToNew
+                      ? "This checkout keeps its branch and its uncommitted changes."
+                      // Claude and ACP thread archive keeps every worktree.
+                      : props.thread?.source === "codex"
+                        ? "The current worktree stays on disk with its branch and its uncommitted changes. Archiving this thread later checkpoints and removes it, unless it was created outside PwrAgent."
+                        : "The current worktree stays on disk with its branch and its uncommitted changes."}
+                  </p>
+                </>
+              ) : fromWorktreeToNew ? (
+                <p className="workspace-handoff-dialog__note">
+                  The current worktree is archived with a checkpoint. Its branch stays where it is.
+                </p>
+              ) : null}
+              {toNewWorktree && localHandoffStrategy === "fresh-from-base" ? null : keepLocalBranchSelected ? (
                 <p className="workspace-handoff-dialog__note">
                   Uncommitted changes stay in the checkpoint; they are not copied into Local.
                 </p>
@@ -14269,6 +14413,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     {workspaceLabel}
                   </button>
                   <div className="composer-dropdown__separator" role="separator" />
+                  {threadWorkspace.mode === "worktree" ? (
+                    <button
+                      className="composer-dropdown__option"
+                      disabled={!canHandoffThreadWorkspace}
+                      role="menuitem"
+                      type="button"
+                      onClick={() => openHandoffDialog("worktree-to-worktree")}
+                    >
+                      <span aria-hidden="true" className="composer-dropdown__check" />
+                      Handoff to New Worktree
+                    </button>
+                  ) : null}
                   <button
                     className="composer-dropdown__option"
                     disabled={!canHandoffThreadWorkspace}
@@ -15843,7 +15999,7 @@ function normalizeSelectableLaunchpadBranch(branch?: string): string | undefined
  * picker still functions before directory git status has loaded.
  */
 function buildLaunchpadBranchPickerOptions(
-  launchpad: NavigationLaunchpadDraft,
+  selectedBranch: string | undefined,
   directory?: NavigationDirectorySummary,
 ): LaunchpadBranchOption[] {
   const details =
@@ -15883,10 +16039,26 @@ function buildLaunchpadBranchPickerOptions(
   for (const name of orderedNames) {
     push(name);
   }
-  push(launchpad.branchName);
+  push(selectedBranch);
   push(directory?.gitStatus?.currentBranch);
   push(directory?.gitStatus?.defaultBranch);
   return ordered;
+}
+
+/**
+ * The fresh-worktree base the handoff dialog selects first: the remote copy of
+ * the default branch when it is listed, since it is usually the newest.
+ */
+function pickFreshHandoffBaseRef(
+  options: LaunchpadBranchOption[],
+  directory?: NavigationDirectorySummary,
+): string {
+  const names = new Set(options.map((option) => option.name));
+  const defaultBranch = normalizeSelectableLaunchpadBranch(directory?.gitStatus?.defaultBranch);
+  for (const candidate of defaultBranch ? [`origin/${defaultBranch}`, defaultBranch] : []) {
+    if (names.has(candidate)) return candidate;
+  }
+  return options.find((option) => option.isDefault)?.name ?? options[0]?.name ?? "";
 }
 
 /**

@@ -995,6 +995,11 @@ function SettingsSectionBody(props: {
         onInteractiveSvgChange={async (patch) => {
           await props.settings.writeConfig({ general: patch });
         }}
+        onHtmlPreviewRunScriptsChange={async (htmlPreviewRunScripts) => {
+          await props.settings.writeConfig({
+            general: { htmlPreviewRunScripts },
+          });
+        }}
         onPdfAnalysisEnabledChange={async (pdfAnalysisEnabled) => {
           await props.settings.writeConfig({
             general: { pdfAnalysisEnabled },
@@ -1615,6 +1620,11 @@ function SettingsSectionBody(props: {
       onSaveHelperModels={async (helperModels) => {
         return await props.settings.writeConfig({
           models: { helperModels },
+        });
+      }}
+      onSaveTaskMonitorModels={async (taskMonitorModels) => {
+        return await props.settings.writeConfig({
+          models: { taskMonitorModels },
         });
       }}
       onSaveUsageAccountGroups={async (usageAccountGroups) => {

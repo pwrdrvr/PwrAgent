@@ -99,6 +99,7 @@ type ConnectionPendingAction = {
     | "disconnect"
     | "newThreadDefault"
     | "probe"
+    | "linearPasteImages"
     | "remove"
     | "sandboxerCleanup"
     | "testLocal"
@@ -227,6 +228,8 @@ export function PluginsSettings(props: {
 }) {
   const [servers, setServers] = useState<CodexMcpServerSummary[]>([]);
   const [connections, setConnections] = useState<McpConnectionStatus[]>([]);
+  /** The profile's Linear paste setting; `undefined` when the owner omits it. */
+  const [linearPasteImages, setLinearPasteImagesValue] = useState<boolean>();
   const [connectionsLoading, setConnectionsLoading] = useState(true);
   const [connectionPending, setConnectionPendingState] =
     useState<ConnectionPendingAction>();
@@ -555,6 +558,7 @@ export function PluginsSettings(props: {
     try {
       const response = await props.desktopApi.listMcpConnections();
       setConnections(response.connections);
+      setLinearPasteImagesValue(response.linearPasteImages);
       return true;
     } catch (error) {
       if (options.background) return false;
@@ -1277,6 +1281,28 @@ export function PluginsSettings(props: {
     }
   };
 
+  const setLinearPasteImages = async (enabled: boolean) => {
+    if (connectionPending || !props.desktopApi?.setLinearPasteImages) return;
+    setConnectionPending({ kind: "linearPasteImages" });
+    try {
+      await props.desktopApi.setLinearPasteImages({ enabled });
+      await loadConnections();
+      setConnectionNotice({
+        kind: "success",
+        text: enabled
+          ? "Images in text pasted from Linear are attached to the message."
+          : "Text pasted from Linear is left as it is.",
+      });
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setConnectionPending(undefined);
+    }
+  };
+
   const setConnectionToolApproval = async (
     connection: McpConnectionStatus,
     toolApproval: McpConnectionToolApproval,
@@ -1404,6 +1430,39 @@ export function PluginsSettings(props: {
               />
             }
           />
+          {/*
+            * Profile-wide and independent of any connection: a paste made
+            * within five minutes of the copy needs none. Only this machine's
+            * own list reports it; a peer's window does not offer it.
+            */}
+          {linearPasteImages !== undefined && props.desktopApi?.setLinearPasteImages ? (
+            <SettingsField
+              label="Attach pasted Linear images"
+              sub={
+                // Older links need a signed-in Linear connection offered to
+                // threads, behind a gateway that is on.
+                gatewayEnabled
+                && connections.some(
+                  (connection) =>
+                    connection.linearPasteImages !== undefined
+                    && connection.enabled
+                    && connection.configured,
+                )
+                  ? "When you paste an issue or description from Linear, its images are attached to the message. Links older than five minutes are downloaded through your Linear connection."
+                  : "When you paste an issue or description from Linear, its images are attached while their links are fresh, for five minutes after the copy. Connect Linear below and offer it to threads to attach older ones."
+              }
+              control={
+                <SettingsSwitch
+                  checked={linearPasteImages}
+                  disabled={Boolean(connectionPending)}
+                  label="Attach images in text pasted from Linear"
+                  onChange={(next) => {
+                    void setLinearPasteImages(next);
+                  }}
+                />
+              }
+            />
+          ) : null}
         </div>
         <div className="settings-mcp-manage">
           {connectionNotice ? (

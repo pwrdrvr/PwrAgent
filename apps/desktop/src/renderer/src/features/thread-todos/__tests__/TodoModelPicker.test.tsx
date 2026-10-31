@@ -38,7 +38,11 @@ async function openPicker() {
 describe("to-do dispatch model picker", () => {
   it("always shows the Model fact first and opens This thread, Recent, then Custom with display labels", async () => {
     const { container, api } = setup();
-    expect([...container.querySelectorAll("dt")].map((dt) => dt.textContent)).toEqual(["Model", "Where"]);
+    // No peer can host it, so the row has no Machine chip; Model leads.
+    expect(within(screen.getByRole("group", { name: "Start settings" })).getAllByRole("button")[0]!.getAttribute("aria-label"))
+      .toMatch(/^Model for the new thread:/);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Show start settings" })); });
+    expect([...container.querySelectorAll("dt")].map((dt) => dt.textContent)).toEqual(["Model", "Where", "Env"]);
     expect(screen.getByRole("button", { name: "Model for the new thread: Claude, Opus 5.5, high" }).getAttribute("aria-expanded")).toBe("false");
     const menu = await openPicker();
     expect(screen.getByRole("button", { name: /^Model for the new thread:/ }).hasAttribute("data-tooltip")).toBe(false);
@@ -191,6 +195,6 @@ describe("to-do dispatch model picker", () => {
     rerender(tree(failed));
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRun).toHaveBeenLastCalledWith(failed, { modelSettings: thread });
-    expect(screen.getByRole("button", { name: /^Model for the new thread:/ }).getAttribute("data-tooltip")).toContain("peer’s defaults");
+    expect(screen.getByRole("button", { name: /^Model for the new thread:/ }).getAttribute("data-tooltip")).toBe("Settings for the start on this thread's machine.");
   });
 });

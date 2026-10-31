@@ -424,6 +424,14 @@ describe("action → permission lookup tables", () => {
     ).toEqual(["thread.control.organize"]);
   });
 
+  it("requires organize for every parent field and remote control for explicit peer scope", () => {
+    for (const args of [{ parentThreadId: "parent" }, { parentBackend: "claude" }, { detachFromParent: true }]) {
+      expect(permissionsForThreadMutation(args)).toEqual(["thread.control.organize"]);
+      expect(toolArgsTargetRemoteInstance({ ...args, instanceId: "peer" })).toBe(true);
+      expect(toolArgsTargetRemoteInstance({ ...args, includeRemote: true })).toBe(true);
+    }
+  });
+
   it("lets a Power User pin and mark read, as they can rename", () => {
     const powerUser = BUILT_IN_ROLES.find(
       (role) => role.id === RBAC_BUILT_IN_ROLE_IDS.powerUser,

@@ -102,6 +102,24 @@ describe("McpConnectionRegistry", () => {
     expect(registry.get("pwrgit")?.sandboxerCleanupOnPrClose).toBeUndefined();
   });
 
+  it("marks Linear connections with the profile's pasted-image setting", () => {
+    const target = configPath();
+    const registry = new McpConnectionRegistry({ configPath: target, randomId: () => "id" });
+    const linear = registry.create({ displayName: "Linear", serverUrl: "https://mcp.linear.app/mcp" });
+    const other = registry.create({ displayName: "Other", serverUrl: "https://example.com/mcp" });
+    expect(registry.get(linear.id)?.linearPasteImages).toBe(true);
+    registry.setLinearPasteImages(false);
+    const saved = fs.readFileSync(target, "utf8");
+    expect(saved).toContain("linear_paste_images = false");
+    // The flag is a scalar beside the rows, never written into one.
+    expect(saved.match(/linear_paste_images/g)).toHaveLength(1);
+    expect(new McpConnectionRegistry({ configPath: target }).get(linear.id)?.linearPasteImages)
+      .toBe(false);
+    // Only a Linear connection carries it.
+    expect(registry.get(other.id)?.linearPasteImages).toBeUndefined();
+    expect(registry.get("builtin:sandboxer")?.linearPasteImages).toBeUndefined();
+  });
+
   it("reads a hand-written sandboxer_cleanup_on_pr_close = false as off", () => {
     const target = configPath();
     fs.writeFileSync(target, "[mcp_connections]\nsandboxer_cleanup_on_pr_close = false\n");

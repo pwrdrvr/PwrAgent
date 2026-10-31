@@ -1113,6 +1113,13 @@ A thread gets a PR without the operator asking from two sources only:
 - **A branch lookup of its own branch and directories.** A default branch
   (`main`, the remote's `HEAD`) looks up nothing, so a thread on it
   attaches nothing automatically (`resolvePrLookupBranches`).
+  The lookup uses the upstream's branch name when the branch tracks one.
+  A branch with no remote upstream may have been pushed under another
+  name, and that branch may be deleted after a merge. When its own name
+  finds no PR, the lookup asks the forge for PRs on the tip commit and
+  keeps only one whose head *is* the tip. It skips that step when a
+  default branch already holds the tip, because the PR that landed the
+  commit there belongs to another thread.
 - **Its own history.** A PR the thread attached earlier, on another
   branch, stays attached after the checkout moves on.
 

@@ -36,6 +36,7 @@ function createWindow(id: number) {
     restore: vi.fn(() => {
       minimized = false;
     }),
+    setTitle: vi.fn(),
     show: vi.fn(() => {
       visible = true;
     }),
@@ -213,5 +214,30 @@ describe("federation window", () => {
     expect(first).toBe(firstWindow);
     expect(second).toBe(secondWindow);
     expect(createMainWindow).toHaveBeenCalledTimes(2);
+  });
+
+  it("titles a viewer with the peer's short name and retitles it when that changes", async () => {
+    const window = createWindow(7);
+    createMainWindow.mockReturnValue(window);
+    const { createFederationWindow, refreshFederationWindowTitles } = await import(
+      "../federation/federation-window"
+    );
+
+    createFederationWindow({
+      peer: { ...peer, label: "Studio-MBP-M5-Max", shortLabel: "Studio" },
+    });
+    expect(createMainWindow).toHaveBeenCalledWith(expect.objectContaining({
+      federationLabel: "Studio-MBP-M5-Max",
+      federationTitleLabel: "Studio",
+    }));
+
+    refreshFederationWindowTitles([
+      { ...peer, label: "Studio-MBP-M5-Max", shortLabel: "M5 Studio" },
+    ]);
+    expect(window.setTitle).toHaveBeenLastCalledWith("PwrAgent - M5 Studio");
+
+    // The name was cleared: the title falls back to the full label.
+    refreshFederationWindowTitles([{ ...peer, label: "Studio-MBP-M5-Max" }]);
+    expect(window.setTitle).toHaveBeenLastCalledWith("PwrAgent - Studio-MBP-M5-Max");
   });
 });

@@ -98,6 +98,49 @@ describe("backend forge tool dispatch", () => {
     expect(forgeRead).toHaveBeenCalledWith("get_forge_status", {}, expect.objectContaining({ threadId: "thread-1", turnId: "turn-1" }));
   });
 
+  it.each(["github", "gitlab"] as const)("asks once per CI rerun with the %s scope and repository on the card", async (provider) => {
+    const repository = { provider, host: provider === "github" ? "github.com" : "gitlab.example.test", owner: "fixture", repo: "project" };
+    registry.setForgePrToolHandler(github, async () => repository);
+    const prompt = nextApproval();
+    const pending = internals.handleServerRequest("codex", request("rerun_failed_ci_jobs", { runId: 42 }, "call-rerun"));
+    const notification = await prompt;
+    expect(notification.params.message).toBe(provider === "github"
+      ? "Allow the agent to rerun failed jobs and their dependents in GitHub Actions run 42?"
+      : "Allow the agent to retry failed and canceled jobs in GitLab pipeline 42?");
+    expect(notification.params._meta).toMatchObject({ connector_name: "fixture/project", tool_params_display: [{ name: "runId", value: "42" }] });
+    expect(notification.params._meta).not.toHaveProperty("persist");
+    expect(github).not.toHaveBeenCalled();
+    await answer(notification, "accept");
+    expect((await pending).success).toBe(true);
+    expect(github).toHaveBeenCalledWith("rerun_failed_ci_jobs", { runId: 42, repository }, expect.objectContaining({ threadId: "thread-1" }));
+    expect(attach).not.toHaveBeenCalled();
+  });
+
+  it("refuses CI reruns when off or declined while leaving CI reads available", async () => {
+    policy.access.ci = "off";
+    const off = await internals.handleServerRequest("codex", request("rerun_failed_ci_jobs", { runId: 42 }, "call-rerun-off"));
+    expect(text(off)).toContain("CI reruns is Off");
+    expect((await internals.handleServerRequest("codex", request("get_ci_run", { runId: 42 }, "call-ci-read"))).success).toBe(true);
+    policy.access.ci = "ask";
+    const prompt = nextApproval();
+    const pending = internals.handleServerRequest("codex", request("rerun_failed_ci_jobs", { runId: 42 }, "call-rerun-decline"));
+    await answer(await prompt, "decline");
+    expect(text(await pending)).toContain("declined");
+    expect(github).not.toHaveBeenCalled();
+  });
+
+  it("gates artifact downloads with the existing forge read access setting", async () => {
+    const args = { runId: 9, artifactId: 12 };
+    const allowed = await internals.handleServerRequest("codex", request("download_ci_artifact", args, "call-artifact"));
+    expect(allowed.success).toBe(true);
+    expect(forgeRead).toHaveBeenCalledWith("download_ci_artifact", args, expect.objectContaining({ threadId: "thread-1" }));
+    forgeRead.mockClear();
+    policy.access.read = "off";
+    const denied = await internals.handleServerRequest("codex", request("download_ci_artifact", args, "call-artifact-off"));
+    expect(text(denied)).toContain("tools_disabled");
+    expect(forgeRead).not.toHaveBeenCalled();
+  });
+
   it("refuses every forge tool, including a stale schema, while the family is off", async () => {
     policy.enabled = false;
     const read = await internals.handleServerRequest("codex", request("list_ci_runs", {}, "call-off-read"));
@@ -134,6 +177,36 @@ describe("backend forge tool dispatch", () => {
     expect(result.success).toBe(true);
     expect(text(result)).toMatch(/"attachedToThread":\s*true/);
     expect(attach).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", url: "https://github.com/fixture/project/pull/9" });
+  });
+
+  it("shows the whole body and every inline comment on the approval card", async () => {
+    const body = `## Summary\n\n${"Moves every macOS job onto the hosted runner. ".repeat(20)}\n\n<!-- end -->`;
+    const pr = nextApproval();
+    const opening = internals.handleServerRequest("codex", request("create_pull_request", { title: "ci: hosted runners", body }, "call-pr-body"));
+    const prNotification = await pr;
+    expect(prNotification.params._meta).toMatchObject({ tool_params_display: [{ name: "title", value: "ci: hosted runners" }, { name: "body", value: body, format: "markdown" }] });
+    await answer(prNotification, "decline");
+    await opening;
+
+    const review = nextApproval();
+    const reviewing = internals.handleServerRequest("codex", request("submit_pull_request_review", {
+      number: 9,
+      event: "COMMENT",
+      body: "Two notes.",
+      comments: [
+        { path: "src/auth/password-reset.ts", line: 41, body: "Rename **this**." },
+        { path: "scripts/sign.mjs", startLine: 88, line: 96, body: "Keep the unlock." },
+      ],
+    }, "call-review-comments"));
+    const reviewNotification = await review;
+    expect((reviewNotification.params._meta as { tool_params_display: unknown[] }).tool_params_display).toEqual(expect.arrayContaining([
+      { name: "body", value: "Two notes.", format: "markdown" },
+      { name: "comment", location: "src/auth/password-reset.ts:41", value: "Rename **this**.", format: "markdown" },
+      { name: "comment", location: "scripts/sign.mjs:88–96", value: "Keep the unlock.", format: "markdown" },
+    ]));
+    await answer(reviewNotification, "decline");
+    await reviewing;
+    expect(github).not.toHaveBeenCalled();
   });
 
   it("budgets creating a pull request and attaching it through the real SQLite store", async () => {

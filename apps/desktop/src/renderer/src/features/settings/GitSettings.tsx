@@ -110,6 +110,7 @@ const FORGE_TOOL_GROUP_SUBS: Record<ForgeAgentToolGroup, string> = {
   pull_requests: "Open, edit, close and reopen pull and merge requests, mark ready or draft, labels, attachments.",
   comments: "Comment, reply to review comments, comment-only reviews, resolve threads.",
   issues: "Open, edit, close and label issues.",
+  ci: "Rerun failed GitHub Actions jobs and their dependents, or failed and canceled GitLab pipeline jobs.",
   approve_merge: "Approving or requesting changes in a review, and merging a pull or merge request.",
 };
 

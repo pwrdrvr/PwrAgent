@@ -15,6 +15,7 @@ import type {
   ThreadTodosChangedEvent,
   ThreadTodoWorkMode,
   ThreadExecutionMode,
+  CodexSpeed,
 } from "@pwragent/shared";
 import {
   DEFAULT_THREAD_TODO_MERGE_METHOD,
@@ -25,8 +26,15 @@ import {
   threadTodoKindForAction,
   threadTodoBlockingItems,
   threadTodoItemNoun,
+  threadTodoSteps,
 } from "@pwragent/shared";
 import type { ThreadTodoStore } from "./thread-todo-store.js";
+import {
+  THREAD_TODO_PLAN_DETAIL,
+  THREAD_TODO_PLAN_KEY,
+  threadTodoPlanTitle,
+  type ThreadTodoPlan,
+} from "./thread-todo-plan.js";
 
 type StartThreadAction = Extract<ThreadTodoAction, { type: "start_thread" }>;
 
@@ -54,7 +62,9 @@ export type ThreadTodoActionRunners = {
     crossProject: boolean;
     action: StartThreadAction;
     modelSettings?: ThreadTodoModelSettings;
-  }) => Promise<ThreadTodoStartedThread & {
+    /** The card's plain steps, raised as the new thread's own card. */
+    plan?: ThreadTodoPlan;
+  } & ThreadTodoStartChoices) => Promise<ThreadTodoStartedThread & {
     dispatchSettings?: { settings: ThreadTodoModelSettings; source: ThreadTodoModelSettings };
   }>;
   /** The same, on a federation peer, in that peer's copy of `project`. */
@@ -65,7 +75,20 @@ export type ThreadTodoActionRunners = {
     project?: ThreadTodoProject;
     crossProject: boolean;
     action: StartThreadAction;
-  }) => Promise<ThreadTodoStartedThread>;
+    /** Checked against the peer's catalog; absent uses the peer's defaults. */
+    modelSettings?: ThreadTodoModelSettings;
+    /** Raised on the peer when it answers `threadTodos.raisePlan`. */
+    plan?: ThreadTodoPlan;
+  } & ThreadTodoStartChoices) => Promise<ThreadTodoStartedThread>;
+};
+
+/** What the operator chose on a handoff card besides its model. */
+export type ThreadTodoStartChoices = {
+  /** Replaces the card's own Where. */
+  workMode?: ThreadTodoWorkMode;
+  /** An environment id, or `none`. Absent keeps the default. */
+  environment?: string;
+  speed?: CodexSpeed;
 };
 
 export type AddThreadTodoInput = {
@@ -169,7 +192,9 @@ export class ThreadTodoService {
     this.newId = options.newId ?? randomUUID;
   }
 
-  private readDispatchSettings: ((thread: { backend: AppServerBackendKind; threadId: string }) => Promise<ThreadTodoModelSettings>) | undefined;
+  private readDispatchSettings: ((thread: { backend: AppServerBackendKind; threadId: string }) => Promise<
+    Pick<NonNullable<ThreadTodo["dispatchDefaults"]>, "thread" | "threadSpeed">
+  >) | undefined;
 
   setDispatchSettingsReader(reader: NonNullable<ThreadTodoService["readDispatchSettings"]>): void {
     this.readDispatchSettings = reader;
@@ -183,8 +208,8 @@ export class ThreadTodoService {
       const key = JSON.stringify([todo.backend, todo.threadId]);
       let pending = defaults.get(key);
       if (!pending) {
-        pending = this.readDispatchSettings(todo).then((thread) => ({
-          thread,
+        pending = this.readDispatchSettings(todo).then((defaults) => ({
+          ...defaults,
           lastDispatch: this.store.getThreadModelSettings(todo.backend, todo.threadId),
         }));
         defaults.set(key, pending);
@@ -328,6 +353,34 @@ export class ThreadTodoService {
     return { todo, created: true };
   }
 
+  /**
+   * The checklist a thread started from a card works through: that card's
+   * plain steps, as the new thread's own card keyed `plan`. One commit. The
+   * card is a reminder, so the thread ticks its steps with update_todo and
+   * can restate or resolve it; a repeat for the same thread merges into the
+   * open card instead of adding one.
+   */
+  raisePlan(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    cwd?: string;
+    sourceProject?: ThreadTodoProject;
+    plan: ThreadTodoPlan;
+  }): ThreadTodo {
+    return this.add({
+      backend: params.backend,
+      threadId: params.threadId,
+      ...(params.cwd ? { cwd: params.cwd } : {}),
+      ...(params.sourceProject ? { sourceProject: params.sourceProject } : {}),
+      input: {
+        title: threadTodoPlanTitle(params.plan.title),
+        detail: THREAD_TODO_PLAN_DETAIL,
+        key: THREAD_TODO_PLAN_KEY,
+        items: params.plan.items,
+      },
+    }).todo;
+  }
+
   /** Announce a card written outside the service's own mutations. */
   publish(todo: ThreadTodo): void {
     this.emit(todo);
@@ -396,14 +449,22 @@ export class ThreadTodoService {
     id?: string;
     key?: string;
     status: Exclude<ThreadTodoStatus, "open">;
+    /** The operator handed the card to this thread, which claims it first. */
+    resolution?: "sent_here";
     allowOpenItems?: boolean;
   }): ThreadTodo {
     const target = this.findForThread(params);
     return this.resolve({
       id: target.id,
       status: params.status,
+      ...(params.resolution ? { resolution: params.resolution } : {}),
       ...(params.allowOpenItems ? { allowOpenItems: true } : {}),
     });
+  }
+
+  /** Any card on this owner, by id. */
+  get(id: string): ThreadTodo {
+    return this.require(id);
   }
 
   /** One of the calling thread's cards, by id or by an open card's key. */
@@ -578,7 +639,7 @@ export class ThreadTodoService {
       modelSettings?: ThreadTodoModelSettings;
       /** A run that succeeds marks the card done, so it asks the same. */
       allowOpenItems?: boolean;
-    } = {},
+    } & ThreadTodoStartChoices = {},
   ): Promise<ThreadTodo> {
     const todo = this.require(id);
     if (todo.status !== "open") {
@@ -634,6 +695,17 @@ export class ThreadTodoService {
         });
         return this.finish(id, { result: merged.summary });
       }
+      const choices: ThreadTodoStartChoices = {
+        ...(options.workMode ? { workMode: options.workMode } : {}),
+        ...(options.environment ? { environment: options.environment } : {}),
+        ...(options.speed ? { speed: options.speed } : {}),
+      };
+      // Prerequisites were the operator's; the plain steps are the new
+      // thread's work, so only those go along.
+      const steps = threadTodoSteps(todo).map((item) => item.text);
+      const plan: ThreadTodoPlan | undefined = steps.length > 0
+        ? { title: action.title ?? todo.title, items: steps }
+        : undefined;
       const started: Awaited<ReturnType<ThreadTodoActionRunners["startThread"]>> = startOnInstance && options.startOnInstanceId
         ? await startOnInstance({
             instanceId: options.startOnInstanceId,
@@ -642,6 +714,11 @@ export class ThreadTodoService {
             project,
             crossProject,
             action,
+            // The thread's remembered dispatch was checked against this
+            // machine's catalog, so only an explicit pick goes to a peer.
+            ...(options.modelSettings ? { modelSettings: options.modelSettings } : {}),
+            ...(plan ? { plan } : {}),
+            ...choices,
           })
         : await runners.startThread({
             sourceBackend: todo.backend,
@@ -651,6 +728,8 @@ export class ThreadTodoService {
             action,
             modelSettings: options.modelSettings
               ?? this.store.getThreadModelSettings(todo.backend, todo.threadId),
+            ...(plan ? { plan } : {}),
+            ...choices,
           });
       if (started.dispatchSettings) {
         this.store.rememberDispatch(todo.backend, todo.threadId,

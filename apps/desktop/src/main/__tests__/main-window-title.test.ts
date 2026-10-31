@@ -5,6 +5,7 @@ import {
   APP_WINDOW_TITLE,
   lockMainWindowTitle,
   mainWindowTitle,
+  updateLockedMainWindowTitle,
 } from "../main-window-title";
 
 type TestBrowserWindow = BrowserWindow & {
@@ -138,5 +139,29 @@ describe("lockMainWindowTitle", () => {
     expect(window.setTitleMock).toHaveBeenLastCalledWith(
       "PwrAgent - Harold-MBP-2018",
     );
+  });
+
+  it("holds a retitled window to its new title", () => {
+    // A remote window's short name can arrive after the window opens.
+    const window = createWindow();
+
+    lockMainWindowTitle(window, mainWindowTitle("DESKTOP-17ISFOI / dev"));
+    updateLockedMainWindowTitle(window, mainWindowTitle("Win-Tower / dev"));
+    window.emitPageTitleUpdated("PwrAgent");
+
+    expect(window.setTitleMock).toHaveBeenLastCalledWith(
+      "PwrAgent - Win-Tower / dev",
+    );
+  });
+
+  it("does not retitle a window that is already torn down", () => {
+    const window = createWindow();
+
+    lockMainWindowTitle(window, "PwrAgent");
+    window.setTitleMock.mockClear();
+    window.destroy();
+    updateLockedMainWindowTitle(window, "PwrAgent - Win-Tower");
+
+    expect(window.setTitleMock).not.toHaveBeenCalled();
   });
 });

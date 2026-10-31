@@ -601,6 +601,36 @@ it("rereads when the period or instances change, and on focus once the data is s
   await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(8));
 });
 
+it("does not poll an open or closed window and advances bounds only on requested refreshes", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  let now = new Date(2026, 8, 28, 12).getTime();
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  const readUsageActivity = vi.fn(async () => ({ rows: [], readAt: now, rateLimits: [], truncated: false }));
+  const mounted = render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(readUsageActivity).toHaveBeenCalledTimes(1);
+  now += HOUR;
+  await act(async () => { await vi.advanceTimersByTimeAsync(HOUR); });
+  expect(readUsageActivity).toHaveBeenCalledTimes(1);
+  await act(async () => { window.dispatchEvent(new Event("focus")); });
+  expect(readUsageActivity).toHaveBeenCalledTimes(2);
+  expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ to: now }));
+  now += 59_000;
+  await act(async () => { window.dispatchEvent(new Event("focus")); });
+  expect(readUsageActivity).toHaveBeenCalledTimes(2);
+  now += 1000;
+  await act(async () => { window.dispatchEvent(new Event("focus")); });
+  expect(readUsageActivity).toHaveBeenCalledTimes(3);
+  now += 1000;
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Refresh" })); });
+  expect(readUsageActivity).toHaveBeenCalledTimes(4);
+  expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ to: now }));
+  mounted.unmount();
+  now += HOUR;
+  await act(async () => { await vi.advanceTimersByTimeAsync(HOUR); window.dispatchEvent(new Event("focus")); });
+  expect(readUsageActivity).toHaveBeenCalledTimes(4);
+});
+
 it("filters and ranks threads without rereading or launching analysis", async () => {
   const at = new Date(2026, 8, 28, 10).getTime();
   const row = usageFixture({ createdAt: at, startedAt: at, completedAt: at + 1000 });
@@ -845,4 +875,21 @@ it("reads a slice by model, and a pinned model name narrows the threads to it", 
   expect(within(card).getByRole("button", { name: "Grok 5" })).toHaveAttribute("aria-pressed", "true");
   expect(screen.queryByRole("button", { name: "Inspect a thread" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Inspect c thread" })).toBeInTheDocument();
+});
+
+it("names each instance toggle by its short name, with the full name as its tooltip", async () => {
+  const readUsageActivity = vi.fn(async () => ({ rows: [], readAt: Date.now(), rateLimits: [], truncated: false }));
+  const readFederationActivity = vi.fn(async () => ({ health: {
+    localLabel: "Harold-MBP-M5-Max", localShortLabel: "M5 Max",
+    peers: [{ id: "win", label: "DESKTOP-17ISFOI", profileName: "dev", shortLabel: "Win-Tower", status: "connected" }],
+  } }) as ReadFederationActivityResponse);
+  render(<UsageActivity desktopApi={{ readUsageActivity, readFederationActivity }} />);
+
+  const instances = screen.getByRole("group", { name: "Instances" });
+  // The accessible name stays the full name, as for every instance chip.
+  const remote = await within(instances).findByRole("button", { name: "DESKTOP-17ISFOI (dev)" });
+  expect(remote).toHaveTextContent("Win-Tower (dev)");
+  expect(remote).toHaveAttribute("title", "DESKTOP-17ISFOI (dev)");
+  const local = within(instances).getByRole("button", { name: "Harold-MBP-M5-Max" });
+  expect(local).toHaveTextContent("M5 Max");
 });

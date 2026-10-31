@@ -18,6 +18,13 @@ sqlite payload columns.
 - If an ACP provider cannot return history itself and PwrAgent must persist a
   fallback transcript, that fallback must use append-only JSONL rollout files,
   not sqlite.
+- The Claude SDK backend keeps its desktop history in append-only JSONL under
+  the active profile's `state/claude/`. Before appending a persistent entry,
+  retain supported inline image parts in the content-addressed
+  `state/thread-images/claude/<thread-id>/` cache and store transcript-image
+  protocol URLs in their place. Revisions reuse the image file; legacy inline
+  entries remain readable without rewriting history. Ephemeral sessions stay
+  in memory, including their images.
 
 ## Desktop Metadata
 
@@ -82,3 +89,14 @@ queue intact. Queued status records mean last confirmed queue admission,
 not delivery; peer cancellation and process restart can make that observation
 stale. Local queue lifecycle events record cancellation, failure, and holds.
 The existing in-memory FIFO is not made restart-persistent by this store.
+
+## Failed environment launches
+
+A launch request whose environment setup failed has not reached the provider.
+The owner retains that unsent request under the active profile's
+`state/pending-environment-launches/<thread-identity-hash>.json`, outside SQLite.
+Continuation reads the request on the owner, preserving its input, review or
+schedule, and launch settings across viewer reloads and owner restarts. Failed
+continuations retain it; successful admission removes it. This is pending work,
+not a provider transcript copy. A legacy thread with no retained request asks
+the operator to send the prompt again rather than silently dismissing startup.

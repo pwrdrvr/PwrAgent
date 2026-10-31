@@ -1,5 +1,9 @@
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import { FEDERATION_SERVICES_CHANNEL } from "../shared/ipc";
+import {
+  HTML_PREVIEW_NAVIGATION_CHANNEL,
+  type HtmlPreviewNavigationEvent,
+} from "../shared/html-preview";
 import { DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL, DIAGNOSTICS_STOP_RENDERING_CHANNEL, type RenderingCaptureResult } from "../shared/rendering-diagnostics";
 import {
   NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL, NATIVE_VOICE_CAMERA_CUE_CHANNEL, NATIVE_VOICE_CAMERA_REPEAT_CHANNEL,
@@ -38,6 +42,8 @@ import type {
   RunThreadTodoActionRequest,
   SetThreadTodoItemCheckedRequest,
   SetThreadTodoProjectRequest,
+  ListThreadTodoDispatchEnvironmentsRequest,
+  ListThreadTodoDispatchEnvironmentsResponse,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
   ThreadTodoFeedDelta,
@@ -82,6 +88,7 @@ import {
   isDesktopLightTheme,
   isDesktopTextSize,
   normalizeNavigationBrowseMode,
+  normalizeNavigationResumeState,
 } from "@pwragent/shared";
 import {
   createEventSubscriptionMultiplexer,
@@ -174,6 +181,9 @@ import type {
   SetMcpConnectionSelectForNewThreadsRequest,
   SetMcpConnectionToolApprovalRequest,
   SetSandboxerCleanupOnPrCloseRequest,
+  SetLinearPasteImagesRequest,
+  FetchLinearPastedImagesRequest,
+  FetchLinearPastedImagesResponse,
   SetSandboxerTransportRequest,
   ReadThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsRequest,
@@ -268,6 +278,7 @@ import type {
   AcknowledgeAcpAgentUpdateRequest,
   AcknowledgeAcpAgentUpdateResponse,
   NavigationBrowseMode,
+  NavigationResumeState,
   AttachDirectoryToThreadRequest,
   AttachDirectoryToThreadResponse,
   DetachDirectoryFromThreadRequest,
@@ -306,6 +317,8 @@ import type {
   ThreadLockNoteRequest,
   SetThreadToolIncidentNoticeRequest,
   SetThreadToolIncidentNoticeResponse,
+  ContinueThreadEnvironmentStartupRequest,
+  ContinueThreadEnvironmentStartupResponse,
   AcknowledgeThreadEnvironmentFailureRequest,
   AcknowledgeThreadEnvironmentFailureResponse,
   ListPendingThreadSpendAlertsRequest,
@@ -506,6 +519,8 @@ import type {
   OpenPathResponse,
   ReadMarkdownFileRequest,
   ReadMarkdownFileResponse,
+  ReadHtmlPreviewAssetsRequest,
+  ReadHtmlPreviewAssetsResponse,
   ResolveTranscriptFilesRequest,
   ResolveTranscriptFilesResponse,
   ReadMarkdownFileViewerSnapshotRequest,
@@ -691,6 +706,7 @@ import {
   THREAD_TODOS_RUN_ACTION_CHANNEL,
   THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL,
   THREAD_TODOS_SET_PROJECT_CHANNEL,
+  THREAD_TODOS_LIST_DISPATCH_ENVIRONMENTS_CHANNEL,
   OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
   OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL,
   OPERATOR_REQUESTS_LIST_CHANNEL,
@@ -818,6 +834,7 @@ import {
   APPLICATIONS_READ_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
   MARKDOWN_FILE_READ_CHANNEL,
+  HTML_PREVIEW_ASSETS_READ_CHANNEL,
   TRANSCRIPT_FILES_RESOLVE_CHANNEL,
   MARKDOWN_FILE_VIEWER_OPEN_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL,
@@ -923,6 +940,8 @@ import {
   MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
   MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL,
   MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
+  MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL,
+  MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL,
   MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL,
   MCP_CONNECTION_LIST_TOOLS_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
@@ -998,6 +1017,7 @@ import {
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
+  NAVIGATION_SET_RESUME_STATE_CHANNEL,
   NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL,
   NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL,
   NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
@@ -1015,6 +1035,7 @@ import {
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
   NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
+  NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL,
   NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -1322,6 +1343,12 @@ const desktopApi = Object.freeze({
       MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
       request,
     ),
+  setLinearPasteImages: async (request: SetLinearPasteImagesRequest): Promise<void> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_SET_LINEAR_PASTE_IMAGES_CHANNEL, request),
+  fetchLinearPastedImages: async (
+    request: FetchLinearPastedImagesRequest,
+  ): Promise<FetchLinearPastedImagesResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_FETCH_LINEAR_PASTED_IMAGES_CHANNEL, request),
   listMcpConnectionTools: async (
     request: ListMcpConnectionToolsRequest,
   ): Promise<ListMcpConnectionToolsResponse> =>
@@ -1997,6 +2024,21 @@ const desktopApi = Object.freeze({
     request: ReadMarkdownFileRequest,
   ): Promise<ReadMarkdownFileResponse> =>
     await ipcRenderer.invoke(MARKDOWN_FILE_READ_CHANNEL, request),
+  readHtmlPreviewAssets: async (
+    request: ReadHtmlPreviewAssetsRequest,
+  ): Promise<ReadHtmlPreviewAssetsResponse> =>
+    await ipcRenderer.invoke(HTML_PREVIEW_ASSETS_READ_CHANNEL, request),
+  onHtmlPreviewNavigation: (
+    callback: (event: HtmlPreviewNavigationEvent) => void,
+  ): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: HtmlPreviewNavigationEvent) => {
+      callback(payload);
+    };
+    ipcRenderer.on(HTML_PREVIEW_NAVIGATION_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(HTML_PREVIEW_NAVIGATION_CHANNEL, listener);
+    };
+  },
   openMarkdownFileViewer: async (
     request: OpenMarkdownFileViewerRequest,
   ): Promise<OpenMarkdownFileViewerResponse> =>
@@ -2376,6 +2418,10 @@ const desktopApi = Object.freeze({
     request: SetThreadTodoProjectRequest,
   ): Promise<ThreadTodoMutationResponse> =>
     await ipcRenderer.invoke(THREAD_TODOS_SET_PROJECT_CHANNEL, request),
+  listThreadTodoDispatchEnvironments: async (
+    request: ListThreadTodoDispatchEnvironmentsRequest,
+  ): Promise<ListThreadTodoDispatchEnvironmentsResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_LIST_DISPATCH_ENVIRONMENTS_CHANNEL, request),
   setThreadTodoItemChecked: async (
     request: SetThreadTodoItemCheckedRequest,
   ): Promise<ThreadTodoMutationResponse> =>
@@ -2653,6 +2699,8 @@ const desktopApi = Object.freeze({
       NAVIGATION_SNAPSHOT_CHANNEL,
       request,
     ),
+  setNavigationResumeState: async (state: NavigationResumeState): Promise<void> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_RESUME_STATE_CHANNEL, state),
   setNavigationBrowseMode: async (
     request: SetNavigationBrowseModeRequest,
   ): Promise<SetNavigationBrowseModeResponse> =>
@@ -2699,6 +2747,10 @@ const desktopApi = Object.freeze({
       NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
       request,
     ),
+  continueThreadEnvironmentStartup: async (
+    request: ContinueThreadEnvironmentStartupRequest,
+  ): Promise<ContinueThreadEnvironmentStartupResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL, request),
   acknowledgeThreadEnvironmentFailure: async (
     request: AcknowledgeThreadEnvironmentFailureRequest,
   ): Promise<AcknowledgeThreadEnvironmentFailureResponse> =>
@@ -3558,6 +3610,7 @@ const bootstrapAppearance = readBootstrapAppearance();
 const NAVIGATION_ARG_PREFIX = "--pwragent-navigation-preferences=";
 function readBootstrapNavigationPreferences(): {
   browseMode: NavigationBrowseMode;
+  resumeState?: NavigationResumeState;
   pinnedGroupCollapsed: boolean;
   pinnedThreadsOnTop: boolean;
 } {
@@ -3571,6 +3624,7 @@ function readBootstrapNavigationPreferences(): {
       // exact flicker this bootstrap hint exists to prevent.
       return {
         browseMode: normalizeNavigationBrowseMode(raw?.browseMode),
+        resumeState: normalizeNavigationResumeState(raw?.resumeState),
         pinnedGroupCollapsed: raw?.pinnedGroupCollapsed === true,
         pinnedThreadsOnTop: raw?.pinnedThreadsOnTop !== false,
       };
@@ -3595,13 +3649,20 @@ const LAYOUT_ARG_PREFIX = "--pwragent-layout-preferences=";
 function readBootstrapLayoutPreferences(): {
   contextRailPinned: boolean;
   sidebarHidden: boolean;
+  projectIndexHidden: boolean;
+  projectIndexWidth: number | null;
 } {
   const defaults = DESKTOP_UI_LAYOUT_DEFAULTS;
   for (const arg of process.argv) {
     if (!arg.startsWith(LAYOUT_ARG_PREFIX)) continue;
     try {
       const raw = JSON.parse(arg.slice(LAYOUT_ARG_PREFIX.length)) as
-        | { contextRailPinned?: unknown; sidebarHidden?: unknown }
+        | {
+          contextRailPinned?: unknown;
+          sidebarHidden?: unknown;
+          projectIndexHidden?: unknown;
+          projectIndexWidth?: unknown;
+        }
         | null;
       return {
         contextRailPinned: typeof raw?.contextRailPinned === "boolean"
@@ -3610,6 +3671,14 @@ function readBootstrapLayoutPreferences(): {
         sidebarHidden: typeof raw?.sidebarHidden === "boolean"
           ? raw.sidebarHidden
           : defaults.sidebarHidden,
+        projectIndexHidden: typeof raw?.projectIndexHidden === "boolean"
+          ? raw.projectIndexHidden
+          : defaults.projectIndexHidden,
+        projectIndexWidth: typeof raw?.projectIndexWidth === "number"
+          && Number.isFinite(raw.projectIndexWidth)
+          && raw.projectIndexWidth > 0
+          ? Math.round(raw.projectIndexWidth)
+          : defaults.projectIndexWidth,
       };
     } catch {
       break;

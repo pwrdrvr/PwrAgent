@@ -1,5 +1,6 @@
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import type { NativeVoiceApi } from "../../../shared/native-voice";
+import type { HtmlPreviewNavigationEvent } from "../../../shared/html-preview";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -7,6 +8,8 @@ import type {
   TerminateBackgroundTerminalResponse,
 } from "@pwragent/shared";
 import type {
+  ListThreadTodoDispatchEnvironmentsRequest,
+  ListThreadTodoDispatchEnvironmentsResponse,
   ListThreadTodoProjectsResponse,
   ListThreadTodoProjectsRequest,
   ListThreadTodosRequest,
@@ -297,6 +300,8 @@ import type {
   ThreadLockNoteRequest,
   SetThreadToolIncidentNoticeRequest,
   SetThreadToolIncidentNoticeResponse,
+  ContinueThreadEnvironmentStartupRequest,
+  ContinueThreadEnvironmentStartupResponse,
   AcknowledgeThreadEnvironmentFailureRequest,
   AcknowledgeThreadEnvironmentFailureResponse,
   ListPendingThreadSpendAlertsRequest,
@@ -384,6 +389,9 @@ import type {
   SetMcpConnectionSelectForNewThreadsRequest,
   SetMcpConnectionToolApprovalRequest,
   SetSandboxerCleanupOnPrCloseRequest,
+  SetLinearPasteImagesRequest,
+  FetchLinearPastedImagesRequest,
+  FetchLinearPastedImagesResponse,
   SetSandboxerTransportRequest,
   ReadThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsRequest,
@@ -546,6 +554,8 @@ import type {
   OpenPathResponse,
   ReadMarkdownFileRequest,
   ReadMarkdownFileResponse,
+  ReadHtmlPreviewAssetsRequest,
+  ReadHtmlPreviewAssetsResponse,
   ResolveTranscriptFilesRequest,
   ResolveTranscriptFilesResponse,
   ReadMarkdownFileViewerSnapshotRequest,
@@ -603,6 +613,7 @@ import type {
   SetDefaultDesktopPwrAgentProfileRequest,
   SetDefaultDesktopPwrAgentProfileResponse,
   SetNavigationBrowseModeRequest,
+  NavigationResumeState,
   SetNavigationBrowseModeResponse,
   SetPinnedGroupCollapsedRequest,
   SetPinnedGroupCollapsedResponse,
@@ -684,6 +695,11 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setSandboxerCleanupOnPrClose?: (
     request: SetSandboxerCleanupOnPrCloseRequest,
   ) => Promise<MutateMcpConnectionResponse>;
+  setLinearPasteImages?: (request: SetLinearPasteImagesRequest) => Promise<void>;
+  /** Images in text pasted from Linear, read through a Linear connection. */
+  fetchLinearPastedImages?: (
+    request: FetchLinearPastedImagesRequest,
+  ) => Promise<FetchLinearPastedImagesResponse>;
   listMcpConnectionTools?: (
     request: ListMcpConnectionToolsRequest,
   ) => Promise<ListMcpConnectionToolsResponse>;
@@ -1112,6 +1128,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => Promise<ThreadTodoMutationResponse>;
   /** The projects a card's project menu offers. */
   listThreadTodoProjects?: (request?: ListThreadTodoProjectsRequest) => Promise<ListThreadTodoProjectsResponse>;
+  /** The environments a handoff card can start with on one instance. */
+  listThreadTodoDispatchEnvironments?: (
+    request: ListThreadTodoDispatchEnvironmentsRequest,
+  ) => Promise<ListThreadTodoDispatchEnvironmentsResponse>;
   /** The operator's pick from a card's project menu. */
   setThreadTodoProject?: (
     request: SetThreadTodoProjectRequest,
@@ -1262,6 +1282,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   onNavigationMentionSourcesChanged?: (
     callback: () => void,
   ) => () => void;
+  setNavigationResumeState?: (state: NavigationResumeState) => Promise<void>;
   setNavigationBrowseMode?: (
     request: SetNavigationBrowseModeRequest,
   ) => Promise<SetNavigationBrowseModeResponse>;
@@ -1398,6 +1419,12 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   readMarkdownFile?: (
     request: ReadMarkdownFileRequest
   ) => Promise<ReadMarkdownFileResponse>;
+  readHtmlPreviewAssets?: (
+    request: ReadHtmlPreviewAssetsRequest
+  ) => Promise<ReadHtmlPreviewAssetsResponse>;
+  onHtmlPreviewNavigation?: (
+    callback: (event: HtmlPreviewNavigationEvent) => void
+  ) => () => void;
   openMarkdownFileViewer?: (
     request: OpenMarkdownFileViewerRequest
   ) => Promise<OpenMarkdownFileViewerResponse>;
@@ -1496,6 +1523,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   acknowledgeThreadSpendAlert?: (
     request: AcknowledgeThreadSpendAlertRequest,
   ) => Promise<AcknowledgeThreadSpendAlertResponse>;
+  continueThreadEnvironmentStartup?: (
+    request: ContinueThreadEnvironmentStartupRequest,
+  ) => Promise<ContinueThreadEnvironmentStartupResponse>;
   acknowledgeThreadEnvironmentFailure?: (
     request: AcknowledgeThreadEnvironmentFailureRequest,
   ) => Promise<AcknowledgeThreadEnvironmentFailureResponse>;
