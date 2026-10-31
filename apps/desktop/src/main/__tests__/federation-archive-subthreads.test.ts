@@ -45,7 +45,7 @@ describe("Federation nested archive placement", () => {
   };
   const ancestorPage = (owner: string, row?: NavigationThreadSummary): NavigationQueryPage => ({
     protocol: 2, queryKey: "ancestor", generation: "fixture", ownerEpoch: owner, countsRevision: "fixture",
-    complete: true, coverage: { state: "complete" }, counts: { total: row ? 1 : 0, active: 0, unread: 0 },
+    complete: true, coverage: { state: "complete" }, counts: { total: row ? 1 : 0, active: 0, unread: 0, review: 0 },
     entries: row && row.archivedAt === undefined ? [{
       row: { ...row, ref: { backend: row.source, threadId: row.id, ownerInstanceId: owner }, rowRevision: "fixture",
         ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "ready" },
