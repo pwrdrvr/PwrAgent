@@ -1,31 +1,30 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, open, rename, rm } from "node:fs/promises";
-import path from "node:path";
+import { lstat, realpath, unlink } from "node:fs/promises";
+import { openForgeArtifactDestination, type ForgeArtifactDestination } from "./forge-artifact-destination";
 import { FORGE_ARTIFACT_MAX_BYTES } from "./forge-read-limits";
 import { ForgeReadError } from "./forge-tool-contract";
 
-/** Stream an opaque ZIP into a private, unique directory. Never use names from the archive. */
-export async function saveForgeArtifact(response: Response, root: string, signal: AbortSignal) {
+/** Stream into an exclusive project file. No profile cache or separate staging store. */
+export async function saveForgeArtifact(response: Response, destination: ForgeArtifactDestination, signal: AbortSignal) {
   const reader = response.body?.getReader();
   if (!reader) throw new ForgeReadError("invalid_response", "The artifact response has no body.");
   const cancel = () => { void reader.cancel().catch(() => {}); };
   signal.addEventListener("abort", cancel, { once: true });
-  let directory: string | undefined;
+  let created: { archivePath: string; dev: number; ino: number } | undefined;
   let complete = false;
   try {
     signal.throwIfAborted();
     if (Number(response.headers.get("content-length")) > FORGE_ARTIFACT_MAX_BYTES) {
       throw new ForgeReadError("response_too_large", "Artifact exceeds the 128 MiB download limit.");
     }
-    await mkdir(root, { recursive: true, mode: 0o700 });
-    directory = await mkdtemp(path.join(root, "download-"));
-    const partial = path.join(directory, "artifact.zip.partial");
-    const archivePath = path.join(directory, "artifact.zip");
-    const file = await open(partial, "wx", 0o600);
+    const { file, archivePath } = await openForgeArtifactDestination(destination, signal);
     const hash = createHash("sha256");
     let sizeBytes = 0;
     let signature = Buffer.alloc(0);
     try {
+      const identity = await file.stat();
+      created = { archivePath, dev: identity.dev, ino: identity.ino };
+      if (await realpath(archivePath) !== archivePath) throw new ForgeReadError("forbidden", "The artifact destination changed while the file was opened.");
       while (true) {
         signal.throwIfAborted();
         const part = await reader.read();
@@ -51,9 +50,14 @@ export async function saveForgeArtifact(response: Response, root: string, signal
       throw new ForgeReadError("invalid_response", "The artifact response is not a ZIP archive.");
     }
     signal.throwIfAborted();
-    await rename(partial, archivePath);
+    const published = await lstat(archivePath);
+    if (await realpath(archivePath) !== archivePath || published.dev !== created.dev || published.ino !== created.ino) {
+      throw new ForgeReadError("forbidden", "The artifact destination changed during the download.");
+    }
     complete = true;
-    return { archivePath, sizeBytes, sha256: hash.digest("hex"), format: "zip", extracted: false, pathOwner: "thread_owner" };
+    return { archivePath, sizeBytes, sha256: hash.digest("hex"), format: "zip", extracted: false, pathOwner: "thread_owner",
+      storage: "project", projectDirectory: destination.directory, relativePath: destination.relativePath,
+    };
   } catch (error) {
     if (signal.aborted) throw error;
     if (error instanceof ForgeReadError) throw error;
@@ -61,6 +65,10 @@ export async function saveForgeArtifact(response: Response, root: string, signal
   } finally {
     signal.removeEventListener("abort", cancel);
     await reader.cancel().catch(() => {});
-    if (!complete && directory) await rm(directory, { recursive: true, force: true });
+    if (!complete && created) {
+      const info = await lstat(created.archivePath).catch(() => undefined);
+      // Do not remove a replacement file installed by someone else.
+      if (info?.isFile() && info.dev === created.dev && info.ino === created.ino) await unlink(created.archivePath);
+    }
   }
 }

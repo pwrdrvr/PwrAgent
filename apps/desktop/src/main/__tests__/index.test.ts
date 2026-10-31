@@ -107,6 +107,7 @@ const mainLogWarnMock = vi.fn();
 const mainLogErrorMock = vi.fn();
 const initializeAppStateMock = vi.fn();
 const runStartupStorageMaintenanceMock = vi.fn<typeof import("../storage-maintenance").runStartupStorageMaintenance>();
+const scheduleLegacyCiArtifactCleanupMock = vi.fn(async () => {});
 const disposeAppStateMock = vi.fn();
 const isAppStateInitializedMock = vi.fn();
 const prewarmWindowsJobWrapperMock = vi.fn<() => Promise<void>>();
@@ -638,6 +639,10 @@ vi.mock("../state/app-state", () => ({
 vi.mock("../storage-maintenance", () => ({
   runStartupStorageMaintenance: runStartupStorageMaintenanceMock,
   interruptStartupStorageMaintenance: vi.fn(async () => {}),
+}));
+
+vi.mock("../pr-status/legacy-ci-artifact-cleanup", () => ({
+  scheduleLegacyCiArtifactCleanup: scheduleLegacyCiArtifactCleanupMock,
 }));
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
@@ -2763,6 +2768,7 @@ describe("bootstrapApp", () => {
     // mid-boot (the previous-boot's bootstrap dir, if any, gets
     // wiped only on `open` decisions — see comment in index.ts).
     expect(initializeAppStateMock).toHaveBeenCalledWith("active-profile");
+    expect(scheduleLegacyCiArtifactCleanupMock).toHaveBeenCalledOnce();
     expect(cleanupBootstrapProfileMock).toHaveBeenCalledTimes(1);
   });
 
@@ -2787,6 +2793,7 @@ describe("bootstrapApp", () => {
     // own that dir; cleanup happens at graduation in Task E.
     expect(initializeAppStateMock).toHaveBeenCalledWith("bootstrap");
     expect(runStartupStorageMaintenanceMock).not.toHaveBeenCalled();
+    expect(scheduleLegacyCiArtifactCleanupMock).not.toHaveBeenCalled();
     expect(cleanupBootstrapProfileMock).not.toHaveBeenCalled();
     if (process.platform === "darwin") {
       expect(writeDockProfileSnapshotMock).toHaveBeenCalledWith({
