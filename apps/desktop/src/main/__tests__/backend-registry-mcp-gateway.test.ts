@@ -172,6 +172,67 @@ describe("backend MCP gateway dispatch", () => {
     expect(operation).not.toHaveBeenCalled();
   });
 
+  it("keeps connection approval on the visible parent without granting the monitor all tools", async () => {
+    const call = await createMonitor();
+    const events: AgentEvent[] = [];
+    registry.onEvent(async (event) => {
+      if (event.notification.method !== "mcpServer/elicitation/request") return;
+      events.push(event);
+      expect(event.notification.params.threadId).toBe("thread-1");
+      await registry.submitServerRequest({ backend: "codex", threadId: "thread-1", turnId: "turn-1",
+        requestId: String(event.notification.params.requestId), response: { action: "decline", content: null, _meta: null } });
+    });
+    expect((await call("search_mcp_tools", { query: "lookup" })).success).toBe(true);
+    expect((await call("call_mcp_tool", args)).success).toBe(false);
+    expect(events).toHaveLength(1);
+    expect(operation.mock.calls.some(([entry]) => entry.operation === "gateway/tools/call")).toBe(false);
+  });
+
+  it("rechecks the delegating actor, worker turn and exact tool schema", async () => {
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+    const call = await createMonitor();
+    expect((await call("call_mcp_tool", { ...args, schemaRevision: "stale" })).success).toBe(false);
+    operation.mockClear();
+    const checkDynamicToolPermission = vi.fn((context: { threadId: string }) => ({
+      allowed: context.threadId !== "thread-1", permission: "tools.instance_management",
+    }));
+    Object.assign(registry, { messagingAgentToolService: { checkDynamicToolPermission } });
+    expect((await call("search_mcp_tools", { query: "lookup" })).success).toBe(false);
+    expect((await call("call_mcp_tool", args)).success).toBe(false);
+    expect(operation).not.toHaveBeenCalled();
+    checkDynamicToolPermission.mockReturnValue({ allowed: true, permission: "tools.instance_management" });
+    internals.activeTurnKeys.delete("codex:headless-1:turn-1");
+    expect((await call("call_mcp_tool", args)).success).toBe(false);
+    expect(operation).not.toHaveBeenCalled();
+  });
+
+  it.each(["lookup", "other"])("preserves automation tool limits in a Full Access monitor: %s", async (allowedTool) => {
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+    internals.headlessAutomationTurns.set("codex:thread-1:turn-1", {
+      agentThreadId: "agent-1", backend: "codex", automationRunId: "run-1", executionMode: "full-access",
+      executionThreadId: "thread-1", queueEntryId: "queue-1", startedAt: 1,
+      mcpConnectionIds: ["one"], toolAllowlist: [`mcp__Fixture__${allowedTool}`],
+    });
+    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "agent-1", connectionIds: ["one"] });
+    const call = await createMonitor();
+    // The delegated policy survives the automation parent ending.
+    internals.headlessAutomationTurns.clear();
+    expect((await call("search_mcp_tools", { query: "lookup", connectionId: "one" })).success).toBe(true);
+    expect((await call("call_mcp_tool", args)).success).toBe(allowedTool === "lookup");
+    expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(allowedTool === "lookup" ? 1 : 0);
+  });
+
+  it("refuses to delegate selected MCP connections when the worker gateway is unavailable", async () => {
+    await registry.close();
+    registry = buildRegistry(store, { registerBridge } as unknown as McpConnectionGatewayService);
+    internals = registry as unknown as typeof internals;
+    internals.activeTurnKeys.add("codex:thread-1:turn-1");
+    const response = await internals.handleServerRequest("codex", request("create_monitor_delegation", { task: "Inspect cloud status." }));
+    expect(response.success).toBe(false);
+    expect(JSON.stringify(response)).toContain("MCP gateway is unavailable");
+    expect(startThread).not.toHaveBeenCalled();
+  });
+
   it.each(["disabled", "cold", "expired"] as const)(
     "keeps unrelated new-thread defaults when Sandboxer status is slow (%s)",
     async (cache) => {
