@@ -126,6 +126,7 @@ export type DesktopSettingsConfig = {
     attentionPromoteOnTurnEnd?: boolean;
     pinnedThreadsOnTop?: boolean;
     passSetupVariablesToAgents?: boolean;
+    blockAgentMessagesToHigherAccess?: boolean;
     interactiveSvgSkipNotice?: boolean;
     interactiveSvgAutoOpen?: boolean;
     htmlPreviewRunScripts?: boolean;
@@ -699,6 +700,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["general", "pass_setup_variables_to_agents"],
       patch.general.passSetupVariablesToAgents,
+    );
+  }
+  if (patch.general?.blockAgentMessagesToHigherAccess !== undefined) {
+    set(
+      ["general", "block_agent_messages_to_higher_access"],
+      patch.general.blockAgentMessagesToHigherAccess,
     );
   }
   if (patch.general?.interactiveSvgSkipNotice !== undefined) {
@@ -2177,6 +2184,9 @@ function normalizeDesktopConfig(
       passSetupVariablesToAgents: readBoolean(
         general?.pass_setup_variables_to_agents,
       ),
+      blockAgentMessagesToHigherAccess: readBoolean(
+        general?.block_agent_messages_to_higher_access,
+      ),
       interactiveSvgSkipNotice: readBoolean(
         general?.interactive_svg_skip_notice,
       ),
@@ -2657,6 +2667,8 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const attentionPromoteOnTurnEnd = config.general?.attentionPromoteOnTurnEnd;
   const pinnedThreadsOnTop = config.general?.pinnedThreadsOnTop;
   const passSetupVariablesToAgents = config.general?.passSetupVariablesToAgents;
+  const blockAgentMessagesToHigherAccess =
+    config.general?.blockAgentMessagesToHigherAccess;
   const interactiveSvgSkipNotice = config.general?.interactiveSvgSkipNotice;
   const interactiveSvgAutoOpen = config.general?.interactiveSvgAutoOpen;
   const htmlPreviewRunScripts = config.general?.htmlPreviewRunScripts;
@@ -2683,6 +2695,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     attentionPromoteOnTurnEnd !== undefined ||
     pinnedThreadsOnTop !== undefined ||
     passSetupVariablesToAgents !== undefined ||
+    blockAgentMessagesToHigherAccess !== undefined ||
     interactiveSvgSkipNotice !== undefined ||
     interactiveSvgAutoOpen !== undefined ||
     htmlPreviewRunScripts !== undefined ||
@@ -2731,6 +2744,10 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (passSetupVariablesToAgents !== undefined) {
       pruned.general.passSetupVariablesToAgents = passSetupVariablesToAgents;
+    }
+    if (blockAgentMessagesToHigherAccess !== undefined) {
+      pruned.general.blockAgentMessagesToHigherAccess =
+        blockAgentMessagesToHigherAccess;
     }
     if (interactiveSvgSkipNotice !== undefined) {
       pruned.general.interactiveSvgSkipNotice = interactiveSvgSkipNotice;

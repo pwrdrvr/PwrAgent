@@ -846,6 +846,13 @@ export type DesktopGeneralSettingsSnapshot = {
    */
   passSetupVariablesToAgents: DesktopSettingsValue<boolean>;
   /**
+   * Refuse an agent's send_message_to_thread when the target thread runs
+   * with more access than the sender, so a Default Access thread cannot get
+   * Full Access work done through a message. Operator-typed messages are
+   * never affected.
+   */
+  blockAgentMessagesToHigherAccess: DesktopSettingsValue<boolean>;
+  /**
    * Skip the notice the image lightbox shows before an SVG's own scripts run
    * in its isolated frame. The notice's "Always Run" sets this.
    */
@@ -1639,6 +1646,7 @@ export type DesktopSettingsConfigPatch = {
     attentionPromoteOnTurnEnd?: boolean;
     pinnedThreadsOnTop?: boolean;
     passSetupVariablesToAgents?: boolean;
+    blockAgentMessagesToHigherAccess?: boolean;
     interactiveSvgSkipNotice?: boolean;
     interactiveSvgAutoOpen?: boolean;
     htmlPreviewRunScripts?: boolean;

@@ -970,6 +970,12 @@ export class DesktopSettingsService {
           config.general?.passSetupVariablesToAgents,
           true,
         ),
+        // Default on: a message to a thread with more access would get work
+        // done with that access, which the sender was never granted.
+        blockAgentMessagesToHigherAccess: this.resolveConfigBoolean(
+          config.general?.blockAgentMessagesToHigherAccess,
+          true,
+        ),
         // Default off for both: an SVG's scripts are untrusted code, so the
         // lightbox shows the static preview and asks before running them
         // until the operator says otherwise.
@@ -1903,6 +1909,11 @@ export class DesktopSettingsService {
   /** Whether agents receive the variables an environment's setup captured. */
   resolvePassSetupVariablesToAgents(): boolean {
     return this.readGeneralConfig()?.passSetupVariablesToAgents ?? true;
+  }
+
+  /** Whether agents may message only threads at or below their own access. */
+  resolveBlockAgentMessagesToHigherAccess(): boolean {
+    return this.readGeneralConfig()?.blockAgentMessagesToHigherAccess ?? true;
   }
 
   readExperimentalConfig(): ConfigDomainMap["experimental"] {

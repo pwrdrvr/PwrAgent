@@ -1,4 +1,5 @@
 import type { AppServerThreadMessageOrigin, CelestialIconId } from "@pwragent/shared";
+import { isThreadExecutionMode } from "@pwragent/shared";
 
 export type ResolvedSourceInstance = {
   label: string;
@@ -41,6 +42,11 @@ export function authenticateMessageOrigin(params: {
       ...(typeof sourceThread.turnId === "string" ? { turnId: sourceThread.turnId } : {}),
       ...(typeof sourceThread.rootTurnId === "string" ? { rootTurnId: sourceThread.rootTurnId } : {}),
       ...(sourceThread.title ? { title: sourceThread.title } : {}),
+      // A claim by the peer, like the rest of the agent origin. The owner of
+      // the target reads it only to apply its own agent-message access check.
+      ...(isThreadExecutionMode(sourceThread.executionMode)
+        ? { executionMode: sourceThread.executionMode }
+        : {}),
     },
   };
 }
