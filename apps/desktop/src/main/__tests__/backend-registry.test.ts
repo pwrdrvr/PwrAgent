@@ -53910,6 +53910,8 @@ script = "printf setup"
 
     it("does not start a Claude monitor on a Codex model the agent asked for", async () => {
       const { close, registry } = await createClaudeMonitorRegistry({});
+      const branchRead = vi.spyOn(gitExecutable, "runGitCommand")
+        .mockResolvedValue({ stdout: "main\n", stderr: "" });
       try {
         const response = await callRegistryMcpTool({
           registry,
@@ -53922,7 +53924,11 @@ script = "printf setup"
         expect(response.isError).not.toBe(true);
         expect(response.structuredContent).toMatchObject({ preferredModel: "haiku" });
       } finally {
-        await close();
+        try {
+          await close();
+        } finally {
+          branchRead.mockRestore();
+        }
       }
     });
 
