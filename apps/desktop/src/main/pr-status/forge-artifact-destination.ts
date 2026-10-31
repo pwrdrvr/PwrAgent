@@ -42,7 +42,10 @@ async function inspectDestination(destination: ForgeArtifactDestination, signal?
 
 /** No ambient cwd or profile fallback: the target thread must own this project. */
 export async function resolveForgeArtifactDestination(args: ForgeReadArgs, directories: readonly string[], signal?: AbortSignal): Promise<ForgeArtifactDestination> {
-  const roots = [...new Set(await Promise.all(directories.map((directory) => realpath(directory))))];
+  // Persisted links can outlive deleted worktrees or unavailable directories.
+  const resolved = await Promise.allSettled(directories.map((directory) => realpath(directory)));
+  const roots = [...new Set(resolved.flatMap((result) => result.status === "fulfilled" ? [result.value] : []))];
+  signal?.throwIfAborted();
   let directory: string;
   if (args.directory) {
     if (!path.isAbsolute(args.directory)) throw new ForgeReadError("invalid_arguments", "directory must be an absolute linked project path on the thread owner's machine.");

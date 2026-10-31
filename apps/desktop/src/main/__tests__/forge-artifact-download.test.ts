@@ -250,6 +250,30 @@ describe("CI artifact downloads", () => {
     expect(h.fetcher).not.toHaveBeenCalled();
   });
 
+  it.each([true, false])("ignores stale linked paths when project selection is explicit: %s", async (explicit) => {
+    const h = fixture();
+    const deleted = path.join(directory, "deleted-worktree");
+    const unavailable = path.join(directory, ".gitignore", "not-a-directory");
+    const scope = { ...h.scope, directories: [deleted, directory, unavailable] };
+    const result = await h.service.execute("download_ci_artifact", {
+      runId: 9, artifactId: 12, ...(explicit ? { directory } : {}),
+    }, scope) as Download;
+    expect(result.archivePath).toBe(path.join(root, "artifact.zip"));
+    expect(await readFile(result.archivePath)).toEqual(zip);
+  });
+
+  it("refuses unavailable selections and all-stale links without fetching or a project fallback", async () => {
+    const h = fixture();
+    const deleted = path.join(directory, "deleted-worktree");
+    const scope = { ...h.scope, directories: [deleted, directory] };
+    await expect(h.service.execute("download_ci_artifact", { runId: 9, artifactId: 12, directory: deleted }, scope)).rejects.toMatchObject({ code: "forbidden" });
+    const staleScope = { ...h.scope, directories: [deleted] };
+    await expect(h.service.execute("download_ci_artifact", { runId: 9, artifactId: 12 }, staleScope)).rejects.toMatchObject({ code: "ambiguous_directory" });
+    await expect(h.service.execute("download_ci_artifact", { runId: 9, artifactId: 12, directory }, staleScope)).rejects.toMatchObject({ code: "forbidden" });
+    expect(h.fetcher).not.toHaveBeenCalled();
+    expect(await readdir(directory)).toEqual([".git", ".gitignore"]);
+  });
+
   it("refuses parent symlinks and junctions, including changes during download", async () => {
     const h = fixture();
     const outside = await mkdtemp(path.join(os.tmpdir(), "pwragent-artifact-outside-"));
