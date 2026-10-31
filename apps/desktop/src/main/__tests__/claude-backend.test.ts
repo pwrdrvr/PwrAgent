@@ -1595,6 +1595,38 @@ describe("Claude SDK backend", () => {
     } });
   });
 
+  it.each(["refusal", "max_tokens"])("fails a success result stopped by %s and permits a later send", async (stopReason) => {
+    let attempts = 0;
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false,
+        stop_reason: attempts++ === 0 ? stopReason : "end_turn", result: "Response" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Continue" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
+      turn: { error: { message: stopReason === "refusal" ? "Response"
+        : "Claude reached the output token limit before completing the response. Send another message to continue." } },
+    } });
+    expect((await f.backend.readThread(threadId)).threadStatus).toBe("idle");
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Try this revised request" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+  });
+
+  it("provides a reason for an empty refusal result", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "result", subtype: "success", is_error: false, stop_reason: "refusal", result: "" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Continue" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
+      turn: { error: { message: "Claude declined the request. Review the request before continuing." } },
+    } });
+  });
+
   it("allows a slash command to complete without assistant output", async () => {
     const f = await fixture(async function* () {
       yield { type: "result", subtype: "success", is_error: false, num_turns: 0, result: "" } as SDKMessage;
@@ -2928,6 +2960,153 @@ describe("Claude transcript fidelity", () => {
     expect((await f.backend.readThread(threadId)).entries.find((entry) => entry.type === "activity")).toMatchObject({
       id: "notice:refusal-1", summary: "Switched to claude-sonnet-5-5", tone: "warning",
     });
+  });
+
+  it("shows and persists an output-limit recovery banner while the turn continues", async () => {
+    const resume = Promise.withResolvers<void>();
+    const banner = Promise.withResolvers<void>();
+    const text = "Output token limit hit. Retrying with a smaller response.";
+    const f = await fixture(async function* () {
+      yield init;
+      yield { type: "system", subtype: "informational", uuid: "00000000-0000-4000-8000-000000000001",
+        session_id: "session", content: text, level: "notice" } as SDKMessage;
+      banner.resolve();
+      await resume.promise;
+      yield result;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Work" }] });
+    try {
+      await banner.promise;
+      expect(f.events.find((event) => event.notification.method === "warning")?.notification).toMatchObject({
+        params: { message: text, presentation: "activity-only" },
+      });
+      expect((await f.store.entries(threadId)).find((entry) => entry.id === "notice:00000000-0000-4000-8000-000000000001"))
+        .toMatchObject({ summary: text, status: "completed" });
+      expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(false);
+    } finally {
+      resume.resolve();
+    }
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+  });
+
+  it.each(["informational", "output-limit", "compaction"])("fails an empty successful result after only a %s notice", async (notice) => {
+    const f = await fixture(async function* () {
+      yield init;
+      if (notice === "informational") {
+        yield { type: "system", subtype: "informational", uuid: "00000000-0000-4000-8000-000000000001",
+          session_id: "session", content: "Retrying the response", level: "notice" } as SDKMessage;
+      } else if (notice === "output-limit") {
+        yield { type: "assistant", parent_tool_use_id: null, message: {
+          id: "limited", stop_reason: "max_tokens", content: [],
+        } } as unknown as SDKMessage;
+      } else {
+        yield { type: "system", subtype: "compact_boundary", uuid: "00000000-0000-4000-8000-000000000002",
+          session_id: "session", compact_metadata: { trigger: "auto", pre_tokens: 100 } } as SDKMessage;
+      }
+      yield { ...result, result: "" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Work" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
+      turn: { error: { message: "Claude completed without a response or any tool activity. Try sending the message again." } },
+    } });
+    expect((await f.store.entries(threadId)).filter((entry) => entry.id.startsWith("notice:"))).toHaveLength(1);
+  });
+
+  it("accepts assistant output after a notice even when the result text is empty", async () => {
+    const f = await fixture(async function* () {
+      yield init;
+      yield { type: "system", subtype: "informational", uuid: "00000000-0000-4000-8000-000000000001",
+        session_id: "session", content: "Retrying the response", level: "notice" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "answer", content: [{ type: "text", text: "Finished" }],
+      } } as SDKMessage;
+      yield { ...result, result: "" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Work" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+  });
+
+  it("retains the latest informational progress per tool use across replay", async () => {
+    const f = await fixture(async function* () {
+      yield init;
+      const notices = [
+        { uuid: "00000000-0000-4000-8000-000000000001", tool_use_id: "tool-1", content: "Preparing" },
+        { uuid: "00000000-0000-4000-8000-000000000002", tool_use_id: "tool-2", content: "Other progress" },
+        { uuid: "00000000-0000-4000-8000-000000000003", tool_use_id: "tool-1", content: "Ready" },
+        { uuid: "00000000-0000-4000-8000-000000000004", content: "Status" },
+        { uuid: "00000000-0000-4000-8000-000000000005", content: "Status" },
+      ] as const;
+      for (const notice of notices) {
+        yield { type: "system", subtype: "informational", session_id: "session", level: "notice", ...notice } as SDKMessage;
+      }
+      yield result;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Work" }] });
+    await f.waitForTurn();
+    const replay = await new ClaudeSessionStore(f.root).entries(threadId);
+    const notices = replay.filter((entry) => entry.type === "activity");
+    expect(notices.map((entry) => ({ id: entry.id, summary: entry.summary }))).toEqual([
+      { id: "notice:informational:tool:tool-1", summary: "Ready" },
+      { id: "notice:informational:tool:tool-2", summary: "Other progress" },
+      { id: "notice:00000000-0000-4000-8000-000000000004", summary: "Status" },
+      { id: "notice:00000000-0000-4000-8000-000000000005", summary: "Status" },
+    ]);
+  });
+
+  it.each(["A hook stopped continuation", ""])("ends a stopped turn without waiting for a result (%s)", async (content) => {
+    const f = await fixture(async function* () {
+      yield init;
+      yield { type: "system", subtype: "session_state_changed", state: "running" } as SDKMessage;
+      yield { type: "system", subtype: "informational", uuid: "00000000-0000-4000-8000-000000000002", session_id: "session", content,
+        level: "warning", prevent_continuation: true } as SDKMessage;
+      // An interactive query may remain open waiting for its next input.
+      await new Promise<void>(() => {});
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Work" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
+      turn: { error: { message: content || "Claude stopped execution without providing a reason." } },
+    } });
+    expect(f.close).toHaveBeenCalledOnce();
+    expect((await f.backend.readThread(threadId)).threadStatus).toBe("idle");
+  });
+
+  it("reports an intermediate output limit without ending the recovering turn", async () => {
+    const f = await fixture(async function* () {
+      yield init;
+      yield { type: "stream_event", parent_tool_use_id: null, event: {
+        type: "message_start", message: { id: "limited" },
+      } } as SDKMessage;
+      yield { type: "stream_event", parent_tool_use_id: null, event: {
+        type: "message_delta", delta: { stop_reason: "max_tokens" },
+      } } as SDKMessage;
+      yield { type: "assistant", uuid: "00000000-0000-4000-8000-000000000003", session_id: "session", parent_tool_use_id: null, message: {
+        id: "limited", stop_reason: "max_tokens", content: [{ type: "thinking", thinking: "", signature: "" }],
+      } } as unknown as SDKMessage;
+      expect(f.events.some((event) => event.notification.method === "turn/failed")).toBe(false);
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "recovered", content: [{ type: "text", text: "Finished after retry" }],
+      } } as SDKMessage;
+      yield { ...result, stop_reason: "end_turn", result: "Finished after retry" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Work" }] });
+    await f.waitForTurn();
+    expect(f.events.find((event) => event.notification.method === "warning")?.notification).toMatchObject({
+      params: { message: expect.stringContaining("Waiting for Claude to continue"), presentation: "activity-only" },
+    });
+    expect(f.events.filter((event) => event.notification.method === "warning")).toHaveLength(1);
+    expect((await f.store.entries(threadId)).find((entry) => entry.id === "notice:output-limit:limited"))
+      .toMatchObject({ summary: "Reached output token limit", tone: "warning" });
+    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
   });
 
   it("records compaction as its own row and a compaction boundary, and reports retries without a toast", async () => {

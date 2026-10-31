@@ -87,6 +87,13 @@ const MAX_TURN_STDERR_LENGTH = 4_096;
 
 /** Error subtypes are authoritative even when the producer leaves is_error false. */
 function claudeResultFailure(message: SDKResultMessage): string | undefined {
+  if (message.stop_reason === "refusal") {
+    return message.subtype === "success" && message.result.trim()
+      ? message.result : "Claude declined the request. Review the request before continuing.";
+  }
+  if (message.subtype === "success" && message.stop_reason === "max_tokens") {
+    return "Claude reached the output token limit before completing the response. Send another message to continue.";
+  }
   if (message.subtype === "success" && !message.is_error) return undefined;
   const detail = message.subtype === "success" ? message.result : message.errors.join("\n");
   if (detail.trim()) return detail;
@@ -1194,7 +1201,13 @@ export class ClaudeBackend {
         // turn's account must not wait past its own end.
         if (message.type === "result") live.accountChecked.resolve();
         if (turn) await this.consumeCompleteMessage(message, live, turn);
-        await this.consumeNotice(message, live, turn);
+        await this.consumeNotice(message, live, turn, messageId);
+        // This banner can stop execution without a result on an open input
+        // stream. Do not wait for another message to end the desktop turn.
+        if (turn && message.type === "system" && message.subtype === "informational" && message.prevent_continuation) {
+          if (live.tasks.active().length === 0) break;
+          await this.endTurn(live, turn);
+        }
         // The probe is a control round-trip that can wait 1.5s; never hold
         // the stream for it. The result boundary below reads it in order.
         if (turn && message.type === "assistant" && !message.parent_tool_use_id) {
@@ -1469,7 +1482,9 @@ export class ClaudeBackend {
     // Local slash commands can legitimately finish without model output, and
     // a follow-up Claude starts itself has no send to answer.
     const hasResponse = turn.hasCompletedToolActivity || [...turn.entries.values()].some((entry) =>
-      entry.type !== "message" || (entry.role === "assistant" && entry.text.trim()));
+      entry.type === "message"
+        ? entry.role === "assistant" && entry.text.trim()
+        : !entry.id.startsWith("notice:"));
     if (!failure && !turn.followUp && message.subtype === "success" && message.result?.trim() === ""
       && !hasResponse && !turn.titlePrompt?.trimStart().startsWith("/")) {
       failure = "Claude completed without a response or any tool activity. Try sending the message again.";
@@ -2108,23 +2123,37 @@ export class ClaudeBackend {
    * shows in the transcript without a toast; compaction and a refusal also
    * stay in the thread's history.
    */
-  private async consumeNotice(message: SDKMessage, live: LiveSession, turn: RunningTurn | undefined): Promise<void> {
-    if (message.type !== "system") return;
+  private async consumeNotice(message: SDKMessage, live: LiveSession, turn: RunningTurn | undefined, streamMessageId: string): Promise<void> {
+    if (message.type !== "system" && message.type !== "assistant" && message.type !== "stream_event") return;
     const threadId = live.session.thread.id;
     const warn = async (text: string) => {
       await this.emit({ method: "warning", params: { threadId, message: text, presentation: "activity-only" } });
     };
-    const record = async (summary: string, label: string, tone?: "warning") => {
+    const record = async (summary: string, label: string, tone?: "warning", noticeId: string = message.uuid) => {
       if (!turn) return;
-      const id = `notice:${message.uuid}`;
+      const id = `notice:${noticeId}`;
       const entry: AppServerThreadActivityEntry = {
         type: "activity", id, summary, status: "completed", ...(tone ? { tone } : {}),
         details: [{ id: `${id}:detail`, kind: "read", label, status: "completed" }],
-        createdAt: Date.now(), turn: { id: turn.turnId },
+        createdAt: turn.entries.get(id)?.createdAt ?? Date.now(), turn: { id: turn.turnId },
       };
       turn.entries.set(id, entry);
       await this.store.append(threadId, [entry]);
     };
+    if (message.type === "assistant" || message.type === "stream_event") {
+      // An intermediate response limit can trigger the CLI's automatic
+      // continuation. Only the final result decides the turn's outcome.
+      const limitedMessageId = message.type === "assistant"
+        ? message.message.stop_reason === "max_tokens" ? message.message.id : undefined
+        : message.event.type === "message_delta" && message.event.delta.stop_reason === "max_tokens" ? streamMessageId : undefined;
+      const noticeId = `output-limit:${limitedMessageId}`;
+      if (!message.parent_tool_use_id && limitedMessageId && !turn?.entries.has(`notice:${noticeId}`)) {
+        const text = "Claude reached the output token limit. Waiting for Claude to continue or report a final result.";
+        await record("Reached output token limit", text, "warning", noticeId);
+        await warn(text);
+      }
+      return;
+    }
     switch (message.subtype) {
       case "compact_boundary": {
         const { trigger, pre_tokens: before, post_tokens: after } = message.compact_metadata;
@@ -2148,6 +2177,19 @@ export class ClaudeBackend {
         // decision_reason is written for people; message is the model's tool result.
         await warn(`Claude could not use ${message.tool_name}: ${message.decision_reason?.trim() || message.message}`);
         return;
+      case "informational": {
+        const text = message.content.trim();
+        if (message.prevent_continuation && turn) {
+          turn.resultFailure = text || "Claude stopped execution without providing a reason.";
+        }
+        if (!text) return;
+        // Recovery banners can explain an otherwise silent output-limit retry.
+        // They are plain text; feature tags are not a stable control protocol.
+        const noticeId = message.tool_use_id ? `informational:tool:${message.tool_use_id}` : message.uuid;
+        await record(text, text, message.level === "warning" || message.prevent_continuation ? "warning" : undefined, noticeId);
+        await warn(text);
+        return;
+      }
       case "model_refusal_fallback": {
         const text = message.content.trim()
           || `${message.original_model} declined the request; Claude used ${message.fallback_model} instead.`;
