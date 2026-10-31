@@ -53,6 +53,7 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   reportedModelProviderForThread: "reportedProvider",
   readThreadPricingSnapshot: "threadId",
   readThreadTurn: "thread",
+  readMcpApprovalUserMessages: "thread",
   readThreadToolInvocation: "thread",
   readTurnRoot: "thread",
   readThreadActivity: "thread",
@@ -98,7 +99,7 @@ type Subscription = { method: Method; args: unknown[]; stops: Map<CodexAppServer
 const READ_ONLY = new Set<Method>([
   "readArchiveCleanupThreadSummary", "readThreadPricingSnapshot", "readThreadTurn", "readThreadActivity",
   "readThreadName", "readThreadSummary", "readThread", "readThreadProtocolResult", "readThreadModelSettings", "exportThreadForHandoff",
-  "listBackgroundTerminals",
+  "listBackgroundTerminals", "readMcpApprovalUserMessages",
   "readThreadToolInvocation", "readTurnRoot",
 ]);
 
