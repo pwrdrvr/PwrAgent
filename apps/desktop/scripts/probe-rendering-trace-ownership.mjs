@@ -12,20 +12,26 @@ const root = await mkdtemp(join(tmpdir(), "pwragent-rendering-ownership-"));
 try {
   await build({
     configFile: false, logLevel: "error", root: desktop,
+    resolve: { alias: process.env.PWRAGENT_RENDERING_CAPTURE_SOURCE ? [{
+      find: "../../../src/main/diagnostics/rendering-capture",
+      replacement: resolve(process.env.PWRAGENT_RENDERING_CAPTURE_SOURCE),
+    }] : [] },
     build: {
       ssr: join(desktop, "scripts/fixtures/rendering-ownership/main.ts"),
       outDir: join(root, "app"), emptyOutDir: true,
       rollupOptions: { external: ["electron"], output: { format: "es", entryFileNames: "main.mjs" } },
     },
   });
-  const env = { ...process.env, PWRAGENT_RENDERING_FIXTURE_ROOT: root };
-  delete env.ELECTRON_RUN_AS_NODE;
-  const child = spawn(require("electron"), [join(root, "app/main.mjs")], { env, stdio: "inherit" });
-  const exit = await new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("exit", (code) => resolve(code ?? 1));
-  });
-  process.exitCode = exit;
+  for (const kind of ["cdp", "content"]) {
+    const env = { ...process.env, PWRAGENT_RENDERING_FIXTURE_ROOT: root, PWRAGENT_RENDERING_EXTERNAL_KIND: kind };
+    delete env.ELECTRON_RUN_AS_NODE;
+    const child = spawn(require("electron"), [join(root, "app/main.mjs")], { env, stdio: "inherit" });
+    const exit = await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code) => resolve(code ?? 1));
+    });
+    if (exit) { process.exitCode = exit; break; }
+  }
 } finally {
   await rm(root, { recursive: true, force: true });
 }
