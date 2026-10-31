@@ -3,6 +3,7 @@ import { performance } from "node:perf_hooks";
 import type { ElectronApplication } from "@playwright/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCloseHarness } from "./fixtures/electron-close-harness";
+import { ElectronQuitModel } from "./helpers/electron-quit-model";
 import { captureElectronMainProcess, closeElectronApplication, closeElectronWithSessionDrain } from "../../../e2e/fixtures/electron-app";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -165,10 +166,10 @@ describe("closeElectronApplication", () => {
     await vi.advanceTimersByTimeAsync(4_499);
     expect(harness.child.exitCode).toBeNull();
     expect(childProcess.execFile).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(2);
     expect(harness.child.exitCode).toBe(0);
     await expect(closing).resolves.toMatchObject({
-      gracefulCloseOutcome: "closed", forceExitOutcome: "not-needed", elapsedMs: 4_500,
+      gracefulCloseOutcome: "closed", forceExitOutcome: "not-needed", elapsedMs: 4_501,
     });
     expect(childProcess.execFile).not.toHaveBeenCalled();
   });
@@ -201,6 +202,25 @@ describe("closeElectronApplication", () => {
 });
 
 describe("closeElectronWithSessionDrain", () => {
+  it("retries native quit after a cache callback settles inside will-quit", async () => {
+    const model = new ElectronQuitModel(["main"]);
+    let finishCache: () => void = () => undefined;
+    const harness = createCloseHarness([{
+      closeAllConnections: async () => undefined,
+      cookies: { flushStore: async () => undefined },
+      clearData: () => new Promise<void>((resolve) => { finishCache = resolve; }),
+    }], { quitModel: model });
+    harness.app.once("will-quit", () => { finishCache(); });
+    const closing = closeElectronWithSessionDrain(harness.electronApp);
+    await model.settle();
+    expect(model.emitted.filter((event) => event === "will-quit")).toHaveLength(2);
+    expect(model.hasQuit).toBe(true);
+    expect(harness.child.exitCode).toBe(0);
+    await closing;
+    expect(harness.app.listenerCount("will-quit")).toBe(0);
+    expect(harness.stderr.listenerCount("data")).toBe(0);
+  });
+
   it("keeps every distinct session alive until completion after inspector detachment", async () => {
     const completions: Array<() => void> = [];
     const makeSession = () => ({

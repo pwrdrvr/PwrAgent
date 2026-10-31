@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { runInNewContext } from "node:vm";
 import type { ElectronApplication } from "@playwright/test";
 import { vi } from "vitest";
+import type { ElectronQuitModel } from "../helpers/electron-quit-model";
 
 type SessionDouble = {
   closeAllConnections(): Promise<void>;
@@ -11,6 +12,7 @@ type SessionDouble = {
 
 export function createCloseHarness(sessions: SessionDouble[], options: {
   installed?: boolean;
+  quitModel?: ElectronQuitModel;
   onPrepare?: () => void;
   onSignal?: () => void;
   onNativeQuit?: () => void;
@@ -26,17 +28,30 @@ export function createCloseHarness(sessions: SessionDouble[], options: {
   };
   let finishNativeClose: () => void = () => undefined;
   const nativeClosed = new Promise<void>((resolve) => { finishNativeClose = resolve; });
+  const completeNativeQuit = () => {
+    options.onNativeQuit?.();
+    child.exitCode = 0;
+    finishNativeClose();
+  };
+  if (options.quitModel) {
+    for (const stage of ["before-quit", "will-quit"]) {
+      options.quitModel.on(stage, (event) => { app.emit(stage, event); });
+    }
+    options.quitModel.on("quit", completeNativeQuit);
+  }
   let inspectorDetached = false;
   const quit = vi.fn(() => {
+    if (options.quitModel) {
+      options.quitModel.quit();
+      return;
+    }
     const before = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
     app.emit("before-quit", before);
     if (before.defaultPrevented) return;
     const will = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
     app.emit("will-quit", will);
     if (!will.defaultPrevented) {
-      options.onNativeQuit?.();
-      child.exitCode = 0;
-      finishNativeClose();
+      completeNativeQuit();
     }
   });
   app.quit = quit;
@@ -60,6 +75,7 @@ export function createCloseHarness(sessions: SessionDouble[], options: {
         } },
       },
       Date,
+      setImmediate,
     });
   });
   const close = vi.fn(async () => {

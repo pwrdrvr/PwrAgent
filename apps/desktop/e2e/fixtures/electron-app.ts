@@ -1310,7 +1310,9 @@ export async function closeElectronWithSessionDrain(
         await ownedSession.clearData({ dataTypes: ["cache"] });
       })).then(() => {
         app.removeListener("will-quit", holdNativeQuit);
-        if (quitHeld) app.quit();
+        // A native will-quit dispatch can still be unwinding its microtask
+        // checkpoint. Retry from a fresh task, as product quit-retry.ts does.
+        if (quitHeld) setImmediate(() => app.quit());
       }, (error: unknown) => {
         // The parent owns this stderr pipe even after inspector detachment.
         // Leave native quit held on failure; strict teardown owns force cleanup.
