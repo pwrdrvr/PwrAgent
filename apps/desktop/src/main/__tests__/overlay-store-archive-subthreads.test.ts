@@ -137,6 +137,16 @@ describe("archiving nested subthreads", () => {
     expect(await tray()).toEqual(["before", "survivor", "after"]);
   });
 
+  it("preserves saved slots for siblings owned on other instances", async () => {
+    await link("parent", "root");
+    await link("survivor", "parent");
+    await store.updateSubthreadOrder({ backend: "codex", parentThreadId: "root",
+      threadIds: ["remote-before", "parent", "remote-after"] });
+    await archive("parent");
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
+      .toEqual(["remote-before", "survivor", "remote-after"]);
+  });
+
   it("rolls back every relationship and rank if promotion fails", async () => {
     await link("parent", "root");
     await link("child-a", "parent");

@@ -9493,7 +9493,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     // Materialize the complete prior order, including legacy unranked
     // siblings. Appending promoted rows would move them behind those siblings.
     const siblings = this.readLocalSubthreadChildren({ backend: parentBackend, threadId: parent.threadId }, insertionId);
-    const order = this.orderStoredSubthreads(parent, siblings).map((child) => child.id)
+    // Saved ranks can also name remotely owned siblings, whose overlays are
+    // absent here. Keep those slots while filling in legacy local ranks.
+    const saved = new Set(parent.subthreadOrder ?? []);
+    const order = [...saved, ...this.orderStoredSubthreads(parent, siblings)
+      .map((child) => child.id).filter((id) => !saved.has(id))]
       .filter((id) => !promotedIds.has(id));
     const index = order.indexOf(insertionId);
     order.splice(index < 0 ? order.length : index, index < 0 ? 0 : 1, ...promotedIds);
