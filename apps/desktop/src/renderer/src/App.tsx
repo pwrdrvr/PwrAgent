@@ -2175,7 +2175,7 @@ function DesktopAppShell(props: {
     suspended: Boolean(windowFederationTarget && remoteReadsSuspended),
     pollRateLimits: !sidebarHidden,
   });
-  const selectedPeerCatalog = Boolean(activeFederationTarget && !windowFederationTarget);
+  const selectedPeerCatalog = !federationTargetsEqual(activeFederationTarget, windowFederationTarget);
   const selectedPeerBackendSummaries = useBackendSummaries(desktopApi, {
     enabled: normalAppEnabled && selectedPeerCatalog,
     federationTarget: activeFederationTarget,
