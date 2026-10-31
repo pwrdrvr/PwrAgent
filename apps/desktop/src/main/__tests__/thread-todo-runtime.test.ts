@@ -607,6 +607,38 @@ describe("operator dispatch choices", () => {
       instanceId: "win", projectKey: "peer-repo", backend: "codex", model: "gpt-6.1-sol", reasoningEffort: "high",
       fastMode: true, workMode: "local", environment: "windows-ci", executionMode: "full-access",
     });
+    // A card that shares the peer's checkout names no worktree base.
+    expect(created?.args).not.toHaveProperty("worktreeBase");
+  });
+
+  it("starts a peer's new worktree from its default branch", async () => {
+    const registry = {
+      readThreadHandoffSettings: vi.fn(async () => FULL_ACCESS_SOL),
+      startThread: vi.fn(), renameThread: vi.fn(), startTurn: vi.fn(),
+    };
+    const federation = vi.fn(async (request: { operation: string }) =>
+      request.operation === "list_instance_projects"
+        ? { ok: true as const, data: {
+            instanceLabel: "win-lab", complete: true,
+            projects: [{ key: "peer-repo", label: "repo", path: "C:\\repo", kind: "directory" }],
+          } }
+        : { ok: true as const, data: {
+            backend: "codex", threadId: "peer-thread", isLocal: false, instanceId: "win", instanceLabel: "win-lab",
+          } });
+    const runners = createThreadTodoRunners({
+      registry: registry as unknown as ThreadTodoRunnerRegistry, federation: federation as never,
+    });
+    await runners.startThreadOnInstance!({
+      instanceId: "win", sourceBackend: "codex", sourceThreadId: "source",
+      project: { key: "local-repo", label: "repo", path: "/repo" }, crossProject: false,
+      action: { type: "start_thread", prompt: "Rewrite the CLI", workMode: "worktree" },
+    });
+    const created = federation.mock.calls
+      .map(([request]) => request as { operation: string; args: Record<string, unknown> })
+      .find((request) => request.operation === "create_instance_thread");
+    // The peer's checkout can sit on a branch with another thread's
+    // unpublished work, as the raising thread's can here.
+    expect(created?.args).toMatchObject({ workMode: "worktree", worktreeBase: "default_branch" });
   });
 
   it("refuses Ultrafast on a peer, which create_instance_thread cannot carry", async () => {
