@@ -37,6 +37,33 @@ test("an identical published version is a verified retry without any npm mutatio
   assert.equal(result.status, "verified-existing");
 });
 
+test("prerelease desktop versions publish to next with the exact prerelease version", async () => {
+  const version = "1.4.0-prerelease.2";
+  const request = input();
+  request.source = { ...source, tag: `v${version}` };
+  request.desktopVersion = version;
+  request.pkg = { ...request.pkg, version, publishConfig: { ...pkg.publishConfig, tag: "next" } };
+  request.manifest = { ...request.pkg, pwragentRelease: request.source };
+  request.packed = { ...request.packed, filename: `pwragent-${version}.tgz`, version, release: request.source };
+  const document = published();
+  document.versions[version] = { ...document.versions["1.3.7"], pwragentRelease: request.source };
+  document["dist-tags"].next = version;
+  let reads = 0;
+  const calls = [];
+  const result = await publishRelease(request, { readRegistry: async () => ++reads === 1 ? registry() : document,
+    publish: async (filename, tag) => calls.push([filename, tag]) });
+  assert.deepEqual(calls, [[`pwragent-${version}.tgz`, "next"]]);
+  assert.equal(result.version, version);
+});
+
+test("retry verifies an older identical version without rolling a later channel backwards", async () => {
+  const document = published();
+  document.versions["1.3.8"] = {};
+  document["dist-tags"].latest = "1.3.8";
+  assert.equal((await publishRelease(input(), { readRegistry: async () => document,
+    publish: async () => assert.fail("must not mutate channel") })).status, "verified-existing");
+});
+
 test("source, artifact, ownership, channel and OIDC prerequisites fail before publishing", async () => {
   for (const change of [{ bytes: Buffer.from("tampered") }, { expectedIntegrity: "sha512-other" },
     { desktopVersion: "1.3.8" }, { npmVersion: "11.5.0" },
@@ -66,4 +93,6 @@ test("publish failure and an unconfirmed registry write reject without a success
   await assert.rejects(publishRelease(input(), { readRegistry: async () => registry(),
     publish: async () => { throw new Error("npm publish failed"); } }), /npm publish failed/);
   await assert.rejects(publishRelease(input(), { readRegistry: async () => registry(), publish: async () => {} }), /not visible/);
+  await assert.rejects(publishRelease(input(), { readRegistry: async () => { throw new Error("registry unavailable"); },
+    publish: async () => assert.fail("must fail closed") }), /registry unavailable/);
 });

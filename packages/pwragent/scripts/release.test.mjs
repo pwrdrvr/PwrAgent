@@ -71,5 +71,19 @@ test("registry preflight fails closed on ownership, incomplete metadata, duplica
   }
   checkRegistry(releaseMetadata(candidate("0.1.0-alpha.10")), {
     ...registry(), "dist-tags": { latest: "0.0.0", next: "0.1.0-alpha.9" },
+    versions: { "0.0.0": {}, "0.1.0-alpha.9": {} },
   });
+});
+
+test("a maintenance branch publishes its matching version without rolling back newer global channels", () => {
+  const metadata = releaseMetadata(candidate("1.2.3"));
+  const document = { ...registry(), "dist-tags": { latest: "1.3.6" }, versions: { "1.3.6": {} } };
+  assert.throws(() => checkRegistry(metadata, document), /advance/);
+  assert.deepEqual(checkRegistry(metadata, document, { branch: "releases/1.2" }),
+    { status: "unpublished", distTag: "release-1.2" });
+  assert.deepEqual(checkRegistry(releaseMetadata(candidate("1.2.4-prerelease.1")), document, { branch: "releases/1.2" }),
+    { status: "unpublished", distTag: "release-1.2-next" });
+  assert.throws(() => checkRegistry(metadata, { ...document, versions: { ...document.versions, "1.2.4": {} },
+    "dist-tags": { ...document["dist-tags"], "release-1.2": "1.2.4" } },
+    { branch: "releases/1.2" }), /advance/);
 });

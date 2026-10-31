@@ -17,11 +17,13 @@ The daemon owns its execution lifetime; an SSH forward only provides access.
 
 ## Install and update
 
-The first headless npm release is prepared as `0.1.0-alpha.1`; these commands
-become available after an operator publishes it. The existing npm `0.0.0`
-placeholder does not provide this implementation. Use the explicit prerelease
-channel rather than a bare `npm install pwragent` while `latest` is still the
-placeholder:
+Outpost ships with every desktop release, using the exact desktop version and
+source commit. Suffix-free versions use npm `latest`; alpha, beta, prerelease
+and rc versions use `next`. The existing npm `0.0.0` placeholder does not
+provide this implementation; these commands require a successful paired release.
+Use an exact version to match a desktop installation. See the
+[release contract](../../docs/headless-npm-release.md) for maintenance channels
+and publication verification.
 
 ```sh
 npm install --global pwragent@next
@@ -29,7 +31,7 @@ pwragent --help
 # Update to the newest headless prerelease:
 npm install --global pwragent@next
 # Or choose a reproducible version:
-npm install --global pwragent@0.1.0-alpha.1
+npm install --global pwragent@1.3.6
 ```
 
 Provide **Node >=22 and npm separately**, on Linux (macOS is also supported for
@@ -68,7 +70,7 @@ shell's Node version-manager initialization does not run under systemd.
 After publication, install a pinned version into the service prefix:
 
 ```sh
-sudo npm install --prefix /opt/pwragent --omit=dev --ignore-scripts pwragent@0.1.0-alpha.1
+sudo npm install --prefix /opt/pwragent --omit=dev --ignore-scripts pwragent@1.3.6
 sudo install -m 0644 /opt/pwragent/node_modules/pwragent/examples/pwragent-headless.service /etc/systemd/system/pwragent-headless.service
 # Review the account, paths, profile and Codex configuration before enabling:
 sudo systemctl daemon-reload

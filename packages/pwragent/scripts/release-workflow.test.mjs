@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 const workflow = readFileSync(new URL("../../../.github/workflows/release.yml", import.meta.url), "utf8");
@@ -40,8 +41,21 @@ test("desktop packaging requires Outpost validation and final success requires n
   assert.match(job("outpost-publish"), /EXPECTED_INTEGRITY: \$\{\{ needs.outpost-validate.outputs.integrity \}\}/);
   assert.match(job("release-preflight"), /OUTPOST_NPM_RELEASE_READY/);
   assert.match(workflow, /cancel-in-progress: false/);
+  assert.match(job("outpost-publish"), /group: pwragent-npm-publication\n      queue: max\n      cancel-in-progress: false/);
   // Only the protected npm job may obtain an OIDC token. All source checkouts
   // use the event's immutable SHA, including workflow_dispatch retries.
   assert.equal(workflow.match(/id-token: write/g)?.length, 1);
   assert.doesNotMatch(workflow, /ref: \$\{\{ github.event.inputs.tag \|\| github.ref \}\}/);
+});
+
+test("the actual completion shell rejects npm failure, skipped publication, and desktop failure", () => {
+  const shell = job("release-complete").split("        run: |\n")[1].split("\n")
+    .filter((line) => line.startsWith("          ")).map((line) => line.slice(10)).join("\n");
+  for (const change of [{ OUTPOST: "failure" }, { OUTPOST: "skipped" }, { OUTPOST: "cancelled" },
+    { DESKTOP: "failure" }, { PREFLIGHT: "failure" }, { PACKAGE: "failure" }, {}]) {
+    const result = spawnSync("bash", ["-c", shell], { encoding: "utf8",
+      env: { ...process.env, PREFLIGHT: "success", PACKAGE: "success", DESKTOP: "success", OUTPOST: "success",
+        GITHUB_STEP_SUMMARY: process.platform === "win32" ? "NUL" : "/dev/null", ...change } });
+    assert.equal(result.status, Object.keys(change).length ? 1 : 0, JSON.stringify(change));
+  }
 });
