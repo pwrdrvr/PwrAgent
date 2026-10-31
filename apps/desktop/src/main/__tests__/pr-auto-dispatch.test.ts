@@ -236,7 +236,7 @@ describe("PrAutoDispatchCoordinator", () => {
     expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps fork contributions eligible only in their source workspace", () => {
+  it("keeps automatically discovered fork contributions eligible only in their source workspace", () => {
     const contribution = pr({
       org: "upstream", repo: "project",
       url: "https://github.com/upstream/project/pull/38",
@@ -245,6 +245,20 @@ describe("PrAutoDispatchCoordinator", () => {
     expect(pullRequestMatchesRepositoryKey(contribution, "github.com/contributor/project")).toBe(true);
     expect(pullRequestMatchesRepositoryKey(contribution, "github.com/unrelated/project")).toBe(false);
     expect(pullRequestMatchesRepositoryKey(contribution, "github.com/upstream/project")).toBe(false);
+  });
+
+  it("admits explicitly attached fork contributions in their source or destination workspace", () => {
+    const contribution = pr({
+      org: "Upstream", repo: "Project",
+      url: "https://github.com/Upstream/Project/pull/38",
+      sourceRepository: { provider: "github.com", org: "contributor", repo: "project" },
+      explicitlyAttached: true,
+    });
+    expect(pullRequestMatchesRepositoryKey(contribution, "github.com/contributor/project")).toBe(true);
+    expect(pullRequestMatchesRepositoryKey(contribution, "github.com/upstream/project")).toBe(true);
+    expect(pullRequestMatchesRepositoryKey(contribution, "github.com/unrelated/project")).toBe(false);
+    expect(pullRequestMatchesRepositoryKey(contribution, "gitlab.com/upstream/project")).toBe(false);
+    expect(pullRequestMatchesRepositoryKey(contribution, undefined)).toBe(false);
   });
 
   it("treats PRs from secondary repositories as informational", () => {

@@ -1177,7 +1177,9 @@ have:
   thread's *primary* repository, matching `collectPrPollTargets`. Fork
   contributions match their separate `sourceRepository`; an explicitly attached
   contribution also matches its destination repository. Use the shared
-  `pullRequestMatchesRepositoryKey` predicate. Their status key still belongs
+  `pullRequestMatchesRepositoryKey` predicate. Keep `explicitlyAttached` on the
+  thread's attachment when applying shared provider status; never copy it into
+  the status cache. Their status key still belongs
   to the destination repository. A PR
   attached to a local thread some other way is not polled by us either,
   so the peer's observation is the fresher one.
