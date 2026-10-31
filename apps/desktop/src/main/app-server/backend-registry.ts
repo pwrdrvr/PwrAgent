@@ -10852,7 +10852,7 @@ export class DesktopBackendRegistry {
           if (denied) throw new Error(`The messaging actor lacks permission for MCP gateway tools (${denied}).`);
           return await this.readMcpGatewaySelection(context);
         },
-        toolAllowed: (tool, context) => !this.taskMonitorForThread(context)
+        toolAllowed: (tool, context) => !this.isTaskMonitorThread(context)
           || (tool.definition.annotations?.readOnlyHint === true && tool.definition.annotations.destructiveHint !== true),
         approve: (invocation, context, signal, annotations, catalogRevision) => this.approveGatewayInvocation(invocation, context, signal, annotations, catalogRevision),
       });
@@ -10885,7 +10885,7 @@ export class DesktopBackendRegistry {
           new AgentToolMcpServer({
             resolveCallContext: (context) =>
               this.resolveAgentToolMcpCallContext(context),
-            resolveCatalogs: (context) => context.threadId && this.taskMonitorForThread({ ...context, threadId: context.threadId })
+            resolveCatalogs: (context) => context.threadId && this.isTaskMonitorThread({ ...context, threadId: context.threadId })
               ? [
                   { id: "thread_orchestration", router: new AgentToolRouter(buildPwrAgentTaskMonitorToolDefinitions(
                     async (request) => await this.handleAgentTaskMonitorRequest(request), "monitor",
@@ -39959,12 +39959,15 @@ export class DesktopBackendRegistry {
       method: request.method,
       params: request.params,
     });
-    if (hostToolCall && this.taskMonitorForThread({ backend, threadId: hostToolCall.threadId })
-      && ((!(["inject_progress", "complete_monitoring"].includes(hostToolCall.tool)
-          && hostToolCall.namespace === TASK_MONITOR_TOOL_NAMESPACE)
-          && hostToolCall.namespace !== PWRAGENT_TOOL_NAMESPACE)
-        || !["inject_progress", "complete_monitoring", "search_mcp_tools", "call_mcp_tool"].includes(hostToolCall.tool))) {
-      return toDynamicToolResponse({ ok: false, code: "forbidden", message: "Job Monitors may use only their lifecycle and read-only MCP gateway tools." });
+    if (hostToolCall && this.isTaskMonitorThread({ backend, threadId: hostToolCall.threadId })) {
+      const allowedTools = hostToolCall.namespace === PWRAGENT_TOOL_NAMESPACE
+        ? ["inject_progress", "complete_monitoring", "search_mcp_tools", "call_mcp_tool"]
+        : hostToolCall.namespace === TASK_MONITOR_TOOL_NAMESPACE
+          ? ["inject_progress", "complete_monitoring"]
+          : [];
+      if (!allowedTools.includes(hostToolCall.tool)) {
+        return toDynamicToolResponse({ ok: false, code: "forbidden", message: "Job Monitors may use only their lifecycle and read-only MCP gateway tools." });
+      }
     }
     // Keep dispatch available after disabling the experiment: older runtimes
     // can retain the previously advertised schema until a new thread starts.
@@ -40264,6 +40267,11 @@ export class DesktopBackendRegistry {
         );
       });
     });
+  }
+
+  private isTaskMonitorThread(context: { backend: AppServerBackendKind; threadId: string }): boolean {
+    return Boolean(this.taskMonitorForThread(context))
+      || this.completedTaskMonitorsByThread.has(taskMonitorThreadKey(context.backend, context.threadId));
   }
 
   private taskMonitorForThread(context: { backend: AppServerBackendKind; threadId: string }): TaskMonitorDelegationRecord | undefined {
