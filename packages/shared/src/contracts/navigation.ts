@@ -705,6 +705,14 @@ export function normalizeNavigationBrowseMode(
 }
 export type LaunchpadWorkMode = "local" | "worktree";
 
+/**
+ * What a new worktree starts from when no base branch is named.
+ * `current_branch` follows the project checkout, as the launchpad picker
+ * does. `default_branch` skips it: that checkout's branch can hold another
+ * thread's unpublished work.
+ */
+export type LaunchpadWorktreeBase = "current_branch" | "default_branch";
+
 export type CodexEnvironmentOption = {
   id: string;
   name: string;

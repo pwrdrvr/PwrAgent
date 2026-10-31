@@ -28146,7 +28146,11 @@ export class DesktopBackendRegistry {
     }
 
     const preparedWorkspace =
-      await this.gitDirectoryService.prepareLaunchpadWorkspace(launchpad);
+      await this.gitDirectoryService.prepareLaunchpadWorkspace(
+        request.worktreeBase
+          ? { ...launchpad, worktreeBase: request.worktreeBase }
+          : launchpad,
+      );
     const workspace =
       launchpad.directoryKind === "workspace" && !preparedWorkspace.cwd
         ? {

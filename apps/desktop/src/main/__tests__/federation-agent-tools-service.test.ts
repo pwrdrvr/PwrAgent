@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type {
   CreateInstanceThreadResult,
+  CreateInstanceThreadToolArgs,
   FederationHealthStatus,
   FederationHostInfo,
   FederationLoadStatus,
@@ -1164,6 +1165,72 @@ describe("federation agent tools service", () => {
       threadId: "remote-thread-9",
     });
     expect(data.groupingMode).toBe("none");
+  });
+
+  it("asks the owner for a default-branch worktree and drops the launchpad's base pick", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async (request: MaterializeDirectoryLaunchpadRequest) => ({
+      backend: "codex" as const,
+      threadId: "remote-thread-10",
+      executionMode: "default" as const,
+      workMode: request.launchpad!.workMode!,
+    }));
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => buildHealth({ peers: [{
+          id: "pwr_studio",
+          label: "Studio Mac",
+          role: "client",
+          status: "connected",
+          capabilities: ["thread_navigation", "environment_actions"],
+        }] }),
+        remoteBackend: (() => ({
+          readPopulation: async () => buildSnapshot({
+            directories: [{
+              key: "dir:/repo",
+              kind: "directory",
+              label: "PwrAgent",
+              path: "/repo",
+              threadKeys: [],
+              needsAttentionCount: 0,
+              launchpad: {
+                backend: "codex",
+                executionMode: "default",
+                workMode: "worktree",
+                branchName: "feature/unpublished",
+                directoryKey: "dir:/repo",
+                directoryKind: "directory",
+                directoryLabel: "PwrAgent",
+                prompt: "",
+                createdAt: 1,
+                updatedAt: 2,
+              },
+            }] as NavigationSnapshot["directories"],
+          }),
+          materializeDirectoryLaunchpad,
+        })) as never,
+      }),
+    });
+    const create = async (args: Partial<CreateInstanceThreadToolArgs>) => await handler({
+      operation: "create_instance_thread",
+      context,
+      args: { instanceId: "pwr_studio", projectKey: "dir:/repo", workMode: "worktree", ...args },
+    });
+
+    await expect(create({ worktreeBase: "default_branch" })).resolves.toMatchObject({ ok: true });
+    const request = materializeDirectoryLaunchpad.mock.calls[0]![0];
+    expect(request.worktreeBase).toBe("default_branch");
+    // The saved base belongs to the operator's unsent draft on that project.
+    expect(request.launchpad).not.toHaveProperty("branchName");
+
+    // A named base still wins, and the owner verifies it.
+    await create({ worktreeBase: "default_branch", branchName: "origin/release" });
+    expect(materializeDirectoryLaunchpad.mock.calls[1]![0].launchpad).toMatchObject({ branchName: "origin/release" });
+
+    // Without a base choice the request is what older owners already accept.
+    await create({});
+    expect(materializeDirectoryLaunchpad.mock.calls[2]![0]).not.toHaveProperty("worktreeBase");
+    expect(materializeDirectoryLaunchpad.mock.calls[2]![0].launchpad).toMatchObject({ branchName: "feature/unpublished" });
   });
 
   it("uses an explicit backend instead of a remote Grok launchpad backend", async () => {
