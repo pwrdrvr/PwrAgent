@@ -1,4 +1,6 @@
 import { traceUnbornWorkspace } from "./helpers/unborn-workspace-trace";
+import { FEDERATION_BACKEND_METHODS, FEDERATION_BACKEND_METHOD_CAPABILITIES, registerFederationBackendHandlers, type FederationBackendOperations } from "../federation/federation-backend-bridge";
+import { FederationRouter } from "../federation/federation-router";
 import { PendingEnvironmentLaunchStore } from "../app-server/pending-environment-launch-store";
 import type { Options as ClaudeOptions, Query as ClaudeQuery, SDKMessage as ClaudeMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
@@ -24663,7 +24665,58 @@ ${id === "broken" ? '[setup]\nscript = "fail-setup"' : ""}
     }
   });
 
-  it.each(["setup", "creating"])("cancels a startup operation during %s without a late first turn", async (phase) => {
+  it("observes and cancels attachment preparation after a federation reconnect without duplicate starts", async () => {
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null, pdfToolMcpServer: null });
+    const prepare = vi.spyOn(GitDirectoryService.prototype, "prepareLaunchpadWorkspace");
+    const start = vi.spyOn(registry, "startThread");
+    let ready!: () => void;
+    const resolving = new Promise<void>((resolve) => { ready = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const resolveTurnInput = vi.fn(async () => {
+      ready();
+      await gate;
+      return [{ type: "localImage" as const, path: "/owner/staged.png" }];
+    });
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    router.registerConnection({ peerId: "viewer", capabilities: ["environment_actions"], sendEnvelope: () => {} });
+    registerFederationBackendHandlers({ router, backend: registry as unknown as FederationBackendOperations, resolveTurnInput });
+    const route = (id: string, method: string, params: unknown) => router.routeEnvelope({ sourcePeerId: "viewer", envelope: {
+      id, method, params, kind: "request", protocolVersion: 1, sourceInstanceId: "viewer", targetInstanceId: "owner", createdAt: 100,
+    } });
+    const request = { directoryKey: "repo", operationId: "preparing-input", submittedAt: 100,
+      input: [{ type: "text", text: "Inspect the attachment" }, { type: "federationBlob", transferId: "blob-1" }] };
+    const running = route("submit", FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad, request);
+    const duplicate = route("duplicate", FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad, request);
+    try {
+      await resolving;
+      // A replacement connection has no materialize response, only status RPCs.
+      const replies: import("@pwragent/shared").FederationProtocolEnvelope[] = [];
+      router.registerConnection({ peerId: "viewer", capabilities: ["environment_actions"], sendEnvelope: (envelope) => { replies.push(envelope); } });
+      await route("read", FEDERATION_BACKEND_METHODS.manageLaunchpadCreation, { operationId: request.operationId, action: "read" });
+      expect(replies).toContainEqual(expect.objectContaining({ requestId: "read", result: { operation: expect.objectContaining({
+        operationId: request.operationId, phase: "preparing", cancellable: true, title: "Inspect the attachment", submittedAt: 100,
+      }) } }));
+      await route("cancel", FEDERATION_BACKEND_METHODS.manageLaunchpadCreation, { operationId: request.operationId, action: "cancel" });
+      release();
+      await Promise.all([running, duplicate]);
+      const status = await registry.manageLaunchpadCreation({ operationId: request.operationId, action: "read" }, "viewer");
+      expect(status.operation?.phase).toBe("cancelled");
+      expect(resolveTurnInput).toHaveBeenCalledOnce();
+      expect(prepare).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await Promise.all([running, duplicate]);
+      prepare.mockRestore();
+      await registry.close();
+    }
+  });
+
+  it.each([
+    ["preparing", "worktree"], ["setup", "worktree"], ["creating", "worktree"], ["setup", "local"],
+  ] as const)("cancels a startup operation during %s in %s mode without a late first turn", async (phase, workMode) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-startup-cancel-"));
     await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
     await writeFile(path.join(root, ".codex", "environments", "env.toml"), 'version = 1\nname = "Env"\n[setup]\nscript = "install"\n');
@@ -24671,6 +24724,18 @@ ${id === "broken" ? '[setup]\nscript = "fail-setup"' : ""}
     const reachedPhase = new Promise<void>((resolve) => { ready = resolve; });
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
+    const worktreePath = path.join(root, "owned-worktree");
+    await mkdir(path.join(worktreePath, "node_modules"), { recursive: true });
+    await writeFile(path.join(worktreePath, "node_modules", "installed.txt"), "partial installation");
+    let runnerExited = false;
+    const rollback = vi.fn(async () => {
+      if (phase === "setup") expect(runnerExited).toBe(true);
+      await rm(worktreePath, { recursive: true, force: true });
+    });
+    const prepareLaunchpadWorkspace = vi.fn(async () => {
+      if (phase === "preparing") { ready(); await gate; }
+      return { cwd: worktreePath, repositoryPath: root, workMode, rollback: workMode === "worktree" ? rollback : undefined };
+    });
     let setupSignal: AbortSignal | undefined;
     const commandRunner: CodexEnvironmentCommandRunner = async (params) => {
       setupSignal = params.signal;
@@ -24678,18 +24743,20 @@ ${id === "broken" ? '[setup]\nscript = "fail-setup"' : ""}
       if (phase === "setup") { ready(); await gate; }
       // Deliberately return success after cancellation, emulating a runner
       // whose last successful exit races the AbortSignal.
+      runnerExited = true;
       return { exitCode: 0, output: "installed", durationMs: 10 };
     };
     const overlayStore = createOverlayStoreMock();
     const launchpad: NavigationLaunchpadDraft = {
       directoryKey: `directory:${root}`, directoryKind: "directory", directoryLabel: "Fixture",
-      directoryPath: root, backend: "codex", executionMode: "default", workMode: "local",
+      directoryPath: root, backend: "codex", executionMode: "default", workMode,
       prompt: "Keep this submitted task", codexEnvironmentId: "env", codexEnvironmentExecutionTarget: "local",
       createdAt: 1, updatedAt: 1,
     };
     await overlayStore.upsertDirectoryLaunchpad(launchpad);
     const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore,
-      codexEnvironmentCommandRunner: commandRunner, threadTitleGenerationService: null, pdfToolMcpServer: null });
+      codexEnvironmentCommandRunner: commandRunner, threadTitleGenerationService: null, pdfToolMcpServer: null,
+      gitDirectoryService: { prepareLaunchpadWorkspace } as never });
     const start = vi.spyOn(registry, "startThread").mockImplementation(async () => {
       ready();
       await gate;
@@ -24697,26 +24764,38 @@ ${id === "broken" ? '[setup]\nscript = "fail-setup"' : ""}
     });
     const turn = vi.spyOn(registry, "startTurn");
     const archive = vi.spyOn(registry, "archiveThread").mockResolvedValue({ backend: "codex", threadId: "late-empty-thread", archivedAt: 1, cleanup: [] });
+    let outcome: Promise<unknown> | undefined;
     try {
       const running = registry.materializeDirectoryLaunchpad({ operationId: "cancel-race", submittedAt: 100,
         directoryKey: launchpad.directoryKey, launchpad, releaseLaunchpadOnSubmit: true,
         input: [{ type: "text", text: launchpad.prompt }] });
-      const rejected = expect(running).rejects.toThrow("startup cancelled");
+      outcome = running.catch((error: unknown) => error);
       await reachedPhase;
       const before = await registry.manageLaunchpadCreation({ operationId: "cancel-race", action: "read" });
-      expect(before.operation).toMatchObject({ phase, backend: "codex", submittedAt: 100,
-        setupProgress: { output: expect.stringContaining(phase === "setup" ? "installing" : "installed"), startedAt: expect.any(Number) } });
+      expect(before.operation).toMatchObject({ phase, backend: "codex", submittedAt: 100 });
+      if (phase !== "preparing") expect(before.operation?.setupProgress).toMatchObject({
+        output: expect.stringContaining(phase === "setup" ? "installing" : "installed"), startedAt: expect.any(Number),
+      });
       expect((await registry.manageLaunchpadCreation({ operationId: "cancel-race", action: "cancel" })).cancellationAccepted).toBe(true);
-      expect(setupSignal?.aborted).toBe(true);
+      if (phase !== "preparing") expect(setupSignal?.aborted).toBe(true);
       release();
-      await rejected;
+      await expect(outcome).resolves.toMatchObject({ name: "LaunchpadCreationCancelledError" });
       expect(turn).not.toHaveBeenCalled();
       expect(start).toHaveBeenCalledTimes(phase === "creating" ? 1 : 0);
       expect(archive).toHaveBeenCalledTimes(phase === "creating" ? 1 : 0);
+      expect(rollback).toHaveBeenCalledTimes(phase === "creating" || workMode === "local" ? 0 : 1);
+      if (phase === "creating" || workMode === "local") {
+        // Existing paths and thread-owned paths never belong to rollback.
+        expect(await readFile(path.join(worktreePath, "node_modules", "installed.txt"), "utf8")).toBe("partial installation");
+      } else {
+        await expect(stat(worktreePath)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      expect(await readFile(path.join(root, ".codex", "environments", "env.toml"), "utf8")).toContain("Env");
       expect(await overlayStore.getDirectoryLaunchpad({ directoryKey: launchpad.directoryKey })).toMatchObject({ prompt: launchpad.prompt });
       expect((await registry.manageLaunchpadCreation({ operationId: "cancel-race", action: "read" })).operation?.phase).toBe("cancelled");
     } finally {
       release();
+      await outcome;
       await registry.close();
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }

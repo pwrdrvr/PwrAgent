@@ -803,6 +803,7 @@ import {
   CodexEnvironmentStartupError,
   startLocalCodexEnvironmentAction,
   stopCodexEnvironmentDetachedCommand,
+  waitForCodexEnvironmentDetachedCommandGone,
   type CodexEnvironmentCommandRunner,
   type CodexEnvironmentDetachedExit,
   type CodexEnvironmentDetachedOutput,
@@ -28105,15 +28106,30 @@ export class DesktopBackendRegistry {
       sourceInstanceId?: FederationInstanceId;
     },
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
-    if (!request.operationId) return await this.runMaterializeDirectoryLaunchpad(request, options);
+    const prepare = async (operation?: LaunchpadCreationOperation) => {
+      const input = await options?.resolveInput?.();
+      operation?.check();
+      return await this.runMaterializeDirectoryLaunchpad(input ? { ...request, input } : request, options, operation);
+    };
+    if (!request.operationId) return await prepare();
     return await this.launchpadCreationOperations.run(request, options?.sourceInstanceId, async (operation) => {
       try {
-        return await this.runMaterializeDirectoryLaunchpad(request, options, operation);
+        return await prepare(operation);
       } catch (error) {
         if (operation.controller.signal.aborted) {
-          if (operation.actionRunId) stopCodexEnvironmentDetachedCommand(operation.actionRunId, "terminate");
+          if (operation.actionRunId) {
+            stopCodexEnvironmentDetachedCommand(operation.actionRunId, "terminate");
+            await waitForCodexEnvironmentDetachedCommandGone({ runId: operation.actionRunId });
+          }
           if (operation.status.threadId && operation.status.backend) {
             await this.archiveThread({ backend: operation.status.backend, threadId: operation.status.threadId });
+          } else if (operation.workspaceRollback) {
+            try {
+              await operation.workspaceRollback();
+              operation.workspaceRollback = undefined;
+            } catch (cleanupError) {
+              throw new Error(`Cancelled startup could not clean up its prepared workspace at ${operation.status.cwd}: ${String(cleanupError)}`, { cause: cleanupError });
+            }
           }
           operation.check();
         }
@@ -28237,6 +28253,9 @@ export class DesktopBackendRegistry {
     operation?.check();
     const preparedWorkspace =
       await this.gitDirectoryService.prepareLaunchpadWorkspace(launchpad);
+    // Retain ownership before the next await/check: cancellation may have
+    // overtaken preparation. Existing/local workspaces supply no rollback.
+    if (operation) operation.workspaceRollback = preparedWorkspace.rollback;
     const workspace =
       launchpad.directoryKind === "workspace" && !preparedWorkspace.cwd
         ? {
@@ -28394,6 +28413,7 @@ export class DesktopBackendRegistry {
         request.parentThreadInstanceId ?? launchpad.parentThreadInstanceId,
     });
     operation?.update({ threadId: startThreadResponse.threadId });
+    if (operation) operation.workspaceRollback = undefined;
     operation?.check();
     const linkedDirectory = linkedDirectories?.[0];
     if (linkedDirectory) {

@@ -25,6 +25,22 @@ describe("remote startup observation", () => {
     expect(api.manageLaunchpadCreation).toHaveBeenLastCalledWith({ operationId: "op-1", action: "read", federationTarget: request.federationTarget });
   });
 
+  it("keeps observing cancellable attachment preparation after a dropped materialize response", async () => {
+    const preparing = { ...status, phase: "preparing" as const };
+    const api = {
+      materializeDirectoryLaunchpad: vi.fn(async () => { throw new Error("connection dropped during attachment transfer"); }),
+      manageLaunchpadCreation: vi.fn()
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({ operation: preparing })
+        .mockResolvedValueOnce({ operation: preparing })
+        .mockResolvedValueOnce({ operation: { ...preparing, phase: "cancelled" } }),
+    };
+    const onStatus = vi.fn();
+    await expect(materializeObservableLaunchpad({ api, request, onStatus, wait: async () => {} })).rejects.toBeInstanceOf(LaunchpadStartupCancelledError);
+    expect(onStatus.mock.calls.slice(0, 2).map(([operation]) => operation)).toEqual([preparing, preparing]);
+    expect(api.materializeDirectoryLaunchpad).toHaveBeenCalledOnce();
+  });
+
   it("settles on owner cancellation even if the unlimited materialize response is lost", async () => {
     const api = {
       materializeDirectoryLaunchpad: vi.fn(() => new Promise<MaterializeDirectoryLaunchpadResponse>(() => {})),

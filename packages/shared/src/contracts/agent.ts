@@ -1196,6 +1196,8 @@ export type MaterializedDirectoryLaunchpadThread = {
 };
 
 export type MaterializeDirectoryLaunchpadOptions = {
+  /** Owner-side attachment preparation runs only after startup registration. */
+  resolveInput?: () => Promise<AppServerTurnInputItem[]>;
   messageOrigin?: AppServerThreadMessageOrigin;
   onCodexEnvironmentSetupProgress?: (
     event: CodexEnvironmentSetupProgressEvent,
