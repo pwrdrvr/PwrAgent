@@ -149,9 +149,11 @@ class NativeCpuCapture {
         if (++reads > NATIVE_CPU_DECODE_CAP / READ_BYTES + 1) throw failure();
         const chunk = await this.bounded(d.sendCommand("IO.read", { handle: complete.stream, size: READ_BYTES }), transferDeadline);
         if (typeof chunk.data !== "string") throw failure();
-        const data = Buffer.from(chunk.data, chunk.base64Encoded ? "base64" : "utf8");
+        const encoding = chunk.base64Encoded ? "base64" : "utf8";
+        const chunkBytes = Buffer.byteLength(chunk.data, encoding);
+        if (chunkBytes > READ_BYTES || bytes + chunkBytes > NATIVE_CPU_DECODE_CAP) throw failure();
+        const data = Buffer.from(chunk.data, encoding);
         bytes += data.length;
-        if (bytes > NATIVE_CPU_DECODE_CAP) throw failure();
         chunks.push(data);
         if (chunk.eof) break;
       }

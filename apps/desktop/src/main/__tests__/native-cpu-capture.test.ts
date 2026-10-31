@@ -122,12 +122,15 @@ describe("bounded opt-in native CPU capture", () => {
     expect(await readdir(root)).toEqual([]);
   });
 
-  it.each(["bad-json", "read-failed", "decode-cap", "non-progress"])("closes raw streams and leaves no files on %s", async (fault) => {
+  it.each(["bad-json", "read-failed", "decode-cap", "non-progress", "oversized-chunk", "close-failed"])("closes raw streams and leaves no files on %s", async (fault) => {
     const normal = d.sendCommand.getMockImplementation()!;
     let reads = 0;
     d.sendCommand.mockImplementation(async (method, params) => {
+      if (fault === "close-failed" && method === "IO.close") throw new Error("operator-content");
       if (method === "IO.read") {
         reads++;
+        if (fault === "close-failed") return normal(method, params);
+        if (fault === "oversized-chunk") return { data: " ".repeat(1024 * 1024 + 1), eof: true };
         if (fault === "bad-json") return { data: "operator-content", eof: true };
         if (fault === "read-failed") throw new Error("operator-content");
         if (fault === "decode-cap") return { data: " ".repeat(1024 * 1024), eof: false };

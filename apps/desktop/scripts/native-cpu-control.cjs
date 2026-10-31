@@ -23,7 +23,10 @@ app.whenReady().then(async () => {
   await w.loadURL("data:text/html," + encodeURIComponent("<!doctype html><div id='root'></div>"));
   await w.webContents.executeJavaScript(`window.control = async (kind) => {
     const delay = ms => new Promise(r => setTimeout(r, ms));
-    if (kind === "js") { const end = performance.now() + 700; while (performance.now() < end) {} }
+    if (kind === "js") {
+      function nativeControlJsBurst() { const end = performance.now() + 700; while (performance.now() < end) {} }
+      nativeControlJsBurst();
+    }
     if (kind === "layout") {
       const root = document.getElementById("root");
       root.innerHTML = "<div style='display:inline-block;width:100px'>invented</div>".repeat(300);
@@ -32,7 +35,7 @@ app.whenReady().then(async () => {
     }
     if (kind === "ipc") for (let i = 0; i < 1000; i++) await window.controlIpc();
     if (kind === "worker") {
-      const url = URL.createObjectURL(new Blob(["onmessage = () => { const end = performance.now() + 700; while (performance.now() < end) {} postMessage(1); }"], { type: "text/javascript" }));
+      const url = URL.createObjectURL(new Blob(["function nativeControlWorkerBurst() { const end = performance.now() + 700; while (performance.now() < end) {} } onmessage = () => { nativeControlWorkerBurst(); postMessage(1); }"], { type: "text/javascript" }));
       const worker = new Worker(url);
       await new Promise(resolve => { worker.onmessage = resolve; worker.postMessage(1); });
       worker.terminate(); URL.revokeObjectURL(url);
@@ -96,11 +99,20 @@ app.whenReady().then(async () => {
         assert.ok(profile.samples.length > 0, "V8 profiler did not survive trace");
         assert.ok(d.isAttached(), "Native capture detached V8 profiler");
         row.v8Samples = profile.samples.length;
+        const samplesOf = (name) => {
+          const ids = new Set(profile.nodes.filter(n => n.callFrame.functionName === name).map(n => n.id));
+          return profile.samples.filter(id => ids.has(id)).length;
+        };
+        row.jsBurstV8Samples = samplesOf("nativeControlJsBurst");
+        row.workerBurstV8Samples = samplesOf("nativeControlWorkerBurst");
+        if (kind === "js") assert.ok(row.jsBurstV8Samples > 0, "V8 missed main JS control");
+        if (kind === "worker") assert.equal(row.workerBurstV8Samples, 0, "Unexpected worker samples in main isolate");
       }
       if (native) row.native = { durationMs: native.durationMs, bytes: native.transfer.bytes,
         buffer: native.buffer, coverage: native.trace.coverage, threads: native.trace.threads,
         layoutSpans: native.trace.spans.filter(s => s.name === "Layout").length,
         ipcSpans: native.trace.spans.filter(s => /mojo|ipc/.test(s.name)).length };
+      if (tracing && kind === "ipc") assert.ok(row.native.ipcSpans >= 1000, "Missing IPC activity");
       rows.push(row);
       console.log(JSON.stringify({ mode, kind, rendererCpuMs: row.rendererCpuMs, mainCpuMs: row.mainCpuMs, bytes: row.native?.bytes }));
     }
