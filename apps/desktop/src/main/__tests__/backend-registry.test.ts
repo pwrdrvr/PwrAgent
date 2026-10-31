@@ -24665,6 +24665,32 @@ ${id === "broken" ? '[setup]\nscript = "fail-setup"' : ""}
     }
   });
 
+  it("cancels a pending startup when close requests shutdown", async () => {
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null, pdfToolMcpServer: null });
+    const start = vi.spyOn(registry, "startThread");
+    let ready!: () => void;
+    const preparing = new Promise<void>((resolve) => { ready = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const running = registry.materializeDirectoryLaunchpad({ operationId: "shutdown-startup", directoryKey: "repo" }, {
+      resolveInput: async () => { ready(); await gate; return [{ type: "text", text: "Retain this draft" }]; },
+    });
+    const outcome = running.catch((error: unknown) => error);
+    try {
+      await preparing;
+      const closing = registry.close();
+      release();
+      await expect(outcome).resolves.toMatchObject({ name: "LaunchpadCreationCancelledError" });
+      await closing;
+      expect(start).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await outcome;
+      await registry.close();
+    }
+  });
+
   it("observes and cancels attachment preparation after a federation reconnect without duplicate starts", async () => {
     const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null, pdfToolMcpServer: null });
