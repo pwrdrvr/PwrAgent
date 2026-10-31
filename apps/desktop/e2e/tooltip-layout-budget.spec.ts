@@ -21,10 +21,19 @@ async function capturePerformance(session: CDPSession, output: string) {
       excludedCategories: ["*"],
     },
   });
+  let ended = false;
+  const stop = async () => {
+    if (ended) return;
+    ended = true;
+    await session.send("Tracing.end");
+  };
+  let stopTimer: ReturnType<typeof setTimeout>;
   const end = new Promise<void>((resolve, reject) => {
-    setTimeout(() => { session.send("Tracing.end").then(() => resolve(), reject); }, 3000);
+    stopTimer = setTimeout(() => { stop().then(resolve, reject); }, 3000);
   });
-  return async () => {
+  // Failure before finish still has an owned cancellation path.
+  void end.catch(() => {});
+  const finish = async () => {
     await end;
     const result = await Promise.race([
       completed,
@@ -54,6 +63,10 @@ async function capturePerformance(session: CDPSession, output: string) {
     await writeFile(output, Buffer.concat(chunks));
     await writeFile(`${output}.cpuprofile`, JSON.stringify(profile.profile));
   };
+  return {
+    finish,
+    cancel: async () => { clearTimeout(stopTimer); await stop().catch(() => {}); },
+  };
 }
 
 test("tooltip ignores sibling streaming and still detects sibling layout movement", async ({}, testInfo) => {
@@ -62,6 +75,7 @@ test("tooltip ignores sibling streaming and still detects sibling layout movemen
     windowSize: { width: 1280, height: 820 },
   });
   let session: CDPSession | undefined;
+  let capture: Awaited<ReturnType<typeof capturePerformance>> | undefined;
   try {
     await app.window.getByRole("button", { name: /Linked directory tooltip thread/i }).first().click();
     const rail = app.window.getByRole("complementary", { name: "Thread context" });
@@ -93,10 +107,9 @@ test("tooltip ignores sibling streaming and still detects sibling layout movemen
       target.getBoundingClientRect = () => { reads += 1; return original(); };
       Object.assign(window, { tooltipBudgetReads: () => reads });
     });
-    let finishCapture: (() => Promise<void>) | undefined;
     if (process.env.PWRAGENT_TOOLTIP_PERFORMANCE_TRACE === "1") {
       session = await app.window.context().newCDPSession(app.window);
-      finishCapture = await capturePerformance(session, testInfo.outputPath("tooltip-performance.json"));
+      capture = await capturePerformance(session, testInfo.outputPath("tooltip-performance.json"));
     }
     const reads = await app.window.evaluate(async () => {
       const stream = document.querySelector<HTMLElement>("#tooltip-budget-stream")!;
@@ -110,7 +123,7 @@ test("tooltip ignores sibling streaming and still detects sibling layout movemen
       performance.mark("tooltip-stream-end");
       return (window as unknown as { tooltipBudgetReads: () => number }).tooltipBudgetReads();
     });
-    await finishCapture?.();
+    await capture?.finish();
     console.log(JSON.stringify({ tooltipStreaming: { deliveries: 100, anchorGeometryReads: reads } }));
     expect(reads).toBe(0);
     await expect(app.window.getByRole("tooltip")).toBeVisible();
@@ -141,6 +154,7 @@ test("tooltip ignores sibling streaming and still detects sibling layout movemen
     await anchor.evaluate((target) => { target.remove(); });
     await expect(app.window.getByRole("tooltip")).toHaveCount(0);
   } finally {
+    await capture?.cancel();
     await session?.detach();
     await app.close();
   }
