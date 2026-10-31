@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFile, copyFile, link, mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, link, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,7 @@ import { materializeTranscriptImageUrlsForRenderer, toTranscriptImageProtocolUrl
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, link: vi.fn(actual.link), copyFile: vi.fn(actual.copyFile) };
+  return { ...actual, link: vi.fn(actual.link), copyFile: vi.fn(actual.copyFile), rename: vi.fn(actual.rename) };
 });
 
 const id = "e3333333-3333-4333-8333-333333333333";
@@ -50,6 +50,7 @@ function entryImages(entries: AppServerThreadEntry[]): AppServerThreadImagePart[
 afterEach(async () => {
   vi.mocked(link).mockReset();
   vi.mocked(copyFile).mockReset();
+  vi.mocked(rename).mockReset();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -169,6 +170,34 @@ describe("Claude history image persistence", () => {
     await expect(readFile(path.join(f.sessions, `${forkId}.jsonl`))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("owns fallback fork copying across concurrent stores", async () => {
+    const f = await fixture();
+    const forkId = "f3333333-3333-4333-8333-333333333333";
+    await f.store.append(id, [activity()]);
+    const source = await f.store.entries(id);
+    vi.mocked(link).mockRejectedValue(Object.assign(new Error("No hard links"), { code: "ENOTSUP" }));
+    await Promise.all(Array.from({ length: 8 }, () => new ClaudeSessionStore(f.sessions, f.images).append(forkId, source)));
+    expect(copyFile).toHaveBeenCalledTimes(1);
+    const cached = imagePath(entryImages(await f.store.entries(forkId))[0]!);
+    await expect(readFile(cached)).resolves.toEqual(png);
+    expect(await readdir(path.dirname(cached))).toEqual([path.basename(cached)]);
+  });
+
+  it("verifies a competing fork publication against the complete staged copy", async () => {
+    const f = await fixture();
+    const forkId = "f3333333-3333-4333-8333-333333333333";
+    await f.store.append(id, [activity()]);
+    vi.mocked(link).mockRejectedValue(Object.assign(new Error("No hard links"), { code: "ENOTSUP" }));
+    vi.mocked(rename).mockImplementationOnce(async (source, destination) => {
+      await writeFile(destination, await readFile(source));
+      throw Object.assign(new Error("Concurrent publication"), { code: "EPERM" });
+    });
+    await f.store.append(forkId, await f.store.entries(id));
+    const cached = imagePath(entryImages(await f.store.entries(forkId))[0]!);
+    await expect(readFile(cached)).resolves.toEqual(png);
+    expect(await readdir(path.dirname(cached))).toEqual([path.basename(cached)]);
+  });
+
   it("removes an incomplete fork copy when fallback copying fails", async () => {
     const f = await fixture();
     const forkId = "f3333333-3333-4333-8333-333333333333";
@@ -194,6 +223,81 @@ describe("Claude history image persistence", () => {
     expect(await readdir(root)).toEqual([path.basename(cached)]);
     expect(await f.store.entries(id)).toHaveLength(1);
   });
+
+  it("owns publication across stores and renderer reads until the complete image is published", async () => {
+    const f = await fixture();
+    const root = path.join(f.images, id);
+    const cached = path.join(root, `${createHash("sha256").update(png).digest("hex")}.png`);
+    await mkdir(root, { recursive: true });
+    await writeFile(cached, png.subarray(0, 8));
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    let publish!: () => void;
+    let staged!: () => void;
+    const ready = new Promise<void>((resolve) => { staged = resolve; });
+    const release = new Promise<void>((resolve) => { publish = resolve; });
+    vi.mocked(rename).mockImplementationOnce(async (source, destination) => {
+      expect(await readFile(source)).toEqual(png);
+      staged();
+      await release;
+      await actual.rename(source, destination);
+    });
+    const first = f.store.append(id, [activity()]);
+    await ready;
+    const second = new ClaudeSessionStore(f.sessions, f.images).append(id, [activity()]);
+    const rendered = materializeTranscriptImageUrlsForRenderer({
+      backend: "claude", threadId: id, fetchedAt: 0,
+      replay: { entries: [activity()], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } },
+    }, { resolveRoot: () => root });
+    try {
+      // Another destination must remain independent of the blocked publisher.
+      const otherId = "f3333333-3333-4333-8333-333333333333";
+      await f.store.append(otherId, [activity()]);
+      expect(vi.mocked(rename).mock.calls.filter(([, destination]) => destination === cached)).toHaveLength(1);
+      await expect(readFile(f.history)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(cached)).resolves.toEqual(png.subarray(0, 8));
+    } finally {
+      publish();
+      await Promise.all([first, second, rendered]);
+    }
+    expect(vi.mocked(rename).mock.calls.filter(([, destination]) => destination === cached)).toHaveLength(1);
+    await expect(readFile(imagePath(entryImages((await rendered).replay.entries)[0]!))).resolves.toEqual(png);
+    expect(await readdir(root)).toEqual([path.basename(cached)]);
+  });
+
+  it.each(["EPERM", "EACCES", "EEXIST", "EBUSY"])(
+    "accepts an identical complete image published by another process after rename fails with %s", async (code) => {
+      const f = await fixture();
+      vi.mocked(rename).mockImplementationOnce(async (_source, destination) => {
+        await writeFile(destination, png);
+        throw Object.assign(new Error("Concurrent publication"), { code });
+      });
+      await f.store.append(id, [activity()]);
+      const cached = imagePath(entryImages(await f.store.entries(id))[0]!);
+      await expect(readFile(cached)).resolves.toEqual(png);
+      expect(await readdir(path.dirname(cached))).toEqual([path.basename(cached)]);
+    },
+  );
+
+  it.each(["missing", "truncated", "different", "unrelated error"])(
+    "rejects a denied publication with %s content and releases ownership for a later append", async (kind) => {
+      const f = await fixture();
+      const error = Object.assign(new Error("Publication failed"), { code: kind === "unrelated error" ? "EIO" : "EPERM" });
+      vi.mocked(rename).mockImplementationOnce(async (_source, destination) => {
+        if (kind !== "missing") {
+          await writeFile(destination, kind === "truncated" ? png.subarray(0, 8)
+            : kind === "different" ? Buffer.alloc(png.length) : png);
+        }
+        throw error;
+      });
+      await expect(f.store.append(id, [activity()])).rejects.toBe(error);
+      await expect(readFile(f.history)).rejects.toMatchObject({ code: "ENOENT" });
+      const root = path.join(f.images, id);
+      expect((await readdir(root)).some((name) => name.endsWith(".tmp"))).toBe(false);
+      await rm(path.join(root, `${createHash("sha256").update(png).digest("hex")}.png`), { force: true });
+      await f.store.append(id, [activity()]);
+      await expect(readFile(imagePath(entryImages(await f.store.entries(id))[0]!))).resolves.toEqual(png);
+    },
+  );
 
   it("preserves remote and existing file URLs, malformed images, and text", async () => {
     const f = await fixture();

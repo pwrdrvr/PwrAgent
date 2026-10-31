@@ -166,8 +166,46 @@ const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies =
   writeFile: writeCachedTranscriptImage,
 };
 
+// Shared by history appends, store instances, and renderer materialization.
+// A per-append map cannot own concurrent publication of the same destination.
+const cachedImagePublications = new Map<string, Promise<void>>();
+
+async function withCachedImagePublication(filePath: string, publish: () => Promise<void>): Promise<void> {
+  const absolutePath = path.resolve(filePath);
+  const key = process.platform === "win32" ? absolutePath.toLowerCase() : absolutePath;
+  const pending = cachedImagePublications.get(key);
+  if (pending) return pending;
+  const publication = publish();
+  cachedImagePublications.set(key, publication);
+  try {
+    await publication;
+  } finally {
+    cachedImagePublications.delete(key);
+  }
+}
+
 /** Publish complete cache files, reusing images retained by an earlier write or read. */
 async function writeCachedTranscriptImage(filePath: string, data: Buffer): Promise<void> {
+  await withCachedImagePublication(filePath, () => publishCachedTranscriptImage(filePath, data));
+}
+
+async function publishStagedTranscriptImage(temporary: string, filePath: string, data?: Buffer): Promise<void> {
+  try {
+    // Close the staging file before publishing. Windows can deny replacement
+    // when another process has just published this destination.
+    await rename(temporary, filePath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (!["EPERM", "EACCES", "EEXIST", "EBUSY"].includes(code ?? "")) throw error;
+    // Only an identical, complete winner satisfies this publication. Keep
+    // the original error for inaccessible, truncated, or different files.
+    const expected = data ?? await readFile(temporary);
+    const existing = await readFile(filePath).catch(() => undefined);
+    if (!existing?.equals(expected)) throw error;
+  }
+}
+
+async function publishCachedTranscriptImage(filePath: string, data: Buffer): Promise<void> {
   try {
     if ((await stat(filePath)).size === data.byteLength) return;
   } catch (error) {
@@ -177,9 +215,7 @@ async function writeCachedTranscriptImage(filePath: string, data: Buffer): Promi
   const temporary = `${filePath}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, data, { mode: 0o600, flag: "wx" });
-    // Concurrent publishers have identical content-addressed bytes. Rename
-    // publishes a complete file even on filesystems without hard links.
-    await rename(temporary, filePath);
+    await publishStagedTranscriptImage(temporary, filePath, data);
   } finally {
     await rm(temporary, { force: true });
   }
@@ -213,7 +249,7 @@ export async function persistTranscriptEntryImages(
       const filePath = path.join(root, path.basename(sourcePath));
       let write = writes.get(filePath);
       if (!write) {
-        write = (async () => {
+        write = withCachedImagePublication(filePath, async () => {
           await mkdir(root, { recursive: true, mode: 0o700 });
           try {
             await link(sourcePath, filePath);
@@ -224,13 +260,13 @@ export async function persistTranscriptEntryImages(
               const temporary = `${filePath}.${randomUUID()}.tmp`;
               try {
                 await copyFile(sourcePath, temporary, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
-                await rename(temporary, filePath);
+                await publishStagedTranscriptImage(temporary, filePath);
               } finally {
                 await rm(temporary, { force: true });
               }
             }
           }
-        })();
+        });
         writes.set(filePath, write);
       }
       await write;
