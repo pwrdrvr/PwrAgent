@@ -2107,6 +2107,10 @@ class MockBackendClient {
     };
   }
 
+  async readConfiguredMcpServerNames(): Promise<string[]> {
+    return [];
+  }
+
   async readCodexHome(): Promise<string> {
     return this.options.codexHome ?? "/home/example/.codex";
   }
@@ -53199,7 +53203,7 @@ script = "printf setup"
     });
     expect(codexClient.lastStartThreadParams?.threadSource).toBe("subagent");
     expect(pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools)
-      .map((tool) => tool.name)).toEqual(["inject_progress", "complete_monitoring"]);
+      .map((tool) => tool.name)).toEqual(["inject_progress", "complete_monitoring", "search_mcp_tools", "call_mcp_tool"]);
     expect(codexClient.startTurnCallCount).toBe(1);
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "monitor-thread",
