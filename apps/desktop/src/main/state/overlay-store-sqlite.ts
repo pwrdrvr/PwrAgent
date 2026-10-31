@@ -9580,7 +9580,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           return (summary.parentThreadBackend ?? summary.source) === archived.backend && summary.archivedAt === undefined;
         }).map((row) => `${row.instance_id}:${row.backend}:${row.thread_id}`);
         const actual = new Set([...local, ...remote]);
-        if (actual.size !== children.length || children.some(({ ref }) => !actual.has(`${remotePinInstanceId(ref)}:${ref.backend}:${ref.threadId}`))
+        const planned = new Set(children.map(({ ref }) => `${remotePinInstanceId(ref)}:${ref.backend}:${ref.threadId}`));
+        // Owner events may already have refreshed a planned child's cached
+        // parent to the destination. Its guarded owner mutation is replayable;
+        // only an unexpected new source member invalidates this boundary.
+        if ([...actual].some((identity) => !planned.has(identity))
           || JSON.stringify(current?.subthreadOrder ?? []) !== JSON.stringify(promotion.expectedChildOrder)) {
           throw new Error("Thread children changed before archive. Refresh the group and try again.");
         }
