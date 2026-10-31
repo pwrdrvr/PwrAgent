@@ -1179,6 +1179,95 @@ describe("App", () => {
     })).not.toBeInTheDocument();
   });
 
+  it.each(["New chat on", "machine chip"] as const)(
+    "uses another instance's provider catalog from a federation viewer via %s", async (entry) => {
+      const windowTarget = { scope: "remote" as const, instanceId: "viewer-owner" };
+      const selectedTarget = { scope: "remote" as const, instanceId: "composer-owner" };
+      Object.assign(window, {
+        __pwragentFederationTarget: windowTarget,
+        __pwragentFederationLabel: "Viewer owner",
+      });
+      const provider = (kind: "codex" | "claude"): BackendSummary => ({
+        kind, source: "builtin", label: kind === "codex" ? "OpenAI" : "Claude", available: true,
+        methods: [], executionModes: [{ mode: "default", label: "Default Access", available: true, isDefault: true }],
+        capabilities: {
+          listThreads: true, createThread: true, resumeThread: true, renameThread: true,
+          readThread: true, startTurn: true, interruptTurn: true, steerTurn: false,
+          transcriptPagination: true, toolUse: true, approvalRequests: false, multiDirectoryThreads: true,
+        },
+      });
+      const workspace = { key: "workspace:new-thread", kind: "workspace" as const,
+        label: "Workspaces", threadKeys: [], needsAttentionCount: 0 };
+      const listBackends = vi.fn(async (request?: { federationTarget?: FederationTarget }) => ({
+        fetchedAt: Date.now(),
+        backends: [provider(request?.federationTarget?.scope === "remote"
+          && request.federationTarget.instanceId === selectedTarget.instanceId ? "claude" : "codex")],
+      }));
+      const ensureDirectoryLaunchpad = vi.fn(async (request: EnsureDirectoryLaunchpadRequest) => {
+        const backend = request.federationTarget?.scope === "remote"
+          && request.federationTarget.instanceId === selectedTarget.instanceId ? "claude" as const : "codex" as const;
+        const defaults = { backend, executionMode: "default" as const };
+        return { defaults, launchpad: {
+          directoryKey: request.directoryKey, directoryKind: request.directoryKind,
+          directoryLabel: request.directoryLabel, ...defaults, prompt: "", workMode: "local" as const,
+          createdAt: 1, updatedAt: 1, federationTarget: request.federationTarget,
+        } };
+      });
+      const materializeDirectoryLaunchpad = vi.fn(async () => ({
+        backend: "claude" as const, executionMode: "default" as const,
+        threadId: "created-on-composer-owner", workMode: "local" as const,
+      }));
+      Object.defineProperty(window, "pwragent", { configurable: true, value: ownerApi({
+        listBackends, ensureDirectoryLaunchpad, materializeDirectoryLaunchpad,
+        getNavigationSnapshot: async () => ({
+          backend: "all", fetchedAt: Date.now(), unchanged: false, inboxThreadKeys: [], threads: [],
+          directories: [workspace], launchpadDefaults: { backend: "codex", executionMode: "default" },
+        }),
+        readFederationHealth: async () => ({ health: {
+          enabled: true, role: "gateway", status: "connected", instanceId: "local-viewer",
+          peers: [windowTarget, selectedTarget].map((target) => ({
+            id: target.instanceId, label: target === windowTarget ? "Viewer owner" : "Composer owner",
+            role: "client" as const, status: "connected" as const,
+            capabilities: ["thread_navigation", "turn_control", "launchpad_metadata", "environment_actions"] as const,
+          })),
+        } }),
+        onAgentEvent: () => () => undefined, onWindowFocus: () => () => undefined,
+      }) });
+
+      await renderApp();
+      const newThread = await screen.findByRole("button", { name: "New thread" });
+      await waitFor(() => expect(newThread).toHaveAttribute("aria-haspopup", "menu"));
+      if (entry === "New chat on") {
+        fireEvent.mouseEnter(newThread.parentElement!);
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Composer owner" }));
+      } else {
+        await clickButton("New thread");
+        fireEvent.click(await screen.findByRole("button", { name: /^Machine(?::|$)/ }));
+        fireEvent.click(await screen.findByRole("option", { name: "Composer owner" }));
+      }
+      await waitFor(() => expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+        federationTarget: selectedTarget,
+      })));
+      await waitFor(() => expect(listBackends).toHaveBeenCalledWith(expect.objectContaining({
+        federationTarget: selectedTarget,
+      })));
+      const providerButton = await screen.findByRole("button", { name: /^Provider(?::|$)/ });
+      await waitFor(() => expect(providerButton).toHaveTextContent("Claude"));
+      fireEvent.click(providerButton);
+      const choices = screen.getByRole("listbox", { name: "Provider" });
+      expect(within(choices).getByRole("option", { name: "Claude" })).toBeInTheDocument();
+      expect(within(choices).queryByRole("option", { name: "OpenAI" })).not.toBeInTheDocument();
+      fireEvent.click(within(choices).getByRole("option", { name: "Claude" }));
+      pasteComposerText(await screen.findByRole("textbox", { name: "New thread" }), "Compose on the selected owner");
+      await waitFor(() => expect(screen.getByRole("button", { name: "Start thread" })).toBeEnabled());
+      await clickButton("Start thread");
+      await waitFor(() => expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+        backend: "claude", federationTarget: selectedTarget,
+        input: [{ type: "text", text: "Compose on the selected owner" }],
+      })));
+    },
+  );
+
   it.each([
     { explicitOwner: false, otherPeers: true, healthPending: false },
     { explicitOwner: true, otherPeers: true, healthPending: false },
