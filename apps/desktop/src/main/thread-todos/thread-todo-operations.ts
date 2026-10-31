@@ -16,9 +16,12 @@ import type {
   ListThreadTodoDispatchEnvironmentsRequest,
   ListThreadTodoDispatchEnvironmentsResponse,
   CodexSpeed,
+  RaiseThreadTodoPlanRequest,
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
+  parseThreadTodoItemTexts,
+  THREAD_TODO_TITLE_MAX_LENGTH,
   isThreadTodoMergeMethod,
   isThreadTodoResolution,
   isThreadTodoStatus,
@@ -29,6 +32,7 @@ import {
   getThreadTodoService,
   listThreadTodoProjectCandidates,
   listThreadTodoProjects,
+  raiseThreadTodoPlan,
   setThreadTodoProject,
 } from "../thread-todos/thread-todo-runtime";
 import { listThreadTodoDispatchEnvironments } from "../thread-todos/thread-todo-dispatch";
@@ -185,6 +189,22 @@ export const localThreadTodoOperations = {
       }),
     };
   },
+  /** A viewer started a thread here from a card with steps. One commit. */
+  raisePlan: async (request: RaiseThreadTodoPlanRequest): Promise<ThreadTodoMutationResponse> => {
+    const { backend, threadId, title } = request;
+    if (!isBackendKind(backend) || typeof threadId !== "string" || !threadId.trim()
+      || typeof title !== "string" || !title.trim()) {
+      throw new Error("A plan needs the started thread and its card's title.");
+    }
+    const items = parseThreadTodoItemTexts(request.items);
+    if (!items.ok) throw new Error(items.message);
+    if (items.value.length === 0) throw new Error("A plan needs at least one step.");
+    return {
+      todo: await raiseThreadTodoPlan(getDesktopBackendRegistry(), { backend, threadId },
+        // Clipped, not refused: the viewer has already told the thread its plan card exists.
+        { title: title.trim().slice(0, THREAD_TODO_TITLE_MAX_LENGTH), items: items.value }),
+    };
+  },
   setProject: async (
     request: SetThreadTodoProjectRequest,
   ): Promise<ThreadTodoMutationResponse> => {
@@ -202,10 +222,14 @@ function isCodexSpeed(value: unknown): value is CodexSpeed {
   return value === "standard" || value === "fast" || value === "ultrafast";
 }
 
+function isBackendKind(value: unknown): value is AppServerBackendKind {
+  return typeof value === "string" && (value === "codex" || value === "claude" || /^acp:.+/.test(value));
+}
+
 function parseDispatchSettings(value: unknown): ThreadTodoModelSettings {
   if (!value || typeof value !== "object") throw new Error("Invalid dispatch model settings.");
   const { backend, model, reasoningEffort } = value as Record<string, unknown>;
-  if (typeof backend !== "string" || !(backend === "codex" || backend === "claude" || /^acp:.+/.test(backend))
+  if (!isBackendKind(backend)
     || (model !== undefined && (typeof model !== "string" || !model.trim()))
     || (reasoningEffort !== undefined && (typeof reasoningEffort !== "string" || !reasoningEffort.trim()))) {
     throw new Error("Invalid dispatch model settings.");

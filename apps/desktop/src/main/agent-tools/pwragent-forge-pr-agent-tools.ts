@@ -39,6 +39,7 @@ const descriptions: Record<ForgePrToolOperation, string> = {
   create_issue: `Open an issue with optional labels and image or video attachments. ${ASKS}`,
   update_issue: `Edit an issue: title, body, open or closed state, and labels. stateReason applies on GitHub only. Attachments need the full new body. ${ASKS}`,
   merge_pull_request: `Merge a pull request. expectedHeadSha must be the head SHA you checked with get_pull_request, so a later push is never merged unseen. method defaults to the operator's merge method. GitLab supports merge and squash. Does not delete the branch. ${ASKS}`,
+  rerun_failed_ci_jobs: `Request a rerun of failed jobs on a CI run. Pass runId from list_ci_runs or get_ci_run. GitHub Actions reruns failed jobs and their dependent jobs. GitLab retries failed and canceled pipeline jobs. Uses this thread's repository and configured forge authentication. Returns request acceptance, not CI completion or success. Inspect the run afterward when needed. Do not retry an uncertain request automatically or duplicate Auto-fix monitoring. ${ASKS}`,
 };
 
 export function buildForgePrToolDefinitions(handler?: ForgePrToolHandler): AgentToolDefinition[] {
@@ -75,6 +76,7 @@ export function buildForgePrToolDefinitions(handler?: ForgePrToolHandler): Agent
     create_issue: { title: { ...string, maxLength: 256 }, body, attachments, addLabels: names("Labels to add.") },
     update_issue: { number, title: { ...string, maxLength: 256 }, body, state: { type: "string", enum: ["open", "closed"] }, stateReason: { type: "string", enum: ["completed", "not_planned", "reopened"] }, attachments, addLabels: names("Labels to add."), removeLabels: names("Labels to remove.") },
     merge_pull_request: { number, method: { type: "string", enum: ["merge", "squash", "rebase"] }, expectedHeadSha: sha, commitTitle: { ...string, maxLength: 256 }, commitMessage: { type: "string", maxLength: FORGE_BODY_MAX_CHARS } },
+    rerun_failed_ci_jobs: { runId: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "GitHub Actions workflow run ID or GitLab pipeline ID from list_ci_runs or get_ci_run." } },
   };
   return FORGE_PR_TOOL_OPERATIONS.map((operation): AgentToolDefinition => {
     const write = forgePrToolGroup(operation, {}) !== "read";

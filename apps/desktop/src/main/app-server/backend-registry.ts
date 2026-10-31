@@ -18931,11 +18931,19 @@ export class DesktopBackendRegistry {
     threadId: string;
   }): Promise<Pick<StartThreadResponse, "pinnedRank" | "autoPinFailure">> {
     const directory = this.resolveCreatedThreadDirectoryVisibility(params);
-    if (
-      !directory?.directoryThreadsCollapsed
-      || !directory.hasPinnedTopLevelThread
-    ) {
+    if (!directory?.hasPinnedTopLevelThread) {
       return {};
+    }
+    if (!directory.directoryThreadsCollapsed) {
+      // With only pins left, Directory threads has no disclosure to close.
+      // Treat that empty section as closed too. A refresh may already include
+      // this creation; it must not count as pre-existing unpinned overflow.
+      for (const row of directory.rowsByThreadKey.values()) {
+        if (!row.parentKey && !row.pinned
+          && (row.remote || row.backend !== params.backend || row.threadId !== params.threadId)) {
+          return {};
+        }
+      }
     }
 
     // A sub-thread renders inside its group, so what has to be visible is the
@@ -50295,6 +50303,9 @@ function forgeToolApprovalMessage(operation: ForgePrToolOperation, args: ForgePr
   const issue = args.number ? ` #${args.number}` : "";
   const commentTarget = gitlab && args.kind === "pr" ? pr : issue;
   switch (operation) {
+    case "rerun_failed_ci_jobs": return gitlab
+      ? `Allow the agent to retry failed and canceled jobs in GitLab pipeline ${args.runId}?`
+      : `Allow the agent to rerun failed jobs and their dependents in GitHub Actions run ${args.runId}?`;
     case "create_pull_request": return `Allow the agent to open a ${request} on ${forge}?`;
     case "update_pull_request": return `Allow the agent to edit ${request}${pr} on ${forge}?`;
     case "merge_pull_request": return `Allow the agent to merge ${request}${pr} on ${forge}?`;

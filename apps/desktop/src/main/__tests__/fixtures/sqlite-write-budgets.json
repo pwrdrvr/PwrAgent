@@ -42,6 +42,7 @@
     "statements": 140
   },
   "agent-thread-named-environment-start": {"commits": 5, "note": "One agent-created thread with a named environment: thread start bookkeeping, setup hydration and runtime persistence; no per-event writes. ~74 KB per thread: ~7.4 MB/day at 100 agent-created threads/day, 0 MB/day idle.", "observedWalBytes": 74160, "rowsChanged": 5, "statements": 5},
+  "all-pinned-project-thread-creation": {"commits": 4, "note": "One new thread including its automatic pin: 4 commits, ~0.054 MB/thread and ~5.4 MB/day at 100 starts/day; 0 MB/day idle.", "observedWalBytes": 53560, "rowsChanged": 4, "statements": 4},
   "archive-cleanup-130-checkpoint-recover-drain": {"commits": 3, "note": "130 jobs: one quit checkpoint, one recovery claim, one drained checkpoint deletion; 3 commits per quit/restart cycle, no per-item or timer writes. At 10 cycles/day and 32 KiB/commit, about 0.94 MB/day; idle is 0 MB/day.", "observedWalBytes": 90640, "rowsChanged": 4, "statements": 4},
   "archive-cleanup-read-only-inventory": {
     "commits": 0,
@@ -1242,6 +1243,13 @@
     "observedWalBytes": 8240,
     "rowsChanged": 1,
     "statements": 1
+  },
+  "thread-todo-start-with-plan": {
+    "commits": 2,
+    "note": "one Start thread from a card with a 3-step plan: one commit for the new thread's plan card and one for marking the start card done; only on an operator's Start click, never per turn or event; ~24 KB WAL per start, ~1.2 MB/day at 50 starts, half of it the plan card",
+    "observedWalBytes": 24720,
+    "rowsChanged": 2,
+    "statements": 2
   },
   "thread-usage-activities-move": {
     "commits": 5,

@@ -1277,6 +1277,10 @@ export async function closeElectronWithSessionDrain(
     await Promise.all([...sessions].map(async (ownedSession) => {
       await ownedSession.closeAllConnections();
       await ownedSession.cookies.flushStore();
+      // clearCache() does not await network-history persistence. clearData's
+      // cache completion also awaits HttpServerProperties::Clear and its
+      // Network Persistent State write, a native BLOCK_SHUTDOWN owner.
+      await ownedSession.clearData({ dataTypes: ["cache"] });
     }));
   });
   await electronApp.close();
@@ -1400,7 +1404,7 @@ async function killProcessTree(
       await taskkillTree(pid);
     }
     if (mainProcess && quitStartedAt !== undefined) {
-      // The Playwright child is cmd.exe. Its exit does not prove that Electron
+      // A custom Windows batch launcher can exit before its Electron
       // descendants have released the launcher's inherited pipes.
       const rows = await listWindowsMainAndChildren(mainProcess.pid);
       const pids = selectWindowsElectronCleanupPids(

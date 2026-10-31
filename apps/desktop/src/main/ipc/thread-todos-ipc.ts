@@ -126,6 +126,13 @@ export function registerThreadTodoIpcHandlers(options: {
     readDefaultMergeMethod: () =>
       getDesktopSettingsService().resolveDefaultMergeMethod(),
     ...(options.federation ? { federation: options.federation } : {}),
+    peerPlans: {
+      // The instance picker can name this machine, which raises its own.
+      supports: (instanceId) => isLocalTodoInstance(runtime, instanceId)
+        || runtime.remotePeerSupportsTodoPlan({ scope: "remote", instanceId }),
+      raise: (instanceId, request) =>
+        runtime.requestThreadTodoOperation({ scope: "remote", instanceId }, "raisePlan", request),
+    },
   });
 
   const service = new FederatedThreadTodoService({
@@ -176,5 +183,17 @@ export function registerThreadTodoIpcHandlers(options: {
         throw error;
       }
     });
+  }
+}
+
+function isLocalTodoInstance(
+  runtime: ReturnType<typeof getDesktopFederationRuntime>,
+  instanceId: string,
+): boolean {
+  try {
+    return instanceId === runtime.localFederationInstanceId();
+  } catch {
+    // State is not open yet, so the id cannot be read or minted.
+    return false;
   }
 }

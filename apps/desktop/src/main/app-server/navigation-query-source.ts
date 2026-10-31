@@ -21,6 +21,7 @@ import {
 import { getMainLogger } from "../log";
 
 const indexReads = new NavigationIndexReadPool(1_000);
+const latestVisibilityScanByRegistry = new WeakMap<DesktopBackendRegistry, number>();
 const sourceIds = new WeakMap<object, number>();
 let nextSourceId = 0;
 function sourceId(value: object): number {
@@ -54,11 +55,15 @@ export async function loadLocalNavigationQueryIndex(params: {
     ...(params.refreshProviders ? ["refresh-providers"] : [])]);
   const version = overlayStore.readNavigationSourceVersion?.();
   return indexReads.read(key, async (signal, checkpoint) => {
+    let navigationChanged = false;
     // An event during a scan stops later readers from joining it; they share
     // one follow-up scan. Each run owns its listener, because the pool can
     // run this same load again for a follow-up.
     const unsubscribe = registry.onEvent?.((event) => {
-      if (navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)) indexReads.invalidate(key);
+      if (navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)) {
+        navigationChanged = true;
+        indexReads.invalidate(key);
+      }
     });
     // The pool owns this listener through its bounded completed reuse window.
     // Eviction/expiry/cancellation aborts the lifetime and releases it.
@@ -67,7 +72,21 @@ export async function loadLocalNavigationQueryIndex(params: {
     // listings for a boundary before it tells listeners, so this listing
     // reflects every boundary observed before this value.
     const observedAt = nextNavigationObservation();
+    const visibilitySourceVersion = backend === "all" ? overlayStore.readNavigationSourceVersion?.() : undefined;
+    if (backend === "all") latestVisibilityScanByRegistry.set(registry, observedAt);
     const index = { ...await buildLocalNavigationQueryIndex({ ...params, registry, signal, checkpoint }), observedAt };
+    // Creation uses the same complete membership that the sidebar just read.
+    // Waiting for owner PR metadata work can leave visibility uninitialized
+    // even after the directory and its pins have appeared in the window.
+    // Normal and forced-refresh scans have independent pool keys. Only the
+    // latest scan may publish, and an intervening mutation also makes its
+    // membership and pin ranks obsolete even when its coverage is complete.
+    if (backend === "all" && index.coverage?.state === "complete"
+      && latestVisibilityScanByRegistry.get(registry) === observedAt
+      && !navigationChanged
+      && visibilitySourceVersion === overlayStore.readNavigationSourceVersion?.()) {
+      registry.rememberNavigationVisibilityIndex?.(index);
+    }
     // Only the whole-owner index is what viewers read as its directory set.
     if (backend === "all" && !params.registry) {
       getNavigationDirectorySetAnnouncer().observe(index.directories);

@@ -1,18 +1,143 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
-import { expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const { packageManager } = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8"));
+const pinnedPnpmVersion = packageManager.match(/^pnpm@([^+]+)/)[1];
+
+function requirePinnedNativePnpm(pnpmCli, cwd, { platform = process.platform, run = spawnSync } = {}) {
+  const fail = (reason) => {
+    throw new Error(`Run deployment isolation tests through pnpm test: ${reason}`);
+  };
+  if (!pnpmCli || !isAbsolute(pnpmCli) || !/^pnpm(?:-native)?(?:\.exe)?$/.test(basename(pnpmCli))) {
+    fail("npm_execpath must name an absolute native pnpm executable");
+  }
+
+  // pnpm 12.13 installs the native binary as pnpm (pnpm.exe on Windows),
+  // replacing a script placeholder. A filename alone cannot distinguish them.
+  const header = Buffer.alloc(4);
+  try {
+    const fd = openSync(pnpmCli, "r");
+    try {
+      readSync(fd, header, 0, header.length, 0);
+    } finally {
+      closeSync(fd);
+    }
+  } catch (error) {
+    fail(`cannot read ${pnpmCli}: ${error.message}`);
+  }
+  const magic = header.toString("hex");
+  const native = platform === "win32"
+    ? magic.startsWith("4d5a")
+    : platform === "darwin"
+      ? ["feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca"].includes(magic)
+      : platform === "linux" && magic === "7f454c46";
+  if (!native) {
+    fail(`${pnpmCli} is not a native ${platform} executable`);
+  }
+
+  // The empty fixture cwd has no packageManager pin that could select a
+  // different pnpm. Probe and deploy with this exact executable, without a shell.
+  const version = run(pnpmCli, ["--version"], { cwd, encoding: "utf8", shell: false, timeout: 10_000 });
+  if (version.error || version.status !== 0 || version.stdout?.trim() !== pinnedPnpmVersion) {
+    fail(`expected pnpm ${pinnedPnpmVersion} at ${pnpmCli}; ${version.error?.message ?? version.stderr ?? ""} ${version.stdout ?? ""}`);
+  }
+  return pnpmCli;
+}
+
+describe("deployment pnpm executable guard", () => {
+  const roots = [];
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  function fixture(name, content) {
+    const root = mkdtempSync(join(tmpdir(), "pwragent-pnpm-guard-"));
+    roots.push(root);
+    const cli = join(root, name);
+    writeFileSync(cli, content);
+    return { root, cli };
+  }
+
+  it.each([
+    ["linux", "pnpm", "7f454c46"],
+    ["linux", "pnpm-native", "7f454c46"],
+    ["win32", "pnpm.exe", "4d5a9000"],
+    ["win32", "pnpm", "4d5a9000"],
+    ["win32", "pnpm-native.exe", "4d5a9000"],
+    ["darwin", "pnpm", "cffaedfe"],
+    ["darwin", "pnpm-native", "cffaedfe"],
+    ["darwin", "pnpm", "cafebabe"],
+  ])("accepts native %s %s with the pinned version (%s)", (platform, name, magic) => {
+    const { root, cli } = fixture(name, Buffer.from(magic, "hex"));
+    const run = vi.fn(() => ({ status: 0, stdout: `${pinnedPnpmVersion}\n` }));
+    expect(requirePinnedNativePnpm(cli, root, { platform, run })).toBe(cli);
+    expect(run).toHaveBeenCalledExactlyOnceWith(cli, ["--version"], {
+      cwd: root, encoding: "utf8", shell: false, timeout: 10_000,
+    });
+  });
+
+  it.each([
+    ["pnpm.cmd", "@echo off\r\n"],
+    ["pnpm.ps1", "#!/usr/bin/env pwsh\n"],
+    ["pnpm.cjs", "#!/usr/bin/env node\n"],
+    ["pnpm.mjs", "#!/usr/bin/env node\n"],
+    ["pnpm", "#!/bin/sh\n"],
+    ["pnpm", "# pnpm's native binary placeholder\n"],
+    ["pnpm-native", "#!/usr/bin/env node\n"],
+    ["pnpm.exe", "@echo off\r\n"],
+    ["pnpm", ""],
+    ["not-pnpm-native", Buffer.from("7f454c46", "hex")],
+  ])("rejects wrappers and non-native files before execution: %s (case %#)", (name, content) => {
+    const { root, cli } = fixture(name, content);
+    const run = vi.fn();
+    expect(() => requirePinnedNativePnpm(cli, root, { run })).toThrow("Run deployment isolation tests through pnpm test");
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "", "pnpm", "./pnpm-native"])("rejects missing or relative npm_execpath: %s", (cli) => {
+    expect(() => requirePinnedNativePnpm(cli, tmpdir())).toThrow("absolute native pnpm");
+  });
+
+  it.each([
+    ["linux", "4d5a9000"],
+    ["win32", "7f454c46"],
+    ["darwin", "7f454c46"],
+  ])("rejects another platform's binary before execution: %s (%s)", (platform, magic) => {
+    const { root, cli } = fixture("pnpm", Buffer.from(magic, "hex"));
+    const run = vi.fn();
+    expect(() => requirePinnedNativePnpm(cli, root, { platform, run })).toThrow(`not a native ${platform} executable`);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("reports an unreadable executable before execution", () => {
+    const { root, cli } = fixture("pnpm", "");
+    rmSync(cli);
+    const run = vi.fn();
+    expect(() => requirePinnedNativePnpm(cli, root, { run })).toThrow(`cannot read ${cli}`);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: 0, stdout: "0.0.0\n" },
+    { status: 1, stdout: `${pinnedPnpmVersion}\n`, stderr: "failed" },
+    { status: null, stdout: "", error: new Error("spawn failed") },
+    { status: null, stdout: "", signal: "SIGTERM" },
+  ])("rejects a wrong version or failed native probe: %j", (result) => {
+    const { root, cli } = fixture("pnpm", Buffer.from("7f454c46", "hex"));
+    expect(() => requirePinnedNativePnpm(cli, root, { platform: "linux", run: () => result }))
+      .toThrow(`expected pnpm ${pinnedPnpmVersion}`);
+  });
+});
 
 it("keeps both release stages out of repeated paired pnpm deployments", () => {
-  const pnpmCli = process.env.npm_execpath;
-  if (!pnpmCli || !/pnpm-native(?:\.exe)?$/.test(pnpmCli)) {
-    throw new Error("Run deployment isolation tests through pnpm test");
-  }
   const root = mkdtempSync(join(tmpdir(), "pwragent-deploy-isolation-"));
   try {
+    const pnpmCli = requirePinnedNativePnpm(process.env.npm_execpath, root);
     const desktop = join(root, "desktop");
     mkdirSync(desktop);
     writeFileSync(join(root, "package.json"), JSON.stringify({ private: true }));

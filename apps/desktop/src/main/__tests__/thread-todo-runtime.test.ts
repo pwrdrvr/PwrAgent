@@ -8,9 +8,11 @@ import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
 import {
   createThreadTodoRunners,
+  raiseThreadTodoPlan,
   setThreadTodoProject,
   type ThreadTodoRunnerRegistry,
 } from "../thread-todos/thread-todo-runtime";
+import { withThreadTodoPlanNote } from "../thread-todos/thread-todo-plan";
 import type { ThreadTodoProjectCandidate } from "../thread-todos/thread-todo-projects";
 
 const FULL_ACCESS_SOL: HandoffSourceSettings = {
@@ -578,5 +580,138 @@ describe("operator dispatch choices", () => {
       action: { type: "start_thread", prompt: "Go" }, speed: "ultrafast",
     })).rejects.toThrow("Ultrafast");
     expect(federation).not.toHaveBeenCalled();
+  });
+});
+
+describe("thread to-do Start thread with a plan", () => {
+  const PLAN = { title: "Windows smoke test", items: ["Run lint", "Capture screenshots"] };
+  const promptOf = (call: Record<string, unknown> | undefined) =>
+    ((call?.input as Array<{ text: string }> | undefined) ?? [])[0]?.text;
+
+  function localRunners(raiseHere: (thread: unknown, plan: unknown) => Promise<unknown>) {
+    const { registry } = fakeRegistry(FULL_ACCESS_SOL);
+    const runners = createThreadTodoRunners({
+      registry: registry as unknown as ThreadTodoRunnerRegistry,
+      plans: { raiseHere: vi.fn(raiseHere) },
+    });
+    return { registry, runners };
+  }
+
+  const start = (runners: ReturnType<typeof createThreadTodoRunners>, plan?: typeof PLAN) => runners.startThread({
+    sourceBackend: "codex",
+    sourceThreadId: "source-thread",
+    crossProject: false,
+    action: { type: "start_thread", prompt: "Finish the Windows smoke test." },
+    ...(plan ? { plan } : {}),
+  });
+
+  it("raises the plan on the new thread before its first turn, and names it in the prompt", async () => {
+    const order: string[] = [];
+    const raiseHere = vi.fn(async (_thread: unknown, _plan: unknown) => { order.push("plan"); });
+    const { registry } = fakeRegistry(FULL_ACCESS_SOL);
+    registry.startTurn.mockImplementation(async () => { order.push("turn"); return { turnId: "child-turn" }; });
+    const runners = createThreadTodoRunners({
+      registry: registry as unknown as ThreadTodoRunnerRegistry,
+      plans: { raiseHere },
+    });
+    await start(runners, PLAN);
+    expect(raiseHere).toHaveBeenCalledWith({ backend: "codex", threadId: "child-thread" }, PLAN);
+    expect(order).toEqual(["plan", "turn"]);
+    expect(promptOf(registry.startTurn.mock.calls[0]?.[0])).toBe(withThreadTodoPlanNote("Finish the Windows smoke test."));
+    expect(promptOf(registry.startTurn.mock.calls[0]?.[0])).toContain('update_todo (key "plan"');
+  });
+
+  it("sends the prompt alone when the plan card cannot be raised", async () => {
+    const { registry, runners } = localRunners(async () => { throw new Error("limit reached"); });
+    await start(runners, PLAN);
+    expect(promptOf(registry.startTurn.mock.calls[0]?.[0])).toBe("Finish the Windows smoke test.");
+  });
+
+  it("raises nothing and sends the prompt alone without plain steps", async () => {
+    const raiseHere = vi.fn(async () => undefined);
+    const { registry, runners } = localRunners(raiseHere);
+    await start(runners);
+    expect(raiseHere).not.toHaveBeenCalled();
+    expect(promptOf(registry.startTurn.mock.calls[0]?.[0])).toBe("Finish the Windows smoke test.");
+  });
+
+  function peerRunners(options: { supports: boolean; isLocal?: boolean; raiseFails?: boolean }) {
+    const registry = {
+      readThreadHandoffSettings: vi.fn(async () => FULL_ACCESS_SOL),
+      startThread: vi.fn(),
+      renameThread: vi.fn(),
+      startTurn: vi.fn(),
+    };
+    const federation = vi.fn(async (request: { operation: string }) =>
+      request.operation === "list_instance_projects"
+        ? { ok: true as const, data: { instanceLabel: "win-lab", complete: true,
+            projects: [{ key: "peer-atlas", label: "atlas", path: "/peer/atlas", kind: "directory" }] } }
+        : { ok: true as const, data: { backend: "codex", threadId: "peer-thread", isLocal: options.isLocal ?? false,
+            instanceId: "win-lab", instanceLabel: "win-lab" } });
+    const raiseHere = vi.fn(async () => undefined);
+    const peer = {
+      supports: vi.fn((_instanceId: string) => options.supports),
+      raise: vi.fn(async (_instanceId: string, _request: unknown) => {
+        if (options.raiseFails) throw new Error("win-lab is disconnected.");
+      }),
+    };
+    const runners = createThreadTodoRunners({
+      registry: registry as unknown as ThreadTodoRunnerRegistry,
+      federation: federation as never,
+      plans: { raiseHere, peer },
+    });
+    const run = (plan?: typeof PLAN) => runners.startThreadOnInstance!({
+      instanceId: "win-lab",
+      sourceBackend: "codex",
+      sourceThreadId: "source-thread",
+      project: { key: "local-atlas", label: "atlas", path: "/local/atlas" },
+      crossProject: false,
+      action: { type: "start_thread", prompt: "Finish the Windows smoke test." },
+      ...(plan ? { plan } : {}),
+    });
+    const createdInput = () => (federation.mock.calls
+      .map(([request]) => request as { operation: string; args: Record<string, unknown> })
+      .find((request) => request.operation === "create_instance_thread"))?.args.input;
+    return { run, peer, raiseHere, createdInput };
+  }
+
+  it("raises the plan on a peer that answers raisePlan, after naming it in the prompt", async () => {
+    const { run, peer, raiseHere, createdInput } = peerRunners({ supports: true });
+    await run(PLAN);
+    expect(peer.supports).toHaveBeenCalledWith("win-lab");
+    expect(createdInput()).toBe(withThreadTodoPlanNote("Finish the Windows smoke test."));
+    expect(peer.raise).toHaveBeenCalledWith("win-lab", {
+      backend: "codex", threadId: "peer-thread", title: PLAN.title, items: PLAN.items,
+    });
+    expect(raiseHere).not.toHaveBeenCalled();
+  });
+
+  it("sends an older peer the prompt alone and raises nothing", async () => {
+    const { run, peer, createdInput } = peerRunners({ supports: false });
+    await run(PLAN);
+    expect(createdInput()).toBe("Finish the Windows smoke test.");
+    expect(peer.raise).not.toHaveBeenCalled();
+  });
+
+  it("raises the plan here when the picked instance is this one", async () => {
+    const { run, peer, raiseHere } = peerRunners({ supports: true, isLocal: true });
+    await run(PLAN);
+    expect(raiseHere).toHaveBeenCalledWith({ backend: "codex", threadId: "peer-thread" }, PLAN);
+    expect(peer.raise).not.toHaveBeenCalled();
+  });
+
+  it("still reports the started thread when the peer's plan card fails", async () => {
+    const { run } = peerRunners({ supports: true, raiseFails: true });
+    await expect(run(PLAN)).resolves.toMatchObject({ threadId: "peer-thread", instanceId: "win-lab" });
+  });
+
+  it("files the plan card where add_todo would file one the thread raised", async () => {
+    const raisePlan = vi.fn((params: Record<string, unknown>) => params as unknown as ThreadTodo);
+    const registry = {
+      resolveThreadWorkspaceCwd: vi.fn(async () => "/worktrees/atlas"),
+      resolveThreadPrimaryDirectory: vi.fn(async () => { throw new Error("not indexed yet"); }),
+    };
+    await raiseThreadTodoPlan(registry as never, { backend: "codex", threadId: "child" }, PLAN, { raisePlan });
+    expect(raisePlan).toHaveBeenCalledWith({ backend: "codex", threadId: "child", cwd: "/worktrees/atlas", plan: PLAN });
   });
 });

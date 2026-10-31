@@ -98,6 +98,37 @@ describe("backend forge tool dispatch", () => {
     expect(forgeRead).toHaveBeenCalledWith("get_forge_status", {}, expect.objectContaining({ threadId: "thread-1", turnId: "turn-1" }));
   });
 
+  it.each(["github", "gitlab"] as const)("asks once per CI rerun with the %s scope and repository on the card", async (provider) => {
+    const repository = { provider, host: provider === "github" ? "github.com" : "gitlab.example.test", owner: "fixture", repo: "project" };
+    registry.setForgePrToolHandler(github, async () => repository);
+    const prompt = nextApproval();
+    const pending = internals.handleServerRequest("codex", request("rerun_failed_ci_jobs", { runId: 42 }, "call-rerun"));
+    const notification = await prompt;
+    expect(notification.params.message).toBe(provider === "github"
+      ? "Allow the agent to rerun failed jobs and their dependents in GitHub Actions run 42?"
+      : "Allow the agent to retry failed and canceled jobs in GitLab pipeline 42?");
+    expect(notification.params._meta).toMatchObject({ connector_name: "fixture/project", tool_params_display: [{ name: "runId", value: "42" }] });
+    expect(notification.params._meta).not.toHaveProperty("persist");
+    expect(github).not.toHaveBeenCalled();
+    await answer(notification, "accept");
+    expect((await pending).success).toBe(true);
+    expect(github).toHaveBeenCalledWith("rerun_failed_ci_jobs", { runId: 42, repository }, expect.objectContaining({ threadId: "thread-1" }));
+    expect(attach).not.toHaveBeenCalled();
+  });
+
+  it("refuses CI reruns when off or declined while leaving CI reads available", async () => {
+    policy.access.ci = "off";
+    const off = await internals.handleServerRequest("codex", request("rerun_failed_ci_jobs", { runId: 42 }, "call-rerun-off"));
+    expect(text(off)).toContain("CI reruns is Off");
+    expect((await internals.handleServerRequest("codex", request("get_ci_run", { runId: 42 }, "call-ci-read"))).success).toBe(true);
+    policy.access.ci = "ask";
+    const prompt = nextApproval();
+    const pending = internals.handleServerRequest("codex", request("rerun_failed_ci_jobs", { runId: 42 }, "call-rerun-decline"));
+    await answer(await prompt, "decline");
+    expect(text(await pending)).toContain("declined");
+    expect(github).not.toHaveBeenCalled();
+  });
+
   it("gates artifact downloads with the existing forge read access setting", async () => {
     const args = { runId: 9, artifactId: 12 };
     const allowed = await internals.handleServerRequest("codex", request("download_ci_artifact", args, "call-artifact"));

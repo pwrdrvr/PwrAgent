@@ -15,6 +15,19 @@ cleanup phase takes five seconds, it captures a snapshot before Playwright's
 three snapshots per worker). The existing CI artifact upload includes these
 files under `test-results/worker-shutdown/worker-<index>-<pid>/`.
 
+If cancellation skips that upload, search the job log for
+`[worker-shutdown-evidence]`. Each failure snapshot synchronously emits a compact
+JSON record with pending process owners, exit/close and stdio state, and
+referenced native handles. The ancestry query also logs its result or explicit
+failure/interruption. Each record is capped at 16 KiB of JSON; snapshots include
+at most 16 pending processes, eight stdio entries per process and 32 handles;
+trees include at most 64 processes. Total counts expose omitted entries, and
+`byteLimitReached` marks further clipping to the byte cap. There are at most
+three snapshots and one query result per worker. Full artifacts retain their
+existing detail. This adds no wait or cancellation handler and cannot preserve
+evidence if the worker never reaches capture or the runner stops forwarding its
+output.
+
 ## Reading a failure
 
 Start with `snapshot-1.json`, then use `timeline.jsonl` to reconstruct events:
@@ -43,8 +56,10 @@ Start with `snapshot-1.json`, then use `timeline.jsonl` to reconstruct events:
   cleanup, and entry into each worker cleanup phase. It includes healthy
   launches so an earlier test's leftover process can be identified.
 
-A Windows Electron launcher can be `cmd.exe`; its exit is not the Electron
-tree's completion. Fixture teardown treats an unresolved `electronApp.close()`
+Windows native Electron executables launch directly, so Playwright owns the
+Electron main process and its stdio. Explicit `.cmd` or `.bat` executable
+wrappers still use `cmd.exe`; that shell's exit is not the Electron tree's
+completion. Fixture teardown treats an unresolved `electronApp.close()`
 as abnormal even after that launcher exits. It captures the Electron main PID
 before quit and, on the abnormal path, checks process creation times before
 terminating that process or its direct surviving children. It rejects a
@@ -65,13 +80,23 @@ launcher alive after `quit`. The fixture removes the Chromium directories only
 after closing the app and cleaning up its profile helpers.
 
 On Windows, fixture close also drains each live Electron session before asking
-Playwright to quit: it closes connections and awaits the cookie store flush.
+Playwright to quit: it closes connections, awaits the cookie store flush, and
+disposes the fixture session cache with `clearData({ dataTypes: ["cache"] })`.
 This preparation shares the existing six-second graceful-close deadline.
 Chromium's native `BrowserProcessIOThread::ProcessHostCleanUp` otherwise waits
 for the network service to flush cookies and cache after JavaScript quit has
 finished. That service can retain the launcher's pipes while native storage
 work is still pending. The fixture must await that work while the sessions
 are still reachable over RPC; storage isolation alone does not drain it.
+
+The cache operation also waits for Chromium's network-history completion.
+Unlike `clearCache()`, this reaches `HttpServerProperties::Clear` and the
+`Network/Network Persistent State` preference write. A matching Electron native
+snapshot retained that write and its initial preference read as queued
+`BLOCK_SHUTDOWN` work after the network service entered shutdown. Awaiting the
+cache completion keeps its RPC owner alive until the write finishes. Cache
+disposal applies only to the Playwright-owned fixture sessions. A failed or
+stalled completion still fails teardown under the existing close deadline.
 
 The Windows reproduction left a suspended no-op `cmd.exe` from the startup
 Job-wrapper prewarm alive after the app exited. The app no longer starts this
@@ -109,11 +134,14 @@ artifacts. No Electron window, display server, or browser download is needed.
 The suite also runs Playwright's `--list` mode with an inherited worker index
 to verify that a controller cannot emit a false readiness marker.
 
-Two small versioned pnpm patches emit observations from Playwright's worker
-and process launcher. They leave the original promises, cleanup, error handling
-and deadlines in place. The hooks are inert outside the instrumented E2E
-workers. When upgrading Playwright, port both patches and run the real-worker
-tests: a green ordinary E2E run does not validate failure capture.
+Two versioned pnpm patches emit observations from Playwright's worker and
+process launcher. The core patch also bypasses the Windows shell for native
+Electron executables, preserving shell launch only for `.cmd` and `.bat`
+wrappers. The original close promises, cleanup, error handling and deadlines
+remain in place. Diagnostic hooks are inert outside instrumented E2E workers.
+When upgrading Playwright, port both patches and run the real-worker tests and
+`e2e/electron-launcher-ownership.spec.ts` on Windows. A green ordinary E2E run
+does not validate failure capture or native launcher ownership.
 
 ## Unit probe timeouts
 

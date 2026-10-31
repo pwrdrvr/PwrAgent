@@ -1261,8 +1261,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
     } = expandedThreadModel;
     // Starting threads, placed where the owner will put each one. A sub-thread
     // lands under its parent wherever that row renders. A top-level thread
-    // lands in its project: newest first among the unpinned rows, or pinned
-    // last when the project's unpinned rows are collapsed under pins (main
+    // lands in its project: newest first among the unpinned rows, or before
+    // ordinary pins when the project's unpinned rows are collapsed (main
     // pins it then so it stays visible), or beside the open transcript when
     // they are collapsed with nothing pinned.
     const renderedThreadKeys = new Set<string>();
@@ -1327,9 +1327,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
     // kept yet. With no ordinary pin loaded it would share the append
     // target's boundary; dropping on the last kept row's lower half keeps
     // there.
-    const keepAtTopSeamIndex = props.onReorderThreadPins
-      ? directoryPinnedThreads.findIndex((thread) => !isKeptAtTopThread(thread))
-      : -1;
+    const firstOrdinaryPinIndex = directoryPinnedThreads.findIndex((thread) => !isKeptAtTopThread(thread));
+    const startingPinnedIndex = firstOrdinaryPinIndex < 0 ? directoryPinnedThreads.length : firstOrdinaryPinIndex;
+    const keepAtTopSeamIndex = props.onReorderThreadPins ? firstOrdinaryPinIndex : -1;
     const renderUnpinnedRow = (
       thread: NavigationThreadSummary,
     ): ReactElement => {
@@ -1655,6 +1655,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                                   label={`Keep thread at top of pinned threads for ${directory.label}`}
                                 />
                               ) : null}
+                              {pinnedIndex === startingPinnedIndex ? renderStartingRootThreads("pinned") : null}
 	                        <ThreadRow
 	                          key={`${directory.key}:${threadKey}`}
                           approvalRequestThreadKeys={props.approvalRequestThreadKeys}
@@ -1713,7 +1714,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                             </Fragment>
 	                      );
                     })}
-                    {renderStartingRootThreads("pinned")}
+                    {startingPinnedIndex === directoryPinnedThreads.length ? renderStartingRootThreads("pinned") : null}
 
                     {renderPinnedAppendTarget ? (
                       <div

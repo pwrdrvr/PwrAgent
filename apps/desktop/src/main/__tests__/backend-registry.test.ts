@@ -3216,6 +3216,7 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
   registry: DesktopBackendRegistry;
   threadId?: string;
   collapsed?: boolean;
+  unpinnedThreadIds?: string[];
 }): void {
   const threadId = params.threadId ?? "thread-pinned";
   params.registry.rememberCompleteNavigationSnapshot(buildNavigationSnapshot({
@@ -3238,23 +3239,21 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
       },
     },
     previousKnownThreadKeys: [`codex:${threadId}`],
-    threads: [
-      {
-        id: threadId,
-        title: "Pinned thread",
-        titleSource: "explicit",
-        source: "codex",
-        linkedDirectories: [
-          {
-            id: params.directoryKey,
-            kind: "local",
-            label: "project",
-            path: params.directoryPath,
-          },
-        ],
-        updatedAt: 1_000,
-      },
-    ],
+    threads: [threadId, ...(params.unpinnedThreadIds ?? [])].map((id) => ({
+      id,
+      title: id === threadId ? "Pinned thread" : id,
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [
+        {
+          id: params.directoryKey,
+          kind: "local",
+          label: "project",
+          path: params.directoryPath,
+        },
+      ],
+      updatedAt: 1_000,
+    })),
     unchanged: false,
   }));
 }
@@ -14029,6 +14028,7 @@ describe("DesktopBackendRegistry", () => {
       directoryPath,
       registry,
       collapsed: !collapsed,
+      unpinnedThreadIds: ["older-unpinned"],
     });
     // The disclosure mutation reaches the owner immediately, even if provider
     // metadata cannot produce another complete navigation snapshot.
@@ -14051,6 +14051,66 @@ describe("DesktopBackendRegistry", () => {
       expect(response).not.toHaveProperty("pinnedRank");
     }
     await registry.close();
+  });
+
+  it.each([
+    { name: "all remaining roots are pinned", unpinnedThreadIds: [], pinned: true },
+    { name: "the new root is already indexed", unpinnedThreadIds: ["thread-1"], pinned: true },
+    { name: "an older unpinned root remains", unpinnedThreadIds: ["older-unpinned"], pinned: false },
+  ])("places a new thread when $name and Directory threads is open", async ({ unpinnedThreadIds, pinned }) => {
+    const directoryPath = expectedDir(path.join(os.tmpdir(), "pwragent-all-pinned-project"));
+    const directoryKey = `directory:${directoryPath}`;
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+    });
+    rememberCollapsedDirectoryWithPinnedThread({
+      directoryKey,
+      directoryPath,
+      registry,
+      collapsed: false,
+      unpinnedThreadIds,
+    });
+
+    const response = await registry.startThread({ backend: "codex", cwd: directoryPath });
+
+    if (pinned) {
+      expect(response).toMatchObject({ pinnedRank: "0" });
+      await expect(overlayStore.getThreadOverlayState({ backend: "codex", threadId: response.threadId }))
+        .resolves.toMatchObject({ pinnedRank: "0" });
+    } else {
+      expect(response).not.toHaveProperty("pinnedRank");
+    }
+    await registry.close();
+  });
+
+  it("bounds SQLite writes when creating a thread in an all-pinned project", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-all-pinned-creation-");
+    const db = StateDb.open(temp.dbPath);
+    onTestFinished(() => {
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+      vi.unstubAllEnvs();
+    });
+    const directoryPath = expectedDir(path.join(os.tmpdir(), "pwragent-all-pinned-budget"));
+    const directoryKey = `directory:${directoryPath}`;
+    const overlayStore = new SqliteOverlayStore(db);
+    await overlayStore.setThreadPin({ backend: "codex", threadId: "thread-pinned", pinnedRank: "1024" });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+    });
+    rememberCollapsedDirectoryWithPinnedThread({ directoryKey, directoryPath, registry, collapsed: false });
+    try {
+      const { result, writes } = await measureSqliteWrites(() => registry.startThread({ backend: "codex", cwd: directoryPath }));
+      expect(result).toMatchObject({ pinnedRank: "0" });
+      expectSqliteWriteBudget({ scenario: "all-pinned-project-thread-creation", writes,
+        note: "One new thread including its automatic pin: 4 commits, ~0.054 MB/thread and ~5.4 MB/day at 100 starts/day; 0 MB/day idle." });
+    } finally {
+      await registry.close();
+    }
   });
 
   it("auto-pins a new local thread before the existing local and remote pins", async () => {
@@ -53910,6 +53970,8 @@ script = "printf setup"
 
     it("does not start a Claude monitor on a Codex model the agent asked for", async () => {
       const { close, registry } = await createClaudeMonitorRegistry({});
+      const branchRead = vi.spyOn(gitExecutable, "runGitCommand")
+        .mockResolvedValue({ stdout: "main\n", stderr: "" });
       try {
         const response = await callRegistryMcpTool({
           registry,
@@ -53922,7 +53984,11 @@ script = "printf setup"
         expect(response.isError).not.toBe(true);
         expect(response.structuredContent).toMatchObject({ preferredModel: "haiku" });
       } finally {
-        await close();
+        try {
+          await close();
+        } finally {
+          branchRead.mockRestore();
+        }
       }
     });
 

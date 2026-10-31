@@ -365,8 +365,9 @@ export function threadTodoItemNoun(items: readonly ThreadTodoItem[]): string {
  * "2 of 4" for a card with steps; undefined for one without.
  *
  * A start_thread card counts its prerequisites instead. Its plain steps
- * are the new thread's plan, sent in the prompt: nothing ticks them, so a
- * count of them would sit at 0 until the card closes.
+ * are the new thread's plan: nothing ticks them on this card, which closes
+ * at the start, so a count of them would sit at 0. The started thread gets
+ * them as its own card keyed `plan`, and ticks them there.
  */
 export function threadTodoItemProgress(
   todo: Pick<ThreadTodo, "items" | "action">,
@@ -471,6 +472,19 @@ export type SetThreadTodoItemCheckedRequest = {
   id: string;
   itemId: string;
   checked: boolean;
+};
+
+/**
+ * A start_thread card's plain steps, sent to the thread it started. The owner
+ * raises them as that thread's own card, keyed `plan`, which the thread ticks
+ * with update_todo. Needs `thread_todo_plan` on the owner.
+ */
+export type RaiseThreadTodoPlanRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** The starting card's title. The owner names the card "Plan: <title>". */
+  title: string;
+  items: string[];
 };
 
 export type ThreadTodoResolution = "handled_elsewhere" | "sent_here";

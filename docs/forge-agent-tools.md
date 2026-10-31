@@ -24,6 +24,7 @@ Agent forge tools**:
 | `pull_requests` | `allow`, `auto`, `ask`, `off` | `auto` | `create_pull_request`, `update_pull_request` |
 | `comments` | same | `auto` | `add_issue_comment`, `reply_to_review_comment`, `resolve_review_thread`, a `COMMENT` review |
 | `issues` | same | `auto` | `create_issue`, `update_issue` |
+| `ci` | same | `auto` | `rerun_failed_ci_jobs` |
 | `approve_merge` | same | `ask` | `merge_pull_request`, an `APPROVE` or `REQUEST_CHANGES` review |
 
 - `allow` runs without asking. `auto` asks unless the turn has Full Access,
@@ -37,7 +38,7 @@ Agent forge tools**:
   "mcp_tool_call"`), so desktop and messaging draw it the same way. Comments
   and issues also offer a conversation grant, kept in memory until PwrAgent
   restarts or that group's level changes. Opening, editing, approving and
-  merging are granted one call at a time.
+  merging, and rerunning CI jobs are granted one call at a time.
 - Automations cannot answer a prompt. An `auto` or `ask` write in an
   automation fails with `approval_required` unless the automation runs in
   Full Access and the level is `auto`.
@@ -145,6 +146,31 @@ and does not start a provider cooldown.
   do not apply. GitLab's `closed` state excludes merged merge requests.
 - A merge request from a fork cannot be opened here; pass a source branch.
 
+## CI reruns
+
+`rerun_failed_ci_jobs` requests a rerun using a `runId` from `list_ci_runs`
+or `get_ci_run`. It acts in the calling thread's repository, following the
+same repository resolution, provider settings, write approval and messaging
+authorization as the other writes. It accepts no thread or Federation target.
+**Settings → Git → Agent forge tools → CI reruns** controls access separately
+from read access; its default is Auto.
+
+- GitHub and GitHub Enterprise use
+  [`POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs`](https://docs.github.com/en/rest/actions/workflow-runs#re-run-failed-jobs-from-a-workflow-run).
+  GitHub reruns failed jobs and their dependent jobs. Authentication needs
+  Actions write permission.
+- GitLab uses
+  [`POST /projects/:id/pipelines/:pipeline_id/retry`](https://docs.gitlab.com/api/pipelines/#retry-jobs-in-a-pipeline).
+  This retries failed **and canceled** jobs, and has no effect if there are
+  none. The tool description and approval card name this broader behavior.
+
+Success returns `requested: true`, `runId`, the repository, provider request
+count, source URL and a provider-specific `scope`. It means the provider
+accepted the request, not that any job completed or passed. Provider refusals
+are returned through the existing bounded, redacted error path. A timeout or
+disconnect may leave the outcome unknown; inspect the run before requesting
+another retry. This tool does not poll, start a repair turn, or add persistence.
+
 ## CI read contracts
 
 - `get_forge_status`: cache-only by default, with per-observation fetched time,
@@ -231,7 +257,7 @@ ongoing Settings storage controls. All new output belongs to the selected projec
   prevents mixing pages when a job appends or replaces output: restart without
   the cursor on `log_changed`. Each page downloads and redacts the source again.
 
-All tools accept an optional thread/backend/instance target. Repository
+The CI read tools accept an optional thread/backend/instance target. Repository
 identities contain the product (`provider`), actual host (`host`), namespace
 (`owner`, including GitLab subgroups), and repository (`repo`). Explicit
 repositories must belong to the target thread's linked remotes or attached

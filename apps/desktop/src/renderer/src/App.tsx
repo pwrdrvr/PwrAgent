@@ -63,6 +63,7 @@ import type { ProjectRevealRequest } from "./features/navigation/DirectoriesList
 import { isSubthreadLaunchpadDraft } from "./features/navigation/StartingThreadRow";
 import { SidebarResizeHandle } from "./features/navigation/SidebarResizeHandle";
 import { useThreadJump } from "./features/navigation/useThreadJump";
+import { useLensHotkeys } from "./features/navigation/useLensHotkeys";
 import { revealSelectedSidebarThreadRow } from "./features/navigation/reveal-selected-thread-row";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
 import { buildFederationThreadTargets } from "./features/chrome/federation-thread-targets";
@@ -2404,6 +2405,11 @@ function DesktopAppShell(props: {
     restore: restoreHistoryLocation,
   });
   useHistoryNavHotkeys({ onBack: history.goBack, onForward: history.goForward });
+  useLensHotkeys({
+    browseMode: navigation.browseMode,
+    onBrowseModeChange: navigation.setBrowseMode,
+    threadLensesEmpty: navigation.threadLensesEmpty,
+  });
   // ⌘⇧F / ⌃⇧F opens the global thread search screen; ⌘F is the focus-sensitive
   // context find; ⌘K always lands on the thread-list quick search.
   useFindHotkeys({
