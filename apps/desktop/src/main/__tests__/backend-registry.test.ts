@@ -42222,7 +42222,7 @@ script = "printf setup"
             ? launchpadStorageKey(`directory:${expectedDir(trustedPath)}`, { scope: "remote", instanceId: "peer-instance" })
             : `directory:${expectedDir(trustedPath)}`,
           directoryKind: "directory", directoryLabel: "demo", directoryPath: expectedDir(trustedPath),
-          backend: "codex", executionMode, workMode: "worktree", prompt: "", updatedAt: 1000,
+          backend: "codex", executionMode, workMode: "worktree", prompt: "", createdAt: 1000, updatedAt: 1000,
         });
         const codexClient = new MockBackendClient({ threads: [thread] });
         const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
@@ -42284,7 +42284,13 @@ script = "printf setup"
     const request = events.find((event) => event.notification.method === "item/tool/requestUserInput")!.notification;
     if (request.method !== "item/tool/requestUserInput") throw new Error("Expected trust confirmation");
     expect(handoff).not.toHaveBeenCalled();
-    expect(request.params.questions).toEqual([expect.objectContaining({ question: expect.stringContaining(expectedDir(root)) })]);
+    const modeLabel = executionMode === "auto" ? "Auto" : "Default Access";
+    expect(request.params.questions).toEqual([expect.objectContaining({
+      question: `Trust ${expectedDir(root)} and allow ${modeLabel} agent threads to read, write, and delete files in it?`,
+      options: expect.arrayContaining([expect.objectContaining({
+        description: `Trust this directory for future ${modeLabel} agent work.`,
+      })]),
+    })]);
     await registry.submitServerRequest({ backend: "codex", threadId: "agent-thread", turnId: "turn-1",
       requestId: request.params.requestId, response: { answers: { trust_directory: { answers: ["Cancel move"] } } },
     });
