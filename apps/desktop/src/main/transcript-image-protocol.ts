@@ -166,8 +166,21 @@ const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies =
   writeFile: writeCachedTranscriptImage,
 };
 
+const pendingCachedImageWrites = new Map<string, Promise<void>>();
+
+/** Content-addressed paths share one publisher across concurrent appends and reads. */
+function writeCachedTranscriptImage(filePath: string, data: Buffer): Promise<void> {
+  const pending = pendingCachedImageWrites.get(filePath);
+  if (pending) return pending;
+  const publication = publishCachedTranscriptImage(filePath, data).finally(() => {
+    pendingCachedImageWrites.delete(filePath);
+  });
+  pendingCachedImageWrites.set(filePath, publication);
+  return publication;
+}
+
 /** Publish complete cache files, reusing images retained by an earlier write or read. */
-async function writeCachedTranscriptImage(filePath: string, data: Buffer): Promise<void> {
+async function publishCachedTranscriptImage(filePath: string, data: Buffer): Promise<void> {
   try {
     if ((await stat(filePath)).size === data.byteLength) return;
   } catch (error) {
@@ -179,7 +192,16 @@ async function writeCachedTranscriptImage(filePath: string, data: Buffer): Promi
     await writeFile(temporary, data, { mode: 0o600, flag: "wx" });
     // Concurrent publishers have identical content-addressed bytes. Rename
     // publishes a complete file even on filesystems without hard links.
-    await rename(temporary, filePath);
+    try {
+      await rename(temporary, filePath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EPERM" && code !== "EACCES" && code !== "EEXIST") throw error;
+      // Another process can win publication while Windows refuses replacement.
+      // Only identical, complete bytes satisfy this write's persistence contract.
+      const published = await readFile(filePath).catch(() => undefined);
+      if (!published?.equals(data)) throw error;
+    }
   } finally {
     await rm(temporary, { force: true });
   }
