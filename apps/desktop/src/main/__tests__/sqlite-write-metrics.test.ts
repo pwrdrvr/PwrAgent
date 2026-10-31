@@ -152,26 +152,11 @@ describe("sqlite write metrics", () => {
       registry.onEvent((event) => { idleEvents.push(event); });
       const probeStart = gitCommand.mock.calls.length;
       const idle = await measureSqliteWrites(async () => {
-        // One real unchanged observation covers the Git integration. Repeating
-        // the same subprocess 100 times tests process startup cost, while this
-        // budget needs 100 passes through the registry and the real SQLite store.
-        await registry.refreshThreadDirectoryRelationship(identity);
-        expect(gitCommand.mock.calls.slice(probeStart)).toEqual([
-          [cwd, ["rev-parse", "--abbrev-ref", "HEAD"], { ownProcessTree: true }],
-        ]);
-        const observation = await gitCommand.mock.results.at(-1)!.value;
-        expect(observation.stdout.trim()).toBe("fix/external-branch");
-        const run = gitCommand.getMockImplementation()!;
-        try {
-          gitCommand.mockResolvedValue(observation);
-          for (let index = 1; index < 100; index++) await registry.refreshThreadDirectoryRelationship(identity);
-        } finally {
-          gitCommand.mockImplementation(run);
-        }
+        // Ordinary branch refs now use filesystem observations. Exercise all
+        // 100 real refreshes without paying platform-specific launcher costs.
+        for (let index = 0; index < 100; index++) await registry.refreshThreadDirectoryRelationship(identity);
       });
-      expect(gitCommand.mock.calls.slice(probeStart)).toEqual(Array.from({ length: 100 }, () => [
-        cwd, ["rev-parse", "--abbrev-ref", "HEAD"], { ownProcessTree: true },
-      ]));
+      expect(gitCommand.mock.calls.slice(probeStart)).toEqual([]);
       expect(await store.getThreadOverlayState(identity)).toMatchObject({
         gitBranch: "fix/agent-branch", observedGitBranch: "fix/external-branch",
       });
@@ -180,7 +165,7 @@ describe("sqlite write metrics", () => {
         note: "100 unchanged hover/timer observations; zero commits, 0 MB/day while idle", writes: idle.writes });
       await git(["switch", "fix/agent-branch"]);
       await registry.refreshThreadDirectoryRelationship(identity);
-      // This probe is real again: the fixture must observe the switch back.
+      // The fixture must observe the switch back after the unchanged refreshes.
       expect(await store.getThreadOverlayState(identity)).toMatchObject({
         gitBranch: "fix/agent-branch", observedGitBranch: "fix/agent-branch",
       });

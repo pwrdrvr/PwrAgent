@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -135,7 +135,9 @@ describe("probeCurrentGitBranch", () => {
       expect(await probeCurrentGitBranch(linked)).toEqual({ branch: "feature/probe" });
       const relative = path.join(root, "relative");
       await mkdir(relative);
-      await writeFile(path.join(relative, ".git"), "gitdir: " + path.relative(relative, admin) + "\n");
+      const relativeAdmin = path.relative(await realpath(relative), await realpath(admin));
+      await writeFile(path.join(relative, ".git"), "gitdir: " + relativeAdmin + "\n");
+      expect(await git(relative, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("feature/probe");
       expect(await probeCurrentGitBranch(relative)).toEqual({ branch: "feature/probe" });
       await git(local, ["pack-refs", "--all"]);
       await rm(path.join(local, ".git", "refs", "heads", "feature", "probe"), { force: true });
