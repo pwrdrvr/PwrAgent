@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent, AppServerBackendScope, NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared";
+import { buildPrependPinRank } from "@pwragent/shared";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { NavigationQueryIndex } from "../app-server/navigation-query-projection";
@@ -35,7 +36,7 @@ function createSource(coverage: "complete" | "checking" | "degraded" = "complete
   let finish!: () => void;
   const gate = new Promise<void>((resolve) => { finish = resolve; });
   const listeners = new Set<(event: AgentEvent) => void>();
-  const listThreads = vi.fn(async (_params?: { forceRefresh?: boolean }) => { await gate; return []; });
+  const listThreads = vi.fn(async (_params?: { forceRefresh?: boolean }): Promise<NavigationThreadSummary[]> => { await gate; return []; });
   const rememberNavigationVisibilityIndex = vi.fn();
   const registry = {
     listThreads,
@@ -112,6 +113,83 @@ describe("owner index source event admission", () => {
       .toEqual([false, true]);
   });
 
+  it.each([
+    { olderRefresh: false, olderFinishesLast: false },
+    { olderRefresh: false, olderFinishesLast: true },
+    { olderRefresh: true, olderFinishesLast: false },
+    { olderRefresh: true, olderFinishesLast: true },
+  ])("preserves the newest creation visibility across pool keys (older refresh: $olderRefresh, finishes last: $olderFinishesLast)", async ({ olderRefresh, olderFinishesLast }) => {
+    const source = createSource();
+    const pinned = { id: "pinned", source: "codex", title: "Pinned", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false }, pinnedRank: "1024" } as NavigationThreadSummary;
+    const created = { ...pinned, id: "created", pinnedRank: "0" };
+    let finishOlder!: (threads: NavigationThreadSummary[]) => void;
+    let finishNewer!: (threads: NavigationThreadSummary[]) => void;
+    source.listThreads.mockImplementationOnce(() => new Promise((resolve) => { finishOlder = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishNewer = resolve; }));
+    const projection = mocks.store.readNavigationQueryIndex.getMockImplementation();
+    mocks.store.readNavigationQueryIndex.mockImplementation(({ threads }) => ({ threads, directories: [] }));
+    const older = olderRefresh ? source.refresh() : source.read();
+    const newer = olderRefresh ? source.read() : source.refresh();
+    try {
+      if (olderFinishesLast) {
+        finishNewer([pinned, created]);
+        await newer;
+        finishOlder([pinned]);
+        await older;
+      } else {
+        finishOlder([pinned]);
+        await older;
+        expect(source.rememberNavigationVisibilityIndex).not.toHaveBeenCalled();
+        finishNewer([pinned, created]);
+        await newer;
+      }
+      expect(source.rememberNavigationVisibilityIndex).toHaveBeenCalledExactlyOnceWith(await newer);
+      const remembered = source.rememberNavigationVisibilityIndex.mock.calls.at(-1)![0] as NavigationQueryIndex;
+      expect(remembered.threads.map((thread) => thread.id)).toEqual(["pinned", "created"]);
+      // A stale completion must not discard the newly allocated rank and
+      // let the following creation reuse it.
+      expect(buildPrependPinRank(remembered.threads.map((thread) => thread.pinnedRank))).toBe("-1024");
+      expect((await older).threads).toEqual([pinned]);
+    } finally {
+      finishOlder([pinned]); finishNewer([pinned, created]);
+      await Promise.allSettled([older, newer]);
+      mocks.store.readNavigationQueryIndex.mockImplementation(projection!);
+      source.emit("thread/name/updated");
+    }
+  });
+
+  it.each(["thread/pin/added", "thread/pin/removed", "directory/threadsCollapsed/updated"])("does not publish a scan overtaken by %s", async (method) => {
+    const source = createSource();
+    const pending = source.read();
+    source.emit(method);
+    source.finish();
+    try {
+      expect((await pending).coverage?.state).toBe("complete");
+      expect(source.rememberNavigationVisibilityIndex).not.toHaveBeenCalled();
+      const current = await source.read();
+      expect(source.rememberNavigationVisibilityIndex).toHaveBeenCalledExactlyOnceWith(current);
+    } finally {
+      source.emit("thread/name/updated");
+    }
+  });
+
+  it("does not publish a scan overtaken by an external source version change", async () => {
+    const source = createSource();
+    const pending = source.read();
+    mocks.store.readNavigationSourceVersion.mockReturnValue("external-pin-change");
+    source.finish();
+    try {
+      await pending;
+      expect(source.rememberNavigationVisibilityIndex).not.toHaveBeenCalled();
+      const current = await source.read();
+      expect(source.rememberNavigationVisibilityIndex).toHaveBeenCalledExactlyOnceWith(current);
+    } finally {
+      mocks.store.readNavigationSourceVersion.mockReturnValue("unchanged");
+      source.emit("thread/name/updated");
+    }
+  });
+
   it("does not restart an index for a subagent event with unchanged navigation", async () => {
     const source = createSource();
     const first = source.read();
@@ -182,6 +260,8 @@ describe("owner index source event admission", () => {
       await Promise.all([first.read(), first.read("codex"), second.read()]);
       expect(first.listThreads).toHaveBeenCalledTimes(2);
       expect(second.listThreads).toHaveBeenCalledTimes(1);
+      expect(first.rememberNavigationVisibilityIndex).toHaveBeenCalledTimes(1);
+      expect(second.rememberNavigationVisibilityIndex).toHaveBeenCalledTimes(1);
       await Promise.all([first.read(), first.read("codex"), second.read()]);
       expect(first.listThreads).toHaveBeenCalledTimes(2);
       expect(second.listThreads).toHaveBeenCalledTimes(1);
