@@ -36,7 +36,7 @@ import type { ThreadActionErrorKind } from "../../features/notifications/thread-
 function useThreadNavigation(api?: DesktopApi, options?: Parameters<typeof useRealThreadNavigation>[1]) {
   const localStore = useComposerDraftStore();
   const composerDraftStore = options?.composerDraftStore ?? localStore;
-  const ownerApi = useMemo(() => api ? navigationOwnerApiFixture({ manageLaunchpadCreation: async () => ({}), ...api }, (launchpads) => {
+  const ownerApi = useMemo(() => api ? navigationOwnerApiFixture(api, (launchpads) => {
     for (const launchpad of launchpads) {
       // Where main's draft index keeps it: a peer's draft names its owner.
       const scope = buildLaunchpadComposerScopeKey(launchpad.directoryKey);
