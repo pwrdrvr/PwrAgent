@@ -2178,19 +2178,20 @@ export function registerFederationBackendHandlers(params: {
         resolveSourceInstance: params.resolveSourceInstance,
         sourceInstanceId: envelope.sourceInstanceId,
       });
-      const input = wireInput
-        ? await resolveFederationTurnInput(
-            params.resolveTurnInput,
-            wireInput,
-            envelope.sourceInstanceId,
-          )
-        : undefined;
+      // Only diagnostic text crosses this boundary before registration. Blob
+      // resolution can outlive the connection and must belong to the operation.
+      const input = wireInput?.filter((item) => item.type === "text");
       return await params.backend.materializeDirectoryLaunchpad(
         {
           ...request,
           ...(input ? { input } : {}),
         },
         {
+          ...(wireInput ? { resolveInput: () => resolveFederationTurnInput(
+            params.resolveTurnInput,
+            wireInput,
+            envelope.sourceInstanceId,
+          ) } : {}),
           ...(messageOrigin ? { messageOrigin } : {}),
           sourceInstanceId: envelope.sourceInstanceId,
           onCodexEnvironmentSetupProgress: (event) => {

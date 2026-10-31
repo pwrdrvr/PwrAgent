@@ -18,6 +18,7 @@ export class LaunchpadCreationOperation {
   readonly status: LaunchpadCreationStatus;
   promise?: Promise<MaterializeDirectoryLaunchpadResponse>;
   actionRunId?: string;
+  workspaceRollback?: () => Promise<void>;
 
   constructor(request: MaterializeDirectoryLaunchpadRequest) {
     const now = Date.now();
