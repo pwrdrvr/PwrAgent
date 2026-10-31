@@ -2903,6 +2903,7 @@ describe("app server ipc", () => {
   async function requestWatchForAttachedPr(
     attached: PrSummary,
     notifyOn: ThreadPullRequestWatchEvent[],
+    options: { autoFixEnabled?: boolean; url?: string } = {},
   ) {
     readPrStatusCache.mockResolvedValueOnce({
       [buildPullRequestStatusKey(attached)]: {
@@ -2937,6 +2938,7 @@ describe("app server ipc", () => {
       executionMode: "default",
       extraLinkedDirectories: [],
       prs: [attached],
+      prAutoDispatchEnabled: options.autoFixEnabled,
     });
 
     registerAppServerIpcHandlers();
@@ -2954,8 +2956,75 @@ describe("app server ipc", () => {
       backend: "codex",
       threadId: "thread-1",
       notifyOn,
+      url: options.url,
     });
   }
+
+  it("watches an explicitly attached upstream fork PR and reports active primary monitoring", async () => {
+    const attached = githubPr({
+      number: 3129, org: "pwrdrvr", repo: "PwrAgent", state: "pending",
+      headRefName: "feat/fork-contribution", headSha: "f".repeat(40),
+      sourceRepository: { provider: "github.com", org: "contributor", repo: "PwrAgent" },
+      explicitlyAttached: true,
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3129",
+    });
+    getPrAutoDispatchCandidateWinner.mockResolvedValue({ backend: "codex", threadId: "thread-1" } as never);
+    registerThreadPrStatusWatch.mockClear();
+
+    const response = await requestWatchForAttachedPr(attached, ["merged", "closed"], {
+      autoFixEnabled: true, url: attached.url,
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: { pullRequestWatch: {
+        terminalWatch: { kind: "terminal", notifyOn: ["merged", "closed"], prUrl: attached.url },
+        prAutomation: { autoFixActive: true, guidance: expect.stringContaining("monitoring is active") },
+      } },
+    });
+    expect(getPrAutoDispatchCandidateWinner).toHaveBeenCalledWith({ prKey: buildPullRequestStatusKey(attached) });
+    expect(registerThreadPrStatusWatch).toHaveBeenCalledOnce();
+    const owner = setLocalPullRequestAuthorityResolver.mock.calls.at(-1)?.[0];
+    expect(owner(buildPullRequestStatusKey(attached))).toBe(true);
+
+    const { appServerService } = await import("../ipc/app-server");
+    const service = appServerService as unknown as {
+      setThreadPrAttachment: (key: string, attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] }) => void;
+      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+      collectPrPollTargets: () => { prKey: string; threadKeys: string[] }[];
+    };
+    const automatic = { ...attached, explicitlyAttached: undefined };
+    service.setThreadPrAttachment("codex:automatic-sibling", {
+      backend: "codex", primaryRepoKey: "github.com/pwrdrvr/pwragent", prs: [automatic],
+    });
+    // Forge status is shared, but explicit attachment permission is thread-owned.
+    // Refreshing must neither drop it nor give it to an automatic sibling.
+    service.rememberPrStatuses([automatic], Date.now(), "test-forge-refresh");
+    expect(service.collectPrPollTargets()).toEqual([
+      expect.objectContaining({ prKey: buildPullRequestStatusKey(attached), threadKeys: ["codex:thread-1"] }),
+    ]);
+    const watchHandler = setThreadPullRequestWatchToolHandler.mock.calls.at(-1)?.[0];
+    await expect(watchHandler?.({ backend: "codex", threadId: "thread-1", url: attached.url, notifyOn: ["merged", "closed"] }))
+      .resolves.toMatchObject({ ok: true });
+  });
+
+  it.each([
+    { explicitlyAttached: undefined, org: "pwrdrvr", repo: "PwrAgent" },
+    { explicitlyAttached: true, org: "pwrdrvr", repo: "docs.pwragent.ai" },
+    { explicitlyAttached: true, org: "other", repo: "PwrAgent" },
+  ] as const)("rejects a non-primary fork PR watch (%j)", async (identity) => {
+    const attached = githubPr({
+      ...identity, number: 3130, state: "pending", headSha: "e".repeat(40),
+      sourceRepository: { provider: "github.com", org: "contributor", repo: identity.repo },
+      url: `https://github.com/${identity.org}/${identity.repo}/pull/3130`,
+    });
+    registerThreadPrStatusWatch.mockClear();
+    const response = await requestWatchForAttachedPr(attached, ["merged", "closed"], { url: attached.url });
+    expect(response).toMatchObject({ ok: false, error: { code: "not_found" } });
+    expect(registerThreadPrStatusWatch).not.toHaveBeenCalled();
+    const owner = setLocalPullRequestAuthorityResolver.mock.calls.at(-1)?.[0];
+    expect(owner(buildPullRequestStatusKey(attached))).toBe(false);
+  });
 
   it("returns merge details at once when the PR merged before the watch was requested", async () => {
     const merged = githubPr({

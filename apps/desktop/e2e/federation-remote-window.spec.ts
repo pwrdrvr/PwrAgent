@@ -2120,11 +2120,11 @@ test.describe("federation remote window", () => {
       await viewer.window.getByRole("menuitem", { name: "Unlink from Parent" }).click();
       await expect
         .poll(async () => {
-          const { childThread } = await readViewerRelationship();
+          const child = (await readViewerRelationship()).childThread;
           return {
-            pinnedRank: childThread?.pinnedRank,
-            parentThreadId: childThread?.parentThreadId,
-            parentThreadInstanceId: childThread?.parentThreadInstanceId,
+            pinnedRank: child?.pinnedRank,
+            parentThreadId: child?.parentThreadId,
+            parentThreadInstanceId: child?.parentThreadInstanceId,
           };
         })
         .toEqual({
