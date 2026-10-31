@@ -16166,10 +16166,12 @@ export class DesktopBackendRegistry {
     const backend = request.backend ?? "codex";
     if (backend === "claude") {
       await this.claudeBackend.setArchived(request.threadId, false);
+      const restoredAt = Date.now();
+      await this.overlayStore.setThreadArchiveTombstone({ backend, threadId: request.threadId, restoredAt });
       this.clearArchivedMessagingCleanupCache({ backend, threadId: request.threadId });
       this.invalidateThreadListCache(backend);
       await this.emit({ backend, notification: { method: "thread/unarchived", params: { threadId: request.threadId } } });
-      return { backend, threadId: request.threadId, restoredAt: Date.now() };
+      return { backend, threadId: request.threadId, restoredAt };
     }
     if (isAcpBackendId(backend)) {
       return await this.restoreAcpThread({
@@ -16279,6 +16281,7 @@ export class DesktopBackendRegistry {
       ...restoredSession,
       updatedAt: Math.max(session.updatedAt, restoredAt),
     });
+    await this.overlayStore.setThreadArchiveTombstone({ ...params, restoredAt });
     this.invalidateThreadListCache(params.backend, true);
     this.clearArchivedMessagingCleanupCache({
       backend: params.backend,
@@ -30309,6 +30312,11 @@ export class DesktopBackendRegistry {
         }
         if (notification.method === "thread/unarchived") {
           if (backend === "codex") await this.restoreTokenMiserThread(notification.params.threadId);
+          await this.overlayStore.setThreadArchiveTombstone({
+            backend,
+            threadId: notification.params.threadId,
+            restoredAt: Date.now(),
+          });
           this.clearArchivedMessagingCleanupCache({
             backend,
             threadId: notification.params.threadId,

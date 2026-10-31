@@ -1033,6 +1033,7 @@ function createOverlayStoreMock(params?: {
         ...current,
         archiveTombstonedAt: archivedAt,
         archiveRestoredAt: restoredAt ?? current.archiveRestoredAt,
+        archiveRetentionStartedAt: restoredAt === undefined ? current.archiveRetentionStartedAt : undefined,
       } as ThreadOverlayState;
       overlays.set(key, next);
       return next;
