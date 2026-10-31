@@ -8,6 +8,7 @@ import { captureRenderingDiagnostics, stopRenderingDiagnostics } from "../../../
 const root = process.env.PWRAGENT_RENDERING_FIXTURE_ROOT!;
 app.setPath("userData", join(root, "user-data"));
 const watchdog = setTimeout(() => { console.error("fixture deadline exceeded"); app.exit(1); }, 20_000);
+async function main() {
 await app.whenReady();
 console.log("fixture ready");
 const external = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
@@ -83,3 +84,5 @@ try {
   external.destroy();
   app.quit();
 }
+}
+void main().catch(() => { console.error("rendering ownership fixture failed"); app.exit(1); });
