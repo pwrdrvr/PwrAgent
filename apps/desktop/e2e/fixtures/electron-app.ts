@@ -1277,6 +1277,10 @@ export async function closeElectronWithSessionDrain(
     await Promise.all([...sessions].map(async (ownedSession) => {
       await ownedSession.closeAllConnections();
       await ownedSession.cookies.flushStore();
+      // clearCache() does not await network-history persistence. clearData's
+      // cache completion also awaits HttpServerProperties::Clear and its
+      // Network Persistent State write, a native BLOCK_SHUTDOWN owner.
+      await ownedSession.clearData({ dataTypes: ["cache"] });
     }));
   });
   await electronApp.close();
