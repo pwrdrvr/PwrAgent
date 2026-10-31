@@ -7813,6 +7813,7 @@ export class CodexAppServerClient {
   private readonly threadsAwaitingFirstTurn = new Set<string>();
   private readonly pendingFirstTurnThreadResults = new Map<string, unknown>();
   private readonly pendingFirstTurnShellEnvironments = new Map<string, string | undefined>();
+  private readonly helperTurnStartObservers = new Map<string, (turnId: string) => void>();
   private readonly helperThreadIds = new Set<string>();
   private readonly pendingHelperThreadStarts = new Set<Promise<string | undefined>>();
   private readonly helperTurnWaiters = new Map<
@@ -8314,6 +8315,7 @@ export class CodexAppServerClient {
     this.pendingFirstTurnShellEnvironments.clear();
     this.recordedThreadNames.clear();
     this.helperThreadIds.clear();
+    this.helperTurnStartObservers.clear();
     this.helperThreadToolHandlers.clear();
     this.helperToolTurnThreadIds.clear();
     this.completedHelperTurnResults.clear();
@@ -8973,6 +8975,7 @@ export class CodexAppServerClient {
       method !== "item/completed" &&
       method !== "turn/completed" &&
       method !== "turn/failed" &&
+      method !== "turn/started" &&
       method !== "thread/tokenUsage/updated"
     ) {
       return;
@@ -8981,6 +8984,11 @@ export class CodexAppServerClient {
     const threadId = readStringFromRecord(notification.params, "threadId");
     const turnId = extractTurnIdFromNotificationParams(notification.params);
     if (!threadId || !turnId) {
+      return;
+    }
+
+    if (method === "turn/started") {
+      this.helperTurnStartObservers.get(threadId)?.(turnId);
       return;
     }
 
@@ -9082,7 +9090,9 @@ export class CodexAppServerClient {
     threadId: string;
     turnId: string;
     timeoutMs: number;
+    signal?: AbortSignal;
   }): Promise<Extract<HelperTurnResult, { status: "ok" }>> {
+    params.signal?.throwIfAborted();
     const key = buildHelperTurnKey(params.threadId, params.turnId);
     const completed = this.completedHelperTurnResults.get(key);
     if (completed) {
@@ -9096,13 +9106,21 @@ export class CodexAppServerClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.helperTurnWaiters.delete(key);
+        params.signal?.removeEventListener("abort", aborted);
         reject(new Error("codex_title_turn_timeout"));
       }, Math.max(100, params.timeoutMs));
       this.helperTurnWaiters.set(key, {
-        resolve,
-        reject,
+        resolve: (result) => { params.signal?.removeEventListener("abort", aborted); resolve(result); },
+        reject: (error) => { params.signal?.removeEventListener("abort", aborted); reject(error); },
         timer,
       });
+      const aborted = (): void => {
+        clearTimeout(timer);
+        this.helperTurnWaiters.delete(key);
+        reject(params.signal?.reason ?? new Error("Helper cancelled"));
+      };
+      params.signal?.addEventListener("abort", aborted, { once: true });
+      if (params.signal?.aborted) aborted();
     });
   }
 
@@ -9966,6 +9984,53 @@ export class CodexAppServerClient {
     return undefined;
   }
 
+  /** Complete, bounded user evidence for host approvals; partial history cannot authorize. */
+  async readMcpApprovalUserMessages(params: {
+    threadId: string;
+    turnId: string;
+    signal: AbortSignal;
+  }): Promise<Array<{ id: string; turnId: string; firstInTurn: boolean; text: string }> | undefined> {
+    await this.ensureInitialized();
+    const messages: Array<{ id: string; turnId: string; firstInTurn: boolean; text: string }> = [];
+    const userTurns = new Set<string>();
+    const cursors = new Set<string>();
+    const deadline = Date.now() + 10_000;
+    let cursor: string | undefined;
+    let currentTurnSeen = false;
+    let bytes = 0;
+    for (let pageNumber = 0; pageNumber < 32; pageNumber += 1) {
+      params.signal.throwIfAborted();
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return undefined;
+      const page = await requestCodexThreadItemsPage({
+        client: this.connection,
+        payload: { threadId: params.threadId, limit: 100, sortDirection: "asc", ...(cursor ? { cursor } : {}) },
+        timeoutMs: Math.min(remaining, 5_000),
+      });
+      params.signal.throwIfAborted();
+      if (!Array.isArray(page.data)) return undefined;
+      for (const entry of page.data) {
+        // A legacy page without its containing turn cannot attest current intent.
+        if (!entry.item || typeof entry.turnId !== "string") return undefined;
+        if (entry.item.type !== "userMessage") continue;
+        if (typeof entry.item.id !== "string" || !entry.item.id) return undefined;
+        const firstInTurn = !userTurns.has(entry.turnId);
+        userTurns.add(entry.turnId);
+        if (entry.item.content.some((part) => part.type !== "text")) return undefined;
+        const text = entry.item.content.map((part) => part.type === "text" ? part.text : "").join("\n");
+        bytes += Buffer.byteLength(text);
+        if (bytes > 32_000) return undefined;
+        if (text.trim()) messages.push({ id: entry.item.id, turnId: entry.turnId, firstInTurn, text });
+        if (entry.turnId === params.turnId && text.trim()) currentTurnSeen = true;
+      }
+      if (!page.nextCursor) return currentTurnSeen && messages.length ? messages : undefined;
+      if (cursors.has(page.nextCursor)) return undefined;
+      cursors.add(page.nextCursor);
+      cursor = page.nextCursor;
+    }
+    return undefined;
+  }
+
   /**
    * One turn's replay, normalized through the same adapter as a history page,
    * so its messages carry the same parts: a turn's tool screenshots attach to
@@ -10706,6 +10771,7 @@ export class CodexAppServerClient {
     system?: string;
     /** Explicitly remove execution and delegation tools for data-only helpers. */
     disableExecution?: boolean;
+    signal?: AbortSignal;
     isMatch: StructuredRecordPredicate;
     timeoutMs?: number;
     turnTimeoutMs?: number;
@@ -10821,6 +10887,7 @@ export class CodexAppServerClient {
     schema?: Record<string, unknown>;
     system?: string;
     disableExecution?: boolean;
+    signal?: AbortSignal;
     isMatch?: StructuredRecordPredicate;
     /**
      * PwrAgent tools this helper may call. Supplying these also supplies
@@ -10843,19 +10910,38 @@ export class CodexAppServerClient {
      */
     turnTimeoutMs?: number;
   }): Promise<ThreadTitleAdapterResult> {
+    params.signal?.throwIfAborted();
     await this.ensureInitialized();
+    params.signal?.throwIfAborted();
 
     let helperThreadId: string | undefined;
     let helperTurnId: string | undefined;
     let helperTurnCompleted = false;
+    let pendingTurnStart: Promise<unknown> | undefined;
+    let turnStartSettled = false;
+    let removeStartupAbort = (): void => {};
+    let interruptPromise: Promise<void> | undefined;
     const timeoutMs = params.timeoutMs ?? DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS;
     const turnTimeoutMs = params.turnTimeoutMs ?? timeoutMs;
+    const interrupt = (): Promise<void> => {
+      if (!helperThreadId || !helperTurnId || helperTurnCompleted) return Promise.resolve();
+      return interruptPromise ??= requestWithFallbacks({
+        client: this.connection, methods: ["turn/interrupt"],
+        payloads: [{ threadId: helperThreadId, turnId: helperTurnId }], timeoutMs,
+      }).then(() => undefined).catch((error: unknown) => {
+        codexClientLog.warn("codex helper turn cleanup interrupt failed", {
+          threadId: helperThreadId, turnId: helperTurnId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    };
     const helperWorkspaceDir = await ensureCodexThreadTitleWorkspace();
     const selection = await this.resolveHelperModelSelection({
       helper: params.helper,
       model: params.model,
       reasoningEffort: params.reasoningEffort,
     });
+    params.signal?.throwIfAborted();
     const helperModel = selection.model;
     if (!helperModel) {
       return { status: "unavailable", reason: "codex_helper_no_available_model" };
@@ -10879,6 +10965,7 @@ export class CodexAppServerClient {
         helperWorkspaceDir,
         timeoutMs,
       );
+      params.signal?.throwIfAborted();
       const helperConfig = buildCodexHelperConfig(
         CODEX_THREAD_TITLE_CONFIG,
         mcpServerNames,
@@ -10931,6 +11018,7 @@ export class CodexAppServerClient {
           reason: "codex_title_thread_start_missing_thread_id",
         };
       }
+      params.signal?.throwIfAborted();
       const instructionSources = readThreadInstructionSources(threadStartResult);
       if (!instructionSources) {
         return {
@@ -10962,6 +11050,7 @@ export class CodexAppServerClient {
           threadId: helperThreadId,
         });
       }
+      params.signal?.throwIfAborted();
       this.helperThreadPredicates.set(helperThreadId, helperPredicate);
       if (params.onToolCall) {
         // Registered only after the attestation above proves this thread has
@@ -10971,7 +11060,21 @@ export class CodexAppServerClient {
         this.helperToolTurnThreadIds.add(helperThreadId);
       }
 
-      const turnStartResult = await requestWithFallbacks({
+      // turn/started can precede the RPC response. Keep its identity until
+      // startup drains, including when the caller has already been cancelled.
+      this.helperTurnStartObservers.set(helperThreadId, (turnId) => {
+        helperTurnId = turnId;
+        if (params.signal?.aborted) void interrupt();
+      });
+      let rejectStartupAbort!: (reason: unknown) => void;
+      const startupAbort = new Promise<never>((_resolve, reject) => { rejectStartupAbort = reject; });
+      const aborted = (): void => {
+        rejectStartupAbort(params.signal?.reason ?? new Error("Helper cancelled"));
+        void interrupt();
+      };
+      params.signal?.addEventListener("abort", aborted, { once: true });
+      removeStartupAbort = () => { params.signal?.removeEventListener("abort", aborted); };
+      pendingTurnStart = requestWithFallbacks({
         client: this.connection,
         methods: ["turn/start"],
         payloads: [
@@ -10998,8 +11101,17 @@ export class CodexAppServerClient {
         // a raised `turnTimeoutMs` a no-op whenever the app server
         // completes the helper turn inside `turn/start`.
         timeoutMs: Math.max(timeoutMs, turnTimeoutMs),
+      }).then((result) => {
+        helperTurnId ??= extractTurnIdFromValue(result);
+        turnStartSettled = true;
+        if (params.signal?.aborted) void interrupt();
+        return result;
+      }, (error: unknown) => {
+        turnStartSettled = true;
+        throw error;
       });
-      helperTurnId = extractTurnIdFromValue(turnStartResult);
+      const turnStartResult = await Promise.race([pendingTurnStart, startupAbort]);
+      params.signal?.throwIfAborted();
       const immediateObject = findStructuredRecord(turnStartResult, helperPredicate);
       if (immediateObject) {
         helperTurnCompleted = true;
@@ -11028,6 +11140,7 @@ export class CodexAppServerClient {
         threadId: helperThreadId,
         turnId: helperTurnId,
         timeoutMs: turnTimeoutMs,
+        signal: params.signal,
       });
       helperTurnCompleted = true;
       const accountKey = await accountKeyRead;
@@ -11049,21 +11162,11 @@ export class CodexAppServerClient {
         reason: error instanceof Error ? error.message : String(error),
       };
     } finally {
-      if (helperThreadId) {
-        if (helperTurnId && !helperTurnCompleted) {
-          await requestWithFallbacks({
-            client: this.connection,
-            methods: ["turn/interrupt"],
-            payloads: [{ threadId: helperThreadId, turnId: helperTurnId }],
-            timeoutMs,
-          }).catch((error: unknown) => {
-            codexClientLog.warn("codex helper turn cleanup interrupt failed", {
-              threadId: helperThreadId,
-              turnId: helperTurnId,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          });
-        }
+      const cleanup = async (): Promise<void> => {
+        removeStartupAbort();
+        if (!helperThreadId) return;
+        this.helperTurnStartObservers.delete(helperThreadId);
+        await interrupt();
         await requestWithFallbacks({
           client: this.connection,
           methods: ["thread/unsubscribe"],
@@ -11086,6 +11189,15 @@ export class CodexAppServerClient {
         this.helperThreadToolHandlers.delete(helperThreadId);
         this.helperToolTurnThreadIds.delete(helperThreadId);
         this.noteLiveTurnActivity();
+      };
+      if (pendingTurnStart && !turnStartSettled && params.signal?.aborted) {
+        // Return cancellation promptly, but keep notification suppression and
+        // the startup observer until a late response/turn identity is drained.
+        void pendingTurnStart.catch(() => undefined).then(cleanup).catch((error: unknown) => {
+          codexClientLog.warn("cancelled helper startup cleanup failed", { error: String(error) });
+        });
+      } else {
+        await cleanup();
       }
     }
   }

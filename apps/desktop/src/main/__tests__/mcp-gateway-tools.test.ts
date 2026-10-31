@@ -69,7 +69,7 @@ describe("fixed MCP gateway tools", () => {
         connectionId: entry.connectionId, toolName: entry.toolName, schemaRevision: entry.schemaRevision, arguments: { id: "x" },
       } });
       expect(called._meta?.["pwragent/source"]).toMatchObject({ connectionId: "one", toolName: "late_tool" });
-      expect(f.approve).toHaveBeenCalledWith(expect.objectContaining({ toolName: "late_tool" }), expect.objectContaining({ backend: "acp:fixture", threadId: "thread-a", turnId: "turn-a" }), expect.any(AbortSignal), undefined, gatewayCatalogRevision([entry]));
+      expect(f.approve).toHaveBeenCalledWith(expect.objectContaining({ toolName: "late_tool" }), expect.objectContaining({ backend: "acp:fixture", threadId: "thread-a", turnId: "turn-a" }), expect.any(AbortSignal), undefined, gatewayCatalogRevision([entry]), entry.definition);
     } finally {
       await client.close();
       await server.close();

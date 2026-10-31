@@ -22,7 +22,7 @@ export type McpGatewayToolServiceOptions = {
   /** Must check active turn, actor permissions and the latest saved selection. */
   selectedConnections: (context: AgentToolCallContext) => Promise<string[]>;
   /** `annotations` are the listed tool's own hints, under its exact schema revision. */
-  approve: (invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, annotations: Tool["annotations"], catalogRevision: string) => Promise<McpGatewayApproval>;
+  approve: (invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, annotations: Tool["annotations"], catalogRevision: string, definition: Tool) => Promise<McpGatewayApproval>;
 };
 
 /** No disk catalog. Every invocation revalidates
@@ -125,7 +125,7 @@ export class McpGatewayToolService {
         toolName: tool.toolName, schemaRevision: tool.schemaRevision,
       };
       const invocation = { ...source, arguments: args.arguments };
-      const approval = await this.options.approve(invocation, context, signal, tool.definition.annotations, gatewayCatalogRevision(tools));
+      const approval = await this.options.approve(invocation, context, signal, tool.definition.annotations, gatewayCatalogRevision(tools), tool.definition);
       if (!approval) throw new Error("The MCP tool invocation was not approved.");
       await this.requireSelected(args.connectionId, context, signal);
       // The owner lists and validates again, preventing schema/auth changes while

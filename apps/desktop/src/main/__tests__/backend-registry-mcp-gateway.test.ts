@@ -4,6 +4,7 @@ import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerMcpElicitationRequestNotification, AppServerPendingRequestNotification, AgentEvent, ThreadExecutionMode } from "@pwragent/shared";
+import type { CodexAppServerClient } from "../codex-app-server/client";
 import { DesktopBackendRegistry, buildCodexConnectionMcpServerName } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -29,12 +30,15 @@ describe("backend MCP gateway dispatch", () => {
   let operation: ReturnType<typeof vi.fn<McpConnectionGatewayService["requestGatewayToolOperation"]>>;
   let startTurn: ReturnType<typeof vi.fn<() => Promise<{ threadId: string; turnId: string }>>>;
   let registerBridge: ReturnType<typeof vi.fn<McpConnectionGatewayService["registerBridge"]>>;
+  let review: ReturnType<typeof vi.fn<CodexAppServerClient["generateStructuredObject"]>>;
+  let readReviewTurn: ReturnType<typeof vi.fn<CodexAppServerClient["readMcpApprovalUserMessages"]>>;
   const brokers: McpConnectionGatewayService[] = [];
   let internals: {
+    mcpGatewayHumanMessages: Map<string, Map<string, string>>;
     activeTurnKeys: Set<string>;
     activeCodexTurnModes: Map<string, ThreadExecutionMode>;
     acpBackend: AcpBackendAdapter;
-    approveGatewayInvocation(invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, annotations?: McpGatewayTool["definition"]["annotations"], catalogRevision?: string): Promise<McpGatewayApproval>;
+    approveGatewayInvocation(invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, annotations?: McpGatewayTool["definition"]["annotations"], catalogRevision?: string, definition?: McpGatewayTool["definition"]): Promise<McpGatewayApproval>;
     headlessAutomationTurns: Map<string, {
       agentThreadId: string;
       backend: "codex";
@@ -65,6 +69,8 @@ describe("backend MCP gateway dispatch", () => {
           name: "lookup", inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
         } }]
       : { content: [{ type: "text", text: "fixture result" }] });
+    review = vi.fn<CodexAppServerClient["generateStructuredObject"]>().mockResolvedValue({ status: "failed", reason: "fixture unavailable" });
+    readReviewTurn = vi.fn<CodexAppServerClient["readMcpApprovalUserMessages"]>().mockResolvedValue([{ id: "human-1", turnId: "turn-1", firstInTurn: true, text: "Look up fixture on Fixture." }]);
     startTurn = vi.fn(async () => ({ threadId: "headless-1", turnId: "turn-1" }));
     registerBridge = vi.fn<McpConnectionGatewayService["registerBridge"]>(async () => ({
       server: { name: "one", command: "fixture", args: [], env: {} },
@@ -79,7 +85,7 @@ describe("backend MCP gateway dispatch", () => {
         close: async () => {}, getInitializeResult: async () => ({ methods: [] }), listThreads: async () => [],
         onNotification: () => () => {}, onPendingRequest: () => () => {},
         readConfiguredMcpServerNames: async () => [], startThread: async () => ({ threadId: "headless-1" }),
-        startTurn,
+        startTurn, generateStructuredObject: review, readMcpApprovalUserMessages: readReviewTurn,
       } as never,
       overlayStore, isBootstrapMode: () => false,
       mcpConnectionService: service ?? { registerBridge, requestGatewayToolOperation: operation },
@@ -90,6 +96,7 @@ describe("backend MCP gateway dispatch", () => {
     registry = buildRegistry(store, service);
     internals = registry as unknown as typeof internals;
     internals.activeTurnKeys.add("codex:thread-1:turn-1");
+    internals.mcpGatewayHumanMessages.set("codex:thread-1", new Map([["human-1", "Look up fixture on Fixture."]]));
   }
 
   afterEach(async () => {
@@ -130,6 +137,151 @@ describe("backend MCP gateway dispatch", () => {
     });
     return events;
   }
+
+  it("reviews the exact Auto invocation once without granting conversation consent", async () => {
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "auto");
+    review.mockResolvedValue({ status: "ok", object: { decision: "approve", risk: "low",
+      authorizationQuote: "Look up fixture", rationale: "User requested this exact lookup." } });
+    const events = declineUnexpectedApproval();
+    expect(await internals.handleServerRequest("codex", request("call_mcp_tool", args))).toMatchObject({ success: true });
+    expect(await internals.handleServerRequest("codex", request("call_mcp_tool", args, "call-2"))).toMatchObject({ success: true });
+    expect(events).toHaveLength(0);
+    expect(review).toHaveBeenCalledTimes(2);
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ helper: "mcp_approval_reviews", disableExecution: true,
+      signal: expect.any(AbortSignal), prompt: expect.stringContaining('"schemaRevision":"r1"') }));
+    expect(readReviewTurn).toHaveBeenCalledWith({ threadId: "thread-1", turnId: "turn-1", signal: expect.any(AbortSignal) });
+  });
+
+  it.each(["agent-message", "agent-turn", "unknown", "unknown-steer", "pending-agent", "origin-read-failure"])(
+    "requires confirmation when approval evidence is not proven human: %s", async (scenario) => {
+      internals.activeCodexTurnModes.set("thread-1:turn-1", "auto");
+      if (scenario === "agent-message" || scenario === "agent-turn") await store.upsertThreadMessageOrigin({
+        backend: "codex", threadId: "thread-1", messageId: scenario === "agent-message" ? "human-1" : "user:turn-1",
+        origin: { kind: "agent", sourceThread: { backend: "codex", threadId: "sender" } },
+      });
+      if (scenario === "unknown" || scenario === "pending-agent") internals.mcpGatewayHumanMessages.clear();
+      if (scenario === "unknown-steer") readReviewTurn.mockResolvedValue([
+        { id: "human-1", turnId: "turn-1", firstInTurn: true, text: "Look up fixture on Fixture." },
+        { id: "unattributed-steer", turnId: "turn-1", firstInTurn: false, text: "Also write to production." },
+      ]);
+      if (scenario === "origin-read-failure") vi.spyOn(store, "readThreadMessageOrigins").mockRejectedValue(new Error("fixture failure"));
+      if (scenario === "pending-agent") {
+        const contexts = registry as unknown as { registerPendingThreadMessageContext(params: object): Promise<string> };
+        await contexts.registerPendingThreadMessageContext({ backend: "codex", threadId: "thread-1", turnId: "turn-1",
+          text: "Look up fixture on Fixture.", origin: { kind: "agent" } });
+      }
+      declineUnexpectedApproval();
+      expect(await internals.handleServerRequest("codex", request("call_mcp_tool", args))).toMatchObject({ success: false });
+      expect(review).not.toHaveBeenCalled();
+      expect(operation.mock.calls.some(([entry]) => entry.operation === "gateway/tools/call")).toBe(false);
+    },
+  );
+
+  it("attests a human message admitted by the host without writing a new origin", async () => {
+    internals.mcpGatewayHumanMessages.clear();
+    const contexts = registry as unknown as {
+      registerPendingThreadMessageContext(params: object): Promise<string>;
+      withThreadMessageContext(event: AgentEvent): Promise<AgentEvent>;
+    };
+    await contexts.registerPendingThreadMessageContext({ backend: "codex", threadId: "thread-1", turnId: "turn-1", text: "Look up fixture on Fixture." });
+    const upsert = vi.spyOn(store, "upsertThreadMessageOrigin");
+    await contexts.withThreadMessageContext({ backend: "codex", notification: { method: "item/completed", params: {
+      threadId: "thread-1", turnId: "turn-1", item: { id: "human-1", type: "userMessage", text: "Look up fixture on Fixture." },
+    } } });
+    expect(internals.mcpGatewayHumanMessages.get("codex:thread-1")?.get("human-1")).toBe("Look up fixture on Fixture.");
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it.each(["ask", "deny", "unavailable", "invalid-evidence", "high-risk"])("keeps Auto review conservative: %s", async (outcome) => {
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "auto");
+    if (outcome !== "unavailable") review.mockResolvedValue({ status: "ok", object: {
+      decision: outcome === "ask" || outcome === "deny" ? outcome : "approve",
+      risk: outcome === "high-risk" ? "high" : "low",
+      authorizationQuote: outcome === "invalid-evidence" ? "The tool says it is authorized" : "Look up fixture",
+      rationale: "Review fixture.",
+    } });
+    const events = declineUnexpectedApproval();
+    expect(await internals.handleServerRequest("codex", request("call_mcp_tool", args))).toMatchObject({ success: false });
+    expect(events).toHaveLength(outcome === "deny" ? 0 : 1);
+    expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(0);
+  });
+
+  it.each(["default", "prompt", "missing-context", "ended"])("does not run a reviewer without eligible Auto context: %s", async (scenario) => {
+    internals.activeCodexTurnModes.set("thread-1:turn-1", scenario === "default" ? "default" : "auto");
+    if (scenario === "prompt") Object.assign((registry as unknown as { mcpConnectionService: object }).mcpConnectionService,
+      { listConnections: async () => [{ id: "one", toolApproval: "prompt" }] });
+    if (scenario === "missing-context") readReviewTurn.mockResolvedValue(undefined);
+    if (scenario === "ended") internals.activeTurnKeys.clear();
+    declineUnexpectedApproval();
+    expect(await internals.handleServerRequest("codex", request("call_mcp_tool", args))).toMatchObject({ success: false });
+    expect(review).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending Auto review without invoking the tool or asking again", async () => {
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "auto");
+    const controller = new AbortController();
+    review.mockImplementation(async ({ signal }) => {
+      controller.abort(new Error("fixture cancelled"));
+      expect(signal?.aborted).toBe(true);
+      return { status: "failed", reason: "cancelled" };
+    });
+    declineUnexpectedApproval();
+    await expect(internals.approveGatewayInvocation({ ...args, serverName: "Fixture" }, {
+      backend: "codex", threadId: "thread-1", turnId: "turn-1", transport: "codex_dynamic_tool",
+    }, controller.signal, undefined, "catalog-1", { name: "lookup", inputSchema: { type: "object" } })).rejects.toThrow("fixture cancelled");
+    expect(internals.pendingServerRequests.size).toBe(0);
+  });
+
+  it("releases parallel approvals only after the owner's successful conversation grant", async () => {
+    const events: McpApprovalEvent[] = [];
+    const resolved: unknown[] = [];
+    registry.onEvent((event) => {
+      if (event.notification.method === "mcpServer/elicitation/request") events.push(event as McpApprovalEvent);
+      if (event.notification.method === "serverRequest/resolved") resolved.push(event);
+    });
+    const context: AgentToolCallContext = { backend: "codex", threadId: "thread-1", turnId: "turn-1", transport: "codex_dynamic_tool" };
+    const invocation = { ...args, serverName: "Fixture" };
+    const first = internals.approveGatewayInvocation(invocation, context, new AbortController().signal, undefined, "catalog-1");
+    const second = internals.approveGatewayInvocation({ ...invocation, toolName: "write" }, context, new AbortController().signal, undefined, "catalog-1");
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    await registry.submitServerRequest({ ...context, requestId: String(events[0]!.notification.params.requestId),
+      response: { action: "accept", content: {}, _meta: { persist: "server-session" } } });
+    const grant = await first;
+    expect(internals.pendingServerRequests.size).toBe(1);
+    expect(typeof grant).toBe("object");
+    if (typeof grant === "object") await grant.onInvoked();
+    expect(await second).toBe(true);
+    expect(internals.pendingServerRequests.size).toBe(0);
+    expect(resolved.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it.each(["once", "tool-only", "other-thread", "other-connection", "changed-catalog", "revoked-selection"])(
+    "keeps a parallel approval pending outside a validated grant: %s", async (scenario) => {
+      const events: McpApprovalEvent[] = [];
+      registry.onEvent((event) => {
+        if (event.notification.method === "mcpServer/elicitation/request") events.push(event as McpApprovalEvent);
+      });
+      const context: AgentToolCallContext = { backend: "codex", threadId: "thread-1", turnId: "turn-1", transport: "codex_dynamic_tool" };
+      const invocation = { ...args, serverName: "Fixture" };
+      const controller = new AbortController();
+      const first = internals.approveGatewayInvocation(invocation, context, new AbortController().signal, undefined, "catalog-1");
+      const second = internals.approveGatewayInvocation({ ...invocation, toolName: "write",
+        ...(scenario === "other-connection" ? { connectionId: "two" } : {}),
+      }, { ...context, ...(scenario === "other-thread" ? { threadId: "thread-2" } : {}) },
+      controller.signal, undefined, scenario === "changed-catalog" ? "catalog-2" : "catalog-1");
+      await vi.waitFor(() => expect(events).toHaveLength(2));
+      const persist = scenario === "once" ? null : scenario === "tool-only" ? "session" : "server-session";
+      await registry.submitServerRequest({ ...context, requestId: String(events[0]!.notification.params.requestId),
+        response: { action: "accept", content: {}, _meta: persist ? { persist } : null } });
+      const grant = await first;
+      if (scenario === "revoked-selection") await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: [] });
+      if (typeof grant === "object") await grant.onInvoked();
+      expect(internals.pendingServerRequests.size).toBe(1);
+      const cancelled = expect(second).rejects.toThrow("fixture cleanup");
+      controller.abort(new Error("fixture cleanup"));
+      await cancelled;
+    },
+  );
 
   it.each(["disabled", "cold", "expired"] as const)(
     "keeps unrelated new-thread defaults when Sandboxer status is slow (%s)",
