@@ -1027,6 +1027,82 @@ describe("Composer", () => {
     expect(onMaterializeLaunchpad).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["slash", false],
+    ["slash", true],
+    ["panel", false],
+    ["panel", true],
+  ] as const)("keeps a %s review behind the first launchpad message (starting scope: %s)", async (entry, startingScope) => {
+    const draftStore = createComposerDraftStore();
+    const launchpad = createRetargetingLaunchpad(retargetingPwrSnap, "Check out PR #42 and attach it");
+    const materialization = createDeferred<void>();
+    const onMaterializeLaunchpad = vi.fn<NonNullable<ComponentProps<typeof Composer>["onMaterializeLaunchpad"]>>(() => materialization.promise);
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend, threadId: request.threadId,
+      reviewThreadId: request.threadId, turnId: "review-turn",
+    }));
+    const startTurn = vi.fn();
+    const createScheduledThreadAction = vi.fn();
+    const baseProps = {
+      backends: [backendSummary("codex")], directory: retargetingPwrSnap, draftStore, skills: [],
+      desktopApi: { startReview, startTurn, createScheduledThreadAction },
+      onMaterializeLaunchpad,
+    };
+    const view = render(<Composer {...baseProps} launchpad={launchpad} />);
+    await clickButton("Start thread");
+    await waitFor(() => expect(onMaterializeLaunchpad).toHaveBeenCalledTimes(1));
+    expect(onMaterializeLaunchpad.mock.calls[0]?.[1]).toEqual([
+      { type: "text", text: "Check out PR #42 and attach it" },
+    ]);
+    const scopeKey = startingScope
+      ? `launchpad:starting:creation:${launchpad.directoryKey}`
+      : `launchpad:${launchpad.directoryKey}`;
+    const pendingComposer = <Composer {...baseProps} launchpad={launchpad}
+      launchpadMaterializing launchpadComposerScopeKey={scopeKey} />;
+    if (startingScope) view.rerender(pendingComposer);
+
+    const input = screen.getByLabelText("New thread");
+    fireEvent.change(input, { target: { value: entry === "panel" ? "/review" : "/review main" } });
+    await act(async () => { fireEvent.keyDown(input, { key: "Enter" }); });
+    if (entry === "panel") {
+      expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+      expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+      await clickButton("Start review");
+    }
+    await waitFor(() => expect(screen.getByLabelText("Queued message")).toHaveTextContent("Review changes against main"));
+    expect(draftStore.getQueuedTurns(scopeKey)[0].reviewCommand).toMatchObject({
+      target: { type: "baseBranch", branch: "main" },
+    });
+    expect(onMaterializeLaunchpad).toHaveBeenCalledTimes(1);
+    expect(startReview).not.toHaveBeenCalled();
+    expect(createScheduledThreadAction).not.toHaveBeenCalled();
+    view.unmount();
+    const remounted = render(pendingComposer);
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent("Review changes against main");
+
+    const thread: NavigationThreadSummary = {
+      id: "checkout-thread", source: "codex", title: "Check out PR #42", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false }, optimisticActiveTurn: { id: "checkout-turn" },
+    };
+    await act(async () => {
+      handoffLaunchpadComposer(draftStore, scopeKey, thread);
+      materialization.resolve();
+      await materialization.promise;
+    });
+    remounted.rerender(<Composer {...baseProps} thread={thread} activeTurnId="checkout-turn" />);
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent("Review changes against main");
+    expect(startReview).not.toHaveBeenCalled();
+    expect(draftStore.getQueuedTurns(scopeKey)).toEqual([]);
+
+    remounted.rerender(<Composer {...baseProps} thread={{ ...thread, optimisticActiveTurn: undefined }} />);
+    await waitFor(() => expect(startReview).toHaveBeenCalledTimes(1));
+    expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: "checkout-thread", target: { type: "baseBranch", branch: "main" },
+    }));
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(onMaterializeLaunchpad).toHaveBeenCalledTimes(1);
+  });
+
   it("shows handoff progress until the provider publishes the steered message", async () => {
     const { result } = renderHook(useComposerDraftStore);
     const store = result.current;
