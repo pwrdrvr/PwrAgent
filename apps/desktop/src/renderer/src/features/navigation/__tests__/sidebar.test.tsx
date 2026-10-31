@@ -1030,6 +1030,7 @@ describe("Sidebar", () => {
   });
 
   it("describes each thread lens with a custom tooltip and preserves selection", async () => {
+    stubMacPlatform();
     const onBrowseModeChange = vi.fn();
 
     render(
@@ -1050,9 +1051,10 @@ describe("Sidebar", () => {
     );
 
     const updatedTab = screen.getByRole("tab", { name: "Updated" });
+    expect(updatedTab).toHaveAttribute("aria-keyshortcuts", "Meta+Alt+3");
     fireEvent.mouseEnter(updatedTab);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "Updated — all threads, most recently updated first"
+      "Updated — all threads, most recently updated first  (⌥⌘3)"
     );
     fireEvent.mouseLeave(updatedTab);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
@@ -1060,7 +1062,7 @@ describe("Sidebar", () => {
     const createdTab = screen.getByRole("tab", { name: "Created" });
     fireEvent.focus(createdTab);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "Created — all threads, newest created first"
+      "Created — all threads, newest created first  (⌥⌘4)"
     );
 
     // Selecting a lens still works and the tooltip dismisses on click.
@@ -1107,7 +1109,7 @@ describe("Sidebar", () => {
     const updatedTab = within(tablist).getByRole("tab", { name: "Updated" });
     fireEvent.focus(updatedTab);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "Updated — all threads, most recently updated first\nNo threads yet"
+      "Updated — all threads, most recently updated first  (Ctrl+Alt+3)\nNo threads yet"
     );
     fireEvent.blur(updatedTab);
 
@@ -4643,6 +4645,8 @@ describe("Sidebar", () => {
       expect(card).toHaveTextContent(
         /AttentionThreads in progress or waiting to be reviewedIn progress1To review1/,
       );
+      expect(card).toHaveTextContent("Show Attention (Ctrl+Alt+1)");
+      expect(tab).toHaveAttribute("aria-keyshortcuts", "Control+Alt+1");
       // Unfederated: no machine named, because there is nothing to tell apart.
       expect(card.textContent).not.toContain("Quitting");
       // The consequence lines exist nowhere else, so the card has to be
@@ -4838,7 +4842,7 @@ describe("Sidebar", () => {
 
       fireEvent.mouseEnter(screen.getByRole("tab", { name: /^Drafts,/ }));
       expect((await screen.findByRole("tooltip")).textContent).toBe(
-        "Drafts — threads with a reply you started and never sent"
+        "Drafts — threads with a reply you started and never sent  (Ctrl+Alt+2)"
           + "\n1 thread with an unsent draft",
       );
     });

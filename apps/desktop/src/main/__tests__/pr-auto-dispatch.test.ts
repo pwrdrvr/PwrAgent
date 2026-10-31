@@ -276,6 +276,24 @@ describe("PrAutoDispatchCoordinator", () => {
     expect(pullRequestMatchesRepositoryKey(pr(), undefined)).toBe(false);
   });
 
+  it("allows an explicit fork contribution in its destination workspace only", () => {
+    const contribution = pr({
+      org: "upstream", repo: "project",
+      url: "https://github.com/upstream/project/pull/38",
+      sourceRepository: { provider: "github.com", org: "contributor", repo: "project" },
+      explicitlyAttached: true,
+    });
+    expect(pullRequestMatchesRepositoryKey(contribution, "github.com/upstream/project")).toBe(true);
+    expect(pullRequestMatchesRepositoryKey(contribution, "github.com/contributor/project")).toBe(true);
+    expect(pullRequestMatchesRepositoryKey(contribution, "github.com/unrelated/project")).toBe(false);
+    expect(pullRequestMatchesRepositoryKey(contribution, "github.com/upstream/other-project")).toBe(false);
+    expect(pullRequestMatchesRepositoryKey(contribution, "github.example.com/upstream/project")).toBe(false);
+    expect(pullRequestMatchesRepositoryKey(contribution, undefined)).toBe(false);
+    expect(pullRequestMatchesRepositoryKey({ ...contribution, explicitlyAttached: undefined }, "github.com/upstream/project")).toBe(false);
+    // A legacy source identity must not override the destination URL.
+    expect(pullRequestMatchesRepositoryKey({ ...contribution, org: "contributor" }, "github.com/upstream/project")).toBe(true);
+  });
+
   it("elects the oldest enabled primary attachment and reorders after detach", async () => {
     const dbPath = await useFileStateDb();
     const prKey = buildPullRequestStatusKey(pr());

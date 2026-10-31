@@ -844,6 +844,7 @@ function prSummariesEqual(
       candidate.sourceRepository?.provider === pr.sourceRepository?.provider &&
       candidate.sourceRepository?.org === pr.sourceRepository?.org &&
       candidate.sourceRepository?.repo === pr.sourceRepository?.repo &&
+      candidate.explicitlyAttached === pr.explicitlyAttached &&
       candidate.title === pr.title &&
       candidate.state === pr.state &&
       candidate.checkState === pr.checkState &&
@@ -2054,7 +2055,8 @@ function applyPullRequestStatusUpdate(
     if (buildPullRequestStatusKey(currentPr) !== params.prKey) {
       continue;
     }
-    if (prSummariesEqual([currentPr], [params.pr])) {
+    const updatedPr = { ...params.pr, explicitlyAttached: currentPr.explicitlyAttached };
+    if (prSummariesEqual([currentPr], [updatedPr])) {
       continue;
     }
 
@@ -2068,7 +2070,7 @@ function applyPullRequestStatusUpdate(
       };
       updatedThreadIndexes.add(location.threadIndex);
     }
-    threads[location.threadIndex]!.prs![location.prIndex] = params.pr;
+    threads[location.threadIndex]!.prs![location.prIndex] = updatedPr;
   }
 
   if (!threads) {

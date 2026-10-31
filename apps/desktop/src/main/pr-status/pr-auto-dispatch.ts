@@ -783,22 +783,7 @@ export function buildPrRepositoryKey(
     .join("/");
 }
 
-export function pullRequestMatchesRepositoryKey(
-  pr: PrSummary,
-  repositoryKey: string | undefined,
-): boolean {
-  const repository = pr.sourceRepository ?? pr;
-  return Boolean(
-    repositoryKey
-    && (
-      buildPrRepositoryKey(repository.provider, repository.org, repository.repo) === repositoryKey
-      // Explicit attachment also admits a contribution from a checkout of the
-      // destination repository. Automatic discovery still requires its source.
-      || (pr.explicitlyAttached === true
-        && buildPrRepositoryKey(pr.provider, pr.org, pr.repo) === repositoryKey)
-    ),
-  );
-}
+export { pullRequestMatchesRepositoryKey } from "@pwragent/shared";
 
 export function buildPrAutoDispatchEvent(
   pr: PrSummary,

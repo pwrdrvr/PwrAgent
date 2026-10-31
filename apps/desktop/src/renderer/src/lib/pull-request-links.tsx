@@ -1,5 +1,6 @@
 import {
   buildPullRequestStatusKey,
+  pullRequestMatchesRepositoryKey,
   resolvePullRequestIdentity,
   type NavigationThreadSummary,
   type PrSummary,
@@ -314,18 +315,10 @@ function pullRequestsByKey(
     for (const rawPr of thread.prs ?? []) {
       const pr = { ...rawPr, ...resolvePullRequestIdentity(rawPr) };
       const key = buildPullRequestStatusKey(pr);
-      const repository = pr.sourceRepository ?? pr;
-      const repositoryKey = [repository.provider, repository.org, repository.repo]
-        .map((part) => part.trim().toLowerCase()).join("/");
-      const destinationKey = [pr.provider, pr.org, pr.repo]
-        .map((part) => part.trim().toLowerCase()).join("/");
       // Main resolves this field with the same primary-workspace probe used by
       // collectPrPollTargets. A local secondary attachment cannot claim status
       // authority merely because it appears before a pinned peer in the list.
-      const localPrimary = !peerOwned && (
-        thread.primaryGitRepository === repositoryKey
-        || (pr.explicitlyAttached === true && thread.primaryGitRepository === destinationKey)
-      );
+      const localPrimary = !peerOwned && pullRequestMatchesRepositoryKey(pr, thread.primaryGitRepository);
       const priority = localPrimary ? 2 : peerOwned ? 1 : 0;
       if (!prs.has(key) || priority > prs.get(key)!.priority) {
         prs.set(key, { pr, peerOwned, priority });

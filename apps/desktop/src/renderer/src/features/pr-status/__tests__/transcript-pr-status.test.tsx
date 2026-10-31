@@ -240,16 +240,14 @@ describe("PR ownership across local and pinned remote threads", () => {
   });
 
   it.each([
-    { peerFirst: false, explicit: false },
-    { peerFirst: true, explicit: false },
-    { peerFirst: false, explicit: true },
-    { peerFirst: true, explicit: true },
-  ])("local primary fork contributions keep authority ($peerFirst, explicit destination: $explicit)", async ({ peerFirst, explicit }) => {
+    { peerFirst: false, primary: "github.com/contributor/project", explicitlyAttached: false },
+    { peerFirst: true, primary: "github.com/contributor/project", explicitlyAttached: false },
+    { peerFirst: false, primary: "github.com/example/project", explicitlyAttached: true },
+    { peerFirst: true, primary: "github.com/example/project", explicitlyAttached: true },
+  ])("local primary fork contributions keep authority (%j)", async ({ peerFirst, primary, explicitlyAttached }) => {
     const h = harness();
-    const local = thread("local", [{ ...pr, state: "passing",
-      sourceRepository: { provider: "github.com", org: "contributor", repo: "project" },
-      ...(explicit ? { explicitlyAttached: true } : {}),
-    }], explicit ? "github.com/example/project" : "github.com/contributor/project");
+    const local = thread("local", [{ ...pr, state: "passing", explicitlyAttached: explicitlyAttached ? true : undefined,
+      sourceRepository: { provider: "github.com", org: "contributor", repo: "project" } }], primary);
     const peer = thread("peer", [{ ...pr, state: "merged", lifecycleState: "merged" }], undefined, true);
     render(transcript(peerFirst ? [peer, local] : [local, peer]));
     expect(screen.getByRole("button")).toHaveAccessibleName(/checks passing/);
