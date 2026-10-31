@@ -69,6 +69,9 @@ describe("Windows natural pipe evidence", () => {
     const before = { pid: 77, created: "134379500000000000", verified: true, liveAfter: true };
     const text = names.map((name, i) => "  " + (i + 16).toString(16) + ": File  " + name).join("\n");
     expect(bindPipeNames(before, { ...before }, text).pipes.map((pipe) => pipe.name)).toEqual(names);
+    expect(bindPipeNames(before, { ...before }, text.replaceAll("File  ", "")).pipes.map((pipe) => pipe.name)).toEqual(names);
+    expect(bindPipeNames(before, { ...before }, "Access denied").nameQueryErrorCount).toBe(1);
+    expect(bindPipeNames(before, { ...before }, "Access denied").pipes).toEqual([]);
     expect(bindPipeNames(before, { ...before, created: "134379500000000001" }, text).error).toBeDefined();
     expect(bindPipeNames(before, { ...before, liveAfter: false }, text).error).toBeDefined();
   });
@@ -79,6 +82,7 @@ describe("Windows natural pipe evidence", () => {
     expect(parsed.processes).toHaveLength(1);
     expect(parsed.processes[0]).toMatchObject({ pid: 99 });
     expect(parsed.processes[0].pipes.map((pipe) => pipe.name)).toEqual(names);
+    expect(parseHandleOutput(text.replaceAll("type: File ", "")).processes[0].pipes.map((pipe) => pipe.name)).toEqual(names);
     expect(parsed.errorCount).toBe(1);
     expect(parseHandleOutput("node.exe pid: 98\n  10: File " + names[0]).processes[0].pid).toBe(98);
   });

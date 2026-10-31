@@ -102,14 +102,15 @@ export function parseHandleOutput(output, defaultPid) {
   for (const line of output.split("\n")) {
     // Search mode is one process/handle per line. A scoped numeric -p dump
     // omits the header entirely; its PID is supplied by the bracketed query.
-    const search = line.match(/\bpid:\s*(\d+)\s+type:\s+File\s+([a-f0-9]+):\s+(\\Device\\NamedPipe\\uv\\[^\r\n]+)\r?$/i);
+    // File-only mode can also omit the redundant File/type column.
+    const search = line.match(/\bpid:\s*(\d+)\s+(?:type:\s+File\s+)?([a-f0-9]+):\s+(\\Device\\NamedPipe\\uv\\[^\r\n]+)\r?$/i);
     if (search) {
       get(Number(search[1])).pipes.push({ handle: search[2].toLowerCase(), name: search[3] });
       continue;
     }
     const header = line.match(/\bpid:\s*(\d+)\b/);
     if (header) { current = get(Number(header[1])); continue; }
-    const pipe = line.match(/^\s*([a-f0-9]+):\s+File\s+(?:\([^)]*\)\s+)?(\\Device\\NamedPipe\\uv\\[^\r\n]+)\r?$/i);
+    const pipe = line.match(/^\s*([a-f0-9]+):\s+(?:File\s+(?:\([^)]*\)\s+)?)?(\\Device\\NamedPipe\\uv\\[^\r\n]+)\r?$/i);
     if (pipe && current) {
       current = get(current.pid);
       current.pipes.push({ handle: pipe[1].toLowerCase(), name: pipe[2] });
@@ -126,10 +127,13 @@ export function bindPipeNames(before, after, output) {
   const parsed = parseHandleOutput(output, before?.pid);
   const source = parsed.processes.find((entry) => entry.pid === before?.pid);
   if (!before?.verified || !after?.verified || !before.liveAfter || !after.liveAfter
-    || before.pid !== after.pid || before.created !== after.created || parsed.processes.length !== 1 || !source) {
+    || before.pid !== after.pid || before.created !== after.created) {
     return { error: "Source creation identity was not verified around the name inventory." };
   }
-  return { ...after, pipes: source.pipes, nameQueryErrors: parsed.errors, nameQueryErrorCount: parsed.errorCount, omittedNameQueryErrors: parsed.omittedErrors };
+  if (parsed.processes.some((entry) => entry.pid !== before.pid)) {
+    return { error: "Unexpected PID in the scoped name inventory.", observedPids: parsed.processes.slice(0, 8).map((entry) => entry.pid) };
+  }
+  return { ...after, pipes: source?.pipes ?? [], parsedProcessCount: parsed.processes.length, nameQueryErrors: parsed.errors, nameQueryErrorCount: parsed.errorCount, omittedNameQueryErrors: parsed.omittedErrors };
 }
 
 export function packageManagerCommand(pnpm, args) {
