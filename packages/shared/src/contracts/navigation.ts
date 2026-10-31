@@ -1,3 +1,4 @@
+import type { ThreadMergeHold } from "./thread-merge-holds";
 import type { ForgeCli } from "../forge-product";
 import type { AppServerTurnInputItem } from "./normalized-app-server";
 import type {
@@ -268,6 +269,7 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   reactions?: string[];
   /** Present while the thread is locked against new turns. */
   lock?: ThreadLock;
+  mergeHolds?: ThreadMergeHold[];
   /** Pull requests known for this thread's linked directories + branch history. */
   prs?: PrSummary[];
   /** Codex environments discovered from the active thread workspace. */
@@ -2049,6 +2051,7 @@ export type NavigationRow = {
   reactions?: string[];
   reactionsTruncated?: boolean;
   lock?: ThreadLock;
+  mergeHolds?: ThreadMergeHold[];
   prs?: PrSummary[];
   prsTruncated?: boolean;
   messagingBindings?: MessagingThreadBindingSummary[];
@@ -3146,6 +3149,7 @@ export type ThreadOverlayState = {
   reactions?: string[];
   /** Present while the thread is locked against new turns. See {@link ThreadLock}. */
   lock?: ThreadLock;
+  mergeHolds?: ThreadMergeHold[];
   /**
    * Consolidated tool-output incident state for this thread: when it first
    * warned, what the operator dismissed, and what they muted. Persisted so an

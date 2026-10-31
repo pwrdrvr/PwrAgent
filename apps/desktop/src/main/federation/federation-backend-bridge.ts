@@ -1,3 +1,4 @@
+import type { ManageThreadMergeHoldsRequest, ManageThreadMergeHoldsResponse } from "@pwragent/shared";
 import { authenticateMessageOrigin, type ResolvedSourceInstance } from "@pwragent/federation/federation-message-origin";
 export { authenticateMessageOrigin } from "@pwragent/federation/federation-message-origin";
 import { ForgeReadError, type ForgeReadRequest } from "../pr-status/forge-tool-contract";
@@ -553,6 +554,7 @@ export const FEDERATION_BACKEND_METHODS = {
   acknowledgeThreadEnvironmentFailure: "backend.acknowledgeThreadEnvironmentFailure",
   setThreadReaction: "backend.setThreadReaction",
   setThreadLock: "backend.setThreadLock",
+  manageThreadMergeHolds: "backend.manageThreadMergeHolds",
   setThreadPin: "backend.setThreadPin",
   reorderThreadPins: "backend.reorderThreadPins",
   mountRemoteChild: "backend.mountRemoteChild",
@@ -712,6 +714,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   // A lock refuses every turn on the owner's thread, so it takes the same
   // capability as starting one.
   [FEDERATION_BACKEND_METHODS.setThreadLock]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.manageThreadMergeHolds]: "turn_control",
   [FEDERATION_BACKEND_METHODS.setThreadPin]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.reorderThreadPins]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.mountRemoteChild]: "thread_navigation",
@@ -940,6 +943,7 @@ export type FederationBackendOperations = {
   setThreadReaction(
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse>;
+  manageThreadMergeHolds(request: ManageThreadMergeHoldsRequest, options?: { requesterInstanceId?: string }): Promise<ManageThreadMergeHoldsResponse>;
   setThreadLock(
     request: SetThreadLockRequest,
     options?: { requesterInstanceId?: string },
@@ -1544,6 +1548,12 @@ export function registerFederationBackendHandlers(params: {
       await params.backend.setThreadReaction(
         envelope.params as SetThreadReactionRequest,
       ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.manageThreadMergeHolds,
+    async (envelope) => await params.backend.manageThreadMergeHolds(
+      envelope.params as ManageThreadMergeHoldsRequest, { requesterInstanceId: envelope.sourceInstanceId },
+    ),
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.setThreadLock,
@@ -2688,6 +2698,10 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       method: FEDERATION_BACKEND_METHODS.setThreadReaction,
       params: request,
     });
+  }
+
+  async manageThreadMergeHolds(request: ManageThreadMergeHoldsRequest): Promise<ManageThreadMergeHoldsResponse> {
+    return await this.rpc.request<ManageThreadMergeHoldsResponse>({ method: FEDERATION_BACKEND_METHODS.manageThreadMergeHolds, params: request });
   }
 
   async setThreadLock(

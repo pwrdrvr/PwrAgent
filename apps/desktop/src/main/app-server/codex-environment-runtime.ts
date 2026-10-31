@@ -23,10 +23,7 @@ import {
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import {
-  collectProcessTreeIds,
-  isProcessIdAlive,
-} from "../process-tree";
+import { isProcessIdAlive } from "../process-tree";
 import {
   formatWindowsJobStartupTelemetry,
   formatWindowsJobStartupTimeout,
@@ -307,6 +304,7 @@ export type CodexEnvironmentDetachedCommandStopResult = {
 };
 
 export type CodexEnvironmentDetachedCommandGoneParams = {
+  /** Snapshot descendants before termination, while their parent links exist. */
   knownPids?: Iterable<number>;
   pid?: number;
   runId: string;
@@ -343,23 +341,10 @@ export async function waitForCodexEnvironmentDetachedCommandGone(
   };
 
   while (true) {
-    // Expand only while budget remains. A 5s CIM walk per live pid would
-    // otherwise ignore timeoutMs (including 0) and hang Windows CI when the
-    // tracked root is a busy process with many descendants.
-    if (remainingMs() > 0) {
-      for (const pid of [...tracked]) {
-        if (remainingMs() <= 0) {
-          break;
-        }
-        if (isProcessIdAlive(pid)) {
-          for (const childPid of collectProcessTreeIds(pid)) {
-            tracked.add(childPid);
-          }
-        }
-      }
-    }
-    // Blocking CIM walks stall the event loop, so a close handler queued
-    // during the walk cannot run until we yield.
+    // The Windows Job already owns all descendants. After termination, wait
+    // on the pre-stop snapshot instead of rediscovering reparented processes.
+    // Synchronous CIM walks here can exhaust the deadline before Node drains
+    // the launcher's pipes and receives close. Yield before checking both.
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });

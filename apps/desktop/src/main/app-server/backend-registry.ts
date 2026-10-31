@@ -1,3 +1,5 @@
+import type { ManageThreadMergeHoldsRequest, ManageThreadMergeHoldsResponse } from "@pwragent/shared";
+import { blockingMergeHolds, validateMergeHoldRequest } from "../thread-merge-holds/thread-merge-holds";
 import { delegatedTurnAttribution, withoutTurnAttribution } from "./delegated-turn-attribution";
 import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
@@ -8711,6 +8713,8 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
   Pick<
     SqliteOverlayStore,
     | "acknowledgeThreadEnvironmentFailure"
+    | "manageThreadMergeHolds"
+    | "listActiveThreadMergeHolds"
     | "adoptLegacyRemoteDirectoryLaunchpad"
     | "readThreadGitWorkingStateCache"
     | "completeThreadUsageTurn"
@@ -12036,6 +12040,38 @@ export class DesktopBackendRegistry {
     handler: ThreadPullRequestWatchToolHandler | null | undefined,
   ): void {
     this.threadPullRequestWatchToolHandler = handler ?? undefined;
+  }
+
+  private threadMergeHoldToolHandler?: (request: ManageThreadMergeHoldsRequest, actor: string) => Promise<ManageThreadMergeHoldsResponse>;
+
+  setThreadMergeHoldToolHandler(handler: typeof this.threadMergeHoldToolHandler): void {
+    this.threadMergeHoldToolHandler = handler;
+  }
+
+  /** Local authority. This does not start, stop, or steer a turn. */
+  async manageThreadMergeHolds(request: ManageThreadMergeHoldsRequest, actor: string): Promise<ManageThreadMergeHoldsResponse> {
+    if (!this.overlayStore.manageThreadMergeHolds || !this.overlayStore.listActiveThreadMergeHolds) throw new Error("Merge holds are unavailable on this instance.");
+    const normalized = { ...request, backend: request.backend ?? "codex", threadId: request.threadId ?? "" };
+    validateMergeHoldRequest(normalized);
+    const all = this.overlayStore.listActiveThreadMergeHolds();
+    if (request.action === "active") return { holds: all, dependents: [] };
+    if (request.action === "create") await this.readThread({ backend: normalized.backend, threadId: normalized.threadId, includeTurns: false });
+    const holds = this.overlayStore.manageThreadMergeHolds(normalized, actor);
+    if (request.action !== "list") {
+      await this.emit({ backend: normalized.backend, notification: {
+        method: "thread/mergeHolds/updated",
+        params: { threadId: normalized.threadId, mergeHolds: holds.filter((hold) => hold.status === "waiting") },
+      } });
+    }
+    const overlay = await this.overlayStore.getThreadOverlayState(normalized);
+    const prUrl = request.pullRequest && /^\d+$/.test(request.pullRequest)
+      ? overlay?.prs?.find((pr) => pr.number === Number(request.pullRequest))?.url
+      : request.pullRequest;
+    return {
+      holds, blockingHolds: blockingMergeHolds(all, { ...normalized, pullRequest: prUrl }),
+      dependents: request.includeDependents === false ? [] : all.filter((hold) => hold.dependency?.target.scope === "local"
+        && hold.dependency.backend === normalized.backend && hold.dependency.threadId === normalized.threadId).map((hold) => ({ hold })),
+    };
   }
 
   setThreadDependencyToolHandler(
@@ -45725,6 +45761,20 @@ export class DesktopBackendRegistry {
       });
     }
 
+    if (request.operation === "manage_thread_merge_holds") {
+      if (!this.threadMergeHoldToolHandler) return threadInspectionFailure("unsupported_operation", "Merge holds are not available.");
+      if (request.args.action === "active") return threadInspectionFailure("invalid_arguments", "Use list for a thread's merge holds.");
+      try {
+        const response = await this.threadMergeHoldToolHandler({
+          ...request.args, backend: request.args.backend ?? request.context.backend,
+          threadId: request.args.threadId ?? request.context.threadId,
+        }, `agent:${request.context.backend}:${request.context.threadId}`);
+        return { ok: true, data: { threadMergeHolds: response } };
+      } catch (error) {
+        return threadInspectionFailure("invalid_arguments", error instanceof Error ? error.message : String(error));
+      }
+    }
+
     if (request.operation === "manage_thread_dependencies") {
       if (!this.threadDependencyToolHandler) return threadInspectionFailure("unsupported_operation", "Thread dependencies are not available.");
       // The resumed turn may have lost the plan to compaction, so an agent must
@@ -49847,6 +49897,7 @@ function toThreadInspectionSummary(
     linkedDirectories,
     linkedRepositories: summarizeLinkedRepositories(linkedDirectories),
     ...(overlay?.prs?.length ? { pullRequests: overlay.prs } : {}),
+    ...(overlay?.mergeHolds?.some((hold) => hold.status === "waiting") ? { mergeHolds: overlay.mergeHolds.filter((hold) => hold.status === "waiting") } : {}),
   };
 }
 
@@ -49858,6 +49909,7 @@ function toThreadInspectionSummaryFromNavigation(
     agent: thread.agent,
     handoffOrigin: thread.handoffOrigin,
     ...(thread.prs?.length ? { pullRequests: thread.prs } : {}),
+    ...(thread.mergeHolds?.length ? { mergeHolds: thread.mergeHolds } : {}),
   };
 }
 

@@ -166,8 +166,21 @@ const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies =
   writeFile: writeCachedTranscriptImage,
 };
 
+const pendingCachedTranscriptImages = new Map<string, Promise<void>>();
+
+/** Share publication across append and renderer calls for the same content-addressed file. */
+function writeCachedTranscriptImage(filePath: string, data: Buffer): Promise<void> {
+  const pending = pendingCachedTranscriptImages.get(filePath);
+  if (pending) return pending;
+  const write = publishCachedTranscriptImage(filePath, data).finally(() => {
+    pendingCachedTranscriptImages.delete(filePath);
+  });
+  pendingCachedTranscriptImages.set(filePath, write);
+  return write;
+}
+
 /** Publish complete cache files, reusing images retained by an earlier write or read. */
-async function writeCachedTranscriptImage(filePath: string, data: Buffer): Promise<void> {
+async function publishCachedTranscriptImage(filePath: string, data: Buffer): Promise<void> {
   try {
     if ((await stat(filePath)).size === data.byteLength) return;
   } catch (error) {
@@ -177,8 +190,8 @@ async function writeCachedTranscriptImage(filePath: string, data: Buffer): Promi
   const temporary = `${filePath}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, data, { mode: 0o600, flag: "wx" });
-    // Concurrent publishers have identical content-addressed bytes. Rename
-    // publishes a complete file even on filesystems without hard links.
+    // Same-process publishers share this operation: Windows can refuse
+    // concurrent replacement renames with EPERM. Keep publication atomic.
     await rename(temporary, filePath);
   } finally {
     await rm(temporary, { force: true });

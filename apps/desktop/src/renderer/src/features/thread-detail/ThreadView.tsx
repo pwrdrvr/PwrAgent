@@ -1,3 +1,4 @@
+import { ThreadMergeHoldStatus } from "../thread-merge-holds/ThreadMergeHoldStatus";
 import { threadTodoThreadKey, parseRemoteOperatorItemKey } from "@pwragent/shared";
 import { ThreadServices } from "../federation/ThreadServices";
 import type { BackgroundTerminalsViewProps } from "./BackgroundTerminalsView";
@@ -4923,6 +4924,7 @@ export function ThreadView(props: ThreadViewProps) {
               ownerLabel={props.activeFederationOwnerLabel}
               onOpenFederationSettings={props.starMap?.onOpenFederationSettings}
             /> : null}
+            {selectedThread ? <ThreadMergeHoldStatus thread={selectedThread} api={props.desktopApi} /> : null}
             {primaryContent}
             {composerSlotElement}
             {threadLock ? (

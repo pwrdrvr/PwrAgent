@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFile, copyFile, link, mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, link, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,7 @@ import { materializeTranscriptImageUrlsForRenderer, toTranscriptImageProtocolUrl
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, link: vi.fn(actual.link), copyFile: vi.fn(actual.copyFile) };
+  return { ...actual, link: vi.fn(actual.link), copyFile: vi.fn(actual.copyFile), rename: vi.fn(actual.rename) };
 });
 
 const id = "e3333333-3333-4333-8333-333333333333";
@@ -50,6 +50,7 @@ function entryImages(entries: AppServerThreadEntry[]): AppServerThreadImagePart[
 afterEach(async () => {
   vi.mocked(link).mockReset();
   vi.mocked(copyFile).mockReset();
+  vi.mocked(rename).mockReset();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -190,9 +191,22 @@ describe("Claude history image persistence", () => {
     await mkdir(root, { recursive: true });
     await writeFile(cached, png.subarray(0, 8));
     await Promise.all([f.store.append(id, [activity()]), f.store.append(id, [activity()])]);
+    expect(rename).toHaveBeenCalledTimes(1);
     await expect(readFile(cached)).resolves.toEqual(png);
     expect(await readdir(root)).toEqual([path.basename(cached)]);
     expect(await f.store.entries(id)).toHaveLength(1);
+  });
+
+  it("rejects a failed publication without retaining history or poisoning later appends", async () => {
+    const f = await fixture();
+    vi.mocked(rename).mockRejectedValueOnce(Object.assign(new Error("Publication denied"), { code: "EPERM" }));
+    await expect(f.store.append(id, [activity()])).rejects.toMatchObject({ code: "EPERM" });
+    expect(await readdir(path.join(f.images, id))).toEqual([]);
+    await expect(readFile(f.history)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await f.store.append(id, [activity()]);
+    const [image] = entryImages(await f.store.entries(id));
+    await expect(readFile(imagePath(image!))).resolves.toEqual(png);
   });
 
   it("preserves remote and existing file URLs, malformed images, and text", async () => {

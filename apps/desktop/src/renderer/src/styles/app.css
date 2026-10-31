@@ -24651,7 +24651,7 @@ a.button {
 .thread-todo-stack {
   position: absolute;
   z-index: 29;
-  top: 10px;
+  top: calc(10px + var(--thread-merge-hold-height, 0px));
   right: 18px;
   display: flex;
   width: min(340px, calc(100% - 36px));
@@ -24666,7 +24666,7 @@ a.button {
 }
 
 .thread-todo-stack.is-below-find {
-  top: 56px;
+  top: calc(56px + var(--thread-merge-hold-height, 0px));
 }
 
 /* The shadow is on the deck, not the card, so the slivers of the cards
@@ -26056,7 +26056,7 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
 .thread-find {
   position: absolute;
   z-index: 30;
-  top: 10px;
+  top: calc(10px + var(--thread-merge-hold-height, 0px));
   right: 18px;
   display: flex;
   align-items: center;
@@ -51278,3 +51278,65 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   outline: 1px solid var(--focus-ring);
   outline-offset: 2px;
 }
+
+
+/* Merge holds leave the conversation and composer available. */
+.thread-merge-holds {
+  width: min(620px, calc(100vw - 48px));
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  padding: 20px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.thread-merge-holds__entry {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.thread-merge-holds__entry p,
+.thread-merge-holds__status p {
+  margin: 0;
+}
+
+.thread-merge-holds__entry p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.thread-merge-holds__actions,
+.thread-merge-holds__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.thread-merge-holds__actions { flex-wrap: wrap; }
+.thread-merge-holds__status {
+  flex: 0 0 auto;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.thread-merge-holds__status strong { color: var(--accent); }
+.thread-merge-holds__status .button { flex-shrink: 0; }
+.thread-merge-holds form { display: grid; gap: 12px; padding: 16px 0; }
+
+.thread-merge-holds__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.thread-merge-holds__entry .thread-dependencies__field { width: 100%; }
+
+.thread-merge-holds .button { font-size: 12px; }

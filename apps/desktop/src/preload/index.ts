@@ -1,3 +1,4 @@
+import { THREAD_MERGE_HOLDS_CHANNEL } from "@pwragent/shared";
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import { FEDERATION_SERVICES_CHANNEL } from "../shared/ipc";
 import {
@@ -1244,6 +1245,8 @@ let federationJumpSearchRequestSequence = 0;
 let threadSearchRequestSequence = 0;
 
 const desktopApi = Object.freeze({
+  manageThreadMergeHolds: async (request: import("@pwragent/shared").ManageThreadMergeHoldsRequest): Promise<import("@pwragent/shared").ManageThreadMergeHoldsResponse> =>
+    await ipcRenderer.invoke(THREAD_MERGE_HOLDS_CHANNEL, request),
   manageThreadDependencies: async (request: import("@pwragent/shared").ManageThreadDependenciesRequest): Promise<import("@pwragent/shared").ManageThreadDependenciesResponse> =>
     await ipcRenderer.invoke("thread:dependencies", request),
   nativeVoiceCapability: () => ipcRenderer.invoke(NATIVE_VOICE_CAPABILITY_CHANNEL),
