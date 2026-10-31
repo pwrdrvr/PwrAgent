@@ -39820,7 +39820,7 @@ command = "pnpm dev"
     { parentMode: "auto", requestedMode: undefined, expectedMode: "default" },
     { parentMode: "full-access", requestedMode: undefined, expectedMode: "full-access" },
     { parentMode: "auto", requestedMode: "default", expectedMode: "default" },
-    { parentMode: "auto", requestedMode: "full-access", expectedMode: "full-access" },
+    { parentMode: "full-access", requestedMode: "full-access", expectedMode: "full-access" },
     { parentMode: "auto", requestedMode: "auto", expectedMode: undefined },
   ] as const)("resolves ACP handoff access from $parentMode with override $requestedMode", async ({ parentMode, requestedMode, expectedMode }) => {
     const parentDirectory = {
@@ -45996,7 +45996,17 @@ script = "printf setup"
     });
     const readTurnRoot = vi.fn(async () => "root-original");
     Object.assign(codexClient, { readTurnRoot });
-    const overlayStore = createOverlayStoreMock();
+    // A Full Access caller may pass Full Access on.
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:parent-thread": {
+          backend: "codex",
+          threadId: "parent-thread",
+          executionMode: "full-access",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
@@ -52623,7 +52633,10 @@ script = "printf setup"
     });
     const overlayStore = createOverlayStoreMock({
       overlays: {
-        "codex:agent-thread": createAgentOverlay(),
+        "codex:agent-thread": {
+          ...createAgentOverlay(),
+          executionMode: "full-access",
+        },
         "codex:target-thread": {
           backend: "codex",
           threadId: "target-thread",
@@ -68805,5 +68818,361 @@ command = "pnpm dev"
       await registry.close();
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
+  });
+});
+
+describe("agent tool access ceiling", () => {
+  type Mode = "default" | "auto" | "full-access";
+
+  async function startCaller(params: {
+    callerMode: Mode;
+    /** Stored after the turn starts, so it differs from the live turn mode. */
+    storedCallerMode?: Mode;
+  }) {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "agent-thread",
+          title: "Parent Thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          updatedAt: 1000,
+        },
+        {
+          id: "target-thread",
+          title: "Target Thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          updatedAt: 1000,
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:agent-thread": {
+          ...createAgentOverlay(),
+          executionMode: params.callerMode,
+        },
+        "codex:target-thread": {
+          backend: "codex",
+          threadId: "target-thread",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      createScratchProjectDirectory: async () => "/repo/scratch",
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+    // The live turn takes the thread's stored mode as it starts.
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    if (params.storedCallerMode) {
+      await overlayStore.setThreadExecutionMode({
+        backend: "codex",
+        threadId: "agent-thread",
+        executionMode: params.storedCallerMode,
+      });
+    }
+    let callCount = 0;
+    const call = async (tool: string, args: Record<string, unknown>) => {
+      callCount += 1;
+      const response = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          callId: `call-${callCount}`,
+          requestId: `call-${callCount}`,
+          namespace: "pwragent",
+          tool,
+          arguments: args,
+        },
+      } as AppServerPendingRequestNotification);
+      const result = response as {
+        success: boolean;
+        contentItems: Array<{ text: string }>;
+      };
+      return {
+        success: result.success,
+        payload: JSON.parse(result.contentItems[0]!.text) as Record<string, unknown>,
+      };
+    };
+    return { codexClient, overlayStore, registry, call };
+  }
+
+  const forbidden = {
+    success: false,
+    payload: {
+      code: "forbidden",
+      message: expect.stringContaining("An agent cannot raise access"),
+    },
+  };
+
+  describe("handoff_task", () => {
+    const handoff = (extra: Record<string, unknown> = {}) => ({
+      task: "Investigate the flaky test.",
+      title: "Flaky test",
+      workspaceMode: "none",
+      ...extra,
+    });
+
+    it.each(["auto", "full-access"] as const)(
+      "refuses a Default Access caller asking for %s",
+      async (executionMode) => {
+        const { codexClient, registry, call } = await startCaller({ callerMode: "default" });
+
+        expect(await call("handoff_task", handoff({ executionMode }))).toMatchObject(forbidden);
+        expect(codexClient.lastStartThreadParams).toBeUndefined();
+        expect(codexClient.startTurnCalls).toHaveLength(0);
+
+        await registry.close();
+      },
+    );
+
+    it("refuses raw approval and sandbox overrides above the caller", async () => {
+      const { codexClient, registry, call } = await startCaller({ callerMode: "auto" });
+
+      expect(await call("handoff_task", handoff({
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      }))).toMatchObject(forbidden);
+      expect(codexClient.lastStartThreadParams).toBeUndefined();
+
+      await registry.close();
+    });
+
+    it.each([
+      { callerMode: "default", executionMode: "default" },
+      { callerMode: "full-access", executionMode: "auto" },
+      { callerMode: "full-access", executionMode: "full-access" },
+    ] as const)(
+      "lets a $callerMode caller hand off at $executionMode",
+      async ({ callerMode, executionMode }) => {
+        const { registry, call } = await startCaller({ callerMode });
+
+        const result = await call("handoff_task", handoff({ executionMode }));
+
+        expect(result.success).toBe(true);
+        expect(result.payload.inheritedSettings).toMatchObject({ executionMode });
+
+        await registry.close();
+      },
+    );
+
+    it("inherits the caller's mode when the request names none", async () => {
+      const { registry, call } = await startCaller({ callerMode: "auto" });
+
+      const result = await call("handoff_task", handoff());
+
+      expect(result.success).toBe(true);
+      expect(result.payload.inheritedSettings).toMatchObject({ executionMode: "auto" });
+
+      await registry.close();
+    });
+  });
+
+  describe("send_message_to_thread", () => {
+    const message = (extra: Record<string, unknown> = {}) => ({
+      backend: "codex",
+      threadId: "target-thread",
+      prompt: "Please pick up the CI failure.",
+      ...extra,
+    });
+
+    it.each(["auto", "full-access"] as const)(
+      "refuses a Default Access caller asking for %s",
+      async (executionMode) => {
+        const { codexClient, registry, call } = await startCaller({ callerMode: "default" });
+
+        expect(await call("send_message_to_thread", message({ executionMode })))
+          .toMatchObject(forbidden);
+        expect(codexClient.startTurnCalls).toHaveLength(0);
+
+        await registry.close();
+      },
+    );
+
+    it("refuses a raw Full Access sandbox from a Default Access caller", async () => {
+      const { codexClient, registry, call } = await startCaller({ callerMode: "default" });
+
+      expect(await call("send_message_to_thread", message({ sandbox: "danger-full-access" })))
+        .toMatchObject(forbidden);
+      expect(codexClient.startTurnCalls).toHaveLength(0);
+
+      await registry.close();
+    });
+
+    it.each([
+      { callerMode: "default", extra: { executionMode: "default" } },
+      { callerMode: "full-access", extra: { executionMode: "auto" } },
+      { callerMode: "default", extra: {} },
+    ] as const)(
+      "lets a $callerMode caller send $extra",
+      async ({ callerMode, extra }) => {
+        const { codexClient, registry, call } = await startCaller({ callerMode });
+
+        expect(await call("send_message_to_thread", message(extra)))
+          .toMatchObject({ success: true });
+        expect(codexClient.startTurnCalls).toHaveLength(1);
+
+        await registry.close();
+      },
+    );
+  });
+
+  describe("mutate_thread", () => {
+    it.each(["auto", "full-access"] as const)(
+      "refuses raising the caller's own thread to %s",
+      async (executionMode) => {
+        const { overlayStore, registry, call } = await startCaller({ callerMode: "default" });
+
+        expect(await call("mutate_thread", {
+          backend: "codex",
+          threadId: "agent-thread",
+          executionMode,
+        })).toMatchObject(forbidden);
+        await expect(overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "agent-thread",
+        })).resolves.toMatchObject({ executionMode: "default" });
+
+        await registry.close();
+      },
+    );
+
+    it("refuses another thread above the caller, dry run included", async () => {
+      const { overlayStore, registry, call } = await startCaller({ callerMode: "auto" });
+
+      for (const dryRun of [true, false]) {
+        expect(await call("mutate_thread", {
+          backend: "codex",
+          threadId: "target-thread",
+          executionMode: "full-access",
+          dryRun,
+        })).toMatchObject(forbidden);
+      }
+      await expect(overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "target-thread",
+      })).resolves.toMatchObject({ executionMode: "default" });
+
+      await registry.close();
+    });
+
+    it.each([
+      { callerMode: "auto", threadId: "target-thread", executionMode: "auto" },
+      { callerMode: "full-access", threadId: "agent-thread", executionMode: "default" },
+      { callerMode: "auto", threadId: "agent-thread", executionMode: "auto" },
+    ] as const)(
+      "lets a $callerMode caller set $threadId to $executionMode",
+      async ({ callerMode, threadId, executionMode }) => {
+        const { registry, call } = await startCaller({ callerMode });
+
+        const result = await call("mutate_thread", {
+          backend: "codex",
+          threadId,
+          executionMode,
+          dryRun: true,
+        });
+
+        expect(result).toMatchObject({
+          success: true,
+          payload: {
+            mutation: {
+              changes: [{ field: "execution_mode", status: "would_apply", to: executionMode }],
+            },
+          },
+        });
+
+        await registry.close();
+      },
+    );
+  });
+
+  describe("a lower mode the operator queued mid-turn", () => {
+    it("caps what the agent may ask for and what a handoff inherits", async () => {
+      const { registry, call } = await startCaller({ callerMode: "full-access" });
+      await registry.setThreadExecutionMode({
+        backend: "codex",
+        threadId: "agent-thread",
+        executionMode: "auto",
+      });
+      expect(registry.getQueuedExecutionModeForThread({
+        backend: "codex",
+        threadId: "agent-thread",
+      })?.mode).toBe("auto");
+
+      expect(await call("mutate_thread", {
+        backend: "codex",
+        threadId: "target-thread",
+        executionMode: "full-access",
+        dryRun: true,
+      })).toMatchObject(forbidden);
+      const handoff = await call("handoff_task", {
+        task: "Investigate the flaky test.",
+        title: "Flaky test",
+        workspaceMode: "none",
+      });
+      expect(handoff.success).toBe(true);
+      expect(handoff.payload.inheritedSettings).toMatchObject({ executionMode: "auto" });
+
+      await registry.close();
+    });
+  });
+
+  describe("the caller's mode is its live Codex turn's", () => {
+    it("refuses Full Access when only the stored mode was raised mid-turn", async () => {
+      const { registry, call } = await startCaller({
+        callerMode: "default",
+        storedCallerMode: "full-access",
+      });
+
+      expect(await call("mutate_thread", {
+        backend: "codex",
+        threadId: "target-thread",
+        executionMode: "full-access",
+        dryRun: true,
+      })).toMatchObject(forbidden);
+      expect(await call("send_message_to_thread", {
+        backend: "codex",
+        threadId: "target-thread",
+        prompt: "Take this one.",
+        executionMode: "full-access",
+      })).toMatchObject(forbidden);
+
+      await registry.close();
+    });
+
+    it("allows Full Access when the live turn runs at Full Access", async () => {
+      const { registry, call } = await startCaller({
+        callerMode: "full-access",
+        storedCallerMode: "default",
+      });
+
+      expect(await call("mutate_thread", {
+        backend: "codex",
+        threadId: "target-thread",
+        executionMode: "full-access",
+        dryRun: true,
+      })).toMatchObject({ success: true });
+
+      await registry.close();
+    });
   });
 });

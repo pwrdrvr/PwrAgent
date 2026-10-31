@@ -251,7 +251,11 @@ function inputSchemaForOperation(
               "Exact model ID from list_instance_projects. Match modelOptions.label and pass its id, which may be an alias. Omit to inherit the launchpad model.",
           },
           reasoningEffort: { type: "string" },
-          executionMode: { type: "string" },
+          executionMode: {
+            type: "string",
+            description:
+              "Cannot exceed this thread's mode. Omit for the project's.",
+          },
           fastMode: { type: "boolean" },
           tokenMiserEnabled: {
             type: "boolean",
