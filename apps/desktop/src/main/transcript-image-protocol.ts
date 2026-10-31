@@ -9,9 +9,9 @@ import type {
   AppServerThreadMessagePart,
   FederationInstanceId,
 } from "@pwragent/shared";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { copyFile, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -163,8 +163,105 @@ const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies =
   },
   mkdir,
   resolveLocalImageLink: resolveTranscriptImageFile,
-  writeFile,
+  writeFile: writeCachedTranscriptImage,
 };
+
+/** Publish complete cache files, reusing images retained by an earlier write or read. */
+async function writeCachedTranscriptImage(filePath: string, data: Buffer): Promise<void> {
+  try {
+    if ((await stat(filePath)).size === data.byteLength) return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  const temporary = `${filePath}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, data, { mode: 0o600, flag: "wx" });
+    // Concurrent publishers have identical content-addressed bytes. Rename
+    // publishes a complete file even on filesystems without hard links.
+    await rename(temporary, filePath);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+/**
+ * Retain inline images before appending history. Unlike renderer materialization,
+ * a failed write rejects the append so history never references a missing image.
+ * Only image fields are visited; text and remote URLs keep their original form.
+ */
+export async function persistTranscriptEntryImages(
+  entries: readonly AppServerThreadEntry[],
+  root: string,
+): Promise<AppServerThreadEntry[]> {
+  const writes = new Map<string, Promise<void>>();
+  const retain = async (part: AppServerThreadImagePart): Promise<AppServerThreadImagePart> => {
+    const image = parseSupportedImageDataUrl(part.url);
+    if (!image) {
+      // Forks copy history containing cache URLs. Retain the image in the fork
+      // so deleting the source thread cannot remove the fork's image.
+      let sourcePath: string | undefined;
+      try {
+        sourcePath = decodeTranscriptImageProtocolRequest(part.url);
+      } catch {
+        return part;
+      }
+      if (!sourcePath || path.dirname(sourcePath) === root) return part;
+      const cacheRoot = path.dirname(root);
+      if (path.dirname(path.dirname(sourcePath)) !== cacheRoot
+        || !/^[a-f0-9]{64}\.[a-z]+$/.test(path.basename(sourcePath))) return part;
+      const filePath = path.join(root, path.basename(sourcePath));
+      let write = writes.get(filePath);
+      if (!write) {
+        write = (async () => {
+          await mkdir(root, { recursive: true, mode: 0o700 });
+          try {
+            await link(sourcePath, filePath);
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code ?? "";
+            if (code !== "EEXIST") {
+              if (!["EXDEV", "EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "EMLINK"].includes(code)) throw error;
+              const temporary = `${filePath}.${randomUUID()}.tmp`;
+              try {
+                await copyFile(sourcePath, temporary, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+                await rename(temporary, filePath);
+              } finally {
+                await rm(temporary, { force: true });
+              }
+            }
+          }
+        })();
+        writes.set(filePath, write);
+      }
+      await write;
+      return { ...part, url: toTranscriptImageProtocolUrl(pathToFileURL(filePath).toString()) };
+    }
+    const filePath = path.join(root, `${image.sha256}.${image.extension}`);
+    let write = writes.get(filePath);
+    if (!write) {
+      write = (async () => {
+        await mkdir(root, { recursive: true, mode: 0o700 });
+        await writeCachedTranscriptImage(filePath, image.buffer);
+      })();
+      writes.set(filePath, write);
+    }
+    await write;
+    return { ...part, url: toTranscriptImageProtocolUrl(pathToFileURL(filePath).toString()) };
+  };
+  return await Promise.all(entries.map(async (entry) => {
+    if (entry.type === "activity") {
+      return { ...entry, details: await Promise.all(entry.details.map(async (detail) => ({
+        ...detail,
+        ...(detail.images ? { images: await Promise.all(detail.images.map(retain)) } : {}),
+      }))) };
+    }
+    if (entry.type === "message" && entry.parts) {
+      return { ...entry, parts: await Promise.all(entry.parts.map((part) =>
+        part.type === "image" ? retain(part) : part)) };
+    }
+    return entry;
+  }));
+}
 
 async function retainLegacyThreadImage(sourcePath: string, owner: ThreadAssetOwner): Promise<string | undefined> {
   if (isThreadAssetPath(sourcePath, owner)) return sourcePath;
@@ -1653,7 +1750,7 @@ function mimeTypeForImagePath(filePath: string): string | undefined {
 function parseSupportedImageDataUrl(
   url: string,
 ): MaterializedTranscriptImage | undefined {
-  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/]+={0,2})$/iu.exec(
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)$/iu.exec(
     url,
   );
   if (!match) {
@@ -1662,8 +1759,8 @@ function parseSupportedImageDataUrl(
 
   const mimeType = match[1]?.toLowerCase();
   const extension = mimeType ? DATA_IMAGE_EXTENSIONS.get(mimeType) : undefined;
-  const payload = match[2] ?? "";
-  if (!mimeType || !extension || payload.length % 4 === 1) {
+  const payload = (match[2] ?? "").replace(/\s+/gu, "");
+  if (!mimeType || !extension || !/^[a-z0-9+/]+={0,2}$/iu.test(payload) || payload.length % 4 === 1) {
     return undefined;
   }
 

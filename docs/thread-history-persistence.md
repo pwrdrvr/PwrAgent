@@ -18,6 +18,13 @@ sqlite payload columns.
 - If an ACP provider cannot return history itself and PwrAgent must persist a
   fallback transcript, that fallback must use append-only JSONL rollout files,
   not sqlite.
+- The Claude SDK backend keeps its desktop history in append-only JSONL under
+  the active profile's `state/claude/`. Before appending a persistent entry,
+  retain supported inline image parts in the content-addressed
+  `state/thread-images/claude/<thread-id>/` cache and store transcript-image
+  protocol URLs in their place. Revisions reuse the image file; legacy inline
+  entries remain readable without rewriting history. Ephemeral sessions stay
+  in memory, including their images.
 
 ## Desktop Metadata
 

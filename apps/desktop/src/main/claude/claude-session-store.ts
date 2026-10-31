@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AppServerThreadEntry, AppServerThreadSummary, BackendRateLimitSummary } from "@pwragent/shared";
+import { persistTranscriptEntryImages } from "../transcript-image-protocol";
 
 /** Not a thread id, so list() never reads it as session metadata. */
 const RATE_LIMITS_FILE = "rate-limits.json";
@@ -108,7 +109,10 @@ export class ClaudeSessionStore {
   /** Ended ephemeral threads. A late write for one must not create a file. */
   private readonly forgotten = new Set<string>();
 
-  constructor(private readonly root: string) {}
+  constructor(
+    private readonly root: string,
+    private readonly imageRoot = path.join(root, "images"),
+  ) {}
 
   /** Starts holding an ephemeral session in memory. */
   holdEphemeral(session: ClaudeSession): void {
@@ -239,8 +243,12 @@ export class ClaudeSessionStore {
       held.entries.push(...entries.map((entry) => JSON.parse(JSON.stringify(entry)) as AppServerThreadEntry));
       return;
     }
+    const destination = this.file(id, "jsonl");
+    const retained = await persistTranscriptEntryImages(
+      entries, path.join(this.imageRoot, id),
+    );
     await mkdir(this.root, { recursive: true, mode: 0o700 });
-    await appendFile(this.file(id, "jsonl"), entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n", { mode: 0o600 });
+    await appendFile(destination, retained.map((entry) => JSON.stringify(entry)).join("\n") + "\n", { mode: 0o600 });
   }
 
   /** Drop `beforeEntryId` and every entry recorded after it; returns the truncation's id. */

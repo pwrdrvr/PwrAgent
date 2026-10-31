@@ -433,7 +433,10 @@ export class ClaudeBackend {
   private terminalCommands = new Set(CLAUDE_TERMINAL_COMMANDS_SEED);
 
   constructor(private readonly options: ClaudeBackendOptions) {
-    this.store = options.store ?? new ClaudeSessionStore(path.join(resolveActiveProfilePath("state"), "claude"));
+    this.store = options.store ?? new ClaudeSessionStore(
+      resolveActiveProfilePath("state/claude"),
+      resolveActiveProfilePath("state/thread-images/claude"),
+    );
   }
 
   async discover(options: { models?: boolean } = {}): Promise<void> {
