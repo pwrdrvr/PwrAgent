@@ -245,7 +245,7 @@ describe("Federation nested archive placement", () => {
     }
     const { writes } = await measureSqliteWrites(() => runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" }));
     expectSqliteWriteBudget({ scenario: "federation-archive-subthread-promotion", writes,
-      note: "100 direct children across four owners, one archive boundary; commits scale with owners, not children. No idle writes. See PR for measured MB/day at 10 archives/day." });
+      note: "100 direct children across four owners, one promotion boundary (~0.243 MB WAL); 10 such archives/day cost ~2.43 MB/day. Commits scale with owners, not children; idle cost 0 MB/day." });
     const repeated = await measureSqliteWrites(() => runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" }));
     expectSqliteWriteBudget({ scenario: "federation-archive-subthread-promotion-repeat", writes: repeated.writes,
       note: "Repeated completed archive promotion: zero commits, 0 MB/day." });
