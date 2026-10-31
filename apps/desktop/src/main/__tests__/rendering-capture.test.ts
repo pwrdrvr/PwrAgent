@@ -92,6 +92,18 @@ describe("opt-in rendering capture", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("admits existing and newly discovered pages without reattaching its own target", async () => {
+    const pending = captureRenderingDiagnostics(root);
+    await vi.waitFor(() => expect(electron.debuggerApi.sendCommand).toHaveBeenCalledWith("Target.setDiscoverTargets", { discover: true }));
+    expect(electron.debuggerApi.sendCommand).toHaveBeenCalledWith("Target.attachToTarget", { targetId: "application-target", flatten: true });
+    message("Target.targetCreated", { targetInfo: { type: "page", targetId: "owned-target" } });
+    message("Target.targetCreated", { targetInfo: { type: "page", targetId: "new-page", title: "private-prompt" } });
+    message("Target.targetCreated", { targetInfo: { type: "page", targetId: "new-page" } });
+    expect(electron.debuggerApi.sendCommand.mock.calls.filter(([method]) => method === "Target.attachToTarget")).toHaveLength(2);
+    await stopRenderingDiagnostics();
+    expect(await readFile((await pending).summaryPath, "utf8")).not.toContain("private-prompt");
+  });
+
   it("rejects external CDP ownership without ending or adopting the external trace", async () => {
     electron.debuggerApi.sendCommand.mockRejectedValue(new Error("private-page-data"));
     await expect(captureRenderingDiagnostics(root)).rejects.toThrow("Rendering capture failed; no summary is available");

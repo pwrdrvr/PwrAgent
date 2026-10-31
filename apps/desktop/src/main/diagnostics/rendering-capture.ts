@@ -6,12 +6,12 @@ import { acquireChromiumTrace } from "./chromium-trace-lease";
 import { RENDERER_UPDATE_EVENT_NAMES } from "../../shared/renderer-update-diagnostics";
 
 // No screenshots, JS stacks, user timing, URLs, DOM or trace arguments are exported.
-export const RENDERING_TRACE_CONFIG: Electron.TraceConfig = {
-  recording_mode: "record-until-full",
-  trace_buffer_size_in_kb: 8192,
-  enable_argument_filter: true,
-  included_categories: ["cc", "viz", "gpu", "devtools.timeline", "disabled-by-default-devtools.timeline.frame"],
-  excluded_categories: ["*"],
+export const RENDERING_TRACE_CONFIG = {
+  recordMode: "recordUntilFull",
+  traceBufferSizeInKb: 8192,
+  enableArgumentFilter: true,
+  includedCategories: ["cc", "viz", "gpu", "devtools.timeline", "disabled-by-default-devtools.timeline.frame"],
+  excludedCategories: ["*"],
 };
 
 const EVENTS = [
@@ -207,23 +207,21 @@ class RenderingCapture {
       await this.bounded(d.sendCommand("Tracing.start", {
         transferMode: "ReturnAsStream", streamFormat: "json", streamCompression: "none",
         bufferUsageReportingInterval: 250,
-        traceConfig: {
-          recordMode: "recordUntilFull", traceBufferSizeInKb: 8192, enableArgumentFilter: true,
-          includedCategories: RENDERING_TRACE_CONFIG.included_categories,
-          excludedCategories: RENDERING_TRACE_CONFIG.excluded_categories,
-        },
+        traceConfig: RENDERING_TRACE_CONFIG,
       }), this.startedAt + TRANSFER_BUDGET_MS);
       this.recording = true;
+      if (this.endRequested) void this.stop(this.reason).catch(() => {});
       // Chromium 152 filters page-level traces to the root debugger's session
       // tree. Attach application pages as children after tracing starts so its
       // process monitor sees each attachment; a blank root alone misses them.
-      const own = await this.bounded(d.sendCommand("Target.getTargetInfo"), this.startedAt + TRANSFER_BUDGET_MS);
-      this.ownTargetId = own.targetInfo.targetId;
-      const targets = await this.bounded(d.sendCommand("Target.getTargets"), this.startedAt + TRANSFER_BUDGET_MS);
-      await this.bounded(Promise.all(targets.targetInfos.map((info: unknown) => this.attachTarget(info))), this.startedAt + TRANSFER_BUDGET_MS);
-      await this.bounded(d.sendCommand("Target.setDiscoverTargets", { discover: true }), this.startedAt + TRANSFER_BUDGET_MS);
-      if (this.endRequested) void this.stop(this.reason).catch(() => {});
-      else this.sample();
+      if (!this.endRequested) {
+        const own = await this.bounded(d.sendCommand("Target.getTargetInfo"), this.startedAt + TRANSFER_BUDGET_MS);
+        this.ownTargetId = own.targetInfo.targetId;
+        const targets = await this.bounded(d.sendCommand("Target.getTargets"), this.startedAt + TRANSFER_BUDGET_MS);
+        await this.bounded(Promise.all(targets.targetInfos.map((info: unknown) => this.attachTarget(info))), this.startedAt + TRANSFER_BUDGET_MS);
+        await this.bounded(d.sendCommand("Target.setDiscoverTargets", { discover: true }), this.startedAt + TRANSFER_BUDGET_MS);
+        this.sample();
+      }
       const stream = await this.bounded(this.complete, this.startedAt + seconds * 1000 + TRANSFER_BUDGET_MS);
       clearTimeout(this.stopTimer);
       if (!stream || !this.endTask) throw failure();

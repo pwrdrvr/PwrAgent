@@ -97,7 +97,12 @@ async function main() {
       if (completions > report.externalCompletionsBeforeOwnerStop) return resolve();
       d.on("message", (_event, method) => { if (method === "Tracing.tracingComplete") resolve(); });
     });
+    await d.sendCommand("Profiler.enable");
+    await d.sendCommand("Profiler.start");
     const result = await captureRenderingDiagnostics(join(root, "diagnostics"), 1);
+    assert.equal(d.isAttached(), true);
+    const v8 = await d.sendCommand("Profiler.stop");
+    assert.ok(v8.profile.nodes.length > 0);
     const summary = await readFile(result.summaryPath, "utf8");
     assert.ok(!summary.includes("invented rendering fixture"));
     assert.ok(!summary.includes("data:text/html"));
