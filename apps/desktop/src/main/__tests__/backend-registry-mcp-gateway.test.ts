@@ -191,7 +191,7 @@ describe("backend MCP gateway dispatch", () => {
     expect((await call("search_mcp_tools", { query: "lookup", connectionId: "one" })).success).toBe(true);
     expect((await call("call_mcp_tool", args)).success).toBe(true);
     expect(operation).toHaveBeenCalledWith(expect.objectContaining({
-      connectionId: "one", operation: "gateway/tools/call", scopeKey: JSON.stringify(["gateway", "codex", "headless-1"]),
+      connectionId: "one", operation: "gateway/tools/call", scopeKey: JSON.stringify(["gateway", "codex", "headless-1", { selectionOwner: { backend: "codex", threadId: "thread-1" }, connectionIds: ["one"], readOnly: true }]),
     }));
     expect((await call("search_mcp_tools", { query: "lookup", connectionId: "unselected" })).success).toBe(false);
     await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["one", "later"] });
@@ -492,13 +492,15 @@ select_for_new_threads = true
     bridge.revoke();
   });
 
-  async function brokerFixture() {
+  async function brokerFixture(readOnly = false) {
     await registry.close();
     await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["pwrsnap"] });
     let credentials: string | undefined;
+    const connections = new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") });
+    if (readOnly) connections.setToolApproval("pwrsnap", "prompt");
     const broker = new McpConnectionGatewayService({
       sandboxer: sandboxerStub(),
-      registry: new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") }),
+      registry: connections,
       leaseManager: null,
       readGatewaySelection: async (context) => (await store.getThreadOverlayState(context))?.mcpConnectionIds ?? [],
       settings: {
@@ -517,7 +519,7 @@ select_for_new_threads = true
     let idType = "string";
     const callTool = vi.fn(async () => ({ content: [{ type: "text", text: "fixture result" }] }));
     Object.assign(broker, { connectUpstreamClient: async () => ({
-      client: { listTools: async () => ({ tools: [{ name: "lookup", inputSchema: {
+      client: { listTools: async () => ({ tools: [{ name: "lookup", ...(readOnly ? { annotations: { readOnlyHint: true } } : {}), inputSchema: {
         type: "object", properties: { id: { type: idType } }, required: ["id"],
       } }] }), callTool, close: async () => {} },
       transport: { close: async () => {} },
@@ -533,6 +535,64 @@ select_for_new_threads = true
     };
     return { broker, readArgs, callTool, changeSchema: (type: string) => { idType = type; } };
   }
+
+  async function discoveredCall(call: Awaited<ReturnType<typeof createMonitor>>) {
+    const found = await call("search_mcp_tools", { query: "lookup", connectionId: "pwrsnap" });
+    expect(found.success).toBe(true);
+    const tool = JSON.parse((found.contentItems[0] as { text: string }).text).tools[0];
+    expect(tool).toBeDefined();
+    return { connectionId: tool.connectionId, toolName: tool.toolName, schemaRevision: tool.schemaRevision, arguments: { id: "fixture" } };
+  }
+
+  it.each(["session", "server-session"])("shares broker-backed %s consent across distinct worker scopes", async (persist) => {
+    const f = await brokerFixture(true);
+    const events = acceptFirstConversationApproval(persist);
+    const parent = await f.readArgs();
+    expect((await internals.handleServerRequest("codex", request("call_mcp_tool", parent, "parent-call"))).success).toBe(true);
+    const first = await createMonitor();
+    const firstArgs = await discoveredCall(first);
+    expect(firstArgs.schemaRevision).not.toBe(parent.schemaRevision);
+    expect((await first("call_mcp_tool", firstArgs)).success).toBe(true);
+    startThread.mockResolvedValueOnce({ threadId: "monitor-2" });
+    startTurn.mockResolvedValueOnce({ threadId: "monitor-2", turnId: "turn-2" });
+    const second = await createMonitor();
+    const secondArgs = await discoveredCall(second);
+    expect(secondArgs.schemaRevision).not.toBe(firstArgs.schemaRevision);
+    expect((await second("call_mcp_tool", secondArgs)).success).toBe(true);
+    expect(events).toHaveLength(1);
+    f.changeSchema("number");
+    const changed = await second("search_mcp_tools", { query: "lookup", connectionId: "pwrsnap" });
+    const tool = JSON.parse((changed.contentItems[0] as { text: string }).text).tools[0];
+    expect((await second("call_mcp_tool", { ...secondArgs, schemaRevision: tool.schemaRevision, arguments: { id: 1 } })).success).toBe(false);
+    expect(events).toHaveLength(2);
+    expect(f.callTool).toHaveBeenCalledTimes(3);
+    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: [] });
+    const count = f.callTool.mock.calls.length;
+    expect((await second("call_mcp_tool", secondArgs)).success).toBe(false);
+    expect(f.callTool).toHaveBeenCalledTimes(count);
+  });
+
+  it.each(["accept", "decline"] as const)("keeps a monitor's broker-backed approval alive after parent completion: %s", async (action) => {
+    const f = await brokerFixture(true);
+    const call = await createMonitor();
+    const args = await discoveredCall(call);
+    const shown = approval();
+    const pending = call("call_mcp_tool", args);
+    const event = await shown;
+    await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/completed", params: {
+      threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed" },
+    } } } as AgentEvent);
+    expect(internals.pendingServerRequests.size).toBe(1);
+    expect([...internals.taskMonitorDelegations.values()][0].pendingMcpApprovalCount).toBe(1);
+    await registry.submitServerRequest({ backend: "codex", threadId: "thread-1", turnId: "turn-1",
+      requestId: String(event.notification.params.requestId), response: { action, content: {}, _meta: null } });
+    expect((await pending).success).toBe(action === "accept");
+    expect(f.callTool).toHaveBeenCalledTimes(action === "accept" ? 1 : 0);
+    if (action === "decline") {
+      expect((await call("call_mcp_tool", args)).success).toBe(false);
+      expect(internals.pendingServerRequests.size).toBe(0);
+    }
+  });
 
   function acceptFirstConversationApproval(persist = "session") {
     const events: AgentEvent[] = [];

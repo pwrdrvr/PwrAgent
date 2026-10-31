@@ -21,10 +21,12 @@ export type McpGatewayToolServiceOptions = {
   connections: Pick<McpConnectionGatewayService, "requestGatewayToolOperation">;
   /** Must check active turn, actor permissions and the latest saved selection. */
   selectedConnections: (context: AgentToolCallContext) => Promise<string[]>;
+  /** Trusted host identity, never supplied by tool arguments. */
+  scopeKey?: (context: AgentToolCallContext) => string;
   /** A host policy can narrow discovery and invocation independently of approval. */
   toolAllowed?: (tool: McpGatewayTool, context: AgentToolCallContext) => boolean;
   /** `annotations` are the listed tool's own hints, under its exact schema revision. */
-  approve: (invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, annotations: Tool["annotations"], catalogRevision: string) => Promise<McpGatewayApproval>;
+  approve: (invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, annotations: Tool["annotations"], catalogRevision: string, consentRevision?: string) => Promise<McpGatewayApproval>;
 };
 
 /** No disk catalog. Every invocation revalidates
@@ -129,7 +131,9 @@ export class McpGatewayToolService {
         toolName: tool.toolName, schemaRevision: tool.schemaRevision,
       };
       const invocation = { ...source, arguments: args.arguments };
-      const approval = await this.options.approve(invocation, context, signal, tool.definition.annotations, gatewayCatalogRevision(tools));
+      const approval = tool.consentRevision
+        ? await this.options.approve(invocation, context, signal, tool.definition.annotations, gatewayCatalogRevision(tools), tool.consentRevision)
+        : await this.options.approve(invocation, context, signal, tool.definition.annotations, gatewayCatalogRevision(tools));
       if (!approval) throw new Error("The MCP tool invocation was not approved.");
       await this.requireSelected(args.connectionId, context, signal);
       if (this.options.toolAllowed?.(tool, context) === false) throw new Error("This MCP tool is no longer permitted for the calling thread.");
@@ -145,7 +149,7 @@ export class McpGatewayToolService {
   }
 
   private scopeKey(context: AgentToolCallContext): string {
-    return JSON.stringify(["gateway", context.backend, context.threadId]);
+    return this.options.scopeKey?.(context) ?? JSON.stringify(["gateway", context.backend, context.threadId]);
   }
 
   private async requireSelected(id: string, context: AgentToolCallContext, signal: AbortSignal): Promise<void> {

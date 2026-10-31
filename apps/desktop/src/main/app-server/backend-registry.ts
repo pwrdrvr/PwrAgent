@@ -2075,6 +2075,7 @@ type QuitThreadSource = {
 type LiveCodexToolItem = { turnId: string; itemType: string; turnEnded?: boolean };
 
 type PendingServerRequest = {
+  owner?: { backend: AppServerBackendKind; threadId: string; turnId?: string };
   backend: AppServerBackendKind;
   notification: AppServerPendingRequestNotification;
   resolve: (response: SubmitServerRequestRequest["response"]) => void;
@@ -10856,9 +10857,16 @@ export class DesktopBackendRegistry {
           if (denied) throw new Error(`The messaging actor lacks permission for MCP gateway tools (${denied}).`);
           return await this.readMcpGatewaySelection(context);
         },
+        scopeKey: (context) => {
+          const access = this.taskMonitorForThread(context)?.mcpAccess;
+          return JSON.stringify(["gateway", context.backend, context.threadId, ...(access ? [{
+            selectionOwner: access.selectionOwner, connectionIds: access.connectionIds,
+            grantedConnectionIds: access.automation?.grantedConnectionIds, readOnly: true,
+          }] : [])]);
+        },
         toolAllowed: (tool, context) => !this.isTaskMonitorThread(context)
           || (tool.definition.annotations?.readOnlyHint === true && tool.definition.annotations.destructiveHint !== true),
-        approve: (invocation, context, signal, annotations, catalogRevision) => this.approveGatewayInvocation(invocation, context, signal, annotations, catalogRevision),
+        approve: (invocation, context, signal, annotations, catalogRevision, consentRevision) => this.approveGatewayInvocation(invocation, context, signal, annotations, catalogRevision, consentRevision),
       });
     }
     if (this.tokenMiserStore) {
@@ -40327,9 +40335,11 @@ export class DesktopBackendRegistry {
     signal: AbortSignal,
     annotations?: McpGatewayTool["definition"]["annotations"],
     catalogRevision?: string,
+    consentRevision?: string,
   ): Promise<McpGatewayApproval> {
     signal.throwIfAborted();
     const requestId = `mcp-gateway:${randomUUID()}`;
+    const sourceRevision = consentRevision ?? invocation.schemaRevision;
     const sourceKey = JSON.stringify([invocation.connectionId, invocation.serverName, invocation.toolName]);
     const monitor = this.taskMonitorForThread(context);
     if (monitor && (annotations?.readOnlyHint !== true || annotations.destructiveHint === true)) return false;
@@ -40346,9 +40356,9 @@ export class DesktopBackendRegistry {
     let current = approvals.get(sourceKey);
     // Observe revocation before automatic approval as well. Identity changes
     // supersede pending responses, even when a catalog later restores R1.
-    if (!current || current.schemaRevision !== invocation.schemaRevision
+    if (!current || current.schemaRevision !== sourceRevision
       || current.selectionRevision !== selectionRevision) {
-      current = { schemaRevision: invocation.schemaRevision, selectionRevision, approved: false };
+      current = { schemaRevision: sourceRevision, selectionRevision, approved: false };
       approvals.set(sourceKey, current);
       this.mcpGatewaySessionApprovals.set(sessionKey, approvals);
     }
@@ -40468,10 +40478,11 @@ export class DesktopBackendRegistry {
       };
       this.pendingServerRequests.set(key, {
         backend: approvalContext.backend, notification,
+        ...(monitor ? { owner: { backend: context.backend, threadId: context.threadId, turnId: context.turnId } } : {}),
         resolve: (response) => {
           if (signal.aborted) { aborted(); return; }
           const approved = Boolean(response && "action" in response && response.action === "accept");
-          if (!approved && monitor) (monitor.deniedMcpTools ??= new Set()).add(denialKey);
+          if (response && "action" in response && response.action === "decline" && monitor) (monitor.deniedMcpTools ??= new Set()).add(denialKey);
           const persist = response && "_meta" in response ? readRecord(response._meta)?.persist : undefined;
           const rememberedConsent = persist === "session" ? consent
             : persist === "server-session" ? connectionConsent : undefined;
@@ -48984,9 +48995,10 @@ export class DesktopBackendRegistry {
         const withdrawnForgeApprovals: AppServerPendingRequestNotification[] = [];
         for (const [key, pending] of this.pendingServerRequests) {
           const request = pending.notification;
-          if (pending.backend !== event.backend
-            || request.params.threadId !== event.notification.params.threadId
-            || request.params.turnId !== completedTurnId
+          const owner = pending.owner ?? { backend: pending.backend, threadId: request.params.threadId, turnId: request.params.turnId };
+          if (owner.backend !== event.backend
+            || owner.threadId !== event.notification.params.threadId
+            || owner.turnId !== completedTurnId
             || request.method !== "mcpServer/elicitation/request") {
             continue;
           }
@@ -48995,9 +49007,9 @@ export class DesktopBackendRegistry {
           }
           this.pendingServerRequests.delete(key);
           pending.resolve({ action: "cancel", content: null, _meta: null });
-          await this.emit({ backend: event.backend, notification: {
+          await this.emit({ backend: pending.backend, notification: {
             method: "serverRequest/resolved", params: {
-              threadId: request.params.threadId, turnId: completedTurnId,
+              threadId: request.params.threadId, turnId: request.params.turnId,
               requestId: request.params.requestId,
             },
           } });
