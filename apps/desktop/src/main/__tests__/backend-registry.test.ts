@@ -1,3 +1,4 @@
+import { traceUnbornWorkspace } from "./helpers/unborn-workspace-trace";
 import { PendingEnvironmentLaunchStore } from "../app-server/pending-environment-launch-store";
 import type { Options as ClaudeOptions, Query as ClaudeQuery, SDKMessage as ClaudeMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
@@ -1034,6 +1035,7 @@ function createOverlayStoreMock(params?: {
         ...current,
         archiveTombstonedAt: archivedAt,
         archiveRestoredAt: restoredAt ?? current.archiveRestoredAt,
+        archiveRetentionStartedAt: restoredAt === undefined ? current.archiveRetentionStartedAt : undefined,
       } as ThreadOverlayState;
       overlays.set(key, next);
       return next;
@@ -43173,12 +43175,15 @@ script = "printf setup"
   });
 
   it("describes unborn Git workspaces and gates worktrees on available refs", async () => {
+    const trace = traceUnbornWorkspace();
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-unborn-"));
+    trace.setRoot(root);
     const repoPath = path.join(root, "repo");
     const remotePath = path.join(root, "origin.git");
     const unpublishedBaseReason =
       "Worktrees are unavailable because this repository has no published base branch yet. Create the initial commit in the Local checkout and publish the default branch. Worktrees will be enabled once a remote base branch is available.";
     try {
+      trace.phase("initialize-repositories");
       await git(root, ["init", "--bare", "-b", "main", remotePath]);
       await mkdir(repoPath, { recursive: true });
       await git(repoPath, ["init", "-b", "main"]);
@@ -43225,6 +43230,7 @@ script = "printf setup"
         }),
         threadTitleGenerationService: null,
       });
+      trace.phase("publish-active-turn");
       await registry.publishLocalEvent({
         backend: "codex",
         notification: {
@@ -43237,6 +43243,7 @@ script = "printf setup"
         },
       });
 
+      trace.phase("unborn-project-local-handoff");
       const projectLocalResponse = await codexClient.emitRequest({
         method: "item/tool/call",
         params: {
@@ -43278,6 +43285,7 @@ script = "printf setup"
       expect(prompt).not.toContain(unpublishedBaseReason);
       const projectLocalStartParams = codexClient.lastStartThreadParams;
 
+      trace.phase("reject-unborn-worktree");
       const worktreeResponse = await codexClient.emitRequest({
         method: "item/tool/call",
         params: {
@@ -43317,6 +43325,7 @@ script = "printf setup"
       });
       expect(codexClient.lastStartThreadParams).toBe(projectLocalStartParams);
 
+      trace.phase("publish-and-fetch-initial-commit");
       const seedPath = path.join(root, "seed");
       await mkdir(seedPath, { recursive: true });
       await git(seedPath, ["init", "-b", "main"]);
@@ -43331,6 +43340,7 @@ script = "printf setup"
         "main:refs/remotes/origin/main",
       ]);
 
+      trace.phase("fetched-project-local-handoff");
       const fetchedProjectLocalResponse = await codexClient.emitRequest({
         method: "item/tool/call",
         params: {
@@ -43367,6 +43377,7 @@ script = "printf setup"
         "unavailableReason",
       );
 
+      trace.phase("fetched-worktree-handoff");
       const remoteWorktreeResponse = await codexClient.emitRequest({
         method: "item/tool/call",
         params: {
@@ -43389,13 +43400,17 @@ script = "printf setup"
       const createdWorktree = codexClient.lastStartThreadParams?.cwd;
       expect(createdWorktree).toBeDefined();
       expect(createdWorktree).not.toBe(expectedDir(repoPath));
+      trace.phase("verify-worktree-head");
       expect(await git(createdWorktree!, ["rev-parse", "HEAD"])).toBe(
         await git(repoPath, ["rev-parse", "origin/main"]),
       );
 
+      trace.phase("registry-close");
       await registry.close();
     } finally {
+      trace.phase("filesystem-cleanup");
       await rm(root, { recursive: true, force: true });
+      trace.phase("finished");
     }
   }, 15_000);
 
@@ -59155,6 +59170,152 @@ script = "printf setup"
     }
   });
 
+  it("keeps a grandchild in its original tray when three siblings are archived", async () => {
+    const db = openInMemoryStateDb();
+    const overlayStore = new SqliteOverlayStore(db);
+    const ids = ["root", "before", "archive-a", "survivor", "archive-b", "archive-c", "after"];
+    let threads: AppServerThreadSummary[] = ids.map((id, index) => ({
+      id, title: id, titleSource: "explicit", linkedDirectories: [], source: "codex",
+      createdAt: index, updatedAt: index,
+    }));
+    for (const id of ["before", "archive-a", "archive-b", "archive-c", "after"]) {
+      await overlayStore.setThreadParent({ backend: "codex", threadId: id, parentThreadId: "root" });
+    }
+    await overlayStore.setThreadParent({ backend: "codex", threadId: "survivor", parentThreadId: "archive-a" });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] }, threads,
+    });
+    const archived: string[] = [];
+    vi.spyOn(codexClient, "archiveThread").mockImplementation(async ({ threadId }) => {
+      archived.push(threadId);
+      threads = threads.filter((thread) => thread.id !== threadId);
+      codexClient.setThreads(threads);
+      return { threadId };
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    // The tray must survive the foreground mutation, even while expensive
+    // worktree cleanup has not reached its child-ungrouping stage.
+    const cleanup = vi.spyOn(registry as unknown as {
+      ungroupChildrenOfArchivedThread(params: unknown): Promise<void>;
+    }, "ungroupChildrenOfArchivedThread").mockResolvedValue();
+    try {
+      for (const threadId of ["archive-a", "archive-b", "archive-c"]) {
+        await registry.archiveThread({ backend: "codex", threadId, backgroundCleanup: true });
+      }
+      expect(archived).toEqual(["archive-a", "archive-b", "archive-c"]);
+      expect(await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "survivor" }))
+        .toMatchObject({ parentThreadId: "root", parentThreadBackend: "codex" });
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
+        .toEqual(["before", "survivor", "after"]);
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "survivor" }))?.archiveRetentionStartedAt)
+        .toBeUndefined();
+    } finally {
+      cleanup.mockRestore();
+      await registry.close();
+      db.close();
+    }
+  });
+
+  it.each(["claude", "acp:gemini"] as const)(
+    "keeps restored %s ancestors and children eligible for archive promotion", async (backend) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-restore-promotion-"));
+      const db = openInMemoryStateDb();
+      const overlayStore = new SqliteOverlayStore(db);
+      const store = new ClaudeSessionStore(path.join(root, "sessions"));
+      const ancestor = "0f7b3c1e-2d4a-4e5f-9a6b-7c8d9e0f1a2b";
+      const survivor = "6a1d2c3b-4e5f-4a7b-8c9d-0e1f2a3b4c5d";
+      const restoredIds = [ancestor, survivor];
+      for (const id of restoredIds) {
+        if (backend === "claude") await store.save({ cwd: root, thread: {
+          id, title: id, titleSource: "explicit", linkedDirectories: [], source: backend,
+          updatedAt: 1, archivedAt: 1000,
+        } });
+        await overlayStore.observeArchivedThreads([{ backend, threadId: id }], 1000);
+      }
+      const codexClient = new MockBackendClient({
+        threads: [{ id: "nested", title: "nested", titleSource: "explicit", linkedDirectories: [],
+          source: "codex", updatedAt: 1 }],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore,
+        claudeBackendOptions: { store, inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+          discoverModels: async () => [] },
+        acpSessionStore: createAcpSessionStoreMock(backend === "claude" ? [] : restoredIds.map((sessionId) => ({
+          backendId: backend, sessionId, title: sessionId, createdAt: 1, updatedAt: 1,
+          executionMode: "default", status: "idle", archivedAt: 1000,
+        }))),
+      });
+      const markersAtNotification: Array<number | undefined> = [];
+      const unsubscribe = registry.onEvent(async (event) => {
+        if (event.notification.method === "thread/unarchived") {
+          markersAtNotification.push((await overlayStore.getThreadOverlayState({
+            backend: event.backend, threadId: event.notification.params.threadId,
+          }))?.archiveRetentionStartedAt);
+        }
+      });
+      // Keep cleanup from masking the foreground promotion result.
+      const cleanup = vi.spyOn(registry as unknown as {
+        ungroupChildrenOfArchivedThread(params: unknown): Promise<void>;
+      }, "ungroupChildrenOfArchivedThread").mockResolvedValue();
+      try {
+        for (const threadId of restoredIds) await registry.restoreThread({ backend, threadId });
+        await overlayStore.setThreadParent({ backend, threadId: ancestor, parentThreadId: "root", parentThreadBackend: "codex" });
+        for (const threadId of ["before", "nested", "after"]) {
+          await overlayStore.setThreadParent({ backend: "codex", threadId, parentThreadId: ancestor, parentThreadBackend: backend });
+        }
+        await overlayStore.setThreadParent({ backend, threadId: survivor, parentThreadId: "nested", parentThreadBackend: "codex" });
+        await registry.archiveThread({ backend: "codex", threadId: "nested", backgroundCleanup: true });
+        expect(await overlayStore.getThreadOverlayState({ backend, threadId: survivor }))
+          .toMatchObject({ parentThreadId: ancestor, parentThreadBackend: backend });
+        expect((await overlayStore.getThreadOverlayState({ backend, threadId: ancestor }))?.subthreadOrder)
+          .toEqual(["before", survivor, "after"]);
+        expect(markersAtNotification).toEqual([undefined, undefined]);
+        for (const threadId of restoredIds) {
+          const state = await overlayStore.getThreadOverlayState({ backend, threadId });
+          expect(state?.archiveRetentionStartedAt).toBeUndefined();
+          expect(state?.archiveTombstonedAt).toBeUndefined();
+          expect(state?.archiveRestoredAt).toEqual(expect.any(Number));
+        }
+        await overlayStore.observeArchivedThreads([{ backend, threadId: "missing" }], 1000);
+        await expect(registry.restoreThread({ backend, threadId: "missing" })).rejects.toThrow();
+        expect((await overlayStore.getThreadOverlayState({ backend, threadId: "missing" }))?.archiveRetentionStartedAt).toBe(1000);
+      } finally {
+        unsubscribe();
+        cleanup.mockRestore();
+        await registry.close();
+        db.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("clears archive markers before publishing a provider restore notification", async () => {
+    const db = openInMemoryStateDb();
+    const overlayStore = new SqliteOverlayStore(db);
+    const identity = { backend: "codex" as const, threadId: "restored" };
+    await overlayStore.observeArchivedThreads([identity], 1000);
+    await overlayStore.setThreadArchiveTombstone({ ...identity, archivedAt: 1000 });
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const observations: Array<ThreadOverlayState | undefined> = [];
+    const unsubscribe = registry.onEvent(async (event) => {
+      if (event.notification.method === "thread/unarchived") observations.push(await overlayStore.getThreadOverlayState(identity));
+    });
+    try {
+      await codexClient.emit({ method: "thread/unarchived", params: { threadId: identity.threadId } });
+      expect(observations).toHaveLength(1);
+      expect(observations[0]?.archiveRetentionStartedAt).toBeUndefined();
+      expect(observations[0]?.archiveTombstonedAt).toBeUndefined();
+      expect(observations[0]?.archiveRestoredAt).toEqual(expect.any(Number));
+      await overlayStore.observeArchivedThreads([identity], Date.now() + 1);
+      expect((await overlayStore.getThreadOverlayState(identity))?.archiveRetentionStartedAt).toEqual(expect.any(Number));
+    } finally {
+      unsubscribe();
+      await registry.close();
+      db.close();
+    }
+  });
+
   it("ungroups active child threads when archiving only the parent", async () => {
     const parentThread: AppServerThreadSummary = {
       id: "thread-parent",
@@ -59359,7 +59520,9 @@ script = "printf setup"
       await registry.archiveThread({ backend: "claude", threadId: parentId });
       expect(archiveCodexThread).not.toHaveBeenCalled();
       expect((await store.read(parentId)).thread.archivedAt).toEqual(expect.any(Number));
-      expect(observeArchivedThreads).toHaveBeenCalledWith([{ backend: "claude", threadId: parentId }], expect.any(Number));
+      expect(observeArchivedThreads).toHaveBeenCalledWith(
+        [{ backend: "claude", threadId: parentId }], expect.any(Number), { promoteSubthreads: true },
+      );
       expect(setThreadParent).toHaveBeenCalledWith({
         backend: "codex",
         threadId: "codex-child",

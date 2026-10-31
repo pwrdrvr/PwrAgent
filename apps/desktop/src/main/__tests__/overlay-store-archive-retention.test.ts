@@ -48,7 +48,9 @@ describe("archive retention persistence", () => {
   it("clears the deadline on restore and records a new period on the next archive", async () => {
     const identity = { backend: "codex" as const, threadId: "restored" };
     await store.observeArchivedThreads([identity], 1000);
-    await store.setThreadArchiveTombstone({ ...identity, restoredAt: 2000 });
+    const { writes } = await measureSqliteWrites(() => store.setThreadArchiveTombstone({ ...identity, restoredAt: 2000 }));
+    expectSqliteWriteBudget({ scenario: "archive-retention-restore", writes,
+      note: "One restore boundary clears archive markers and records the restore watermark in one commit (~0.012 MB); 10 restores/day cost ~0.12 MB/day. No recurring writes." });
     expect((await store.getThreadOverlayState(identity))?.archiveRetentionStartedAt).toBeUndefined();
     await store.observeArchivedThreads([identity], 3000);
     expect((await store.getThreadOverlayState(identity))?.archiveRetentionStartedAt).toBe(3000);

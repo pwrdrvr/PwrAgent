@@ -80,13 +80,23 @@ launcher alive after `quit`. The fixture removes the Chromium directories only
 after closing the app and cleaning up its profile helpers.
 
 On Windows, fixture close also drains each live Electron session before asking
-Playwright to quit: it closes connections and awaits the cookie store flush.
+Playwright to quit: it closes connections, awaits the cookie store flush, and
+disposes the fixture session cache with `clearData({ dataTypes: ["cache"] })`.
 This preparation shares the existing six-second graceful-close deadline.
 Chromium's native `BrowserProcessIOThread::ProcessHostCleanUp` otherwise waits
 for the network service to flush cookies and cache after JavaScript quit has
 finished. That service can retain the launcher's pipes while native storage
 work is still pending. The fixture must await that work while the sessions
 are still reachable over RPC; storage isolation alone does not drain it.
+
+The cache operation also waits for Chromium's network-history completion.
+Unlike `clearCache()`, this reaches `HttpServerProperties::Clear` and the
+`Network/Network Persistent State` preference write. A matching Electron native
+snapshot retained that write and its initial preference read as queued
+`BLOCK_SHUTDOWN` work after the network service entered shutdown. Awaiting the
+cache completion keeps its RPC owner alive until the write finishes. Cache
+disposal applies only to the Playwright-owned fixture sessions. A failed or
+stalled completion still fails teardown under the existing close deadline.
 
 The Windows reproduction left a suspended no-op `cmd.exe` from the startup
 Job-wrapper prewarm alive after the app exited. The app no longer starts this

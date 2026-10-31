@@ -844,6 +844,7 @@ function prSummariesEqual(
       candidate.sourceRepository?.provider === pr.sourceRepository?.provider &&
       candidate.sourceRepository?.org === pr.sourceRepository?.org &&
       candidate.sourceRepository?.repo === pr.sourceRepository?.repo &&
+      candidate.explicitlyAttached === pr.explicitlyAttached &&
       candidate.title === pr.title &&
       candidate.state === pr.state &&
       candidate.checkState === pr.checkState &&
@@ -2054,7 +2055,8 @@ function applyPullRequestStatusUpdate(
     if (buildPullRequestStatusKey(currentPr) !== params.prKey) {
       continue;
     }
-    if (prSummariesEqual([currentPr], [params.pr])) {
+    const updatedPr = { ...params.pr, explicitlyAttached: currentPr.explicitlyAttached };
+    if (prSummariesEqual([currentPr], [updatedPr])) {
       continue;
     }
 
@@ -2068,7 +2070,7 @@ function applyPullRequestStatusUpdate(
       };
       updatedThreadIndexes.add(location.threadIndex);
     }
-    threads[location.threadIndex]!.prs![location.prIndex] = params.pr;
+    threads[location.threadIndex]!.prs![location.prIndex] = updatedPr;
   }
 
   if (!threads) {
@@ -3559,6 +3561,9 @@ export function useThreadNavigation(
     | undefined
   >(undefined);
   const suppressedArchivedThreadKeysRef = useRef<Set<string>>(new Set());
+  const deferredArchiveRemovalsRef = useRef(new Map<string, {
+    resourceId: string; request: unknown; sequence: number;
+  }>());
   const removedDirectoryKeysRef = useRef(new Set<string>());
   const updateRemovedDirectoryKey = useCallback((key: string, removed: boolean): void => {
     if (removedDirectoryKeysRef.current.has(key) === removed) return;
@@ -3718,6 +3723,26 @@ export function useThreadNavigation(
   const directoryPatchReadsRef = useRef(new Map<string, ReadonlyMap<string, { request: unknown; sequence: number }>>());
   const navigationResourcesRef = useRef(boundedNavigation.resources);
   navigationResourcesRef.current = boundedNavigation.resources;
+  const deferNestedArchiveRemoval = useCallback((thread: NavigationThreadSummary): boolean => {
+    const key = threadSummaryIdentityKey(thread);
+    if (suppressedArchivedThreadKeysRef.current.has(key)) return false;
+    if (deferredArchiveRemovalsRef.current.has(key)) return true;
+    if (!thread.parentThreadId || thread.parentThreadInstanceId || thread.federation) return false;
+    const rows = loadedThreadRows(stateRef.current.rows);
+    const byKey = new Map(rows.map((row) => [threadSummaryIdentityKey(row), row]));
+    if (!rows.some((row) => resolveThreadParentKey(row, byKey) === key)) return false;
+    const parentKey = resolveThreadParentKey(thread, byKey);
+    const resource = [...navigationResourcesRef.current.values()].find(({ state }) =>
+      state.request.query.kind === "children"
+      && navigationThreadSelectionKey(state.request.query.parent) === parentKey);
+    if (!resource) return false;
+    // Keep this row as the tray's bridge until its owning child page can
+    // publish the replacement rows together. An eager removal loses the
+    // grandchildren even after their durable relationships have been fixed.
+    deferredArchiveRemovalsRef.current.set(key, { resourceId: resource.id,
+      request: resource.state.request, sequence: resource.state.pendingSequence });
+    return true;
+  }, []);
   const noteDirectoryPatch = useCallback((directoryKeys: Iterable<string>): void => {
     const reads = new Map([...navigationResourcesRef.current].map(([id, resource]) =>
       [id, { request: resource.state.request, sequence: resource.state.pendingSequence }]));
@@ -3741,6 +3766,16 @@ export function useThreadNavigation(
     const loading = enabled && primary.some((resource) => !resource.state.page && !resource.state.error);
     if (changed && pages.size) {
       const changedPages = [...pages].filter(([id, page]) => acceptedPages.get(id) !== page);
+      for (const [key, pending] of deferredArchiveRemovalsRef.current) {
+        const resource = boundedNavigation.resources.get(pending.resourceId);
+        const page = resource?.state.page;
+        if (!resource || !page || resource.state.stale || page.coverage.state !== "complete"
+          || acceptedPages.get(pending.resourceId) === page
+          || (resource.state.request === pending.request && resource.state.pendingSequence <= pending.sequence)
+          || page.entries.some(({ row }) => threadSummaryIdentityKey(row) === key)) continue;
+        suppressedArchivedThreadKeysRef.current.add(key);
+        deferredArchiveRemovalsRef.current.delete(key);
+      }
       // Directories this pass may rebuild: those in a page that landed now,
       // from a read that began after the directory's last patch. An earlier
       // read can still land between an unpin and the owner's event.
@@ -4549,7 +4584,9 @@ export function useThreadNavigation(
           threadId: string;
         };
         const threadKey = agentEventThreadIdentityKey(event, threadId);
-        suppressedArchivedThreadKeysRef.current.add(threadKey);
+        const row = stateRef.current.rows?.threadRows.get(threadKey);
+        const deferRemoval = row && deferNestedArchiveRemoval(row);
+        if (!deferRemoval) suppressedArchivedThreadKeysRef.current.add(threadKey);
         setPendingEnvironmentFailures((current) => {
           if (!current[threadKey]) return current;
           const next = { ...current };
@@ -4559,7 +4596,7 @@ export function useThreadNavigation(
 
         setState((current) => ({
           ...current,
-          rows: removeThreadFromLoadedRows(current.rows, {
+          rows: deferRemoval ? current.rows : removeThreadFromLoadedRows(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             threadId,
@@ -5064,6 +5101,7 @@ export function useThreadNavigation(
         suppressedArchivedThreadKeysRef.current.delete(
           agentEventThreadIdentityKey(event, threadId)
         );
+        deferredArchiveRemovalsRef.current.delete(agentEventThreadIdentityKey(event, threadId));
         scheduleEventRefresh();
         return;
       }
@@ -5088,6 +5126,7 @@ export function useThreadNavigation(
     scheduleRefresh,
     state.rows,
     invalidateNavigation,
+    deferNestedArchiveRemoval,
     noteDirectoryPatch,
     setSelectedItemKey,
   ]);
@@ -8441,9 +8480,10 @@ export function useThreadNavigation(
           threadSummaryIdentityKey(target)
         )
       );
+      const deferRemoval = !options?.includeSubthreads && deferNestedArchiveRemoval(thread);
 
       for (const targetKey of targetThreadKeys) {
-        suppressedArchivedThreadKeysRef.current.add(targetKey);
+        if (!deferRemoval) suppressedArchivedThreadKeysRef.current.add(targetKey);
       }
       setArchiveThreadError(undefined);
       setArchiveThreadNotice(undefined);
@@ -8453,7 +8493,7 @@ export function useThreadNavigation(
       setSetThreadModelSettingsError(undefined);
       setState((current) => ({
         ...current,
-        rows: targetThreads.reduce(
+        rows: deferRemoval ? current.rows : targetThreads.reduce(
           (snapshot, target) =>
             removeThreadFromLoadedRows(snapshot, {
               backend: target.source,
@@ -8542,7 +8582,10 @@ export function useThreadNavigation(
         await refresh(undefined, undefined, false, refreshOptions);
       } catch (error) {
         for (const targetKey of targetThreadKeys) {
-          if (!archivedKeys.has(targetKey)) suppressedArchivedThreadKeysRef.current.delete(targetKey);
+          if (!archivedKeys.has(targetKey)) {
+            suppressedArchivedThreadKeysRef.current.delete(targetKey);
+            deferredArchiveRemovalsRef.current.delete(targetKey);
+          }
         }
         setArchiveThreadError(error instanceof Error ? error.message : String(error));
         await refresh(archivedKeys.has(threadKey) ? undefined : threadKey, undefined, !archivedKeys.has(threadKey), refreshOptions);
@@ -8551,6 +8594,7 @@ export function useThreadNavigation(
     },
     [
       archiveThreadRequest,
+      deferNestedArchiveRemoval,
       desktopApi,
       optimisticThread,
       refresh,
@@ -8584,6 +8628,7 @@ export function useThreadNavigation(
           suppressedArchivedThreadKeysRef.current.delete(
             buildThreadIdentityKey(thread.backend, thread.threadId),
           );
+          deferredArchiveRemovalsRef.current.delete(buildThreadIdentityKey(thread.backend, thread.threadId));
         }
         await refresh(reopenKey, undefined, reopenKey !== undefined);
       } catch (error) {

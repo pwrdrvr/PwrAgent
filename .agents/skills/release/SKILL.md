@@ -5,7 +5,7 @@ description: Prepare, validate, tag, publish, and monitor guarded PwrAgent deskt
 
 # Release
 
-Use this skill for PwrAgent desktop releases published by the
+Use this skill for paired PwrAgent desktop and Outpost npm releases published by the
 `.github/workflows/release.yml` macOS, Windows and Linux workflow.
 
 ## Read First
@@ -18,6 +18,7 @@ Read these files before changing release metadata:
 4. [../../../scripts/check-desktop-release-metadata.mjs](../../../scripts/check-desktop-release-metadata.mjs)
 5. [../../../docs/package-manager-distribution.md](../../../docs/package-manager-distribution.md) for every release, including prereleases
 6. [../../../.github/workflows/package-manager-distribution.yml](../../../.github/workflows/package-manager-distribution.yml)
+7. [../../../docs/headless-npm-release.md](../../../docs/headless-npm-release.md), including its operator migration checklist and partial-failure recovery
 
 ## Guardrails
 
@@ -35,11 +36,24 @@ Read these files before changing release metadata:
   git fetch origin --tags
   ```
 
-- Treat `apps/desktop/package.json` as the desktop release version source.
+- Treat `apps/desktop/package.json` as the shared release version source.
   The root `package.json` version is not the desktop app release version.
+- Outpost's public npm `pwragent` package must have the exact desktop version,
+  including suffix. Use `pnpm release:prepare <version>` to update both package
+  manifests and Outpost's npm channel. Never create a `pwragent-v*` tag or dispatch
+  a separate CLI publisher. Shared/private packages keep independent versions.
+- Before tagging, have the operator verify the npm migration checklist:
+  `npm-pwragent` required review/admin-bypass protection, exactly one `v*` tag
+  deployment rule, protected desktop tags, npm trust for
+  `pwrdrvr/PwrAgent` / `release.yml` / `npm-pwragent` with direct publish allowed,
+  and repository variable `OUTPOST_NPM_RELEASE_READY=release.yml/npm-pwragent`.
+  Do not change protections, trust, owners or credentials without explicit
+  authorization. Missing setup blocks desktop packaging; public registry reads
+  cannot prove the private npm trust settings are correct.
 - Always use a leading-`v` tag such as `v1.0.0-alpha.5`.
 - The tag version, `apps/desktop/package.json` version, and
-  `CHANGELOG.md` release heading must match.
+  `packages/pwragent/package.json` version and `CHANGELOG.md` release heading
+  must match.
 - Desktop Settings expose two axes: **channel** (Stable or Beta) and
   **track** (Latest or Prerelease). Encode those slots in the tag suffix
   so GitHub `/releases/latest` stays on the Stable Latest train:
@@ -57,7 +71,7 @@ Read these files before changing release metadata:
 - `main` tags with a prerelease suffix must stay GitHub Pre-release so they
   never steal `/releases/latest` from the Stable train. Never promote a
   suffixed tag.
-- To promote a smoked alpha to beta, bump `apps/desktop/package.json` and
+- To promote a smoked alpha to beta, run `pnpm release:prepare <beta-version>` and
   add a CHANGELOG heading from `X.Y.Z-alpha.N` to `X.Y.Z-beta.M`, commit,
   and tag that commit. The tree can otherwise match the alpha. Do not add
   a second tag to the alpha SHA: the metadata gate and the baked app
@@ -150,14 +164,15 @@ but do not update either stable package channel.
    gh release list --limit 10
    ```
 
-2. Update `apps/desktop/package.json` without creating a tag yet:
+2. Prepare both package versions without creating a tag yet:
 
    ```bash
-   pnpm --filter @pwragent/desktop version <version> --no-git-tag-version
+   pnpm release:prepare <version>
    ```
 
-   If that command is not available in the current pnpm version, edit only
-   `apps/desktop/package.json` and preserve JSON formatting.
+   This synchronizes `packages/pwragent/package.json` and its `next`/`latest`
+   channel with the desktop authority. Commit both manifests. If editing by
+   hand, preserve formatting and update both; `release:check` rejects drift.
 
 3. Add a top `CHANGELOG.md` entry:
 
@@ -205,7 +220,7 @@ Commit the version and changelog together. Use a signed commit; this repo's git
 config should already sign commits with SSH.
 
 ```bash
-git add apps/desktop/package.json CHANGELOG.md
+git add apps/desktop/package.json packages/pwragent/package.json CHANGELOG.md
 git commit -m "chore(release): prepare v<version>"
 ```
 
@@ -290,8 +305,12 @@ For a manual dispatch, verify the tag already exists on GitHub:
 
 ```bash
 git ls-remote --tags origin v<version>
-gh workflow run release.yml --ref <RELEASE_BRANCH> -f tag=v<version>
+gh workflow run release.yml --ref v<version> -f tag=v<version>
 ```
+
+The workflow ref must be that same protected desktop tag. Branch dispatches
+are rejected so event SHA, desktop source, tested npm bytes and provenance all
+identify one commit. An advancing release branch does not invalidate a retry.
 
 ## Monitor And Verify
 
@@ -307,6 +326,21 @@ The `Sign, notarize, publish` job pauses for `apple-signing` Environment
 approval. Treat that pause as expected. Before approving, verify the workflow
 run is for the intended tag, the tag points at the intended default-branch
 commit, and the version/changelog metadata match the tag.
+
+The npm job later pauses for `npm-pwragent` review after desktop assets/notes
+are visible. Before approval, verify the tag/SHA, Node 22/24 validation and
+retained `headless-npm-package` artifact/integrity. There is no independent CLI
+release request. Do not report success until `Verify desktop and Outpost release
+completion` succeeds and `outpost-release-receipt` matches public npm version,
+`pwragentRelease` tag/commit, integrity and provenance metadata.
+
+An npm failure leaves a partial release, not a successful desktop-only train.
+Inspect the registry, then prefer rerunning failed jobs of the original run to
+reuse tested bytes. Identical occupied versions are verified without mutation;
+different bytes/source, missing provenance, stale channels or expired artifacts
+fail closed. Do not overwrite/unpublish, move tags, change trust or use a token
+fallback as recovery. Follow the runbook for operator action or a new paired
+version. GitHub and npm have no cross-service atomic transaction.
 
 If monitoring is delegated and the monitor stops at the approval gate, resume
 monitoring after approval. Do not end the release turn as "done" at the
@@ -350,6 +384,12 @@ them from
 `https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg`
 and the default Electron updater feed. Promotion to Latest is a separate
 operator action, not part of the workflow.
+
+The npm `latest` channel advances for suffix-free versions in the shared
+workflow, before desktop promotion. Alpha/beta/prerelease/rc versions use `next`;
+older maintenance trains use guarded per-train channels where needed. Use a
+`-prerelease.N` version if npm stable consumers must not advance yet. Verify
+shared-release completion before promoting the desktop release.
 
 This release-note publication is required, not cosmetic. Electron-builder may
 leave the body empty or duplicate the tag name. If the workflow release-notes
@@ -430,6 +470,10 @@ Use the local path only when CI is unavailable or the user explicitly asks for
 local signing/notarization. Follow
 [../../../docs/desktop-release-runbook.md](../../../docs/desktop-release-runbook.md)
 for required Apple and GitHub secrets.
+
+Local desktop packaging does not satisfy the shared release contract or publish
+Outpost. Finish the normal protected-tag workflow and verify its npm receipt;
+do not manually publish a separately built npm tarball as a local fallback.
 
 ```bash
 pnpm --filter @pwragent/desktop package:dryrun

@@ -663,6 +663,24 @@ export function buildPullRequestStatusKey(
   return `${identity.provider}/${identity.org.toLowerCase()}/${identity.repo.toLowerCase()}#${identity.number}`;
 }
 
+/**
+ * Automatic fork attachments belong to their source workspace. An explicit
+ * attachment also belongs to its destination workspace, so an upstream checkout
+ * can monitor a deliberately attached contribution without admitting other forks.
+ */
+export function pullRequestMatchesRepositoryKey(
+  pr: PrSummary,
+  repositoryKey: string | undefined,
+): boolean {
+  if (!repositoryKey) return false;
+  const identity = resolvePullRequestIdentity(pr);
+  const key = (repository: Pick<PrSummary, "provider" | "org" | "repo">): string =>
+    [repository.provider, repository.org, repository.repo]
+      .map((part) => part.trim().toLowerCase()).join("/");
+  return key(identity.sourceRepository ?? identity) === repositoryKey
+    || (pr.explicitlyAttached === true && key(identity) === repositoryKey);
+}
+
 export type DirectorySummaryKind = "directory" | "workspace" | "unlinked";
 /**
  * `attention` is the work-queue lens: threads with a live turn or waiting to
