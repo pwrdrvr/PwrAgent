@@ -255,15 +255,20 @@ export async function persistTranscriptEntryImages(
             await link(sourcePath, filePath);
           } catch (error) {
             const code = (error as NodeJS.ErrnoException).code ?? "";
-            if (code !== "EEXIST") {
-              if (!["EXDEV", "EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "EMLINK"].includes(code)) throw error;
-              const temporary = `${filePath}.${randomUUID()}.tmp`;
-              try {
-                await copyFile(sourcePath, temporary, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
-                await publishStagedTranscriptImage(temporary, filePath);
-              } finally {
-                await rm(temporary, { force: true });
-              }
+            if (code === "EEXIST") {
+              // This publisher may also own an inline append waiting to repair
+              // the same legacy file. Do not reuse a truncated fork target.
+              const [source, destination] = await Promise.all([stat(sourcePath), stat(filePath)]);
+              if (source.size === destination.size) return;
+            } else if (!["EXDEV", "EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "EMLINK"].includes(code)) {
+              throw error;
+            }
+            const temporary = `${filePath}.${randomUUID()}.tmp`;
+            try {
+              await copyFile(sourcePath, temporary, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+              await publishStagedTranscriptImage(temporary, filePath);
+            } finally {
+              await rm(temporary, { force: true });
             }
           }
         });

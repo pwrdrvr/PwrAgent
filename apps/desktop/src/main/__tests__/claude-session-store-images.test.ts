@@ -183,6 +183,20 @@ describe("Claude history image persistence", () => {
     expect(await readdir(path.dirname(cached))).toEqual([path.basename(cached)]);
   });
 
+  it("repairs a truncated fork destination shared with a concurrent inline append", async () => {
+    const f = await fixture();
+    const forkId = "f3333333-3333-4333-8333-333333333333";
+    await f.store.append(id, [activity()]);
+    const source = await f.store.entries(id);
+    const root = path.join(f.images, forkId);
+    const cached = path.join(root, `${createHash("sha256").update(png).digest("hex")}.png`);
+    await mkdir(root, { recursive: true });
+    await writeFile(cached, png.subarray(0, 8));
+    await Promise.all([f.store.append(forkId, source), f.store.append(forkId, [activity()])]);
+    await expect(readFile(cached)).resolves.toEqual(png);
+    expect(await readdir(root)).toEqual([path.basename(cached)]);
+  });
+
   it("verifies a competing fork publication against the complete staged copy", async () => {
     const f = await fixture();
     const forkId = "f3333333-3333-4333-8333-333333333333";
