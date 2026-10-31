@@ -1,3 +1,4 @@
+import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { SandboxerConnection } from "../mcp-connections/sandboxer-connection";
 import { sandboxerStub } from "./helpers/sandboxer-stub";
 import { rmSync, writeFileSync } from "node:fs";
@@ -28,6 +29,7 @@ describe("backend MCP gateway dispatch", () => {
   let registry: DesktopBackendRegistry;
   let operation: ReturnType<typeof vi.fn<McpConnectionGatewayService["requestGatewayToolOperation"]>>;
   let startTurn: ReturnType<typeof vi.fn<() => Promise<{ threadId: string; turnId: string }>>>;
+  let startThread: ReturnType<typeof vi.fn<(params: { dynamicTools?: DynamicToolSpec[] }) => Promise<{ threadId: string }>>>;
   let registerBridge: ReturnType<typeof vi.fn<McpConnectionGatewayService["registerBridge"]>>;
   const brokers: McpConnectionGatewayService[] = [];
   let internals: {
@@ -65,6 +67,7 @@ describe("backend MCP gateway dispatch", () => {
           name: "lookup", inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
         } }]
       : { content: [{ type: "text", text: "fixture result" }] });
+    startThread = vi.fn(async () => ({ threadId: "headless-1" }));
     startTurn = vi.fn(async () => ({ threadId: "headless-1", turnId: "turn-1" }));
     registerBridge = vi.fn<McpConnectionGatewayService["registerBridge"]>(async () => ({
       server: { name: "one", command: "fixture", args: [], env: {} },
@@ -78,7 +81,8 @@ describe("backend MCP gateway dispatch", () => {
       codexClient: {
         close: async () => {}, getInitializeResult: async () => ({ methods: [] }), listThreads: async () => [],
         onNotification: () => () => {}, onPendingRequest: () => () => {},
-        readConfiguredMcpServerNames: async () => [], startThread: async () => ({ threadId: "headless-1" }),
+        readConfiguredMcpServerNames: async () => [], startThread,
+        listModels: async () => [{ id: "gpt-6-luna", label: "Luna", supportsReasoning: true }],
         startTurn,
       } as never,
       overlayStore, isBootstrapMode: () => false,
@@ -130,6 +134,43 @@ describe("backend MCP gateway dispatch", () => {
     });
     return events;
   }
+
+  async function createMonitor() {
+    const response = await internals.handleServerRequest("codex", request("create_monitor_delegation", {
+      task: "Use the selected MCP connection to inspect durable cloud status and report its exit code.",
+      cwd: directory,
+    }));
+    expect(response.success).toBe(true);
+    return (tool: string, arguments_: Record<string, unknown>) => {
+      const call = request(tool, arguments_, `monitor-${tool}`);
+      return internals.handleServerRequest("codex", { ...call, params: { ...call.params, threadId: "headless-1" } });
+    };
+  }
+
+  it("advertises MCP discovery and invocation to a delegated monitor", async () => {
+    await createMonitor();
+    const tools = startThread.mock.calls[0][0].dynamicTools?.flatMap((spec) => spec.type === "namespace" ? spec.tools.map((tool) => tool.name) : [spec.name]);
+    expect(tools).toEqual(["inject_progress", "complete_monitoring", "search_mcp_tools", "call_mcp_tool"]);
+  });
+
+  it("lets the delegated monitor discover and invoke only its parent's selected connections", async () => {
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+    const call = await createMonitor();
+    // The worker has no saved overlay and the parent may finish its turn.
+    internals.activeTurnKeys.delete("codex:thread-1:turn-1");
+    expect((await call("search_mcp_tools", { query: "lookup", connectionId: "one" })).success).toBe(true);
+    expect((await call("call_mcp_tool", args)).success).toBe(true);
+    expect(operation).toHaveBeenCalledWith(expect.objectContaining({
+      connectionId: "one", operation: "gateway/tools/call", scopeKey: JSON.stringify(["gateway", "codex", "headless-1"]),
+    }));
+    expect((await call("search_mcp_tools", { query: "lookup", connectionId: "unselected" })).success).toBe(false);
+    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["one", "later"] });
+    expect((await call("search_mcp_tools", { query: "lookup", connectionId: "later" })).success).toBe(false);
+    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: [] });
+    operation.mockClear();
+    expect((await call("call_mcp_tool", args)).success).toBe(false);
+    expect(operation).not.toHaveBeenCalled();
+  });
 
   it.each(["disabled", "cold", "expired"] as const)(
     "keeps unrelated new-thread defaults when Sandboxer status is slow (%s)",
