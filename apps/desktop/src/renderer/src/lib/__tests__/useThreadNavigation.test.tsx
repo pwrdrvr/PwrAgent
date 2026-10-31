@@ -12263,7 +12263,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("applies pull request update notification payloads before unchanged refreshes", async () => {
+  it.each(["title", "explicit-attachment"])("applies pull request %s notification payloads before unchanged refreshes", async (change) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     onTestFinished(() => { vi.useRealTimers(); });
     const listeners = new Set<(event: AgentEvent) => void>();
@@ -12277,7 +12277,9 @@ describe("useThreadNavigation", () => {
     };
     const updatedPr: PrSummary = {
       ...initialPr,
-      title: "Preserve PR title updates",
+      ...(change === "explicit-attachment"
+        ? { explicitlyAttached: true as const }
+        : { title: "Preserve PR title updates" }),
     };
     const readPopulation = vi
       .fn()
@@ -12399,7 +12401,7 @@ describe("useThreadNavigation", () => {
             titleSource: "explicit" as const,
             source: "codex" as const,
             linkedDirectories: [],
-            prs: [initialPr],
+            prs: [{ ...initialPr, explicitlyAttached: true }],
             inbox: { inInbox: true, reason: "new-thread" as const },
             updatedAt: 1_000,
           },
@@ -12486,7 +12488,7 @@ describe("useThreadNavigation", () => {
       });
 
       expect(result.current.threads.find((thread) => thread.id === "thread-1")?.prs)
-        .toEqual([updatedPr]);
+        .toEqual([{ ...updatedPr, explicitlyAttached: true }]);
       expect(result.current.threads.find((thread) => thread.id === "thread-2")?.prs)
         .toEqual([updatedPr]);
       expect(result.current.threads.find((thread) => thread.id === "thread-3")?.prs?.[0])

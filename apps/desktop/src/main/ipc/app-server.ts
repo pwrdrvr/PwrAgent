@@ -3151,6 +3151,7 @@ class DesktopAppServerService {
         return normalizePrSummary({
           ...pr,
           linkedDirectoryPaths: candidate.linkedDirectoryPaths,
+          ...(candidate.explicitlyAttached ? { explicitlyAttached: true } : {}),
         });
       });
       if (changed) {
