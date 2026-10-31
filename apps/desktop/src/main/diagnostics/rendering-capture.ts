@@ -1,17 +1,10 @@
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { app, BrowserWindow, contentTracing } from "electron";
+import { app, BrowserWindow } from "electron";
 import { readRenderingSnapshot, type RenderingCaptureResult } from "../../shared/rendering-diagnostics";
 import { RENDERER_UPDATE_EVENT_NAMES } from "../../shared/renderer-update-diagnostics";
 
-// No screenshots, JS stacks, user timing, URLs, DOM or trace arguments are exported.
-export const RENDERING_TRACE_CONFIG: Electron.TraceConfig = {
-  recording_mode: "record-until-full",
-  trace_buffer_size_in_kb: 8192,
-  enable_argument_filter: true,
-  included_categories: ["cc", "viz", "gpu", "devtools.timeline", "disabled-by-default-devtools.timeline.frame"],
-  excluded_categories: ["*"],
-};
+import { RenderingTrace } from "./rendering-trace";
 
 const EVENTS = [
   "BeginFrame", "BeginMainThreadFrame", "DrawFrame", "SubmitCompositorFrame",
@@ -84,7 +77,7 @@ class RenderingCapture {
   private sampleTask: Promise<void> | undefined;
   private finishTask: Promise<void> | undefined;
   private directory = "";
-  private recording = false;
+  private trace: RenderingTrace | undefined;
   private resolve!: (result: RenderingCaptureResult) => void;
   private reject!: (error: unknown) => void;
   readonly result = new Promise<RenderingCaptureResult>((resolve, reject) => {
@@ -100,10 +93,13 @@ class RenderingCapture {
   private async start(outputRoot: string, seconds: number): Promise<void> {
     await mkdir(outputRoot, { recursive: true, mode: 0o700 });
     this.directory = await mkdtemp(join(outputRoot, "rendering-"));
-    await contentTracing.startRecording(RENDERING_TRACE_CONFIG);
-    this.recording = true;
+    const window = BrowserWindow.getAllWindows().find((candidate) =>
+      !candidate.isDestroyed() && !candidate.webContents.isDestroyed());
+    if (!window) throw new Error("No rendering trace target");
+    this.trace = new RenderingTrace(window.webContents, () => { void this.stop("manual").catch(() => {}); });
+    await this.trace.start();
     this.startedAt = performance.now();
-    this.timer = setTimeout(() => { void this.stop("duration"); }, seconds * 1000);
+    this.timer = setTimeout(() => { void this.stop("duration").catch(() => {}); }, seconds * 1000);
     this.sample();
   }
 
@@ -130,9 +126,8 @@ class RenderingCapture {
       await this.startTask;
       clearTimeout(this.timer);
       clearTimeout(this.sampleTimer);
-      const bufferUsage = await contentTracing.getTraceBufferUsage();
-      await contentTracing.stopRecording(rawPath());
-      this.recording = false;
+      await this.trace!.stop(rawPath());
+      const bufferUsage = this.trace!.bufferUsage;
       const durationMs = Math.round(performance.now() - this.startedAt);
       await this.sampleTask;
       clearTimeout(this.sampleTimer);
@@ -150,7 +145,11 @@ class RenderingCapture {
     } finally {
       clearTimeout(this.timer);
       clearTimeout(this.sampleTimer);
-      if (this.recording) await contentTracing.stopRecording(rawPath()).catch(() => {});
+      try {
+        this.trace?.release();
+      } catch {
+        result = undefined;
+      }
       if (this.directory) {
         try {
           await rm(rawPath(), { force: true });
@@ -167,7 +166,7 @@ class RenderingCapture {
     try {
       await this.startTask;
     } catch {
-      void this.stop("manual");
+      void this.stop("manual").catch(() => {});
     }
     return this.result;
   }

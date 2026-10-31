@@ -109,3 +109,84 @@ test("production thinking scanners submit fewer frames than a refresh-rate sweep
     await app.close();
   }
 });
+
+test("rendering acquisition preserves an external Electron contentTracing owner", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/smoke/replay.fixture.json"),
+  });
+  try {
+    await app.electronApp.evaluate(async ({ contentTracing }) => {
+      await contentTracing.startRecording({
+        recording_mode: "record-until-full", trace_buffer_size_in_kb: 8192,
+        included_categories: ["toplevel"], excluded_categories: ["*"], enable_argument_filter: true,
+      });
+    });
+    await expect(app.window.evaluate(() => (window as unknown as { pwragent: {
+      captureRenderingDiagnostics: (seconds: number) => Promise<RenderingCaptureResult>;
+    } }).pwragent.captureRenderingDiagnostics(1))).rejects.toThrow("Rendering capture failed");
+    // Only the original owner stops this trace. The previous implementation
+    // resolved the overlapping start, then stopped this recording itself.
+    const rawPath = path.join(app.homeRoot, "contrived-external-trace.json");
+    const stopped = await app.electronApp.evaluate(({ contentTracing }, file) => contentTracing.stopRecording(file), rawPath);
+    expect(stopped).toBe(rawPath);
+    expect((await readFile(rawPath)).byteLength).toBeGreaterThan(0);
+    // A failed acquisition must release its lease so a later request can run.
+    const result = await app.window.evaluate(() => (window as unknown as { pwragent: {
+      captureRenderingDiagnostics: (seconds: number) => Promise<RenderingCaptureResult>;
+    } }).pwragent.captureRenderingDiagnostics(1));
+    expect(JSON.parse(await readFile(result.summaryPath, "utf8")).reason).toBe("duration");
+  } finally {
+    await app.close();
+  }
+});
+
+test("HotCpuProfiler co-records through rendering capture on one debugger attachment", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/smoke/replay.fixture.json"),
+    env: {
+      PWRAGENT_HOT_CPU_PROFILING_START_DELAY_MS: "0",
+      PWRAGENT_HOT_CPU_PROFILING_INTERVAL_MS: "250",
+      PWRAGENT_HOT_CPU_PROFILING_THRESHOLD_PERCENT: "0.01",
+      PWRAGENT_HOT_CPU_PROFILING_TRIGGER_MODE: "spike",
+      PWRAGENT_HOT_CPU_PROFILING_DURATION_MS: "2000",
+      PWRAGENT_HOT_CPU_PROFILING_COOLDOWN_MS: "1",
+      PWRAGENT_HOT_CPU_PROFILING_MAX_PROFILES: "10",
+    },
+  });
+  try {
+    await app.window.evaluate(async () => {
+      const api = (window as unknown as { pwragent: {
+        onHotCpuProfileCaptured: (callback: (event: { target?: string; profilePath: string }) => void) => () => void;
+        writeSettingsConfig: (request: { patch: { general: { hotCpuProfilingEnabled: boolean } } }) => Promise<unknown>;
+      } }).pwragent;
+      (window as unknown as { rendererProfile: Promise<string> }).rendererProfile = new Promise((resolve) => {
+        const unsubscribe = api.onHotCpuProfileCaptured((event) => {
+          if (event.target !== "renderer") return;
+          unsubscribe();
+          resolve(event.profilePath);
+        });
+      });
+      // Entirely contrived activity. The normal profiler owns start/stop and
+      // artifact publication; the regression never sends Profiler commands.
+      setInterval(() => {
+        const until = performance.now() + 8;
+        while (performance.now() < until) Math.sqrt(performance.now());
+      }, 25);
+      await api.writeSettingsConfig({ patch: { general: { hotCpuProfilingEnabled: true } } });
+    });
+    await expect.poll(() => app.electronApp.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.debugger.isAttached())).toBe(true);
+    const result = await app.window.evaluate(() => (window as unknown as { pwragent: {
+      captureRenderingDiagnostics: (seconds: number) => Promise<RenderingCaptureResult>;
+    } }).pwragent.captureRenderingDiagnostics(1));
+    expect(JSON.parse(await readFile(result.summaryPath, "utf8")).trace.length).toBeGreaterThan(0);
+    expect(await app.electronApp.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.debugger.isAttached())).toBe(true);
+    const profilePath = await app.window.evaluate(() => (window as unknown as { rendererProfile: Promise<string> }).rendererProfile);
+    const profile = JSON.parse(await readFile(profilePath, "utf8"));
+    expect(profile.samples.length).toBeGreaterThan(0);
+    console.log(JSON.stringify({ coRecording: { profileSamples: profile.samples.length } }));
+  } finally {
+    await app.close();
+  }
+});

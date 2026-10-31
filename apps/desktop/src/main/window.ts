@@ -635,6 +635,7 @@ export function createMainWindow(options?: {
         debugger: webContents.debugger,
         getOSProcessId: () => webContents.getOSProcessId(),
         isDestroyed: () => webContents.isDestroyed(),
+        isDevToolsOpened: () => webContents.isDevToolsOpened(),
         takeHeapSnapshot: (filePath) => webContents.takeHeapSnapshot(filePath),
         readDiagnostics: () => readRendererListingDiagnostics(webContents),
       },
