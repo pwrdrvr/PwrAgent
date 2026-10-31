@@ -3,10 +3,25 @@ import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "n
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { probeCurrentGitBranch } from "../app-server/git-head-branch";
 
 const execFile = promisify(execFileCallback);
+
+const readObservation = vi.hoisted(() => ({
+  afterRead: undefined as ((filePath: unknown) => Promise<void>) | undefined,
+}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    async readFile(...args: Parameters<typeof actual.readFile>) {
+      const result = await actual.readFile(...args);
+      await readObservation.afterRead?.(args[0]);
+      return result;
+    },
+  };
+});
 
 const isolatedGitKeys = /^(?:PWRAGENT_GIT_PATH|GIT_(?:DIR|WORK_TREE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|INDEX_FILE|NAMESPACE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM|CONFIG.*))$/i;
 let savedGitEnv: Map<string, string>;
@@ -22,6 +37,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  readObservation.afterRead = undefined;
   for (const [key, value] of savedGitEnv) process.env[key] = value;
 });
 
@@ -45,6 +61,52 @@ async function git(cwd: string, args: string[]): Promise<string> {
 }
 
 describe("probeCurrentGitBranch", () => {
+  it("keeps a committed HEAD when Git packs its loose ref during the probe", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-packing-head-"));
+    try {
+      await git(root, ["init", "-b", "main"]);
+      await git(root, ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "seed"]);
+      const oid = await git(root, ["rev-parse", "HEAD"]);
+      await git(root, ["branch", "packed-only"]);
+      await git(root, ["pack-refs", "--all"]);
+      await git(root, ["update-ref", "-d", "refs/heads/main"]);
+      await git(root, ["update-ref", "refs/heads/main", oid]);
+      const packedPath = path.join(root, ".git", "packed-refs");
+      expect(await readFile(packedPath, "utf8")).not.toContain("refs/heads/main");
+      let packedDuringProbe = false;
+      readObservation.afterRead = async (filePath) => {
+        if (filePath !== packedPath || packedDuringProbe) return;
+        packedDuringProbe = true;
+        await git(root, ["pack-refs", "--all"]);
+      };
+      expect(await probeCurrentGitBranch(root)).toEqual({ branch: "main" });
+      expect(packedDuringProbe).toBe(true);
+      expect(await git(root, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("main");
+      await expect(readFile(path.join(root, ".git", "refs", "heads", "main"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      readObservation.afterRead = undefined;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("defers at nested bare and administrative repositories instead of selecting the enclosing checkout", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-bare-boundary-"));
+    const nested = path.join(root, "nested.git");
+    try {
+      await git(root, ["init", "-b", "outer"]);
+      await git(root, ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "seed"]);
+      await git(root, ["init", "--bare", "-b", "inner", nested]);
+      await git(root, ["push", nested, "HEAD:refs/heads/inner"]);
+      expect(await git(nested, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("inner");
+      expect(await probeCurrentGitBranch(nested)).toBeUndefined();
+      expect(await probeCurrentGitBranch(path.join(nested, "objects"))).toBeUndefined();
+      expect(await probeCurrentGitBranch(path.join(root, ".git"))).toBeUndefined();
+      expect(await probeCurrentGitBranch(root)).toEqual({ branch: "outer" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("preserves unborn HEAD after fetching remote refs, then reads loose and packed branch refs", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-head-probe-"));
     const local = path.join(root, "local");
@@ -131,6 +193,7 @@ describe("probeCurrentGitBranch", () => {
       const match = /^gitdir: ([^\r\n]+)/.exec(link);
       expect(match).toBeTruthy();
       const admin = path.resolve(linked, match![1]);
+      expect(await probeCurrentGitBranch(admin)).toBeUndefined();
       expect(await git(linked, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("feature/probe");
       expect(await probeCurrentGitBranch(linked)).toEqual({ branch: "feature/probe" });
       const relative = path.join(root, "relative");

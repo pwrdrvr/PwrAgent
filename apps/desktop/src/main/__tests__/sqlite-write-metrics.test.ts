@@ -66,6 +66,8 @@ vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => ({
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
 let tempDir: string;
+const isolatedGitKeys = /^(?:PWRAGENT_GIT_PATH|GIT_(?:DIR|WORK_TREE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|INDEX_FILE|NAMESPACE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM|CONFIG.*))$/i;
+let savedGitEnv: Map<string, string>;
 
 const ALERTING_TOOL_OUTPUT_POLICY = {
   outputCapHitsEnabled: true,
@@ -76,6 +78,13 @@ const ALERTING_TOOL_OUTPUT_POLICY = {
 };
 
 beforeEach(() => {
+  savedGitEnv = new Map();
+  for (const [key, value] of Object.entries(process.env)) {
+    if (isolatedGitKeys.test(key) && value !== undefined) {
+      savedGitEnv.set(key, value);
+      delete process.env[key];
+    }
+  }
   process.env[SQLITE_WRITE_METRICS_ENV] = "1";
   const fixture = createTempStateDb("pwragent-write-metrics-");
   tempDir = fixture.tempDir;
@@ -89,12 +98,19 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  gitCommand.mockClear();
-  delete process.env[SQLITE_WRITE_METRICS_ENV];
-  stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
-  try { expect(sdkGetSessionInfo).not.toHaveBeenCalled(); }
-  finally { sdkGetSessionInfo.mockClear(); }
+  try {
+    gitCommand.mockClear();
+    delete process.env[SQLITE_WRITE_METRICS_ENV];
+    stateDb.close();
+    rmSync(tempDir, { recursive: true, force: true });
+    try { expect(sdkGetSessionInfo).not.toHaveBeenCalled(); }
+    finally { sdkGetSessionInfo.mockClear(); }
+  } finally {
+    for (const key of Object.keys(process.env)) {
+      if (isolatedGitKeys.test(key)) delete process.env[key];
+    }
+    for (const [key, value] of savedGitEnv) process.env[key] = value;
+  }
 });
 
 describe("sqlite write metrics", () => {
