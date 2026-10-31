@@ -2109,6 +2109,10 @@ class MockBackendClient {
     };
   }
 
+  async readConfiguredMcpServerNames(): Promise<string[]> {
+    return [];
+  }
+
   async readCodexHome(): Promise<string> {
     return this.options.codexHome ?? "/home/example/.codex";
   }
@@ -53214,7 +53218,7 @@ script = "printf setup"
     });
     expect(codexClient.lastStartThreadParams?.threadSource).toBe("subagent");
     expect(pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools)
-      .map((tool) => tool.name)).toEqual(["inject_progress", "complete_monitoring"]);
+      .map((tool) => tool.name)).toEqual(["inject_progress", "complete_monitoring", "search_mcp_tools", "call_mcp_tool"]);
     expect(codexClient.startTurnCallCount).toBe(1);
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "monitor-thread",
@@ -54001,6 +54005,48 @@ script = "printf setup"
       } finally {
         try {
           await close();
+        } finally {
+          branchRead.mockRestore();
+        }
+      }
+    });
+
+    it("does not start a Claude monitor recovery turn during shutdown", async () => {
+      const { registry, prompts, release, root } = await createClaudeMonitorRegistry({});
+      const branchRead = vi.spyOn(gitExecutable, "runGitCommand")
+        .mockResolvedValue({ stdout: "main\n", stderr: "" });
+      try {
+        const response = await callRegistryMcpTool({
+          registry,
+          backend: "claude",
+          threadId: parentThreadId,
+          turnId: "parent-turn",
+          tool: "create_monitor_delegation",
+          args: { task: "Watch PR #8 checks until they finish." },
+        });
+        expect(response.isError).not.toBe(true);
+        await vi.waitFor(() => expect(prompts).toHaveLength(1));
+        await registry.publishLocalEvent({
+          backend: "claude",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: parentThreadId,
+              turnId: "parent-turn",
+              turn: { id: "parent-turn", status: "completed", output: [] },
+            },
+          },
+        });
+
+        const closing = registry.close();
+        release();
+        await closing;
+        expect(prompts).toHaveLength(1);
+      } finally {
+        release();
+        try {
+          await registry.close();
+          await rm(root, { recursive: true, force: true });
         } finally {
           branchRead.mockRestore();
         }

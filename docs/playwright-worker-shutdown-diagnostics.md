@@ -143,6 +143,48 @@ When upgrading Playwright, port both patches and run the real-worker tests and
 `e2e/electron-launcher-ownership.spec.ts` on Windows. A green ordinary E2E run
 does not validate failure capture or native launcher ownership.
 
+## Controlled native Windows pipe inheritance
+
+To reproduce an exited native Electron process whose launcher pipes remain open,
+run this manual probe from the repository root on Windows:
+
+```powershell
+node apps/desktop/scripts/probe-windows-electron-pipe-inheritance.mjs
+```
+
+It loads a minimal Electron entry, without the product or a user profile. Electron
+starts a Node intermediate, which starts a detached Node retainer. Both launches
+request ignored stdio. The probe records all three Windows creation times and
+parent PIDs while they are alive, lets the intermediate exit, and quits Electron.
+The retainer exits on its own after twelve seconds. No surviving descendant is
+terminated by PID. On an error, only the exact Playwright-owned Electron process
+handle may be stopped.
+
+`summary.json`, `events.jsonl`, and process snapshots are retained under
+`apps/desktop/test-results/windows-pipe-inheritance/<timestamp>/`. Use
+`--output-dir <new-directory>` to preserve a run elsewhere. For native handle
+evidence, optionally pass `--handle-exe <path-to-handle64.exe>` using Microsoft's
+[Sysinternals Handle](https://learn.microsoft.com/en-us/sysinternals/downloads/handle).
+The probe uses bounded, read-only queries for its identified PIDs and records
+query errors. It does not download Handle or scan every process.
+
+On Electron 44.9.3 (embedded Node 24.22.0, libuv 1.52.1), the control reproduced
+exit code zero with fd 1–4 still open. The retainer held the same four launcher
+pipe names before and after Electron exited; launcher close followed the
+retainer's natural exit. Electron explicitly enables stdio inheritance in its
+[browser process](https://github.com/electron/electron/blob/v44.9.3/shell/common/node_bindings.cc#L638),
+and this runtime's libuv uses unrestricted handle inheritance when spawning a
+[Windows child](https://github.com/nodejs/node/blob/v24.22.0/deps/uv/src/win/process.c).
+Ignored stdio does not exclude inherited handles outside the child's new stdio
+mapping. A grandchild can outlive both its intermediate parent and Electron.
+
+This is a positive control for the failure mechanism. It does not identify the
+historical retaining process in CI job 124557904187: that artifact has no earlier
+ancestry trace or native handle inventory. A healthy natural run, a late process
+tree, or this control alone cannot establish that process's identity. Preserve
+creation-time ancestry from before quit and matching pipe handles in a natural
+failure before changing product ownership or cleanup.
+
 ## Unit probe timeouts
 
 The real-worker unit tests launch a separate Playwright CLI with a generated
