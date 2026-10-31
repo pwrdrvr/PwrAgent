@@ -252,12 +252,19 @@ another retry. This tool does not poll, start a repair turn, or add persistence.
   GitLab returns `unsupported_provider`. No CI operation is started or rerun.
   Archives stream directly into a new project file, with a 128 MiB cap and no
   profile cache or separate staging store. Optional `destination` is a relative
-  ZIP filename, defaulting to `.local/ci-artifacts/<runId>/<artifactId>/artifact.zip`.
+  ZIP filename, defaulting to `.pwragent/ci-artifacts/<runId>/<artifactId>/artifact.zip`.
   Optional `directory` selects an absolute linked directory on the thread owner;
   it is required when linked project selection is ambiguous. Neither field is
   required by existing dynamic-tool schemas. Missing projects fail explicitly.
   The destination must actually be Git-ignored, including explicit destinations.
-  The tool does not edit ignore rules. Traversal, symlinks/junctions, nested
+  Recommend adding `.pwragent/` to the user's existing global Git ignore file
+  (`core.excludesFile`), or to the project's `.gitignore`. Preserve any existing
+  global excludes configuration. Git's default user ignore file is
+  `$XDG_CONFIG_HOME/git/ignore`, or `$HOME/.config/git/ignore` when XDG is unset.
+  Verify the chosen ZIP with `git check-ignore --verbose -- <relative-path>`:
+  repository rules can override global rules. In Federation, these rules must
+  apply on the thread owner's machine. The tool does not edit ignore rules or
+  Git configuration. Traversal, symlinks/junctions, nested
   repositories, Git internals and existing files are refused. A repeated call
   must select another destination or explicitly remove the previous download.
   Results retain `archivePath`, `sizeBytes`, `sha256` and `pathOwner: "thread_owner"`,

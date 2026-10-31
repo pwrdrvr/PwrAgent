@@ -35,7 +35,7 @@ async function inspectDestination(destination: ForgeArtifactDestination, signal?
   } catch (error) {
     signal?.throwIfAborted();
     if (error instanceof ForgeReadError) throw error;
-    throw new ForgeReadError("destination_not_ignored", "The ZIP destination must be Git-ignored. Select an ignored path or add a project ignore rule before downloading.");
+    throw new ForgeReadError("destination_not_ignored", "The ZIP destination must be Git-ignored. Select an ignored path or add an ignore rule before downloading. For the default, add .pwragent/ to your existing global Git ignore file (core.excludesFile), or the project's .gitignore. Verify with git check-ignore; repository rules can override global rules. PwrAgent does not change Git configuration.");
   }
   return archivePath;
 }
@@ -63,7 +63,7 @@ export async function resolveForgeArtifactDestination(args: ForgeReadArgs, direc
     signal?.throwIfAborted();
     throw new ForgeReadError("invalid_arguments", "Artifact downloads require a linked Git working directory.");
   }
-  const destination = { directory, worktreeRoot, relativePath: args.destination ?? `.local/ci-artifacts/${args.runId}/${args.artifactId}/artifact.zip` };
+  const destination = { directory, worktreeRoot, relativePath: args.destination ?? `.pwragent/ci-artifacts/${args.runId}/${args.artifactId}/artifact.zip` };
   await inspectDestination(destination, signal);
   return destination;
 }
