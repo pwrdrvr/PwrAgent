@@ -11,6 +11,16 @@ import {
 } from "../live-transcript-activity";
 
 describe("buildLiveToolDetails", () => {
+  it("renders native imageView only with images retained by main and merges repeated completions", () => {
+    const item = { type: "imageView", id: "native-view", path: "/tmp/native.png" };
+    const image = { type: "image" as const, url: "pwragent-image://file/retained", sourceUrl: "file:///tmp/native.png", alt: "native.png" };
+    expect(buildLiveToolDetails(item)[0]).not.toHaveProperty("images");
+    const completed = buildLiveToolDetails(item, [image]);
+    expect(completed[0]).toMatchObject({ id: item.id, label: "View image: /tmp/native.png", images: [image] });
+    expect(mergeActivityDetails(completed, completed)).toEqual(completed);
+    expect(buildLiveToolDetails(item, [])[0]).not.toHaveProperty("images");
+  });
+
   it("surfaces Codex function call activity while reviews run", () => {
     const details = buildLiveToolDetails({
       type: "functionCall",

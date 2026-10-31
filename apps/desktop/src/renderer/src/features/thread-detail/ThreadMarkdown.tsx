@@ -691,10 +691,17 @@ const markdownComponents: Components = {
   hr() {
     return <hr className="transcript-message__rule" />;
   },
-  img(imageProps) {
+  img: function MarkdownImage(imageProps) {
+    const { props } = useContext(MarkdownRenderContext)!;
     const altText = typeof imageProps.alt === "string" ? imageProps.alt : "";
     const src = typeof imageProps.src === "string" ? denormalizeMarkdownUrl(imageProps.src) : "";
     const title = typeof imageProps.title === "string" ? ` "${imageProps.title}"` : "";
+
+    // The message's image strip owns previews and gallery navigation. Hide
+    // markup only for a reference that main successfully materialized.
+    if (findMarkdownLinkedImagePart(props.imageParts, localFileTargetFromHref(src))) {
+      return null;
+    }
 
     return (
       <span className="thread-markdown__image-literal">

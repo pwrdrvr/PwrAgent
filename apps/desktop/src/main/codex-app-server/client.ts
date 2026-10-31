@@ -18,6 +18,7 @@ import { CODEX_SIGN_IN_REQUIRED, codexAuthState } from "../codex-auth-state";
 import { mkdir } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
   buildSubAgentActivityDetail,
@@ -4916,7 +4917,8 @@ function summarizeActivityItems(
       toolCalls += 1;
       const toolName =
         pickString(item, ["tool", "toolName", "tool_name", "name"]) ??
-        (normalizedItemType === "websearch" ? "web search" : undefined);
+        (normalizedItemType === "websearch" ? "web search"
+          : normalizedItemType === "imageview" ? `View image: ${pickString(item, ["path"]) ?? "unknown image"}` : undefined);
       const args = parseToolArguments(item);
       const query =
         pickString(item, ["query"]) ??
@@ -4935,6 +4937,8 @@ function summarizeActivityItems(
           ? extractDynamicToolCallImageParts(item, toolName ?? "Tool")
           : normalizedItemType === "mcptoolcall"
             ? extractMcpToolResultContentImageParts(item, toolName ?? "Tool")
+          : normalizedItemType === "imageview" && typeof item.path === "string" && path.isAbsolute(item.path)
+            ? [{ type: "image" as const, url: pathToFileURL(item.path).toString(), sourceUrl: pathToFileURL(item.path).toString(), alt: path.basename(item.path) }]
           : [];
       const label =
         (normalizedItemType === "mcptoolcall" || normalizedItemType === "dynamictoolcall")

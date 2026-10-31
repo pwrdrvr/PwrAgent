@@ -206,6 +206,31 @@ async function flushReactUpdates(): Promise<void> {
 }
 
 describe("useThreadSessionState", () => {
+  it.each(["codex", "claude"] as const)("keeps safe live %s image parts when a completed reply replaces streamed text", async (backend) => {
+    let emit: (event: AgentEvent) => void = () => undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+      readThread: vi.fn().mockResolvedValue({ ...readThreadResponse({ entries: [], hasPreviousPage: false }), backend }),
+    };
+    const { result } = renderHook(() => useThreadSessionState({
+      desktopApi, thread: { ...buildThread({ id: "thread-1", updatedAt: 1_000 }), source: backend },
+    }));
+    await waitForThreadHydration(result);
+    act(() => emit({ backend, notification: { method: "turn/started", params: {
+      threadId: "thread-1", turn: { id: "turn-1", status: "in_progress" },
+    } } }));
+    const image = { type: "image" as const, url: "pwragent-image://file/retained", sourceUrl: "file:///tmp/mockup.png" };
+    const event: AgentEvent = { backend, rendererImageParts: [image], notification: { method: "item/completed", params: {
+      threadId: "thread-1", turnId: "turn-1", item: { id: "reply", type: "agentMessage", text: "![Mockup](/tmp/mockup.png)" },
+    } } };
+    act(() => emit(event));
+    act(() => emit(event));
+    expect(result.current.entries.filter((entry) => entry.id === "reply")).toEqual([
+      expect.objectContaining({ parts: [{ type: "text", text: "![Mockup](/tmp/mockup.png)" }, image] }),
+    ]);
+    expect(result.current.activeTurnId).toBe("turn-1");
+  });
+
   it.each(["partial_answer", "partial", undefined] as const)(
     "retains live %s output through continued tool work until the turn completes",
     async (phase) => {

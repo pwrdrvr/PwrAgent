@@ -2710,6 +2710,22 @@ describe("DesktopFederationRuntime", () => {
     const ownerUrl =
       `pwragent-image://file/${encodeURIComponent("file:///Users/owner/.pwragent/profiles/default/state/image-inputs/image.png")}`;
 
+    for (const backend of ["codex", "claude"] as const) {
+      runtime.forwardLocalBackendEvent({
+        backend,
+        rendererImageParts: [{ type: "image", url: ownerUrl }],
+        notification: { method: "item/completed", params: {
+          threadId: "thread-1", item: { id: "reply", type: "agentMessage", text: "Preview" },
+        } },
+      });
+    }
+    expect(forwarded).toMatchObject(["codex", "claude"].map((backend) => ({
+      params: { backend, rendererImageParts: [{
+        type: "image", url: `pwragent-image://federation/gateway_one/${encodeURIComponent(ownerUrl)}`,
+      }] },
+    })));
+    forwarded.length = 0;
+
     runtime.forwardLocalBackendEvent({
       backend: "codex",
       notification: {

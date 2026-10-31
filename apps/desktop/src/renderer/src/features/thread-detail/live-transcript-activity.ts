@@ -719,7 +719,8 @@ function truncateActivityText(text: string, maxLength: number): string {
 }
 
 export function buildLiveToolDetails(
-  item: Record<string, unknown>
+  item: Record<string, unknown>,
+  retainedImages?: AppServerThreadImagePart[],
 ): AppServerThreadActivityDetail[] {
   const itemType = readString(item, "type")?.replace(/[-_\s]/g, "").toLowerCase();
   if (itemType === "autoapprovalreview") {
@@ -747,7 +748,8 @@ export function buildLiveToolDetails(
     itemType !== "functioncall" &&
     itemType !== "mcptoolcall" &&
     itemType !== "collabagenttoolcall" &&
-    itemType !== "websearch"
+    itemType !== "websearch" &&
+    itemType !== "imageview"
   ) {
     return [];
   }
@@ -764,7 +766,8 @@ export function buildLiveToolDetails(
     readString(item, "toolName") ??
     readString(item, "tool_name") ??
     readString(item, "name") ??
-    (itemType === "websearch" ? "web search" : "tool");
+    (itemType === "websearch" ? "web search"
+      : itemType === "imageview" ? `View image: ${readString(item, "path") ?? "unknown image"}` : "tool");
   const status = normalizeItemStatus(item.status);
   const title = readToolArgument(item, "title");
   const query = readToolArgument(item, "query") ?? readToolArgument(item, "q");
@@ -776,7 +779,7 @@ export function buildLiveToolDetails(
       : itemType === "dynamictoolcall"
         ? summarizeDynamicToolResult(item)
       : summarizeToolOutput(readToolOutputText(item));
-  const images = readToolResultImages(item, itemType, toolName);
+  const images = retainedImages ?? readToolResultImages(item, itemType, toolName);
   const elapsedMs = readElapsedMs(item);
   const command =
     itemType === "commandexecution"

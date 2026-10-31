@@ -6711,6 +6711,12 @@ export function useThreadSessionState(params: {
                 itemParams: event.notification.params,
                 turn: assistantTurn,
               });
+          if (assistantMessageEntry && event.rendererImageParts?.length) {
+            assistantMessageEntry.parts = [
+              { type: "text", text: assistantMessageEntry.text },
+              ...event.rendererImageParts,
+            ];
+          }
           const taskMonitorUsageEntry = item && !transientTaskMonitorItem
             ? buildTaskMonitorUsageActivityEntry({
                 id: `${item.id ?? event.notification.params.turnId ?? "monitor"}:usage`,
@@ -6834,7 +6840,7 @@ export function useThreadSessionState(params: {
             };
           }
 
-          const details = item ? buildLiveToolDetails(item) : [];
+          const details = item ? buildLiveToolDetails(item, event.rendererImageParts) : [];
           if (details.length > 0) {
             const turn = buildTurnMetadata({
               fallbackId:

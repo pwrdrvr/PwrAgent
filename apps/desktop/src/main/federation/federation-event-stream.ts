@@ -195,6 +195,7 @@ export class FederationAccountingStream {
     return {
       backend: event.backend,
       notification: { method: event.notification.method, params },
+      ...(event.rendererImageParts ? { rendererImageParts: event.rendererImageParts } : {}),
       ...(event.errorNoticeContext
         ? { errorNoticeContext: event.errorNoticeContext }
         : {}),

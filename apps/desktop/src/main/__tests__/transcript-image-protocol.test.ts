@@ -12,6 +12,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentEvent, AppServerThreadImagePart } from "@pwragent/shared";
+import type { ItemCompletedNotification } from "@pwrdrvr/codex-app-server-protocol/v2";
+import { resetCachedActiveProfileNameForTests } from "../profile";
 
 const protocolHandleMock = vi.fn();
 const protocolRegisterSchemesAsPrivilegedMock = vi.fn();
@@ -27,6 +30,7 @@ describe("transcript image protocol", () => {
   let tempDir: string;
 
   beforeEach(async () => {
+    resetCachedActiveProfileNameForTests();
     tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-transcript-images-"));
     protocolHandleMock.mockReset();
     protocolRegisterSchemesAsPrivilegedMock.mockReset();
@@ -35,6 +39,128 @@ describe("transcript image protocol", () => {
   afterEach(async () => {
     vi.unstubAllEnvs();
     await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it.each(["codex", "claude"] as const)("retains completed %s previews once and reopens them after source removal", async (backend) => {
+    const { materializeTranscriptImageEventForRenderer, materializeTranscriptImageUrlsForRenderer } = await import("../transcript-image-protocol");
+    const worktree = path.join(tempDir, "worktree");
+    const temporary = await mkdtemp(path.join(os.tmpdir(), "pwragent-live-preview-"));
+    await mkdir(worktree);
+    const paths = [path.join(worktree, "mockup.png"), path.join(temporary, "screenshot.png")];
+    const bytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6tAAAAABJRU5ErkJggg==", "base64");
+    await Promise.all(paths.map((file) => writeFile(file, bytes)));
+    const text = paths.map((file) => `![Preview](${file})\n![Again](${file})`).join("\n");
+    const event: AgentEvent = { backend, notification: { method: "item/completed", params: {
+      threadId: "live-images", turnId: "turn", item: { id: "reply", type: "agentMessage", text },
+    } } };
+    const dependencies = { resolveRoot: () => path.join(tempDir, "cache"), retainLocalImage: async () => undefined };
+    const options = { approvedLocalImageRoots: [worktree], includeTemporaryImageRoots: true };
+    try {
+      const live = await materializeTranscriptImageEventForRenderer(event, dependencies, options);
+      expect(live.rendererImageParts).toHaveLength(2);
+      for (const image of live.rendererImageParts ?? []) {
+        await expect(readFile(filePathFromProtocolUrl(image.url))).resolves.toEqual(bytes);
+      }
+      await Promise.all(paths.map((file) => rm(file)));
+      const message = { id: "reply", role: "assistant" as const, text };
+      const reopened = await materializeTranscriptImageUrlsForRenderer({
+        backend, threadId: "live-images", fetchedAt: 0,
+        replay: { entries: [{ type: "message", ...message }], messages: [message], pagination: { supportsPagination: false, hasPreviousPage: false } },
+      }, dependencies, options);
+      expect(reopened.replay.messages[0]?.parts?.filter((part) => part.type === "image")).toEqual(live.rendererImageParts);
+      const repeated = await materializeTranscriptImageUrlsForRenderer(reopened, dependencies, options);
+      expect(repeated.replay.messages[0]?.parts).toEqual(reopened.replay.messages[0]?.parts);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["worktree", "temporary"])("retains a native imageView from %s for identical live and reopened previews", async (location) => {
+    const { materializeTranscriptImageEventForRenderer, materializeTranscriptImageUrlsForRenderer } = await import("../transcript-image-protocol");
+    const sourceRoot = location === "temporary"
+      ? await mkdtemp(path.join(path.sep === "/" ? "/tmp" : os.tmpdir(), "pwragent-native-image-"))
+      : path.join(tempDir, "worktree");
+    await mkdir(sourceRoot, { recursive: true });
+    const file = path.join(sourceRoot, "native (v1)#100%.png");
+    const bytes = Buffer.from([1, 2, 3]);
+    await writeFile(file, bytes);
+    const params = {
+      threadId: "native-thread", turnId: "native-turn", completedAtMs: 1,
+      item: { type: "imageView", id: "native-view", path: file },
+    } satisfies ItemCompletedNotification;
+    const event: AgentEvent = { backend: "codex", notification: { method: "item/completed", params } };
+    const dependencies = { resolveRoot: () => path.join(tempDir, "cache"), retainLocalImage: async () => undefined };
+    const options = { approvedLocalImageRoots: location === "worktree" ? [sourceRoot] : [], includeTemporaryImageRoots: location === "temporary" };
+    try {
+      const live = await materializeTranscriptImageEventForRenderer(event, dependencies, options);
+      expect(live.rendererImageParts).toEqual([expect.objectContaining({
+        type: "image", sourceUrl: pathToFileURL(file).toString(), alt: path.basename(file),
+      })]);
+      const image = live.rendererImageParts![0]!;
+      await expect(readFile(filePathFromProtocolUrl(image.url))).resolves.toEqual(bytes);
+      await rm(file);
+      const sourceImage: AppServerThreadImagePart = { type: "image", url: pathToFileURL(file).toString(), sourceUrl: pathToFileURL(file).toString(), alt: path.basename(file) };
+      const reopened = await materializeTranscriptImageUrlsForRenderer({
+        backend: "codex", threadId: "native-thread", fetchedAt: 2,
+        replay: { entries: [{ type: "activity", id: "activity-native", summary: "View image", status: "completed", details: [{
+          id: params.item.id, kind: "command", label: `View image: ${file}`, images: [sourceImage],
+        }] }], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } },
+      }, dependencies, options);
+      expect(reopened.replay.entries[0]).toMatchObject({ details: [{ images: [image] }] });
+      expect((await materializeTranscriptImageEventForRenderer(event, dependencies, options)).rendererImageParts).toEqual([image]);
+    } finally {
+      if (location === "temporary") await rm(sourceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("drops unsafe or missing native images without fetching URLs or losing the activity", async () => {
+    const { materializeTranscriptImageEventForRenderer } = await import("../transcript-image-protocol");
+    const approved = path.join(tempDir, "worktree");
+    await mkdir(approved);
+    const privateFile = path.join(tempDir, "private.png");
+    await writeFile(privateFile, Buffer.from([1]));
+    const linkedFile = path.join(approved, "linked.png");
+    await symlink(privateFile, linkedFile);
+    const fetch = vi.fn();
+    for (const file of [privateFile, linkedFile, path.join(approved, "missing.png"), "relative.png", "https://example.com/image.png"]) {
+      const event: AgentEvent = { backend: "codex", notification: { method: "item/completed", params: {
+        threadId: "unsafe-thread", item: { type: "imageView", id: file, path: file },
+      } } };
+      const result = await materializeTranscriptImageEventForRenderer(event, {
+        resolveRoot: () => path.join(tempDir, "cache"), fetch,
+      }, { approvedLocalImageRoots: [approved] });
+      expect(result.rendererImageParts).toEqual([]);
+      expect(result.notification).toBe(event.notification);
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("does no image work for deltas, plain paths, code examples, or external Markdown images", async () => {
+    const { materializeTranscriptImageEventForRenderer } = await import("../transcript-image-protocol");
+    const resolveApprovedLocalImageRoots = vi.fn(async () => []);
+    const writeFile = vi.fn();
+    const fetch = vi.fn();
+    const delta: AgentEvent = { backend: "codex", notification: { method: "item/agentMessage/delta", params: { threadId: "thread", itemId: "reply", delta: "![Preview](/tmp/image.png)" } } };
+    expect(await materializeTranscriptImageEventForRenderer(delta, { writeFile, fetch }, { resolveApprovedLocalImageRoots })).toBe(delta);
+    const event: AgentEvent = { backend: "claude", notification: { method: "item/completed", params: {
+      threadId: "thread", item: { id: "reply", type: "agentMessage", text: "`/tmp/image.png`\n`![Example](/tmp/image.png)`\n![Remote](https://example.com/image.png)" },
+    } } };
+    expect(await materializeTranscriptImageEventForRenderer(event, { writeFile, fetch }, { resolveApprovedLocalImageRoots })).toBe(event);
+    expect(resolveApprovedLocalImageRoots).not.toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps missing and disallowed live references readable", async () => {
+    const { materializeTranscriptImageEventForRenderer } = await import("../transcript-image-protocol");
+    const resolveLocalImageLink = vi.fn(async () => ({ ok: false as const, status: 403, message: "Forbidden" }));
+    const dependencies = { resolveRoot: () => path.join(tempDir, "cache"), resolveLocalImageLink };
+    const event: AgentEvent = { backend: "codex", notification: { method: "item/completed", params: {
+      threadId: "thread", item: { id: "reply", type: "agentMessage", text: "![Private](/private/image.png)" },
+    } } };
+    expect(await materializeTranscriptImageEventForRenderer(event, dependencies)).toBe(event);
+    resolveLocalImageLink.mockResolvedValue({ ok: false, status: 404, message: "Missing" });
+    expect(await materializeTranscriptImageEventForRenderer(event, dependencies)).toBe(event);
   });
 
   it("promotes legacy image references and resolves them after the shared source is removed", async () => {

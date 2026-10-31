@@ -2,6 +2,7 @@ import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AppServerNotification,
@@ -27,6 +28,7 @@ import type {
   ThreadArchiveResponse,
   ThreadSetNameResponse,
   ThreadSettingsUpdateResponse,
+  ThreadItem,
   TurnInterruptResponse,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
 
@@ -7375,6 +7377,25 @@ describe("CodexAppServerClient", () => {
     expect(replay.lastUserMessage).toBe("Describe this image");
 
     await client.close();
+  });
+
+  it("projects native imageView history into local image placeholders for safe materialization", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const file = path.join(os.tmpdir(), "native (v1)#100%.png");
+    const item = { type: "imageView", id: "native-view", path: file } satisfies ThreadItem;
+    MockTransport.readThreadResultByThreadId.set("thread-native-image", {
+      thread: { turns: [{ id: "native-turn", items: [item] }] },
+    });
+    const client = new CodexAppServerClient();
+    try {
+      const replay = await client.readThread({ threadId: "thread-native-image" });
+      expect(replay.entries).toEqual([expect.objectContaining({ type: "activity", details: [expect.objectContaining({
+        id: item.id, label: `View image: ${file}`,
+        images: [{ type: "image", url: pathToFileURL(file).toString(), sourceUrl: pathToFileURL(file).toString(), alt: path.basename(file) }],
+      })] })]);
+    } finally {
+      await client.close();
+    }
   });
 
   it("attaches custom tool output images to the final assistant message", async () => {
