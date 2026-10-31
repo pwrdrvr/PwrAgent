@@ -126,6 +126,36 @@ describe("Claude SDK backend", () => {
     expect(f.queries[1].additionalDirectories).toEqual([path.resolve(secondary)]);
   });
 
+  it("waits for a starting session to stop before close resolves", async () => {
+    const f = await fixture();
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const enteredRead = Promise.withResolvers<void>();
+    const releaseRead = Promise.withResolvers<void>();
+    const read = f.store.read.bind(f.store);
+    const readSpy = vi.spyOn(f.store, "read").mockImplementation(async (id) => {
+      if (id === threadId) {
+        enteredRead.resolve();
+        await releaseRead.promise;
+      }
+      return await read(id);
+    });
+    const starting = f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    void starting.catch(() => {});
+    let closing: Promise<void> | undefined;
+    try {
+      await enteredRead.promise;
+      let closed = false;
+      closing = f.backend.close().then(() => { closed = true; });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closed).toBe(false);
+    } finally {
+      releaseRead.resolve();
+      await starting.catch(() => {});
+      await closing;
+      readSpy.mockRestore();
+    }
+  });
+
   it("refuses to move a thread while its turn runs", async () => {
     const finish = Promise.withResolvers<void>();
     const f = await fixture(async function* () {
