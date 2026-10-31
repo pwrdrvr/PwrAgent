@@ -3,17 +3,39 @@ import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/pro
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { probeCurrentGitBranch } from "../app-server/git-head-branch";
 
 const execFile = promisify(execFileCallback);
 
+const isolatedGitKeys = /^(?:PWRAGENT_GIT_PATH|GIT_(?:DIR|WORK_TREE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|INDEX_FILE|NAMESPACE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM|CONFIG.*))$/i;
+let savedGitEnv: Map<string, string>;
+
+beforeEach(() => {
+  savedGitEnv = new Map();
+  for (const [key, value] of Object.entries(process.env)) {
+    if (isolatedGitKeys.test(key) && value !== undefined) {
+      savedGitEnv.set(key, value);
+      delete process.env[key];
+    }
+  }
+});
+
+afterEach(() => {
+  for (const [key, value] of savedGitEnv) process.env[key] = value;
+});
+
 async function git(cwd: string, args: string[]): Promise<string> {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (isolatedGitKeys.test(key)) delete env[key];
+  }
   const { stdout } = await execFile("git", ["-C", cwd, ...args], {
     env: {
-      ...process.env,
+      ...env,
       GIT_CONFIG_GLOBAL: path.join(cwd, "missing-global-config"),
       GIT_CONFIG_SYSTEM: path.join(cwd, "missing-system-config"),
+      GIT_CONFIG_NOSYSTEM: "1",
       GIT_TERMINAL_PROMPT: "0",
     },
     encoding: "utf8",
@@ -60,6 +82,34 @@ describe("probeCurrentGitBranch", () => {
       expect(await probeCurrentGitBranch(local)).toBeUndefined();
       await git(local, ["pack-refs", "--all"]);
       expect(await probeCurrentGitBranch(local)).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("defers to Git when remote or custom refs make a branch abbreviation ambiguous", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-ambiguous-head-"));
+    try {
+      await git(root, ["init", "-b", "origin/main"]);
+      await writeFile(path.join(root, "README.md"), "seed\n");
+      await git(root, ["add", "README.md"]);
+      await git(root, ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "seed"]);
+      const oid = await git(root, ["rev-parse", "HEAD"]);
+      await git(root, ["update-ref", "refs/remotes/origin/main", oid]);
+      expect(await git(root, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("heads/origin/main");
+      expect(await probeCurrentGitBranch(root)).toBeUndefined();
+      await git(root, ["pack-refs", "--all"]);
+      await expect(readFile(path.join(root, ".git", "refs", "remotes", "origin", "main"))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await probeCurrentGitBranch(root)).toBeUndefined();
+
+      await git(root, ["update-ref", "-d", "refs/remotes/origin/main"]);
+      await git(root, ["branch", "-m", "main"]);
+      await git(root, ["update-ref", "refs/main", oid]);
+      expect(await git(root, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("heads/main");
+      expect(await probeCurrentGitBranch(root)).toBeUndefined();
+      await git(root, ["pack-refs", "--all"]);
+      await expect(readFile(path.join(root, ".git", "refs", "main"))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await probeCurrentGitBranch(root)).toBeUndefined();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -129,6 +179,30 @@ describe("probeCurrentGitBranch", () => {
         if (prior === undefined) delete process.env.GIT_DIR;
         else process.env.GIT_DIR = prior;
       }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts an ordinary Windows remote path and defers malformed config to Git", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-config-head-"));
+    try {
+      await git(root, ["init", "-b", "main"]);
+      await writeFile(path.join(root, "README.md"), "seed\n");
+      await git(root, ["add", "README.md"]);
+      await git(root, ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "seed"]);
+      await git(root, ["remote", "add", "origin", path.join(root, "origin.git")]);
+      expect(await probeCurrentGitBranch(root)).toEqual({ branch: "main" });
+      const config = path.join(root, ".git", "config");
+      const ordinaryConfig = await readFile(config, "utf8");
+
+      await writeFile(config, ordinaryConfig + "\n[other]\ninvalid?key = value\n");
+      await expect(git(root, ["rev-parse", "--abbrev-ref", "HEAD"])).rejects.toThrow(/bad config line/);
+      expect(await probeCurrentGitBranch(root)).toBeUndefined();
+
+      await writeFile(config, ordinaryConfig + "\n[remote \"broken\"]\nurl = \"unterminated\n");
+      await expect(git(root, ["rev-parse", "--abbrev-ref", "HEAD"])).rejects.toThrow(/bad config line/);
+      expect(await probeCurrentGitBranch(root)).toBeUndefined();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -75,14 +75,25 @@ function hasOrdinaryFilesConfig(text: string): boolean {
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#") || line.startsWith(";")) continue;
-    const header = /^\[([^\]]+)\]$/.exec(line);
-    if (header) {
+    if (line.startsWith("[")) {
+      // Complex section and subsection syntax belongs to Git's config parser.
+      const header = /^\[([A-Za-z][A-Za-z0-9-]*)(?: "[^"\\]+")?\]$/.exec(line);
+      if (!header) return false;
       section = header[1].toLowerCase();
       if (/^(?:extensions|include|includeif)(?:\s|$)/.test(section)) return false;
       continue;
     }
-    const entry = /^([^=\s]+)\s*=\s*(.*)$/.exec(line);
-    if (!entry) return false;
+    const entry = /^([A-Za-z][A-Za-z0-9-]*)\s*=\s*(.*)$/.exec(line);
+    if (!section || !entry) return false;
+    // Accept plain values and Git's simple escapes. Quoting, comments inside
+    // values, and continuations require Git's own parser.
+    if (/["#;]/.test(entry[2])) return false;
+    for (let index = 0; index < entry[2].length; index++) {
+      if (entry[2][index] !== "\\") continue;
+      const escaped = entry[2][index + 1];
+      if (!escaped || !"\\ntb".includes(escaped)) return false;
+      index++;
+    }
     const key = entry[1].toLowerCase();
     if (section === "core") {
       if (key === "repositoryformatversion") formatVersion = entry[2];
@@ -181,6 +192,15 @@ export async function probeCurrentGitBranch(
   if (!headRef || !safeBranchName(headRef[1])) return undefined;
   const branch = headRef[1];
   const ref = "refs/heads/" + branch;
+  const ambiguousRefs = [
+    "refs/" + branch,
+    "refs/remotes/" + branch,
+    "refs/remotes/" + branch + "/HEAD",
+  ];
+  for (const ambiguousRef of ambiguousRefs) {
+    const candidate = await readSmallFile(path.join(commonDir, ...ambiguousRef.split("/")), 4096, signal);
+    if (candidate?.kind !== "missing") return undefined;
+  }
   signal?.throwIfAborted();
   let looseTags: string[];
   try {
@@ -212,6 +232,7 @@ export async function probeCurrentGitBranch(
       lastRef = entry[2];
       seen.add(lastRef);
       if (lastRef.startsWith("refs/tags/")) return undefined;
+      if (ambiguousRefs.includes(lastRef)) return undefined;
       if (lastRef === ref) found = true;
     }
   }
