@@ -62,7 +62,7 @@ async function git(cwd: string, args: string[]): Promise<string> {
 
 describe("probeCurrentGitBranch", () => {
   it("keeps a committed HEAD when Git packs its loose ref during the probe", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-packing-head-"));
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-packing-head-")));
     try {
       await git(root, ["init", "-b", "main"]);
       await git(root, ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "seed"]);

@@ -35,6 +35,26 @@ async function readSmallFile(
   }
 }
 
+async function hasGitAdministrativeBoundary(directory: string, signal?: AbortSignal): Promise<boolean> {
+  const head = await readSmallFile(path.join(directory, "HEAD"), 4096, signal);
+  if (!head) return true;
+  if (head.kind === "missing") return false;
+  // Bare repositories own objects here; linked-worktree administrative
+  // directories point at their common repository. Neither may be skipped
+  // while discovering an enclosing checkout.
+  for (const marker of ["objects", "commondir"]) {
+    try {
+      await stat(path.join(directory, marker));
+      signal?.throwIfAborted();
+      return true;
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (!isMissing(error)) return true;
+    }
+  }
+  return false;
+}
+
 function hasGitEnvironmentOverride(): boolean {
   const env = new Map(Object.entries(process.env).map(([key, value]) => [key.toUpperCase(), value]));
   if ([...env.keys()].some((key) =>
@@ -139,6 +159,7 @@ export async function probeCurrentGitBranch(
     } catch (error) {
       signal?.throwIfAborted();
       if (!isMissing(error)) return undefined;
+      if (await hasGitAdministrativeBoundary(current, signal)) return undefined;
       const parent = path.dirname(current);
       if (parent === current) return undefined;
       current = parent;
@@ -213,6 +234,10 @@ export async function probeCurrentGitBranch(
   signal?.throwIfAborted();
   if (looseTags.length > 0) return undefined;
 
+  // Packing publishes packed-refs before pruning loose refs. Read the loose
+  // ref first so concurrent packing cannot make a committed HEAD look unborn.
+  const loose = await readSmallFile(path.join(commonDir, ...ref.split("/")), 4096, signal);
+  if (!loose) return undefined;
   const packed = await readSmallFile(path.join(commonDir, "packed-refs"), 1024 * 1024, signal);
   if (!packed) return undefined;
   let found = false;
@@ -236,8 +261,6 @@ export async function probeCurrentGitBranch(
       if (lastRef === ref) found = true;
     }
   }
-  const loose = await readSmallFile(path.join(commonDir, ...ref.split("/")), 4096, signal);
-  if (!loose) return undefined;
   if (loose.kind === "text") {
     return /^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?\r?\n?$/.test(loose.text)
       ? { branch }
