@@ -56,10 +56,10 @@ Only one capture can run per instance. Duration must be 1–30 seconds (default
 10). The main-process deadline survives a hidden, closed, or stalled requesting
 renderer. App shutdown also stops an active capture. A conflicting Chromium
 CDP tracing session fails the request; it is not taken over. Rendering and native
-CPU captures share PwrAgent's internal Chromium trace lease. A hidden, blank
+CPU captures use the same internal Chromium trace lease contract. A hidden, blank
 window owns rendering's debugger connection, independently of DevTools and the
 requesting window; it is excluded from window samples and destroyed on cleanup.
-Electron's separate `contentTracing` controller can coexist with CDP tracing.
+The standalone fixture also verifies existing Electron `contentTracing` ownership.
 Rendering never calls its global start or stop methods.
 
 ## Read the evidence
@@ -95,6 +95,10 @@ edges, not every React component. `processes[].cpuPercent` is Electron CPU usage
 not GPU usage. Trace counts cannot be converted to machine GPU percentages.
 GPU-process events can serve several windows; only renderer-process events join
 directly to a window. Correlation is a lead, not proof of causality.
+`traceProcessIds` records the instance process IDs admitted when capture starts.
+Chromium also admits the tracing target, browser and GPU processes. A renderer
+created or replaced afterward can appear in snapshots without native events;
+start another capture after the new window has loaded.
 
 The native buffer is 8 MiB and stops accepting events when full. Inspect
 `bufferUsage.percentage`, the peak of CDP's buffer reports at 250 ms intervals;
@@ -168,8 +172,10 @@ tracing overhead, so compare against the same collection conditions.
 The exported summary contains fixed event/animation/view labels, numeric IDs,
 counts and window state. It excludes window titles, URLs, paths inside pages,
 DOM text, animation keyframes, custom class names, React props, JS stacks, trace
-arguments, and screenshots. Chromium's argument filter is enabled. Raw trace
-chunks stay in bounded main-process memory and are never written to disk.
-Only the sanitized summary is written inside a private capture directory;
+arguments, and screenshots. Chromium's argument filter is enabled. PwrAgent reads
+raw chunks into bounded main-process memory through a CDP stream; Chromium backs
+that stream with a temporary file (unlinked immediately on macOS/Linux and
+deleted on close on Windows). PwrAgent closes the stream and destroys its owned
+target on cleanup. Only the sanitized summary is written inside a private capture directory;
 failed capture directories are removed. Raw traces and logs must stay out of Git and PR
 attachments. Share only the relevant sanitized counts and conditions.

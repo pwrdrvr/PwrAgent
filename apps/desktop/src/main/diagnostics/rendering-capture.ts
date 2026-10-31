@@ -146,7 +146,11 @@ class RenderingCapture {
     clearTimeout(this.sampleTimer);
     if (this.recording && !this.endTask && !this.closed) {
       // No buffer request, renderer read or filesystem operation precedes end.
-      this.endTask = this.session!.webContents.debugger.sendCommand("Tracing.end");
+      try {
+        this.endTask = this.debuggerApi!.sendCommand("Tracing.end");
+      } catch {
+        this.endTask = Promise.reject(failure());
+      }
       void this.endTask.catch(() => {});
       this.stoppedAt = performance.now();
       this.stopTimer = setTimeout(() => this.completeResolve(undefined), TRANSFER_BUDGET_MS);
@@ -181,6 +185,10 @@ class RenderingCapture {
       d.on("detach", this.detached);
       this.startedAt = performance.now();
       this.timer = setTimeout(() => { void this.stop("duration").catch(() => {}); }, seconds * 1000);
+      // Chromium 152 filters page-level CDP traces to that page's process tree.
+      // Seed the filter with the instance's existing processes so a dedicated
+      // blank target still captures the application renderers.
+      const traceProcessIds = app.getAppMetrics().map((metric) => metric.pid);
       // contentTracing.startRecording resolves even when it did not start a
       // recording. CDP rejects conflicts; only this acknowledgement grants ownership.
       await this.bounded(d.sendCommand("Tracing.start", {
@@ -190,6 +198,7 @@ class RenderingCapture {
           recordMode: "recordUntilFull", traceBufferSizeInKb: 8192, enableArgumentFilter: true,
           includedCategories: RENDERING_TRACE_CONFIG.included_categories,
           excludedCategories: RENDERING_TRACE_CONFIG.excluded_categories,
+          includedProcessIds: traceProcessIds,
         },
       }), this.startedAt + TRANSFER_BUDGET_MS);
       this.recording = true;
@@ -223,6 +232,7 @@ class RenderingCapture {
       await writeFile(summaryPath, JSON.stringify({
         version: 1, reason: this.reason, durationMs, bufferUsage: this.bufferUsage,
         dataLossOccurred: this.dataLossOccurred,
+        traceProcessIds,
         updateEventNames: RENDERER_UPDATE_EVENT_NAMES, trace, samples: this.samples,
       }, null, 2), { mode: 0o600, flag: "wx" });
       saved = true;
@@ -238,7 +248,7 @@ class RenderingCapture {
       if (this.session && this.debuggerApi) {
         const d = this.debuggerApi;
         if (this.stream && !this.session.isDestroyed() && d.isAttached()) {
-          await this.bounded(d.sendCommand("IO.close", { handle: this.stream }), performance.now() + 1000).catch(() => {});
+          await this.bounded(Promise.resolve().then(() => d.sendCommand("IO.close", { handle: this.stream })), performance.now() + 1000).catch(() => {});
         }
         d.off("message", this.message);
         d.off("detach", this.detached);
@@ -246,7 +256,9 @@ class RenderingCapture {
         // start acknowledgement or a stuck end/transfer. Never use a global stop.
         if (!this.session.isDestroyed()) this.session.destroy();
       }
-      if (!saved && this.directory) await rm(this.directory, { recursive: true, force: true });
+      if (!saved && this.directory) {
+        await rm(this.directory, { recursive: true, force: true }).catch(() => { throw failure(); });
+      }
     }
   }
 }

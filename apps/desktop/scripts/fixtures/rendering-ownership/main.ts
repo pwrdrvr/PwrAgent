@@ -28,9 +28,8 @@ async function main() {
         elapsedMs: Math.round(performance.now() - started),
       } }));
       if (!process.env.PWRAGENT_RENDERING_EXPECT_BASELINE) {
+        assert.equal(renderingRejected, true);
         assert.equal(externalOwnerStopSucceeded, true);
-        // Electron's contentTracing uses a separate controller; a CDP session
-        // may coexist. Either rejection or an independently owned trace is safe.
       }
     } finally {
       clearTimeout(watchdog);
@@ -103,11 +102,24 @@ async function main() {
     assert.ok(!summary.includes("invented rendering fixture"));
     assert.ok(!summary.includes("data:text/html"));
     console.log(JSON.stringify({ isolatedRenderingCapture: { durationMs: result.durationMs, summaryBytes: Buffer.byteLength(summary) } }));
+    if (!process.env.PWRAGENT_RENDERING_EXPECT_BASELINE) {
+      const longCapture = captureRenderingDiagnostics(join(root, "diagnostics"), 30);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      external.destroy();
+      const shutdownStarted = performance.now();
+      await stopRenderingDiagnostics("shutdown");
+      const shutdownResult = await longCapture;
+      const shutdownSummary = JSON.parse(await readFile(shutdownResult.summaryPath, "utf8"));
+      assert.equal(shutdownSummary.reason, "shutdown");
+      assert.ok(performance.now() - shutdownStarted < 5_000);
+      console.log(JSON.stringify({ mainOwnedShutdown: {
+        elapsedMs: Math.round(performance.now() - shutdownStarted), durationMs: shutdownResult.durationMs,
+      } }));
+    }
   } finally {
     clearTimeout(watchdog);
-    external.destroy();
+    if (!external.isDestroyed()) external.destroy();
     app.quit();
   }
-
 }
 void main().catch(() => { console.error("rendering ownership fixture failed"); app.exit(1); });
