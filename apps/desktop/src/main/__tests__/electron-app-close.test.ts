@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { runInNewContext } from "node:vm";
 import type { ElectronApplication } from "@playwright/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { captureElectronMainProcess, closeElectronApplication } from "../../../e2e/fixtures/electron-app";
+import { captureElectronMainProcess, closeElectronApplication, closeElectronWithSessionDrain } from "../../../e2e/fixtures/electron-app";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:child_process")>();
@@ -113,6 +113,10 @@ describe("closeElectronApplication", () => {
       child.exitCode = 0;
     });
     const ownedSession = {
+      clearData: vi.fn(async () => {
+        expect(rendererClosed).toBe(false);
+        order.push("complete-session-cache-writes");
+      }),
       closeAllConnections: vi.fn(async () => {
         expect(rendererClosed).toBe(false);
         order.push("close-session-connections");
@@ -142,8 +146,9 @@ describe("closeElectronApplication", () => {
     expect(child.kill).not.toHaveBeenCalled();
     expect(ownedSession.closeAllConnections).toHaveBeenCalledTimes(platform === "win32" ? 1 : 0);
     expect(ownedSession.cookies.flushStore).toHaveBeenCalledTimes(platform === "win32" ? 1 : 0);
+    expect(ownedSession.clearData.mock.calls).toEqual(platform === "win32" ? [[{ dataTypes: ["cache"] }]] : []);
     expect(order).toEqual([
-      ...(platform === "win32" ? ["close-session-connections", "flush-session-cookies"] : []),
+      ...(platform === "win32" ? ["close-session-connections", "flush-session-cookies", "complete-session-cache-writes"] : []),
       "prepare-playwright-close",
       "native-quit",
       ...(installed ? ["owned-shutdown"] : []),
@@ -153,6 +158,49 @@ describe("closeElectronApplication", () => {
     expect(app.listenerCount("before-quit")).toBe(1);
   });
 
+  it("charges a stalled cache completion to the existing Windows graceful-close deadline", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.useFakeTimers();
+    const child = { pid: 120, exitCode: null as number | null, signalCode: null };
+    const ownedSession = {
+      closeAllConnections: async () => undefined,
+      cookies: { flushStore: async () => undefined },
+      clearData: vi.fn(() => new Promise<void>(() => undefined)),
+    };
+    const close = vi.fn(async () => undefined);
+    const electronApp = {
+      process: () => child,
+      evaluate: async (callback: unknown) => runInNewContext(`(${String(callback)})({ app, session, webContents })`, {
+        app: new EventEmitter(),
+        session: { defaultSession: ownedSession },
+        webContents: { getAllWebContents: () => [] },
+        process: { pid: 120, uptime: () => 10 },
+        Date,
+      }),
+      close,
+    } as unknown as ElectronApplication;
+    const execFile = vi.mocked(childProcess.execFile).mockImplementation((command, _args, _options, callback) => {
+      if (command === "taskkill") child.exitCode = 1;
+      callback?.(null, "", "");
+      return {} as childProcess.ChildProcess;
+    });
+
+    const closing = closeElectronApplication(electronApp);
+    await vi.advanceTimersByTimeAsync(5_999);
+    expect(ownedSession.clearData).toHaveBeenCalledOnce();
+    expect(close).not.toHaveBeenCalled();
+    expect(execFile).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(execFile.mock.calls[0].slice(0, 2)).toEqual(["taskkill", ["/pid", "120", "/T", "/F"]]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(closing).resolves.toMatchObject({
+      classification: "force-killed",
+      gracefulCloseOutcome: "timeout",
+      forceExitOutcome: "timed-out",
+    });
+    expect(close).not.toHaveBeenCalled();
+  });
   it("is a no-op when Playwright throws for an exited Electron handle", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const process = vi.fn(() => {
@@ -177,5 +225,69 @@ describe("closeElectronApplication", () => {
       forceExitOutcome: "not-needed",
     });
     expect(process).toHaveBeenCalledOnce();
+  });
+});
+
+describe("closeElectronWithSessionDrain", () => {
+  it("keeps every distinct session reachable until its cache write completion", async () => {
+    const completions: Array<() => void> = [];
+    const makeSession = () => ({
+      closeAllConnections: vi.fn(async () => undefined),
+      cookies: { flushStore: vi.fn(async () => undefined) },
+      clearData: vi.fn(() => new Promise<void>((resolve) => { completions.push(resolve); })),
+    });
+    const defaultSession = makeSession();
+    const partitionSession = makeSession();
+    const session = { defaultSession };
+    const webContents = {
+      getAllWebContents: () => [
+        { session: defaultSession },
+        { session: partitionSession },
+        { session: partitionSession },
+      ],
+    };
+    const close = vi.fn(async () => undefined);
+    const electronApp = {
+      evaluate: async (callback: unknown) => runInNewContext(`(${String(callback)})({ session, webContents })`, {
+        session, webContents,
+      }),
+      close,
+    } as unknown as ElectronApplication;
+
+    const closing = closeElectronWithSessionDrain(electronApp);
+    await vi.waitFor(() => expect(completions).toHaveLength(2));
+    expect(close).not.toHaveBeenCalled();
+    completions[0]();
+    await Promise.resolve();
+    expect(close).not.toHaveBeenCalled();
+    completions[1]();
+    await closing;
+
+    expect(close).toHaveBeenCalledOnce();
+    for (const ownedSession of [defaultSession, partitionSession]) {
+      expect(ownedSession.closeAllConnections).toHaveBeenCalledOnce();
+      expect(ownedSession.cookies.flushStore).toHaveBeenCalledOnce();
+      expect(ownedSession.clearData).toHaveBeenCalledExactlyOnceWith({ dataTypes: ["cache"] });
+    }
+  });
+
+  it("propagates cache completion failure without pretending native quit finished", async () => {
+    const failure = new Error("Network Persistent State write failed");
+    const ownedSession = {
+      closeAllConnections: async () => undefined,
+      cookies: { flushStore: async () => undefined },
+      clearData: async () => { throw failure; },
+    };
+    const close = vi.fn(async () => undefined);
+    const electronApp = {
+      evaluate: async (callback: unknown) => runInNewContext(`(${String(callback)})({ session, webContents })`, {
+        session: { defaultSession: ownedSession },
+        webContents: { getAllWebContents: () => [] },
+      }),
+      close,
+    } as unknown as ElectronApplication;
+
+    await expect(closeElectronWithSessionDrain(electronApp)).rejects.toBe(failure);
+    expect(close).not.toHaveBeenCalled();
   });
 });
