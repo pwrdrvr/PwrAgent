@@ -1,3 +1,4 @@
+import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
 import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent-task-monitor-agent-tools";
 import { delegatedTurnAttribution, withoutTurnAttribution } from "./delegated-turn-attribution";
 import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
@@ -10887,9 +10888,10 @@ export class DesktopBackendRegistry {
               this.resolveAgentToolMcpCallContext(context),
             resolveCatalogs: (context) => context.threadId && this.isTaskMonitorThread({ ...context, threadId: context.threadId })
               ? [
-                  { id: "thread_orchestration", router: new AgentToolRouter(buildPwrAgentTaskMonitorToolDefinitions(
-                    async (request) => await this.handleAgentTaskMonitorRequest(request), "monitor",
-                  )) },
+                  { id: "thread_orchestration", router: new AgentToolRouter([
+                    ...buildPwrAgentTaskMonitorToolDefinitions(async (request) => await this.handleAgentTaskMonitorRequest(request), "monitor"),
+                    buildPwrAgentToolGuideDefinition(),
+                  ]) },
                   { id: "mcp_connections", router: new AgentToolRouter(buildMcpGatewayToolDefinitions(this.mcpGatewayTools)) },
                 ]
               : resolveAgentToolCatalogs({
@@ -39961,7 +39963,7 @@ export class DesktopBackendRegistry {
     });
     if (hostToolCall && this.isTaskMonitorThread({ backend, threadId: hostToolCall.threadId })) {
       const allowedTools = hostToolCall.namespace === PWRAGENT_TOOL_NAMESPACE
-        ? ["inject_progress", "complete_monitoring", "search_mcp_tools", "call_mcp_tool"]
+        ? ["inject_progress", "complete_monitoring", "search_mcp_tools", "call_mcp_tool", "read_tool_guide"]
         : hostToolCall.namespace === TASK_MONITOR_TOOL_NAMESPACE
           ? ["inject_progress", "complete_monitoring"]
           : [];
