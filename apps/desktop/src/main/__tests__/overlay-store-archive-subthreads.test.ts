@@ -152,7 +152,7 @@ describe("archiving nested subthreads", () => {
     for (let index = 0; index < 100; index++) await link(`child-${index}`, "parent");
     const { writes } = await measureSqliteWrites(() => archive("parent"));
     expectSqliteWriteBudget({ scenario: "archive-subthread-promotion", writes,
-      note: "One archive boundary promotes 100 children and preserves both orders in one commit; no per-child commits or timer writes. Idle: 0 MB/day." });
+      note: "One archive boundary promotes 100 children in one commit (~0.033 MB); 10 such archives/day cost ~0.33 MB/day. No per-child commits or idle writes (0 MB/day)." });
     const repeated = await measureSqliteWrites(() => archive("parent"));
     expectSqliteWriteBudget({ scenario: "archive-subthread-promotion-repeat", writes: repeated.writes,
       note: "Repeated archive notification or resumed cleanup after promotion: zero commits, 0 MB/day." });

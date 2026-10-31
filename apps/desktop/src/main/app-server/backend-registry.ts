@@ -15742,8 +15742,8 @@ export class DesktopBackendRegistry {
       backendRegistryLog.info("thread archive mutation completed", {
         backend, threadId: request.threadId, runtimeInstanceId: this.runtimeInstanceId, archivedAt,
       });
-      // Same bookkeeping as ACP: record the archive, then let the cleanup
-      // queue ungroup children. Like ACP, Claude keeps its worktrees.
+      // Same bookkeeping as ACP: preserve the tray and record the archive
+      // before publishing its removal. Like ACP, Claude keeps its worktrees.
       await this.overlayStore.observeArchivedThreads?.([{ backend, threadId: request.threadId }], archivedAt, { promoteSubthreads: true });
       this.invalidateThreadListCache(backend);
       await this.emit({ backend, notification: { method: "thread/archived", params: { threadId: request.threadId } } });
@@ -16031,6 +16031,7 @@ export class DesktopBackendRegistry {
       // Startup recovery can reach this stage without a foreground mutation
       // in this process. Preserve nested tray members before the legacy
       // top-level ungrouping fallback inspects them.
+      context.assertCurrent();
       await this.overlayStore.observeArchivedThreads?.(
         [{ backend, threadId: result.threadId }], params.archivedAt, { promoteSubthreads: true },
       );
@@ -46293,7 +46294,7 @@ export class DesktopBackendRegistry {
     } catch (error) {
       return federatedThreadInspectionFailure(error);
     }
-    // Archiving a parent ungroups its children, so the link would not last.
+    // An archived parent cannot own a live tray row.
     if (archived) {
       return threadInspectionFailure(
         "invalid_arguments",
