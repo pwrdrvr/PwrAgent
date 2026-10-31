@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import type { NavigationThreadSummary, UpdateSubthreadOrderRequest, UpdateSubthreadOrderResponse } from "@pwragent/shared";
+import type { NavigationQueryPage, NavigationThreadSummary, UpdateSubthreadOrderRequest, UpdateSubthreadOrderResponse } from "@pwragent/shared";
 import { buildFederatedThreadRef } from "@pwragent/shared";
 import { DesktopFederationRuntime, getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
@@ -7,7 +7,7 @@ import { setDesktopOverlayStoreForTests, resetDesktopOverlayStoreForTests } from
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
-import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV, type SqliteWriteDelta } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createSubthreadTrays } from "../../renderer/src/features/navigation/subthread-trays";
 
@@ -93,6 +93,15 @@ describe("Federation nested archive placement", () => {
     vi.spyOn(runtime, "health").mockResolvedValue({ instanceId: "middle-owner" } as never);
     vi.spyOn(runtime, "assertRemoteNavigationQueryProtocol").mockImplementation(() => {});
     vi.spyOn(runtime, "remoteTargetSupportsCapability").mockReturnValue(true);
+    vi.spyOn(runtime, "remoteNavigationQueryPage").mockImplementation(async (target, request) => {
+      if (request.query.kind !== "exact") throw new Error("Expected an exact ancestor read.");
+      const identity = request.query.identities[0]!;
+      const row = owners.get(identity.threadId) === target.instanceId ? await summary(identity.threadId) : undefined;
+      return { protocol: 2, complete: true, coverage: { state: "complete" }, entries: row && row.archivedAt === undefined ? [{
+        row: { ...row, ref: { ...identity, ownerInstanceId: target.instanceId } },
+        orderKey: identity.threadId, placement: { kind: "root" },
+      }] : [] } as NavigationQueryPage;
+    });
     remoteUpdate = vi.fn<OwnerUpdate>(async (owner, request) => {
       const store = stores.get(owner)!;
       // Exercise the same atomic store boundary as the receiving owner.
@@ -102,6 +111,10 @@ describe("Federation nested archive placement", () => {
       return { backend: "codex", parentThreadId: request.parentThreadId, threadIds };
     });
     vi.spyOn(runtime, "remoteBackend").mockImplementation((target) => ({
+      lookupArchivedThreads: async (request: { threadIds: string[] }) => ({ threads:
+        (await Promise.all(request.threadIds.filter((id) => owners.get(id) === target.instanceId).map(summary)))
+          .filter((row) => row.archivedAt !== undefined),
+      }),
       setThreadParent: (request: Parameters<SqliteOverlayStore["setThreadParent"]>[0]) =>
         stores.get(target.instanceId)!.setThreadParent(request),
       updateSubthreadOrder: (request: UpdateSubthreadOrderRequest) => remoteUpdate(target.instanceId, request),
@@ -147,6 +160,38 @@ describe("Federation nested archive placement", () => {
     await runtime.localBackend().archiveThread({ backend: "codex", threadId: "middle" });
     expect(archive).toHaveBeenCalledOnce();
     expect(await tray()).toEqual(["before", "child-b", "deeper", "child-a", "after"]);
+  });
+
+  it("archives a remote-parent leaf without a parent pin or peer access", async () => {
+    owners.set("leaf", "middle-owner");
+    await link("leaf", "root");
+    await stores.get("middle-owner")!.removeRemoteThreadPin({
+      ref: buildFederatedThreadRef({ backend: "codex", threadId: "root", instanceId: "root-owner" }),
+    });
+    vi.mocked(runtime.assertRemoteNavigationQueryProtocol).mockImplementation(() => { throw new Error("offline"); });
+    vi.spyOn(getDesktopFederationRuntime(), "ungroupRemoteChildrenOfArchivedThread")
+      .mockImplementation((request) => runtime.ungroupRemoteChildrenOfArchivedThread(request));
+    const archive = vi.spyOn(getDesktopBackendRegistry(), "archiveThread").mockResolvedValue({
+      backend: "codex", threadId: "leaf", archivedAt: 1000, cleanup: [],
+    });
+    const { writes } = await measureSqliteWrites(() => runtime.localBackend().archiveThread({ backend: "codex", threadId: "leaf" }));
+    expect(archive).toHaveBeenCalledWith({ backend: "codex", threadId: "leaf" });
+    expect(runtime.remoteNavigationQueryPage).not.toHaveBeenCalled();
+    expect(remoteUpdate).not.toHaveBeenCalled();
+    expectSqliteWriteBudget({ scenario: "federation-archive-leaf-preparation", writes,
+      note: "A leaf with an uncached remote parent needs no promotion, peer access, or SQLite writes; 0 MB/day." });
+  });
+
+  it("reads missing ancestor membership from its owner without inventing a local overlay", async () => {
+    await stores.get("middle-owner")!.removeRemoteThreadPin({
+      ref: buildFederatedThreadRef({ backend: "codex", threadId: "root", instanceId: "root-owner" }),
+    });
+    await runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" });
+    expect(runtime.remoteNavigationQueryPage).toHaveBeenCalledWith({ scope: "remote", instanceId: "root-owner" },
+      expect.objectContaining({ query: { kind: "exact", includeAncestry: false,
+        identities: [{ backend: "codex", threadId: "root", ownerInstanceId: "root-owner" }] } }), expect.anything());
+    expect((await summary("root")).subthreadOrder).toEqual(["before", "child-b", "child-a", "after"]);
+    expect(await stores.get("middle-owner")!.getThreadOverlayState({ backend: "codex", threadId: "root" })).toBeUndefined();
   });
 
   it("does not start promotion or provider archive with a stale expected parent", async () => {
@@ -221,6 +266,45 @@ describe("Federation nested archive placement", () => {
     expect(await tray()).toEqual(["before", "child-b", "deeper", "child-a", "after"]);
     const rootPins = await stores.get("root-owner")!.listRemoteThreadPins();
     for (const id of ["child-b", "child-a"]) expect(rootPins.some((pin) => pin.ref.threadId === id)).toBe(true);
+  });
+
+  it.each(["lost ancestor response", "failed source commit"])("retains committed ancestor placement after %s", async (failure) => {
+    const apply = remoteUpdate.getMockImplementation()!;
+    let ancestorCommits = 0;
+    let replayWrites: SqliteWriteDelta | undefined;
+    remoteUpdate.mockImplementation(async (owner, request) => {
+      if (owner !== "root-owner" || request.archivePromotion?.dryRun) return await apply(owner, request);
+      ancestorCommits++;
+      if (ancestorCommits > 1) {
+        const measured = await measureSqliteWrites(() => apply(owner, request));
+        replayWrites = measured.writes;
+        return measured.result;
+      }
+      const response = await apply(owner, request);
+      if (failure === "lost ancestor response") throw new Error(failure);
+      return response;
+    });
+    if (failure === "failed source commit") {
+      const source = stores.get("middle-owner")!;
+      const applySource = source.applyArchiveSubthreadPromotion.bind(source);
+      let fail = true;
+      vi.spyOn(source, "applyArchiveSubthreadPromotion").mockImplementation((promotion, instanceId) => {
+        if (!promotion.dryRun && fail) { fail = false; throw new Error(failure); }
+        return applySource(promotion, instanceId);
+      });
+    }
+    await expect(runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" })).rejects.toThrow(failure);
+    expect((await summary("root")).subthreadOrder).toEqual(["before", "child-b", "child-a", "after"]);
+    // A manual move after the commit is newer than the replayed request.
+    await stores.get("root-owner")!.updateSubthreadOrder({ backend: "codex", parentThreadId: "root",
+      threadIds: ["before", "child-a", "child-b", "after"] });
+    await runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" });
+    expect((await summary("root")).subthreadOrder).toEqual(["before", "child-a", "child-b", "after"]);
+    expect(replayWrites).toBeDefined();
+    expectSqliteWriteBudget({ scenario: "federation-archive-ancestor-promotion-repeat", writes: replayWrites!,
+      note: "Replay after a committed ancestor promotion preserves placement and newer manual ranks with zero SQLite writes; 0 MB/day." });
+    await stores.get("middle-owner")!.observeArchivedThreads([{ backend: "codex", threadId: "middle" }], 1000, { promoteSubthreads: true });
+    expect(await tray()).toEqual(["before", "child-a", "child-b", "deeper", "after"]);
   });
 
   it("accepts owner events refreshing viewer membership before the final local commit", async () => {
