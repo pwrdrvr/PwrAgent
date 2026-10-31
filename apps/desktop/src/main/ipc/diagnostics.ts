@@ -19,6 +19,9 @@ import { subscribersForChannel } from "../window-channels";
 import { DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL, DIAGNOSTICS_STOP_RENDERING_CHANNEL } from "../../shared/rendering-diagnostics";
 import { captureRenderingDiagnostics, stopRenderingDiagnostics } from "../diagnostics/rendering-capture";
 
+import { DIAGNOSTICS_CAPTURE_NATIVE_CPU_CHANNEL, DIAGNOSTICS_STOP_NATIVE_CPU_CHANNEL } from "../../shared/native-cpu-diagnostics";
+import { captureNativeCpuDiagnostics, stopNativeCpuDiagnostics } from "../diagnostics/native-cpu-capture";
+
 const logger = getMainLogger("pwragent:diagnostics-ipc");
 
 /** Long enough to stage a scenario, short enough that nobody forgets it is armed. */
@@ -72,8 +75,13 @@ async function runCapture(
 }
 
 export function registerDiagnosticsIpcHandlers(): void {
+  ipcMain.removeHandler(DIAGNOSTICS_CAPTURE_NATIVE_CPU_CHANNEL);
+  ipcMain.removeHandler(DIAGNOSTICS_STOP_NATIVE_CPU_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_STOP_RENDERING_CHANNEL);
+  ipcMain.handle(DIAGNOSTICS_CAPTURE_NATIVE_CPU_CHANNEL, (event) =>
+    captureNativeCpuDiagnostics(resolveDiagnosticsOutputRoot(), event.sender));
+  ipcMain.handle(DIAGNOSTICS_STOP_NATIVE_CPU_CHANNEL, () => stopNativeCpuDiagnostics());
   ipcMain.handle(DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL, (_event, seconds?: number) =>
     captureRenderingDiagnostics(resolveDiagnosticsOutputRoot(), seconds));
   ipcMain.handle(DIAGNOSTICS_STOP_RENDERING_CHANNEL, () => stopRenderingDiagnostics());
@@ -132,6 +140,8 @@ export function registerDiagnosticsIpcHandlers(): void {
 }
 
 export function disposeDiagnosticsIpcHandlers(): void {
+  ipcMain.removeHandler(DIAGNOSTICS_CAPTURE_NATIVE_CPU_CHANNEL);
+  ipcMain.removeHandler(DIAGNOSTICS_STOP_NATIVE_CPU_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_STOP_RENDERING_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL);

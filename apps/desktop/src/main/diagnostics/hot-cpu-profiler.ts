@@ -1,3 +1,4 @@
+import { reclaimDeferredDebuggerDetach, requestDebuggerDetach } from "./debugger-connection-hold";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Profiler } from "node:inspector";
@@ -444,9 +445,9 @@ export class HotCpuProfiler {
       || this.isTargetDestroyed()
       || this.profileCount >= this.config.maxProfiles
     ) return;
-    if (this.target.debugger.isAttached()) return;
+    if (this.target.debugger.isAttached() && !reclaimDeferredDebuggerDetach(this.target.debugger)) return;
     try {
-      this.target.debugger.attach(CHROME_DEBUGGER_PROTOCOL_VERSION);
+      if (!this.target.debugger.isAttached()) this.target.debugger.attach(CHROME_DEBUGGER_PROTOCOL_VERSION);
       this.debuggerAttached = true;
       this.target.debugger.on("detach", this.detachListener);
       await this.target.debugger.sendCommand("Profiler.enable");
@@ -871,7 +872,7 @@ export class HotCpuProfiler {
         return;
       }
 
-      this.target.debugger.detach();
+      requestDebuggerDetach(this.target.debugger);
       this.debuggerAttached = false;
     } catch (error) {
       this.debuggerAttached = false;

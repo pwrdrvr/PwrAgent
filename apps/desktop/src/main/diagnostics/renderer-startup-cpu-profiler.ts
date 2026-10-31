@@ -1,3 +1,4 @@
+import { requestDebuggerDetach } from "./debugger-connection-hold";
 import fs from "node:fs/promises";
 import type { StartupCpuProfileSession } from "./startup-cpu-profile-session";
 import { getMainLogger } from "../log";
@@ -182,7 +183,7 @@ export class RendererStartupCpuProfiler {
       return;
     }
 
-    this.target.debugger.detach();
+    requestDebuggerDetach(this.target.debugger);
     this.attachedByProfiler = false;
   }
 
