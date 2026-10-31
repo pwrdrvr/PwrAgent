@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { tolerateTransientRpcFailure } from "./fixtures/transient-rpc-poll";
 import type { RenderingCaptureResult } from "../src/shared/rendering-diagnostics";
 
 test("rendering capture distinguishes static pixels from a compositor animation", async () => {
@@ -174,8 +175,11 @@ test("HotCpuProfiler co-records through rendering capture on one debugger attach
       }, 25);
       await api.writeSettingsConfig({ patch: { general: { hotCpuProfilingEnabled: true } } });
     });
-    await expect.poll(() => app.electronApp.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows()[0].webContents.debugger.isAttached())).toBe(true);
+    const debuggerAttached = tolerateTransientRpcFailure(() =>
+      app.electronApp.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0].webContents.debugger.isAttached()));
+    await expect.poll(debuggerAttached.read).toBe(true)
+      .catch(debuggerAttached.rethrowWithLastFailure);
     const result = await app.window.evaluate(() => (window as unknown as { pwragent: {
       captureRenderingDiagnostics: (seconds: number) => Promise<RenderingCaptureResult>;
     } }).pwragent.captureRenderingDiagnostics(1));
