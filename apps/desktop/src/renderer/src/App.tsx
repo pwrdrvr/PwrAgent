@@ -2150,12 +2150,26 @@ function DesktopAppShell(props: {
           .repeatedLargeOutputMinimumPercent,
     );
   }, [settings.snapshot?.general.toolOutputAlerts]);
-  const backendSummaries = useBackendSummaries(desktopApi, {
+  // The sidebar belongs to the window's navigation owner even when its
+  // selected transcript belongs to a peer. A peer's provider catalog must
+  // not remove management actions from this window's local thread rows.
+  const windowFederationTarget = useMemo(() => readRendererFederationTarget(), []);
+  const windowBackendSummaries = useBackendSummaries(desktopApi, {
     enabled: normalAppEnabled,
+    federationTarget: windowFederationTarget,
+    suspended: Boolean(windowFederationTarget && remoteReadsSuspended),
+    pollRateLimits: !sidebarHidden,
+  });
+  const selectedPeerCatalog = Boolean(activeFederationTarget && !windowFederationTarget);
+  const selectedPeerBackendSummaries = useBackendSummaries(desktopApi, {
+    enabled: normalAppEnabled && selectedPeerCatalog,
     federationTarget: activeFederationTarget,
     suspended: remoteReadsSuspended,
     pollRateLimits: !sidebarHidden,
   });
+  const backendSummaries = selectedPeerCatalog
+    ? selectedPeerBackendSummaries
+    : windowBackendSummaries;
   const startupBackend = useMemo(
     () => resolveNewThreadBackend(backendSummaries.backends),
     [backendSummaries.backends],
@@ -4240,8 +4254,8 @@ function DesktopAppShell(props: {
             navigation.detachSubthreadLaunchpad(draft.directoryKey);
           }}
           addingProjectDirectory={navigation.pickingDirectory}
-          backends={backendSummaries.backends}
-          onRefreshRateLimits={backendSummaries.refreshRateLimits}
+          backends={windowBackendSummaries.backends}
+          onRefreshRateLimits={windowBackendSummaries.refreshRateLimits}
           browseMode={navigation.browseMode}
           pinnedThreadsOnTop={navigation.pinnedThreadsOnTop}
           pinnedGroupCollapsed={navigation.pinnedGroupCollapsed}
