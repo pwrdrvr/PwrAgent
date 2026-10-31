@@ -32,6 +32,7 @@ describe("Federation nested archive placement", () => {
     ["child-a", "fourth-owner"], ["deeper", "fourth-owner"],
   ]);
   const fixtureIds = new Set(owners.keys());
+  const creationTimes = new Map<string, number>();
   let runtime: DesktopFederationRuntime;
   type OwnerUpdate = (owner: string, request: UpdateSubthreadOrderRequest) => Promise<UpdateSubthreadOrderResponse>;
   let remoteUpdate: Mock<OwnerUpdate>;
@@ -40,7 +41,7 @@ describe("Federation nested archive placement", () => {
     const overlay = await stores.get(owners.get(id)!)!.getThreadOverlayState({ backend: "codex", threadId: id });
     return { ...overlay, archivedAt: overlay?.archiveRetentionStartedAt,
       id, source: "codex", title: id, titleSource: "explicit", linkedDirectories: [],
-      createdAt: 0, inbox: { inInbox: false } };
+      createdAt: creationTimes.get(id) ?? 0, inbox: { inInbox: false } };
   };
   const mount = async (viewer: string, id: string) => {
     await stores.get(viewer)!.addRemoteThreadPin({
@@ -113,6 +114,7 @@ describe("Federation nested archive placement", () => {
     databases.splice(0).forEach((db) => db.close());
     directories.splice(0).forEach(removeTempStateDbDir);
     stores.clear();
+    creationTimes.clear();
     for (const id of [...owners.keys()]) if (!fixtureIds.has(id)) owners.delete(id);
   });
 
@@ -205,10 +207,22 @@ describe("Federation nested archive placement", () => {
     expect(await tray()).toEqual(["before", "child-b", "deeper", "child-a", "after"]);
   });
 
+  it("retains unranked remote siblings in their visible creation order", async () => {
+    owners.set("unranked-remote", "fourth-owner");
+    creationTimes.set("unranked-remote", 10);
+    await link("unranked-remote", "root");
+    await stores.get("root-owner")!.updateSubthreadOrder({ backend: "codex", parentThreadId: "root", threadIds: ["before", "middle"] });
+    await mount("middle-owner", "root");
+    expect(await tray()).toEqual(["before", "middle", "child-b", "deeper", "child-a", "unranked-remote", "after"]);
+    await runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" });
+    await stores.get("middle-owner")!.observeArchivedThreads([{ backend: "codex", threadId: "middle" }], 1000, { promoteSubthreads: true });
+    expect(await tray()).toEqual(["before", "child-b", "deeper", "child-a", "unranked-remote", "after"]);
+  });
+
   it("rolls back all relationships and cached membership on a failed owner transaction", async () => {
     const request = await (async () => {
       await runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" });
-      return remoteUpdate.mock.calls.find(([owner, entry]) => owner === "root-owner" && !entry.archivePromotion.dryRun)![1] as UpdateSubthreadOrderRequest;
+      return remoteUpdate.mock.calls.find(([owner, entry]) => owner === "root-owner" && entry.archivePromotion?.dryRun === false)![1];
     })();
     // Restore only the root owner's cache/order to the pre-boundary snapshot.
     await stores.get("root-owner")!.removeRemoteThreadPin({ ref: buildFederatedThreadRef({ backend: "codex", threadId: "child-b", instanceId: "child-owner" }) });

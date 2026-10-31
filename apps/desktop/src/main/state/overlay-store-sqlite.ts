@@ -9521,10 +9521,21 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
 
   readArchiveSubthreadChildren(identity: { backend: AppServerBackendKind; threadId: string }): NavigationThreadSummary[] {
     const parent = this.getThread(buildThreadIdentityKey(identity.backend, identity.threadId));
-    return this.orderStoredSubthreads(parent ?? { ...identity, executionMode: "default", extraLinkedDirectories: [] },
-      this.readLocalSubthreadChildren(identity)).map(({ state, createdAt }) => ({
-        ...state, id: state.threadId, source: state.backend, title: state.threadId, titleSource: "derived",
-        linkedDirectories: [], createdAt, inbox: { inInbox: false },
+    const children = this.readLocalSubthreadChildren(identity);
+    const summaries = new Map<string, NavigationThreadSummary>();
+    for (const backend of new Set(children.map((child) => child.backend))) {
+      const row = this.stateDb.raw.prepare(`SELECT payload FROM provider_thread_snapshots
+        WHERE backend = ? AND schema_version = 1`).get(backend) as { payload: string } | undefined;
+      if (!row) continue;
+      for (const summary of JSON.parse(row.payload) as NavigationThreadSummary[]) {
+        summaries.set(buildThreadIdentityKey(backend, summary.id), summary);
+      }
+    }
+    return this.orderStoredSubthreads(parent ?? { ...identity, executionMode: "default", extraLinkedDirectories: [] }, children)
+      .map(({ state, createdAt }) => ({
+        title: state.threadId, titleSource: "derived" as const, linkedDirectories: [], inbox: { inInbox: false },
+        ...summaries.get(buildThreadIdentityKey(state.backend, state.threadId)),
+        ...state, id: state.threadId, source: state.backend, createdAt,
       }));
   }
 
@@ -9628,8 +9639,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       if (!ownParent) return [];
       // Materialize the owner's current order, preserving unloaded remote slots.
       const saved = new Set(ownParent.subthreadOrder ?? []);
-      const prior = [...saved, ...this.orderStoredSubthreads(ownParent,
-        this.readLocalSubthreadChildren(parent!)).map(({ id }) => id).filter((id) => !saved.has(id))];
+      const remoteRows = this.stateDb.raw.prepare(`SELECT payload FROM remote_thread_pins
+        WHERE revoked_at IS NULL AND CASE WHEN json_valid(payload)
+          THEN json_extract(payload, '$.summary.parentThreadId') = ?
+            AND json_extract(payload, '$.summary.parentThreadInstanceId') = ? END`)
+        .all(parent!.threadId, instanceId) as { payload: string }[];
+      const remoteSiblings = remoteRows.map(({ payload }) => (JSON.parse(payload) as { summary: NavigationThreadSummary }).summary)
+        .filter((summary) => (summary.parentThreadBackend ?? summary.source) === parent!.backend
+          && (summary.archivedAt === undefined || summary.id === anchor.threadId));
+      const siblings = [...this.readArchiveSubthreadChildren(parent!), ...remoteSiblings];
+      const prior = [...saved, ...sortSubthreadSummaries(ownParent, siblings).map(({ id }) => id).filter((id) => !saved.has(id))];
       const promotedIds = children.map(({ ref }) => ref.threadId);
       const promoted = new Set(promotedIds);
       const order = prior.filter((id) => !promoted.has(id));
