@@ -54,12 +54,14 @@ describe("backend MCP gateway dispatch", () => {
     taskMonitorDelegations: Map<string, { pendingMcpApprovalCount?: number; staleInterruptAttempted?: boolean }>;
     checkStaleTaskMonitors(now?: number): Promise<void>;
   };
+  let monitorCreationIndex = 0;
   const args = { connectionId: "one", toolName: "lookup", schemaRevision: "r1", arguments: { id: "fixture" } };
   const request = (tool: string, arguments_: Record<string, unknown>, callId = "call-1"): AppServerPendingRequestNotification => ({
     method: "item/tool/call", params: { threadId: "thread-1", turnId: "turn-1", requestId: callId, callId, namespace: "pwragent", tool, arguments: arguments_ },
   });
 
   beforeEach(async () => {
+    monitorCreationIndex = 0;
     const fixture = createTempStateDb("pwragent-gateway-dispatch-");
     directory = fixture.tempDir;
     db = StateDb.open(fixture.dbPath);
@@ -154,7 +156,7 @@ describe("backend MCP gateway dispatch", () => {
     const response = await internals.handleServerRequest("codex", request("create_monitor_delegation", {
       task: "Use the selected MCP connection to inspect durable cloud status and report its exit code.",
       cwd: directory,
-    }));
+    }, `create-monitor-${++monitorCreationIndex}`));
     expect(response.success).toBe(true);
     const created = JSON.parse((response.contentItems[0] as { text: string }).text);
     let callIndex = 0;
@@ -557,6 +559,7 @@ select_for_new_threads = true
     startTurn.mockResolvedValueOnce({ threadId: "monitor-2", turnId: "turn-2" });
     const second = await createMonitor();
     const secondArgs = await discoveredCall(second);
+    expect(startThread).toHaveBeenCalledTimes(2);
     expect(secondArgs.schemaRevision).not.toBe(firstArgs.schemaRevision);
     expect((await second("call_mcp_tool", secondArgs)).success).toBe(true);
     expect(events).toHaveLength(1);
