@@ -4305,7 +4305,16 @@ describe("App", () => {
       expect(screen.getByRole("menuitem", { name: "Rename Thread" })).toBeInTheDocument();
       fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     };
+    const checkRemoteMenu = async () => {
+      await act(async () => {
+        fireEvent.contextMenu(screen.getByRole("button", { name: remoteThread.title }));
+      });
+      await waitFor(() => expect(screen.getByRole("menuitem", { name: "Rename Thread" })).toBeInTheDocument());
+      expect(screen.getByRole("menuitem", { name: "Archive Thread" })).toBeInTheDocument();
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    };
     await checkLocalMenu();
+    await checkRemoteMenu();
     await clickButton(remoteThread.title);
     await waitFor(() => expect(listBackends).toHaveBeenCalledWith(expect.objectContaining({
       federationTarget: remoteTarget,
@@ -4313,8 +4322,10 @@ describe("App", () => {
     await flushReactUpdates();
     expect(screen.getByRole("button", { name: remoteThread.title })).toHaveAttribute("aria-pressed", "true");
     await checkLocalMenu();
+    await checkRemoteMenu();
     await clickButton(localThread.title);
     await checkLocalMenu();
+    await checkRemoteMenu();
   });
 
   it("waits for peer health before reading a restored remote thread", async () => {
