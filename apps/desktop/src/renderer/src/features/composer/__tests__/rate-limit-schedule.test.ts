@@ -4,7 +4,7 @@ import { getRateLimitResetSendAt, getShortTermRateLimitResetAt } from "../rate-l
 
 const now = Date.parse("2026-10-31T12:00:00Z");
 const resetAt = now + 3 * 60 * 60_000;
-const limit: BackendRateLimitSummary = { name: "Short-term allowance", resetAt, windowMinutes: 300 };
+const limit: BackendRateLimitSummary = { name: "5h limit", resetAt, windowMinutes: 300 };
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -14,9 +14,9 @@ describe("getShortTermRateLimitResetAt", () => {
     { name: "5-hour limit", limitId: "five_hour" },
     { name: "12h limit" },
     { name: "12-hour limit" },
-    { name: "Unlabelled", windowMinutes: 720 },
-    { name: "Unlabelled", windowSeconds: 18_000 },
-    { name: "Unlabelled", windowMinutes: 60 },
+    { name: "Unlabelled", limitId: "codex", windowMinutes: 720 },
+    { name: "Unlabelled", limitId: "codex", windowSeconds: 18_000 },
+    { name: "Unlabelled", limitId: "codex", windowMinutes: 60 },
   ])("uses the reported reset for $name", (reading) => {
     expect(getShortTermRateLimitResetAt({ now, rateLimits: [{ ...reading, resetAt }] })).toBe(resetAt);
   });
@@ -51,6 +51,35 @@ describe("getShortTermRateLimitResetAt", () => {
   it("selects the next reset among eligible windows", () => {
     expect(getShortTermRateLimitResetAt({ now, rateLimits: [limit, { ...limit, resetAt: resetAt - 60_000 }] }))
       .toBe(resetAt - 60_000);
+  });
+
+  const account: BackendRateLimitSummary = { ...limit, limitId: "codex", windowKey: "primary" };
+  const spark: BackendRateLimitSummary = {
+    ...limit, name: "GPT-5.3-Codex-Spark 5h limit", limitId: "codex_spark",
+    limitName: "GPT-5.3-Codex-Spark", windowKey: "primary", resetAt: resetAt - 60_000,
+  };
+
+  it.each([undefined, { id: "gpt-5.5", label: "GPT-5.5" }])(
+    "uses the account reset when Spark has an earlier primary reset (%j)", (selectedModelOption) => {
+      expect(getShortTermRateLimitResetAt({ now, rateLimits: [spark, account], selectedModelOption })).toBe(account.resetAt);
+    },
+  );
+
+  it("still selects a matching model-specific quota", () => {
+    expect(getShortTermRateLimitResetAt({
+      now, rateLimits: [account, spark],
+      selectedModelOption: { id: "gpt-5.3-codex-spark", label: "GPT-5.3-Codex-Spark" },
+    })).toBe(spark.resetAt);
+  });
+
+  it.each([
+    spark,
+    { ...spark, name: "5h limit" },
+    { ...spark, limitId: undefined },
+  ])("does not fall back to an unrelated quota without an account reading: %j", (reading) => {
+    expect(getShortTermRateLimitResetAt({
+      now, rateLimits: [reading], selectedModelOption: { id: "gpt-5.5" },
+    })).toBeUndefined();
   });
 });
 

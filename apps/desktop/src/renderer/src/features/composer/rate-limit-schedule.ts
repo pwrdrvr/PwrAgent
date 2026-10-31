@@ -18,6 +18,20 @@ function shortTermWindowMinutes(limit: BackendRateLimitSummary): number | undefi
   return hours > 0 && hours <= 12 ? hours * 60 : undefined;
 }
 
+function isAccountRateLimit(limit: BackendRateLimitSummary): boolean {
+  if (limit.windowKey === "individual") return false;
+  const id = limit.limitId?.trim().toLowerCase();
+  if (id) return id === "codex" || id === "five_hour";
+  // Primary/secondary are slots within each quota, including Spark's.
+  // Only anonymous windows or legacy duration-only labels are generic.
+  return !limit.limitName?.trim()
+    && (
+      limit.windowKey === "primary"
+      || limit.windowKey === "secondary"
+      || /^\d+(?:\.\d+)?\s*(?:h|[- ]?hours?)\s+limit$/i.test(limit.name)
+    );
+}
+
 /** Use a future renewing short-term allowance, preferring the selected model. */
 export function getShortTermRateLimitResetAt(params: {
   rateLimits?: BackendRateLimitSummary[];
@@ -41,11 +55,8 @@ export function getShortTermRateLimitResetAt(params: {
       [limit.limitId, limit.limitName, limit.name].some((value) => value?.toLowerCase().includes(term))
     )
   );
-  const generic = candidates.filter((limit) =>
-    limit.windowKey === "primary"
-    || /^\d+(?:\.\d+)?\s*(?:h|[- ]?hours?)\s+limit$/i.test(limit.name)
-  );
-  const preferred = modelSpecific.length > 0 ? modelSpecific : generic.length > 0 ? generic : candidates;
+  const generic = candidates.filter(isAccountRateLimit);
+  const preferred = modelSpecific.length > 0 ? modelSpecific : generic;
   return preferred.length > 0 ? Math.min(...preferred.map((limit) => limit.resetAt!)) : undefined;
 }
 
