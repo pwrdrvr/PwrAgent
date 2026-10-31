@@ -1,3 +1,5 @@
+import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
+import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent-task-monitor-agent-tools";
 import { delegatedTurnAttribution, withoutTurnAttribution } from "./delegated-turn-attribution";
 import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
@@ -19,6 +21,7 @@ import {
   findAcpPermissionModeConfigOption,
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
   PWRAGENT_TOOL_NAMESPACE,
+  TASK_MONITOR_TOOL_NAMESPACE,
   DEFAULT_THREAD_ARCHIVE_POLICY,
   FORGE_AGENT_TOOL_GROUP_LABELS,
   isTokenMiserSubAgent,
@@ -576,7 +579,6 @@ import {
 import {
   buildMonitorParentAgentGuidance,
   buildMonitorDelegationPrompt,
-  buildTaskMonitorDynamicToolSpecs,
   findUnsupportedCodexExecSessionReference,
   handleTaskMonitorDynamicToolCall,
   isTaskMonitorDynamicToolCall,
@@ -2077,6 +2079,7 @@ type QuitThreadSource = {
 type LiveCodexToolItem = { turnId: string; itemType: string; turnEnded?: boolean };
 
 type PendingServerRequest = {
+  owner?: { backend: AppServerBackendKind; threadId: string; turnId?: string };
   backend: AppServerBackendKind;
   notification: AppServerPendingRequestNotification;
   resolve: (response: SubmitServerRequestRequest["response"]) => void;
@@ -3236,6 +3239,16 @@ type TaskMonitorCancellationState = {
   summary: string;
 };
 
+type TaskMonitorMcpAccess = {
+  connectionIds: string[];
+  selectionOwner: { backend: AppServerBackendKind; threadId: string };
+  automation?: {
+    grantedConnectionIds?: string[];
+    serverAliases?: Record<string, string[]>;
+    toolAllowlist?: string[];
+  };
+};
+
 type TaskMonitorDelegationRecord = {
   causalContext?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
   activeCommandCount: number;
@@ -3247,6 +3260,9 @@ type TaskMonitorDelegationRecord = {
   lastActivityAt: number;
   latestUsage?: TaskMonitorUsageSnapshot;
   monitorId: string;
+  mcpAccess?: TaskMonitorMcpAccess;
+  pendingMcpApprovalCount?: number;
+  deniedMcpTools?: Set<string>;
   monitorThreadId?: string;
   monitorTurnId?: string;
   parentBackend: AppServerBackendKind;
@@ -6461,6 +6477,7 @@ type StartupProviderThreadRefresh = Readonly<{
 }>;
 
 type McpGatewayConversationConsent = {
+  readOnlyOnly?: boolean;
   schemaRevision: string;
   selectionRevision?: string;
   approved: boolean;
@@ -10842,14 +10859,18 @@ export class DesktopBackendRegistry {
             ...context, tool: "call_mcp_tool",
           });
           if (denied) throw new Error(`The messaging actor lacks permission for MCP gateway tools (${denied}).`);
-          const automation = this.findHeadlessAutomationForThread(context.backend, context.threadId);
-          if (automation?.mcpConnectionIds) {
-            const selected = await this.readThreadMcpConnections({ backend: context.backend, threadId: automation.agentThreadId });
-            return automation.mcpConnectionIds.filter((id) => selected.connectionIds.includes(id) || automation.mcpGrantedConnectionIds?.includes(id));
-          }
-          return (await this.readThreadMcpConnections(context)).connectionIds;
+          return await this.readMcpGatewaySelection(context);
         },
-        approve: (invocation, context, signal, annotations, catalogRevision) => this.approveGatewayInvocation(invocation, context, signal, annotations, catalogRevision),
+        scopeKey: (context) => {
+          const access = this.taskMonitorForThread(context)?.mcpAccess;
+          return JSON.stringify(["gateway", context.backend, context.threadId, ...(access ? [{
+            selectionOwner: access.selectionOwner, connectionIds: access.connectionIds,
+            grantedConnectionIds: access.automation?.grantedConnectionIds, readOnly: true,
+          }] : [])]);
+        },
+        toolAllowed: (tool, context) => !this.isTaskMonitorThread(context)
+          || (tool.definition.annotations?.readOnlyHint === true && tool.definition.annotations.destructiveHint !== true),
+        approve: (invocation, context, signal, annotations, catalogRevision, consentRevision) => this.approveGatewayInvocation(invocation, context, signal, annotations, catalogRevision, consentRevision),
       });
     }
     if (this.tokenMiserStore) {
@@ -10880,8 +10901,15 @@ export class DesktopBackendRegistry {
           new AgentToolMcpServer({
             resolveCallContext: (context) =>
               this.resolveAgentToolMcpCallContext(context),
-            resolveCatalogs: () =>
-              resolveAgentToolCatalogs({
+            resolveCatalogs: (context) => context.threadId && this.isTaskMonitorThread({ ...context, threadId: context.threadId })
+              ? [
+                  { id: "thread_orchestration", router: new AgentToolRouter([
+                    ...buildPwrAgentTaskMonitorToolDefinitions(async (request) => await this.handleAgentTaskMonitorRequest(request), "monitor"),
+                    buildPwrAgentToolGuideDefinition(),
+                  ]) },
+                  { id: "mcp_connections", router: new AgentToolRouter(buildMcpGatewayToolDefinitions(this.mcpGatewayTools)) },
+                ]
+              : resolveAgentToolCatalogs({
                 appManagementHandler: this.appManagementHandler,
                 automationInspectionHandler: this.automationInspectionHandler,
                 federationHandler: this.federationHandler,
@@ -21350,6 +21378,7 @@ export class DesktopBackendRegistry {
           executionMode: params.executionMode ?? overlay?.executionMode,
           instructions,
           mcpServers,
+          ...(this.taskMonitorForThread(params) ? { strictMcpConfig: true } : {}),
           // Directories attached to the thread, so Claude can work in them too.
           attachedDirectories: overlay?.extraLinkedDirectories,
           shellEnvironment: setupVariablesForAgent(
@@ -25848,6 +25877,14 @@ export class DesktopBackendRegistry {
     if (state.mcpSelectionRevision !== previousRevision) {
       this.mcpGatewayTools?.cancel(request.backend, request.threadId);
       this.mcpGatewaySessionApprovals.delete(JSON.stringify([request.backend, request.threadId]));
+      for (const monitor of this.taskMonitorDelegations.values()) {
+        if (monitor.monitorThreadId
+          && monitor.mcpAccess?.selectionOwner.backend === request.backend
+          && monitor.mcpAccess.selectionOwner.threadId === request.threadId) {
+          this.mcpGatewayTools?.cancel(monitor.backend, monitor.monitorThreadId);
+          this.mcpGatewaySessionApprovals.delete(JSON.stringify([monitor.backend, monitor.monitorThreadId]));
+        }
+      }
       // A connection the thread turned off keeps its grant until the agent
       // reloads its servers, but a local command started for this thread has
       // no reason to keep running in the meantime. Not awaited: stopping a
@@ -39957,6 +39994,16 @@ export class DesktopBackendRegistry {
       method: request.method,
       params: request.params,
     });
+    if (hostToolCall && this.isTaskMonitorThread({ backend, threadId: hostToolCall.threadId })) {
+      const allowedTools = hostToolCall.namespace === PWRAGENT_TOOL_NAMESPACE
+        ? ["inject_progress", "complete_monitoring", "search_mcp_tools", "call_mcp_tool", "read_tool_guide"]
+        : hostToolCall.namespace === TASK_MONITOR_TOOL_NAMESPACE
+          ? ["inject_progress", "complete_monitoring"]
+          : [];
+      if (!allowedTools.includes(hostToolCall.tool)) {
+        return toDynamicToolResponse({ ok: false, code: "forbidden", message: "Job Monitors may use only their lifecycle and read-only MCP gateway tools." });
+      }
+    }
     // Keep dispatch available after disabling the experiment: older runtimes
     // can retain the previously advertised schema until a new thread starts.
     const toolSearchRouter = new AgentToolRouter([buildPwrAgentToolSearchDefinition([])]);
@@ -40257,26 +40304,83 @@ export class DesktopBackendRegistry {
     });
   }
 
+  private isTaskMonitorThread(context: { backend: AppServerBackendKind; threadId: string }): boolean {
+    return Boolean(this.taskMonitorForThread(context))
+      || this.completedTaskMonitorsByThread.has(taskMonitorThreadKey(context.backend, context.threadId));
+  }
+
+  private taskMonitorForThread(context: { backend: AppServerBackendKind; threadId: string }): TaskMonitorDelegationRecord | undefined {
+    return [...this.taskMonitorDelegations.values()].find((record) =>
+      record.backend === context.backend && record.monitorThreadId === context.threadId);
+  }
+
+  private async readMcpGatewaySelection(context: AgentToolCallContext): Promise<string[]> {
+    const monitor = this.taskMonitorForThread(context);
+    if (monitor) {
+      const denied = await this.dynamicToolPermissionDenied(monitor.parentBackend, "mcp_connections", {
+        threadId: monitor.parentThreadId, turnId: monitor.parentTurnId, tool: "call_mcp_tool",
+      });
+      if (denied) throw new Error(`The delegating messaging actor lacks permission for MCP gateway tools (${denied}).`);
+      const access = monitor.mcpAccess;
+      if (!access || monitor.cancellation || monitor.finalizationStarted) return [];
+      const selected = await this.readThreadMcpConnections(access.selectionOwner);
+      return access.connectionIds.filter((id) => selected.connectionIds.includes(id)
+        || access.automation?.grantedConnectionIds?.includes(id));
+    }
+    const automation = this.findHeadlessAutomationForThread(context.backend, context.threadId);
+    if (automation?.mcpConnectionIds) {
+      const selected = await this.readThreadMcpConnections({ backend: context.backend, threadId: automation.agentThreadId });
+      return automation.mcpConnectionIds.filter((id) => selected.connectionIds.includes(id) || automation.mcpGrantedConnectionIds?.includes(id));
+    }
+    return (await this.readThreadMcpConnections(context)).connectionIds;
+  }
+
+  private async taskMonitorMcpAccess(context: AgentToolCallContext): Promise<TaskMonitorMcpAccess> {
+    const inherited = this.taskMonitorForThread(context)?.mcpAccess;
+    const automation = this.findHeadlessAutomationForThread(context.backend, context.threadId);
+    return {
+      connectionIds: await this.readMcpGatewaySelection(context),
+      selectionOwner: inherited?.selectionOwner ?? { backend: context.backend, threadId: automation?.agentThreadId ?? context.threadId },
+      ...(inherited?.automation || automation ? {
+        automation: inherited?.automation ?? {
+          grantedConnectionIds: automation?.mcpGrantedConnectionIds?.slice(),
+          serverAliases: automation?.mcpServerAliases ? structuredClone(automation.mcpServerAliases) : undefined,
+          toolAllowlist: automation?.toolAllowlist?.slice(),
+        },
+      } : {}),
+    };
+  }
+
   private async approveGatewayInvocation(
     invocation: McpGatewayInvocation,
     context: AgentToolCallContext,
     signal: AbortSignal,
     annotations?: McpGatewayTool["definition"]["annotations"],
     catalogRevision?: string,
+    consentRevision?: string,
   ): Promise<McpGatewayApproval> {
     signal.throwIfAborted();
     const requestId = `mcp-gateway:${randomUUID()}`;
-    const sessionKey = JSON.stringify([context.backend, context.threadId]);
+    const sourceRevision = consentRevision ?? invocation.schemaRevision;
     const sourceKey = JSON.stringify([invocation.connectionId, invocation.serverName, invocation.toolName]);
-    const selectionRevision = (await this.overlayStore.getThreadOverlayState(context))?.mcpSelectionRevision;
+    const monitor = this.taskMonitorForThread(context);
+    if (monitor && (annotations?.readOnlyHint !== true || annotations.destructiveHint === true)) return false;
+    const selectionOwner = monitor?.mcpAccess?.selectionOwner ?? context;
+    const approvalContext = monitor
+      ? { backend: monitor.parentBackend, threadId: monitor.parentThreadId, turnId: monitor.parentTurnId }
+      : context;
+    const sessionKey = JSON.stringify([approvalContext.backend, approvalContext.threadId]);
+    const selectionRevision = (await this.overlayStore.getThreadOverlayState(selectionOwner))?.mcpSelectionRevision;
+    const denialKey = JSON.stringify([sourceKey, invocation.schemaRevision, selectionRevision]);
+    if (monitor?.deniedMcpTools?.has(denialKey)) return false;
     signal.throwIfAborted();
     const approvals = this.mcpGatewaySessionApprovals.get(sessionKey) ?? new Map<string, McpGatewayConversationConsent>();
     let current = approvals.get(sourceKey);
     // Observe revocation before automatic approval as well. Identity changes
     // supersede pending responses, even when a catalog later restores R1.
-    if (!current || current.schemaRevision !== invocation.schemaRevision
+    if (!current || current.schemaRevision !== sourceRevision
       || current.selectionRevision !== selectionRevision) {
-      current = { schemaRevision: invocation.schemaRevision, selectionRevision, approved: false };
+      current = { schemaRevision: sourceRevision, selectionRevision, approved: false };
       approvals.set(sourceKey, current);
       this.mcpGatewaySessionApprovals.set(sessionKey, approvals);
     }
@@ -40294,8 +40398,8 @@ export class DesktopBackendRegistry {
     const notification: AppServerPendingRequestNotification = {
       method: "mcpServer/elicitation/request",
       params: {
-        threadId: context.threadId,
-        turnId: context.turnId,
+        threadId: approvalContext.threadId,
+        turnId: approvalContext.turnId,
         requestId,
         serverName: invocation.serverName,
         mode: "form",
@@ -40304,7 +40408,9 @@ export class DesktopBackendRegistry {
         _meta: {
           pwragent_approval_kind: "mcp_tool_call",
           persist: connectionConsent ? ["session", "server-session"] : ["session"],
-          subtitle: connectionConsent
+          subtitle: monitor
+            ? `Allow this read-only tool or read-only ${invocation.serverName} tools in this conversation. Job Monitor approval never permits mutating calls. Approval ends when PwrAgent restarts, MCP access changes, or the approved tools change.`
+            : connectionConsent
             ? `Allow this tool or all ${invocation.serverName} tools in this conversation, with any arguments. Approval ends when PwrAgent restarts, MCP access changes, or the approved tools change.`
             : "Allow this tool in this conversation, with any arguments. Approval ends when PwrAgent restarts, MCP access changes, or the tool changes.",
           // The same rows Codex sends, so desktop and messaging draw and
@@ -40319,6 +40425,12 @@ export class DesktopBackendRegistry {
     // This is a host-owned invocation approval, not upstream MCP elicitation.
     // Full Access already authorizes it; ordinary forms and URL flows still
     // pass through performServerRequest and remain interactive.
+    const monitorAutomation = monitor?.mcpAccess?.automation;
+    if (monitorAutomation) {
+      return Boolean(monitor?.mcpAccess?.connectionIds.includes(invocation.connectionId)
+        && automationMcpToolAllowed(monitorAutomation.toolAllowlist,
+          [invocation.serverName, invocation.connectionId, ...(monitorAutomation.serverAliases?.[invocation.connectionId] ?? [])], invocation.toolName));
+    }
     const automation = this.findHeadlessAutomationTurnForRequest(context.backend, notification);
     if (automation?.mcpConnectionIds) {
       if (!automation.mcpConnectionIds.includes(invocation.connectionId)
@@ -40361,10 +40473,20 @@ export class DesktopBackendRegistry {
       });
       return true;
     }
-    if (consent.approved || connectionConsent?.approved) return true;
-    const key = buildPendingRequestKey({ ...context, requestId });
+    const readOnlyCall = annotations?.readOnlyHint === true && annotations.destructiveHint !== true;
+    if ((consent.approved && (!consent.readOnlyOnly || readOnlyCall))
+      || (connectionConsent?.approved && (!connectionConsent.readOnlyOnly || readOnlyCall))) return true;
+    const key = buildPendingRequestKey({ ...approvalContext, requestId });
     return await new Promise<McpGatewayApproval>((resolve, reject) => {
+      if (monitor) monitor.pendingMcpApprovalCount = (monitor.pendingMcpApprovalCount ?? 0) + 1;
+      let waiting = true;
       const finish = (approved: McpGatewayApproval, error?: unknown): void => {
+        if (!waiting) return;
+        waiting = false;
+        if (monitor) {
+          monitor.pendingMcpApprovalCount = Math.max(0, (monitor.pendingMcpApprovalCount ?? 0) - 1);
+          monitor.lastActivityAt = Date.now();
+        }
         signal.removeEventListener("abort", aborted);
         this.pendingServerRequests.delete(key);
         if (error) reject(error);
@@ -40372,15 +40494,17 @@ export class DesktopBackendRegistry {
       };
       const aborted = (): void => {
         finish(false, signal.reason);
-        void this.emit({ backend: context.backend, notification: {
-          method: "serverRequest/resolved", params: { threadId: context.threadId, turnId: context.turnId, requestId },
+        void this.emit({ backend: approvalContext.backend, notification: {
+          method: "serverRequest/resolved", params: { threadId: approvalContext.threadId, turnId: approvalContext.turnId, requestId },
         } }).catch(() => undefined);
       };
       this.pendingServerRequests.set(key, {
-        backend: context.backend, notification,
+        backend: approvalContext.backend, notification,
+        ...(monitor ? { owner: { backend: context.backend, threadId: context.threadId, turnId: context.turnId } } : {}),
         resolve: (response) => {
           if (signal.aborted) { aborted(); return; }
           const approved = Boolean(response && "action" in response && response.action === "accept");
+          if (response && "action" in response && response.action === "decline" && monitor) (monitor.deniedMcpTools ??= new Set()).add(denialKey);
           const persist = response && "_meta" in response ? readRecord(response._meta)?.persist : undefined;
           const rememberedConsent = persist === "session" ? consent
             : persist === "server-session" ? connectionConsent : undefined;
@@ -40391,10 +40515,12 @@ export class DesktopBackendRegistry {
               // exact schema/auth revision. Peer-instance edits also revoke it.
               if (signal.aborted || this.closed) return;
               try {
-                const latest = await this.overlayStore.getThreadOverlayState(context);
+                const latest = await this.overlayStore.getThreadOverlayState(selectionOwner);
                 if (!signal.aborted && !this.closed
                   && latest?.mcpSelectionRevision === selectionRevision
                   && this.mcpGatewaySessionApprovals.get(sessionKey)?.get(rememberedKey) === rememberedConsent) {
+                  if (!monitor) rememberedConsent.readOnlyOnly = false;
+                  else if (!rememberedConsent.approved) rememberedConsent.readOnlyOnly = true;
                   rememberedConsent.approved = true;
                 }
               } catch (error) {
@@ -40409,7 +40535,7 @@ export class DesktopBackendRegistry {
       });
       signal.addEventListener("abort", aborted, { once: true });
       if (signal.aborted) { aborted(); return; }
-      void this.emit({ backend: context.backend, notification }).catch((error) => finish(false, error));
+      void this.emit({ backend: approvalContext.backend, notification }).catch((error) => finish(false, error));
     });
   }
 
@@ -43862,6 +43988,11 @@ export class DesktopBackendRegistry {
       );
     }
 
+    const mcpAccess = await this.taskMonitorMcpAccess({ ...context, transport: "codex_dynamic_tool" });
+    if (mcpAccess.connectionIds.length && !this.mcpGatewayTools) {
+      return taskMonitorFailure("create_monitor_delegation", "internal_error",
+        "Selected MCP connections cannot be delegated because the MCP gateway is unavailable. Keep the cloud task in the parent.");
+    }
     const monitorId = `monitor-${randomUUID()}`;
     const pollIntervalSeconds =
       normalizePollIntervalSeconds(args.pollIntervalSeconds) ??
@@ -43900,6 +44031,7 @@ export class DesktopBackendRegistry {
       startupTimeoutSeconds,
     });
     const prompt = buildMonitorDelegationPrompt({
+      mcpConnectionIds: mcpAccess.connectionIds,
       deferredMcpTools: monitorBackend === "claude",
       finalHandoffPrompt: args.finalHandoffPrompt,
       monitorContext: args.monitorContext,
@@ -43945,6 +44077,7 @@ export class DesktopBackendRegistry {
       finalHandoffPrompt: args.finalHandoffPrompt?.trim() || undefined,
       heartbeatIntervalSeconds,
       lastActivityAt: Date.now(),
+      mcpAccess,
       monitorId,
       parentBackend: context.backend,
       parentThreadId,
@@ -44432,6 +44565,13 @@ export class DesktopBackendRegistry {
     return { preferredModel, preferredReasoningEffort, runtimeModel };
   }
 
+  private bindTaskMonitorMcpThread(monitorId: string, threadId: string, executionMode: ThreadExecutionMode): void {
+    const record = this.taskMonitorDelegations.get(monitorId);
+    if (!record) throw new Error("Task monitor delegation no longer exists.");
+    record.monitorThreadId = threadId;
+    record.executionMode = executionMode;
+  }
+
   private async startManagedTaskMonitor(params: {
     rootTurnId?: string;
     causalContext?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
@@ -44483,7 +44623,10 @@ export class DesktopBackendRegistry {
     // its parent runs on. Claude and ACP monitors use PwrAgent's MCP server.
     const dynamicTools =
       params.monitorBackend === "codex"
-        ? buildTaskMonitorDynamicToolSpecs("monitor")
+        ? new AgentToolRouter([
+            ...buildPwrAgentTaskMonitorToolDefinitions(undefined, "monitor"),
+            ...buildMcpGatewayToolDefinitions(this.mcpGatewayTools),
+          ]).buildDynamicToolSpecs()
         : [];
 
     backendRegistryLog.info("starting managed task monitor thread", {
@@ -44514,6 +44657,7 @@ export class DesktopBackendRegistry {
         model: params.runtimeModel ?? params.preferredModel,
         ephemeral: { title: "Task monitor" },
       });
+      this.bindTaskMonitorMcpThread(params.monitorId, thread.threadId, executionMode);
       const turn = await this.startTurnWithoutHandoff({
         backend: "claude",
         threadId: thread.threadId,
@@ -44575,6 +44719,7 @@ export class DesktopBackendRegistry {
         reasoningEffort,
         hidden: true,
       });
+      this.bindTaskMonitorMcpThread(params.monitorId, thread.threadId, executionMode);
       const turn = await this.startAcpTurn({
         backend: params.context.backend,
         threadId: thread.threadId,
@@ -44596,7 +44741,11 @@ export class DesktopBackendRegistry {
     }
 
     const client = this.getClient("codex", executionMode);
+    const inheritedNames = await this.readConfiguredCodexMcpServerNames(cwd);
+    if (inheritedNames === undefined) throw codexMcpIsolationUnavailableError();
+    const config = buildCodexConnectionMcpConfig([], inheritedNames, { isolateFromInherited: true });
     const thread = await client.startThread({
+      config,
       ...(cwd ? { cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
       dynamicTools,
@@ -44613,6 +44762,7 @@ export class DesktopBackendRegistry {
         ? { codexEnvironmentRuntime: sourceOverlay.codexEnvironmentRuntime }
         : {}),
     });
+    this.bindTaskMonitorMcpThread(params.monitorId, thread.threadId, executionMode);
     this.reservedCodexStartThreadIds.add(thread.threadId);
     let turn: { threadId: string; turnId: string };
     try {
@@ -44998,7 +45148,7 @@ export class DesktopBackendRegistry {
       if (record.cancellation) {
         continue;
       }
-      if (record.activeCommandCount > 0) {
+      if (record.activeCommandCount > 0 || (record.pendingMcpApprovalCount ?? 0) > 0) {
         continue;
       }
 
@@ -48867,9 +49017,10 @@ export class DesktopBackendRegistry {
         const withdrawnForgeApprovals: AppServerPendingRequestNotification[] = [];
         for (const [key, pending] of this.pendingServerRequests) {
           const request = pending.notification;
-          if (pending.backend !== event.backend
-            || request.params.threadId !== event.notification.params.threadId
-            || request.params.turnId !== completedTurnId
+          const owner = pending.owner ?? { backend: pending.backend, threadId: request.params.threadId, turnId: request.params.turnId };
+          if (owner.backend !== event.backend
+            || owner.threadId !== event.notification.params.threadId
+            || owner.turnId !== completedTurnId
             || request.method !== "mcpServer/elicitation/request") {
             continue;
           }
@@ -48878,9 +49029,9 @@ export class DesktopBackendRegistry {
           }
           this.pendingServerRequests.delete(key);
           pending.resolve({ action: "cancel", content: null, _meta: null });
-          await this.emit({ backend: event.backend, notification: {
+          await this.emit({ backend: pending.backend, notification: {
             method: "serverRequest/resolved", params: {
-              threadId: request.params.threadId, turnId: completedTurnId,
+              threadId: request.params.threadId, turnId: request.params.turnId,
               requestId: request.params.requestId,
             },
           } });
