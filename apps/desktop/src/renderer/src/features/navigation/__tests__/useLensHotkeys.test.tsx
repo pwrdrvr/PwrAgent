@@ -167,6 +167,40 @@ describe("useLensHotkeys", () => {
     expect(result.current.browseMode).toBe("attention");
   });
 
+  it.each(["input", "composer"])("leaves AltGr number-row characters to the %s", (target) => {
+    (window as PwrWindow).pwragent = { platform: "win32" };
+    const { result, onChange } = setup("directories");
+    const wrapper = document.createElement("div");
+    const field = document.createElement(target === "input" ? "input" : "div");
+    if (target === "composer") {
+      wrapper.className = "composer";
+      field.contentEditable = "true";
+      Object.defineProperty(field, "isContentEditable", { value: true });
+    }
+    const onKeyDown = vi.fn();
+    field.addEventListener("keydown", onKeyDown);
+    wrapper.append(field);
+    document.body.append(wrapper);
+    try {
+      const characters = ["@", "¹", "~", "#", "{", "["];
+      for (const [digit, key] of characters.entries()) {
+        const event = press(digit, {
+          key,
+          metaKey: false,
+          ctrlKey: true,
+          modifierAltGraph: true,
+        }, field);
+        expect(event.getModifierState("AltGraph")).toBe(true);
+        expect(event.defaultPrevented).toBe(false);
+      }
+      expect(onKeyDown).toHaveBeenCalledTimes(characters.length);
+      expect(onChange).not.toHaveBeenCalled();
+      expect(result.current.browseMode).toBe("directories");
+    } finally {
+      wrapper.remove();
+    }
+  });
+
   it("works from the composer without moving focus", () => {
     const { result } = setup("inbox");
     const composer = document.createElement("textarea");

@@ -29,6 +29,7 @@ export function useLensHotkeys(options: {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+      if (event.getModifierState("AltGraph")) return;
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest("[aria-modal='true'], [role='menu'], [role='dialog'], [role='listbox']")) return;
       const inField = isEditableTarget(event);
