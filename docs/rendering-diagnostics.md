@@ -95,10 +95,11 @@ edges, not every React component. `processes[].cpuPercent` is Electron CPU usage
 not GPU usage. Trace counts cannot be converted to machine GPU percentages.
 GPU-process events can serve several windows; only renderer-process events join
 directly to a window. Correlation is a lead, not proof of causality.
-`traceProcessIds` records the instance process IDs admitted when capture starts.
-Chromium also admits the tracing target, browser and GPU processes. A renderer
-created or replaced afterward can appear in snapshots without native events;
-start another capture after the new window has loaded.
+Chromium 152 scopes page tracing to its debugger session tree. Rendering attaches
+application pages as child sessions of its blank target and discovers new pages
+during the capture. Chromium admits those renderers, their process replacements,
+the browser and GPU. Cleanup removes only these child sessions; existing
+DevTools or V8 profiler connections remain owned by their callers.
 
 The native buffer is 8 MiB and stops accepting events when full. Inspect
 `bufferUsage.percentage`, the peak of CDP's buffer reports at 250 ms intervals;

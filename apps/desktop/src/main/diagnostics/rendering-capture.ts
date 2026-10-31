@@ -101,6 +101,8 @@ class RenderingCapture {
   private closed = false;
   private bufferUsage = { percentage: 0, value: 0 };
   private dataLossOccurred: boolean | null = null;
+  private ownTargetId = "";
+  private readonly targets = new Set<string>();
   private completeResolve!: (stream: string | undefined) => void;
   private readonly complete = new Promise<string | undefined>((resolve) => { this.completeResolve = resolve; });
   readonly result: Promise<RenderingCaptureResult>;
@@ -111,6 +113,9 @@ class RenderingCapture {
 
   private readonly message = (_event: unknown, method: string, params: Record<string, unknown>) => {
     if (!this.recording || this.closed) return;
+    if (method === "Target.targetCreated" && !this.endRequested) {
+      void this.attachTarget(params.targetInfo).catch(() => {});
+    }
     if (method === "Tracing.bufferUsage") {
       if (typeof params.percentFull === "number" && Number.isFinite(params.percentFull)) {
         this.bufferUsage.percentage = Math.max(this.bufferUsage.percentage, params.percentFull);
@@ -126,6 +131,18 @@ class RenderingCapture {
     }
   };
   private readonly detached = () => { this.completeResolve(undefined); };
+
+  private async attachTarget(info: unknown): Promise<void> {
+    const target = info as { type?: string; targetId?: string } | undefined;
+    if (target?.type !== "page" || typeof target.targetId !== "string"
+      || target.targetId === this.ownTargetId || this.targets.has(target.targetId)) return;
+    this.targets.add(target.targetId);
+    // Child sessions belong to this root debugger alone. Chromium's process
+    // monitor admits their renderer PIDs, including later process replacements.
+    await this.bounded(this.debuggerApi!.sendCommand("Target.attachToTarget", {
+      targetId: target.targetId, flatten: true,
+    }), performance.now() + TRANSFER_BUDGET_MS);
+  }
 
   private sample(): void {
     if (this.endRequested || this.closed) return;
@@ -185,10 +202,6 @@ class RenderingCapture {
       d.on("detach", this.detached);
       this.startedAt = performance.now();
       this.timer = setTimeout(() => { void this.stop("duration").catch(() => {}); }, seconds * 1000);
-      // Chromium 152 filters page-level CDP traces to that page's process tree.
-      // Seed the filter with the instance's existing processes so a dedicated
-      // blank target still captures the application renderers.
-      const traceProcessIds = app.getAppMetrics().map((metric) => metric.pid);
       // contentTracing.startRecording resolves even when it did not start a
       // recording. CDP rejects conflicts; only this acknowledgement grants ownership.
       await this.bounded(d.sendCommand("Tracing.start", {
@@ -198,10 +211,17 @@ class RenderingCapture {
           recordMode: "recordUntilFull", traceBufferSizeInKb: 8192, enableArgumentFilter: true,
           includedCategories: RENDERING_TRACE_CONFIG.included_categories,
           excludedCategories: RENDERING_TRACE_CONFIG.excluded_categories,
-          includedProcessIds: traceProcessIds,
         },
       }), this.startedAt + TRANSFER_BUDGET_MS);
       this.recording = true;
+      // Chromium 152 filters page-level traces to the root debugger's session
+      // tree. Attach application pages as children after tracing starts so its
+      // process monitor sees each attachment; a blank root alone misses them.
+      const own = await this.bounded(d.sendCommand("Target.getTargetInfo"), this.startedAt + TRANSFER_BUDGET_MS);
+      this.ownTargetId = own.targetInfo.targetId;
+      const targets = await this.bounded(d.sendCommand("Target.getTargets"), this.startedAt + TRANSFER_BUDGET_MS);
+      await this.bounded(Promise.all(targets.targetInfos.map((info: unknown) => this.attachTarget(info))), this.startedAt + TRANSFER_BUDGET_MS);
+      await this.bounded(d.sendCommand("Target.setDiscoverTargets", { discover: true }), this.startedAt + TRANSFER_BUDGET_MS);
       if (this.endRequested) void this.stop(this.reason).catch(() => {});
       else this.sample();
       const stream = await this.bounded(this.complete, this.startedAt + seconds * 1000 + TRANSFER_BUDGET_MS);
@@ -232,7 +252,6 @@ class RenderingCapture {
       await writeFile(summaryPath, JSON.stringify({
         version: 1, reason: this.reason, durationMs, bufferUsage: this.bufferUsage,
         dataLossOccurred: this.dataLossOccurred,
-        traceProcessIds,
         updateEventNames: RENDERER_UPDATE_EVENT_NAMES, trace, samples: this.samples,
       }, null, 2), { mode: 0o600, flag: "wx" });
       saved = true;

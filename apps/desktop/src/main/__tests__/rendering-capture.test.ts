@@ -31,6 +31,8 @@ function message(method: string, params: Record<string, unknown>) {
   electron.listeners.get("message")?.({}, method, params);
 }
 async function commands(method: string) {
+  if (method === "Target.getTargetInfo") return { targetInfo: { targetId: "owned-target" } };
+  if (method === "Target.getTargets") return { targetInfos: [{ type: "page", targetId: "application-target" }] };
   if (method === "Tracing.end") {
     message("Tracing.bufferUsage", { percentFull: 0.2, eventCount: 12, secret: "private-prompt" });
     message("Tracing.tracingComplete", { stream: "owned-stream", dataLossOccurred: false });
