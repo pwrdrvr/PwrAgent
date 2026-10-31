@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ancestry, bindPipeNames, exactLauncherPipes, normalizePipeName, parseHandleOutput, observeWindowsLauncher } from "./windows-pipe-observation.mjs";
+import { ancestry, bindPipeNames, exactLauncherPipes, normalizePipeName, parseHandleOutput, observeWindowsLauncher, packageManagerCommand } from "./windows-pipe-observation.mjs";
 
 const roots = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -14,6 +14,16 @@ const names = [1, 2, 3, 4].map((n) => "\\Device\\NamedPipe\\uv\\" + n + "-123");
 const inventory = () => ({ verified: true, liveAfter: true, pipes: names.map((name) => ({ name })) });
 
 describe("Windows natural pipe evidence", () => {
+  it("launches pnpm native executables directly and JavaScript entries through Node", () => {
+    const args = ["--filter", "@pwragent/desktop", "test:e2e", "--shard=4/4"];
+    const native = path.resolve("pnpm-native.exe");
+    const script = path.resolve("pnpm.cjs");
+    expect(packageManagerCommand(native, args)).toEqual({ file: native, args });
+    expect(packageManagerCommand(script, args)).toEqual({ file: process.execPath, args: [script, ...args] });
+    expect(() => packageManagerCommand(path.resolve("pnpm.cmd"), args)).toThrow();
+    expect(() => packageManagerCommand(undefined, args)).toThrow();
+  });
+
   it("normalizes only the namespace prefix and requires complete exact names", () => {
     expect(normalizePipeName("\\\\?\\pipe\\uv\\1-123")).toBe(names[0]);
     expect(normalizePipeName("\\Device\\NamedPipe\\uv\\1-123")).toBe(names[0]);

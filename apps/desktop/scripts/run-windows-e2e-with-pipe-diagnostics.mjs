@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, watch, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ancestry, bindPipeNames, exactLauncherPipes, parseHandleOutput } from "./windows-pipe-observation.mjs";
+import { ancestry, bindPipeNames, exactLauncherPipes, packageManagerCommand, parseHandleOutput } from "./windows-pipe-observation.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
 const root = path.join(desktop, ".local", "windows-pipe-diagnostics", randomUUID());
@@ -268,8 +268,8 @@ async function closeObserver() {
   }
 }
 async function main() {
-  const pnpm = process.env.npm_execpath;
-  if (!pnpm || !path.isAbsolute(pnpm)) throw new Error("Run this controller through its pnpm package script.");
+  const command = packageManagerCommand(process.env.npm_execpath,
+    ["--filter", "@pwragent/desktop", "test:e2e", ...process.argv.slice(2)]);
   let enabled = false;
   try {
     if (process.platform !== "win32" || process.arch !== "x64") throw new Error("Native diagnostics require Windows x64.");
@@ -282,7 +282,7 @@ async function main() {
   }
   // Same build/test command, shards, worker count, retries and deadlines as CI.
   // All diagnostic children belong to this controller, before launcher pipes exist.
-  const child = spawn(process.execPath, [pnpm, "--filter", "@pwragent/desktop", "test:e2e", ...process.argv.slice(2)], {
+  const child = spawn(command.file, command.args, {
     stdio: "inherit", env: { ...process.env, ...(enabled ? { PWRAGENT_WINDOWS_PIPE_REQUESTS: requests } : {}) },
   });
   let code;

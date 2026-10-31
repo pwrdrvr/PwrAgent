@@ -131,3 +131,12 @@ export function bindPipeNames(before, after, output) {
   }
   return { ...after, pipes: source.pipes, nameQueryErrors: parsed.errors, nameQueryErrorCount: parsed.errorCount, omittedNameQueryErrors: parsed.omittedErrors };
 }
+
+export function packageManagerCommand(pnpm, args) {
+  if (!pnpm || !path.isAbsolute(pnpm) || /\.(?:cmd|bat)$/i.test(pnpm)) {
+    throw new Error("Run this controller through a pnpm JavaScript entry point or native executable.");
+  }
+  return /\.exe$/i.test(pnpm)
+    ? { file: pnpm, args }
+    : { file: process.execPath, args: [pnpm, ...args] };
+}
