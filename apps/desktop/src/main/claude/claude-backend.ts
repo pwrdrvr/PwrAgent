@@ -1479,7 +1479,9 @@ export class ClaudeBackend {
     // Local slash commands can legitimately finish without model output, and
     // a follow-up Claude starts itself has no send to answer.
     const hasResponse = turn.hasCompletedToolActivity || [...turn.entries.values()].some((entry) =>
-      entry.type !== "message" || (entry.role === "assistant" && entry.text.trim()));
+      entry.type === "message"
+        ? entry.role === "assistant" && entry.text.trim()
+        : !entry.id.startsWith("notice:"));
     if (!failure && !turn.followUp && message.subtype === "success" && message.result?.trim() === ""
       && !hasResponse && !turn.titlePrompt?.trimStart().startsWith("/")) {
       failure = "Claude completed without a response or any tool activity. Try sending the message again.";
@@ -2130,7 +2132,7 @@ export class ClaudeBackend {
       const entry: AppServerThreadActivityEntry = {
         type: "activity", id, summary, status: "completed", ...(tone ? { tone } : {}),
         details: [{ id: `${id}:detail`, kind: "read", label, status: "completed" }],
-        createdAt: Date.now(), turn: { id: turn.turnId },
+        createdAt: turn.entries.get(id)?.createdAt ?? Date.now(), turn: { id: turn.turnId },
       };
       turn.entries.set(id, entry);
       await this.store.append(threadId, [entry]);
@@ -2180,7 +2182,8 @@ export class ClaudeBackend {
         if (!text) return;
         // Recovery banners can explain an otherwise silent output-limit retry.
         // They are plain text; feature tags are not a stable control protocol.
-        await record(text, text, message.level === "warning" || message.prevent_continuation ? "warning" : undefined);
+        const noticeId = message.tool_use_id ? `informational:tool:${message.tool_use_id}` : message.uuid;
+        await record(text, text, message.level === "warning" || message.prevent_continuation ? "warning" : undefined, noticeId);
         await warn(text);
         return;
       }

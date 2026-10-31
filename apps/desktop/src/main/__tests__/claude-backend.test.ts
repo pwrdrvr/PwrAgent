@@ -2986,6 +2986,75 @@ describe("Claude transcript fidelity", () => {
     expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
   });
 
+  it.each(["informational", "output-limit", "compaction"])("fails an empty successful result after only a %s notice", async (notice) => {
+    const f = await fixture(async function* () {
+      yield init;
+      if (notice === "informational") {
+        yield { type: "system", subtype: "informational", uuid: "00000000-0000-4000-8000-000000000001",
+          session_id: "session", content: "Retrying the response", level: "notice" } as SDKMessage;
+      } else if (notice === "output-limit") {
+        yield { type: "assistant", parent_tool_use_id: null, message: {
+          id: "limited", stop_reason: "max_tokens", content: [],
+        } } as unknown as SDKMessage;
+      } else {
+        yield { type: "system", subtype: "compact_boundary", uuid: "00000000-0000-4000-8000-000000000002",
+          session_id: "session", compact_metadata: { trigger: "auto", pre_tokens: 100 } } as SDKMessage;
+      }
+      yield { ...result, result: "" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Work" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
+      turn: { error: { message: "Claude completed without a response or any tool activity. Try sending the message again." } },
+    } });
+    expect((await f.store.entries(threadId)).filter((entry) => entry.id.startsWith("notice:"))).toHaveLength(1);
+  });
+
+  it("accepts assistant output after a notice even when the result text is empty", async () => {
+    const f = await fixture(async function* () {
+      yield init;
+      yield { type: "system", subtype: "informational", uuid: "00000000-0000-4000-8000-000000000001",
+        session_id: "session", content: "Retrying the response", level: "notice" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "answer", content: [{ type: "text", text: "Finished" }],
+      } } as SDKMessage;
+      yield { ...result, result: "" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Work" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+  });
+
+  it("retains the latest informational progress per tool use across replay", async () => {
+    const f = await fixture(async function* () {
+      yield init;
+      const notices = [
+        { uuid: "00000000-0000-4000-8000-000000000001", tool_use_id: "tool-1", content: "Preparing" },
+        { uuid: "00000000-0000-4000-8000-000000000002", tool_use_id: "tool-2", content: "Other progress" },
+        { uuid: "00000000-0000-4000-8000-000000000003", tool_use_id: "tool-1", content: "Ready" },
+        { uuid: "00000000-0000-4000-8000-000000000004", content: "Status" },
+        { uuid: "00000000-0000-4000-8000-000000000005", content: "Status" },
+      ] as const;
+      for (const notice of notices) {
+        yield { type: "system", subtype: "informational", session_id: "session", level: "notice", ...notice } as SDKMessage;
+      }
+      yield result;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Work" }] });
+    await f.waitForTurn();
+    const replay = await new ClaudeSessionStore(f.root).entries(threadId);
+    const notices = replay.filter((entry) => entry.type === "activity");
+    expect(notices.map((entry) => ({ id: entry.id, summary: entry.summary }))).toEqual([
+      { id: "notice:informational:tool:tool-1", summary: "Ready" },
+      { id: "notice:informational:tool:tool-2", summary: "Other progress" },
+      { id: "notice:00000000-0000-4000-8000-000000000004", summary: "Status" },
+      { id: "notice:00000000-0000-4000-8000-000000000005", summary: "Status" },
+    ]);
+  });
+
   it.each(["A hook stopped continuation", ""])("ends a stopped turn without waiting for a result (%s)", async (content) => {
     const f = await fixture(async function* () {
       yield init;
