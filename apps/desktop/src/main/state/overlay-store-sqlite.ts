@@ -9569,6 +9569,21 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             || current.parentThreadInstanceId !== expected.instanceId) {
           throw new Error("Thread grouping changed before archive. Refresh the group and try again.");
         }
+        const local = this.readLocalSubthreadChildren(archived).map((child) => `${instanceId}:${child.backend}:${child.threadId}`);
+        const remoteRows = this.stateDb.raw.prepare(`SELECT instance_id, backend, thread_id, payload FROM remote_thread_pins
+          WHERE revoked_at IS NULL AND CASE WHEN json_valid(payload)
+            THEN json_extract(payload, '$.summary.parentThreadId') = ?
+              AND json_extract(payload, '$.summary.parentThreadInstanceId') = ? END`)
+          .all(archived.threadId, instanceId) as { instance_id: string; backend: AppServerBackendKind; thread_id: string; payload: string }[];
+        const remote = remoteRows.filter(({ payload }) => {
+          const summary = (JSON.parse(payload) as { summary: NavigationThreadSummary }).summary;
+          return (summary.parentThreadBackend ?? summary.source) === archived.backend && summary.archivedAt === undefined;
+        }).map((row) => `${row.instance_id}:${row.backend}:${row.thread_id}`);
+        const actual = new Set([...local, ...remote]);
+        if (actual.size !== children.length || children.some(({ ref }) => !actual.has(`${remotePinInstanceId(ref)}:${ref.backend}:${ref.threadId}`))
+          || JSON.stringify(current?.subthreadOrder ?? []) !== JSON.stringify(promotion.expectedChildOrder)) {
+          throw new Error("Thread children changed before archive. Refresh the group and try again.");
+        }
       }
       const localChildren = children.filter(({ ref }) => remotePinInstanceId(ref) === instanceId);
       for (const { ref } of localChildren) {

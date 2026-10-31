@@ -37,6 +37,7 @@ describe("federation backend bridge", () => {
       archived: { backend: "codex" as const, threadId: "middle", instanceId: "viewer" },
       anchor: { backend: "codex" as const, threadId: "middle", instanceId: "viewer" },
       expectedParent: { backend: "codex" as const, threadId: "root", instanceId: "owner" },
+      expectedChildOrder: [],
       parent: { backend: "codex" as const, threadId: "root", instanceId: "owner" }, children: [], dryRun: true,
     } };
     const updateSubthreadOrder = vi.fn(async () => ({ backend: "codex", parentThreadId: "root", threadIds: [] }));

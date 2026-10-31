@@ -251,6 +251,27 @@ describe("Federation nested archive placement", () => {
     expect((await stores.get("middle-owner")!.listRemoteThreadPins()).find((pin) => pin.ref.threadId === "child-b")?.summary?.parentThreadId).toBe("middle");
   });
 
+  it.each(["membership", "order"])("rejects concurrent source %s changes before committing any promotion", async (change) => {
+    const apply = remoteUpdate.getMockImplementation()!;
+    let changed = false;
+    remoteUpdate.mockImplementation(async (owner, request) => {
+      if (!changed && request.archivePromotion?.dryRun) {
+        changed = true;
+        if (change === "membership") {
+          owners.set("late-child", "middle-owner");
+          await link("late-child", "middle");
+        } else await stores.get("middle-owner")!.updateSubthreadOrder({ backend: "codex", parentThreadId: "middle",
+          threadIds: ["child-a", "child-b"] });
+      }
+      return await apply(owner, request);
+    });
+    await expect(runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" }))
+      .rejects.toThrow("children changed before archive");
+    expect((await summary("child-b")).parentThreadId).toBe("middle");
+    expect((await summary("root")).subthreadOrder).toEqual(["before", "middle", "after"]);
+    expect(remoteUpdate.mock.calls.every(([, request]) => request.archivePromotion?.dryRun)).toBe(true);
+  });
+
   it("batches 100 children by owner with no writes on repeat", async () => {
     for (let index = 0; index < 98; index++) {
       const id = `extra-${index}`;

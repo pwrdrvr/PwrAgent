@@ -2729,6 +2729,7 @@ export type ArchiveSubthreadPromotion = {
   /** The direct slot under the surviving ancestor, including older archives. */
   anchor: { backend: AppServerBackendKind; threadId: string; instanceId: string };
   expectedParent: { threadId: string; backend: AppServerBackendKind; instanceId?: string } | null;
+  expectedChildOrder: string[];
   parent: { backend: AppServerBackendKind; threadId: string; instanceId: string } | null;
   parentSummary?: NavigationThreadSummary;
   children: { ref: FederatedThreadRef; summary: NavigationThreadSummary; instanceLabel: string }[];
