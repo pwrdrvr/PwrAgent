@@ -25840,6 +25840,14 @@ export class DesktopBackendRegistry {
     if (state.mcpSelectionRevision !== previousRevision) {
       this.mcpGatewayTools?.cancel(request.backend, request.threadId);
       this.mcpGatewaySessionApprovals.delete(JSON.stringify([request.backend, request.threadId]));
+      for (const monitor of this.taskMonitorDelegations.values()) {
+        if (monitor.monitorThreadId
+          && monitor.mcpAccess?.selectionOwner.backend === request.backend
+          && monitor.mcpAccess.selectionOwner.threadId === request.threadId) {
+          this.mcpGatewayTools?.cancel(monitor.backend, monitor.monitorThreadId);
+          this.mcpGatewaySessionApprovals.delete(JSON.stringify([monitor.backend, monitor.monitorThreadId]));
+        }
+      }
       // A connection the thread turned off keeps its grant until the agent
       // reloads its servers, but a local command started for this thread has
       // no reason to keep running in the meantime. Not awaited: stopping a

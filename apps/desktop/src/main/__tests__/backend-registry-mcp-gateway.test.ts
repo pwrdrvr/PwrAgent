@@ -141,8 +141,9 @@ describe("backend MCP gateway dispatch", () => {
       cwd: directory,
     }));
     expect(response.success).toBe(true);
+    let callIndex = 0;
     return (tool: string, arguments_: Record<string, unknown>) => {
-      const call = request(tool, arguments_, `monitor-${tool}`);
+      const call = request(tool, arguments_, `monitor-${++callIndex}-${tool}`);
       return internals.handleServerRequest("codex", { ...call, params: { ...call.params, threadId: "headless-1" } });
     };
   }
@@ -185,6 +186,17 @@ describe("backend MCP gateway dispatch", () => {
     expect((await call("search_mcp_tools", { query: "lookup" })).success).toBe(true);
     expect((await call("call_mcp_tool", args)).success).toBe(false);
     expect(events).toHaveLength(1);
+    expect(operation.mock.calls.some(([entry]) => entry.operation === "gateway/tools/call")).toBe(false);
+  });
+
+  it("cancels the worker's pending approval when the parent removes its connection", async () => {
+    const call = await createMonitor();
+    const event = approval();
+    const pending = call("call_mcp_tool", args);
+    await event;
+    await registry.setThreadMcpConnections({ backend: "codex", threadId: "thread-1", connectionIds: [] });
+    expect((await pending).success).toBe(false);
+    expect(internals.pendingServerRequests.size).toBe(0);
     expect(operation.mock.calls.some(([entry]) => entry.operation === "gateway/tools/call")).toBe(false);
   });
 
