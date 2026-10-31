@@ -51,6 +51,8 @@ describe("backend MCP gateway dispatch", () => {
     }>;
     handleServerRequest(backend: "codex", request: AppServerPendingRequestNotification): Promise<{ success: boolean; contentItems: unknown[] }>;
     pendingServerRequests: Map<string, unknown>;
+    taskMonitorDelegations: Map<string, { pendingMcpApprovalCount?: number; staleInterruptAttempted?: boolean }>;
+    checkStaleTaskMonitors(now?: number): Promise<void>;
   };
   const args = { connectionId: "one", toolName: "lookup", schemaRevision: "r1", arguments: { id: "fixture" } };
   const request = (tool: string, arguments_: Record<string, unknown>, callId = "call-1"): AppServerPendingRequestNotification => ({
@@ -154,10 +156,11 @@ describe("backend MCP gateway dispatch", () => {
       cwd: directory,
     }));
     expect(response.success).toBe(true);
+    const created = JSON.parse((response.contentItems[0] as { text: string }).text);
     let callIndex = 0;
     return (tool: string, arguments_: Record<string, unknown>) => {
       const call = request(tool, arguments_, `monitor-${++callIndex}-${tool}`);
-      return internals.handleServerRequest("codex", { ...call, params: { ...call.params, threadId: "headless-1" } });
+      return internals.handleServerRequest("codex", { ...call, params: { ...call.params, threadId: created.monitorThreadId, turnId: created.monitorTurnId } });
     };
   }
 
@@ -236,6 +239,10 @@ describe("backend MCP gateway dispatch", () => {
     expect((await call("call_mcp_tool", args)).success).toBe(action === "accept");
     expect(events).toHaveLength(1);
     expect(operation.mock.calls.some(([entry]) => entry.operation === "gateway/tools/call")).toBe(action === "accept");
+    if (action === "decline") {
+      expect((await call("call_mcp_tool", args)).success).toBe(false);
+      expect(events).toHaveLength(1);
+    }
     if (action === "accept") {
       const implementation = operation.getMockImplementation()!;
       operation.mockImplementation(async (params) => {
@@ -248,7 +255,32 @@ describe("backend MCP gateway dispatch", () => {
       });
       expect((await call("call_mcp_tool", args)).success).toBe(false);
       expect(events).toHaveLength(1);
+      internals.activeTurnKeys.add("codex:thread-1:turn-1");
+      expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args, "parent-mutation"))).success).toBe(true);
+      expect(events).toHaveLength(2);
     }
+  });
+
+  it("reuses the parent conversation's remembered tool approval across monitors", async () => {
+    await registry.close();
+    createRegistry({ registerBridge, requestGatewayToolOperation: operation,
+      listConnections: async () => [{ id: "one", toolApproval: "prompt" }],
+    } as unknown as McpConnectionGatewayService);
+    const first = await createMonitor();
+    const events: AgentEvent[] = [];
+    registry.onEvent(async (event) => {
+      if (event.notification.method !== "mcpServer/elicitation/request") return;
+      events.push(event);
+      await registry.submitServerRequest({ backend: "codex", threadId: "thread-1", turnId: "turn-1",
+        requestId: String(event.notification.params.requestId), response: { action: "accept", content: {}, _meta: { persist: "session" } } });
+    });
+    expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args, "parent-approval"))).success).toBe(true);
+    expect((await first("call_mcp_tool", args)).success).toBe(true);
+    startThread.mockResolvedValueOnce({ threadId: "monitor-2" });
+    startTurn.mockResolvedValueOnce({ threadId: "monitor-2", turnId: "turn-2" });
+    const second = await createMonitor();
+    expect((await second("call_mcp_tool", args)).success).toBe(true);
+    expect(events).toHaveLength(1);
   });
 
   it("cancels the worker's pending approval when the parent removes its connection", async () => {
@@ -260,9 +292,15 @@ describe("backend MCP gateway dispatch", () => {
     const event = approval();
     const pending = call("call_mcp_tool", args);
     await event;
+    const monitor = [...internals.taskMonitorDelegations.values()][0];
+    expect(monitor.pendingMcpApprovalCount).toBe(1);
+    await internals.checkStaleTaskMonitors(Date.now() + 60 * 60_000);
+    expect(monitor.staleInterruptAttempted).not.toBe(true);
+    expect(internals.pendingServerRequests.size).toBe(1);
     await registry.setThreadMcpConnections({ backend: "codex", threadId: "thread-1", connectionIds: [] });
     expect((await pending).success).toBe(false);
     expect(internals.pendingServerRequests.size).toBe(0);
+    expect(monitor.pendingMcpApprovalCount).toBe(0);
     expect(operation.mock.calls.some(([entry]) => entry.operation === "gateway/tools/call")).toBe(false);
   });
 

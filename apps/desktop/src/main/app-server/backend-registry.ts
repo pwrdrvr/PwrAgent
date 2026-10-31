@@ -3256,6 +3256,8 @@ type TaskMonitorDelegationRecord = {
   latestUsage?: TaskMonitorUsageSnapshot;
   monitorId: string;
   mcpAccess?: TaskMonitorMcpAccess;
+  pendingMcpApprovalCount?: number;
+  deniedMcpTools?: Set<string>;
   monitorThreadId?: string;
   monitorTurnId?: string;
   parentBackend: AppServerBackendKind;
@@ -6470,6 +6472,7 @@ type StartupProviderThreadRefresh = Readonly<{
 }>;
 
 type McpGatewayConversationConsent = {
+  readOnlyOnly?: boolean;
   schemaRevision: string;
   selectionRevision?: string;
   approved: boolean;
@@ -40327,7 +40330,6 @@ export class DesktopBackendRegistry {
   ): Promise<McpGatewayApproval> {
     signal.throwIfAborted();
     const requestId = `mcp-gateway:${randomUUID()}`;
-    const sessionKey = JSON.stringify([context.backend, context.threadId]);
     const sourceKey = JSON.stringify([invocation.connectionId, invocation.serverName, invocation.toolName]);
     const monitor = this.taskMonitorForThread(context);
     if (monitor && (annotations?.readOnlyHint !== true || annotations.destructiveHint === true)) return false;
@@ -40335,7 +40337,10 @@ export class DesktopBackendRegistry {
     const approvalContext = monitor
       ? { backend: monitor.parentBackend, threadId: monitor.parentThreadId, turnId: monitor.parentTurnId }
       : context;
+    const sessionKey = JSON.stringify([approvalContext.backend, approvalContext.threadId]);
     const selectionRevision = (await this.overlayStore.getThreadOverlayState(selectionOwner))?.mcpSelectionRevision;
+    const denialKey = JSON.stringify([sourceKey, invocation.schemaRevision, selectionRevision]);
+    if (monitor?.deniedMcpTools?.has(denialKey)) return false;
     signal.throwIfAborted();
     const approvals = this.mcpGatewaySessionApprovals.get(sessionKey) ?? new Map<string, McpGatewayConversationConsent>();
     let current = approvals.get(sourceKey);
@@ -40371,7 +40376,9 @@ export class DesktopBackendRegistry {
         _meta: {
           pwragent_approval_kind: "mcp_tool_call",
           persist: connectionConsent ? ["session", "server-session"] : ["session"],
-          subtitle: connectionConsent
+          subtitle: monitor
+            ? `Allow this read-only tool or read-only ${invocation.serverName} tools in this conversation. Job Monitor approval never permits mutating calls. Approval ends when PwrAgent restarts, MCP access changes, or the approved tools change.`
+            : connectionConsent
             ? `Allow this tool or all ${invocation.serverName} tools in this conversation, with any arguments. Approval ends when PwrAgent restarts, MCP access changes, or the approved tools change.`
             : "Allow this tool in this conversation, with any arguments. Approval ends when PwrAgent restarts, MCP access changes, or the tool changes.",
           // The same rows Codex sends, so desktop and messaging draw and
@@ -40434,10 +40441,20 @@ export class DesktopBackendRegistry {
       });
       return true;
     }
-    if (consent.approved || connectionConsent?.approved) return true;
+    const readOnlyCall = annotations?.readOnlyHint === true && annotations.destructiveHint !== true;
+    if ((consent.approved && (!consent.readOnlyOnly || readOnlyCall))
+      || (connectionConsent?.approved && (!connectionConsent.readOnlyOnly || readOnlyCall))) return true;
     const key = buildPendingRequestKey({ ...approvalContext, requestId });
     return await new Promise<McpGatewayApproval>((resolve, reject) => {
+      if (monitor) monitor.pendingMcpApprovalCount = (monitor.pendingMcpApprovalCount ?? 0) + 1;
+      let waiting = true;
       const finish = (approved: McpGatewayApproval, error?: unknown): void => {
+        if (!waiting) return;
+        waiting = false;
+        if (monitor) {
+          monitor.pendingMcpApprovalCount = Math.max(0, (monitor.pendingMcpApprovalCount ?? 0) - 1);
+          monitor.lastActivityAt = Date.now();
+        }
         signal.removeEventListener("abort", aborted);
         this.pendingServerRequests.delete(key);
         if (error) reject(error);
@@ -40454,6 +40471,7 @@ export class DesktopBackendRegistry {
         resolve: (response) => {
           if (signal.aborted) { aborted(); return; }
           const approved = Boolean(response && "action" in response && response.action === "accept");
+          if (!approved && monitor) (monitor.deniedMcpTools ??= new Set()).add(denialKey);
           const persist = response && "_meta" in response ? readRecord(response._meta)?.persist : undefined;
           const rememberedConsent = persist === "session" ? consent
             : persist === "server-session" ? connectionConsent : undefined;
@@ -40468,6 +40486,8 @@ export class DesktopBackendRegistry {
                 if (!signal.aborted && !this.closed
                   && latest?.mcpSelectionRevision === selectionRevision
                   && this.mcpGatewaySessionApprovals.get(sessionKey)?.get(rememberedKey) === rememberedConsent) {
+                  if (!monitor) rememberedConsent.readOnlyOnly = false;
+                  else if (!rememberedConsent.approved) rememberedConsent.readOnlyOnly = true;
                   rememberedConsent.approved = true;
                 }
               } catch (error) {
@@ -45095,7 +45115,7 @@ export class DesktopBackendRegistry {
       if (record.cancellation) {
         continue;
       }
-      if (record.activeCommandCount > 0) {
+      if (record.activeCommandCount > 0 || (record.pendingMcpApprovalCount ?? 0) > 0) {
         continue;
       }
 
