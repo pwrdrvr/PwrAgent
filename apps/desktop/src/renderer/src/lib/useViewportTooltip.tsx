@@ -17,6 +17,7 @@ import {
   isNativeDragInteractionActive,
   subscribeNativeDragInteraction,
 } from "./native-drag-interaction";
+import { observeTooltipAnchor } from "./observe-tooltip-anchor";
 
 const VIEWPORT_PADDING = 12;
 /** Gap between the tooltip and its placement anchor. */
@@ -422,6 +423,7 @@ export function useViewportTooltip(options: {
   const hoverDelayTimerRef = useRef<number | null>(null);
   /** True while the anchor is animating and its settled baseline is pending. */
   const anchorSettlingRef = useRef(false);
+  const anchorGenerationRef = useRef(0);
   // Read from the settle callback below, which re-measures the bounds after the
   // motion stops. A ref rather than a dependency: consumers pass an inline
   // arrow, and threading that identity through `rememberTarget` would rebuild
@@ -456,6 +458,7 @@ export function useViewportTooltip(options: {
     recordRendererUpdate(RendererUpdateEvent.tooltipHide, tooltipId);
     clearHoverDelay();
     setDelayPending(false);
+    anchorGenerationRef.current += 1;
     targetRef.current = null;
     targetRectRef.current = null;
     anchorSettlingRef.current = false;
@@ -479,7 +482,7 @@ export function useViewportTooltip(options: {
    * portal down.
    */
   const scheduleAnchorSettle = useCallback(
-    function schedule(target: HTMLElement): void {
+    function schedule(target: HTMLElement, generation = anchorGenerationRef.current): void {
       const animations = animationsMovingAnchor(target);
       anchorSettlingRef.current = animations.length > 0;
       if (!anchorSettlingRef.current) {
@@ -488,14 +491,15 @@ export function useViewportTooltip(options: {
       void Promise.allSettled(
         animations.map((animation) => animation.finished),
       ).then(() => {
-        if (targetRef.current !== target || !target.isConnected) {
+        if (anchorGenerationRef.current !== generation
+          || targetRef.current !== target || !target.isConnected) {
           return;
         }
         // Motion that started while this was waiting leaves the anchor just as
         // unsettled: re-arm on the new set rather than re-anchoring the tooltip
         // to another rectangle it is about to leave.
         if (animationsMovingAnchor(target).length > 0) {
-          schedule(target);
+          schedule(target, generation);
           return;
         }
         anchorSettlingRef.current = false;
@@ -526,6 +530,7 @@ export function useViewportTooltip(options: {
       anchorSettlingRef.current = false;
       return undefined;
     }
+    anchorGenerationRef.current += 1;
     const rect = target.getBoundingClientRect();
     targetRef.current = target;
     targetRectRef.current = toTargetRect(rect);
@@ -694,6 +699,7 @@ export function useViewportTooltip(options: {
   }, []);
 
   useEffect(() => () => {
+    anchorGenerationRef.current += 1;
     if (pointerFrameRef.current !== null) {
       window.cancelAnimationFrame(pointerFrameRef.current);
     }
@@ -727,21 +733,14 @@ export function useViewportTooltip(options: {
 
   useEffect(() => clearHoverDelay, [clearHoverDelay]);
 
-  // A portal outlives its anchor unless the hook explicitly notices that the
-  // anchor changed. React does not fire `mouseleave` when a refresh removes or
-  // replaces the hovered element, and moving a keyed row can leave the same
-  // DOM element connected at a new position. Watch the document only while a
-  // tooltip is armed or visible, and dismiss when its anchor disappears, is
-  // replaced, or is laid out somewhere new. Motion under a running animation
-  // is none of those (see `readAnchorState`), and attribute and content updates
-  // alone are not replacement: live cards update both their trigger state and
-  // tooltip content while they remain open.
-  // Unrelated mutations are intentionally ignored when the anchor stays put;
-  // transcript streaming must not close a sidebar tooltip.
+  // Removal is checked on the owned ancestor path. Layout movement arrives
+  // from native observers or one coalesced frame, never a document-wide
+  // mutation microtask. Live sibling streaming cannot force anchor layout.
   const visible = state !== undefined;
   const active = delayPending || visible;
+  const observedTarget = targetRef.current;
   useEffect(() => {
-    if (!active) {
+    if (!active || !observedTarget || !targetRectRef.current) {
       return;
     }
     const unsubscribeNativeDrag = subscribeNativeDragInteraction((active) => {
@@ -762,13 +761,13 @@ export function useViewportTooltip(options: {
     // The re-baseline is a write the call site has to make on purpose, because
     // a check that quietly moves the goalposts is the kind a second caller
     // would get wrong.
-    const readAnchorState = (): AnchorState => {
+    const readAnchorState = (observedRect?: DOMRectReadOnly): AnchorState => {
       const target = targetRef.current;
       const rememberedRect = targetRectRef.current;
       if (!target || !rememberedRect || !target.isConnected) {
         return { status: "gone" };
       }
-      const currentRect = target.getBoundingClientRect();
+      const currentRect = observedRect ?? target.getBoundingClientRect();
       if (
         currentRect.top === rememberedRect.top
         && currentRect.right === rememberedRect.right
@@ -793,26 +792,22 @@ export function useViewportTooltip(options: {
       }
       return { status: "settling", rect: toTargetRect(currentRect) };
     };
-    const mutationObserver = new MutationObserver(() => {
-      const anchor = readAnchorState();
-      if (anchor.status === "gone" || anchor.status === "relocated") {
-        hide();
-        return;
-      }
-      if (anchor.status === "settling") {
-        // Only a ref write: repositioning here would mutate the portal's own
-        // style attribute, and this observer watches document.body, so a moving
-        // anchor would feed itself renders. `scheduleAnchorSettle` owns the one
-        // reposition, when the motion stops.
-        targetRectRef.current = anchor.rect;
-      }
-    });
-    mutationObserver.observe(document.body, {
-      attributes: true,
-      characterData: true,
-      childList: true,
-      subtree: true,
-    });
+    const stopObserving = observeTooltipAnchor(
+      observedTarget,
+      targetRectRef.current,
+      () => tooltipRef.current,
+      (rect) => {
+        if (targetRef.current !== observedTarget) return;
+        const anchor = readAnchorState(rect);
+        if (anchor.status === "gone" || anchor.status === "relocated") {
+          hide();
+        } else if (anchor.status === "settling") {
+          // A newly started animation also needs an owned completion callback.
+          if (!anchorSettlingRef.current) scheduleAnchorSettle(observedTarget);
+          targetRectRef.current = anchor.rect;
+        }
+      },
+    );
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === "Escape") {
         hide();
@@ -825,14 +820,14 @@ export function useViewportTooltip(options: {
     document.addEventListener("pointerdown", hide, { capture: true });
     return () => {
       unsubscribeNativeDrag();
-      mutationObserver.disconnect();
+      stopObserving();
       window.removeEventListener("blur", hide);
       window.removeEventListener("resize", hide);
       window.removeEventListener("scroll", onScroll, { capture: true });
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", hide, { capture: true });
     };
-  }, [active, hide]);
+  }, [active, hide, observedTarget, scheduleAnchorSettle, state?.targetTop, state?.targetBottom, state?.targetCenter]);
 
   const tooltipNode =
     state && typeof document !== "undefined"

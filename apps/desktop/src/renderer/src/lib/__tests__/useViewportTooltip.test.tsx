@@ -1065,6 +1065,33 @@ describe("tooltip observation budgets", () => {
     expect(geometry).toHaveBeenCalledTimes(1);
   });
 
+  it("invalidates animation completion when the same anchor is reopened", async () => {
+    mockAnchorRectangleFromLayout();
+    const animation = stubAncestorAnimation();
+    render(<AnchorLifecycleFixture />);
+    const anchor = screen.getByRole("button");
+    fireEvent.mouseEnter(anchor);
+    fireEvent.mouseLeave(anchor);
+    fireEvent.mouseEnter(anchor);
+    await deliverMutations();
+    const geometry = vi.spyOn(anchor, "getBoundingClientRect");
+    await act(async () => { animation.finish(); await Promise.resolve(); });
+    expect(geometry).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Branch details");
+  });
+
+  it("ignores animation completion after unmount", async () => {
+    mockAnchorRectangleFromLayout();
+    const animation = stubAncestorAnimation();
+    const { unmount } = render(<AnchorLifecycleFixture />);
+    const anchor = screen.getByRole("button");
+    fireEvent.mouseEnter(anchor);
+    const geometry = vi.spyOn(anchor, "getBoundingClientRect");
+    unmount();
+    await act(async () => { animation.finish(); await Promise.resolve(); });
+    expect(geometry).toHaveBeenCalledTimes(0);
+  });
+
   it("never observes the body subtree for attributes, text or child mutations", async () => {
     const observe = vi.spyOn(MutationObserver.prototype, "observe");
     render(<AnchorLifecycleFixture />);
