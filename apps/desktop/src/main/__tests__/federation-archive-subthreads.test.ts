@@ -174,7 +174,14 @@ describe("Federation nested archive placement", () => {
       .toEqual(["before", "child-b", "local-survivor", "ancestor-owned-survivor", "child-a", "after"]);
   });
 
-  it("retries a transport failure after one owner commits without detaching children", async () => {
+  it.each([false, true])("retries a transport failure after one owner commits (viewer refreshed: %s)", async (refresh) => {
+    if (refresh) {
+      creationTimes.set("child-b", 20);
+      creationTimes.set("child-a", 10);
+      await mount("middle-owner", "child-b");
+      await mount("middle-owner", "child-a");
+      await stores.get("middle-owner")!.updateSubthreadOrder({ backend: "codex", parentThreadId: "middle", threadIds: [] });
+    }
     const apply = remoteUpdate.getMockImplementation()!;
     let fail = true;
     remoteUpdate.mockImplementation(async (owner: string, request: UpdateSubthreadOrderRequest) => {
@@ -182,7 +189,14 @@ describe("Federation nested archive placement", () => {
         fail = false;
         throw new Error("transport interrupted");
       }
-      return await apply(owner, request);
+      const result = await apply(owner, request);
+      if (refresh && owner === "child-owner" && !request.archivePromotion?.dryRun) {
+        await stores.get("middle-owner")!.updateRemoteThreadPinSnapshots([{
+          ref: buildFederatedThreadRef({ backend: "codex", threadId: "child-b", instanceId: owner }),
+          summary: await summary("child-b"), instanceLabel: owner,
+        }]);
+      }
+      return result;
     });
     await expect(runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" })).rejects.toThrow("transport interrupted");
     expect((await summary("middle")).archivedAt).toBeUndefined();
@@ -191,6 +205,8 @@ describe("Federation nested archive placement", () => {
     await runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" });
     await stores.get("middle-owner")!.observeArchivedThreads([{ backend: "codex", threadId: "middle" }], 1000, { promoteSubthreads: true });
     expect(await tray()).toEqual(["before", "child-b", "deeper", "child-a", "after"]);
+    const rootPins = await stores.get("root-owner")!.listRemoteThreadPins();
+    for (const id of ["child-b", "child-a"]) expect(rootPins.some((pin) => pin.ref.threadId === id)).toBe(true);
   });
 
   it("accepts owner events refreshing viewer membership before the final local commit", async () => {

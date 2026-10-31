@@ -9541,6 +9541,22 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
 
   /** One commit per participating owner, including cached membership and ranks.
    * Never create a threads overlay for a row owned by another instance. */
+  prepareArchiveSubthreadPromotion(promotion: ArchiveSubthreadPromotion, instanceId: string): void {
+    this.stateDb.raw.transaction(() => {
+      this.applyArchiveSubthreadPromotion({ ...promotion, dryRun: true }, instanceId);
+      const { backend, threadId } = promotion.archived;
+      const key = buildThreadIdentityKey(backend, threadId);
+      const current = this.getThread(key) ?? { backend, threadId, executionMode: "default" as const, extraLinkedDirectories: [] };
+      const order = promotion.children.map(({ ref }) => ref.threadId);
+      // Materialize legacy ranks once before the first peer commit. They are
+      // also the recovery slots when an owner event races a transport failure.
+      if (JSON.stringify(current.subthreadOrder ?? []) !== JSON.stringify(order)) {
+        this.putThread(key, { ...current, subthreadOrder: order });
+      }
+      promotion.expectedChildOrder = order;
+    })();
+  }
+
   applyArchiveSubthreadPromotion(promotion: ArchiveSubthreadPromotion, instanceId: string): string[] {
     const { archived, anchor, parent, children } = promotion;
     const parentKey = parent && buildThreadIdentityKey(parent.backend, parent.threadId);
