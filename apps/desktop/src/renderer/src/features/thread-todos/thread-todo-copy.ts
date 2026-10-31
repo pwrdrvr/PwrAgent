@@ -34,7 +34,7 @@ export function threadTodoMarkdown(
     sections.push(reviewItems.map(reviewItemMarkdown).join("\n"));
   }
   const action = todo.action;
-  if (action?.type === "start_thread" && action.prompt.trim()) {
+  if ((action?.type === "start_thread" || action?.type === "send_message") && action.prompt.trim()) {
     const quoted = action.prompt.trim().split(/\r?\n/).map((line) => line ? `> ${line}` : ">").join("\n");
     sections.push(`### Prompt\n\n${quoted}`);
   }

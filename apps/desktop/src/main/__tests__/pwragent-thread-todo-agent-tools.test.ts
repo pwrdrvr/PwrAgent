@@ -54,6 +54,13 @@ function createHandler(): PwrAgentThreadTodoHandler {
 }
 
 describe("normalizePullRequestReference", () => {
+  it("accepts an existing thread request and rejects invalid destinations", () => {
+    const action = { type: "send_message", prompt: "Refresh #42", target: { backend: "codex", threadId: "owner", title: "PR owner" } };
+    expect(normalizeAddTodoArgs({ title: "Refresh the PR", action })).toMatchObject({ ok: true, value: { action } });
+    for (const target of [null, {}, { backend: "unknown", threadId: "owner" }, { backend: "codex", threadId: " " }]) {
+      expect(normalizeAddTodoArgs({ title: "Refresh", action: { ...action, target } }).ok).toBe(false);
+    }
+  });
   it.each([
     [42, "42"],
     ["42", "42"],

@@ -492,7 +492,7 @@ function TodoRow(props: {
   const route = describeRoute(todo, props.scope, props.projectKey);
   // A handoff counts only its prerequisites, and once it has started there
   // is nothing left to tick.
-  const progress = todo.status !== "open" && todo.action?.type === "start_thread"
+  const progress = todo.status !== "open" && (todo.action?.type === "start_thread" || todo.action?.type === "send_message")
     ? undefined
     : threadTodoItemProgress(todo);
   // Grouped by project, the thread is not in the heading: say it here.

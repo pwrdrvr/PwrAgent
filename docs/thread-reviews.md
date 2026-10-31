@@ -33,7 +33,13 @@ done:
 A deferral must name a to-do card that the same thread raised; the tool
 refuses any other id. That keeps the work on the operator's list after the
 finding leaves it. The repository's "Deferred work" rule in `AGENTS.md` gives
-such a card a `start_thread` action whose prompt stands alone.
+such a card a `send_message` action when an existing thread owns the work,
+or a `start_thread` action for new work. Both carry a prompt that stands
+alone. A message proposal names `target: { backend, threadId }`, plus
+`instanceId` for a remote owner and a `title` for the destination preview.
+The operator can change the destination and inspect the prompt before
+clicking **Send request**. Existing start-thread cards also offer
+**Send to thread…** in their action menu; selecting a destination never sends.
 
 `update_review_item` also accepts other names. `dismissed` is the older name
 for declined. Claude Code's code review reports `fixed`, `no_change_needed`,
