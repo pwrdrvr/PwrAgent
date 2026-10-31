@@ -3531,19 +3531,14 @@ export class DesktopFederationRuntime {
       && pin.summary.parentThreadInstanceId === localInstanceId
       && isRemoteFederationTarget(pin.ref.target) && pin.summary.archivedAt === undefined);
     // The local SQLite boundary already handles an entirely local branch.
-    if (!archived?.parentThreadInstanceId && remoteChildren.length === 0) return;
+    const savedRemoteChildren = pins.filter((pin) => archived?.subthreadOrder?.includes(pin.ref.threadId));
+    if (!archived?.parentThreadInstanceId && remoteChildren.length === 0 && savedRemoteChildren.length === 0) return;
     const localChildren = store.readArchiveSubthreadChildren({ backend: params.backend, threadId: params.parentThreadId });
     const children = [
       ...localChildren.map((summary) => ({ ref: buildFederatedThreadRef({ backend: summary.source,
         threadId: summary.id, instanceId: localInstanceId }), summary, instanceLabel: localInstanceId })),
       ...remoteChildren.map((pin) => ({ ref: pin.ref, summary: pin.summary!, instanceLabel: pin.instanceLabel })),
     ];
-    if (!children.length) return;
-    const ordered = sortSubthreadSummaries(archived ?? {}, children.map((entry) => ({ ...entry,
-      id: entry.ref.threadId, createdAt: entry.summary.createdAt })));
-    if (new Set(children.map(({ ref }) => ref.threadId)).size !== children.length) {
-      throw new Error("Ambiguous child identities. Refresh the group before archiving.");
-    }
     let cursor = archived;
     let cursorOwner = localInstanceId;
     let anchor = { backend: params.backend, threadId: params.parentThreadId, instanceId: localInstanceId };
@@ -3571,6 +3566,23 @@ export class DesktopFederationRuntime {
       cursorOwner = owner;
       cursor = local ?? { ...cached!, backend, threadId, executionMode: "default", extraLinkedDirectories: [] };
     }
+    // A child owner can publish its new parent before a later participant
+    // disconnects. Saved direct-child slots retain that successful part of a
+    // prior attempt even after this viewer has refreshed its cached summary.
+    for (const pin of savedRemoteChildren) {
+      if (!parent || !pin.summary || !isRemoteFederationTarget(pin.ref.target)
+        || pin.summary.archivedAt !== undefined || pin.summary.parentThreadId !== parent.threadId
+        || (pin.summary.parentThreadBackend ?? pin.summary.source) !== parent.backend
+        || pin.summary.parentThreadInstanceId !== (pin.ref.target.instanceId === parent.instanceId ? undefined : parent.instanceId)
+        || children.some(({ ref }) => federatedThreadIdentityKey(ref) === federatedThreadIdentityKey(pin.ref))) continue;
+      children.push({ ref: pin.ref, summary: pin.summary, instanceLabel: pin.instanceLabel });
+    }
+    if (!children.length) return;
+    if (new Set(children.map(({ ref }) => ref.threadId)).size !== children.length) {
+      throw new Error("Ambiguous child identities. Refresh the group before archiving.");
+    }
+    const ordered = sortSubthreadSummaries(archived ?? {}, children.map((entry) => ({ ...entry,
+      id: entry.ref.threadId, createdAt: entry.summary.createdAt })));
     const promotion: ArchiveSubthreadPromotion = {
       archived: { backend: params.backend, threadId: params.parentThreadId, instanceId: localInstanceId },
       anchor, expectedParent: archived?.parentThreadId ? { threadId: archived.parentThreadId,
@@ -3603,6 +3615,7 @@ export class DesktopFederationRuntime {
       return response.threadIds ?? [];
     };
     for (const instanceId of participants) await apply(instanceId, true);
+    store.prepareArchiveSubthreadPromotion(promotion, localInstanceId);
     // Commit the ancestor's slot replacement after every child owner accepts
     // the guarded relationship change; then refresh this viewer's cache.
     const commitOrder = [...participants].filter((id) => id !== localInstanceId && id !== parent?.instanceId);
