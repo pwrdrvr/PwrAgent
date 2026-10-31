@@ -7,6 +7,7 @@ import { ForgeReadError, repositoryKey, validateForgeReadArgs, type ForgeReadReq
 import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation, type ForgeReviewComment } from "../pr-status/forge-pr-tool-contract";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
+import { probeCurrentGitBranch } from "./git-head-branch";
 import {
   indexTokenMiserCachedReplays,
   indexTokenMiserPricingLines,
@@ -1883,6 +1884,9 @@ function resolveBranchDriftExpectedBranch(params: {
 }
 
 async function readCurrentGitBranch(sourcePath: string, signal?: AbortSignal): Promise<string | undefined> {
+  const head = await probeCurrentGitBranch(sourcePath, signal);
+  signal?.throwIfAborted();
+  if (head) return head.branch;
   // Git for Windows can hand off to a descendant that still holds the
   // workspace open. Wait for the owned tree before allowing its removal.
   const result = await runGitCommand(sourcePath, ["rev-parse", "--abbrev-ref", "HEAD"], {
