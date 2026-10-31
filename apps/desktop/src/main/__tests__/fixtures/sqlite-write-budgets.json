@@ -79,6 +79,9 @@
     "rowsChanged": 100,
     "statements": 100
   },
+  "archive-retention-restore": {"commits": 1, "note": "One restore boundary clears archive markers and records the restore watermark in one commit (~0.012 MB); 10 restores/day cost ~0.12 MB/day. No recurring writes.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "archive-subthread-promotion": {"commits": 1, "note": "One archive boundary promotes 100 children in one commit (~0.033 MB); 10 such archives/day cost ~0.33 MB/day. No per-child commits or idle writes (0 MB/day).", "observedWalBytes": 32960, "rowsChanged": 103, "statements": 103},
+  "archive-subthread-promotion-repeat": {"commits": 0, "note": "Repeated archive notification or resumed cleanup after promotion: zero commits, 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "archived-worktree-repair-once-marker": {
     "commits": 2,
     "note": "One claim and one completion for a 501-thread pass plus a completed-startup no-op: 2 commits total, no per-item or timer writes; about 0.02 MB once and 0 MB/day afterward.",
