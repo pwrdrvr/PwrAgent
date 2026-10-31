@@ -924,6 +924,7 @@ const SCHEDULED_SEND_OPTIONS = [
   { label: "Send in 30m", delayMs: 30 * 60_000 },
   { label: "Send in 1h", delayMs: 60 * 60_000 },
   { label: "Send in 2h", delayMs: 2 * 60 * 60_000 },
+  { label: "Send in 5h", delayMs: 5 * 60 * 60_000 },
 ] as const;
 
 type ScheduledSendMenuOption = {
