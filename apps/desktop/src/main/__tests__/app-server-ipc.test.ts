@@ -3000,6 +3000,12 @@ describe("app server ipc", () => {
     // Forge status is shared, but explicit attachment permission is thread-owned.
     // Refreshing must neither drop it nor give it to an automatic sibling.
     service.rememberPrStatuses([automatic], Date.now(), "test-forge-refresh");
+    expect(await appServerService.canonicalizeStoredPullRequests([attached])).toEqual([
+      expect.objectContaining({ explicitlyAttached: true }),
+    ]);
+    expect(await appServerService.canonicalizeStoredPullRequests([automatic])).toEqual([
+      expect.not.objectContaining({ explicitlyAttached: true }),
+    ]);
     expect(service.collectPrPollTargets()).toEqual([
       expect.objectContaining({ prKey: buildPullRequestStatusKey(attached), threadKeys: ["codex:thread-1"] }),
     ]);
