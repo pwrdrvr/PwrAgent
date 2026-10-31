@@ -327,7 +327,7 @@
     "rowsChanged": 0,
     "statements": 0
   },
-  "federation-archive-subthread-promotion": {"commits": 5, "note": "100 direct children across four owners, one promotion boundary (~0.243 MB WAL); 10 such archives/day cost ~2.43 MB/day. Commits scale with owners, not children; idle cost 0 MB/day.", "observedWalBytes": 243080, "rowsChanged": 305, "statements": 305},
+  "federation-archive-subthread-promotion": {"commits": 6, "note": "100 direct children (98 unranked) across four owners: 6 boundary commits including recovery slots and viewer cache (~0.255 MB WAL); 10 such archives/day cost ~2.55 MB/day. No per-child commits; idle cost 0 MB/day.", "observedWalBytes": 255440, "rowsChanged": 306, "statements": 306},
   "federation-archive-subthread-promotion-repeat": {"commits": 0, "note": "Repeated completed archive promotion: zero commits, 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "federation-owner-project-pages": {
     "commits": 0,

@@ -9539,8 +9539,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       }));
   }
 
-  /** One commit per participating owner, including cached membership and ranks.
-   * Never create a threads overlay for a row owned by another instance. */
+  /** Preserve direct-child slots before any peer can publish new membership. */
   prepareArchiveSubthreadPromotion(promotion: ArchiveSubthreadPromotion, instanceId: string): void {
     this.stateDb.raw.transaction(() => {
       this.applyArchiveSubthreadPromotion({ ...promotion, dryRun: true }, instanceId);
@@ -9557,6 +9556,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     })();
   }
 
+  /** One commit per participating owner, including cached membership and ranks.
+   * Never create a threads overlay for a row owned by another instance. */
   applyArchiveSubthreadPromotion(promotion: ArchiveSubthreadPromotion, instanceId: string): string[] {
     const { archived, anchor, parent, children } = promotion;
     const parentKey = parent && buildThreadIdentityKey(parent.backend, parent.threadId);
