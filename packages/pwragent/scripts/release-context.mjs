@@ -15,6 +15,7 @@ export function releaseSource(context, ancestors) {
     "npm provenance must identify release.yml at the exact desktop tag");
   if (context.tag !== undefined && context.tag !== "") assert.equal(context.tag, tag, "Dispatch input must match its tag ref");
   assert.match(context.sha, /^[0-9a-f]{40}$/);
+  assert.equal(context.workflowSha, context.sha, "Release workflow source must match the tagged application source SHA");
   assert.equal(context.head, context.sha, "Checkout must match the event's source SHA");
   assert.equal(context.tagCommit, context.sha, "Desktop tag moved or does not match the source SHA");
   const train = context.version.split(".").slice(0, 2).join(".");
@@ -39,7 +40,8 @@ export function currentReleaseSource() {
   });
   return releaseSource({ repository: env.GITHUB_REPOSITORY, eventName: env.GITHUB_EVENT_NAME,
     ref: env.GITHUB_REF, refProtected: env.GITHUB_REF_PROTECTED, workflowRef: env.GITHUB_WORKFLOW_REF,
-    sha: env.GITHUB_SHA, head: git("rev-parse", "HEAD"), tagCommit: git("rev-parse", `refs/tags/v${pkg.version}^{commit}`),
+    sha: env.GITHUB_SHA, workflowSha: env.GITHUB_WORKFLOW_SHA,
+    head: git("rev-parse", "HEAD"), tagCommit: git("rev-parse", `refs/tags/v${pkg.version}^{commit}`),
     tag: env.RELEASE_TAG, version: pkg.version }, ancestors);
 }
 
