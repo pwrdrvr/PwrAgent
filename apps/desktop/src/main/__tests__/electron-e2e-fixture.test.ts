@@ -75,7 +75,7 @@ describe("Electron E2E fixture teardown", () => {
     });
   });
 
-  it("keeps Electron alive until each owned session has closed connections and flushed cookies", async () => {
+  it("keeps Electron alive until each owned session has completed connections, cookies, and cache cleanup", async () => {
     let connectionStarted!: () => void;
     const connectionStart = new Promise<void>((resolve) => { connectionStarted = resolve; });
     let releaseConnections!: () => void;
@@ -84,6 +84,10 @@ describe("Electron E2E fixture teardown", () => {
     const flushStart = new Promise<void>((resolve) => { flushStarted = resolve; });
     let releaseFlush!: () => void;
     const cookiesFlushed = new Promise<void>((resolve) => { releaseFlush = resolve; });
+    let cacheStarted!: () => void;
+    const cacheStart = new Promise<void>((resolve) => { cacheStarted = resolve; });
+    let releaseCache!: () => void;
+    const cacheCleared = new Promise<void>((resolve) => { releaseCache = resolve; });
     const ownedSession = {
       closeAllConnections: vi.fn(async () => {
         connectionStarted();
@@ -95,10 +99,15 @@ describe("Electron E2E fixture teardown", () => {
           await cookiesFlushed;
         }),
       },
+      clearData: vi.fn(async () => {
+        cacheStarted();
+        await cacheCleared;
+      }),
     };
     const otherSession = {
       closeAllConnections: vi.fn(async () => undefined),
       cookies: { flushStore: vi.fn(async () => undefined) },
+      clearData: vi.fn(async () => undefined),
     };
     const electron = {
       session: { defaultSession: ownedSession },
@@ -118,16 +127,23 @@ describe("Electron E2E fixture teardown", () => {
 
     await connectionStart;
     expect(ownedSession.cookies.flushStore).not.toHaveBeenCalled();
+    expect(ownedSession.clearData).not.toHaveBeenCalled();
     expect(close).not.toHaveBeenCalled();
     releaseConnections();
     await flushStart;
+    expect(ownedSession.clearData).not.toHaveBeenCalled();
     expect(close).not.toHaveBeenCalled();
     releaseFlush();
+    await cacheStart;
+    expect(close).not.toHaveBeenCalled();
+    releaseCache();
     await closing;
     expect(ownedSession.closeAllConnections).toHaveBeenCalledTimes(1);
     expect(ownedSession.cookies.flushStore).toHaveBeenCalledTimes(1);
+    expect(ownedSession.clearData).toHaveBeenCalledExactlyOnceWith({ dataTypes: ["cache"] });
     expect(otherSession.closeAllConnections).toHaveBeenCalledTimes(1);
     expect(otherSession.cookies.flushStore).toHaveBeenCalledTimes(1);
+    expect(otherSession.clearData).toHaveBeenCalledExactlyOnceWith({ dataTypes: ["cache"] });
     expect(close).toHaveBeenCalledTimes(1);
   });
 
