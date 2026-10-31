@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path";
 import { app, BrowserWindow, contentTracing } from "electron";
 import { readRenderingSnapshot, type RenderingCaptureResult } from "../../shared/rendering-diagnostics";
+import { acquireChromiumTrace } from "./chromium-trace-lease";
 import { RENDERER_UPDATE_EVENT_NAMES } from "../../shared/renderer-update-diagnostics";
 
 // No screenshots, JS stacks, user timing, URLs, DOM or trace arguments are exported.
@@ -180,12 +181,14 @@ export async function captureRenderingDiagnostics(outputRoot: string, seconds: u
   if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 1 || seconds > 30) {
     throw new Error("Rendering capture duration must be between 1 and 30 seconds");
   }
+  const releaseTrace = acquireChromiumTrace();
   const capture = new RenderingCapture(outputRoot, seconds);
   active = capture;
   try {
     return await capture.run();
   } finally {
     if (active === capture) active = undefined;
+    releaseTrace();
   }
 }
 

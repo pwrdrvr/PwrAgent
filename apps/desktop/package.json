@@ -45,6 +45,7 @@
     "eval:pdf": "tsx eval/pdf.ts",
     "eval:typecheck": "tsc --noEmit -p eval/tsconfig.json",
     "preview": "node ../../scripts/linux-sandbox.mjs --warn && electron-vite preview",
+    "probe:native-cpu": "node scripts/ensure-electron-runtime.mjs && electron ./scripts/native-cpu-control.cjs",
     "probe:quit-reentry": "node scripts/ensure-electron-runtime.mjs && electron ./scripts/electron-quit-reentry-probe.mjs",
     "test:e2e": "playwright test -c playwright.config.ts",
     "test:e2e:prebuilt": "node scripts/ensure-electron-runtime.mjs && node ../../scripts/ci/desktop-out-cache.mjs verify && playwright test -c playwright.config.ts",

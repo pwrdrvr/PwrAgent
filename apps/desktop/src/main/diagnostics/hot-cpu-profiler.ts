@@ -1,3 +1,4 @@
+import { requestDebuggerDetach } from "./debugger-connection-hold";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Profiler } from "node:inspector";
@@ -871,7 +872,7 @@ export class HotCpuProfiler {
         return;
       }
 
-      this.target.debugger.detach();
+      requestDebuggerDetach(this.target.debugger);
       this.debuggerAttached = false;
     } catch (error) {
       this.debuggerAttached = false;
