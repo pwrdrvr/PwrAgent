@@ -1374,7 +1374,7 @@ describe("codex environment runtime", () => {
       await expectEventually(async () => { expect(pids.filter(isProcessIdAlive)).toEqual([]); });
     } finally {
       controller.abort();
-      await rejected;
+      await outcome;
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });

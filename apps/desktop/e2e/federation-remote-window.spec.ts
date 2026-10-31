@@ -1474,7 +1474,7 @@ test.describe("federation remote window", () => {
       directories: [{ key: "directory:/fixture/repo", label: "FixtureRepo", path: "/fixture/repo" }],
     });
     let app: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
-    let scenarioError: unknown;
+    const failures: unknown[] = [];
     try {
       app = await launchElectronApp({ fixturePath: fixture.fixturePath, secretStorage: "memory" });
       const { electronApp, window } = app;
@@ -1512,19 +1512,20 @@ test.describe("federation remote window", () => {
         await (surface === "setup row" ? setup : remote.locator(".composer__actions"))
           .getByRole("button", { name: "Cancel startup", exact: true }).click();
         await expect(remote.getByLabel("Preparing transcript")).toHaveCount(0);
-        await expect(prompt).toHaveValue(submitted);
+        await expect(prompt).toHaveText(submitted);
         await expect(remote.locator(".thread-row__title").filter({ hasText: submitted })).toHaveCount(0);
       }
       expect(gateway.calls.filter((call) => call.method === "materializeDirectoryLaunchpad")).toHaveLength(2);
       expect(gateway.calls.filter((call) => call.method === "manageLaunchpadCreation" && (call.params as { action: string }).action === "cancel")).toHaveLength(2);
     } catch (error) {
-      scenarioError = error;
-    } finally {
-      const failures: unknown[] = scenarioError ? [scenarioError] : [];
-      for (const cleanup of [() => app?.close(), () => gateway.close(), () => fixture.cleanup()]) {
-        try { await cleanup(); } catch (error) { failures.push(error); }
-      }
-      if (failures.length) throw new AggregateError(failures, "Remote startup scenario or teardown failed");
+      failures.push(error);
+    }
+    for (const cleanup of [() => app?.close(), () => gateway.close(), () => fixture.cleanup()]) {
+      try { await cleanup(); } catch (error) { failures.push(error); }
+    }
+    if (failures.length) {
+      const details = failures.map((error) => error instanceof Error ? error.stack ?? error.message : String(error));
+      throw new AggregateError(failures, `Remote startup scenario or teardown failed:\n${details.join("\n\n")}`);
     }
   });
 
