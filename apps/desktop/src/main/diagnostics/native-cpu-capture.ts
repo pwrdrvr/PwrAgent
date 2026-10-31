@@ -10,6 +10,7 @@ export const NATIVE_CPU_DURATION_MS = 3_000;
 export const NATIVE_CPU_DECODE_CAP = 64 * 1024 * 1024;
 export const NATIVE_CPU_TRACE_CONFIG = {
   recordMode: "recordUntilFull", traceBufferSizeInKb: 8192, enableArgumentFilter: true,
+  enableSampling: false, enableSystrace: false,
   includedCategories: ["toplevel", "devtools.timeline", "ipc", "mojom", "v8.execute"],
   excludedCategories: ["*"],
 };
@@ -130,7 +131,7 @@ class NativeCpuCapture {
       await d.sendCommand("Tracing.start", {
         transferMode: "ReturnAsStream", streamFormat: "json", streamCompression: "none",
         bufferUsageReportingInterval: 250,
-        traceConfig: { ...NATIVE_CPU_TRACE_CONFIG, includedProcessIds: [pid] },
+        traceConfig: NATIVE_CPU_TRACE_CONFIG,
       });
       this.recording = true;
       const startAcknowledged = anchor();

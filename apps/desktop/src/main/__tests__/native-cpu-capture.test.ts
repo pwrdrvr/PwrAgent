@@ -13,6 +13,7 @@ import { acquireChromiumTrace } from "../diagnostics/chromium-trace-lease";
 
 class Debugger extends EventEmitter {
   attached = true;
+  startedAt = 0;
   attach = vi.fn(() => { this.attached = true; });
   detach = vi.fn(() => { this.attached = false; this.emit("detach", {}, "test"); });
   isAttached = () => this.attached;
@@ -20,6 +21,7 @@ class Debugger extends EventEmitter {
     { name: "Layout", cat: "devtools.timeline", ph: "X", pid: 21, tid: 22, ts: 1, dur: 4, args: { secret: "operator-content" } },
   ] });
   sendCommand = vi.fn(async (method: string, _params?: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    if (method === "Tracing.start") this.startedAt = performance.now();
     if (method === "Tracing.end") this.emit("message", {}, "Tracing.tracingComplete", { stream: "private-handle", dataLossOccurred: false });
     if (method === "IO.read") return { data: this.data, eof: true };
     return {};
@@ -77,7 +79,7 @@ describe("bounded opt-in native CPU capture", () => {
 
   it("requests stop at the fixed main deadline without a renderer callback or buffer query", async () => {
     const { pending } = await begin();
-    await vi.advanceTimersByTimeAsync(2999);
+    await vi.advanceTimersByTimeAsync(2999 - (performance.now() - d.startedAt));
     expect(d.sendCommand.mock.calls.map(([m]) => m)).toEqual(["Tracing.start"]);
     await vi.advanceTimersByTimeAsync(1);
     await pending;
