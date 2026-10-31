@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
@@ -9,6 +9,24 @@ import { syntaxLintPaths } from "./lint-syntax.mjs";
 
 const require = createRequire(import.meta.url);
 const directories = [];
+const fixtureProbes = new Map();
+
+// Write each boundary immediately: spawnSync blocks the worker, including its
+// timers. A final test timeout alone cannot locate a slow native invocation.
+function nativeLintProbe() {
+  const started = performance.now();
+  let previous = started;
+  return (phase, details = {}) => {
+    const now = performance.now();
+    writeSync(2, `[native-typed-lint] ${JSON.stringify({
+      phase,
+      elapsedMs: Math.round(now - started),
+      phaseMs: Math.round(now - previous),
+      ...details,
+    })}\n`);
+    previous = now;
+  };
+}
 
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pwragent-native-lint-")));
@@ -25,7 +43,18 @@ function source(root, path, text) {
 }
 
 afterEach(() => {
-  for (const root of directories.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of directories.splice(0)) {
+    const probe = fixtureProbes.get(root);
+    fixtureProbes.delete(root);
+    probe?.("fixture-cleanup-start");
+    try {
+      rmSync(root, { recursive: true, force: true });
+      probe?.("fixture-cleanup-complete");
+    } catch (error) {
+      probe?.("fixture-cleanup-error", { code: error.code });
+      throw error;
+    }
+  }
 });
 
 describe("native typed lint correctness", () => {
@@ -68,7 +97,10 @@ describe("native typed lint correctness", () => {
   });
 
   it("runs the native typed backend and catches a lost receiver in the configured production scope", () => {
+    const probe = nativeLintProbe();
+    probe("fixture-setup-start", { pid: process.pid, node: process.version, platform: process.platform });
     const root = fixture();
+    fixtureProbes.set(root, probe);
     source(root, "packages/shared/tsconfig.json", JSON.stringify({
       compilerOptions: { target: "ES2022", strict: true, types: [] }, include: ["src/**/*.ts"],
     }));
@@ -79,15 +111,26 @@ describe("native typed lint correctness", () => {
     ].join("\n"));
     const packageFile = require.resolve("oxlint/package.json");
     const { bin } = JSON.parse(readFileSync(packageFile, "utf8"));
+    probe("fixture-setup-complete");
+    probe("node-native-launch");
     const result = spawnSync(process.execPath, [resolve(dirname(packageFile), bin.oxlint),
       "--config", join(root, "oxlint.typed.json"), "--format=json", file,
     ], { cwd: root, encoding: "utf8" });
+    probe("node-native-complete", {
+      pid: result.pid,
+      status: result.status,
+      signal: result.signal,
+      error: result.error?.code,
+      stdoutBytes: Buffer.byteLength(result.stdout ?? ""),
+      stderrBytes: Buffer.byteLength(result.stderr ?? ""),
+    });
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(1);
     const diagnostics = JSON.parse(result.stdout).diagnostics;
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0].code).toBe("typescript(unbound-method)");
     expect(diagnostics[0].labels[0].span.line).toBe(2);
+    probe("assertions-complete");
   });
 
   it("preserves unused-binding exemptions and applies hook safety only to renderer files", () => {
