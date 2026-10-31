@@ -51,6 +51,7 @@ describe("CodexModelProviderTranslator", () => {
     }) as { thread: { model: string } };
     expect(result.thread.model).toBe("llama");
     expect(t.providerForThread("t4")).toBeUndefined();
+    expect(t.reportedProviderForThread("t4")).toBe("my-own");
   });
 
   it("resumes a provider thread on its provider and refuses a switch to another", () => {

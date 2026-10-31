@@ -139,6 +139,7 @@ import type {
   UserInput as CodexUserInput,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
+import { flattenPwrAgentDynamicTools, usesFlatPwrAgentTools } from "./dynamic-tool-exposure";
 import {
   JsonRpcConnection,
   type JsonRpcId,
@@ -7889,13 +7890,37 @@ export class CodexAppServerClient {
     );
     // Every request, admitted or lifecycle, reaches Codex through this one
     // function, so qualified model ids are translated in one place.
-    const resolveModelProviderIds = options.resolveModelProviderIds;
-    if (resolveModelProviderIds) {
-      this.modelProviderTranslator = new CodexModelProviderTranslator(resolveModelProviderIds);
+    {
+      this.modelProviderTranslator = new CodexModelProviderTranslator(options.resolveModelProviderIds ?? (() => new Set()));
       const translator = this.modelProviderTranslator;
       const rawRequest = this.rawConnection.request.bind(this.rawConnection);
       this.rawConnection.request = async (method, params, timeoutMs, diagnostics) => {
-        const translated = translator.translateRequest(method, params);
+        let translated = translator.translateRequest(method, params);
+        const request = asRecord(translated);
+        if ((method === "thread/start" || method === "thread/resume")
+          && Array.isArray(request?.dynamicTools)
+          && request.dynamicTools.some((tool) => asRecord(tool)?.type === "namespace" && asRecord(tool)?.name === "pwragent")) {
+          const config = asRecord(request.config);
+          let provider = extractStringProperty(request, "modelProvider")
+            ?? (typeof request.threadId === "string" ? translator.reportedProviderForThread(request.threadId) : undefined)
+            ?? extractStringProperty(config, "model_provider");
+          if (!provider) {
+            // model/list does not expose supports_search_tool. Read effective
+            // config through Codex, including profile/project provider selection.
+            try {
+              const result = await rawRequest("config/read", {
+                includeLayers: false,
+                ...(typeof request.cwd === "string" ? { cwd: request.cwd } : {}),
+              }, timeoutMs, diagnostics);
+              provider = extractStringProperty(asRecord(asRecord(result)?.config), "model_provider");
+            } catch {
+              codexClientLog.warn("Could not resolve the effective provider for dynamic tools");
+            }
+          }
+          if (usesFlatPwrAgentTools(provider)) {
+            translated = { ...request, dynamicTools: flattenPwrAgentDynamicTools(request.dynamicTools as CodexDynamicToolSpec[]) };
+          }
+        }
         const result = await rawRequest(method, translated, timeoutMs, diagnostics);
         return translator.observeResponse(method, translated, result);
       };

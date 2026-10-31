@@ -11465,6 +11465,34 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it.each(["openai", "local-fixture"])("adapts parent tools for the effective %s provider at start and resume", async (provider) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.configReadResult = { config: { model_provider: provider } };
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const dynamicTools: DynamicToolSpec[] = [{
+      type: "namespace", name: "pwragent", description: "PwrAgent", tools: [{
+        type: "function", name: "create_pull_request", description: "Create a PR", inputSchema: { type: "object" }, deferLoading: true,
+      }],
+    }];
+    try {
+      await client.startThread({ cwd: "/fixture/project", dynamicTools });
+      await client.startTurn({ threadId: "thread-2", cwd: "/fixture/project", input: [{ type: "text", text: "Continue." }], dynamicTools });
+      const requests = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message));
+      const spec = dynamicTools[0];
+      if (spec.type !== "namespace") throw new Error("Expected namespace fixture");
+      for (const method of ["thread/start", "thread/resume"]) {
+        const sent = requests.find((request) => request.method === method);
+        expect(sent.params.dynamicTools).toEqual(provider === "openai" ? dynamicTools : [{
+          ...spec.tools[0], name: "pwragent__create_pull_request", deferLoading: false,
+        }]);
+      }
+      expect(requests.filter((request) => request.method === "config/read").at(-1)?.params)
+        .toMatchObject({ includeLayers: false, cwd: "/fixture/project" });
+    } finally {
+      await client.close();
+    }
+  });
+
   it("passes dynamic tool specs when creating a thread", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 

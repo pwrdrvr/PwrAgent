@@ -25,9 +25,10 @@ the negotiated `dynamicToolsResumeField` capability. Older clients retain their
 persisted definitions. Returning a new schema from search does not register an
 unknown native tool on those clients.
 
-- New threads receive only the unified `pwragent` dynamic namespace. Add new
-  tools there through the agent-tool catalog so both dynamic-tool and MCP
-  dispatch expose the same contract.
+- New threads use the unified `pwragent` catalog. Add new tools there so both
+  dynamic-tool and MCP dispatch expose the same contract. The Codex adapter
+  projects a compact core set as eager `pwragent__<name>` flat functions for
+  non-OpenAI providers; unnamespaced calls normalize back to this catalog.
 - Deprecated namespaces are compatibility-only for threads that already have
   their definitions persisted. They are never advertised to new threads and
   cannot discover additive tool changes.
