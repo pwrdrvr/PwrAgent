@@ -2726,6 +2726,9 @@ export type NavigationRelativeChildMove = {
 /** Versioned, per-owner archive boundary. Remote rows remain cached pins. */
 export type ArchiveSubthreadPromotion = {
   archived: { backend: AppServerBackendKind; threadId: string; instanceId: string };
+  /** The direct slot under the surviving ancestor, including older archives. */
+  anchor: { backend: AppServerBackendKind; threadId: string; instanceId: string };
+  expectedParent: { threadId: string; backend: AppServerBackendKind; instanceId?: string } | null;
   parent: { backend: AppServerBackendKind; threadId: string; instanceId: string } | null;
   parentSummary?: NavigationThreadSummary;
   children: { ref: FederatedThreadRef; summary: NavigationThreadSummary; instanceLabel: string }[];

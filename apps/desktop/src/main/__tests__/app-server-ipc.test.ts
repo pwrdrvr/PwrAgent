@@ -5372,6 +5372,7 @@ describe("app server ipc", () => {
     ).toHaveBeenCalledWith({
       backend: "codex",
       parentThreadId: "thread-1",
+      expectedParent: undefined,
     });
     expect(response).toEqual({
       backend: "codex",
