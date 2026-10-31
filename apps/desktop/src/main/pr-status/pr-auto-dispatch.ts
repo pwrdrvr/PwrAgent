@@ -783,16 +783,7 @@ export function buildPrRepositoryKey(
     .join("/");
 }
 
-export function pullRequestMatchesRepositoryKey(
-  pr: PrSummary,
-  repositoryKey: string | undefined,
-): boolean {
-  const repository = pr.sourceRepository ?? pr;
-  return Boolean(
-    repositoryKey
-    && buildPrRepositoryKey(repository.provider, repository.org, repository.repo) === repositoryKey,
-  );
-}
+export { pullRequestMatchesRepositoryKey } from "@pwragent/shared";
 
 export function buildPrAutoDispatchEvent(
   pr: PrSummary,
