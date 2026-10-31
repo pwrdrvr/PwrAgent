@@ -9660,7 +9660,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       if (parent && parent.instanceId !== instanceId && promotion.parentSummary && localChildren.length) {
         const existing = pinPayload(parent.instanceId, parent.backend, parent.threadId);
         if (!existing) writePin.run(parent.instanceId, parent.backend, parent.threadId, Date.now(), JSON.stringify({
-          instanceLabel: parent.instanceId, pinnedVia: "companion", summary: promotion.parentSummary,
+          instanceLabel: promotion.parentInstanceLabel ?? parent.instanceId, pinnedVia: "companion", summary: promotion.parentSummary,
         }));
       }
       if (archived.instanceId === instanceId) {

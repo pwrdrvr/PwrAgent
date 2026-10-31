@@ -156,6 +156,20 @@ describe("Federation nested archive placement", () => {
     expect(await summary("child-b")).toMatchObject({ parentThreadId: "middle" });
   });
 
+  it("preserves viewer pin labels, provenance, and curated ranks", async () => {
+    const store = stores.get("middle-owner")!;
+    for (const id of ["root", "child-b"]) {
+      const ref = buildFederatedThreadRef({ backend: "codex", threadId: id, instanceId: owners.get(id)! });
+      await store.addRemoteThreadPin({ ref, summary: await summary(id), instanceLabel: `Display ${id}`, pinnedVia: "explicit" });
+      await store.setRemoteThreadLocalPin({ ref, pinnedRank: "8192" });
+    }
+    await runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" });
+    const pins = await store.listRemoteThreadPins();
+    for (const id of ["root", "child-b"]) expect(pins.find((pin) => pin.ref.threadId === id)).toMatchObject({
+      instanceLabel: `Display ${id}`, pinnedVia: "explicit", localPinnedRank: "8192",
+    });
+  });
+
   it("promotes local survivors through a remote ancestor without remote-owner overlays", async () => {
     owners.set("local-survivor", "middle-owner");
     owners.set("ancestor-owned-survivor", "root-owner");

@@ -2750,6 +2750,7 @@ export type ArchiveSubthreadPromotion = {
   expectedChildOrder: string[];
   parent: { backend: AppServerBackendKind; threadId: string; instanceId: string } | null;
   parentSummary?: NavigationThreadSummary;
+  parentInstanceLabel?: string;
   children: { ref: FederatedThreadRef; summary: NavigationThreadSummary; instanceLabel: string }[];
   dryRun?: boolean;
 };
