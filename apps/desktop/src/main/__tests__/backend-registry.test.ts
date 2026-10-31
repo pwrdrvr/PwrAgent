@@ -59128,6 +59128,106 @@ script = "printf setup"
     }
   });
 
+  it.each(["claude", "acp:gemini"] as const)(
+    "keeps restored %s ancestors and children eligible for archive promotion", async (backend) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-restore-promotion-"));
+      const db = openInMemoryStateDb();
+      const overlayStore = new SqliteOverlayStore(db);
+      const store = new ClaudeSessionStore(path.join(root, "sessions"));
+      const ancestor = "0f7b3c1e-2d4a-4e5f-9a6b-7c8d9e0f1a2b";
+      const survivor = "6a1d2c3b-4e5f-4a7b-8c9d-0e1f2a3b4c5d";
+      const restoredIds = [ancestor, survivor];
+      for (const id of restoredIds) {
+        if (backend === "claude") await store.save({ cwd: root, thread: {
+          id, title: id, titleSource: "explicit", linkedDirectories: [], source: backend,
+          updatedAt: 1, archivedAt: 1000,
+        } });
+        await overlayStore.observeArchivedThreads([{ backend, threadId: id }], 1000);
+      }
+      const codexClient = new MockBackendClient({
+        threads: [{ id: "nested", title: "nested", titleSource: "explicit", linkedDirectories: [],
+          source: "codex", updatedAt: 1 }],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore,
+        claudeBackendOptions: { store, inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+          discoverModels: async () => [] },
+        acpSessionStore: createAcpSessionStoreMock(backend === "claude" ? [] : restoredIds.map((sessionId) => ({
+          backendId: backend, sessionId, title: sessionId, createdAt: 1, updatedAt: 1,
+          executionMode: "default", status: "idle", archivedAt: 1000,
+        }))),
+      });
+      const markersAtNotification: Array<number | undefined> = [];
+      const unsubscribe = registry.onEvent(async (event) => {
+        if (event.notification.method === "thread/unarchived") {
+          markersAtNotification.push((await overlayStore.getThreadOverlayState({
+            backend: event.backend, threadId: event.notification.params.threadId,
+          }))?.archiveRetentionStartedAt);
+        }
+      });
+      // Keep cleanup from masking the foreground promotion result.
+      const cleanup = vi.spyOn(registry as unknown as {
+        ungroupChildrenOfArchivedThread(params: unknown): Promise<void>;
+      }, "ungroupChildrenOfArchivedThread").mockResolvedValue();
+      try {
+        for (const threadId of restoredIds) await registry.restoreThread({ backend, threadId });
+        await overlayStore.setThreadParent({ backend, threadId: ancestor, parentThreadId: "root", parentThreadBackend: "codex" });
+        for (const threadId of ["before", "nested", "after"]) {
+          await overlayStore.setThreadParent({ backend: "codex", threadId, parentThreadId: ancestor, parentThreadBackend: backend });
+        }
+        await overlayStore.setThreadParent({ backend, threadId: survivor, parentThreadId: "nested", parentThreadBackend: "codex" });
+        await registry.archiveThread({ backend: "codex", threadId: "nested", backgroundCleanup: true });
+        expect(await overlayStore.getThreadOverlayState({ backend, threadId: survivor }))
+          .toMatchObject({ parentThreadId: ancestor, parentThreadBackend: backend });
+        expect((await overlayStore.getThreadOverlayState({ backend, threadId: ancestor }))?.subthreadOrder)
+          .toEqual(["before", survivor, "after"]);
+        expect(markersAtNotification).toEqual([undefined, undefined]);
+        for (const threadId of restoredIds) {
+          const state = await overlayStore.getThreadOverlayState({ backend, threadId });
+          expect(state?.archiveRetentionStartedAt).toBeUndefined();
+          expect(state?.archiveTombstonedAt).toBeUndefined();
+          expect(state?.archiveRestoredAt).toEqual(expect.any(Number));
+        }
+        await overlayStore.observeArchivedThreads([{ backend, threadId: "missing" }], 1000);
+        await expect(registry.restoreThread({ backend, threadId: "missing" })).rejects.toThrow();
+        expect((await overlayStore.getThreadOverlayState({ backend, threadId: "missing" }))?.archiveRetentionStartedAt).toBe(1000);
+      } finally {
+        unsubscribe();
+        cleanup.mockRestore();
+        await registry.close();
+        db.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("clears archive markers before publishing a provider restore notification", async () => {
+    const db = openInMemoryStateDb();
+    const overlayStore = new SqliteOverlayStore(db);
+    const identity = { backend: "codex" as const, threadId: "restored" };
+    await overlayStore.observeArchivedThreads([identity], 1000);
+    await overlayStore.setThreadArchiveTombstone({ ...identity, archivedAt: 1000 });
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const observations: Array<ThreadOverlayState | undefined> = [];
+    const unsubscribe = registry.onEvent(async (event) => {
+      if (event.notification.method === "thread/unarchived") observations.push(await overlayStore.getThreadOverlayState(identity));
+    });
+    try {
+      await codexClient.emit({ method: "thread/unarchived", params: { threadId: identity.threadId } });
+      expect(observations).toHaveLength(1);
+      expect(observations[0]?.archiveRetentionStartedAt).toBeUndefined();
+      expect(observations[0]?.archiveTombstonedAt).toBeUndefined();
+      expect(observations[0]?.archiveRestoredAt).toEqual(expect.any(Number));
+      await overlayStore.observeArchivedThreads([identity], Date.now() + 1);
+      expect((await overlayStore.getThreadOverlayState(identity))?.archiveRetentionStartedAt).toEqual(expect.any(Number));
+    } finally {
+      unsubscribe();
+      await registry.close();
+      db.close();
+    }
+  });
+
   it("ungroups active child threads when archiving only the parent", async () => {
     const parentThread: AppServerThreadSummary = {
       id: "thread-parent",
