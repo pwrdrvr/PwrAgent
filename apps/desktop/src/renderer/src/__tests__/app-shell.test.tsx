@@ -1262,7 +1262,7 @@ describe("App", () => {
       await waitFor(() => expect(screen.getByRole("button", { name: "Start thread" })).toBeEnabled());
       await clickButton("Start thread");
       await waitFor(() => expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
-        backend: "claude", federationTarget: selectedTarget,
+        launchpad: expect.objectContaining({ backend: "claude" }), federationTarget: selectedTarget,
         input: [{ type: "text", text: "Compose on the selected owner" }],
       })));
     },
