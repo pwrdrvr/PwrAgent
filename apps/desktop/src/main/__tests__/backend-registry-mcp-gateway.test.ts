@@ -223,18 +223,32 @@ describe("backend MCP gateway dispatch", () => {
       listConnections: async () => [{ id: "one", toolApproval: "prompt" }],
     } as unknown as McpConnectionGatewayService);
     const call = await createMonitor();
+    internals.activeTurnKeys.delete("codex:thread-1:turn-1");
     const events: AgentEvent[] = [];
     registry.onEvent(async (event) => {
       if (event.notification.method !== "mcpServer/elicitation/request") return;
       events.push(event);
       expect(event.notification.params.threadId).toBe("thread-1");
       await registry.submitServerRequest({ backend: "codex", threadId: "thread-1", turnId: "turn-1",
-        requestId: String(event.notification.params.requestId), response: { action, content: null, _meta: null } });
+        requestId: String(event.notification.params.requestId), response: { action, content: null, _meta: { persist: "server-session" } } });
     });
     expect((await call("search_mcp_tools", { query: "lookup" })).success).toBe(true);
     expect((await call("call_mcp_tool", args)).success).toBe(action === "accept");
     expect(events).toHaveLength(1);
     expect(operation.mock.calls.some(([entry]) => entry.operation === "gateway/tools/call")).toBe(action === "accept");
+    if (action === "accept") {
+      const implementation = operation.getMockImplementation()!;
+      operation.mockImplementation(async (params) => {
+        const result = await implementation(params);
+        return params.operation === "gateway/tools/list"
+          ? (result as McpGatewayTool[]).map((tool) => ({ ...tool,
+              definition: { ...tool.definition, annotations: { readOnlyHint: false } },
+            }))
+          : result;
+      });
+      expect((await call("call_mcp_tool", args)).success).toBe(false);
+      expect(events).toHaveLength(1);
+    }
   });
 
   it("cancels the worker's pending approval when the parent removes its connection", async () => {
