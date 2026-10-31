@@ -20,6 +20,7 @@ import type {
 import type {
   DirectorySummaryKind,
   LaunchpadWorkMode,
+  LaunchpadWorktreeBase,
   NavigationDirectoryGitStatus,
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadAgent,
@@ -1178,6 +1179,12 @@ export type MaterializeDirectoryLaunchpadRequest = {
    * predate this field ignore it and match the draft's id.
    */
   codexEnvironmentSelector?: string;
+  /**
+   * Base for a new worktree when the draft names no `branchName`. Owners
+   * that predate this field ignore it and follow the checkout's current
+   * branch.
+   */
+  worktreeBase?: LaunchpadWorktreeBase;
 };
 
 export type MaterializedDirectoryLaunchpadThread = {
