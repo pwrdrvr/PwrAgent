@@ -59082,6 +59082,52 @@ script = "printf setup"
     }
   });
 
+  it("keeps a grandchild in its original tray when three siblings are archived", async () => {
+    const db = openInMemoryStateDb();
+    const overlayStore = new SqliteOverlayStore(db);
+    const ids = ["root", "before", "archive-a", "survivor", "archive-b", "archive-c", "after"];
+    let threads: AppServerThreadSummary[] = ids.map((id, index) => ({
+      id, title: id, titleSource: "explicit", linkedDirectories: [], source: "codex",
+      createdAt: index, updatedAt: index,
+    }));
+    for (const id of ["before", "archive-a", "archive-b", "archive-c", "after"]) {
+      await overlayStore.setThreadParent({ backend: "codex", threadId: id, parentThreadId: "root" });
+    }
+    await overlayStore.setThreadParent({ backend: "codex", threadId: "survivor", parentThreadId: "archive-a" });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] }, threads,
+    });
+    const archived: string[] = [];
+    vi.spyOn(codexClient, "archiveThread").mockImplementation(async ({ threadId }) => {
+      archived.push(threadId);
+      threads = threads.filter((thread) => thread.id !== threadId);
+      codexClient.setThreads(threads);
+      return { threadId };
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    // The tray must survive the foreground mutation, even while expensive
+    // worktree cleanup has not reached its child-ungrouping stage.
+    const cleanup = vi.spyOn(registry as unknown as {
+      ungroupChildrenOfArchivedThread(params: unknown): Promise<void>;
+    }, "ungroupChildrenOfArchivedThread").mockResolvedValue();
+    try {
+      for (const threadId of ["archive-a", "archive-b", "archive-c"]) {
+        await registry.archiveThread({ backend: "codex", threadId, backgroundCleanup: true });
+      }
+      expect(archived).toEqual(["archive-a", "archive-b", "archive-c"]);
+      expect(await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "survivor" }))
+        .toMatchObject({ parentThreadId: "root", parentThreadBackend: "codex" });
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
+        .toEqual(["before", "survivor", "after"]);
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "survivor" }))?.archiveRetentionStartedAt)
+        .toBeUndefined();
+    } finally {
+      cleanup.mockRestore();
+      await registry.close();
+      db.close();
+    }
+  });
+
   it("ungroups active child threads when archiving only the parent", async () => {
     const parentThread: AppServerThreadSummary = {
       id: "thread-parent",
