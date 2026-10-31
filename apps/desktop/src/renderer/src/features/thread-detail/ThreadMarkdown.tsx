@@ -444,8 +444,11 @@ const markdownComponents: Components = {
     );
     const skillPath = localTarget?.path;
     const label = extractTextContent(anchorProps.children).trim();
-    const linkedImage = findMarkdownLinkedImagePart(props.imageParts, href);
     const source = sourceForNode(markdownText, anchorProps.node);
+    const linkedImage = findMarkdownLinkedImagePart(
+      props.imageParts,
+      windowsMarkdownDestinationFromSource(source) ?? href,
+    );
     const linkedChildren = (
       <MarkdownLinkContext.Provider value={true}>
         {anchorProps.children}
@@ -692,14 +695,16 @@ const markdownComponents: Components = {
     return <hr className="transcript-message__rule" />;
   },
   img: function MarkdownImage(imageProps) {
-    const { props } = useContext(MarkdownRenderContext)!;
+    const { props, markdownText } = useContext(MarkdownRenderContext)!;
     const altText = typeof imageProps.alt === "string" ? imageProps.alt : "";
-    const src = typeof imageProps.src === "string" ? denormalizeMarkdownUrl(imageProps.src) : "";
+    const href = windowsMarkdownDestinationFromSource(sourceForNode(markdownText, imageProps.node))
+      ?? (typeof imageProps.src === "string" ? imageProps.src : "");
+    const src = denormalizeMarkdownUrl(href);
     const title = typeof imageProps.title === "string" ? ` "${imageProps.title}"` : "";
 
     // The message's image strip owns previews and gallery navigation. Hide
     // markup only for a reference that main successfully materialized.
-    if (findMarkdownLinkedImagePart(props.imageParts, typeof imageProps.src === "string" ? imageProps.src : "")) {
+    if (findMarkdownLinkedImagePart(props.imageParts, href)) {
       return null;
     }
 
@@ -1365,6 +1370,17 @@ function localFileTargetFromHref(
   }
 
   return undefined;
+}
+
+function windowsMarkdownDestinationFromSource(source: string | undefined): string | undefined {
+  // CommonMark treats '\\.' and '\\_' as escapes, even inside Windows paths.
+  // Match the original destination used by main's image materializer, before
+  // Markdown removes those filesystem separators.
+  const match = /^!?\[([^\]\r\n]*)\]\(\s*(?:<([^>\r\n]+)>|([^\s)]+))/.exec(source ?? "");
+  const destination = match?.[2] ?? match?.[3];
+  return destination && isWindowsFilesystemPath(decodeMarkdownDestination(destination))
+    ? `file://${destination}`
+    : undefined;
 }
 
 function markdownImagePathFromHref(href: string): string | undefined {

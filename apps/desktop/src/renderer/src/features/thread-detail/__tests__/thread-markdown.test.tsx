@@ -478,6 +478,23 @@ describe("ThreadMarkdown", () => {
     expect(openApplication).not.toHaveBeenCalled();
   });
 
+  it("opens Windows image links without consuming separators before punctuation", () => {
+    const onOpenImage = vi.fn();
+    const imagePart = {
+      type: "image" as const, url: "pwragent-image://file/cached",
+      sourceUrl: "file:///D:/work/.local/mockup.png",
+    };
+    render(<ThreadMarkdown
+      text={String.raw`[Preview](D:\work\.local\mockup.png)`}
+      imageParts={[imagePart]}
+      onOpenImage={onOpenImage}
+    />);
+    const link = screen.getByRole("link", { name: "Preview" });
+    expect(link).toHaveAttribute("href", imagePart.url);
+    fireEvent.click(link);
+    expect(onOpenImage).toHaveBeenCalledWith(imagePart);
+  });
+
   it.each([undefined, "File pull is disabled on the owning machine.", "The owning machine does not support file pull.", "Remote machine disconnected."])("keeps remote Markdown reads in the local modal: %s", async (error) => {
     const federationTarget = { scope: "remote" as const, instanceId: "owner" };
     const thread = { backend: "codex" as const, threadId: "owner-thread" };
@@ -1519,6 +1536,9 @@ describe("ThreadMarkdown", () => {
   });
 
   it.each([
+    { destination: String.raw`D:\a\PwrAgent\PwrAgent\.local\image-preview-worktree-YER6mT\mockup.png`, sourceUrl: "file:///D:/a/PwrAgent/PwrAgent/.local/image-preview-worktree-YER6mT/mockup.png" },
+    { destination: String.raw`D:\work\_private\mockup.png`, sourceUrl: "file:///D:/work/_private/mockup.png" },
+    { destination: String.raw`\\server\share\mockup.png`, sourceUrl: "file://server/share/mockup.png" },
     { destination: String.raw`D:\a\PwrAgent\mockup.png`, sourceUrl: "file:///D:/a/PwrAgent/mockup.png" },
     { destination: "D:%5Ca%5CPwrAgent%5Cmockup.png", sourceUrl: "file:///D:/a/PwrAgent/mockup.png" },
     { destination: "D:/a/PwrAgent/mockup.png", sourceUrl: "file:///D:/a/PwrAgent/mockup.png" },
