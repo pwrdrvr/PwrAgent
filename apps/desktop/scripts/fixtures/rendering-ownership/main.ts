@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, contentTracing } from "electron";
 import { captureRenderingDiagnostics, stopRenderingDiagnostics } from "../../../src/main/diagnostics/rendering-capture";
 
 // A standalone Electron process: no PwrAgent startup, profiles, backends or IPC.
@@ -14,6 +14,18 @@ await external.loadURL("data:text/html,<p>invented rendering fixture</p>");
 const d = external.webContents.debugger;
 d.attach("1.3");
 let completions = 0;
+let startRecordingResolved = false;
+let stopRecordingCalls = 0;
+const originalStart = contentTracing.startRecording;
+const originalStop = contentTracing.stopRecording;
+contentTracing.startRecording = async (...args) => {
+  await originalStart(...args);
+  startRecordingResolved = true;
+};
+contentTracing.stopRecording = (...args) => {
+  stopRecordingCalls++;
+  return originalStop(...args);
+};
 d.on("message", (_event, method) => { if (method === "Tracing.tracingComplete") completions++; });
 try {
   await d.sendCommand("Tracing.start", {
@@ -25,18 +37,27 @@ try {
   const capture = captureRenderingDiagnostics(join(root, "diagnostics"), 1);
   // Observe rejection immediately; Chromium errors themselves are never printed.
   const settled = capture.then(() => {}, () => { renderingRejected = true; });
-  await settled;
-  await stopRenderingDiagnostics("shutdown");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const renderingSettled = await Promise.race([
+    settled.then(() => true),
+    new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), 3_000); }),
+  ]);
+  clearTimeout(timer);
+  if (renderingSettled) await stopRenderingDiagnostics("shutdown");
   let externalStillRecording = false;
   try { await d.sendCommand("Tracing.start", { transferMode: "ReportEvents" }); }
   catch { externalStillRecording = true; }
   const outputDirectories = await readdir(join(root, "diagnostics")).catch(() => []);
   const report = {
     electron: process.versions.electron, platform: process.platform,
-    renderingRejected, externalStillRecording, externalCompletionsBeforeOwnerStop: completions,
+    renderingSettled, renderingRejected, startRecordingResolved, stopRecordingCalls,
+    externalStillRecording, externalCompletionsBeforeOwnerStop: completions,
     outputDirectories: outputDirectories.length, elapsedMs: Math.round(performance.now() - started),
   };
   console.log(JSON.stringify({ externalTraceOwnership: report }));
+  if (!renderingSettled && process.env.PWRAGENT_RENDERING_EXPECT_BASELINE) {
+    app.exit(0);
+  }
   if (!process.env.PWRAGENT_RENDERING_EXPECT_BASELINE) {
     assert.equal(renderingRejected, true);
     assert.equal(externalStillRecording, true);
