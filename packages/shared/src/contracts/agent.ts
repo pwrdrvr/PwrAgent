@@ -1470,6 +1470,8 @@ export type AgentEvent = {
    * raw params are expensive for React to parse on every update.
    */
   rendererActivityEntry?: AppServerThreadActivityEntry;
+  /** Safe, retained previews resolved by main at an item completion boundary. */
+  rendererImageParts?: AppServerThreadImagePart[];
 };
 
 export type LatestCodexConfigWarningResponse = {

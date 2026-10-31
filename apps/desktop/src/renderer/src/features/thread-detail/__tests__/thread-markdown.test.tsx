@@ -1493,7 +1493,7 @@ describe("ThreadMarkdown", () => {
     expect(screen.queryByRole("button", { name: /Collapse quote/ })).not.toBeInTheDocument();
   });
 
-  it("renders markdown image syntax as literal text instead of an image", () => {
+  it("keeps external Markdown images inert", () => {
     const { container } = render(
       <ThreadMarkdown
         text={"Keep ![Transcript preview](https://example.com/preview.png) inert for now."}
@@ -1504,6 +1504,18 @@ describe("ThreadMarkdown", () => {
     expect(container.textContent).toContain(
       "![Transcript preview](https://example.com/preview.png)"
     );
+  });
+
+  it("hides materialized image markup while keeping missing references and code examples readable", () => {
+    const { container } = render(<ThreadMarkdown
+      text={"Here: ![Preview](/tmp/mockup.png)\n\n![Missing](/tmp/missing.png)\n\n`![Example](/tmp/mockup.png)`"}
+      imageParts={[{ type: "image", url: "pwragent-image://file/cached", sourceUrl: "file:///tmp/mockup.png" }]}
+    />);
+    expect(container.textContent).toContain("Here:");
+    expect(container.textContent).not.toContain("![Preview]");
+    expect(container.textContent).toContain("![Missing](/tmp/missing.png)");
+    expect(container.textContent).toContain("![Example](/tmp/mockup.png)");
+    expect(container.querySelector("img")).toBeNull();
   });
 
   it("renders wide review-style markdown tables with transcript table chrome", () => {

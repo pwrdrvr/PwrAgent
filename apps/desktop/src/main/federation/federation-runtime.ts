@@ -307,6 +307,7 @@ import { spawnTerminalPty } from "../terminal/integrated-terminal-service";
 import { registerWorktreeTerminalOwner } from "../terminal/worktree-terminals";
 import {
   readTranscriptImageProtocolRequest,
+  rewriteFederatedTranscriptImageUrlForRenderer,
   rewriteFederatedTranscriptImageUrlsForRenderer,
   toFederatedTranscriptImageProtocolUrl,
 } from "../transcript-image-protocol";
@@ -546,6 +547,12 @@ function rewriteLiveTranscriptImagesForFederation(
   event: AgentEvent,
   ownerInstanceId: FederationInstanceId,
 ): AgentEvent {
+  if (event.rendererImageParts?.length) {
+    event = { ...event, rendererImageParts: event.rendererImageParts.map((image) => ({
+      ...image,
+      url: rewriteFederatedTranscriptImageUrlForRenderer(image.url, ownerInstanceId),
+    })) };
+  }
   if (
     event.notification.method !== "item/started"
     && event.notification.method !== "item/completed"
@@ -823,6 +830,7 @@ export function unsequencedFederationEventPayload(event: AgentEvent): AgentEvent
   return {
     backend: event.backend,
     notification: event.notification,
+    ...(event.rendererImageParts ? { rendererImageParts: event.rendererImageParts } : {}),
     ...(event.errorNoticeContext
       ? { errorNoticeContext: event.errorNoticeContext }
       : {}),
