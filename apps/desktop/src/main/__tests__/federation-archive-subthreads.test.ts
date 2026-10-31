@@ -11,6 +11,12 @@ import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-w
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createSubthreadTrays } from "../../renderer/src/features/navigation/subthread-trays";
 
+const providerRegistry = vi.hoisted(() => ({ archiveThread: vi.fn(), publishLocalEvent: vi.fn(async () => {}) }));
+vi.mock("../app-server/backend-registry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../app-server/backend-registry")>()),
+  getDesktopBackendRegistry: () => providerRegistry,
+}));
+
 vi.mock("../acp/acp-instance-discovery", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../acp/acp-instance-discovery")>()),
   discoverLocalAcpAgentRecords: vi.fn(async () => []),
@@ -25,6 +31,7 @@ describe("Federation nested archive placement", () => {
     ["middle", "middle-owner"], ["child-b", "child-owner"],
     ["child-a", "fourth-owner"], ["deeper", "fourth-owner"],
   ]);
+  const fixtureIds = new Set(owners.keys());
   let runtime: DesktopFederationRuntime;
   let remoteUpdate: ReturnType<typeof vi.fn>;
 
@@ -105,7 +112,7 @@ describe("Federation nested archive placement", () => {
     databases.splice(0).forEach((db) => db.close());
     directories.splice(0).forEach(removeTempStateDbDir);
     stores.clear();
-    for (const id of [...owners.keys()]) if (id.startsWith("extra-")) owners.delete(id);
+    for (const id of [...owners.keys()]) if (!fixtureIds.has(id)) owners.delete(id);
   });
 
   it("replaces only the intermediate row across four owners in exact flattened order", async () => {
@@ -146,6 +153,73 @@ describe("Federation nested archive placement", () => {
     expect(await summary("child-b")).toMatchObject({ parentThreadId: "middle" });
   });
 
+  it("promotes local survivors through a remote ancestor without remote-owner overlays", async () => {
+    owners.set("local-survivor", "middle-owner");
+    owners.set("ancestor-owned-survivor", "root-owner");
+    await link("local-survivor", "middle");
+    await link("ancestor-owned-survivor", "middle");
+    await stores.get("middle-owner")!.updateSubthreadOrder({ backend: "codex", parentThreadId: "middle",
+      threadIds: ["child-b", "local-survivor", "ancestor-owned-survivor", "child-a"] });
+    await runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" });
+    await stores.get("middle-owner")!.observeArchivedThreads([{ backend: "codex", threadId: "middle" }], 1000, { promoteSubthreads: true });
+    expect(await tray()).toEqual(["before", "child-b", "deeper", "local-survivor", "ancestor-owned-survivor", "child-a", "after"]);
+    expect(await summary("local-survivor")).toMatchObject({ parentThreadId: "root", parentThreadInstanceId: "root-owner" });
+    expect((await summary("ancestor-owned-survivor")).parentThreadInstanceId).toBeUndefined();
+    expect(await stores.get("middle-owner")!.getThreadOverlayState({ backend: "codex", threadId: "root" })).toBeUndefined();
+    expect(await stores.get("root-owner")!.getThreadOverlayState({ backend: "codex", threadId: "local-survivor" })).toBeUndefined();
+    expect((await stores.get("middle-owner")!.listRemoteThreadPins()).find((pin) => pin.ref.threadId === "root")?.summary?.subthreadOrder)
+      .toEqual(["before", "child-b", "local-survivor", "ancestor-owned-survivor", "child-a", "after"]);
+  });
+
+  it("retries a transport failure after one owner commits without detaching children", async () => {
+    const apply = remoteUpdate.getMockImplementation()!;
+    let fail = true;
+    remoteUpdate.mockImplementation(async (owner: string, request: UpdateSubthreadOrderRequest) => {
+      if (owner === "fourth-owner" && !request.archivePromotion?.dryRun && fail) {
+        fail = false;
+        throw new Error("transport interrupted");
+      }
+      return await apply(owner, request);
+    });
+    await expect(runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" })).rejects.toThrow("transport interrupted");
+    expect((await summary("middle")).archivedAt).toBeUndefined();
+    expect((await summary("child-b")).parentThreadId).toBe("root");
+    expect((await summary("child-a")).parentThreadId).toBe("middle");
+    await runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" });
+    await stores.get("middle-owner")!.observeArchivedThreads([{ backend: "codex", threadId: "middle" }], 1000, { promoteSubthreads: true });
+    expect(await tray()).toEqual(["before", "child-b", "deeper", "child-a", "after"]);
+  });
+
+  it("skips an older remote archive and replaces its slot under the nearest live ancestor", async () => {
+    owners.set("older-archive", "root-owner");
+    await link("older-archive", "root");
+    await link("middle", "older-archive");
+    await stores.get("root-owner")!.updateSubthreadOrder({ backend: "codex", parentThreadId: "root",
+      threadIds: ["before", "older-archive", "after"] });
+    await stores.get("root-owner")!.observeArchivedThreads([{ backend: "codex", threadId: "older-archive" }], 500);
+    await mount("middle-owner", "older-archive");
+    await mount("middle-owner", "root");
+    await runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" });
+    await stores.get("middle-owner")!.observeArchivedThreads([{ backend: "codex", threadId: "middle" }], 1000, { promoteSubthreads: true });
+    expect(await tray()).toEqual(["before", "child-b", "deeper", "child-a", "after"]);
+  });
+
+  it("rolls back all relationships and cached membership on a failed owner transaction", async () => {
+    const request = await (async () => {
+      await runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" });
+      return remoteUpdate.mock.calls.find(([owner, entry]) => owner === "root-owner" && !entry.archivePromotion.dryRun)![1] as UpdateSubthreadOrderRequest;
+    })();
+    // Restore only the root owner's cache/order to the pre-boundary snapshot.
+    await stores.get("root-owner")!.removeRemoteThreadPin({ ref: buildFederatedThreadRef({ backend: "codex", threadId: "child-b", instanceId: "child-owner" }) });
+    await stores.get("root-owner")!.removeRemoteThreadPin({ ref: buildFederatedThreadRef({ backend: "codex", threadId: "child-a", instanceId: "fourth-owner" }) });
+    await stores.get("root-owner")!.updateSubthreadOrder({ backend: "codex", parentThreadId: "root", threadIds: ["before", "middle", "after"] });
+    databases[0]!.raw.exec(`CREATE TRIGGER fail_promotion BEFORE INSERT ON remote_thread_pins
+      WHEN NEW.thread_id = 'child-a' BEGIN SELECT RAISE(ABORT, 'fixture failure'); END;`);
+    expect(() => stores.get("root-owner")!.applyArchiveSubthreadPromotion(request.archivePromotion!, "root-owner")).toThrow("fixture failure");
+    expect((await summary("root")).subthreadOrder).toEqual(["before", "middle", "after"]);
+    expect((await stores.get("root-owner")!.listRemoteThreadPins()).some((pin) => pin.ref.threadId === "child-b")).toBe(false);
+  });
+
   it("rejects a child reparented after discovery without overwriting its owner or viewer", async () => {
     let moved = false;
     remoteUpdate.mockImplementation(async (owner: string, request: UpdateSubthreadOrderRequest) => {
@@ -177,9 +251,12 @@ describe("Federation nested archive placement", () => {
     for (let index = 0; index < 98; index++) owners.delete(`extra-${index}`);
   });
 
-  it.each(["offline", "denied"])("keeps relationships and caches intact when an owner is %s", async (reason) => {
-    if (reason === "offline") vi.mocked(runtime.assertRemoteNavigationQueryProtocol).mockImplementation(() => { throw new Error("offline"); });
-    else vi.mocked(runtime.remoteTargetSupportsCapability).mockReturnValue(false);
+  it.each(["offline", "denied", "upgrade"])("keeps relationships and caches intact when the last participant is %s", async (reason) => {
+    if (reason === "offline") vi.mocked(runtime.assertRemoteNavigationQueryProtocol).mockImplementation((target) => {
+      if (target.instanceId === "root-owner") throw new Error("offline");
+    });
+    else vi.mocked(runtime.remoteTargetSupportsCapability).mockImplementation((target, capability) =>
+      target.instanceId !== "root-owner" || capability !== (reason === "denied" ? "thread_grouping" : "archive_subthread_promotion_v1"));
     await expect(runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" })).rejects.toThrow();
     expect(await summary("child-b")).toMatchObject({ parentThreadId: "middle", parentThreadInstanceId: "middle-owner" });
     expect((await summary("root")).subthreadOrder).toEqual(["before", "middle", "after"]);
