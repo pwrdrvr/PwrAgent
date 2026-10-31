@@ -3544,6 +3544,7 @@ export class DesktopFederationRuntime {
     let anchor = { backend: params.backend, threadId: params.parentThreadId, instanceId: localInstanceId };
     let parent: ArchiveSubthreadPromotion["parent"] = null;
     let parentSummary: NavigationThreadSummary | undefined;
+    let parentInstanceLabel: string | undefined;
     const seen = new Set<string>();
     while (cursor?.parentThreadId) {
       const owner: string = cursor.parentThreadInstanceId ?? cursorOwner;
@@ -3553,13 +3554,15 @@ export class DesktopFederationRuntime {
       if (seen.has(key)) throw new Error("Cyclic archive ancestry. Refresh the group before archiving.");
       seen.add(key);
       const local = owner === localInstanceId ? await store.getThreadOverlayState({ backend, threadId }) : undefined;
-      const cached = pins.find((pin) => isRemoteFederationTarget(pin.ref.target)
-        && pin.ref.target.instanceId === owner && pin.ref.backend === backend && pin.ref.threadId === threadId)?.summary;
+      const cachedPin = pins.find((pin) => isRemoteFederationTarget(pin.ref.target)
+        && pin.ref.target.instanceId === owner && pin.ref.backend === backend && pin.ref.threadId === threadId);
+      const cached = cachedPin?.summary;
       if (!local && !cached) throw new Error("The surviving ancestor is unavailable. Refresh the group before archiving.");
       if (local?.archiveRetentionStartedAt === undefined && local?.archiveTombstonedAt === undefined
         && cached?.archivedAt === undefined) {
         parent = { backend, threadId, instanceId: owner };
         parentSummary = cached;
+        parentInstanceLabel = cachedPin?.instanceLabel;
         break;
       }
       anchor = { backend, threadId, instanceId: owner };
@@ -3588,7 +3591,7 @@ export class DesktopFederationRuntime {
       anchor, expectedParent: archived?.parentThreadId ? { threadId: archived.parentThreadId,
         backend: archived.parentThreadBackend ?? params.backend, instanceId: archived.parentThreadInstanceId } : null,
       expectedChildOrder: archived?.subthreadOrder ?? [],
-      parent, parentSummary, children: ordered.map(({ ref, summary, instanceLabel }) => ({ ref, summary, instanceLabel })),
+      parent, parentSummary, parentInstanceLabel, children: ordered.map(({ ref, summary, instanceLabel }) => ({ ref, summary, instanceLabel })),
     };
     const participants = new Set(ordered.flatMap(({ ref }) =>
       isRemoteFederationTarget(ref.target) ? [ref.target.instanceId] : []));
@@ -3629,7 +3632,7 @@ export class DesktopFederationRuntime {
     if (parentSummary && parent && parentOrder) {
       await store.updateRemoteThreadPinSnapshots([{
         ref: buildFederatedThreadRef({ backend: parent.backend, threadId: parent.threadId, instanceId: parent.instanceId }),
-        summary: { ...parentSummary, subthreadOrder: parentOrder }, instanceLabel: parent.instanceId,
+        summary: { ...parentSummary, subthreadOrder: parentOrder }, instanceLabel: parentInstanceLabel ?? parent.instanceId,
       }]);
     }
   }
