@@ -245,3 +245,61 @@ to approximately twenty launches; pending launches remain tracked.
 
 Set `PWRAGENT_E2E_WORKER_DIAGNOSTICS=0` only to compare instrumentation overhead.
 Failure semantics stay unchanged when capture is disabled.
+
+## Regular hosted Windows pipe evidence
+
+The Windows E2E job uses `pnpm test:desktop-e2e:windows-diagnostics`. It forwards
+the same desktop build, test arguments, shards, workers, retries and deadlines.
+No Electron close promise or cleanup phase waits for this recorder.
+
+An external controller starts native process observation before starting pnpm,
+before Electron launcher pipes exist. Native x64 process snapshots are sampled
+with a 50 ms pause. Identities use PID plus creation FILETIME; retained,
+non-inheritable `PROCESS_QUERY_LIMITED_INFORMATION` handles supply native exit
+FILETIMEs. These are 100 ns units since 1601, not CIM/DateTime ticks since year
+0001. A process may begin and end between samples. Missing or ambiguous
+ancestry remains explicit. A sampled disappearance time cannot substitute for
+a native exit time. Executable paths are recorded; command lines are omitted.
+
+The true Playwright worker guard remains. Each direct native Electron launch
+gets a random `launchId` carried through exit, close and stage events. Only
+launch generates a Node report, retaining pipe names rather than the raw
+report. A worker-PID suffix supplies a candidate pool, not a per-launch mapping.
+The controller narrows that pool against the exact live main's handle-name
+inventory and requires four complete exact names. Creation identity is checked
+before and after each scoped name inventory.
+
+On a natural code-zero exit with all four launcher streams still open, the
+worker captures callback-entry time and flags before reports or queries. It
+immediately preserves the trigger. The controller inspects surviving processes
+from the retained ancestry first, requiring all four exact endpoint names and
+the same creation identity before and after inspection. A bounded global search
+supplies fallback candidates; substring matches do not qualify. Query intervals,
+access failures, timeouts, omissions and unavailable mappings remain explicit.
+The result flags a launch inventory that overlaps the exit callback and marks
+known diagnostic processes so their handles cannot be mistaken for an
+uninstrumented holder.
+
+Names come from the official [Sysinternals Handle utility](https://learn.microsoft.com/en-us/sysinternals/downloads/handle),
+downloaded and checked for a valid Microsoft signature by the Windows job.
+Queries use its File-only default and never request handle closure. The custom
+native helper never duplicates remote handles or opens Job handles. Every
+observer and scanner belongs to the controller, not a Playwright worker.
+Diagnostic setup failure is logged and leaves the original test command running.
+
+The normal `test-results/worker-shutdown/native-controller/` artifact contains
+`native-processes.jsonl`, `launch-<launchId>.json`, `trigger-<launchId>.json`,
+`match-<launchId>.json`, tool/source hashes and a summary. The native journal is
+capped at 8 MiB and the observer at 32,768 starts. There are at most two concurrent
+queries and four triggered captures per run; each capture considers at most
+sixteen preserved descendants and eight global candidates within a five-second
+query window after its main mapping is available. Requests, query outputs and
+log records are bounded too. Raw tool output, environments and raw Node reports
+are not uploaded. On cancellation, `[worker-shutdown-evidence]` retains the
+trigger and `[windows-pipe-evidence]` retains bounded results when available.
+
+Diagnostic work can affect scheduling. A source verified against all four exact
+names is an observed holder during that query interval. It does not prove its
+launch cause, missing Job assignment, or the cause of a separate live-main
+native stall. A controlled probe validates instrumentation; a natural failure
+must establish the holder for this investigation.
