@@ -3,6 +3,7 @@ import * as composerMentionSources from "../useComposerMentionSources";
 import { buildThreadComposerScopeKey } from "../useComposerDraftStore";
 import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
 import { hydrateComposerDraft } from "../composer-draft-hydration";
+import * as rateLimitSchedule from "../rate-limit-schedule";
 import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-references";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, createEvent, fireEvent, render, renderHook, screen, waitFor, within } from "../../../test/phase-probes";
@@ -8028,7 +8029,7 @@ describe("Composer", () => {
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
-  it("shows a 5h context reset schedule option when the backend exposes a reset", async () => {
+  it("schedules after the actual rate limit reset with a buffer and one jitter sample", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({
@@ -8037,6 +8038,9 @@ describe("Composer", () => {
       turnId: "turn-scheduled",
     }));
 
+    const scheduledApi = createScheduledActionApi();
+    const resetAt = Date.now() + 180 * 60_000;
+
     render(
       <Composer
         backends={[
@@ -8044,15 +8048,17 @@ describe("Composer", () => {
             ...backendSummary("codex"),
             rateLimits: [
               {
-                name: "5h limit",
-                resetAt: Date.now() + 154 * 60_000,
+                name: "5-hour limit",
+                limitId: "five_hour",
+                windowMinutes: 300,
+                resetAt,
                 usedPercent: 80,
               },
             ],
           },
         ]}
         desktopApi={{
-          ...createScheduledActionApi(),
+          ...scheduledApi,
           onAgentEvent: () => () => undefined,
           startTurn,
         }}
@@ -8073,22 +8079,68 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "After the reset" } });
     fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
-    await act(async () => {
-      fireEvent.click(
-        screen.getByRole("menuitem", {
-          name: "Send in 2h 34m (5h context reset)",
-        })
-      );
-    });
+    const sample = vi.spyOn(Math, "random").mockReturnValue(0.4);
+    const resetSendAt = vi.spyOn(rateLimitSchedule, "getRateLimitResetSendAt");
+    try {
+      const option = screen.getByRole("menuitem", { name: /Send after rate limit reset/ });
+      expect(option).toHaveTextContent("In 3h 5m–3h 10m · 5–10m buffer");
+      expect(resetSendAt).not.toHaveBeenCalled();
+      await act(async () => { fireEvent.click(option); });
+      expect(resetSendAt).toHaveBeenCalledExactlyOnceWith(resetAt);
+    } finally {
+      resetSendAt.mockRestore();
+      sample.mockRestore();
+    }
+    expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledWith(
+      expect.objectContaining({ scheduledFor: resetAt + 7 * 60_000 }),
+    );
 
     expect(startTurn).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Scheduled message")).toHaveTextContent(
-      "Scheduled · sends in 2h 34m"
+      "Scheduled · sends in 3h 7m"
     );
     expect(screen.getByLabelText("Scheduled message")).toHaveTextContent(
       "After the reset"
     );
   });
+
+  it.each(["no reset", "weekly limit", "remote owner"])(
+    "hides the computed schedule for %s while retaining fixed delays", (scenario) => {
+      render(
+        <Composer
+          backends={[{
+            ...backendSummary("codex"),
+            rateLimits: scenario === "no reset" ? [] : [{
+              name: "Plan limit",
+              resetAt: Date.now() + 3 * 60 * 60_000,
+              windowMinutes: scenario === "weekly limit" ? 10_080 : 300,
+            }],
+          }]}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Schedule availability",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+            ...(scenario === "remote owner" ? {
+              federation: {
+                instanceLabel: "Owner",
+                ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "owner" } },
+                capabilities: [],
+              },
+            } : {}),
+          }}
+        />,
+      );
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "For later" } });
+      fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
+      expect(screen.queryByRole("menuitem", { name: /Send after rate limit reset/ })).not.toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: "Send in 5h" })).toBeInTheDocument();
+    },
+  );
 
   it("hides the schedule caret on a launchpad where scheduling does not apply", () => {
     render(

@@ -16,6 +16,12 @@ import {
   findCheckedOutPullRequest,
 } from "../../../../shared/pull-request-review";
 import { hydrateComposerDraft } from "./composer-draft-hydration";
+import {
+  getShortTermRateLimitResetAt,
+  getRateLimitResetSendAt,
+  RATE_LIMIT_RESET_BUFFER_MS,
+  RATE_LIMIT_RESET_JITTER_MS,
+} from "./rate-limit-schedule";
 import { useLaunchpadComposerFocusHandoff } from "./useLaunchpadComposerFocusHandoff";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
@@ -924,12 +930,14 @@ const SCHEDULED_SEND_OPTIONS = [
   { label: "Send in 30m", delayMs: 30 * 60_000 },
   { label: "Send in 1h", delayMs: 60 * 60_000 },
   { label: "Send in 2h", delayMs: 2 * 60 * 60_000 },
+  { label: "Send in 5h", delayMs: 5 * 60 * 60_000 },
 ] as const;
 
 type ScheduledSendMenuOption = {
   delayMs?: number;
   label: string;
-  scheduledSendAt?: number;
+  description?: string;
+  rateLimitResetAt?: number;
 };
 
 const globalQueuedTurnReleaseScopeKeys = new Set<string>();
@@ -949,69 +957,6 @@ function formatScheduledSendCountdown(
   now = Date.now(),
 ): string {
   return formatRunningDurationMs(Math.max(0, scheduledSendAt - now));
-}
-
-function isFiveHourRateLimitName(value?: string): boolean {
-  return value?.toLowerCase().endsWith("5h limit") ?? false;
-}
-
-function rateLimitMatchesModel(
-  rateLimit: NonNullable<BackendSummary["rateLimits"]>[number],
-  selectedModelOption?: ModelOption,
-): boolean {
-  const modelTerms = [
-    selectedModelOption?.id,
-    selectedModelOption?.label,
-  ]
-    .filter((term): term is string => Boolean(term))
-    .map((term) => term.toLowerCase());
-  if (modelTerms.length === 0) {
-    return false;
-  }
-
-  const searchable = [
-    rateLimit.limitId,
-    rateLimit.name,
-  ]
-    .filter((term): term is string => Boolean(term))
-    .map((term) => term.toLowerCase());
-  return modelTerms.some((term) =>
-    searchable.some((candidate) => candidate.includes(term))
-  );
-}
-
-function getFiveHourRateLimitResetAt(params: {
-  backend?: BackendSummary;
-  now: number;
-  selectedModelOption?: ModelOption;
-}): number | undefined {
-  const candidates = (params.backend?.rateLimits ?? []).filter((rateLimit) => {
-    const resetAt = rateLimit.resetAt;
-    return (
-      typeof resetAt === "number" &&
-      Number.isFinite(resetAt) &&
-      resetAt > params.now &&
-      (isFiveHourRateLimitName(rateLimit.name) ||
-        isFiveHourRateLimitName(rateLimit.limitId))
-    );
-  });
-  if (candidates.length === 0) {
-    return undefined;
-  }
-
-  const modelSpecific = candidates.filter((candidate) =>
-    rateLimitMatchesModel(candidate, params.selectedModelOption)
-  );
-  const generic = candidates.filter(
-    (candidate) => candidate.name.toLowerCase() === "5h limit",
-  );
-  const ordered =
-    modelSpecific.length > 0
-      ? modelSpecific
-      : generic.length > 0
-        ? generic
-        : candidates;
-  return Math.min(...ordered.map((candidate) => candidate.resetAt!));
 }
 
 const SLASH_COMMANDS: SlashCommandSuggestion[] = [
@@ -11060,27 +11005,36 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     abandonComposerDraftSnapshot(composerScopeKey);
     props.onCancelLaunchpad?.(request.directoryKey);
   }, [props.launchpadCancelRequest]);
-  const fiveHourResetAt = getFiveHourRateLimitResetAt({
-    backend,
-    now: scheduleNow,
-    selectedModelOption,
-  });
+  const backendsDescribeScheduleOwner =
+    filesystemFederationTarget?.scope !== "remote"
+    || rendererFederationTarget?.instanceId === filesystemFederationTarget.instanceId;
+  const shortTermResetAt = backendsDescribeScheduleOwner
+    ? getShortTermRateLimitResetAt({
+        rateLimits: backend?.rateLimits,
+        now: scheduleNow,
+        selectedModelOption,
+      })
+    : undefined;
   const scheduledSendOptions: ScheduledSendMenuOption[] = [
+    ...(shortTermResetAt
+      ? [
+          {
+            label: "Send after rate limit reset",
+            description: `In ${formatScheduledSendCountdown(
+              shortTermResetAt + RATE_LIMIT_RESET_BUFFER_MS,
+              scheduleNow,
+            )}–${formatScheduledSendCountdown(
+              shortTermResetAt + RATE_LIMIT_RESET_BUFFER_MS + RATE_LIMIT_RESET_JITTER_MS,
+              scheduleNow,
+            )} · 5–10m buffer`,
+            rateLimitResetAt: shortTermResetAt,
+          },
+        ]
+      : []),
     ...SCHEDULED_SEND_OPTIONS.map((option) => ({
       delayMs: option.delayMs,
       label: option.label,
     })),
-    ...(fiveHourResetAt
-      ? [
-          {
-            label: `Send in ${formatScheduledSendCountdown(
-              fiveHourResetAt,
-              scheduleNow,
-            )} (5h context reset)`,
-            scheduledSendAt: fiveHourResetAt,
-          },
-        ]
-      : []),
   ];
   const sendButtonDisabled =
     forking ||
@@ -15277,24 +15231,38 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     </div>
                   </>
                 ) : null}
-                {scheduledSendOptions.map((option) => (
-                  <button
-                    className="composer__schedule-menu-item"
-                    key={option.label}
-                    role="menuitem"
-                    type="button"
-                    onClick={() => {
-                      setScheduleMenuOpen(false);
-                      scheduleCurrentDraft(
-                        option.scheduledSendAt ?? Date.now() + option.delayMs!,
-                      );
-                    }}
-                  >
-                    {props.launchpad
-                      ? option.label.replace(/^Send /, "Start ")
-                      : option.label}
-                  </button>
-                ))}
+                {scheduledSendOptions.map((option) => {
+                  const label = props.launchpad
+                    ? option.label.replace(/^Send /, "Start ")
+                    : option.label;
+                  const onSelect = () => {
+                    setScheduleMenuOpen(false);
+                    if (option.rateLimitResetAt !== undefined) {
+                      if (option.rateLimitResetAt <= Date.now()) return;
+                      scheduleCurrentDraft(getRateLimitResetSendAt(option.rateLimitResetAt));
+                    } else {
+                      scheduleCurrentDraft(Date.now() + option.delayMs!);
+                    }
+                  };
+                  return option.description ? (
+                    <ComposerSendMenuItem
+                      key={option.label}
+                      label={label}
+                      description={option.description}
+                      onSelect={onSelect}
+                    />
+                  ) : (
+                    <button
+                      className="composer__schedule-menu-item"
+                      key={option.label}
+                      role="menuitem"
+                      type="button"
+                      onClick={onSelect}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
               </div>
             ) : null}
           </div>
