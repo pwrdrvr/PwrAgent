@@ -8585,6 +8585,7 @@ a.button {
 
 :root[data-native-drag-active] .directory-row__header--with-launchpad:hover .directory-row__summary-meta {
   opacity: 1;
+  min-width: 0;
 }
 
 .directory-row.is-drop-target-before::before,
@@ -8952,6 +8953,17 @@ a.button {
 .directory-row__header--with-launchpad:hover .directory-row__summary-meta,
 .directory-row__header--with-launchpad:has(.directory-row__launchpad-cluster :focus-visible) .directory-row__summary-meta {
   opacity: 0;
+  /* The faded block keeps at least the cluster's width, so a long name
+     ellipsizes beside the "+" instead of running under it. Without this
+     a directory with no counts has a zero-width block and its title
+     reaches the row's right edge. Both share the 6px right inset, so the
+     block's width equals the cluster's (24px button / 24+16px split). */
+  min-width: 24px;
+}
+
+.directory-row__header--with-launchpad.directory-row__header--split:hover .directory-row__summary-meta,
+.directory-row__header--with-launchpad.directory-row__header--split:has(.directory-row__launchpad-cluster :focus-visible) .directory-row__summary-meta {
+  min-width: 40px;
 }
 
 /* A directory holding an unsent launchpad draft shows the tinted "+"
