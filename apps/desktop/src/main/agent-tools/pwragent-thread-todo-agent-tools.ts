@@ -17,6 +17,7 @@ import {
   THREAD_TODO_PROMPT_MAX_LENGTH,
   THREAD_TODO_TITLE_MAX_LENGTH,
   parseThreadTodoItemTexts,
+  parseThreadTodoMessageTarget,
   threadTodoPrerequisites,
   threadTodoSteps,
 } from "@pwragent/shared";
@@ -301,6 +302,14 @@ function normalizeAction(
   }
   const action = value as Record<string, unknown>;
   switch (action.type) {
+    case "send_message": {
+      const prompt = optionalString(action.prompt);
+      const target = parseThreadTodoMessageTarget(action.target);
+      if (!prompt || prompt.length > THREAD_TODO_PROMPT_MAX_LENGTH || !target) {
+        return { ok: false, message: "send_message requires a prompt of at most 20000 characters and target with backend and threadId." };
+      }
+      return { ok: true, value: { type: "send_message", prompt, target } };
+    }
     case "start_review":
       return { ok: true, value: { type: "start_review" } };
     case "merge_pull_request": {
@@ -361,7 +370,7 @@ function normalizeAction(
       return {
         ok: false,
         message:
-          "add_todo action.type must be start_review, merge_pull_request or start_thread.",
+          "add_todo action.type must be start_review, merge_pull_request, start_thread or send_message.",
       };
   }
 }
@@ -601,6 +610,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Use start_review when the work is ready for review.",
         "Use merge_pull_request when the PR is green and ready to land.",
         "Use start_thread to propose a follow-up thread with its full prompt.",
+        "Use send_message to preview a request for an existing thread; name its target and prompt. The operator sends it. Prefer this over start_thread when an existing thread owns the work.",
         TODO_WRITING_GUIDANCE,
         "Omit the action for a reminder that must not be lost.",
         "The operator clicks to run an action, and you never run it.",
@@ -613,7 +623,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Use prerequisites only for what the operator must do before the thread can start.",
         "Cloning a repository the thread will work in is one example.",
         "Leave prerequisites out when the thread can start right away.",
-        "On any other card, items are the operator's steps.",
+        "On a send_message card, items are the requested work and do not block sending; include those steps in the prompt. On reminder, review, and merge cards, items are the operator's steps.",
         "A card with unchecked blocking steps cannot be marked done until they are checked.",
         "Re-adding a key with items keeps the id and checked state of every step whose text is unchanged.",
         "Use update_todo to change some fields of a card you already raised.",
@@ -677,7 +687,7 @@ function inputSchemaForOperation(
               "A step whose text is unchanged keeps its id and checked state.",
               "A new text starts unchecked, and a step you leave out is removed.",
               "Omit items to keep the card's steps as they are.",
-              "On a start_thread card these are the new thread's steps, and they do not block the start.",
+              "On start_thread and send_message cards these are the destination thread's steps and do not block dispatch.",
             ].join(" "),
           },
           prerequisites: {
@@ -710,7 +720,7 @@ function inputSchemaForOperation(
             properties: {
               type: {
                 type: "string",
-                enum: ["start_review", "merge_pull_request", "start_thread"],
+                enum: ["start_review", "merge_pull_request", "start_thread", "send_message"],
               },
               pullRequest: {
                 type: "string",
@@ -720,7 +730,19 @@ function inputSchemaForOperation(
               prompt: {
                 type: "string",
                 description:
-                  "start_thread only: the complete first message for the new thread. It must stand alone, because the new thread does not see this one.",
+                  "start_thread or send_message: the complete proposed message. Include all context the destination needs.",
+              },
+              target: {
+                type: "object",
+                description: "send_message only: the existing destination thread. Find it with search_threads or read_thread first. The operator can change it before sending.",
+                required: ["backend", "threadId"],
+                properties: {
+                  backend: { type: "string" },
+                  threadId: { type: "string" },
+                  instanceId: { type: "string", description: "Remote owner, if on another machine." },
+                  title: { type: "string", description: "Destination title shown in the preview." },
+                  instanceLabel: { type: "string", description: "Remote machine label shown in the preview." },
+                },
               },
               title: {
                 type: "string",
@@ -792,7 +814,7 @@ function inputSchemaForOperation(
             type: "string",
             description: "The project the work is for: a projectKey from list_instance_projects, a name, or a path. Empty returns the card to this thread's project.",
           },
-          prompt: { type: "string", description: "Handoff cards: the new thread's complete first message." },
+          prompt: { type: "string", description: "Handoff or message cards: the complete proposed message." },
           threadTitle: { type: "string", description: "Handoff cards: the new thread's name. Empty clears it." },
           model: {
             type: "string",

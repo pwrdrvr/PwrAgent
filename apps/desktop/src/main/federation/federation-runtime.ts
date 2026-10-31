@@ -648,6 +648,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_todos",
   "thread_todo_feed",
   "thread_todo_dispatch_target",
+  "thread_todo_message",
   "thread_todo_plan",
   "operator_questions",
   "operator_requests",
@@ -2453,6 +2454,10 @@ export class DesktopFederationRuntime {
   async requestThreadTodoOperation<K extends ThreadTodoOperation>(
     target: FederationRemoteTarget, operation: K, request: ThreadTodoOperationRequest<K>,
   ): Promise<ThreadTodoOperationResponse<K>> {
+    if (operation === "runAction" && request && "messageTarget" in request && request.messageTarget !== undefined
+      && this.todoQueueUnavailableInstance(target, "thread_todo_message")) {
+      throw new Error("Update the card's PwrAgent owner to send requests to existing threads.");
+    }
     const unavailable = this.todoQueueUnavailableInstance(target, "thread_todos")
       ?? (operation === "raisePlan" ? this.todoQueueUnavailableInstance(target, "thread_todo_plan") : undefined);
     if (unavailable) {

@@ -7,6 +7,7 @@ import type {
   ThreadTodoItem,
   ThreadTodoMergeMethod,
   ThreadTodoModelSettings,
+  ThreadTodoMessageTarget,
   ThreadTodoMergeMethodPreferences,
   ThreadTodoProject,
   ThreadTodoResolution,
@@ -45,6 +46,12 @@ type StartThreadAction = Extract<ThreadTodoAction, { type: "start_thread" }>;
  * once the review starts.
  */
 export type ThreadTodoActionRunners = {
+  sendMessage?: (params: {
+    sourceBackend: AppServerBackendKind;
+    sourceThreadId: string;
+    target: ThreadTodoMessageTarget;
+    prompt: string;
+  }) => Promise<{ summary: string }>;
   mergePullRequest: (params: {
     cwd?: string;
     pullRequest: string;
@@ -636,6 +643,7 @@ export class ThreadTodoService {
       mergeMethod?: ThreadTodoMergeMethod;
       rememberMergeMethod?: boolean;
       startOnInstanceId?: string;
+      messageTarget?: ThreadTodoMessageTarget;
       modelSettings?: ThreadTodoModelSettings;
       /** A run that succeeds marks the card done, so it asks the same. */
       allowOpenItems?: boolean;
@@ -675,6 +683,20 @@ export class ThreadTodoService {
     const crossProject = todo.targetProject !== undefined;
     this.running.add(id);
     try {
+      if (action.type === "send_message" || options.messageTarget) {
+        if (action.type !== "send_message" && action.type !== "start_thread") {
+          throw new ThreadTodoError("invalid_arguments", "Only a handoff can be sent to another thread.");
+        }
+        const target = options.messageTarget ?? (action.type === "send_message" ? action.target : undefined);
+        if (!target || !runners.sendMessage) throw new Error("Sending a message is not available.");
+        if (!target.instanceId && target.backend === todo.backend && target.threadId === todo.threadId) {
+          throw new ThreadTodoError("invalid_arguments", "Use Do it here for this card's own thread.");
+        }
+        const sent = await runners.sendMessage({
+          sourceBackend: todo.backend, sourceThreadId: todo.threadId, target, prompt: action.prompt,
+        });
+        return this.finish(id, { result: sent.summary });
+      }
       if (action.type === "merge_pull_request") {
         const method = options.mergeMethod
           ?? (project ? this.store.getProjectMergeMethod(project.key) : undefined)
@@ -695,6 +717,7 @@ export class ThreadTodoService {
         });
         return this.finish(id, { result: merged.summary });
       }
+      if (action.type !== "start_thread") throw new Error("Unsupported to-do action.");
       const choices: ThreadTodoStartChoices = {
         ...(options.workMode ? { workMode: options.workMode } : {}),
         ...(options.environment ? { environment: options.environment } : {}),
@@ -844,6 +867,12 @@ function patchAction(
     return action;
   }
   const fields = Object.keys(patch);
+  if (action?.type === "send_message") {
+    if (fields.some((field) => field !== "prompt")) {
+      throw new ThreadTodoError("invalid_arguments", "A message card takes only prompt updates. Raise it again with the same key to change its destination.");
+    }
+    return patch.prompt ? { ...action, prompt: patch.prompt } : action;
+  }
   if (action?.type === "merge_pull_request") {
     const misplaced = fields.filter((field) => field !== "pullRequest");
     if (misplaced.length > 0) {

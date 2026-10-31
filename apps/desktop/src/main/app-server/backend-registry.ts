@@ -42105,6 +42105,25 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /** Operator-approved to-do dispatch uses the same routing, queue and receipts as agent messages. */
+  async sendThreadTodoMessage(params: {
+    sourceBackend: AppServerBackendKind;
+    sourceThreadId: string;
+    target: { backend: AppServerBackendKind; threadId: string; instanceId?: string };
+    prompt: string;
+  }): Promise<void> {
+    const response = await this.deliverMessageToThread({
+      operation: "send_message_to_thread",
+      context: { backend: params.sourceBackend, threadId: params.sourceThreadId },
+      args: {
+        ...params.target,
+        includeRemote: params.target.instanceId !== undefined,
+        prompt: params.prompt,
+      },
+    });
+    if (!response.ok) throw new Error(response.error.message);
+  }
+
   private async sendMessageToThread(
     request: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
@@ -42121,6 +42140,12 @@ export class DesktopBackendRegistry {
         "Thread orchestration tools must be invoked from a live turn.",
       );
     }
+    return await this.deliverMessageToThread(request);
+  }
+
+  private async deliverMessageToThread(
+    request: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">,
+  ): Promise<PwrAgentThreadOrchestrationResponse> {
     const backend = request.args.backend;
     if (!isAppServerBackendKind(backend)) {
       return threadOrchestrationFailure(

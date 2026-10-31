@@ -2876,7 +2876,7 @@ export function ThreadView(props: ThreadViewProps) {
     options?: ThreadTodoDoHereOptions,
   ): Promise<boolean> => {
     const { prompt, ...resolveOptions } = options ?? {};
-    const handoff = todo.action?.type === "start_thread" ? todo.action.prompt : undefined;
+    const handoff = todo.action?.type === "start_thread" || todo.action?.type === "send_message" ? todo.action.prompt : undefined;
     const text = prompt ?? handoff;
     if (!text || !selectedThread || threadTodoThreadKey(todo) !== threadSummaryIdentityKey(selectedThread)) return false;
     try {

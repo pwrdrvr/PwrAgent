@@ -472,7 +472,7 @@ export function installThreadTodoRuntime(params: {
 /** The registry calls a to-do's Start thread makes. */
 export type ThreadTodoRunnerRegistry = Pick<
   DesktopBackendRegistry,
-  "readThreadHandoffSettings" | "readBackendModelOptions" | "listBackends" | "renameThread" | "startThread" | "startTurn"
+  "readThreadHandoffSettings" | "readBackendModelOptions" | "listBackends" | "renameThread" | "startThread" | "startTurn" | "sendThreadTodoMessage"
 >;
 
 /**
@@ -530,6 +530,10 @@ export function createThreadTodoRunners(params: {
       return [];
     });
   return {
+    sendMessage: async (request) => {
+      await registry.sendThreadTodoMessage(request);
+      return { summary: `Sent to ${request.target.title ?? request.target.threadId}` };
+    },
     mergePullRequest: async (request) =>
       await new GithubPrFetcher().mergePullRequest(request),
     startThread: async ({

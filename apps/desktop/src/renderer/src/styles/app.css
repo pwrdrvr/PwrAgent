@@ -25032,6 +25032,103 @@ a.button {
 }
 
 /* The Markdown prompt rests at three lines; its own control opens it. */
+.todo-message-destination {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.todo-message-destination__heading,
+.todo-message-destination__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.todo-message-destination__target {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.todo-message-destination__heading > span:first-child {
+  align-self: flex-start;
+  color: var(--text-muted);
+}
+
+.todo-message-destination .thread-todo-card__button {
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.todo-message-destination .thread-todo-card__button:hover {
+  background: var(--bg-panel-hover);
+}
+
+.todo-message-destination .thread-todo-card__button:focus-visible {
+  outline: 1px solid var(--focus-ring);
+}
+
+.todo-message-destination .thread-todo-card__button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.todo-message-destination small {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.todo-message-destination input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.todo-message-destination input:focus-visible {
+  outline: 1px solid var(--focus-ring);
+}
+
+.todo-message-destination__results {
+  display: grid;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.todo-message-destination__results button {
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.todo-message-destination__results button:hover,
+.todo-message-destination__results button:focus-visible {
+  background: var(--bg-panel-hover);
+  outline: 1px solid var(--focus-ring);
+}
+
+.todo-split__primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .thread-todo-card__prompt {
   display: block;
   width: 100%;

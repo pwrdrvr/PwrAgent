@@ -2106,6 +2106,14 @@ describe("DesktopFederationRuntime", () => {
       expect(sent).toEqual([]);
     });
 
+    it("never sends a message override to an older owner that would start a thread instead", async () => {
+      const { runtime, sent } = viewerOf(["thread_detail", "turn_control", "thread_todos", "thread_todo_dispatch_target"]);
+      await expect(runtime.requestThreadTodoOperation(target, "runAction", {
+        id: "card", messageTarget: { backend: "codex", threadId: "existing-owner" },
+      })).rejects.toThrow("Update the card's PwrAgent owner");
+      expect(sent).toEqual([]);
+    });
+
     it("names To-dos when the owner lacks thread_todos", async () => {
       const { runtime, sent } = viewerOf(["thread_detail", "turn_control", "thread_todo_plan"]);
       expect(runtime.remotePeerSupportsTodoPlan(target)).toBe(false);

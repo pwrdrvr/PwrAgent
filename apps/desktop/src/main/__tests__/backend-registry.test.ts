@@ -45915,6 +45915,31 @@ script = "printf setup"
     if (queueMode === "settings") expect(codexClient.lastStartTurnParams?.reasoningEffort).toBe("high");
   });
 
+  it("sends an operator-approved to-do request from an idle source through the existing queue", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: ["sender", "recipient"].map((id) => ({
+        id, title: id, titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [],
+      })),
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "recipient", turnId: "busy", turn: { id: "busy" } },
+    } });
+    const prompt = "Refresh #42.\n\nKeep the current worktree.";
+    await registry.sendThreadTodoMessage({ sourceBackend: "codex", sourceThreadId: "sender",
+      target: { backend: "codex", threadId: "recipient" }, prompt });
+    const queued = registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")]!;
+    expect(queued).toHaveLength(1);
+    const content = await registry.readQueuedTurn({ backend: "codex", threadId: "recipient", queueEntryId: queued[0]!.queueEntryId });
+    expect(content.input).toEqual([{ type: "text", text: prompt }]);
+    expect(content.messageOrigin?.sourceThread).toMatchObject({ backend: "codex", threadId: "sender" });
+    expect(codexClient.startTurnCalls).toHaveLength(0);
+    await expect(registry.sendThreadTodoMessage({ sourceBackend: "codex", sourceThreadId: "sender",
+      target: { backend: "codex", threadId: "sender" }, prompt })).rejects.toThrow(/another thread/);
+  });
+
   it("keeps cross-thread queue content lossless and persists sender correspondence through cancellation and reload", async () => {
     const directory = mkdtempSync(path.join(os.tmpdir(), "correspondence-test-"));
     onTestFinished(() => rmSync(directory, { recursive: true, force: true }));
