@@ -127,6 +127,7 @@ import { useRecoverableState, useRecoverableComposerDraftStore } from "./lib/Ren
 import { readBootstrapLayoutPreferences } from "./lib/layout-preferences";
 import { useAppearance, type AppearanceController } from "./lib/useAppearance";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
+import { useSidebarOwnerBackends } from "./lib/useSidebarOwnerBackends";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useDesktopApplications } from "./lib/useDesktopApplications";
 import { useEventCallback } from "./lib/useEventCallback";
@@ -2170,6 +2171,10 @@ function DesktopAppShell(props: {
   const backendSummaries = selectedPeerCatalog
     ? selectedPeerBackendSummaries
     : windowBackendSummaries;
+  const remoteSidebarBackends = useSidebarOwnerBackends(desktopApi, navigation.threads, {
+    enabled: normalAppEnabled,
+    windowInstanceId: windowFederationTarget?.instanceId,
+  });
   const startupBackend = useMemo(
     () => resolveNewThreadBackend(backendSummaries.backends),
     [backendSummaries.backends],
@@ -4255,6 +4260,7 @@ function DesktopAppShell(props: {
           }}
           addingProjectDirectory={navigation.pickingDirectory}
           backends={windowBackendSummaries.backends}
+          remoteBackends={remoteSidebarBackends}
           onRefreshRateLimits={windowBackendSummaries.refreshRateLimits}
           browseMode={navigation.browseMode}
           pinnedThreadsOnTop={navigation.pinnedThreadsOnTop}

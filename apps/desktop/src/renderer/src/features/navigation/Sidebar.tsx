@@ -226,7 +226,10 @@ type SidebarProps = {
   directoryDisclosure?: NavigationDirectoryDisclosure;
   /** True while a full-window layer (Settings, Automations) covers it. */
   inert?: boolean;
+  /** Provider catalog of this window's navigation owner. */
   backends: BackendSummary[];
+  /** Provider catalogs for rows mounted from other instances; absent means pending. */
+  remoteBackends?: ReadonlyMap<string, readonly BackendSummary[]>;
   browseMode: BrowseMode;
   /**
    * `general.pinned_threads_on_top`: Updated and Created gather every pin
@@ -1424,8 +1427,15 @@ export function Sidebar(props: SidebarProps) {
     return () => window.clearTimeout(timeoutId);
   }, [copiedRuntimeValue]);
 
+  const threadBackends = (thread: NavigationThreadSummary): readonly BackendSummary[] => {
+    const target = thread.federation?.ref.target;
+    return target?.scope === "remote" && target.instanceId !== federationTarget?.instanceId
+      ? props.remoteBackends?.get(target.instanceId) ?? []
+      : props.backends;
+  };
+
   const canRenameThread = (thread: NavigationThreadSummary): boolean =>
-    props.backends.some(
+    threadBackends(thread).some(
       (backend) =>
         backend.kind === thread.source &&
         backend.available &&
@@ -1433,7 +1443,7 @@ export function Sidebar(props: SidebarProps) {
     );
 
   const canArchiveThread = (thread: NavigationThreadSummary): boolean =>
-    props.backends.some(
+    threadBackends(thread).some(
       (backend) =>
         backend.kind === thread.source &&
         backend.available &&
@@ -1441,7 +1451,7 @@ export function Sidebar(props: SidebarProps) {
     );
 
   const canForkThread = (thread: NavigationThreadSummary): boolean =>
-    props.backends.some(
+    threadBackends(thread).some(
       (backend) =>
         backend.kind === thread.source &&
         backend.available &&
@@ -2185,7 +2195,7 @@ export function Sidebar(props: SidebarProps) {
     );
   const threadCanRename = (thread: NavigationThreadSummary): boolean =>
     Boolean(props.onRenameThread)
-    && threadSupportsRename(thread, props.backends, Boolean(federationTarget));
+    && threadSupportsRename(thread, threadBackends(thread), Boolean(federationTarget));
 
   /**
    * Rename in place: in the thread's sidebar row when the list shows one,
@@ -2842,7 +2852,8 @@ export function Sidebar(props: SidebarProps) {
   const bulkUnlinkableThreads = contextMenuThreads.filter(
     (thread) => Boolean(thread.parentThreadId),
   );
-  const bulkArchivableThreads = contextMenuThreads.filter(canArchiveThread);
+  const bulkArchivableThreads = contextMenuThreads.filter((thread) =>
+    canArchiveThread(thread) && threadCanRouteRemoteCapability(thread, "turn_control"));
   const bulkHasPinActions =
     bulkCanPin &&
     (bulkPinnedThreads.length > 0 || bulkUnpinnedThreads.length > 0);
