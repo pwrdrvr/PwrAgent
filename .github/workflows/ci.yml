@@ -368,6 +368,8 @@ jobs:
           cache-electron: "true"
 
       - name: Test
+        env:
+          PWRAGENT_UNBORN_WORKSPACE_TRACE: "1"
         timeout-minutes: 20
         # Keep a common MSYS parent alive while parallel workers launch Git
         # and Bash. Independent starts from PowerShell can race MSYS shared
