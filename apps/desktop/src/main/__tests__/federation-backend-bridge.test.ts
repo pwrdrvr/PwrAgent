@@ -23,6 +23,7 @@ import {
   QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE,
   QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE,
   registerFederationBackendHandlers,
+  additionalFederationBackendCapabilities,
   type FederationBackendOperations,
 } from "../federation/federation-backend-bridge";
 import { FederationRouter } from "../federation/federation-router";
@@ -31,6 +32,33 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("requires grouping and versioned promotion capabilities on the receiving owner", async () => {
+    const request = { backend: "codex" as const, parentThreadId: "root", archivePromotion: {
+      archived: { backend: "codex" as const, threadId: "middle", instanceId: "viewer" },
+      anchor: { backend: "codex" as const, threadId: "middle", instanceId: "viewer" },
+      expectedParent: { backend: "codex" as const, threadId: "root", instanceId: "owner" },
+      parent: { backend: "codex" as const, threadId: "root", instanceId: "owner" }, children: [], dryRun: true,
+    } };
+    const updateSubthreadOrder = vi.fn(async () => ({ backend: "codex", parentThreadId: "root", threadIds: [] }));
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+      additionalRequiredCapabilities: additionalFederationBackendCapabilities });
+    let rpc: FederationRpcEndpoint;
+    const connect = (capabilities: FederationCapability[]) => router.registerConnection({ peerId: "viewer", capabilities,
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    registerFederationBackendHandlers({ router, backend: { updateSubthreadOrder } as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    for (const capabilities of [["thread_grouping"], ["archive_subthread_promotion_v1"]] as FederationCapability[][]) {
+      connect(capabilities);
+      await expect(client.updateSubthreadOrder(request)).rejects.toThrow();
+    }
+    expect(updateSubthreadOrder).not.toHaveBeenCalled();
+    connect(["thread_grouping", "archive_subthread_promotion_v1"]);
+    await client.updateSubthreadOrder(request);
+    expect(updateSubthreadOrder).toHaveBeenCalledExactlyOnceWith(request);
+  });
+
   it("continues environment startup on its owner and enforces turn control", async () => {
     const request = { backend: "codex" as const, threadId: "failed-setup" };
     const response = { ...request, turnId: "continued-turn" };

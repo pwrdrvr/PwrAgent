@@ -9531,7 +9531,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   /** One commit per participating owner, including cached membership and ranks.
    * Never create a threads overlay for a row owned by another instance. */
   applyArchiveSubthreadPromotion(promotion: ArchiveSubthreadPromotion, instanceId: string): string[] {
-    const { archived, parent, children } = promotion;
+    const { archived, anchor, parent, children } = promotion;
     const parentKey = parent && buildThreadIdentityKey(parent.backend, parent.threadId);
     const selectPin = this.stateDb.raw.prepare(`SELECT payload FROM remote_thread_pins
       WHERE instance_id = ? AND backend = ? AND thread_id = ? AND revoked_at IS NULL`);
@@ -9542,13 +9542,23 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const matches = (state: { parentThreadId?: string; parentThreadBackend?: AppServerBackendKind; parentThreadInstanceId?: string },
       owner: string, destination: typeof parent): boolean => destination === null ? !state.parentThreadId
       : state.parentThreadId === destination.threadId
-        && state.parentThreadBackend === destination.backend
+        && (state.parentThreadBackend ?? archived.backend) === destination.backend
         && state.parentThreadInstanceId === (destination.instanceId === owner ? undefined : destination.instanceId);
     const patch = (summary: NavigationThreadSummary, owner: string): NavigationThreadSummary => ({
       ...summary, parentThreadId: parent?.threadId, parentThreadBackend: parent?.backend,
       parentThreadInstanceId: parent && parent.instanceId !== owner ? parent.instanceId : undefined,
     });
     return this.stateDb.raw.transaction(() => {
+      if (archived.instanceId === instanceId) {
+        const current = this.getThread(buildThreadIdentityKey(archived.backend, archived.threadId));
+        const expected = promotion.expectedParent;
+        if (expected === null ? Boolean(current?.parentThreadId)
+          : current?.parentThreadId !== expected.threadId
+            || (current.parentThreadBackend ?? archived.backend) !== expected.backend
+            || current.parentThreadInstanceId !== expected.instanceId) {
+          throw new Error("Thread grouping changed before archive. Refresh the group and try again.");
+        }
+      }
       const localChildren = children.filter(({ ref }) => remotePinInstanceId(ref) === instanceId);
       for (const { ref } of localChildren) {
         const current = this.getThread(buildThreadIdentityKey(ref.backend, ref.threadId));
@@ -9558,12 +9568,20 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         }
       }
       const ownParent = parent?.instanceId === instanceId ? this.getThread(parentKey!) : undefined;
+      for (const { ref } of children) {
+        const owner = remotePinInstanceId(ref);
+        if (owner === instanceId) continue;
+        const cached = pinPayload(owner, ref.backend, ref.threadId)?.summary;
+        if (cached && !matches(cached, owner, archived) && !matches(cached, owner, parent)) {
+          throw new Error("Cached thread parent changed. Refresh the group before archiving.");
+        }
+      }
       if (parent?.instanceId === instanceId) {
-        const archivedState = archived.instanceId === instanceId
-          ? this.getThread(buildThreadIdentityKey(archived.backend, archived.threadId))
-          : pinPayload(archived.instanceId, archived.backend, archived.threadId)?.summary;
+        const archivedState = anchor.instanceId === instanceId
+          ? this.getThread(buildThreadIdentityKey(anchor.backend, anchor.threadId))
+          : pinPayload(anchor.instanceId, anchor.backend, anchor.threadId)?.summary;
         if (!ownParent || ownParent.archiveRetentionStartedAt !== undefined || ownParent.archiveTombstonedAt !== undefined
-          || !archivedState || !matches(archivedState, archived.instanceId, parent)) {
+          || !archivedState || !matches(archivedState, anchor.instanceId, parent)) {
           throw new Error("The surviving ancestor or archived row changed. Refresh the group before archiving.");
         }
       }
@@ -9615,7 +9633,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       const promotedIds = children.map(({ ref }) => ref.threadId);
       const promoted = new Set(promotedIds);
       const order = prior.filter((id) => !promoted.has(id));
-      const index = order.indexOf(archived.threadId);
+      const index = order.indexOf(anchor.threadId);
       order.splice(index < 0 ? order.length : index, index < 0 ? 0 : 1, ...promotedIds);
       if (JSON.stringify(order) !== JSON.stringify(ownParent.subthreadOrder)) {
         this.putThread(parentKey!, { ...ownParent, subthreadOrder: order });

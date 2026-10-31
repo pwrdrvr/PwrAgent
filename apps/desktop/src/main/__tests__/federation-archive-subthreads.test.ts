@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary, UpdateSubthreadOrderRequest } from "@pwragent/shared";
 import { buildFederatedThreadRef } from "@pwragent/shared";
-import { DesktopFederationRuntime } from "../federation/federation-runtime";
+import { DesktopFederationRuntime, getDesktopFederationRuntime } from "../federation/federation-runtime";
+import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { setDesktopOverlayStoreForTests, resetDesktopOverlayStoreForTests } from "../app-server/desktop-overlay-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -27,11 +28,12 @@ describe("Federation nested archive placement", () => {
   let runtime: DesktopFederationRuntime;
   let remoteUpdate: ReturnType<typeof vi.fn>;
 
-  const summary = async (id: string): Promise<NavigationThreadSummary> => ({
-    ...await stores.get(owners.get(id)!)!.getThreadOverlayState({ backend: "codex", threadId: id }),
-    id, source: "codex", title: id, titleSource: "explicit", linkedDirectories: [],
-    createdAt: 0, inbox: { inInbox: false },
-  });
+  const summary = async (id: string): Promise<NavigationThreadSummary> => {
+    const overlay = await stores.get(owners.get(id)!)!.getThreadOverlayState({ backend: "codex", threadId: id });
+    return { ...overlay, archivedAt: overlay?.archiveRetentionStartedAt,
+      id, source: "codex", title: id, titleSource: "explicit", linkedDirectories: [],
+      createdAt: 0, inbox: { inInbox: false } };
+  };
   const mount = async (viewer: string, id: string) => {
     await stores.get(viewer)!.addRemoteThreadPin({
       ref: buildFederatedThreadRef({ backend: "codex", threadId: id, instanceId: owners.get(id)! }),
@@ -49,7 +51,7 @@ describe("Federation nested archive placement", () => {
     const rows = await Promise.all([...owners.keys()].map(summary));
     const buckets = new Map<string, NavigationThreadSummary[]>();
     for (const row of rows) {
-      if (!row.parentThreadId || row.id === "middle") continue;
+      if (!row.parentThreadId || row.archivedAt !== undefined) continue;
       const key = `codex:${row.parentThreadId}`;
       buckets.set(key, [...(buckets.get(key) ?? []), row]);
     }
@@ -103,10 +105,13 @@ describe("Federation nested archive placement", () => {
     databases.splice(0).forEach((db) => db.close());
     directories.splice(0).forEach(removeTempStateDbDir);
     stores.clear();
+    for (const id of [...owners.keys()]) if (id.startsWith("extra-")) owners.delete(id);
   });
 
   it("replaces only the intermediate row across four owners in exact flattened order", async () => {
+    expect(await tray()).toEqual(["before", "middle", "child-b", "deeper", "child-a", "after"]);
     await runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" });
+    await stores.get("middle-owner")!.observeArchivedThreads([{ backend: "codex", threadId: "middle" }], 1000, { promoteSubthreads: true });
     expect(await tray()).toEqual(["before", "child-b", "deeper", "child-a", "after"]);
     for (const id of ["child-b", "child-a"]) {
       expect(await summary(id)).toMatchObject({ parentThreadId: "root", parentThreadInstanceId: "root-owner" });
@@ -118,6 +123,27 @@ describe("Federation nested archive placement", () => {
     }
     expect(await summary("deeper")).toMatchObject({ parentThreadId: "child-b", parentThreadInstanceId: "child-owner" });
     expect((await summary("middle")).subthreadOrder).toEqual([]);
+  });
+
+  it("finishes owner and viewer promotion before invoking the provider archive", async () => {
+    vi.spyOn(getDesktopFederationRuntime(), "ungroupRemoteChildrenOfArchivedThread")
+      .mockImplementation((request) => runtime.ungroupRemoteChildrenOfArchivedThread(request));
+    const archive = vi.spyOn(getDesktopBackendRegistry(), "archiveThread").mockImplementation(async (request) => {
+      expect(await summary("child-b")).toMatchObject({ parentThreadId: "root", parentThreadInstanceId: "root-owner" });
+      expect((await summary("root")).subthreadOrder).toEqual(["before", "child-b", "child-a", "after"]);
+      await stores.get("middle-owner")!.observeArchivedThreads([{ backend: "codex", threadId: request.threadId }], 1000, { promoteSubthreads: true });
+      return { backend: "codex", threadId: request.threadId, archivedAt: 1000, cleanup: [] };
+    });
+    await runtime.localBackend().archiveThread({ backend: "codex", threadId: "middle" });
+    expect(archive).toHaveBeenCalledOnce();
+    expect(await tray()).toEqual(["before", "child-b", "deeper", "child-a", "after"]);
+  });
+
+  it("does not start promotion or provider archive with a stale expected parent", async () => {
+    await expect(runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle",
+      expectedParent: { backend: "codex", threadId: "elsewhere", instanceId: "root-owner" } })).rejects.toThrow("grouping changed");
+    expect(remoteUpdate).not.toHaveBeenCalled();
+    expect(await summary("child-b")).toMatchObject({ parentThreadId: "middle" });
   });
 
   it("rejects a child reparented after discovery without overwriting its owner or viewer", async () => {

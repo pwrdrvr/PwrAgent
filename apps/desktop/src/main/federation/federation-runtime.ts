@@ -209,7 +209,6 @@ import {
   type ForkThreadRequest,
   type EnsureDirectoryLaunchpadRequest,
   type FederationRemoteTarget,
-  type FederatedThreadRef,
   type DesktopApplicationsSnapshot,
   type DesktopFederationMode,
   type HandoffThreadWorkspaceRequest,
@@ -3513,11 +3512,19 @@ export class DesktopFederationRuntime {
   async ungroupRemoteChildrenOfArchivedThread(params: {
     backend: AppServerBackendKind;
     parentThreadId: string;
+    expectedParent?: SetThreadParentRequest["expectedParent"];
   }): Promise<void> {
     const localInstanceId = (await this.health()).instanceId;
     if (!localInstanceId) return;
     const store = getDesktopOverlayStore();
     const archived = await store.getThreadOverlayState({ backend: params.backend, threadId: params.parentThreadId });
+    const expected = params.expectedParent;
+    if (expected !== undefined && (expected === null ? Boolean(archived?.parentThreadId)
+      : archived?.parentThreadId !== expected.threadId
+        || (archived.parentThreadBackend ?? params.backend) !== expected.backend
+        || archived.parentThreadInstanceId !== expected.instanceId)) {
+      throw new Error("Thread grouping changed before archive. Refresh the group and try again.");
+    }
     const pins = await store.listRemoteThreadPins();
     const remoteChildren = pins.filter((pin) => pin.summary?.parentThreadId === params.parentThreadId
       && (pin.summary.parentThreadBackend ?? pin.summary.source) === params.backend
@@ -3534,12 +3541,17 @@ export class DesktopFederationRuntime {
     if (!children.length) return;
     const ordered = sortSubthreadSummaries(archived ?? {}, children.map((entry) => ({ ...entry,
       id: entry.ref.threadId, createdAt: entry.summary.createdAt })));
+    if (new Set(children.map(({ ref }) => ref.threadId)).size !== children.length) {
+      throw new Error("Ambiguous child identities. Refresh the group before archiving.");
+    }
     let cursor = archived;
+    let cursorOwner = localInstanceId;
+    let anchor = { backend: params.backend, threadId: params.parentThreadId, instanceId: localInstanceId };
     let parent: ArchiveSubthreadPromotion["parent"] = null;
     let parentSummary: NavigationThreadSummary | undefined;
     const seen = new Set<string>();
     while (cursor?.parentThreadId) {
-      const owner = cursor.parentThreadInstanceId ?? localInstanceId;
+      const owner: string = cursor.parentThreadInstanceId ?? cursorOwner;
       const backend = cursor.parentThreadBackend ?? cursor.backend;
       const threadId = cursor.parentThreadId;
       const key = `${owner}:${backend}:${threadId}`;
@@ -3555,10 +3567,14 @@ export class DesktopFederationRuntime {
         parentSummary = cached;
         break;
       }
+      anchor = { backend, threadId, instanceId: owner };
+      cursorOwner = owner;
       cursor = local ?? { ...cached!, backend, threadId, executionMode: "default", extraLinkedDirectories: [] };
     }
     const promotion: ArchiveSubthreadPromotion = {
       archived: { backend: params.backend, threadId: params.parentThreadId, instanceId: localInstanceId },
+      anchor, expectedParent: archived?.parentThreadId ? { threadId: archived.parentThreadId,
+        backend: archived.parentThreadBackend ?? params.backend, instanceId: archived.parentThreadInstanceId } : null,
       parent, parentSummary, children: ordered.map(({ ref, summary, instanceLabel }) => ({ ref, summary, instanceLabel })),
     };
     const participants = new Set(ordered.flatMap(({ ref }) =>
@@ -7426,10 +7442,25 @@ function localBackendOperations(): FederationBackendOperations {
         const instanceId = (await getDesktopFederationRuntime().health()).instanceId;
         if (!instanceId) throw new Error("Federation identity is unavailable.");
         const threadIds = getDesktopOverlayStore().applyArchiveSubthreadPromotion(request.archivePromotion, instanceId);
-        if (!request.archivePromotion.dryRun) await getDesktopBackendRegistry().publishLocalEvent({
-          backend: request.backend ?? "codex", notification: { method: "thread/subthreadOrder/updated",
-            params: { parentThreadId: request.parentThreadId, threadIds } },
-        });
+        if (!request.archivePromotion.dryRun) {
+          const { parent, children } = request.archivePromotion;
+          for (const { ref } of children) {
+            if (!isRemoteFederationTarget(ref.target) || ref.target.instanceId !== instanceId) continue;
+            await getDesktopBackendRegistry().publishLocalEvent({ backend: ref.backend,
+              notification: parent ? { method: "thread/parent/set", params: {
+                threadId: ref.threadId, parentThreadId: parent.threadId, parentThreadBackend: parent.backend,
+                parentThreadInstanceId: parent.instanceId === instanceId ? undefined : parent.instanceId,
+              } } : { method: "thread/parent/cleared", params: { threadId: ref.threadId } },
+            });
+          }
+          if (parent?.instanceId === instanceId) await getDesktopBackendRegistry().publishLocalEvent({
+            backend: parent.backend, notification: { method: "thread/subthreadOrder/updated",
+              params: { parentThreadId: parent.threadId, threadIds } },
+          });
+          await getDesktopBackendRegistry().publishLocalEvent({ backend: request.backend ?? "codex",
+            notification: { method: "navigation/remoteThreadPins/changed", params: { instanceId } },
+          });
+        }
         return { backend: request.backend ?? "codex", parentThreadId: request.parentThreadId, threadIds };
       }
       // A viewer sends relative moves; the owner validates them against its
@@ -7464,7 +7495,7 @@ function localBackendOperations(): FederationBackendOperations {
     },
     async archiveThread(request) {
       await getDesktopFederationRuntime().ungroupRemoteChildrenOfArchivedThread({
-        backend: request.backend ?? "codex", parentThreadId: request.threadId,
+        backend: request.backend ?? "codex", parentThreadId: request.threadId, expectedParent: request.expectedParent,
       });
       return await getDesktopBackendRegistry().archiveThread(request);
     },
