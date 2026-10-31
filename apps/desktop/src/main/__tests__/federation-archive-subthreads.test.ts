@@ -11,7 +11,7 @@ import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV, type SqliteWriteDelta } 
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createSubthreadTrays } from "../../renderer/src/features/navigation/subthread-trays";
 
-const providerRegistry = vi.hoisted(() => ({ archiveThread: vi.fn(), publishLocalEvent: vi.fn(async () => {}) }));
+const providerRegistry = vi.hoisted(() => ({ archiveThread: vi.fn(), publishLocalEvent: vi.fn(async () => {}), listThreadSearchCandidates: vi.fn() }));
 vi.mock("../app-server/backend-registry", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../app-server/backend-registry")>()),
   getDesktopBackendRegistry: () => providerRegistry,
@@ -43,6 +43,15 @@ describe("Federation nested archive placement", () => {
       id, source: "codex", title: id, titleSource: "explicit", linkedDirectories: [],
       createdAt: creationTimes.get(id) ?? 0, inbox: { inInbox: false } };
   };
+  const ancestorPage = (owner: string, row?: NavigationThreadSummary): NavigationQueryPage => ({
+    protocol: 2, queryKey: "ancestor", generation: "fixture", ownerEpoch: owner, countsRevision: "fixture",
+    complete: true, coverage: { state: "complete" }, counts: { total: row ? 1 : 0, active: 0, unread: 0 },
+    entries: row && row.archivedAt === undefined ? [{
+      row: { ...row, ref: { backend: row.source, threadId: row.id, ownerInstanceId: owner }, rowRevision: "fixture",
+        ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "ready" },
+      orderKey: row.id, placement: { kind: "root" },
+    }] : [],
+  });
   const mount = async (viewer: string, id: string) => {
     await stores.get(viewer)!.addRemoteThreadPin({
       ref: buildFederatedThreadRef({ backend: "codex", threadId: id, instanceId: owners.get(id)! }),
@@ -97,10 +106,7 @@ describe("Federation nested archive placement", () => {
       if (request.query.kind !== "exact") throw new Error("Expected an exact ancestor read.");
       const identity = request.query.identities[0]!;
       const row = owners.get(identity.threadId) === target.instanceId ? await summary(identity.threadId) : undefined;
-      return { protocol: 2, complete: true, coverage: { state: "complete" }, entries: row && row.archivedAt === undefined ? [{
-        row: { ...row, ref: { ...identity, ownerInstanceId: target.instanceId } },
-        orderKey: identity.threadId, placement: { kind: "root" },
-      }] : [] } as NavigationQueryPage;
+      return ancestorPage(target.instanceId, row);
     });
     remoteUpdate = vi.fn<OwnerUpdate>(async (owner, request) => {
       const store = stores.get(owner)!;
@@ -111,10 +117,14 @@ describe("Federation nested archive placement", () => {
       return { backend: "codex", parentThreadId: request.parentThreadId, threadIds };
     });
     vi.spyOn(runtime, "remoteBackend").mockImplementation((target) => ({
-      lookupArchivedThreads: async (request: { threadIds: string[] }) => ({ threads:
-        (await Promise.all(request.threadIds.filter((id) => owners.get(id) === target.instanceId).map(summary)))
-          .filter((row) => row.archivedAt !== undefined),
-      }),
+      lookupArchivedThreads: async (request: { threadIds: string[]; includeParent?: true }) => {
+        const threads = (await Promise.all(request.threadIds.filter((id) => owners.get(id) === target.instanceId).map(summary)))
+          .filter((row) => row.archivedAt !== undefined);
+        return { threads, ...(request.includeParent ? { parentLinks: threads.map((row) => ({
+          backend: row.source, threadId: row.id, parentThreadId: row.parentThreadId,
+          parentThreadBackend: row.parentThreadBackend, parentThreadInstanceId: row.parentThreadInstanceId,
+        })) } : {}) };
+      },
       setThreadParent: (request: Parameters<SqliteOverlayStore["setThreadParent"]>[0]) =>
         stores.get(target.instanceId)!.setThreadParent(request),
       updateSubthreadOrder: (request: UpdateSubthreadOrderRequest) => remoteUpdate(target.instanceId, request),
@@ -201,12 +211,31 @@ describe("Federation nested archive placement", () => {
     if (failure === "offline" || failure === "denied") {
       vi.mocked(runtime.remoteNavigationQueryPage).mockRejectedValue(new Error(failure));
     } else vi.mocked(runtime.remoteNavigationQueryPage).mockResolvedValue({
-      protocol: 2, complete: failure !== "incomplete", coverage: { state: "complete" }, entries: [],
-    } as NavigationQueryPage);
+      ...ancestorPage("root-owner"), complete: failure !== "incomplete",
+    });
     await expect(runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" })).rejects.toThrow();
     expect(remoteUpdate).not.toHaveBeenCalled();
     expect((await summary("child-b")).parentThreadId).toBe("middle");
     expect((await summary("root")).subthreadOrder).toEqual(["before", "middle", "after"]);
+  });
+
+  it("serves archived parent links from the owning overlay in a bounded lookup", async () => {
+    await stores.get("middle-owner")!.observeArchivedThreads([{ backend: "codex", threadId: "middle" }], 1000);
+    providerRegistry.listThreadSearchCandidates.mockResolvedValue([await summary("middle")]);
+    const response = await runtime.localBackend().lookupArchivedThreads!({ backend: "codex", threadIds: ["middle"], includeParent: true });
+    expect(response.parentLinks).toEqual([{ backend: "codex", threadId: "middle", parentThreadId: "root",
+      parentThreadBackend: "codex", parentThreadInstanceId: "root-owner" }]);
+  });
+
+  it("does not treat omitted archived parent links from an older owner as a root", async () => {
+    await stores.get("root-owner")!.observeArchivedThreads([{ backend: "codex", threadId: "root" }], 1000);
+    vi.mocked(runtime.remoteBackend).mockReturnValue({
+      lookupArchivedThreads: async () => ({ threads: [await summary("root")] }),
+    } as never);
+    await expect(runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" }))
+      .rejects.toThrow("Upgrade the ancestor owner");
+    expect((await summary("child-b")).parentThreadId).toBe("middle");
+    expect(remoteUpdate).not.toHaveBeenCalled();
   });
 
   it("does not start promotion or provider archive with a stale expected parent", async () => {

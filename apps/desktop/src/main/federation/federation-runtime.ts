@@ -3575,10 +3575,15 @@ export class DesktopFederationRuntime {
           && row.ref.ownerInstanceId === owner && row.source === backend && row.id === threadId)?.row;
         if (!remote) {
           if (page.coverage.state !== "complete") throw new Error("Wait for complete ancestor discovery before archiving.");
-          const response = await this.remoteBackend(target).lookupArchivedThreads({ backend, threadIds: [threadId] },
+          const response = await this.remoteBackend(target).lookupArchivedThreads({ backend, threadIds: [threadId], includeParent: true },
             { deadlineAt: ancestryDeadlineAt });
           const thread = response.threads.find((row) => row.source === backend && row.id === threadId && row.archivedAt !== undefined);
-          if (thread) remote = { inbox: { inInbox: false }, ...thread };
+          if (thread) {
+            const link = response.parentLinks?.find((row) => row.backend === backend && row.threadId === threadId);
+            if (!link) throw new Error("Upgrade the ancestor owner before resolving archived parent links.");
+            remote = { inbox: { inInbox: false }, ...thread, parentThreadId: link.parentThreadId,
+              parentThreadBackend: link.parentThreadBackend, parentThreadInstanceId: link.parentThreadInstanceId };
+          }
         }
       }
       if (!local && !remote) throw new Error("The surviving ancestor is unavailable. Refresh the group before archiving.");
@@ -7155,7 +7160,14 @@ function localBackendOperations(): FederationBackendOperations {
         archived: true,
         deadlineAt: rpcOptions?.deadlineAt,
       });
-      return projectFederationArchivedThreads(threads, request);
+      const response = projectFederationArchivedThreads(threads, request);
+      if (!request.includeParent) return response;
+      const parentLinks = await Promise.all(response.threads.map(async (thread) => {
+        const overlay = await getDesktopOverlayStore().getThreadOverlayState({ backend: thread.source, threadId: thread.id });
+        return { backend: thread.source, threadId: thread.id, parentThreadId: overlay?.parentThreadId,
+          parentThreadBackend: overlay?.parentThreadBackend, parentThreadInstanceId: overlay?.parentThreadInstanceId };
+      }));
+      return { ...response, parentLinks };
     },
     async getNavigationSnapshot(request = {}): Promise<NavigationSnapshot> {
       return await messagingBridge.getNavigationSnapshot(request);
