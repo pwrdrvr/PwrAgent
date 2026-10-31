@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary, UpdateSubthreadOrderRequest } from "@pwragent/shared";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import type { NavigationThreadSummary, UpdateSubthreadOrderRequest, UpdateSubthreadOrderResponse } from "@pwragent/shared";
 import { buildFederatedThreadRef } from "@pwragent/shared";
 import { DesktopFederationRuntime, getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
@@ -33,7 +33,8 @@ describe("Federation nested archive placement", () => {
   ]);
   const fixtureIds = new Set(owners.keys());
   let runtime: DesktopFederationRuntime;
-  let remoteUpdate: ReturnType<typeof vi.fn>;
+  type OwnerUpdate = (owner: string, request: UpdateSubthreadOrderRequest) => Promise<UpdateSubthreadOrderResponse>;
+  let remoteUpdate: Mock<OwnerUpdate>;
 
   const summary = async (id: string): Promise<NavigationThreadSummary> => {
     const overlay = await stores.get(owners.get(id)!)!.getThreadOverlayState({ backend: "codex", threadId: id });
@@ -91,7 +92,7 @@ describe("Federation nested archive placement", () => {
     vi.spyOn(runtime, "health").mockResolvedValue({ instanceId: "middle-owner" } as never);
     vi.spyOn(runtime, "assertRemoteNavigationQueryProtocol").mockImplementation(() => {});
     vi.spyOn(runtime, "remoteTargetSupportsCapability").mockReturnValue(true);
-    remoteUpdate = vi.fn(async (owner: string, request: UpdateSubthreadOrderRequest) => {
+    remoteUpdate = vi.fn<OwnerUpdate>(async (owner, request) => {
       const store = stores.get(owner)!;
       // Exercise the same atomic store boundary as the receiving owner.
       const threadIds = request.archivePromotion
