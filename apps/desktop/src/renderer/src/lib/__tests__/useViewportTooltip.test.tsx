@@ -1096,6 +1096,21 @@ describe("tooltip observation budgets", () => {
     expect(geometry).toHaveBeenCalledTimes(0);
   });
 
+  it("transfers observation when a connected anchor is reparented without moving", async () => {
+    mockAnchorRectangleFromLayout();
+    render(<AnchorLifecycleFixture />);
+    const anchor = screen.getByRole("button");
+    fireEvent.mouseEnter(anchor);
+    const parent = document.createElement("div");
+    parent.dataset.anchorTop = "80";
+    screen.getByTestId("unrelated-update").append(parent);
+    parent.append(anchor);
+    await deliverMutations();
+    await waitFor(() => expect(screen.getByRole("tooltip")).toBeInTheDocument());
+    parent.dataset.anchorTop = "180";
+    await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
+  });
+
   it("never observes the body subtree for attributes, text or child mutations", async () => {
     const observe = vi.spyOn(MutationObserver.prototype, "observe");
     render(<AnchorLifecycleFixture />);

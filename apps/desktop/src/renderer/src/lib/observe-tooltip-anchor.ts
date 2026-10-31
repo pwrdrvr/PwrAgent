@@ -23,11 +23,19 @@ export function observeTooltipAnchor(
       if (!disposed) check();
     });
   };
+  let parents: HTMLElement[] = [];
   const mutations = new MutationObserver((records) => {
     if (disposed) return;
     if (!target.isConnected) {
       check();
       return;
+    }
+    // A keyed element may be reparented without moving on screen. Transfer
+    // the subscriptions to its new ancestry even when its rectangle matches.
+    const nextParents: HTMLElement[] = [];
+    for (let parent = target.parentElement; parent; parent = parent.parentElement) nextParents.push(parent);
+    if (nextParents.length !== parents.length || nextParents.some((parent, index) => parent !== parents[index])) {
+      observePath(nextParents);
     }
     const portal = tooltip();
     const relevant = records.some((record) => {
@@ -38,12 +46,16 @@ export function observeTooltipAnchor(
     });
     if (relevant) schedule();
   });
-  mutations.observe(target, {
-    attributes: true, characterData: true, childList: true, subtree: true,
-  });
-  for (let parent = target.parentElement; parent; parent = parent.parentElement) {
-    mutations.observe(parent, { attributes: true, childList: true });
-  }
+  const observePath = (nextParents: HTMLElement[]): void => {
+    mutations.disconnect();
+    mutations.observe(target, {
+      attributes: true, characterData: true, childList: true, subtree: true,
+    });
+    parents = nextParents;
+    for (const parent of parents) mutations.observe(parent, { attributes: true, childList: true });
+  };
+  for (let parent = target.parentElement; parent; parent = parent.parentElement) parents.push(parent);
+  observePath(parents);
   const resize = typeof ResizeObserver === "undefined"
     ? undefined
     : new ResizeObserver(schedule);
