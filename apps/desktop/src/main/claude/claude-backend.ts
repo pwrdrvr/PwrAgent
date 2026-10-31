@@ -246,6 +246,7 @@ type ClaudeSessionConfig = {
   instructions?: string;
   mcpServers?: Options["mcpServers"];
   mcpKey: string;
+  strictMcpConfig?: boolean;
   /** The thread's other linked directories, fixed when the process starts. */
   additionalDirectories: string[];
   /** The thread environment's captured toolchain variables. */
@@ -316,6 +317,7 @@ type ClaudeTurnParams = {
   threadId: string; input: AppServerTurnInputItem[]; model?: string; reasoningEffort?: string;
   executionMode?: ThreadExecutionMode; instructions?: string;
   mcpServers?: Options["mcpServers"];
+  strictMcpConfig?: boolean;
   /** Plan runs this turn in Claude's read-only plan mode. */
   collaborationMode?: AppServerCollaborationModeRequest;
   /** Directories attached to the thread after it was created. */
@@ -348,6 +350,7 @@ function claudeSessionConfig(params: ClaudeTurnParams, session: ClaudeSession): 
     instructions: params.instructions,
     mcpServers: params.mcpServers,
     mcpKey: JSON.stringify(params.mcpServers ?? {}),
+    strictMcpConfig: params.strictMcpConfig,
     additionalDirectories: claudeAdditionalDirectories(session, params.attachedDirectories),
     shellEnvironment: params.shellEnvironment,
     shellEnvironmentKey: JSON.stringify(
@@ -403,6 +406,10 @@ export class ClaudeBackend {
   private readonly sessions = new Map<string, LiveSession>();
   /** Threads whose first turn is reading its session, before a query exists. */
   private readonly starting = new Map<string, AbortController>();
+  /** Turn starts can still read the store before they enter sessions. */
+  private readonly turnStarts = new Set<Promise<ClaudeTurnStart>>();
+  private closing = false;
+  private closeOperation?: Promise<void>;
   /** Threads a rewind is changing; a message for one waits in the queue. */
   private readonly rewinding = new Set<string>();
   /**
@@ -712,9 +719,12 @@ export class ClaudeBackend {
     onSessionClosed?: () => void;
   }): Promise<ClaudeTurnStart> {
     const { onSessionClosed, ...turnParams } = params;
+    const starting = this.startTurnInSession(turnParams);
+    this.turnStarts.add(starting);
     try {
-      return await this.startTurnInSession(turnParams);
+      return await starting;
     } finally {
+      this.turnStarts.delete(starting);
       // A live session uses the thread's MCP grants, so it keeps them too.
       if (onSessionClosed) this.releaseWithSession(params.threadId, onSessionClosed);
       const carried = this.carriedReleases.get(params.threadId);
@@ -731,6 +741,7 @@ export class ClaudeBackend {
 
   private async startTurnInSession(params: ClaudeTurnParams): Promise<ClaudeTurnStart> {
     for (;;) {
+      if (this.closing) throw new Error("Claude backend is closing.");
       if (this.rewinding.has(params.threadId)) {
         throw new ClaudeTurnActiveError("Claude is rewinding this thread.");
       }
@@ -816,6 +827,7 @@ export class ClaudeBackend {
         abortController: controller,
         stderr: (data) => { current.stderr = (current.stderr + data).slice(-MAX_TURN_STDERR_LENGTH); },
         mcpServers: config.mcpServers,
+        ...(config.strictMcpConfig ? { strictMcpConfig: true } : {}),
         ...(config.additionalDirectories.length ? { additionalDirectories: config.additionalDirectories } : {}),
         canUseTool: createClaudePermissionHandler({
           threadId, turnId: () => current.turn?.turnId ?? current.lastTurnId,
@@ -969,6 +981,7 @@ export class ClaudeBackend {
         threadId: live.session.thread.id, taskCount: live.tasks.active().length,
       });
     }
+    if (config.strictMcpConfig !== live.config.strictMcpConfig) return false;
     try {
       if (config.model !== live.config.model) {
         await query.setModel(config.model);
@@ -2678,11 +2691,23 @@ export class ClaudeBackend {
     } while (writes !== live.inputWrites);
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    this.closeOperation ??= this.closeResources();
+    return this.closeOperation;
+  }
+
+  private async closeResources(): Promise<void> {
+    this.closing = true;
     if (this.rateLimitExpiry) clearTimeout(this.rateLimitExpiry);
     this.rateLimitExpiry = undefined;
     for (const controller of this.starting.values()) controller.abort();
-    await Promise.all([...this.sessions.values()].map((live) => this.closeSession(live)));
+    // A start may still be reading session metadata before it appears in
+    // sessions. Close both groups before callers can remove the store root.
+    await Promise.all([
+      Promise.allSettled([...this.turnStarts]),
+      Promise.all([...this.sessions.values()].map((live) => this.closeSession(live))),
+    ]);
+    await this.rateLimitWrites;
   }
 }
 

@@ -13,6 +13,8 @@ export type McpGatewaySource = {
 };
 
 export type McpGatewayTool = McpGatewaySource & {
+  /** Owner-issued schema/authorization identity, stable across worker scopes. */
+  consentRevision?: string;
   definition: Tool;
   /**
    * The server's `initialize` instructions, on the catalog's first entry only
@@ -55,7 +57,7 @@ export function gatewayToolRevision(identity: string, generation: number, tool: 
 
 /** Bind connection-wide consent to the owner's exact tools and authorization. */
 export function gatewayCatalogRevision(tools: McpGatewayTool[]): string {
-  const revisions = tools.map((tool) => [tool.toolName, tool.schemaRevision] as const)
+  const revisions = tools.map((tool) => [tool.toolName, tool.consentRevision ?? tool.schemaRevision] as const)
     .sort(([left], [right]) => left.localeCompare(right));
   return createHash("sha256").update(JSON.stringify(revisions)).digest("hex");
 }
