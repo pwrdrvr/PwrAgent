@@ -320,7 +320,10 @@ describe("MCP connection owner broker", () => {
       const callTool = vi.fn(async () => ({ content: [{ type: "text", text: "owner fixture" }] }));
       Object.assign(owner, { connectUpstreamClient: async () => ({
         client: {
-          listTools: async () => ({ tools: [{ name: "late_tool", annotations: { readOnlyHint: true }, inputSchema: { type: "object" } }] }),
+          listTools: async () => ({ tools: [
+            { name: "late_tool", annotations: { readOnlyHint: true }, inputSchema: { type: "object" } },
+            { name: "mutate", annotations: { readOnlyHint: false, destructiveHint: true }, inputSchema: { type: "object" } },
+          ] }),
           callTool, close: async () => undefined,
         },
         transport: { close: async () => undefined },
@@ -335,6 +338,8 @@ describe("MCP connection owner broker", () => {
       const workerTools = await viewer.requestGatewayToolOperation({ ...delegated, operation: "gateway/tools/list" }) as McpGatewayTool[];
       expect(workerTools[0].schemaRevision).not.toBe(catalog[0].schemaRevision);
       expect(workerTools[0].consentRevision).toBe(catalog[0].consentRevision);
+      await expect(viewer.requestGatewayToolOperation({ ...delegated, operation: "gateway/tools/call", invocation: { ...catalog[0], arguments: {} } })).rejects.toThrow("schema or authorization changed");
+      await expect(viewer.requestGatewayToolOperation({ ...delegated, operation: "gateway/tools/call", invocation: { ...workerTools[1], arguments: {} } })).rejects.toThrow("only explicitly read-only");
       await viewer.requestGatewayToolOperation({ ...delegated, operation: "gateway/tools/call", invocation: { ...workerTools[0], arguments: {} } });
       const calls = callTool.mock.calls.length;
       parentSelected = false;
