@@ -116,6 +116,11 @@ export class GithubPrToolClient {
     const done = <T extends Record<string, unknown>>(result: T) => ({ repository: r, source: "provider", fetchedAt: Date.now(), providerRequests, ...result });
     const pageInfo = (rows: unknown[]) => ({ page, perPage, nextPage: rows.length >= perPage ? page + 1 : null });
 
+    if (operation === "rerun_failed_ci_jobs") {
+      await call("POST", `/actions/runs/${args.runId}/rerun-failed-jobs`);
+      return done({ requested: true, runId: args.runId, scope: "failed_jobs_and_dependents", url: `${repositoryUrl(r)}/actions/runs/${args.runId}` });
+    }
+
     const resolvePullRequestNumber = async (): Promise<number> => {
       if (args.number) return args.number;
       if (args.url) {

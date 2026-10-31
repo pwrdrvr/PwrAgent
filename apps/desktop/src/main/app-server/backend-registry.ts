@@ -50295,6 +50295,9 @@ function forgeToolApprovalMessage(operation: ForgePrToolOperation, args: ForgePr
   const issue = args.number ? ` #${args.number}` : "";
   const commentTarget = gitlab && args.kind === "pr" ? pr : issue;
   switch (operation) {
+    case "rerun_failed_ci_jobs": return gitlab
+      ? `Allow the agent to retry failed and canceled jobs in GitLab pipeline ${args.runId}?`
+      : `Allow the agent to rerun failed jobs and their dependents in GitHub Actions run ${args.runId}?`;
     case "create_pull_request": return `Allow the agent to open a ${request} on ${forge}?`;
     case "update_pull_request": return `Allow the agent to edit ${request}${pr} on ${forge}?`;
     case "merge_pull_request": return `Allow the agent to merge ${request}${pr} on ${forge}?`;

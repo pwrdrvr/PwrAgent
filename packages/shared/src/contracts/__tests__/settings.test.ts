@@ -456,6 +456,7 @@ describe("desktop settings contracts", () => {
             pull_requests: { value: "auto", source: "default" },
             comments: { value: "auto", source: "default" },
             issues: { value: "auto", source: "default" },
+            ci: { value: "auto", source: "default" },
             approve_merge: { value: "ask", source: "default" },
           },
         },

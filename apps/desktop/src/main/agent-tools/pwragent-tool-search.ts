@@ -12,7 +12,7 @@ Search when the user wants to:
 - Run work on another machine or instance through Federation; discover connected machines, their load and projects; find remote threads or create work there.
 - Work with messaging in Telegram, Discord, Slack, LINE, Lark/Feishu, or Mattermost: inspect the current conversation, attach a thread or native child topic, rename a conversation, send a requested file or private response, or inspect/render PDF attachments. Search does not authorize sending messages.
 - Open, edit, read back, comment on, review, approve or merge GitHub pull requests and GitLab merge requests, with screenshot or video attachments; read PR/MR diffs, changed files, reviews and inline review threads; reply to or resolve review comments; search, open, edit or comment on GitHub and GitLab issues.
-- Read forge cache, PR/MR status, GitHub Actions workflow runs/jobs and download CI artifacts, GitLab CI pipelines and failure logs; attach or watch pull requests; wait for another thread's turn or PR prerequisite with durable dependencies; or explicitly request a code review; record reviews, list unresolved findings, and settle each finding as addressed, declined, or deferred. Prefer these forge tools to GitHub connectors and gh/glab when they cover the task.
+- Read forge cache, PR/MR status, GitHub Actions workflow runs/jobs and download CI artifacts, GitLab CI pipelines and failure logs; request rerunning failed CI jobs; attach or watch pull requests; wait for another thread's turn or PR prerequisite with durable dependencies; or explicitly request a code review; record reviews, list unresolved findings, and settle each finding as addressed, declined, or deferred. Prefer these forge tools to GitHub connectors and gh/glab when they cover the task.
 - Inspect automations, schedules, runs, alerts, artifacts, or failures; inspect PwrAgent version, updates, restart, or shutdown.
 - Manage PwrAgent MCP connections and app access; inspect what connections a thread received.
 - Discover or invoke live tools from this thread's selected MCP connections, including tools added after registration. Use search_mcp_tools and call_mcp_tool.
@@ -28,6 +28,7 @@ const SEARCH_ALIASES: Record<string, string> = {
   list_ci_runs: "github actions gitlab ci pipelines workflow runs branch head",
   get_ci_run: "github actions gitlab ci failure pipeline jobs summary",
   get_ci_job: "github actions gitlab ci job failed steps",
+  rerun_failed_ci_jobs: "github actions gitlab ci retry rerun re-run restart failed jobs workflow run pipeline",
   read_ci_job_log: "github actions gitlab ci failure pipeline logs trace failed job earlier paging large output",
   get_commit_checks: "github gitlab commit checks check runs status contexts external ci failures",
   list_ci_artifacts: "github actions gitlab ci pipeline workflow artifacts metadata expiry sizes reports",
