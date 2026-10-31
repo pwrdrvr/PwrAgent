@@ -2053,6 +2053,69 @@ describe("DesktopFederationRuntime", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  describe("plan cards for a thread started on a peer", () => {
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const plan = { backend: "codex" as const, threadId: "child", title: "Smoke test", items: ["Run lint"] };
+
+    function viewerOf(capabilities: FederationCapability[] | undefined) {
+      const runtime = new DesktopFederationRuntime();
+      const harness = runtime as unknown as RuntimeHarness;
+      harness.localInstanceId = "viewer";
+      harness.router = new FederationRouter({ localInstanceId: "viewer" });
+      harness.store = () => ({ listPeers: () => [], getPeer: () => undefined });
+      const sent: FederationProtocolEnvelope[] = [];
+      if (capabilities) {
+        harness.router.registerConnection(createConnection({
+          peerId: "owner", capabilities, sendEnvelope: (envelope) => sent.push(envelope),
+        }));
+      } else {
+        // Remembered capabilities are not evidence of a live connection.
+        harness.remotePeerDirectory.set("owner", {
+          id: "owner", label: "win-lab", status: "disconnected", capabilities: ["thread_todos", "thread_todo_plan"],
+        });
+      }
+      return { runtime, harness, sent };
+    }
+
+    it("sends raisePlan to an owner that advertises To-dos and plan cards", async () => {
+      const { runtime, harness, sent } = viewerOf(["thread_detail", "turn_control", "thread_todos", "thread_todo_plan"]);
+      expect(runtime.remotePeerSupportsTodoPlan(target)).toBe(true);
+      const pending = runtime.requestThreadTodoOperation(target, "raisePlan", plan);
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+      expect(sent[0]).toMatchObject({ method: "threadTodos.raisePlan", params: plan, targetInstanceId: "owner" });
+      const todo = { id: "plan-card", key: "plan" };
+      await harness.receiveEnvelope({
+        id: "response-plan", kind: "response", requestId: sent[0]!.id,
+        protocolVersion: FEDERATION_PROTOCOL_VERSION, sourceInstanceId: "owner", targetInstanceId: "viewer",
+        createdAt: 2_000, hopCount: 0, result: { todo },
+      }, "owner");
+      await expect(pending).resolves.toEqual({ todo });
+    });
+
+    it("sends an owner without plan cards nothing, and names the missing capability", async () => {
+      const { runtime, sent } = viewerOf(["thread_detail", "turn_control", "thread_todos"]);
+      expect(runtime.remotePeerSupportsTodoPlan(target)).toBe(false);
+      await expect(runtime.requestThreadTodoOperation(target, "raisePlan", plan))
+        .rejects.toThrow("does not support plan cards");
+      expect(sent).toEqual([]);
+    });
+
+    it("names To-dos when the owner lacks thread_todos", async () => {
+      const { runtime, sent } = viewerOf(["thread_detail", "turn_control", "thread_todo_plan"]);
+      expect(runtime.remotePeerSupportsTodoPlan(target)).toBe(false);
+      await expect(runtime.requestThreadTodoOperation(target, "raisePlan", plan))
+        .rejects.toThrow("does not support To-dos");
+      expect(sent).toEqual([]);
+    });
+
+    it("reports a disconnected owner as unsupported for plans and refuses the request", async () => {
+      const { runtime } = viewerOf(undefined);
+      expect(runtime.remotePeerSupportsTodoPlan(target)).toBe(false);
+      await expect(runtime.requestThreadTodoOperation(target, "raisePlan", plan))
+        .rejects.toThrow("is disconnected.");
+    });
+  });
+
   it("rejects question dismissals for an older owner before sending an RPC", async () => {
     const runtime = new DesktopFederationRuntime();
     const harness = runtime as unknown as RuntimeHarness;
