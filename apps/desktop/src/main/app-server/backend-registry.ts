@@ -9034,6 +9034,7 @@ export class DesktopBackendRegistry {
   private readonly claudeBackend: ClaudeBackend;
   private readonly claudeAgentToolMcpServer?: AgentToolMcpServerLike;
   private closed = false;
+  private shutdownRequested = false;
   private closeOperation?: Promise<void>;
   // Resolves a managed-worktree ACP cwd to its repository checkout so ACP
   // (e.g. Grok) worktree threads group under the same directory row as their
@@ -28735,6 +28736,7 @@ export class DesktopBackendRegistry {
   }
 
   close(): Promise<void> {
+    this.shutdownRequested = true;
     this.closeOperation ??= this.closeResources();
     return this.closeOperation;
   }
@@ -45126,6 +45128,13 @@ export class DesktopBackendRegistry {
     }
 
     if (!record.recoveryAttempted) {
+      if (this.stoppingRunningTurnsForShutdown || this.shutdownRequested || this.closed) {
+        // Quit ends the monitor process. A recovery turn has no owner to keep
+        // running and can otherwise race the closing Claude session store.
+        this.taskMonitorDelegations.delete(record.monitorId);
+        this.releaseTaskMonitorThread(record);
+        return;
+      }
       await this.startTaskMonitorRecoveryTurn({
         record,
         terminalStatus,
