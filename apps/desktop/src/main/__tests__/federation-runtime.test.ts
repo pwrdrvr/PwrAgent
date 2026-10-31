@@ -2057,21 +2057,22 @@ describe("DesktopFederationRuntime", () => {
     const target = { scope: "remote" as const, instanceId: "owner" };
     const plan = { backend: "codex" as const, threadId: "child", title: "Smoke test", items: ["Run lint"] };
 
-    function viewerOf(capabilities: FederationCapability[] | undefined) {
+    // direct: a live connection to the owner. relayed: a connected peer
+    // summary, as a gateway reports one. remembered: a disconnected summary.
+    function viewerOf(capabilities: FederationCapability[], route: "direct" | "relayed" | "remembered" = "direct") {
       const runtime = new DesktopFederationRuntime();
       const harness = runtime as unknown as RuntimeHarness;
       harness.localInstanceId = "viewer";
       harness.router = new FederationRouter({ localInstanceId: "viewer" });
       harness.store = () => ({ listPeers: () => [], getPeer: () => undefined });
       const sent: FederationProtocolEnvelope[] = [];
-      if (capabilities) {
+      if (route === "direct") {
         harness.router.registerConnection(createConnection({
           peerId: "owner", capabilities, sendEnvelope: (envelope) => sent.push(envelope),
         }));
       } else {
-        // Remembered capabilities are not evidence of a live connection.
         harness.remotePeerDirectory.set("owner", {
-          id: "owner", label: "win-lab", status: "disconnected", capabilities: ["thread_todos", "thread_todo_plan"],
+          id: "owner", label: "win-lab", status: route === "relayed" ? "connected" : "disconnected", capabilities,
         });
       }
       return { runtime, harness, sent };
@@ -2108,8 +2109,14 @@ describe("DesktopFederationRuntime", () => {
       expect(sent).toEqual([]);
     });
 
+    it("reads a relayed owner's plan support from its peer summary", () => {
+      expect(viewerOf(["thread_todos", "thread_todo_plan"], "relayed").runtime.remotePeerSupportsTodoPlan(target)).toBe(true);
+      expect(viewerOf(["thread_todos"], "relayed").runtime.remotePeerSupportsTodoPlan(target)).toBe(false);
+    });
+
     it("reports a disconnected owner as unsupported for plans and refuses the request", async () => {
-      const { runtime } = viewerOf(undefined);
+      // Remembered capabilities are not evidence of a live connection.
+      const { runtime } = viewerOf(["thread_todos", "thread_todo_plan"], "remembered");
       expect(runtime.remotePeerSupportsTodoPlan(target)).toBe(false);
       await expect(runtime.requestThreadTodoOperation(target, "raisePlan", plan))
         .rejects.toThrow("is disconnected.");
