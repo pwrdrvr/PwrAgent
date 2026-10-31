@@ -1010,3 +1010,68 @@ describe("pointer-anchored viewport tooltips", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent("Click here");
   });
 });
+
+
+describe("tooltip observation budgets", () => {
+  async function deliverMutations() {
+    await act(async () => { await Promise.resolve(); });
+  }
+
+  it("does no anchor geometry or scheduled work for 100 unrelated streaming deliveries", async () => {
+    mockAnchorRectangleFromLayout();
+    render(<AnchorLifecycleFixture />);
+    const anchor = screen.getByRole("button");
+    fireEvent.mouseEnter(anchor);
+    await deliverMutations();
+    const geometry = vi.spyOn(anchor, "getBoundingClientRect");
+    const frame = vi.spyOn(window, "requestAnimationFrame");
+    const stream = screen.getByTestId("unrelated-update");
+    for (let index = 0; index < 100; index += 1) {
+      stream.textContent = `Stream chunk ${index}`;
+      stream.setAttribute("data-sequence", String(index));
+      await deliverMutations();
+    }
+    expect(geometry).toHaveBeenCalledTimes(0);
+    expect(frame).toHaveBeenCalledTimes(0);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Branch details");
+  });
+
+  it("coalesces relevant mutations before a frame and cancels the owned frame on unmount", async () => {
+    mockAnchorRectangleFromLayout();
+    const { unmount } = render(<AnchorLifecycleFixture />);
+    const anchor = screen.getByRole("button");
+    fireEvent.mouseEnter(anchor);
+    await deliverMutations();
+    const geometry = vi.spyOn(anchor, "getBoundingClientRect");
+    const frames: FrameRequestCallback[] = [];
+    const frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return 42;
+    });
+    const cancel = vi.spyOn(window, "cancelAnimationFrame");
+    for (let index = 0; index < 100; index += 1) {
+      anchor.setAttribute("data-sequence", String(index));
+      await deliverMutations();
+    }
+    expect(geometry).toHaveBeenCalledTimes(0);
+    expect(frame).toHaveBeenCalledTimes(1);
+    act(() => { frames[0]!(0); });
+    expect(geometry).toHaveBeenCalledTimes(1);
+    anchor.setAttribute("data-sequence", "next");
+    await deliverMutations();
+    unmount();
+    expect(cancel).toHaveBeenCalledWith(42);
+    act(() => { frames[1]!(0); });
+    expect(geometry).toHaveBeenCalledTimes(1);
+  });
+
+  it("never observes the body subtree for attributes, text or child mutations", async () => {
+    const observe = vi.spyOn(MutationObserver.prototype, "observe");
+    render(<AnchorLifecycleFixture />);
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    await deliverMutations();
+    expect(observe.mock.calls.some(([element, options]) =>
+      element === document.body && options?.subtree,
+    )).toBe(false);
+  });
+});
