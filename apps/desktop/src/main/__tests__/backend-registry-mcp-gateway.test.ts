@@ -41,7 +41,7 @@ describe("backend MCP gateway dispatch", () => {
     activeTurnKeys: Set<string>;
     activeCodexTurnModes: Map<string, ThreadExecutionMode>;
     acpBackend: AcpBackendAdapter;
-    approveGatewayInvocation(invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, annotations?: McpGatewayTool["definition"]["annotations"], catalogRevision?: string, definition?: McpGatewayTool["definition"]): Promise<McpGatewayApproval>;
+    approveGatewayInvocation(invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, annotations?: McpGatewayTool["definition"]["annotations"], catalogRevision?: string, consentRevision?: string, definition?: McpGatewayTool["definition"]): Promise<McpGatewayApproval>;
     headlessAutomationTurns: Map<string, {
       agentThreadId: string;
       backend: "codex";
@@ -270,6 +270,41 @@ describe("backend MCP gateway dispatch", () => {
     }
   });
 
+  it("does not release a pending parent write with a monitor's read-only connection grant", async () => {
+    await registry.close();
+    const implementation = operation.getMockImplementation()!;
+    operation.mockImplementation(async (params) => params.operation === "gateway/tools/list"
+      ? ["lookup", "write"].map((name) => ({ connectionId: "one", serverName: "Fixture", toolName: name,
+          schemaRevision: "r1", definition: { name, inputSchema: { type: "object" },
+            annotations: { readOnlyHint: name === "lookup" },
+          },
+        }))
+      : await implementation(params));
+    createRegistry({ registerBridge, requestGatewayToolOperation: operation,
+      listConnections: async () => [{ id: "one", toolApproval: "prompt" }],
+    } as unknown as McpConnectionGatewayService);
+    const call = await createMonitor(false);
+    const writeEvent = approval();
+    const write = internals.handleServerRequest("codex", request("call_mcp_tool", { ...args, toolName: "write" }, "pending-write"));
+    const pendingWrite = await writeEvent;
+    const readEvent = approval(String(pendingWrite.notification.params.requestId));
+    const read = call("call_mcp_tool", args);
+    const pendingRead = await readEvent;
+    await registry.submitServerRequest({ backend: "codex", threadId: "thread-1", turnId: "turn-1",
+      requestId: String(pendingRead.notification.params.requestId),
+      response: { action: "accept", content: {}, _meta: { persist: "server-session" } } });
+    expect((await read).success).toBe(true);
+    expect(internals.pendingServerRequests.size).toBe(1);
+    expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")
+      .map(([entry]) => entry.invocation?.toolName)).toEqual(["lookup"]);
+    await registry.submitServerRequest({ backend: "codex", threadId: "thread-1", turnId: "turn-1",
+      requestId: String(pendingWrite.notification.params.requestId),
+      response: { action: "decline", content: null, _meta: null } });
+    expect((await write).success).toBe(false);
+    expect(internals.pendingServerRequests.size).toBe(0);
+    expect([...internals.taskMonitorDelegations.values()][0].pendingMcpApprovalCount).toBe(0);
+  });
+
   it("reuses the parent conversation's remembered tool approval across monitors", async () => {
     await registry.close();
     createRegistry({ registerBridge, requestGatewayToolOperation: operation,
@@ -491,7 +526,7 @@ describe("backend MCP gateway dispatch", () => {
     declineUnexpectedApproval();
     await expect(internals.approveGatewayInvocation({ ...args, serverName: "Fixture" }, {
       backend: "codex", threadId: "thread-1", turnId: "turn-1", transport: "codex_dynamic_tool",
-    }, controller.signal, undefined, "catalog-1", { name: "lookup", inputSchema: { type: "object" } })).rejects.toThrow("fixture cancelled");
+    }, controller.signal, undefined, "catalog-1", undefined, { name: "lookup", inputSchema: { type: "object" } })).rejects.toThrow("fixture cancelled");
     expect(internals.pendingServerRequests.size).toBe(0);
   });
 
