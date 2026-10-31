@@ -18931,11 +18931,19 @@ export class DesktopBackendRegistry {
     threadId: string;
   }): Promise<Pick<StartThreadResponse, "pinnedRank" | "autoPinFailure">> {
     const directory = this.resolveCreatedThreadDirectoryVisibility(params);
-    if (
-      !directory?.directoryThreadsCollapsed
-      || !directory.hasPinnedTopLevelThread
-    ) {
+    if (!directory?.hasPinnedTopLevelThread) {
       return {};
+    }
+    if (!directory.directoryThreadsCollapsed) {
+      // With only pins left, Directory threads has no disclosure to close.
+      // Treat that empty section as closed too. A refresh may already include
+      // this creation; it must not count as pre-existing unpinned overflow.
+      for (const row of directory.rowsByThreadKey.values()) {
+        if (!row.parentKey && !row.pinned
+          && (row.remote || row.backend !== params.backend || row.threadId !== params.threadId)) {
+          return {};
+        }
+      }
     }
 
     // A sub-thread renders inside its group, so what has to be visible is the
