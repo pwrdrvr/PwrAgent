@@ -13,6 +13,7 @@ import { ThreadUsageActivityTable } from "./thread-usage-activities";
 import { CodexEnvironmentLiveOutput } from "./codex-environment-live-output";
 import type {
   AppServerBackendKind,
+  ArchiveSubthreadPromotion,
   AppServerBackendScope,
   AppServerThreadActivityEntry,
   AppServerThreadMessageOrigin,
@@ -5399,6 +5400,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     parentThreadInstanceId?: string | null;
     expectedParent?: { threadId: string; backend: ThreadOverlayState["backend"]; instanceId?: string } | null;
   }): Promise<ThreadOverlayState> {
+    return this.setThreadParentState(params);
+  }
+
+  private setThreadParentState(params: Parameters<SqliteOverlayStore["setThreadParent"]>[0]): ThreadOverlayState {
     if (
       params.parentThreadId === params.threadId
       && (!params.parentThreadBackend || params.parentThreadBackend === params.backend)
@@ -9512,6 +9517,111 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     if (promotedIds.size) {
       this.putThread(key, { ...archived, subthreadOrder: archived.subthreadOrder?.filter((id) => !promotedIds.has(id)) });
     }
+  }
+
+  readArchiveSubthreadChildren(identity: { backend: AppServerBackendKind; threadId: string }): NavigationThreadSummary[] {
+    const parent = this.getThread(buildThreadIdentityKey(identity.backend, identity.threadId));
+    return this.orderStoredSubthreads(parent ?? { ...identity, executionMode: "default", extraLinkedDirectories: [] },
+      this.readLocalSubthreadChildren(identity)).map(({ state, createdAt }) => ({
+        ...state, id: state.threadId, source: state.backend, title: state.threadId, titleSource: "derived",
+        linkedDirectories: [], createdAt, inbox: { inInbox: false },
+      }));
+  }
+
+  /** One commit per participating owner, including cached membership and ranks.
+   * Never create a threads overlay for a row owned by another instance. */
+  applyArchiveSubthreadPromotion(promotion: ArchiveSubthreadPromotion, instanceId: string): string[] {
+    const { archived, parent, children } = promotion;
+    const parentKey = parent && buildThreadIdentityKey(parent.backend, parent.threadId);
+    const selectPin = this.stateDb.raw.prepare(`SELECT payload FROM remote_thread_pins
+      WHERE instance_id = ? AND backend = ? AND thread_id = ? AND revoked_at IS NULL`);
+    const pinPayload = (owner: string, backend: AppServerBackendKind, id: string) => {
+      const row = selectPin.get(owner, backend, id) as { payload: string } | undefined;
+      return row ? JSON.parse(row.payload) as { summary?: NavigationThreadSummary; instanceLabel: string; pinnedVia?: RemoteThreadPin["pinnedVia"] } : undefined;
+    };
+    const matches = (state: { parentThreadId?: string; parentThreadBackend?: AppServerBackendKind; parentThreadInstanceId?: string },
+      owner: string, destination: typeof parent): boolean => destination === null ? !state.parentThreadId
+      : state.parentThreadId === destination.threadId
+        && state.parentThreadBackend === destination.backend
+        && state.parentThreadInstanceId === (destination.instanceId === owner ? undefined : destination.instanceId);
+    const patch = (summary: NavigationThreadSummary, owner: string): NavigationThreadSummary => ({
+      ...summary, parentThreadId: parent?.threadId, parentThreadBackend: parent?.backend,
+      parentThreadInstanceId: parent && parent.instanceId !== owner ? parent.instanceId : undefined,
+    });
+    return this.stateDb.raw.transaction(() => {
+      const localChildren = children.filter(({ ref }) => remotePinInstanceId(ref) === instanceId);
+      for (const { ref } of localChildren) {
+        const current = this.getThread(buildThreadIdentityKey(ref.backend, ref.threadId));
+        if (!current || current.archiveRetentionStartedAt !== undefined || current.archiveTombstonedAt !== undefined
+          || (!matches(current, instanceId, archived) && !matches(current, instanceId, parent))) {
+          throw new Error("Thread parent changed. Refresh the group before archiving.");
+        }
+      }
+      const ownParent = parent?.instanceId === instanceId ? this.getThread(parentKey!) : undefined;
+      if (parent?.instanceId === instanceId) {
+        const archivedState = archived.instanceId === instanceId
+          ? this.getThread(buildThreadIdentityKey(archived.backend, archived.threadId))
+          : pinPayload(archived.instanceId, archived.backend, archived.threadId)?.summary;
+        if (!ownParent || ownParent.archiveRetentionStartedAt !== undefined || ownParent.archiveTombstonedAt !== undefined
+          || !archivedState || !matches(archivedState, archived.instanceId, parent)) {
+          throw new Error("The surviving ancestor or archived row changed. Refresh the group before archiving.");
+        }
+      }
+      if (promotion.dryRun) return ownParent?.subthreadOrder ?? [];
+      for (const { ref } of localChildren) {
+        const current = this.getThread(buildThreadIdentityKey(ref.backend, ref.threadId))!;
+        if (matches(current, instanceId, parent)) continue;
+        this.setThreadParentState({ backend: ref.backend, threadId: ref.threadId,
+          parentThreadId: parent?.threadId ?? null, parentThreadBackend: parent?.backend,
+          parentThreadInstanceId: parent?.instanceId === instanceId ? undefined : parent?.instanceId,
+          expectedParent: { threadId: archived.threadId, backend: archived.backend,
+            instanceId: archived.instanceId === instanceId ? undefined : archived.instanceId } });
+      }
+      const writePin = this.stateDb.raw.prepare(`INSERT INTO remote_thread_pins(instance_id, backend, thread_id, added_at, payload)
+        VALUES (?, ?, ?, ?, ?) ON CONFLICT(instance_id, backend, thread_id) DO UPDATE SET payload = excluded.payload`);
+      for (const entry of children) {
+        const owner = remotePinInstanceId(entry.ref);
+        if (owner === instanceId) continue;
+        const existing = pinPayload(owner, entry.ref.backend, entry.ref.threadId);
+        if (!existing && !ownParent) continue;
+        // Cached summaries retain the relationship as expressed on the child
+        // owner, even when the viewer owns the destination parent.
+        const next = { ...existing, instanceLabel: existing?.instanceLabel ?? entry.instanceLabel,
+          pinnedVia: existing?.pinnedVia ?? "child", summary: patch(entry.summary, owner) };
+        if (JSON.stringify(existing) !== JSON.stringify(next)) {
+          writePin.run(owner, entry.ref.backend, entry.ref.threadId, Date.now(), JSON.stringify(next));
+        }
+      }
+      if (parent && parent.instanceId !== instanceId && promotion.parentSummary && localChildren.length) {
+        const existing = pinPayload(parent.instanceId, parent.backend, parent.threadId);
+        if (!existing) writePin.run(parent.instanceId, parent.backend, parent.threadId, Date.now(), JSON.stringify({
+          instanceLabel: parent.instanceId, pinnedVia: "companion", summary: promotion.parentSummary,
+        }));
+      }
+      if (archived.instanceId === instanceId) {
+        const key = buildThreadIdentityKey(archived.backend, archived.threadId);
+        const current = this.getThread(key);
+        const ids = new Set(children.map(({ ref }) => ref.threadId));
+        const order = current?.subthreadOrder?.filter((id) => !ids.has(id));
+        if (current && JSON.stringify(order) !== JSON.stringify(current.subthreadOrder)) {
+          this.putThread(key, { ...current, subthreadOrder: order });
+        }
+      }
+      if (!ownParent) return [];
+      // Materialize the owner's current order, preserving unloaded remote slots.
+      const saved = new Set(ownParent.subthreadOrder ?? []);
+      const prior = [...saved, ...this.orderStoredSubthreads(ownParent,
+        this.readLocalSubthreadChildren(parent!)).map(({ id }) => id).filter((id) => !saved.has(id))];
+      const promotedIds = children.map(({ ref }) => ref.threadId);
+      const promoted = new Set(promotedIds);
+      const order = prior.filter((id) => !promoted.has(id));
+      const index = order.indexOf(archived.threadId);
+      order.splice(index < 0 ? order.length : index, index < 0 ? 0 : 1, ...promotedIds);
+      if (JSON.stringify(order) !== JSON.stringify(ownParent.subthreadOrder)) {
+        this.putThread(parentKey!, { ...ownParent, subthreadOrder: order });
+      }
+      return order;
+    })();
   }
 
   private readSubthreadParentCandidates(threadId: string): ThreadOverlayState[] {

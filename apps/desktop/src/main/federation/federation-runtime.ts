@@ -67,6 +67,7 @@ import type {
   AnalyzeThreadToolHistoryRequest,
   AnalyzeThreadToolHistoryResponse,
   AgentEvent,
+  ArchiveSubthreadPromotion,
   AppServerListSkillsResponse,
   AppServerListThreadsResponse,
   AppServerReadThreadResponse,
@@ -166,6 +167,7 @@ import {
   MAX_CELESTIAL_ASSIGNMENTS,
   buildPrependPinRank,
   buildFederatedThreadRef,
+  sortSubthreadSummaries,
   buildThreadIdentityKey,
   encodeLegacyThreadIdentityKey,
   federatedThreadIdentityKey,
@@ -609,6 +611,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "remote_window",
   "thread_navigation",
   "thread_grouping",
+  "archive_subthread_promotion_v1",
   "thread_parent_mutation_v1",
   "thread_detail",
   "turn_control",
@@ -3506,72 +3509,98 @@ export class DesktopFederationRuntime {
     return this.remoteThreadSummaryCache;
   }
 
-  /**
-   * Archiving a local group root must clear parent overlays on children owned
-   * by other instances. Those relationships are visible here through the
-   * root viewer's remote child pins; mutate each child on its owner, then
-   * update the cached pin so restoring the root cannot reattach it.
-   */
+  /** Promote cross-instance children before the archive removes their row. */
   async ungroupRemoteChildrenOfArchivedThread(params: {
     backend: AppServerBackendKind;
     parentThreadId: string;
   }): Promise<void> {
     const localInstanceId = (await this.health()).instanceId;
-    if (!localInstanceId) {
-      return;
+    if (!localInstanceId) return;
+    const store = getDesktopOverlayStore();
+    const archived = await store.getThreadOverlayState({ backend: params.backend, threadId: params.parentThreadId });
+    const pins = await store.listRemoteThreadPins();
+    const remoteChildren = pins.filter((pin) => pin.summary?.parentThreadId === params.parentThreadId
+      && (pin.summary.parentThreadBackend ?? pin.summary.source) === params.backend
+      && pin.summary.parentThreadInstanceId === localInstanceId
+      && isRemoteFederationTarget(pin.ref.target) && pin.summary.archivedAt === undefined);
+    // The local SQLite boundary already handles an entirely local branch.
+    if (!archived?.parentThreadInstanceId && remoteChildren.length === 0) return;
+    const localChildren = store.readArchiveSubthreadChildren({ backend: params.backend, threadId: params.parentThreadId });
+    const children = [
+      ...localChildren.map((summary) => ({ ref: buildFederatedThreadRef({ backend: summary.source,
+        threadId: summary.id, instanceId: localInstanceId }), summary, instanceLabel: localInstanceId })),
+      ...remoteChildren.map((pin) => ({ ref: pin.ref, summary: pin.summary!, instanceLabel: pin.instanceLabel })),
+    ];
+    if (!children.length) return;
+    const ordered = sortSubthreadSummaries(archived ?? {}, children.map((entry) => ({ ...entry,
+      id: entry.ref.threadId, createdAt: entry.summary.createdAt })));
+    let cursor = archived;
+    let parent: ArchiveSubthreadPromotion["parent"] = null;
+    let parentSummary: NavigationThreadSummary | undefined;
+    const seen = new Set<string>();
+    while (cursor?.parentThreadId) {
+      const owner = cursor.parentThreadInstanceId ?? localInstanceId;
+      const backend = cursor.parentThreadBackend ?? cursor.backend;
+      const threadId = cursor.parentThreadId;
+      const key = `${owner}:${backend}:${threadId}`;
+      if (seen.has(key)) throw new Error("Cyclic archive ancestry. Refresh the group before archiving.");
+      seen.add(key);
+      const local = owner === localInstanceId ? await store.getThreadOverlayState({ backend, threadId }) : undefined;
+      const cached = pins.find((pin) => isRemoteFederationTarget(pin.ref.target)
+        && pin.ref.target.instanceId === owner && pin.ref.backend === backend && pin.ref.threadId === threadId)?.summary;
+      if (!local && !cached) throw new Error("The surviving ancestor is unavailable. Refresh the group before archiving.");
+      if (local?.archiveRetentionStartedAt === undefined && local?.archiveTombstonedAt === undefined
+        && cached?.archivedAt === undefined) {
+        parent = { backend, threadId, instanceId: owner };
+        parentSummary = cached;
+        break;
+      }
+      cursor = local ?? { ...cached!, backend, threadId, executionMode: "default", extraLinkedDirectories: [] };
     }
-    const overlayStore = getDesktopOverlayStore();
-    const pins = await overlayStore.listRemoteThreadPins();
-    const children = pins.filter((pin) => {
-      const summary = pin.summary;
-      return summary?.parentThreadId === params.parentThreadId
-        && (summary.parentThreadBackend ?? summary.source) === params.backend
-        && summary.parentThreadInstanceId === localInstanceId
-        && isRemoteFederationTarget(pin.ref.target);
-    });
-    if (children.length === 0) {
-      return;
+    const promotion: ArchiveSubthreadPromotion = {
+      archived: { backend: params.backend, threadId: params.parentThreadId, instanceId: localInstanceId },
+      parent, parentSummary, children: ordered.map(({ ref, summary, instanceLabel }) => ({ ref, summary, instanceLabel })),
+    };
+    const participants = new Set(ordered.flatMap(({ ref }) =>
+      isRemoteFederationTarget(ref.target) ? [ref.target.instanceId] : []));
+    participants.add(localInstanceId);
+    if (parent) participants.add(parent.instanceId);
+    // Resolve all capabilities before the first mutation. Never detach as an
+    // offline or mixed-version fallback: leave the archive available to retry.
+    for (const instanceId of participants) {
+      if (instanceId === localInstanceId) continue;
+      const target = { scope: "remote" as const, instanceId };
+      this.assertRemoteNavigationQueryProtocol(target);
+      if (!this.remoteTargetSupportsCapability(target, "thread_grouping")
+        || !this.remoteTargetSupportsCapability(target, "archive_subthread_promotion_v1")) {
+        throw new Error(`Archive child promotion is unavailable or denied on ${instanceId}.`);
+      }
     }
-
-    const refreshed: Array<{
-      ref: FederatedThreadRef;
-      summary: NavigationThreadSummary;
-      instanceLabel: string;
-    }> = [];
-    await Promise.all(
-      children.map(async (pin) => {
-        if (!isRemoteFederationTarget(pin.ref.target) || !pin.summary) {
-          return;
-        }
-        try {
-          await this.remoteBackend(pin.ref.target).setThreadParent({
-            backend: pin.ref.backend,
-            threadId: pin.ref.threadId,
-            parentThreadId: null,
-          });
-          const summary = { ...pin.summary };
-          delete summary.parentThreadId;
-          delete summary.parentThreadBackend;
-          delete summary.parentThreadInstanceId;
-          refreshed.push({
-            ref: pin.ref,
-            summary,
-            instanceLabel: pin.instanceLabel,
-          });
-          this.remoteThreadSummaryCache?.invalidate(pin.ref.target.instanceId);
-        } catch (error) {
-          log.warn("failed to ungroup remote child after parent archive", {
-            backend: pin.ref.backend,
-            childInstanceId: pin.ref.target.instanceId,
-            childThreadId: pin.ref.threadId,
-            error: error instanceof Error ? error.message : String(error),
-            parentThreadId: params.parentThreadId,
-          });
-        }
-      }),
-    );
-    if (refreshed.length > 0) {
-      await overlayStore.updateRemoteThreadPinSnapshots(refreshed);
+    const apply = async (instanceId: string, dryRun: boolean) => {
+      if (instanceId === localInstanceId) return store.applyArchiveSubthreadPromotion({ ...promotion, dryRun }, instanceId);
+      const response = await this.remoteBackend({ scope: "remote", instanceId }).updateSubthreadOrder({
+        backend: parent?.backend ?? params.backend, parentThreadId: parent?.threadId ?? params.parentThreadId,
+        archivePromotion: { ...promotion, dryRun },
+      });
+      this.remoteThreadSummaryCache?.invalidate(instanceId);
+      return response.threadIds ?? [];
+    };
+    for (const instanceId of participants) await apply(instanceId, true);
+    // Commit the ancestor's slot replacement after every child owner accepts
+    // the guarded relationship change; then refresh this viewer's cache.
+    const commitOrder = [...participants].filter((id) => id !== localInstanceId && id !== parent?.instanceId);
+    if (parent && parent.instanceId !== localInstanceId) commitOrder.push(parent.instanceId);
+    commitOrder.push(localInstanceId);
+    let parentOrder: string[] | undefined;
+    for (const instanceId of commitOrder) {
+      const order = await apply(instanceId, false);
+      if (instanceId === parent?.instanceId) parentOrder = order;
+    }
+    if (parentSummary && parent && parentOrder) {
+      await store.updateRemoteThreadPinSnapshots([{
+        ref: buildFederatedThreadRef({ backend: parent.backend, threadId: parent.threadId, instanceId: parent.instanceId }),
+        summary: { ...parentSummary, subthreadOrder: parentOrder }, instanceLabel: parent.instanceId,
+      }]);
     }
   }
 
@@ -7363,6 +7392,7 @@ function localBackendOperations(): FederationBackendOperations {
         parentThreadId: request.parentThreadId,
         parentThreadBackend: request.parentThreadBackend,
         parentThreadInstanceId: request.parentThreadInstanceId,
+        expectedParent: request.expectedParent,
       });
       await getDesktopBackendRegistry().publishLocalEvent({
         backend,
@@ -7392,6 +7422,16 @@ function localBackendOperations(): FederationBackendOperations {
     async updateSubthreadOrder(
       request: UpdateSubthreadOrderRequest,
     ): Promise<UpdateSubthreadOrderResponse> {
+      if (request.archivePromotion) {
+        const instanceId = (await getDesktopFederationRuntime().health()).instanceId;
+        if (!instanceId) throw new Error("Federation identity is unavailable.");
+        const threadIds = getDesktopOverlayStore().applyArchiveSubthreadPromotion(request.archivePromotion, instanceId);
+        if (!request.archivePromotion.dryRun) await getDesktopBackendRegistry().publishLocalEvent({
+          backend: request.backend ?? "codex", notification: { method: "thread/subthreadOrder/updated",
+            params: { parentThreadId: request.parentThreadId, threadIds } },
+        });
+        return { backend: request.backend ?? "codex", parentThreadId: request.parentThreadId, threadIds };
+      }
       // A viewer sends relative moves; the owner validates them against its
       // complete child order, the same as a local drag.
       return await updateLocalSubthreadOrder(request);
@@ -7423,12 +7463,10 @@ function localBackendOperations(): FederationBackendOperations {
       };
     },
     async archiveThread(request) {
-      const response = await getDesktopBackendRegistry().archiveThread(request);
       await getDesktopFederationRuntime().ungroupRemoteChildrenOfArchivedThread({
-        backend: response.backend,
-        parentThreadId: response.threadId,
+        backend: request.backend ?? "codex", parentThreadId: request.threadId,
       });
-      return response;
+      return await getDesktopBackendRegistry().archiveThread(request);
     },
     async restoreThread(request) {
       return await getDesktopBackendRegistry().restoreThread(request);

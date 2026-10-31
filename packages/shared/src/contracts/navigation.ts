@@ -2741,14 +2741,24 @@ export type NavigationRelativeChildMove = {
   placement: "before" | "after";
 };
 
+/** Versioned, per-owner archive boundary. Remote rows remain cached pins. */
+export type ArchiveSubthreadPromotion = {
+  archived: { backend: AppServerBackendKind; threadId: string; instanceId: string };
+  parent: { backend: AppServerBackendKind; threadId: string; instanceId: string } | null;
+  parentSummary?: NavigationThreadSummary;
+  children: { ref: FederatedThreadRef; summary: NavigationThreadSummary; instanceLabel: string }[];
+  dryRun?: boolean;
+};
+
 export type UpdateSubthreadOrderRequest = {
   federationTarget?: FederationTarget;
   backend?: AppServerBackendKind;
   parentThreadId: ThreadIdentifier;
 } & (
-  | { threadIds: ThreadIdentifier[]; insertAfter?: never; move?: never }
-  | { threadIds?: never; move?: never; insertAfter: { threadId: ThreadIdentifier; sourceThreadId: ThreadIdentifier } }
-  | { threadIds?: never; insertAfter?: never; move: NavigationRelativeChildMove }
+  | { threadIds: ThreadIdentifier[]; insertAfter?: never; move?: never; archivePromotion?: never }
+  | { threadIds?: never; move?: never; archivePromotion?: never; insertAfter: { threadId: ThreadIdentifier; sourceThreadId: ThreadIdentifier } }
+  | { threadIds?: never; insertAfter?: never; archivePromotion?: never; move: NavigationRelativeChildMove }
+  | { threadIds?: never; insertAfter?: never; move?: never; archivePromotion: ArchiveSubthreadPromotion }
 );
 
 export type UpdateSubthreadOrderResponse = {

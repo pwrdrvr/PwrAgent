@@ -6,6 +6,8 @@ import { setDesktopOverlayStoreForTests, resetDesktopOverlayStoreForTests } from
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createSubthreadTrays } from "../../renderer/src/features/navigation/subthread-trays";
 
 vi.mock("../acp/acp-instance-discovery", async (importOriginal) => ({
@@ -56,6 +58,7 @@ describe("Federation nested archive placement", () => {
   };
 
   beforeEach(async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     for (const owner of new Set(owners.values())) {
       const temp = createTempStateDb("federation-archive-");
       directories.push(temp.tempDir);
@@ -96,6 +99,7 @@ describe("Federation nested archive placement", () => {
   afterEach(() => {
     resetDesktopOverlayStoreForTests();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     databases.splice(0).forEach((db) => db.close());
     directories.splice(0).forEach(removeTempStateDbDir);
     stores.clear();
@@ -108,12 +112,43 @@ describe("Federation nested archive placement", () => {
       expect(await summary(id)).toMatchObject({ parentThreadId: "root", parentThreadInstanceId: "root-owner" });
       for (const viewer of ["root-owner", "middle-owner"]) {
         const pin = (await stores.get(viewer)!.listRemoteThreadPins()).find((entry) => entry.ref.threadId === id);
-        expect(pin?.summary).toMatchObject({ parentThreadId: "root", parentThreadInstanceId: viewer === "root-owner" ? undefined : "root-owner" });
+        expect(pin?.summary).toMatchObject({ parentThreadId: "root", parentThreadInstanceId: "root-owner" });
       }
       expect(await stores.get("middle-owner")!.getThreadOverlayState({ backend: "codex", threadId: id })).toBeUndefined();
     }
     expect(await summary("deeper")).toMatchObject({ parentThreadId: "child-b", parentThreadInstanceId: "child-owner" });
     expect((await summary("middle")).subthreadOrder).toEqual([]);
+  });
+
+  it("rejects a child reparented after discovery without overwriting its owner or viewer", async () => {
+    let moved = false;
+    remoteUpdate.mockImplementation(async (owner: string, request: UpdateSubthreadOrderRequest) => {
+      if (!moved && request.archivePromotion?.dryRun) {
+        moved = true;
+        await stores.get("child-owner")!.setThreadParent({ backend: "codex", threadId: "child-b", parentThreadId: "elsewhere" });
+      }
+      const threadIds = stores.get(owner)!.applyArchiveSubthreadPromotion(request.archivePromotion!, owner);
+      return { backend: "codex", parentThreadId: request.parentThreadId, threadIds };
+    });
+    await expect(runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" })).rejects.toThrow("parent changed");
+    expect(await summary("child-b")).toMatchObject({ parentThreadId: "elsewhere" });
+    expect((await summary("root")).subthreadOrder).toEqual(["before", "middle", "after"]);
+    expect((await stores.get("middle-owner")!.listRemoteThreadPins()).find((pin) => pin.ref.threadId === "child-b")?.summary?.parentThreadId).toBe("middle");
+  });
+
+  it("batches 100 children by owner with no writes on repeat", async () => {
+    for (let index = 0; index < 98; index++) {
+      const id = `extra-${index}`;
+      owners.set(id, "child-owner");
+      await link(id, "middle");
+    }
+    const { writes } = await measureSqliteWrites(() => runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" }));
+    expectSqliteWriteBudget({ scenario: "federation-archive-subthread-promotion", writes,
+      note: "100 direct children across four owners, one archive boundary; commits scale with owners, not children. No idle writes. See PR for measured MB/day at 10 archives/day." });
+    const repeated = await measureSqliteWrites(() => runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" }));
+    expectSqliteWriteBudget({ scenario: "federation-archive-subthread-promotion-repeat", writes: repeated.writes,
+      note: "Repeated completed archive promotion: zero commits, 0 MB/day." });
+    for (let index = 0; index < 98; index++) owners.delete(`extra-${index}`);
   });
 
   it.each(["offline", "denied"])("keeps relationships and caches intact when an owner is %s", async (reason) => {
