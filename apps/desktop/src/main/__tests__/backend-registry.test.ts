@@ -1,3 +1,4 @@
+import { traceUnbornWorkspace } from "./helpers/unborn-workspace-trace";
 import { PendingEnvironmentLaunchStore } from "../app-server/pending-environment-launch-store";
 import type { Options as ClaudeOptions, Query as ClaudeQuery, SDKMessage as ClaudeMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
@@ -43100,12 +43101,15 @@ script = "printf setup"
   });
 
   it("describes unborn Git workspaces and gates worktrees on available refs", async () => {
+    const trace = traceUnbornWorkspace();
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-unborn-"));
+    trace.setRoot(root);
     const repoPath = path.join(root, "repo");
     const remotePath = path.join(root, "origin.git");
     const unpublishedBaseReason =
       "Worktrees are unavailable because this repository has no published base branch yet. Create the initial commit in the Local checkout and publish the default branch. Worktrees will be enabled once a remote base branch is available.";
     try {
+      trace.phase("initialize-repositories");
       await git(root, ["init", "--bare", "-b", "main", remotePath]);
       await mkdir(repoPath, { recursive: true });
       await git(repoPath, ["init", "-b", "main"]);
@@ -43152,6 +43156,7 @@ script = "printf setup"
         }),
         threadTitleGenerationService: null,
       });
+      trace.phase("publish-active-turn");
       await registry.publishLocalEvent({
         backend: "codex",
         notification: {
@@ -43164,6 +43169,7 @@ script = "printf setup"
         },
       });
 
+      trace.phase("unborn-project-local-handoff");
       const projectLocalResponse = await codexClient.emitRequest({
         method: "item/tool/call",
         params: {
@@ -43205,6 +43211,7 @@ script = "printf setup"
       expect(prompt).not.toContain(unpublishedBaseReason);
       const projectLocalStartParams = codexClient.lastStartThreadParams;
 
+      trace.phase("reject-unborn-worktree");
       const worktreeResponse = await codexClient.emitRequest({
         method: "item/tool/call",
         params: {
@@ -43244,6 +43251,7 @@ script = "printf setup"
       });
       expect(codexClient.lastStartThreadParams).toBe(projectLocalStartParams);
 
+      trace.phase("publish-and-fetch-initial-commit");
       const seedPath = path.join(root, "seed");
       await mkdir(seedPath, { recursive: true });
       await git(seedPath, ["init", "-b", "main"]);
@@ -43258,6 +43266,7 @@ script = "printf setup"
         "main:refs/remotes/origin/main",
       ]);
 
+      trace.phase("fetched-project-local-handoff");
       const fetchedProjectLocalResponse = await codexClient.emitRequest({
         method: "item/tool/call",
         params: {
@@ -43294,6 +43303,7 @@ script = "printf setup"
         "unavailableReason",
       );
 
+      trace.phase("fetched-worktree-handoff");
       const remoteWorktreeResponse = await codexClient.emitRequest({
         method: "item/tool/call",
         params: {
@@ -43316,13 +43326,17 @@ script = "printf setup"
       const createdWorktree = codexClient.lastStartThreadParams?.cwd;
       expect(createdWorktree).toBeDefined();
       expect(createdWorktree).not.toBe(expectedDir(repoPath));
+      trace.phase("verify-worktree-head");
       expect(await git(createdWorktree!, ["rev-parse", "HEAD"])).toBe(
         await git(repoPath, ["rev-parse", "origin/main"]),
       );
 
+      trace.phase("registry-close");
       await registry.close();
     } finally {
+      trace.phase("filesystem-cleanup");
       await rm(root, { recursive: true, force: true });
+      trace.phase("finished");
     }
   }, 15_000);
 
