@@ -15744,7 +15744,7 @@ export class DesktopBackendRegistry {
       });
       // Same bookkeeping as ACP: record the archive, then let the cleanup
       // queue ungroup children. Like ACP, Claude keeps its worktrees.
-      await this.overlayStore.observeArchivedThreads?.([{ backend, threadId: request.threadId }], archivedAt);
+      await this.overlayStore.observeArchivedThreads?.([{ backend, threadId: request.threadId }], archivedAt, { promoteSubthreads: true });
       this.invalidateThreadListCache(backend);
       await this.emit({ backend, notification: { method: "thread/archived", params: { threadId: request.threadId } } });
       await this.cleanupMessagingForArchivedThread({
@@ -15803,7 +15803,7 @@ export class DesktopBackendRegistry {
     // Missing-rollout recovery still needs any retained workspace until its
     // cleanup and tombstone have settled.
     if (!codexRolloutMissing) this.pendingStartedThreads.delete(buildThreadIdentityKey(backend, result.threadId));
-    await this.overlayStore.observeArchivedThreads?.([{ backend, threadId: result.threadId }], archivedAt);
+    await this.overlayStore.observeArchivedThreads?.([{ backend, threadId: result.threadId }], archivedAt, { promoteSubthreads: true });
     this.invalidateThreadListCache(backend);
     this.invalidateArchiveCleanupReads(backend);
     if (backend === "codex") await this.archiveTokenMiserThread(result.threadId);
@@ -16028,6 +16028,12 @@ export class DesktopBackendRegistry {
     }
     let ungroupError: string | undefined;
     try {
+      // Startup recovery can reach this stage without a foreground mutation
+      // in this process. Preserve nested tray members before the legacy
+      // top-level ungrouping fallback inspects them.
+      await this.overlayStore.observeArchivedThreads?.(
+        [{ backend, threadId: result.threadId }], params.archivedAt, { promoteSubthreads: true },
+      );
       await this.traceArchiveCleanupStage(params, "ungroup", async () => await this.ungroupChildrenOfArchivedThread({
         backend, activeThreads: cleanupMetadata?.activeChildren ?? cleanupMetadata?.activeThreads ?? [], parentThreadId: result.threadId,
         overlaysByThreadKey: cleanupMetadata?.overlaysByThreadKey, context,
@@ -16230,7 +16236,7 @@ export class DesktopBackendRegistry {
     backendRegistryLog.info("thread archive mutation completed", {
       backend: params.backend, threadId: params.threadId, runtimeInstanceId: this.runtimeInstanceId, archivedAt,
     });
-    await this.overlayStore.observeArchivedThreads?.([{ backend: params.backend, threadId: params.threadId }], archivedAt);
+    await this.overlayStore.observeArchivedThreads?.([{ backend: params.backend, threadId: params.threadId }], archivedAt, { promoteSubthreads: true });
     this.invalidateThreadListCache(params.backend, true);
     // Archival on ACP is a local store write, with no provider to announce it.
     // Say it in the same words Codex uses, because everything downstream is
@@ -30290,6 +30296,9 @@ export class DesktopBackendRegistry {
           this.invalidateThreadListCache(backend);
         }
         if (notification.method === "thread/archived") {
+          await this.overlayStore.observeArchivedThreads?.(
+            [{ backend, threadId: notification.params.threadId }], Date.now(), { promoteSubthreads: true },
+          );
           if (backend === "codex") await this.archiveTokenMiserThread(notification.params.threadId);
           await this.cleanupMessagingForArchivedThread({
             backend,

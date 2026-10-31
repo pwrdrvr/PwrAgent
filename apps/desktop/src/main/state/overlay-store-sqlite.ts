@@ -9440,17 +9440,118 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return rows.map((row) => JSON.parse(row.payload) as ThreadOverlayState);
   }
 
-  async observeArchivedThreads(records: Array<{ backend: ThreadOverlayState["backend"]; threadId: string }>, now: number): Promise<void> {
-    const updates = records.flatMap(({ backend, threadId }) => {
-      const key = buildThreadIdentityKey(backend, threadId);
-      const current = this.getThread(key) ?? { backend, threadId, executionMode: "default" as const, extraLinkedDirectories: [] };
-      if (current.archiveRetentionStartedAt !== undefined) return [];
-      return [{ key, state: { ...current, archiveRetentionStartedAt: now } }];
-    });
-    if (!updates.length) return;
+  async observeArchivedThreads(
+    records: Array<{ backend: ThreadOverlayState["backend"]; threadId: string }>,
+    now: number,
+    options?: { promoteSubthreads: boolean },
+  ): Promise<void> {
     this.stateDb.raw.transaction(() => {
-      for (const { key, state } of updates) this.putThread(key, state);
+      for (const { backend, threadId } of records) {
+        if (options?.promoteSubthreads) this.promoteArchivedSubthreads({ backend, threadId });
+        const key = buildThreadIdentityKey(backend, threadId);
+        const current = this.getThread(key) ?? { backend, threadId, executionMode: "default" as const, extraLinkedDirectories: [] };
+        if (current.archiveRetentionStartedAt === undefined) {
+          this.putThread(key, { ...current, archiveRetentionStartedAt: now });
+        }
+      }
     })();
+  }
+
+  /** Replace an archived tray row with its children before publishing its
+   * removal. The nearest surviving ancestor keeps the depth-first tray order
+   * intact, including when that ancestor is itself below the displayed root.
+   * All relationship and order writes share one transaction. */
+  private promoteArchivedSubthreads(identity: { backend: ThreadOverlayState["backend"]; threadId: string }): void {
+    const key = buildThreadIdentityKey(identity.backend, identity.threadId);
+    const archived = this.getThread(key);
+    if (!archived?.parentThreadId || archived.parentThreadInstanceId) return;
+    let parentBackend = archived.parentThreadBackend ?? identity.backend;
+    let parentKey = buildThreadIdentityKey(parentBackend, archived.parentThreadId);
+    let parent = this.getThread(parentKey);
+    if (!parent && !archived.parentThreadBackend) {
+      const candidates = this.readSubthreadParentCandidates(archived.parentThreadId);
+      if (candidates.length !== 1) return;
+      parent = candidates[0]!;
+      parentBackend = parent.backend;
+      parentKey = buildThreadIdentityKey(parent.backend, parent.threadId);
+    }
+    if (!parent || parentKey === key) return;
+    let insertionId = identity.threadId;
+    const seen = new Set([key]);
+    while (parent.archiveRetentionStartedAt !== undefined || parent.archiveTombstonedAt !== undefined) {
+      if (seen.has(parentKey) || !parent.parentThreadId || parent.parentThreadInstanceId) return;
+      seen.add(parentKey);
+      insertionId = parent.threadId;
+      parentBackend = parent.parentThreadBackend ?? parent.backend;
+      parentKey = buildThreadIdentityKey(parentBackend, parent.parentThreadId);
+      parent = this.getThread(parentKey);
+      if (!parent) return;
+    }
+    const children = this.readLocalSubthreadChildren(identity);
+    const ordered = this.orderStoredSubthreads(archived, children);
+    const promotedIds = new Set(ordered.map((child) => child.id));
+    // Materialize the complete prior order, including legacy unranked
+    // siblings. Appending promoted rows would move them behind those siblings.
+    const siblings = this.readLocalSubthreadChildren({ backend: parentBackend, threadId: parent.threadId }, insertionId);
+    const order = this.orderStoredSubthreads(parent, siblings).map((child) => child.id)
+      .filter((id) => !promotedIds.has(id));
+    const index = order.indexOf(insertionId);
+    order.splice(index < 0 ? order.length : index, index < 0 ? 0 : 1, ...promotedIds);
+    for (const { state: child } of ordered) {
+      this.putThread(buildThreadIdentityKey(child.backend, child.threadId), {
+        ...child, parentThreadId: parent.threadId, parentThreadBackend: parentBackend,
+      });
+    }
+    if (JSON.stringify(order) !== JSON.stringify(parent.subthreadOrder ?? [])) {
+      this.putThread(parentKey, { ...parent, subthreadOrder: order });
+    }
+    if (promotedIds.size) {
+      this.putThread(key, { ...archived, subthreadOrder: archived.subthreadOrder?.filter((id) => !promotedIds.has(id)) });
+    }
+  }
+
+  private readSubthreadParentCandidates(threadId: string): ThreadOverlayState[] {
+    const rows = this.stateDb.raw.prepare(`
+      SELECT payload FROM threads
+      WHERE CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') = ? END
+    `).all(threadId) as { payload: string }[];
+    return rows.map(({ payload }) => normalizeThreadOverlayState(JSON.parse(payload) as ThreadOverlayState));
+  }
+
+  private readLocalSubthreadChildren(
+    identity: { backend: ThreadOverlayState["backend"]; threadId: string },
+    includeArchivedId?: string,
+  ): ThreadOverlayState[] {
+    const rows = this.stateDb.raw.prepare(`
+      SELECT payload FROM threads
+      WHERE CASE WHEN json_valid(payload) THEN json_extract(payload, '$.parentThreadId') = ?
+        AND json_extract(payload, '$.parentThreadInstanceId') IS NULL END
+    `).all(identity.threadId) as { payload: string }[];
+    const candidates = this.readSubthreadParentCandidates(identity.threadId);
+    const unambiguousParent = candidates.length === 1 && candidates[0]!.backend === identity.backend;
+    return rows.map(({ payload }) => normalizeThreadOverlayState(JSON.parse(payload) as ThreadOverlayState))
+      .filter((child) => this.namesSubthreadParentBackend(child, identity.backend, unambiguousParent)
+        && (child.threadId === includeArchivedId
+          || (child.archiveTombstonedAt === undefined && child.archiveRetentionStartedAt === undefined)));
+  }
+
+  private orderStoredSubthreads(parent: ThreadOverlayState, children: ThreadOverlayState[]) {
+    const ranked = new Set(parent.subthreadOrder ?? []);
+    const createdAt = new Map<string, number>();
+    // Saved order is authoritative. Only old, unranked links need the
+    // provider snapshot's creation times to reproduce the tray fallback.
+    for (const backend of new Set(children.filter((child) => !ranked.has(child.threadId)).map((child) => child.backend))) {
+      const rows = this.stateDb.raw.prepare(`
+        SELECT json_extract(value, '$.id') AS id, json_extract(value, '$.createdAt') AS created_at
+        FROM provider_thread_snapshots, json_each(payload)
+        WHERE backend = ? AND schema_version = 1
+      `).all(backend) as { id: string; created_at: number | null }[];
+      for (const row of rows) if (row.created_at !== null) createdAt.set(buildThreadIdentityKey(backend, row.id), row.created_at);
+    }
+    return sortSubthreadSummaries(parent, children.map((child) => ({
+      state: child, id: child.threadId,
+      createdAt: createdAt.get(buildThreadIdentityKey(child.backend, child.threadId)) ?? child.handoffOrigin?.createdAt,
+    })));
   }
 
   async forgetThreadArchiveStates(records: Array<{ backend: ThreadOverlayState["backend"]; threadId: string }>): Promise<void> {
