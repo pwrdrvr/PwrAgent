@@ -1317,6 +1317,10 @@ describe("App", () => {
       expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
         federationTarget: { scope: "remote", instanceId: "laptop" },
       }));
+      // The machine chip updates before the scoped editor restores its draft.
+      // Finish the retarget before checking that an offline choice leaves it alone.
+      await waitFor(() => expect(getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })))
+        .toHaveAttribute("data-value", "Create this on the M5"));
       ownerStatus = "disconnected";
       act(() => {
         for (const listener of listeners) listener({
