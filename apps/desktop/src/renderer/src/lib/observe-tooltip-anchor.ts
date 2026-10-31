@@ -58,7 +58,15 @@ export function observeTooltipAnchor(
   observePath(parents);
   const resize = typeof ResizeObserver === "undefined"
     ? undefined
-    : new ResizeObserver(schedule);
+    : new ResizeObserver((entries) => {
+        const size = entries.find((entry) => entry.target === target)?.borderBoxSize[0];
+        // The native observer always sends an initial notification. The
+        // rectangle measured on entry already covers an unchanged box; do not
+        // turn that notification into a later, unrelated geometry read.
+        if (size && size.inlineSize === baseline.right - baseline.left
+          && size.blockSize === baseline.bottom - baseline.top) return;
+        schedule();
+      });
   resize?.observe(target);
 
   let intersection: IntersectionObserver | undefined;

@@ -1124,7 +1124,7 @@ describe("tooltip observation budgets", () => {
     let notify = () => {};
     const disconnect = vi.fn();
     vi.stubGlobal("ResizeObserver", class {
-      constructor(callback: () => void) { notify = callback; }
+      constructor(callback: (entries: ResizeObserverEntry[]) => void) { notify = () => callback([]); }
       observe = vi.fn();
       disconnect = disconnect;
     });
