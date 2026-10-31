@@ -69,7 +69,8 @@ async function capturePerformance(session: CDPSession, output: string) {
   };
 }
 
-test("tooltip ignores sibling streaming and still detects sibling layout movement", async ({}, testInfo) => {
+test("tooltip ignores sibling streaming and still detects sibling layout movement", async () => {
+  const testInfo = test.info();
   const app = await launchElectronApp({
     fixturePath: path.resolve(import.meta.dirname, "fixtures/context-rail-linked-directory-tooltips/replay.fixture.json"),
     windowSize: { width: 1280, height: 820 },

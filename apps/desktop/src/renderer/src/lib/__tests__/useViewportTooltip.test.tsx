@@ -1149,6 +1149,28 @@ describe("tooltip observation budgets", () => {
     expect(disconnect).toHaveBeenCalledTimes(1);
   });
 
+  it("does not schedule geometry for an unchanged initial native size", async () => {
+    let notify = () => {};
+    vi.stubGlobal("ResizeObserver", class {
+      target?: Element;
+      constructor(private callback: (entries: ResizeObserverEntry[]) => void) {
+        notify = () => this.callback([{
+          target: this.target!,
+          borderBoxSize: [{ inlineSize: 160, blockSize: 26 }],
+        } as unknown as ResizeObserverEntry]);
+      }
+      observe(target: Element) { this.target = target; }
+      disconnect = vi.fn();
+    });
+    mockAnchorRectangleFromLayout();
+    render(<AnchorLifecycleFixture />);
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    await deliverMutations();
+    const request = vi.spyOn(window, "requestAnimationFrame");
+    notify();
+    expect(request).toHaveBeenCalledTimes(0);
+  });
+
   it("never observes the body subtree for attributes, text or child mutations", async () => {
     const observe = vi.spyOn(MutationObserver.prototype, "observe");
     render(<AnchorLifecycleFixture />);
