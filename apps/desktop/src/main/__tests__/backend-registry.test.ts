@@ -14941,6 +14941,51 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("prepares a launchpad worktree from the base the request names", async () => {
+    const prepareLaunchpadWorkspace = vi.fn(async () => ({
+      cwd: "/repo/project",
+      workMode: "local" as const,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: { prepareLaunchpadWorkspace } as never,
+    });
+    const launchpad = {
+      directoryKey: "directory:/repo/project",
+      directoryKind: "directory" as const,
+      directoryLabel: "project",
+      directoryPath: "/repo/project",
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      workMode: "worktree" as const,
+      createdAt: 1000,
+      updatedAt: 2000,
+    };
+
+    // A peer's to-do card asks for this; the owner's checkout may be on a
+    // branch that holds another thread's unpublished work.
+    await registry.materializeDirectoryLaunchpad({
+      directoryKey: launchpad.directoryKey,
+      launchpad,
+      worktreeBase: "default_branch",
+    });
+    await registry.materializeDirectoryLaunchpad({
+      directoryKey: launchpad.directoryKey,
+      launchpad,
+    });
+
+    expect(prepareLaunchpadWorkspace).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      directoryPath: "/repo/project",
+      workMode: "worktree",
+      worktreeBase: "default_branch",
+    }));
+    expect(prepareLaunchpadWorkspace.mock.calls[1]![0]).not.toHaveProperty("worktreeBase");
+
+    await registry.close();
+  });
+
   it("preserves the project Working Updates override after materialization", async () => {
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
