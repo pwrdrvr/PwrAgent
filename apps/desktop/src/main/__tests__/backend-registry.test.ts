@@ -15337,7 +15337,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("prepares a launchpad worktree from the base the request names", async () => {
-    const prepareLaunchpadWorkspace = vi.fn(async () => ({
+    const prepareLaunchpadWorkspace = vi.fn(async (_launchpad: object) => ({
       cwd: "/repo/project",
       workMode: "local" as const,
     }));

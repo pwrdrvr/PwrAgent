@@ -29128,7 +29128,11 @@ export class DesktopBackendRegistry {
 
     operation?.check();
     const preparedWorkspace =
-      await this.gitDirectoryService.prepareLaunchpadWorkspace(launchpad);
+      await this.gitDirectoryService.prepareLaunchpadWorkspace(
+        request.worktreeBase
+          ? { ...launchpad, worktreeBase: request.worktreeBase }
+          : launchpad,
+      );
     // Retain ownership before the next await/check: cancellation may have
     // overtaken preparation. Existing/local workspaces supply no rollback.
     if (operation) operation.workspaceRollback = preparedWorkspace.rollback;
