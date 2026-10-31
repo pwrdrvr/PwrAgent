@@ -77,7 +77,17 @@ test("tooltip ignores sibling streaming and still detects sibling layout movemen
       const text = document.createElement("p");
       stream.append(text);
       document.body.append(stream);
-      // Let opening, native initial deliveries and fixture mount motion settle.
+      // Own the actual finite mount animations; two frames alone can still
+      // leave the rail's 220 ms slide and its rebaseline outstanding.
+      const animations: Animation[] = [];
+      for (let element: Element | null = target; element; element = element.parentElement) {
+        animations.push(...element.getAnimations().filter((animation) =>
+          animation.playState === "running"
+          && Number.isFinite(animation.effect?.getComputedTiming().activeDuration),
+        ));
+      }
+      await Promise.allSettled(animations.map((animation) => animation.finished));
+      // Drain the native initial deliveries after the motion's completion.
       await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
       let reads = 0;
       target.getBoundingClientRect = () => { reads += 1; return original(); };
@@ -109,12 +119,18 @@ test("tooltip ignores sibling streaming and still detects sibling layout movemen
     await anchor.evaluate((target) => {
       const sibling = document.createElement("div");
       sibling.id = "tooltip-layout-sibling";
-      sibling.append(document.createElement("div"));
+      sibling.style.display = "contents";
+      const child = document.createElement("div");
+      child.style.position = "absolute";
+      sibling.append(child);
       target.parentElement!.insertBefore(sibling, target);
     });
     await expect(app.window.getByRole("tooltip")).toBeVisible();
     await anchor.evaluate(() => {
-      document.querySelector<HTMLElement>("#tooltip-layout-sibling > div")!.style.height = "50px";
+      const child = document.querySelector<HTMLElement>("#tooltip-layout-sibling > div")!;
+      child.style.position = "static";
+      child.style.width = "20px";
+      child.style.height = "50px";
     });
     await expect(app.window.getByRole("tooltip")).toHaveCount(0);
     await anchor.focus();
