@@ -166,8 +166,24 @@ const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies =
   writeFile: writeCachedTranscriptImage,
 };
 
-/** Publish complete cache files, reusing images retained by an earlier write or read. */
+const pendingCachedImageWrites = new Map<string, Promise<void>>();
+
+/** One publisher per content-addressed path, shared across concurrent appends/readers. */
 async function writeCachedTranscriptImage(filePath: string, data: Buffer): Promise<void> {
+  const key = path.resolve(filePath);
+  const existing = pendingCachedImageWrites.get(key);
+  if (existing) return await existing;
+  const write = publishCachedTranscriptImage(filePath, data);
+  pendingCachedImageWrites.set(key, write);
+  try {
+    await write;
+  } finally {
+    pendingCachedImageWrites.delete(key);
+  }
+}
+
+/** Publish complete cache files, reusing images retained by an earlier write or read. */
+async function publishCachedTranscriptImage(filePath: string, data: Buffer): Promise<void> {
   try {
     if ((await stat(filePath)).size === data.byteLength) return;
   } catch (error) {
