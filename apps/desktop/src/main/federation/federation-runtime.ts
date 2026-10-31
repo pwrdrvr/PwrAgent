@@ -3575,6 +3575,7 @@ export class DesktopFederationRuntime {
       archived: { backend: params.backend, threadId: params.parentThreadId, instanceId: localInstanceId },
       anchor, expectedParent: archived?.parentThreadId ? { threadId: archived.parentThreadId,
         backend: archived.parentThreadBackend ?? params.backend, instanceId: archived.parentThreadInstanceId } : null,
+      expectedChildOrder: archived?.subthreadOrder ?? [],
       parent, parentSummary, children: ordered.map(({ ref, summary, instanceLabel }) => ({ ref, summary, instanceLabel })),
     };
     const participants = new Set(ordered.flatMap(({ ref }) =>
