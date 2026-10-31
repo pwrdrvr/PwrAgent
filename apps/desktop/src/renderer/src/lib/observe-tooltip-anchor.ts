@@ -58,6 +58,9 @@ export function observeTooltipAnchor(
     const rootMargin = `${-baseline.top}px ${baseline.right - root.clientWidth}px ${baseline.bottom - root.clientHeight}px ${-baseline.left}px`;
     let initial = true;
     const observe = (threshold: number): void => {
+      const thresholds = threshold === 1 ? [0, 1] : [0,
+        Math.max(0, threshold - 0.000001),
+        Math.min(1, threshold + 0.000001), 1];
       intersection = new IntersectionObserver((entries) => {
         if (disposed) return;
         const entry = entries.find((entry) => entry.target === target);
@@ -72,7 +75,7 @@ export function observeTooltipAnchor(
             observe(entry.intersectionRatio);
           }
         }
-      }, { rootMargin, threshold: [0, threshold] });
+      }, { rootMargin, threshold: thresholds });
       intersection.observe(target);
     };
     observe(1);

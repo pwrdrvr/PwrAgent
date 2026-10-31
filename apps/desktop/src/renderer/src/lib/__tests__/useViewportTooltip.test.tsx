@@ -1023,7 +1023,8 @@ describe("tooltip observation budgets", () => {
     const anchor = screen.getByRole("button");
     fireEvent.mouseEnter(anchor);
     await deliverMutations();
-    const geometry = vi.spyOn(anchor, "getBoundingClientRect");
+    const geometry = vi.fn(anchor.getBoundingClientRect.bind(anchor));
+    anchor.getBoundingClientRect = geometry;
     const frame = vi.spyOn(window, "requestAnimationFrame");
     const stream = screen.getByTestId("unrelated-update");
     for (let index = 0; index < 100; index += 1) {
@@ -1042,7 +1043,8 @@ describe("tooltip observation budgets", () => {
     const anchor = screen.getByRole("button");
     fireEvent.mouseEnter(anchor);
     await deliverMutations();
-    const geometry = vi.spyOn(anchor, "getBoundingClientRect");
+    const geometry = vi.fn(anchor.getBoundingClientRect.bind(anchor));
+    anchor.getBoundingClientRect = geometry;
     const frames: FrameRequestCallback[] = [];
     const frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
       frames.push(callback);
@@ -1074,7 +1076,8 @@ describe("tooltip observation budgets", () => {
     fireEvent.mouseLeave(anchor);
     fireEvent.mouseEnter(anchor);
     await deliverMutations();
-    const geometry = vi.spyOn(anchor, "getBoundingClientRect");
+    const geometry = vi.fn(anchor.getBoundingClientRect.bind(anchor));
+    anchor.getBoundingClientRect = geometry;
     await act(async () => { animation.finish(); await Promise.resolve(); });
     expect(geometry).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("tooltip")).toHaveTextContent("Branch details");
@@ -1086,7 +1089,8 @@ describe("tooltip observation budgets", () => {
     const { unmount } = render(<AnchorLifecycleFixture />);
     const anchor = screen.getByRole("button");
     fireEvent.mouseEnter(anchor);
-    const geometry = vi.spyOn(anchor, "getBoundingClientRect");
+    const geometry = vi.fn(anchor.getBoundingClientRect.bind(anchor));
+    anchor.getBoundingClientRect = geometry;
     unmount();
     await act(async () => { animation.finish(); await Promise.resolve(); });
     expect(geometry).toHaveBeenCalledTimes(0);
