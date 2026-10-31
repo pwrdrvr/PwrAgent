@@ -721,6 +721,7 @@ function truncateActivityText(text: string, maxLength: number): string {
 export function buildLiveToolDetails(
   item: Record<string, unknown>,
   retainedImages?: AppServerThreadImagePart[],
+  notificationMethod?: "item/started" | "item/completed",
 ): AppServerThreadActivityDetail[] {
   const itemType = readString(item, "type")?.replace(/[-_\s]/g, "").toLowerCase();
   if (itemType === "autoapprovalreview") {
@@ -768,7 +769,9 @@ export function buildLiveToolDetails(
     readString(item, "name") ??
     (itemType === "websearch" ? "web search"
       : itemType === "imageview" ? `View image: ${readString(item, "path") ?? "unknown image"}` : "tool");
-  const status = normalizeItemStatus(item.status);
+  const status = itemType === "imageview" && notificationMethod === "item/completed"
+    ? "completed"
+    : normalizeItemStatus(item.status);
   const title = readToolArgument(item, "title");
   const query = readToolArgument(item, "query") ?? readToolArgument(item, "q");
   const preview =

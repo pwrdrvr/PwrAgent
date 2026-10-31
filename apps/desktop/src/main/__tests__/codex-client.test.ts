@@ -7398,6 +7398,26 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it("keeps distinct native image views of the same path in replay", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const file = path.join(os.tmpdir(), "screenshot.png");
+    const items = ["before", "after"].map((id) => ({ type: "imageView", id, path: file } satisfies ThreadItem));
+    MockTransport.readThreadResultByThreadId.set("thread-repeated-image", {
+      thread: { turns: [{ id: "image-turn", items }] },
+    });
+    const client = new CodexAppServerClient();
+    try {
+      const replay = await client.readThread({ threadId: "thread-repeated-image" });
+      expect(replay.entries).toEqual([expect.objectContaining({ type: "activity", details: items.map((item) =>
+        expect.objectContaining({ id: item.id, label: `View image: ${file}`, images: [{
+          type: "image", url: pathToFileURL(file).toString(), sourceUrl: pathToFileURL(file).toString(), alt: path.basename(file),
+        }] }),
+      ) })]);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("attaches custom tool output images to the final assistant message", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const imageUrl = "data:image/jpeg;base64,AQID";

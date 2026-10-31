@@ -48435,14 +48435,19 @@ export class DesktopBackendRegistry {
     const key = `${event.backend}:${threadId}`;
     const previous = this.transcriptImageWork.get(key);
     const item = notification.method === "item/completed" ? readRecord(notification.params.item) : undefined;
-    if (item?.type !== "agentMessage" && item?.type !== "imageView") {
-      return previous && ["turn/completed", "turn/failed", "turn/cancelled"].includes(notification.method)
-        ? previous.catch(() => undefined).then(() => this.emitEvent(event))
-        : this.emitEvent(event);
+    const materializeImages = item?.type === "agentMessage" || item?.type === "imageView";
+    // Keep lifecycle bookkeeping (including queue release) and subsequent
+    // transcript events behind image work, in arrival order. Extend the chain
+    // through delivery, so idle or the next turn cannot overtake a held terminal.
+    const orderedNotification = notification.method.startsWith("turn/")
+      || notification.method === "thread/status/changed"
+      || notification.method.startsWith("item/");
+    if (!materializeImages && (!previous || !orderedNotification)) {
+      return this.emitEvent(event);
     }
     const work = (async () => {
       await previous?.catch(() => undefined);
-      const materialized = await materializeTranscriptImageEventForRenderer(event, {}, {
+      const materialized = materializeImages ? await materializeTranscriptImageEventForRenderer(event, {}, {
         includeTemporaryImageRoots: true,
         resolveApprovedLocalImageRoots: async () => await this.getThreadTranscriptImageRoots({
           backend: event.backend, threadId,
@@ -48452,7 +48457,7 @@ export class DesktopBackendRegistry {
           error: error instanceof Error ? error.message : String(error),
         });
         return event;
-      });
+      }) : event;
       await this.emitEvent(materialized);
     })();
     this.transcriptImageWork.set(key, work);

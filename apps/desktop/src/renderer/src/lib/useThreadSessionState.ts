@@ -3457,7 +3457,7 @@ function liveActivityNotificationSignature(params: {
   }
 
   const item = getNotificationItem(params.notification.params);
-  const details = item ? buildLiveToolDetails(item) : [];
+  const details = item ? buildLiveToolDetails(item, undefined, params.notification.method) : [];
   if (details.length === 0) {
     return undefined;
   }
@@ -6124,7 +6124,7 @@ export function useThreadSessionState(params: {
         const method = event.notification.method;
         if (method === "item/started" || method === "item/completed") {
           const item = getNotificationItem(event.notification.params);
-          const detail = item ? buildLiveToolDetails(item)[0] : undefined;
+          const detail = item ? buildLiveToolDetails(item, undefined, method)[0] : undefined;
           if (detail) {
             const currentItems = liveToolItemsRef.current[targetThreadKey] ?? {};
             if (method === "item/started" && (
@@ -6394,7 +6394,7 @@ export function useThreadSessionState(params: {
 
         if (event.notification.method === "item/started") {
           const item = getNotificationItem(event.notification.params);
-          const details = item ? buildLiveToolDetails(item) : [];
+          const details = item ? buildLiveToolDetails(item, undefined, event.notification.method) : [];
           if (details.length === 0) {
             return current;
           }
@@ -6840,7 +6840,7 @@ export function useThreadSessionState(params: {
             };
           }
 
-          const details = item ? buildLiveToolDetails(item, event.rendererImageParts) : [];
+          const details = item ? buildLiveToolDetails(item, event.rendererImageParts, event.notification.method) : [];
           if (details.length > 0) {
             const turn = buildTurnMetadata({
               fallbackId:

@@ -15,10 +15,12 @@ describe("buildLiveToolDetails", () => {
     const item = { type: "imageView", id: "native-view", path: "/tmp/native.png" };
     const image = { type: "image" as const, url: "pwragent-image://file/retained", sourceUrl: "file:///tmp/native.png", alt: "native.png" };
     expect(buildLiveToolDetails(item)[0]).not.toHaveProperty("images");
-    const completed = buildLiveToolDetails(item, [image]);
-    expect(completed[0]).toMatchObject({ id: item.id, label: "View image: /tmp/native.png", images: [image] });
+    expect(buildLiveToolDetails(item, undefined, "item/started")[0].status).toBe("in_progress");
+    const completed = buildLiveToolDetails(item, [image], "item/completed");
+    expect(completed[0]).toMatchObject({ id: item.id, label: "View image: /tmp/native.png", images: [image], status: "completed" });
     expect(mergeActivityDetails(completed, completed)).toEqual(completed);
-    expect(buildLiveToolDetails(item, [])[0]).not.toHaveProperty("images");
+    expect(buildLiveToolDetails(item, [], "item/completed")[0]).toMatchObject({ status: "completed" });
+    expect(buildLiveToolDetails(item, [], "item/completed")[0]).not.toHaveProperty("images");
   });
 
   it("surfaces Codex function call activity while reviews run", () => {
