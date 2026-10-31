@@ -9,8 +9,10 @@ const root = process.env.PWRAGENT_RENDERING_FIXTURE_ROOT!;
 app.setPath("userData", join(root, "user-data"));
 const watchdog = setTimeout(() => { console.error("fixture deadline exceeded"); app.exit(1); }, 20_000);
 await app.whenReady();
+console.log("fixture ready");
 const external = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
 await external.loadURL("data:text/html,<p>invented rendering fixture</p>");
+console.log("fixture page loaded");
 const d = external.webContents.debugger;
 d.attach("1.3");
 let completions = 0;
@@ -32,6 +34,7 @@ try {
     transferMode: "ReportEvents",
     traceConfig: { includedCategories: ["blink.user_timing"], excludedCategories: ["*"] },
   });
+  console.log("external trace started");
   const started = performance.now();
   let renderingRejected = false;
   const capture = captureRenderingDiagnostics(join(root, "diagnostics"), 1);
