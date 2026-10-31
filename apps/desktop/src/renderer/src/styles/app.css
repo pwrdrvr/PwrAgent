@@ -8583,7 +8583,7 @@ a.button {
   opacity: 0;
 }
 
-:root[data-native-drag-active] .directory-row__header--with-launchpad:hover .directory-row__summary-meta {
+:root[data-native-drag-active] .directory-row__header--with-launchpad:not(.directory-row__header--has-draft):hover .directory-row__summary-meta {
   opacity: 1;
   min-width: 0;
 }

@@ -1616,6 +1616,17 @@ describe("Tangerine Terminal theme contract", () => {
       ".directory-row__header--with-launchpad.directory-row__header--split:has(.directory-row__launchpad-cluster :focus-visible) .directory-row__summary-meta",
     );
     expect(splitRule).toContain(`min-width: ${buttonWidth + targetsWidth}px;`);
+
+    // extractRuleBody reads only the selector line before `{`, which is the
+    // keyboard half. Pin the mouse half to the same rules.
+    expect(css).toContain(
+      ".directory-row__header--with-launchpad:hover .directory-row__summary-meta,\n"
+        + ".directory-row__header--with-launchpad:has(.directory-row__launchpad-cluster :focus-visible) .directory-row__summary-meta {",
+    );
+    expect(css).toContain(
+      ".directory-row__header--with-launchpad.directory-row__header--split:hover .directory-row__summary-meta,\n"
+        + ".directory-row__header--with-launchpad.directory-row__header--split:has(.directory-row__launchpad-cluster :focus-visible) .directory-row__summary-meta {",
+    );
   });
 
   it("marks a selected row with the inset accent edge, not an inner bar", () => {
