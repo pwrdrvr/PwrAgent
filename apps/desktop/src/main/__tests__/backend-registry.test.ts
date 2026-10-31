@@ -59332,7 +59332,9 @@ script = "printf setup"
       await registry.archiveThread({ backend: "claude", threadId: parentId });
       expect(archiveCodexThread).not.toHaveBeenCalled();
       expect((await store.read(parentId)).thread.archivedAt).toEqual(expect.any(Number));
-      expect(observeArchivedThreads).toHaveBeenCalledWith([{ backend: "claude", threadId: parentId }], expect.any(Number));
+      expect(observeArchivedThreads).toHaveBeenCalledWith(
+        [{ backend: "claude", threadId: parentId }], expect.any(Number), { promoteSubthreads: true },
+      );
       expect(setThreadParent).toHaveBeenCalledWith({
         backend: "codex",
         threadId: "codex-child",
