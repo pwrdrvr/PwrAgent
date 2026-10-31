@@ -111,7 +111,7 @@ export const TranscriptActivity = memo(function TranscriptActivity(props: Transc
                 text={activityCopyText}
               />
               {entry.createdAt ? (
-                <time className="transcript-activity__time">
+                <time className="transcript-activity__time tooltip-target" dateTime={new Date(entry.createdAt).toISOString()} data-tooltip={new Date(entry.createdAt).toISOString()}>
                   {new Intl.DateTimeFormat(undefined, {
                     month: "short",
                     day: "numeric",
@@ -134,7 +134,7 @@ export const TranscriptActivity = memo(function TranscriptActivity(props: Transc
                 text={activityCopyText}
               />
               {entry.createdAt ? (
-                <time className="transcript-activity__time">
+                <time className="transcript-activity__time tooltip-target" dateTime={new Date(entry.createdAt).toISOString()} data-tooltip={new Date(entry.createdAt).toISOString()}>
                   {new Intl.DateTimeFormat(undefined, {
                     month: "short",
                     day: "numeric",

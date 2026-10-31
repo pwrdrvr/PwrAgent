@@ -5906,6 +5906,8 @@ describe("useThreadNavigation", () => {
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
       releaseLaunchpadOnSubmit: true,
       codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
+        operationId: expect.any(String),
+        submittedAt: expect.any(Number),
       directoryKey: "directory:/Users/fixture-user/github/PwrAgent",
       launchpad: expect.objectContaining({
         directoryKey: "directory:/Users/fixture-user/github/PwrAgent",
@@ -6101,6 +6103,8 @@ describe("useThreadNavigation", () => {
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
       releaseLaunchpadOnSubmit: true,
       codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
+        operationId: expect.any(String),
+        submittedAt: expect.any(Number),
       directoryKey,
       launchpad: expect.objectContaining({
         prompt: "/review main",
@@ -6992,6 +6996,8 @@ describe("useThreadNavigation", () => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
         releaseLaunchpadOnSubmit: true,
         codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
+        operationId: expect.any(String),
+        submittedAt: expect.any(Number),
         directoryKey,
         launchpad: expect.objectContaining({
           directoryKey,
@@ -7322,6 +7328,8 @@ describe("useThreadNavigation", () => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
         releaseLaunchpadOnSubmit: true,
         codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
+        operationId: expect.any(String),
+        submittedAt: expect.any(Number),
         directoryKey: firstDirectoryKey,
         launchpad: expect.objectContaining({
           directoryKey: firstDirectoryKey,

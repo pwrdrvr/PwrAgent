@@ -1,4 +1,6 @@
 import type { NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
+import type { LaunchpadCreationStatus } from "@pwragent/shared";
+import { materializeObservableLaunchpad, LaunchpadStartupCancelledError } from "./launchpad-creation-client";
 import { readNavigationQueryRange } from "./read-navigation-query-range";
 import { readBridgedNavigationResumeState } from "./navigation-resume-state";
 import { findPeerCounterpartDirectory, type ProjectIdentity } from "./federation-project-match";
@@ -2714,7 +2716,8 @@ function mergeHydratedThreadWithOptimisticState(
 }
 
 function buildOptimisticUserMessage(
-  input: AppServerTurnInputItem[] | undefined
+  input: AppServerTurnInputItem[] | undefined,
+  submittedAt: number,
 ): NavigationThreadSummary["optimisticUserMessage"] {
   if (!input?.length) {
     return undefined;
@@ -2743,7 +2746,7 @@ function buildOptimisticUserMessage(
   return {
     text,
     ...(imageParts.length > 0 ? { imageParts } : {}),
-    createdAt: Date.now(),
+    createdAt: submittedAt,
   };
 }
 
@@ -2814,6 +2817,14 @@ function reviewDisplayTextFromTarget(
 }
 
 export type PendingLaunchpadCreation = {
+  operationId: string;
+  submittedAt: number;
+  target?: FederationTarget;
+  startup?: LaunchpadCreationStatus;
+  cancelling?: boolean;
+  cancelError?: string;
+  connectionLost?: boolean;
+  onCancel?: () => void;
   federatedSession?: FederatedLaunchpadSession;
   setupProgress?: LaunchpadEnvironmentSetupProgress;
   selectionKey: string;
@@ -3402,6 +3413,8 @@ export function useThreadNavigation(
     let changed = false;
     for (const [key, creation] of pendingLaunchpadCreationsRef.current) {
       if (creation.setupProgressKey !== event.directoryKey) continue;
+      if (event.operationId && creation.operationId !== event.operationId) continue;
+      if (!federationTargetsEqual(creation.target, event.federationTarget)) continue;
       pendingLaunchpadCreationsRef.current.set(key, {
         ...creation,
         setupProgress: applyLaunchpadEnvironmentSetupProgress(creation.setupProgress, event),
@@ -7857,7 +7870,7 @@ export function useThreadNavigation(
 
       const editableSelectionKey = buildLaunchpadSelectionKey(directoryKey);
       const submittedFederationTarget =
-        launchpad.federationTarget ?? readRendererFederationTarget();
+        federatedSelection?.target ?? launchpad.federationTarget ?? readRendererFederationTarget();
       // A local launchpad hands its draft slot back as soon as it is
       // submitted, so the operator can start another thread in this directory
       // while this one sets up. A federated launchpad is one session per
@@ -7877,9 +7890,9 @@ export function useThreadNavigation(
       const composerScopeKey = releasesLaunchpad
         ? buildStartingLaunchpadComposerScopeKey(creationId, directoryKey)
         : undefined;
-      const setupProgressKey = releasesLaunchpad
-        ? `${STARTING_LAUNCHPAD_SELECTION_PREFIX}${creationId}`
-        : directoryKey;
+      const operationId = crypto.randomUUID();
+      const submittedAt = Date.now();
+      const setupProgressKey = `${STARTING_LAUNCHPAD_SELECTION_PREFIX}${operationId}`;
       const materializeParentThreadId =
         parentThreadId ??
         launchpad.parentThreadId ??
@@ -7891,6 +7904,27 @@ export function useThreadNavigation(
       const materializeParentThreadInstanceId =
         launchpad.parentThreadInstanceId;
       const pendingCreation: PendingLaunchpadCreation = {
+        operationId,
+        submittedAt,
+        target: submittedFederationTarget,
+        onCancel: () => {
+          const current = pendingLaunchpadCreationsRef.current.get(launchpadSelectionKey);
+          if (!current || current.cancelling || !desktopApi.manageLaunchpadCreation) return;
+          pendingLaunchpadCreationsRef.current.set(launchpadSelectionKey, { ...current, cancelling: true, cancelError: undefined });
+          setPendingLaunchpadCreations([...pendingLaunchpadCreationsRef.current.values()]);
+          void desktopApi.manageLaunchpadCreation({ operationId, action: "cancel", federationTarget: submittedFederationTarget })
+            .then((response) => {
+              if (!response.cancellationAccepted) throw new Error("The first turn is already being dispatched. Open the thread to stop it.");
+            }).catch((error: unknown) => {
+              const latest = pendingLaunchpadCreationsRef.current.get(launchpadSelectionKey);
+              if (!latest) return;
+              pendingLaunchpadCreationsRef.current.set(launchpadSelectionKey, {
+                ...latest, cancelling: false,
+                cancelError: `Cancellation was not confirmed: ${error instanceof Error ? error.message : String(error)}`,
+              });
+              setPendingLaunchpadCreations([...pendingLaunchpadCreationsRef.current.values()]);
+            });
+        },
         federatedSession: federatedSelection,
         selectionKey: launchpadSelectionKey,
         directoryKey,
@@ -7959,7 +7993,25 @@ export function useThreadNavigation(
         }
         let response: Awaited<ReturnType<NonNullable<DesktopApi["materializeDirectoryLaunchpad"]>>>;
         try {
-          response = await desktopApi.materializeDirectoryLaunchpad({
+          response = await materializeObservableLaunchpad({ api: desktopApi, onConnectionLost: (connectionLost) => {
+            const current = pendingLaunchpadCreationsRef.current.get(launchpadSelectionKey);
+            if (!current || current.connectionLost === connectionLost) return;
+            pendingLaunchpadCreationsRef.current.set(launchpadSelectionKey, { ...current, connectionLost });
+            setPendingLaunchpadCreations([...pendingLaunchpadCreationsRef.current.values()]);
+          }, onStatus: (startup) => {
+            const current = pendingLaunchpadCreationsRef.current.get(launchpadSelectionKey);
+            if (!current) return;
+            pendingLaunchpadCreationsRef.current.set(launchpadSelectionKey, {
+              ...current, startup,
+              setupProgress: startup.setupProgress
+                ? applyLaunchpadEnvironmentSetupProgress(current.setupProgress, startup.setupProgress)
+                : current.setupProgress,
+            });
+            setPendingLaunchpadCreations([...pendingLaunchpadCreationsRef.current.values()]);
+          }, request: {
+            operationId,
+            submittedAt,
+            codexEnvironmentSetupProgressKey: setupProgressKey,
             directoryKey,
             federationTarget,
             launchpad,
@@ -7970,7 +8022,6 @@ export function useThreadNavigation(
             ...(releasesLaunchpad
               ? {
                   releaseLaunchpadOnSubmit: true,
-                  codexEnvironmentSetupProgressKey: setupProgressKey,
                 }
               : {}),
             ...(materializeParentThreadId
@@ -7982,9 +8033,11 @@ export function useThreadNavigation(
                     : {}),
                 }
               : {}),
-          });
+          } });
         } catch (error) {
-          setLaunchpadError(error instanceof Error ? error.message : String(error));
+          if (!(error instanceof LaunchpadStartupCancelledError)) {
+            setLaunchpadError(error instanceof Error ? error.message : String(error));
+          }
           throw error;
         }
         let localDraftResetFailure: string | undefined;
@@ -8028,7 +8081,7 @@ export function useThreadNavigation(
           optimisticUserMessage: response.turnStartFailure
             || response.scheduledAction
             ? undefined
-            : buildOptimisticUserMessage(input),
+            : buildOptimisticUserMessage(input, submittedAt),
           optimisticActiveTurn: response.turnId && !response.turnStartFailure
             ? {
                 id: response.turnId,

@@ -156,6 +156,7 @@ import { openImageGallery } from "../thread-detail/ImageGalleryLayer";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { resolveReviewRunMode } from "../../lib/review-run-mode";
 import { readRendererFederationTarget } from "../../lib/federation-window";
@@ -459,6 +460,9 @@ export type ComposerProps = {
   ) => Promise<void>;
   /** Discard this launchpad draft (the "Cancel" button next to "Start thread"). */
   onCancelLaunchpad?: (directoryKey: string) => void;
+  onCancelLaunchpadStartup?: () => void;
+  launchpadStartupCancelling?: boolean;
+  launchpadStartupCancellable?: boolean;
   /**
    * Cancel this launchpad as its Cancel button does, asked from outside the
    * composer (a sub-thread draft row's menu). The composer must run it: its
@@ -9211,7 +9215,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           draftStore.pushDraft(submittedScopeKey, submittedSnapshot);
         }
         props.onPendingStatusChange?.(undefined);
-        if (!launchpadMaterializingRef.current) {
+        if (!launchpadMaterializingRef.current && !(error instanceof LaunchpadStartupCancelledError)) {
           setSendError(error instanceof Error ? error.message : String(error));
         }
       } finally {
@@ -15072,7 +15076,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               {interrupting ? "Stopping…" : "Stop"}
             </button>
           ) : null}
-          {props.launchpad && props.onCancelLaunchpad ? (
+          {props.launchpadMaterializing && props.onCancelLaunchpadStartup ? (
+            <button className="button button--ghost" type="button" disabled={props.launchpadStartupCancelling || props.launchpadStartupCancellable === false} onClick={props.onCancelLaunchpadStartup}>
+              {props.launchpadStartupCancelling ? "Cancelling…" : "Cancel startup"}
+            </button>
+          ) : props.launchpad && props.onCancelLaunchpad ? (
             <button
               className="button button--ghost"
               disabled={launchpadSubmitting}

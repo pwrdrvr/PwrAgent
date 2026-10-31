@@ -422,6 +422,8 @@ export type CodexThreadEnvironmentRuntime = {
   setupOutput?: string;
   setupExitCode?: number;
   setupDurationMs?: number;
+  setupStartedAt?: number;
+  setupFinishedAt?: number;
   /**
    * When the operator resolved the failure prompt this runtime raised — by
    * continuing anyway, or by the thread moving on without them.

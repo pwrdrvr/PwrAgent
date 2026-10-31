@@ -555,6 +555,8 @@ export function serializeNavigationSnapshotForHash(params: {
             setupOutput: thread.codexEnvironmentRuntime.setupOutput ?? null,
             setupExitCode: thread.codexEnvironmentRuntime.setupExitCode ?? null,
             setupDurationMs: thread.codexEnvironmentRuntime.setupDurationMs ?? null,
+            setupStartedAt: thread.codexEnvironmentRuntime.setupStartedAt ?? null,
+            setupFinishedAt: thread.codexEnvironmentRuntime.setupFinishedAt ?? null,
             setupFailureAcknowledgedAt:
               thread.codexEnvironmentRuntime.setupFailureAcknowledgedAt ?? null,
             actions: (thread.codexEnvironmentRuntime.actions ?? []).map(

@@ -144,6 +144,7 @@ import {
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_STOP_SUB_AGENT_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  AGENT_LAUNCHPAD_CREATION_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_PREVIEW_THREAD_REWIND_CHANNEL,
@@ -1426,6 +1427,14 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_LAUNCHPAD_CREATION_CHANNEL);
+  ipcMain.handle(AGENT_LAUNCHPAD_CREATION_CHANNEL, async (_event, request: import("@pwragent/shared").LaunchpadCreationRequest) => {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime().remoteBackend(request.federationTarget)
+        .manageLaunchpadCreation(stripFederationTarget(request));
+    }
+    return await registry.manageLaunchpadCreation(request);
+  });
   ipcMain.removeHandler(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.handle(
     AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
