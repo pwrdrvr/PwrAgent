@@ -2118,18 +2118,22 @@ test.describe("federation remote window", () => {
       expect(childTitle).toBeTruthy();
       await rightClickThreadRow(viewer.window, childTitle!, { exact: true });
       await viewer.window.getByRole("menuitem", { name: "Unlink from Parent" }).click();
+      // The child can already have a pin rank before unlink completes.
+      // Observe the cleared relationship and the pin in the same owner read.
       await expect
         .poll(async () => {
-          const child = (await readViewerRelationship()).childThread;
+          const thread = (await readViewerRelationship()).childThread;
           return {
-            pinnedRank: child?.pinnedRank,
-            parentThreadId: child?.parentThreadId,
-            parentThreadInstanceId: child?.parentThreadInstanceId,
+            pinnedRank: thread?.pinnedRank,
+            parentThreadId: thread?.parentThreadId,
+            parentThreadBackend: thread?.parentThreadBackend,
+            parentThreadInstanceId: thread?.parentThreadInstanceId,
           };
         })
         .toEqual({
           pinnedRank: expect.any(String),
           parentThreadId: undefined,
+          parentThreadBackend: undefined,
           parentThreadInstanceId: undefined,
         });
 

@@ -3874,6 +3874,67 @@ describe("useThreadNavigation", () => {
     expect(result.current.archiveThreadNotice).toBeUndefined();
   });
 
+  it("keeps a nested tray intact until the owner publishes promoted children", async () => {
+    let archived = false;
+    let releaseArchive!: () => void;
+    const archiveGate = new Promise<void>((resolve) => { releaseArchive = resolve; });
+    let releaseOwnerPage!: () => void;
+    const ownerPageGate = new Promise<void>((resolve) => { releaseOwnerPage = resolve; });
+    let ownerReadStarted = false;
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const rows: NavigationThreadSummary[] = ["root", "before", "parent", "survivor", "after"].map((id, index) => ({
+      id, source: "codex", title: id, titleSource: "explicit", linkedDirectories: [],
+      inbox: { inInbox: false }, createdAt: index, updatedAt: index,
+      ...(id === "root" ? { subthreadOrder: ["before", "parent", "after"] }
+        : { parentThreadId: id === "survivor" ? "parent" : "root", parentThreadBackend: "codex" }),
+    }));
+    const readPopulation = vi.fn(async (): Promise<NavigationSnapshot> => {
+      if (archived) {
+        ownerReadStarted = true;
+        await ownerPageGate;
+      }
+      return {
+        backend: "all", fetchedAt: Date.now(), unchanged: false, inboxThreadKeys: [], directories: [],
+        launchpadDefaults: { backend: "codex", executionMode: "default" },
+        threads: archived ? rows.filter((row) => row.id !== "parent").map((row) => row.id === "root"
+          ? { ...row, subthreadOrder: ["before", "survivor", "after"] }
+          : row.id === "survivor" ? { ...row, parentThreadId: "root" } : row) : rows,
+      };
+    });
+    const archiveThread = vi.fn(async () => {
+      await archiveGate;
+      archived = true;
+      return { backend: "codex" as const, threadId: "parent", archivedAt: 1000, cleanup: [] };
+    });
+    const api: DesktopApi = { readPopulation, archiveThread, onAgentEvent: (listener) => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    } };
+    const { result } = renderHook(() => useThreadNavigation(api));
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(5);
+      expect([...result.current.pagedNavigation.resources.values()].some(({ state }) =>
+        state.request.query.kind === "children" && state.request.query.parent.threadId === "root")).toBe(true);
+    });
+    let operation!: ReturnType<typeof result.current.archiveThread>;
+    act(() => { operation = result.current.archiveThread(result.current.threads.find((row) => row.id === "parent")!); });
+    expect(result.current.threads.map((row) => row.id)).toContain("parent");
+    expect(result.current.threads.find((row) => row.id === "survivor")?.parentThreadId).toBe("parent");
+    act(() => { releaseArchive(); });
+    await waitFor(() => expect(ownerReadStarted).toBe(true));
+    act(() => {
+      for (const listener of listeners) listener({ backend: "codex",
+        notification: { method: "thread/archived", params: { threadId: "parent" } } });
+    });
+    expect(result.current.threads.map((row) => row.id)).toContain("parent");
+    expect(result.current.threads.find((row) => row.id === "survivor")?.parentThreadId).toBe("parent");
+    await act(async () => { releaseOwnerPage(); await operation; });
+    await waitFor(() => {
+      expect(result.current.threads.map((row) => row.id)).not.toContain("parent");
+      expect(result.current.threads.find((row) => row.id === "survivor")?.parentThreadId).toBe("root");
+    });
+  });
+
   it("archives sub-threads before the parent when archiving a group", async () => {
     const archivedThreadIds = new Set<string>();
     const parentThread = {
