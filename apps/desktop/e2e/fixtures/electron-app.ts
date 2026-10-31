@@ -1400,7 +1400,7 @@ async function killProcessTree(
       await taskkillTree(pid);
     }
     if (mainProcess && quitStartedAt !== undefined) {
-      // The Playwright child is cmd.exe. Its exit does not prove that Electron
+      // A custom Windows batch launcher can exit before its Electron
       // descendants have released the launcher's inherited pipes.
       const rows = await listWindowsMainAndChildren(mainProcess.pid);
       const pids = selectWindowsElectronCleanupPids(

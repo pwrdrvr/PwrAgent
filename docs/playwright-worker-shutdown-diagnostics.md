@@ -43,8 +43,10 @@ Start with `snapshot-1.json`, then use `timeline.jsonl` to reconstruct events:
   cleanup, and entry into each worker cleanup phase. It includes healthy
   launches so an earlier test's leftover process can be identified.
 
-A Windows Electron launcher can be `cmd.exe`; its exit is not the Electron
-tree's completion. Fixture teardown treats an unresolved `electronApp.close()`
+Windows native Electron executables launch directly, so Playwright owns the
+Electron main process and its stdio. Explicit `.cmd` or `.bat` executable
+wrappers still use `cmd.exe`; that shell's exit is not the Electron tree's
+completion. Fixture teardown treats an unresolved `electronApp.close()`
 as abnormal even after that launcher exits. It captures the Electron main PID
 before quit and, on the abnormal path, checks process creation times before
 terminating that process or its direct surviving children. It rejects a
@@ -109,11 +111,14 @@ artifacts. No Electron window, display server, or browser download is needed.
 The suite also runs Playwright's `--list` mode with an inherited worker index
 to verify that a controller cannot emit a false readiness marker.
 
-Two small versioned pnpm patches emit observations from Playwright's worker
-and process launcher. They leave the original promises, cleanup, error handling
-and deadlines in place. The hooks are inert outside the instrumented E2E
-workers. When upgrading Playwright, port both patches and run the real-worker
-tests: a green ordinary E2E run does not validate failure capture.
+Two versioned pnpm patches emit observations from Playwright's worker and
+process launcher. The core patch also bypasses the Windows shell for native
+Electron executables, preserving shell launch only for `.cmd` and `.bat`
+wrappers. The original close promises, cleanup, error handling and deadlines
+remain in place. Diagnostic hooks are inert outside instrumented E2E workers.
+When upgrading Playwright, port both patches and run the real-worker tests and
+`e2e/electron-launcher-ownership.spec.ts` on Windows. A green ordinary E2E run
+does not validate failure capture or native launcher ownership.
 
 ## Unit probe timeouts
 
