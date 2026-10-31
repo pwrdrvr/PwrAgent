@@ -173,6 +173,24 @@ describe("backend MCP gateway dispatch", () => {
     expect(operation).not.toHaveBeenCalled();
   });
 
+  it("uses the selected Sandboxer connection to inspect a detached cloud verification", async () => {
+    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["builtin:sandboxer"] });
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+    operation.mockImplementation(async (params) => params.operation === "gateway/tools/list"
+      ? [{ connectionId: "builtin:sandboxer", serverName: "Sandboxer", toolName: "exec", schemaRevision: "sandboxer-r1", definition: {
+          name: "exec", inputSchema: { type: "object", properties: { sandboxId: { type: "string" }, command: { type: "string" } }, required: ["sandboxId", "command"] },
+        } }]
+      : { content: [{ type: "text", text: "unit exit=0\nlint exit=0" }] });
+    const call = await createMonitor();
+    const discovered = await call("search_mcp_tools", { query: "exec", connectionId: "builtin:sandboxer" });
+    expect(discovered.success).toBe(true);
+    const tool = JSON.parse((discovered.contentItems[0] as { text: string }).text).tools[0];
+    const response = await call("call_mcp_tool", { connectionId: tool.connectionId, toolName: tool.toolName,
+      schemaRevision: tool.schemaRevision, arguments: { sandboxId: "sb_fixture", command: "cat /home/user/pwragent/wt/fixture/.local/sandboxer/status" } });
+    expect(response.success).toBe(true);
+    expect(JSON.stringify(response)).toContain("unit exit=0");
+  });
+
   it("keeps connection approval on the visible parent without granting the monitor all tools", async () => {
     const call = await createMonitor();
     const events: AgentEvent[] = [];
