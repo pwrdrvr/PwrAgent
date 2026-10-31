@@ -193,6 +193,23 @@ describe("Federation nested archive placement", () => {
     expect(await tray()).toEqual(["before", "child-b", "deeper", "child-a", "after"]);
   });
 
+  it("accepts owner events refreshing viewer membership before the final local commit", async () => {
+    const apply = remoteUpdate.getMockImplementation()!;
+    remoteUpdate.mockImplementation(async (owner, request) => {
+      const result = await apply(owner, request);
+      if (request.archivePromotion && !request.archivePromotion.dryRun) {
+        const entries = await Promise.all(request.archivePromotion.children
+          .filter(({ ref }) => ref.target.scope === "remote" && ref.target.instanceId === owner)
+          .map(async ({ ref, instanceLabel }) => ({ ref, instanceLabel, summary: await summary(ref.threadId) })));
+        await stores.get("middle-owner")!.updateRemoteThreadPinSnapshots(entries);
+      }
+      return result;
+    });
+    await runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" });
+    await stores.get("middle-owner")!.observeArchivedThreads([{ backend: "codex", threadId: "middle" }], 1000, { promoteSubthreads: true });
+    expect(await tray()).toEqual(["before", "child-b", "deeper", "child-a", "after"]);
+  });
+
   it("skips an older remote archive and replaces its slot under the nearest live ancestor", async () => {
     owners.set("older-archive", "root-owner");
     await link("older-archive", "root");
