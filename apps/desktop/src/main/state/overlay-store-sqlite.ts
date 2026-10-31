@@ -9632,6 +9632,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           throw new Error("The surviving ancestor or archived row changed. Refresh the group before archiving.");
         }
       }
+      // The ancestor may have committed even when its acknowledgment or the
+      // source's final commit was lost. Its existing ranks, including newer
+      // manual moves, then supersede this request's original anchor slot.
+      const preserveParentOrder = ownParent?.subthreadOrder
+        && !ownParent.subthreadOrder.includes(anchor.threadId)
+        && children.every(({ ref }) => {
+          const owner = remotePinInstanceId(ref);
+          const state = owner === instanceId ? this.getThread(buildThreadIdentityKey(ref.backend, ref.threadId))
+            : pinPayload(owner, ref.backend, ref.threadId)?.summary;
+          return ownParent.subthreadOrder!.includes(ref.threadId) && state && matches(state, owner, parent);
+        });
       if (promotion.dryRun) return ownParent?.subthreadOrder ?? [];
       for (const { ref } of localChildren) {
         const current = this.getThread(buildThreadIdentityKey(ref.backend, ref.threadId))!;
@@ -9673,6 +9684,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         }
       }
       if (!ownParent) return [];
+      if (preserveParentOrder) return ownParent.subthreadOrder!;
       // Materialize the owner's current order, preserving unloaded remote slots.
       const saved = new Set(ownParent.subthreadOrder ?? []);
       const remoteRows = this.stateDb.raw.prepare(`SELECT payload FROM remote_thread_pins

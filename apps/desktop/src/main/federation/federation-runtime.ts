@@ -3539,12 +3539,16 @@ export class DesktopFederationRuntime {
         threadId: summary.id, instanceId: localInstanceId }), summary, instanceLabel: localInstanceId })),
       ...remoteChildren.map((pin) => ({ ref: pin.ref, summary: pin.summary!, instanceLabel: pin.instanceLabel })),
     ];
+    // A leaf needs no promotion even if its remote parent is offline or has
+    // never been mounted on this owner. Retained slots still need recovery.
+    if (!children.length && !savedRemoteChildren.length) return;
     let cursor = archived;
     let cursorOwner = localInstanceId;
     let anchor = { backend: params.backend, threadId: params.parentThreadId, instanceId: localInstanceId };
     let parent: ArchiveSubthreadPromotion["parent"] = null;
     let parentSummary: NavigationThreadSummary | undefined;
     let parentInstanceLabel: string | undefined;
+    const ancestryDeadlineAt = Date.now() + 10_000;
     const seen = new Set<string>();
     while (cursor?.parentThreadId) {
       const owner: string = cursor.parentThreadInstanceId ?? cursorOwner;
@@ -3556,18 +3560,38 @@ export class DesktopFederationRuntime {
       const local = owner === localInstanceId ? await store.getThreadOverlayState({ backend, threadId }) : undefined;
       const cachedPin = pins.find((pin) => isRemoteFederationTarget(pin.ref.target)
         && pin.ref.target.instanceId === owner && pin.ref.backend === backend && pin.ref.threadId === threadId);
-      const cached = cachedPin?.summary;
-      if (!local && !cached) throw new Error("The surviving ancestor is unavailable. Refresh the group before archiving.");
+      let remote: NavigationThreadSummary | undefined;
+      if (owner !== localInstanceId) {
+        const target = { scope: "remote" as const, instanceId: owner };
+        const page = await this.remoteNavigationQueryPage(target, {
+          protocol: 2, consumer: "exact-link", inventory: "owner", backend, pageSize: 1,
+          query: { kind: "exact", includeAncestry: false, identities: [{ backend, threadId, ownerInstanceId: owner }] },
+          deadlineAt: ancestryDeadlineAt,
+        }, { deadlineAt: ancestryDeadlineAt });
+        if (page.protocol !== 2 || !page.complete || page.unchanged || page.nextCursor) {
+          throw new Error("Wait for complete ancestor discovery before archiving.");
+        }
+        remote = page.entries.find(({ row }) => row.ref.backend === backend && row.ref.threadId === threadId
+          && row.ref.ownerInstanceId === owner && row.source === backend && row.id === threadId)?.row;
+        if (!remote) {
+          if (page.coverage.state !== "complete") throw new Error("Wait for complete ancestor discovery before archiving.");
+          const response = await this.remoteBackend(target).lookupArchivedThreads({ backend, threadIds: [threadId] },
+            { deadlineAt: ancestryDeadlineAt });
+          const thread = response.threads.find((row) => row.source === backend && row.id === threadId && row.archivedAt !== undefined);
+          if (thread) remote = { inbox: { inInbox: false }, ...thread };
+        }
+      }
+      if (!local && !remote) throw new Error("The surviving ancestor is unavailable. Refresh the group before archiving.");
       if (local?.archiveRetentionStartedAt === undefined && local?.archiveTombstonedAt === undefined
-        && cached?.archivedAt === undefined) {
+        && remote?.archivedAt === undefined) {
         parent = { backend, threadId, instanceId: owner };
-        parentSummary = cached;
-        parentInstanceLabel = cachedPin?.instanceLabel;
+        parentSummary = remote;
+        parentInstanceLabel = cachedPin?.instanceLabel ?? remote?.federation?.instanceLabel;
         break;
       }
       anchor = { backend, threadId, instanceId: owner };
       cursorOwner = owner;
-      cursor = local ?? { ...cached!, backend, threadId, executionMode: "default", extraLinkedDirectories: [] };
+      cursor = local ?? { ...remote!, backend, threadId, executionMode: "default", extraLinkedDirectories: [] };
     }
     // A child owner can publish its new parent before a later participant
     // disconnects. Saved direct-child slots retain that successful part of a

@@ -194,6 +194,21 @@ describe("Federation nested archive placement", () => {
     expect(await stores.get("middle-owner")!.getThreadOverlayState({ backend: "codex", threadId: "root" })).toBeUndefined();
   });
 
+  it.each(["offline", "denied", "incomplete", "missing"])("keeps promotion unchanged when uncached ancestry is %s", async (failure) => {
+    await stores.get("middle-owner")!.removeRemoteThreadPin({
+      ref: buildFederatedThreadRef({ backend: "codex", threadId: "root", instanceId: "root-owner" }),
+    });
+    if (failure === "offline" || failure === "denied") {
+      vi.mocked(runtime.remoteNavigationQueryPage).mockRejectedValue(new Error(failure));
+    } else vi.mocked(runtime.remoteNavigationQueryPage).mockResolvedValue({
+      protocol: 2, complete: failure !== "incomplete", coverage: { state: "complete" }, entries: [],
+    } as NavigationQueryPage);
+    await expect(runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" })).rejects.toThrow();
+    expect(remoteUpdate).not.toHaveBeenCalled();
+    expect((await summary("child-b")).parentThreadId).toBe("middle");
+    expect((await summary("root")).subthreadOrder).toEqual(["before", "middle", "after"]);
+  });
+
   it("does not start promotion or provider archive with a stale expected parent", async () => {
     await expect(runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle",
       expectedParent: { backend: "codex", threadId: "elsewhere", instanceId: "root-owner" } })).rejects.toThrow("grouping changed");
