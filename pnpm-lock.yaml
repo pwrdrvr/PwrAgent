@@ -195,7 +195,7 @@ patchedDependencies:
   '@sigstore/core@4.0.1': 114fda379171cf845319631cc801b3ee84fc2b10b7a95e19bd05bc626f050947
   '@tufjs/models@5.0.0': cda0010163043e933ba6f86a04f2852496a944bf384d5bae3cea219e226ff6dc
   khroma@2.1.0: 2d947e3babbdfcfad137cbccca33429445e6e185c1c94a32039fe95af34623c7
-  playwright-core@1.63.0: 8554b4c8ba32f72c901e65b8d75d007a24c94f013f9df9983f0dda077f94c82d
+  playwright-core@1.63.0: a37ce745327626d7a5d542880d019f19eb6436864ed3b0db8491166ee666c5e7
   playwright@1.63.0: ccabdd5daece7ce9554aa2d1f3b012c121461ddaa14f7ca7dfe4d48289866487
 
 importers:
@@ -445,7 +445,7 @@ importers:
         version: 1.9.0(zod@4.6.6)
       '@axe-core/playwright':
         specifier: ^4.11.3
-        version: 4.14.0(playwright-core@1.63.0(patch_hash=8554b4c8ba32f72c901e65b8d75d007a24c94f013f9df9983f0dda077f94c82d))
+        version: 4.14.0(playwright-core@1.63.0(patch_hash=a37ce745327626d7a5d542880d019f19eb6436864ed3b0db8491166ee666c5e7))
       '@electron/asar':
         specifier: ^4.2.0
         version: 4.3.1
@@ -6035,10 +6035,10 @@ snapshots:
       is-potential-custom-element-name: 1.0.1
       lru-cache: 11.5.3
 
-  '@axe-core/playwright@4.14.0(playwright-core@1.63.0(patch_hash=8554b4c8ba32f72c901e65b8d75d007a24c94f013f9df9983f0dda077f94c82d))':
+  '@axe-core/playwright@4.14.0(playwright-core@1.63.0(patch_hash=a37ce745327626d7a5d542880d019f19eb6436864ed3b0db8491166ee666c5e7))':
     dependencies:
       axe-core: 4.14.0
-      playwright-core: 1.63.0(patch_hash=8554b4c8ba32f72c901e65b8d75d007a24c94f013f9df9983f0dda077f94c82d)
+      playwright-core: 1.63.0(patch_hash=a37ce745327626d7a5d542880d019f19eb6436864ed3b0db8491166ee666c5e7)
 
   '@babel/code-frame@7.29.7':
     dependencies:
@@ -10520,11 +10520,11 @@ snapshots:
       pvutils: 1.2.0
       tslib: 2.8.1
 
-  playwright-core@1.63.0(patch_hash=8554b4c8ba32f72c901e65b8d75d007a24c94f013f9df9983f0dda077f94c82d): {}
+  playwright-core@1.63.0(patch_hash=a37ce745327626d7a5d542880d019f19eb6436864ed3b0db8491166ee666c5e7): {}
 
   playwright@1.63.0(patch_hash=ccabdd5daece7ce9554aa2d1f3b012c121461ddaa14f7ca7dfe4d48289866487):
     dependencies:
-      playwright-core: 1.63.0(patch_hash=8554b4c8ba32f72c901e65b8d75d007a24c94f013f9df9983f0dda077f94c82d)
+      playwright-core: 1.63.0(patch_hash=a37ce745327626d7a5d542880d019f19eb6436864ed3b0db8491166ee666c5e7)
 
   plist@3.1.0:
     dependencies:
