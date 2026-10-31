@@ -1964,14 +1964,10 @@ class DesktopAppServerService {
         .archiveThread(remoteRequest);
     }
     const backend = request.backend ?? "codex";
-    const response = await getDesktopBackendRegistry().archiveThread({
-      ...request,
-      backend,
-    });
     await getDesktopFederationRuntime().ungroupRemoteChildrenOfArchivedThread({
-      backend: response.backend,
-      parentThreadId: response.threadId,
+      backend, parentThreadId: request.threadId,
     });
+    const response = await getDesktopBackendRegistry().archiveThread({ ...request, backend });
 
     logDebug("archiveThread", {
       backend,

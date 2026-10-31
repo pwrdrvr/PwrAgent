@@ -831,6 +831,10 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
 export function additionalFederationBackendCapabilities(
   envelope: FederationRequestEnvelope,
 ): readonly FederationCapability[] {
+  if (envelope.method === FEDERATION_BACKEND_METHODS.updateSubthreadOrder
+    && (envelope.params as UpdateSubthreadOrderRequest | undefined)?.archivePromotion) {
+    return ["archive_subthread_promotion_v1"];
+  }
   if (envelope.method === FEDERATION_BACKEND_METHODS.submitTurnRequest
     || envelope.method === FEDERATION_BACKEND_METHODS.getTurnRequest) return ["durable_turn_requests_v1"];
   if (envelope.method === FEDERATION_BACKEND_METHODS.submitSteerRequest
