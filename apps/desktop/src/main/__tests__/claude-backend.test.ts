@@ -1198,14 +1198,24 @@ describe("Claude SDK backend", () => {
         five_hour: { utilization: 98, resets_at: new Date(Date.now() + 400).toISOString() },
         seven_day: { utilization: 20, resets_at: new Date(Date.now() + 86_400_000).toISOString() },
       }, session: { model_usage: {} } })) });
-    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
-    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
-    await f.waitForTurn();
-    f.events.length = 0;
-    await vi.waitFor(() => expect(f.events.map((event) => event.notification.method))
-      .toContain("backend/providerStatus/updated"), { timeout: 3_000 });
-    expect(f.backend.summary().rateLimits).toEqual([expect.objectContaining({ limitId: "seven_day" })]);
-    await f.backend.close();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+      await f.waitForTurn();
+      expect(f.backend.summary().rateLimits).toHaveLength(2);
+      f.events.length = 0;
+      await vi.advanceTimersByTimeAsync(401);
+      expect(f.events.map((event) => event.notification.method))
+        .toContain("backend/providerStatus/updated");
+      expect(f.backend.summary().rateLimits).toEqual([expect.objectContaining({ limitId: "seven_day" })]);
+    } finally {
+      try {
+        await f.backend.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
   });
 
   it("reads saved limits from the first file shape and drops malformed readings", async () => {

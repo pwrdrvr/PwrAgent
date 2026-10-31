@@ -800,7 +800,7 @@ describe("DesktopFederationRuntime", () => {
     }
   });
 
-  it("ungroups pinned remote children on their owner after parent archive", async () => {
+  it("ungroups pinned remote children through a versioned owner boundary", async () => {
     const stateDb = openInMemoryStateDb();
     const overlayStore = new SqliteOverlayStore(stateDb);
     setDesktopOverlayStoreForTests(overlayStore);
@@ -826,7 +826,7 @@ describe("DesktopFederationRuntime", () => {
           parentThreadInstanceId: "parent-peer",
         },
       });
-      const setThreadParent = vi.fn(async () => ({
+      const updateSubthreadOrder = vi.fn(async () => ({
         backend: "codex" as const,
         threadId: "child",
       }));
@@ -835,18 +835,23 @@ describe("DesktopFederationRuntime", () => {
         instanceId: "parent-peer",
       } as never);
       vi.spyOn(runtime, "remoteBackend").mockReturnValue({
-        setThreadParent,
+        updateSubthreadOrder,
       } as never);
+      vi.spyOn(runtime, "assertRemoteNavigationQueryProtocol").mockImplementation(() => {});
+      vi.spyOn(runtime, "remoteTargetSupportsCapability").mockReturnValue(true);
 
       await runtime.ungroupRemoteChildrenOfArchivedThread({
         backend: "codex",
         parentThreadId: "parent",
       });
 
-      expect(setThreadParent).toHaveBeenCalledWith({
+      expect(updateSubthreadOrder).toHaveBeenCalledWith({
         backend: "codex",
-        threadId: "child",
-        parentThreadId: null,
+        parentThreadId: "parent",
+        archivePromotion: expect.objectContaining({
+          archived: { backend: "codex", threadId: "parent", instanceId: "parent-peer" },
+          parent: null, dryRun: false,
+        }),
       });
       const [pin] = await overlayStore.listRemoteThreadPins();
       expect(pin?.summary?.parentThreadId).toBeUndefined();

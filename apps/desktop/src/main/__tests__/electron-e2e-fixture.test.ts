@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCloseHarness } from "./fixtures/electron-close-harness";
 import {
   assertOnboardingSeedTook,
   closeElectronApplication,
@@ -109,33 +110,21 @@ describe("Electron E2E fixture teardown", () => {
       cookies: { flushStore: vi.fn(async () => undefined) },
       clearData: vi.fn(async () => undefined),
     };
-    const electron = {
-      session: { defaultSession: ownedSession },
-      webContents: {
-        getAllWebContents: () => [
-          { session: ownedSession },
-          { session: otherSession },
-          { session: ownedSession },
-        ],
-      },
-    };
-    const close = vi.fn(async () => undefined);
-    const closing = closeElectronWithSessionDrain({
-      evaluate: (callback: (module: typeof electron) => Promise<void>) => callback(electron),
-      close,
-    } as never);
+    const harness = createCloseHarness([ownedSession, otherSession, ownedSession]);
+    const close = harness.close;
+    const closing = closeElectronWithSessionDrain(harness.electronApp);
 
     await connectionStart;
     expect(ownedSession.cookies.flushStore).not.toHaveBeenCalled();
     expect(ownedSession.clearData).not.toHaveBeenCalled();
-    expect(close).not.toHaveBeenCalled();
+    expect(harness.child.exitCode).toBeNull();
     releaseConnections();
     await flushStart;
     expect(ownedSession.clearData).not.toHaveBeenCalled();
-    expect(close).not.toHaveBeenCalled();
+    expect(harness.child.exitCode).toBeNull();
     releaseFlush();
     await cacheStart;
-    expect(close).not.toHaveBeenCalled();
+    expect(harness.child.exitCode).toBeNull();
     releaseCache();
     await closing;
     expect(ownedSession.closeAllConnections).toHaveBeenCalledTimes(1);
@@ -147,24 +136,16 @@ describe("Electron E2E fixture teardown", () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
-  it("does not request quit when a native session drain fails", async () => {
-    const failure = new Error("cookie store failed to flush");
-    const electron = {
-      session: {
-        defaultSession: {
-          closeAllConnections: async () => undefined,
-          cookies: { flushStore: async () => { throw failure; } },
-        },
-      },
-      webContents: { getAllWebContents: () => [] },
-    };
-    const close = vi.fn(async () => undefined);
-
-    await expect(closeElectronWithSessionDrain({
-      evaluate: (callback: (module: typeof electron) => Promise<void>) => callback(electron),
-      close,
-    } as never)).rejects.toBe(failure);
-    expect(close).not.toHaveBeenCalled();
+  it("holds native quit when a cookie store fails after Playwright starts closing", async () => {
+    const harness = createCloseHarness([{
+      closeAllConnections: async () => undefined,
+      cookies: { flushStore: async () => { throw new Error("cookie store failed to flush"); } },
+      clearData: async () => undefined,
+    }]);
+    await expect(closeElectronWithSessionDrain(harness.electronApp)).rejects.toThrow("cookie store failed to flush");
+    expect(harness.close).toHaveBeenCalledOnce();
+    expect(harness.child.exitCode).toBeNull();
+    expect(harness.app.listenerCount("will-quit")).toBe(1);
   });
 
   it("keeps keychain access disabled while enabling writable screenshot storage", () => {

@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.3.7 - 2026-10-31
+
+- Navigation - Add configurable shortcuts for sidebar lenses, including a quick Attention toggle. Restore the selected thread and expanded projects after restart, keep new threads at the top of project pins, and prevent long directory names from overlapping the new-thread button.
+- To-do Plans - Give a thread started from a To-do card its own plan checklist, including on compatible connected machines. Fold long plans and collapse dispatch settings to keep cards compact.
+- CI Tools - Let agents download GitHub Actions artifacts and request failed CI job reruns through PwrAgent's forge tools, with operator-controlled rerun permissions.
+- Job Monitors - Give lightweight monitors read-only access to selected MCP connections for cloud status checks. Improve monitor handoff reminders and drain Claude monitor work during shutdown.
+- Claude Feedback - Show recovery notices, output-limit stops, and refusals instead of leaving unexplained stalled turns.
+- Claude Images - Store transcript images separately from conversation history to avoid repeatedly loading large inline payloads, with safer concurrent image writes on Windows.
+- Thread Families - Preserve child groups and ordering when archiving a nested thread.
+- Pull Requests and Remote Work - Track explicitly attached fork PRs and their CI, and retry failed Environment launches on the machine that owns the thread.
+- Usage and Responsiveness - Bound Usage Activity history reads, reduce thinking-indicator redraws and Git branch-probe overhead, and merge duplicate Fable usage limits.
+- Rendering Diagnostics - Capture rendering activity from Troubleshooting settings without enabling Developer Mode or restarting, and save a sanitized local summary.
+- MCP Workflow Guides - Make built-in tool-selection and waiting-on-work guides discoverable to compatible MCP clients.
+
 ## v1.3.6 - 2026-10-30
 
 - Thread Families - Drag an existing thread onto another sidebar thread to make it a sub-thread. Reorganize parent-child relationships locally and on connected machines, with protection against circular links.

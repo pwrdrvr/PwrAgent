@@ -1866,6 +1866,8 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   thread_grouping: "reorder and collapse sub-threads",
   // Owner-validated grouping negotiation; thread_grouping grants the action.
   thread_parent_mutation_v1: "",
+  // Archive promotion negotiation; thread_grouping grants the action.
+  archive_subthread_promotion_v1: "",
   thread_detail: "read transcripts",
   turn_control: "prompt, steer, and interrupt",
   durable_turn_requests_v1: "reconcile durable prompt receipts",
