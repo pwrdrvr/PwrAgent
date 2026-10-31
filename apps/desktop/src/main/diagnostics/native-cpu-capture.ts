@@ -53,6 +53,7 @@ class NativeCpuCapture {
   private detached = false;
   private dataLossOccurred: boolean | null = null;
   private readonly message = (_event: unknown, method: string, params: Record<string, unknown>) => {
+    if (!this.recording) return;
     if (method === "Tracing.bufferUsage") {
       this.buffer.reports++;
       if (typeof params.percentFull === "number" && Number.isFinite(params.percentFull)) {

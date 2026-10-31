@@ -146,6 +146,45 @@ describe("bounded opt-in native CPU capture", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+
+  it("ignores another session's completion when start is rejected", async () => {
+    d.sendCommand.mockImplementation(async () => {
+      d.emit("message", {}, "Tracing.tracingComplete", { stream: "foreign-handle" });
+      throw new Error("already tracing");
+    });
+    await expect(captureNativeCpuDiagnostics(root, target())).rejects.toThrow("Native CPU capture failed");
+    expect(d.sendCommand.mock.calls.map(([m]) => m)).toEqual(["Tracing.start"]);
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  it("keeps the original deadline when the start acknowledgment is delayed", async () => {
+    let acknowledge!: () => void;
+    const normal = d.sendCommand.getMockImplementation()!;
+    d.sendCommand.mockImplementation(async (method, params) => {
+      if (method === "Tracing.start") await new Promise<void>((resolve) => { acknowledge = resolve; });
+      return normal(method, params);
+    });
+    const { pending } = await begin();
+    await vi.advanceTimersByTimeAsync(3500);
+    acknowledge();
+    const result = await pending;
+    const summary = JSON.parse(await readFile(result.summaryPath, "utf8"));
+    expect(summary.deadlineOverrunMs).toBeGreaterThanOrEqual(500);
+    expect(d.sendCommand.mock.calls.map(([m]) => m)).toEqual(["Tracing.start", "Tracing.end", "IO.read", "IO.close"]);
+  });
+
+  it("bounds a missing completion and clears all main timers", async () => {
+    d.sendCommand.mockImplementation(async () => ({}));
+    const { pending } = await begin();
+    const rejected = expect(pending).rejects.toThrow("Native CPU capture failed");
+    await vi.advanceTimersByTimeAsync(8000);
+    await rejected;
+    expect(d.sendCommand.mock.calls.map(([m]) => m)).toEqual(["Tracing.start", "Tracing.end"]);
+    expect(d.detach).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(await readdir(root)).toEqual([]);
+  });
+
   it("handles target destruction without publishing partial attribution", async () => {
     const { pending } = await begin();
     const rejected = expect(pending).rejects.toThrow("Native CPU capture failed");

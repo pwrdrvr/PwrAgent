@@ -21,3 +21,11 @@ export function requestDebuggerDetach(connection: Connection): void {
   if (state) state.detachRequested = true;
   else if (connection.isAttached()) connection.detach();
 }
+
+/** A V8 owner can immediately resume on its retained connection after saving. */
+export function reclaimDeferredDebuggerDetach(connection: Connection): boolean {
+  const state = holds.get(connection);
+  if (!state?.detachRequested || !connection.isAttached()) return false;
+  state.detachRequested = false;
+  return true;
+}
