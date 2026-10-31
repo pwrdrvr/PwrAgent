@@ -646,6 +646,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_todos",
   "thread_todo_feed",
   "thread_todo_dispatch_target",
+  "thread_todo_plan",
   "operator_questions",
   "operator_requests",
   "thread_display_bulk_reads",
@@ -2450,13 +2451,16 @@ export class DesktopFederationRuntime {
   async requestThreadTodoOperation<K extends ThreadTodoOperation>(
     target: FederationRemoteTarget, operation: K, request: ThreadTodoOperationRequest<K>,
   ): Promise<ThreadTodoOperationResponse<K>> {
-    const unavailable = this.todoQueueUnavailableInstance(target, "thread_todos");
+    const unavailable = this.todoQueueUnavailableInstance(target, "thread_todos")
+      ?? (operation === "raisePlan" ? this.todoQueueUnavailableInstance(target, "thread_todo_plan") : undefined);
     if (unavailable) {
       if (operation === "listTodos") {
         return { todos: [], unavailableInstances: [unavailable] } as ThreadTodoOperationResponse<K>;
       }
       if (unavailable.reason === "disconnected") throw new Error(`${unavailable.label} is disconnected.`);
-      throw new Error("This Federation owner does not support To-dos. Update that PwrAgent instance.");
+      throw new Error(operation === "raisePlan" && this.todoQueueUnavailableInstance(target, "thread_todos") === undefined
+        ? "This Federation owner does not support plan cards. Update that PwrAgent instance."
+        : "This Federation owner does not support To-dos. Update that PwrAgent instance.");
     }
     return await this.rpcFor(target).request({ method: FEDERATION_THREAD_TODO_METHODS[operation], params: request,
       ...(operation === "runAction" ? { timeoutMs: null } : {}),
@@ -2500,6 +2504,15 @@ export class DesktopFederationRuntime {
   publishThreadTodoDelta(delta: ThreadTodoFeedDelta): void {
     this.forwardLocalBackendEvent({ backend: delta.backend ?? "codex",
       notification: { method: "thread/todos/delta", params: delta } });
+  }
+
+  /**
+   * The owner answers `threadTodos.raisePlan`, so a thread started there
+   * from a card gets the card's steps as its own `plan` card.
+   */
+  remotePeerSupportsTodoPlan(target: FederationRemoteTarget): boolean {
+    return this.todoQueueUnavailableInstance(target, "thread_todos") === undefined
+      && this.todoQueueUnavailableInstance(target, "thread_todo_plan") === undefined;
   }
 
   /**

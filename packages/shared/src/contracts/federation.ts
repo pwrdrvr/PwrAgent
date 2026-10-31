@@ -70,6 +70,12 @@ export const FEDERATION_CAPABILITIES = [
    * card with its model chip only.
    */
   "thread_todo_dispatch_target",
+  /**
+   * The owner answers `threadTodos.raisePlan`, raising a handoff card's
+   * steps as the started thread's own `plan` card. A viewer starting a
+   * thread there sends the prompt alone without it.
+   */
+  "thread_todo_plan",
   /** Owner-persisted async question dismissals and change notifications. */
   "operator_questions",
   "operator_requests",
