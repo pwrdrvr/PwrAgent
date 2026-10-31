@@ -28,7 +28,9 @@ export function traceUnbornWorkspace() {
     freeMemory: os.freemem(),
   });
   record("started", system());
-  const redact = (value: string) => root ? value.split(root).join("<fixture>") : value;
+  const redact = (value: string) => root
+    ? value.split(root).join("<fixture>").split(root.replace(/\\/g, "/")).join("<fixture>")
+    : value;
   prototype.spawn = function tracedSpawn(this: SpawnableChildProcess, options: SpawnOptions) {
     const id = ++nextId;
     const file = path.basename(options.file ?? "");
