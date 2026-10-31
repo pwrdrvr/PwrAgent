@@ -2903,6 +2903,7 @@ describe("app server ipc", () => {
   async function requestWatchForAttachedPr(
     attached: PrSummary,
     notifyOn: ThreadPullRequestWatchEvent[],
+    options: { url?: string; autoFixEnabled?: boolean } = {},
   ) {
     readPrStatusCache.mockResolvedValueOnce({
       [buildPullRequestStatusKey(attached)]: {
@@ -2937,6 +2938,7 @@ describe("app server ipc", () => {
       executionMode: "default",
       extraLinkedDirectories: [],
       prs: [attached],
+      prAutoDispatchEnabled: options.autoFixEnabled,
     });
 
     registerAppServerIpcHandlers();
@@ -2954,8 +2956,59 @@ describe("app server ipc", () => {
       backend: "codex",
       threadId: "thread-1",
       notifyOn,
+      url: options.url,
     });
   }
+
+  it("watches an explicitly attached fork PR from its destination checkout and retains eligibility after a status update", async () => {
+    const attached = githubPr({
+      number: 3114, org: "pwrdrvr", repo: "PwrAgent", state: "passing",
+      sourceRepository: { provider: "github.com", org: "serejja", repo: "PwrAgent" },
+      headRefName: "feat/lens-hotkeys", headSha: "c".repeat(40),
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3114", explicitlyAttached: true,
+    });
+    getPrAutoDispatchCandidateWinner.mockResolvedValue({ backend: "codex", threadId: "thread-1" } as never);
+    const response = await requestWatchForAttachedPr(attached, ["merged", "closed"], {
+      url: attached.url, autoFixEnabled: true,
+    });
+    expect(response).toMatchObject({
+      ok: true,
+      data: { pullRequestWatch: {
+        terminalWatch: { prKey: "github.com/pwrdrvr/pwragent#3114", notifyOn: ["merged", "closed"] },
+        prAutomation: { autoFixActive: true, guidance: expect.stringContaining("monitoring is active") },
+      } },
+    });
+    const { appServerService } = await import("../ipc/app-server");
+    const service = appServerService as unknown as {
+      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+      collectPrPollTargets: () => { prKey: string; threadKeys: string[] }[];
+    };
+    // Provider status is shared across threads and never carries attachment intent.
+    const observed = { ...attached, explicitlyAttached: undefined, title: "Updated by provider" };
+    service.rememberPrStatuses([observed], Date.now(), "test-provider");
+    expect(service.collectPrPollTargets()).toContainEqual(expect.objectContaining({
+      prKey: "github.com/pwrdrvr/pwragent#3114", threadKeys: ["codex:thread-1"],
+    }));
+    expect(appServerService.isPullRequestLocallyMonitored(buildPullRequestStatusKey(attached))).toBe(true);
+    expect(await appServerService.canonicalizeStoredPullRequests([attached])).toEqual([
+      expect.objectContaining({ explicitlyAttached: true, title: "Updated by provider" }),
+    ]);
+    expect(await appServerService.canonicalizeStoredPullRequests([observed])).toEqual([
+      expect.not.objectContaining({ explicitlyAttached: true }),
+    ]);
+  });
+
+  it.each([false, true])("rejects a fork PR outside its source workspace without an explicit destination match (explicit: %s)", async (explicit) => {
+    const attached = githubPr({
+      number: 3114, org: explicit ? "unrelated" : "pwrdrvr", repo: "PwrAgent", state: "passing",
+      sourceRepository: { provider: "github.com", org: "serejja", repo: "PwrAgent" },
+      url: `https://github.com/${explicit ? "unrelated" : "pwrdrvr"}/PwrAgent/pull/3114`,
+      ...(explicit ? { explicitlyAttached: true } : {}),
+    });
+    expect(await requestWatchForAttachedPr(attached, ["merged", "closed"], { url: attached.url }))
+      .toMatchObject({ ok: false, error: { code: "not_found" } });
+    expect(registerThreadPrStatusWatch).not.toHaveBeenCalled();
+  });
 
   it("returns merge details at once when the PR merged before the watch was requested", async () => {
     const merged = githubPr({

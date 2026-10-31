@@ -239,9 +239,17 @@ describe("PR ownership across local and pinned remote threads", () => {
     expect(h.set).toHaveBeenLastCalledWith({ updates: [], removedUrls: [url] });
   });
 
-  it.each([false, true])("local primary fork contributions keep authority regardless of peer ordering (%s)", async (peerFirst) => {
+  it.each([
+    { peerFirst: false, explicit: false },
+    { peerFirst: true, explicit: false },
+    { peerFirst: false, explicit: true },
+    { peerFirst: true, explicit: true },
+  ])("local primary fork contributions keep authority ($peerFirst, explicit destination: $explicit)", async ({ peerFirst, explicit }) => {
     const h = harness();
-    const local = thread("local", [{ ...pr, state: "passing", sourceRepository: { provider: "github.com", org: "contributor", repo: "project" } }], "github.com/contributor/project");
+    const local = thread("local", [{ ...pr, state: "passing",
+      sourceRepository: { provider: "github.com", org: "contributor", repo: "project" },
+      ...(explicit ? { explicitlyAttached: true } : {}),
+    }], explicit ? "github.com/example/project" : "github.com/contributor/project");
     const peer = thread("peer", [{ ...pr, state: "merged", lifecycleState: "merged" }], undefined, true);
     render(transcript(peerFirst ? [peer, local] : [local, peer]));
     expect(screen.getByRole("button")).toHaveAccessibleName(/checks passing/);

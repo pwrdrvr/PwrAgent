@@ -1175,7 +1175,11 @@ have:
 
 - **Non-primary attachments.** The test is the PR matching a local
   thread's *primary* repository, matching `collectPrPollTargets`. Fork
-  contributions match their separate `sourceRepository`; their status key
+  contributions match their separate `sourceRepository`. An explicitly
+  attached contribution also qualifies when its destination matches the
+  primary repository, including a checkout whose branch tracks a fork.
+  Keep `explicitlyAttached` on the thread's attachment when applying shared
+  provider status; never copy it into the status cache. The status key
   still belongs to the destination repository. A PR
   attached to a local thread some other way is not polled by us either,
   so the peer's observation is the fresher one.
