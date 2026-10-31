@@ -2119,11 +2119,19 @@ test.describe("federation remote window", () => {
       await rightClickThreadRow(viewer.window, childTitle!, { exact: true });
       await viewer.window.getByRole("menuitem", { name: "Unlink from Parent" }).click();
       await expect
-        .poll(async () => (await readViewerRelationship()).childThread)
-        .toMatchObject({ pinnedRank: expect.any(String) });
-      relationship = await readViewerRelationship();
-      expect(relationship.childThread?.parentThreadId).toBeUndefined();
-      expect(relationship.childThread?.parentThreadInstanceId).toBeUndefined();
+        .poll(async () => {
+          const { childThread } = await readViewerRelationship();
+          return {
+            pinnedRank: childThread?.pinnedRank,
+            parentThreadId: childThread?.parentThreadId,
+            parentThreadInstanceId: childThread?.parentThreadInstanceId,
+          };
+        })
+        .toEqual({
+          pinnedRank: expect.any(String),
+          parentThreadId: undefined,
+          parentThreadInstanceId: undefined,
+        });
 
       // Unlink above must not wait for provider listing; on CI it routinely
       // runs while the relaunched viewer is still checking. Archive must wait.
