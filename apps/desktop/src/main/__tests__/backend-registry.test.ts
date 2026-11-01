@@ -3454,6 +3454,12 @@ describe("DesktopBackendRegistry", () => {
       await registry.listBackends({ refreshModels: "claude", includeUnavailable: true },
         issueProviderDiscoveryPermit("settings-user-action"));
       const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
+      // Claude does not announce new threads itself. Owner navigation and its
+      // PR repository cache refresh on this event.
+      expect(events).toEqual(expect.arrayContaining([expect.objectContaining({
+        backend: "claude",
+        notification: { method: "thread/started", params: { threadId } },
+      })]));
       await registry.setThreadMcpConnections({ backend: "claude", threadId, connectionIds: ["fixture-connection"] });
       expect(startCodex).not.toHaveBeenCalled();
       expect(await registry.listThreads({ backend: "claude", forceRefresh: true })).toEqual(expect.arrayContaining([expect.objectContaining({ id: threadId, source: "claude" })]));
