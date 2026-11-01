@@ -29,6 +29,7 @@ describe("forge project rules at the write gate", () => {
   let policy: ForgeAgentToolPolicy;
   let github: ReturnType<typeof vi.fn<ForgePrToolHandler>>;
   let writeRule: ReturnType<typeof vi.fn<ForgeToolRuleWriter>>;
+  /** What Codex reported for the thread: `openai` is its default provider. */
   let codexProvider: string | undefined;
   let internals: {
     activeTurnKeys: Set<string>;
@@ -50,13 +51,13 @@ describe("forge project rules at the write gate", () => {
     directory = fixture.tempDir;
     db = StateDb.open(fixture.dbPath);
     overlayStore = new SqliteOverlayStore(db);
-    codexProvider = undefined;
+    codexProvider = "openai";
     registry = new DesktopBackendRegistry({
       codexClient: {
         close: async () => {}, getInitializeResult: async () => ({ methods: [] }),
         listThreads: async () => [{ id: "thread-1", title: "Fixture work", titleSource: "explicit", source: "codex", linkedDirectories: [] }],
         onNotification: () => () => {}, onPendingRequest: () => () => {}, readConfiguredMcpServerNames: async () => [],
-        modelProviderForThread: () => codexProvider,
+        reportedModelProviderForThread: () => codexProvider,
       } as never,
       overlayStore, isBootstrapMode: () => false,
     });
@@ -173,11 +174,96 @@ describe("forge project rules at the write gate", () => {
   });
 
   it("does not let a Codex rule cover a local model named only in the thread's model id", async () => {
+    codexProvider = undefined;
     policy.rules = [rule({ backend: "codex" }, { comments: "allow" })];
     await overlayStore.setThreadModelSettings({ backend: "codex", threadId: "thread-1", model: "@llamacpp/qwen3-abliterated" });
     const prompt = nextApproval();
     const pending = internals.handleServerRequest("codex", request("add_issue_comment", { number: 3, body: "Fixed." }, "call-qualified-model"));
     await answer(await prompt, "decline");
+    expect(text(await pending)).toContain("declined");
+    expect(github).not.toHaveBeenCalled();
+  });
+
+  it("does not let a Codex rule cover a provider PwrAgent did not configure", async () => {
+    policy.rules = [rule({ backend: "codex" }, { comments: "allow" })];
+    codexProvider = "ollama";
+    const prompt = nextApproval();
+    const pending = internals.handleServerRequest("codex", request("add_issue_comment", { number: 3, body: "Fixed." }, "call-unmanaged-provider"));
+    const notification = await prompt;
+    expect(rememberOptions(notification).map((option) => option.label)).toEqual(["Always allow Codex · ollama in Fixture/Project"]);
+    await answer(notification, "decline");
+    expect(text(await pending)).toContain("declined");
+    expect(github).not.toHaveBeenCalled();
+  });
+
+  it("lets a Codex rule only restrict a thread whose provider Codex has not reported", async () => {
+    codexProvider = undefined;
+    policy.rules = [rule({ backend: "codex" }, { comments: "allow", issues: "off" })];
+    const prompt = nextApproval();
+    const pending = internals.handleServerRequest("codex", request("add_issue_comment", { number: 3, body: "Fixed." }, "call-unknown-provider"));
+    const notification = await prompt;
+    // Any rule saved from this card would name the default provider.
+    expect(notification.params._meta).not.toHaveProperty(FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY);
+    await answer(notification, "accept", { [FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY]: "agent" });
+    expect((await pending).success).toBe(true);
+    expect(writeRule).not.toHaveBeenCalled();
+
+    const refused = await internals.handleServerRequest("codex", request("create_issue", { title: "Flaky test" }, "call-unknown-provider-off"));
+    expect(text(refused)).toContain("tools_disabled");
+    expect(github).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the project as the Directories lens does on the card", async () => {
+    registry.setForgeProjectLabelResolver(async (repository) =>
+      repository === ruleRepository ? "Fixture Project" : undefined);
+    policy.rules = [rule({ backend: "codex" }, { issues: "ask" })];
+    const askPrompt = nextApproval();
+    const asked = internals.handleServerRequest("codex", request("create_issue", { title: "Flaky test" }, "call-label-rule"));
+    const askCard = await askPrompt;
+    expect(askCard.params._meta?.subtitle).toBe(
+      "The Fixture Project rule for Codex asks before opening or updating issues. A conversation grant lasts until PwrAgent restarts or the setting changes.",
+    );
+    await answer(askCard, "decline");
+    await asked;
+
+    policy.rules = [];
+    const defaultPrompt = nextApproval();
+    const defaulted = internals.handleServerRequest("codex", request("add_issue_comment", { number: 3, body: "Fixed." }, "call-label-default"));
+    const defaultCard = await defaultPrompt;
+    expect(rememberOptions(defaultCard).map((option) => option.label)).toEqual(["Always allow Codex in Fixture Project"]);
+    await answer(defaultCard, "decline");
+    await defaulted;
+  });
+
+  it("falls back to owner/repo when the project name is slow", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      registry.setForgeProjectLabelResolver(() => new Promise<string | undefined>(() => undefined));
+      let card: AppServerMcpElicitationRequestNotification | undefined;
+      void nextApproval().then((notification) => { card = notification; });
+      const pending = internals.handleServerRequest("codex", request("add_issue_comment", { number: 3, body: "Fixed." }, "call-label-slow"));
+      for (let step = 0; step < 20 && !card; step += 1) await vi.advanceTimersByTimeAsync(250);
+      if (!card) throw new Error("the card never appeared");
+      expect(rememberOptions(card).map((option) => option.label)).toEqual(["Always allow Codex in Fixture/Project"]);
+      await answer(card, "decline");
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks, naming config.toml, when the repository has an unreadable rule", async () => {
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "auto");
+    policy.rules = [rule({ backend: "*" }, { comments: "allow" })];
+    policy.unreadableRuleRepositories = ["github.com/Fixture/Project"];
+    const prompt = nextApproval();
+    const pending = internals.handleServerRequest("codex", request("add_issue_comment", { number: 3, body: "Fixed." }, "call-unreadable"));
+    const notification = await prompt;
+    expect(notification.params._meta?.subtitle).toBe(
+      "A Fixture/Project rule in config.toml cannot be read, so PwrAgent asks before posting comments and reviews. Fix the rule in config.toml. A conversation grant lasts until PwrAgent restarts or the setting changes.",
+    );
+    expect(notification.params._meta).not.toHaveProperty(FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY);
+    await answer(notification, "decline");
     expect(text(await pending)).toContain("declined");
     expect(github).not.toHaveBeenCalled();
   });

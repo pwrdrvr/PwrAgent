@@ -266,6 +266,7 @@ import {
   resolvePullRequestIdentity,
   buildThreadIdentityKey,
   federatedThreadIdentityKey,
+  forgeRuleProjectLabel,
   isAppServerBackendKind,
   isFederationInstanceId,
   isRemoteFederationTarget,
@@ -436,6 +437,7 @@ import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-po
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
 import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, findRemoteHomeDirectoryIndex, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { readLocalNavigationDirectoryIndex } from "../app-server/navigation-directory-index";
 import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
@@ -9106,6 +9108,9 @@ export function registerAppServerIpcHandlers(): void {
   );
   getDesktopBackendRegistry().setForgeToolRuleWriter(
     async (update) => await getDesktopSettingsService().upsertForgeAgentToolRule(update),
+  );
+  getDesktopBackendRegistry().setForgeProjectLabelResolver(
+    async (repository) => forgeRuleProjectLabel(await readLocalNavigationDirectoryIndex(), repository),
   );
   getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(
     async (args, context) =>

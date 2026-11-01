@@ -7,8 +7,10 @@ import {
   isForgeAgentToolRuleGroup,
   isThreadTodoMergeMethod,
   normalizeForgeAgentToolRules,
+  normalizeForgeRuleRepository,
   normalizeTaskMonitorModelChoice,
   validateCodexModelProviders,
+  validateForgeAgentToolRule,
   validateLocalModelIds,
   type CodexModelProviderSettings,
   type DesktopTaskMonitorModelChoice,
@@ -103,6 +105,7 @@ import {
   applyTomlEdits,
   parseTomlTables,
   type TomlEdit,
+  type TomlEditScalar,
   type TomlTables,
   type TomlValue,
 } from "./toml-editor";
@@ -377,6 +380,8 @@ export type DesktopSettingsConfig = {
       enabled?: boolean;
       access?: Partial<Record<ForgeAgentToolGroup, ForgeAgentToolAccess>>;
       rules?: ForgeAgentToolRule[];
+      /** Repositories named by a rule entry that could not be read. */
+      unreadableRuleRepositories?: string[];
     };
   };
   applications?: {
@@ -2077,8 +2082,13 @@ export function desktopSettingsPatchToEdits(
   }
   if (patch.git?.agentTools?.rules !== undefined) {
     // `[[git.agent_tools.rules]]` is additive: older clients ignore it, so
-    // there is no legacy shape to preserve.
-    const entries = forgeAgentToolRuleTomlEntries(patch.git.agentTools.rules);
+    // there is no legacy shape to preserve. An entry this build cannot read
+    // is written back as it was: dropping it could lift a restriction it
+    // meant, and the operator still has to see and fix it.
+    const entries: Record<string, TomlEditScalar | readonly string[]>[] = [
+      ...forgeAgentToolRuleTomlEntries(patch.git.agentTools.rules),
+      ...unreadableForgeAgentToolRuleEntries(currentTables["git.agent_tools"]?.rules),
+    ];
     edits.push(entries.length
       ? { op: "setTableArray", path: ["git", "agent_tools", "rules"], value: entries }
       : { op: "deleteTableArray", path: ["git", "agent_tools", "rules"] });
@@ -2615,7 +2625,7 @@ function normalizeDesktopConfig(
       agentTools: {
         enabled: readBoolean(gitAgentTools?.enabled),
         access: readForgeAgentToolAccess(gitAgentTools),
-        rules: readForgeAgentToolRules(gitAgentTools?.rules),
+        ...readForgeAgentToolRules(gitAgentTools?.rules),
       },
     },
     applications: {
@@ -3154,48 +3164,100 @@ function readForgeAgentToolAccess(
   return access;
 }
 
+type ForgeAgentToolRuleEntryRead =
+  | { ok: true; rule: ForgeAgentToolRule }
+  | { ok: false; problems: string[]; repository?: string };
+
 /**
- * `[[git.agent_tools.rules]]`. An entry that cannot be applied (no
- * repository, an unknown agent, a provider or model where none is allowed) is
- * skipped with a warning; a group with an unknown level is kept as Ask. Only
- * a well-formed rule can loosen access, so a mistake never widens it.
+ * Read one `[[git.agent_tools.rules]]` table. Any problem makes the whole
+ * entry unreadable: a misspelled agent or group, a bad level, a provider or
+ * model where none is allowed. Applying part of it, or dropping it, could
+ * let a broader rule or the global level give an agent what the entry meant
+ * to withhold.
+ */
+function readForgeAgentToolRuleEntry(item: unknown): ForgeAgentToolRuleEntryRead {
+  if (typeof item !== "object" || item === null || Array.isArray(item)) {
+    return { ok: false, problems: ["expected a table"] };
+  }
+  const entry = item as Record<string, unknown>;
+  const repository = typeof entry.repository === "string"
+    ? normalizeForgeRuleRepository(entry.repository)
+    : undefined;
+  const problems: string[] = [];
+  const access: Record<string, unknown> = {};
+  for (const [key, level] of Object.entries(entry)) {
+    if (FORGE_AGENT_TOOL_RULE_TOML_KEYS.has(key)) continue;
+    if (!isForgeAgentToolRuleGroup(key)) {
+      problems.push(
+        `unknown key ${key}; rules set only pull_requests, comments, issues, ci and approve_merge`,
+      );
+    } else if (isForgeAgentToolAccess(key, level)) {
+      access[key] = level;
+    } else {
+      problems.push(`${key} has unknown level ${JSON.stringify(level)}`);
+    }
+  }
+  const result = validateForgeAgentToolRule({
+    repository: entry.repository,
+    agent: {
+      backend: entry.agent,
+      codexModelProvider: entry.codex_model_provider,
+      model: entry.model,
+    },
+    access,
+  });
+  if (!result.ok) problems.push(result.reason);
+  else problems.push(...result.problems);
+  if (problems.length > 0 || !result.ok) {
+    return { ok: false, problems, ...(repository ? { repository } : {}) };
+  }
+  return { ok: true, rule: result.rule };
+}
+
+/**
+ * `[[git.agent_tools.rules]]`. An entry that cannot be read is left out of
+ * the rules with a warning, and its repository is reported so every call
+ * there is capped at Ask until the entry is fixed: a mistake never widens
+ * access. Duplicate entries for one repository and agent merge.
  */
 function readForgeAgentToolRules(
   value: TomlScalar | undefined,
-): ForgeAgentToolRule[] | undefined {
-  if (value === undefined) return undefined;
+): { rules?: ForgeAgentToolRule[]; unreadableRuleRepositories?: string[] } {
+  if (value === undefined) return {};
   if (!Array.isArray(value)) {
     console.warn("Ignoring git.agent_tools.rules: expected [[git.agent_tools.rules]] tables.");
-    return [];
+    return { rules: [] };
   }
-  const candidates = (value as readonly unknown[]).map((item, index) => {
-    if (typeof item !== "object" || item === null || Array.isArray(item)) return item;
-    const entry = item as Record<string, unknown>;
-    const access: Record<string, unknown> = {};
-    for (const [key, level] of Object.entries(entry)) {
-      if (FORGE_AGENT_TOOL_RULE_TOML_KEYS.has(key)) continue;
-      if (isForgeAgentToolRuleGroup(key)) {
-        access[key] = level;
-      } else {
-        console.warn(
-          `git.agent_tools.rules entry ${index + 1}: ignoring ${key}; `
-            + "rules set only pull_requests, comments, issues, ci and approve_merge.",
-        );
-      }
+  const rules: ForgeAgentToolRule[] = [];
+  const unreadable = new Set<string>();
+  (value as readonly unknown[]).forEach((item, index) => {
+    const read = readForgeAgentToolRuleEntry(item);
+    if (read.ok) {
+      rules.push(read.rule);
+      return;
     }
-    return {
-      repository: entry.repository,
-      agent: {
-        backend: entry.agent,
-        codexModelProvider: entry.codex_model_provider,
-        model: entry.model,
-      },
-      access,
-    };
+    if (read.repository) unreadable.add(read.repository);
+    const effect = read.repository
+      ? `every agent asks before writing in ${read.repository} until it is fixed`
+      : "it names no repository, so it applies nowhere";
+    console.warn(
+      `git.agent_tools.rules entry ${index + 1} cannot be read (${read.problems.join("; ")}); ${effect}.`,
+    );
   });
-  return normalizeForgeAgentToolRules(candidates, (problem, index) => {
-    console.warn(`git.agent_tools.rules entry ${index + 1}: ${problem}.`);
-  });
+  return {
+    rules: normalizeForgeAgentToolRules(rules),
+    ...(unreadable.size > 0 ? { unreadableRuleRepositories: [...unreadable] } : {}),
+  };
+}
+
+/** The raw tables of the entries `readForgeAgentToolRules` could not read. */
+function unreadableForgeAgentToolRuleEntries(
+  value: TomlValue | undefined,
+): Record<string, TomlEditScalar | readonly string[]>[] {
+  if (!Array.isArray(value)) return [];
+  return (value as readonly unknown[]).filter((item): item is Record<string, TomlEditScalar | string[]> =>
+    typeof item === "object" && item !== null && !Array.isArray(item)
+    && !readForgeAgentToolRuleEntry(item).ok);
 }
 
 const FORGE_AGENT_TOOL_RULE_TOML_KEYS = new Set([

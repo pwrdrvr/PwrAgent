@@ -3,12 +3,15 @@
    A dashed, muted cell inherits and names the level it would get; a solid
    cell is set by the rule. Colors come from the theme tokens only. */
 
+/* A direct child of `.settings-section__body`, which has no padding of its
+   own: this block pays the `.settings-field` inset, as `.settings-mcp-manage`
+   does, so its copy lines up with the global rows above and its project
+   boxes stand clear of the panel's border. */
 .forge-rules {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin-top: 6px;
-  padding-top: 14px;
+  padding: 14px 18px 18px;
   border-top: 1px solid var(--border-subtle);
 }
 
@@ -235,10 +238,12 @@
   white-space: nowrap;
 }
 
-/* A cell's Select trigger, or the locked stand-in for a globally Off group. */
+/* A cell's Select trigger, or the locked stand-in for a globally Off group.
+   The minimum fits the longest closed label, "Inherit (Allow)", beside the
+   chevron, so a narrow pane scrolls the table before it hides the level. */
 .forge-rules__cell {
   width: 100%;
-  min-width: 96px;
+  min-width: 132px;
   height: 26px;
   padding: 0 8px;
   border: 1px solid var(--border-strong);

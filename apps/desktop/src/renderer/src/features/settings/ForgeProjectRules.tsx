@@ -5,11 +5,13 @@ import {
   forgeAgentRuleAgentLabel,
   forgeAgentToolAccessLevels,
   forgeRuleRepositoryLabel,
+  forgeRuleRepositoryMatchKey,
   normalizeForgeRuleRepository,
   parseCodexProviderModelId,
   removeForgeAgentToolRule,
   resolveForgeAgentToolInheritedAccess,
   sameForgeAgentRuleAgent,
+  sameForgeRuleRepository,
   upsertForgeAgentToolRule,
   validateForgeAgentRuleAgent,
   type BackendSummary,
@@ -24,7 +26,7 @@ import {
   type ForgeAgentToolRuleGroup,
   type NavigationDirectoryRow,
 } from "@pwragent/shared";
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Select, type SelectOption } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
@@ -85,8 +87,36 @@ type AgentChoice = {
   models: string[];
 };
 
-function sameRepository(left: string, right: string): boolean {
-  return normalizeForgeRuleRepository(left) === normalizeForgeRuleRepository(right);
+const sameRepository = sameForgeRuleRepository;
+
+type FocusTarget = () => HTMLElement | null | undefined;
+
+/**
+ * Move focus to a control once it can take it. A control swapped for
+ * another, or disabled while a write saves, drops focus to the page, so a
+ * request waits until its target is mounted and enabled. It is dropped if
+ * the operator has moved focus somewhere else meanwhile.
+ */
+function usePendingFocus(): (target: FocusTarget) => void {
+  const pending = useRef<{ target: FocusTarget; origin: Element | null } | undefined>(undefined);
+  const [, setRequest] = useState(0);
+  useEffect(() => {
+    const current = pending.current;
+    if (!current) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active !== current.origin && active.isConnected) {
+      pending.current = undefined;
+      return;
+    }
+    const element = current.target();
+    if (!element || element.matches(":disabled")) return;
+    pending.current = undefined;
+    element.focus();
+  });
+  return useCallback((target: FocusTarget) => {
+    pending.current = { target, origin: document.activeElement };
+    setRequest((count) => count + 1);
+  }, []);
 }
 
 function uniqueSorted(values: Iterable<string>): string[] {
@@ -156,9 +186,11 @@ function buildAgentChoices(input: {
   return choices;
 }
 
-/** Project labels from the Directories lens, keyed by canonical repository. */
-function projectLabelsFromDirectories(rows: readonly NavigationDirectoryRow[]): Map<string, string> {
-  const labels = new Map<string, string>();
+/** Projects from the Directories lens, keyed by repository match key. */
+function projectLabelsFromDirectories(
+  rows: readonly NavigationDirectoryRow[],
+): Map<string, { repository: string; label: string }> {
+  const labels = new Map<string, { repository: string; label: string }>();
   // Registered projects first; a worktree or workspace row only fills a gap.
   const ordered = [
     ...rows.filter((row) => row.kind === "directory"),
@@ -168,7 +200,8 @@ function projectLabelsFromDirectories(rows: readonly NavigationDirectoryRow[]): 
     const repository = row.repositoryKey
       ? normalizeForgeRuleRepository(row.repositoryKey)
       : undefined;
-    if (repository && !labels.has(repository)) labels.set(repository, row.label);
+    const key = repository?.toLowerCase();
+    if (repository && key && !labels.has(key)) labels.set(key, { repository, label: row.label });
   }
   return labels;
 }
@@ -228,14 +261,20 @@ export function ForgeProjectRules(props: {
   }
   const [addingProject, setAddingProject] = useState(false);
   const [status, setStatus] = useState<string | undefined>();
+  const addProjectRef = useRef<HTMLButtonElement>(null);
+  const focusWhenReady = usePendingFocus();
+  const unreadable = useMemo(
+    () => props.policy.unreadableRuleRepositories ?? [],
+    [props.policy.unreadableRuleRepositories],
+  );
 
   const repositories = useMemo(() => {
     const list: string[] = [];
-    for (const repository of [...rules.map((rule) => rule.repository), ...added]) {
+    for (const repository of [...rules.map((rule) => rule.repository), ...unreadable, ...added]) {
       if (!list.some((entry) => sameRepository(entry, repository))) list.push(repository);
     }
     return list;
-  }, [added, rules]);
+  }, [added, rules, unreadable]);
 
   const previews = useNavigationSettingsPreview(props.desktopApi);
   const canReadDirectories = Boolean(
@@ -267,7 +306,7 @@ export function ForgeProjectRules(props: {
   );
   const projectLabel = useCallback(
     (repository: string) =>
-      projectLabels.get(normalizeForgeRuleRepository(repository) ?? repository)
+      projectLabels.get(forgeRuleRepositoryMatchKey(repository) ?? "")?.label
       ?? forgeRuleRepositoryLabel(repository),
     [projectLabels],
   );
@@ -323,11 +362,13 @@ export function ForgeProjectRules(props: {
     void write(removeForgeAgentToolRule(rules, repository, agent));
   };
 
-  const removeProject = async (repository: string): Promise<void> => {
+  const removeProject = async (repository: string): Promise<boolean> => {
     const next = rules.filter((rule) => !sameRepository(rule.repository, repository));
-    if (await write(next)) {
-      setAdded((current) => current.filter((entry) => !sameRepository(entry, repository)));
-    }
+    if (!(await write(next))) return false;
+    setAdded((current) => current.filter((entry) => !sameRepository(entry, repository)));
+    // The project's controls are gone; its opener is the next stop.
+    focusWhenReady(() => addProjectRef.current);
+    return true;
   };
 
   const addAgent = async (repository: string, agent: ForgeAgentRuleAgent): Promise<boolean> => {
@@ -339,24 +380,30 @@ export function ForgeProjectRules(props: {
     }));
   };
 
+  const isExpanded = (repository: string): boolean =>
+    [...expanded].some((entry) => sameRepository(entry, repository));
+
   const toggleProject = (repository: string): void => {
     setExpanded((current) => {
-      const next = new Set(current);
-      if (next.has(repository)) next.delete(repository);
-      else next.add(repository);
-      return next;
+      const open = [...current].filter((entry) => !sameRepository(entry, repository));
+      return new Set(open.length === current.size ? [...open, repository] : open);
     });
   };
 
-  const openProject = (repository: string): void => {
-    setAdded((current) => (current.some((entry) => sameRepository(entry, repository)) ? current : [...current, repository]));
-    setExpanded((current) => new Set([...current, repository]));
+  const closeAddProject = (): void => {
     setAddingProject(false);
+    focusWhenReady(() => addProjectRef.current);
   };
 
-  const knownProjects = [...projectLabels.entries()]
-    .filter(([repository]) => !repositories.some((entry) => sameRepository(entry, repository)))
-    .map(([repository, label]) => ({ repository, label }))
+  const openProject = (repository: string): void => {
+    const existing = repositories.find((entry) => sameRepository(entry, repository)) ?? repository;
+    setAdded((current) => (current.some((entry) => sameRepository(entry, repository)) ? current : [...current, repository]));
+    setExpanded((current) => new Set([...current, existing]));
+    closeAddProject();
+  };
+
+  const knownProjects = [...projectLabels.values()]
+    .filter(({ repository }) => !repositories.some((entry) => sameRepository(entry, repository)))
     .sort((left, right) => left.label.localeCompare(right.label));
 
   return (
@@ -369,6 +416,7 @@ export function ForgeProjectRules(props: {
           </p>
         </div>
         <button
+          ref={addProjectRef}
           aria-expanded={addingProject}
           className="button button--secondary forge-rules__add"
           disabled={disabled}
@@ -388,7 +436,7 @@ export function ForgeProjectRules(props: {
           knownProjects={knownProjects}
           loading={directoryRead === "loading"}
           onAdd={openProject}
-          onCancel={() => setAddingProject(false)}
+          onCancel={closeAddProject}
         />
       ) : null}
       {repositories.length === 0 && !addingProject ? (
@@ -399,12 +447,13 @@ export function ForgeProjectRules(props: {
           key={repository}
           agentChoices={agentChoices}
           disabled={disabled}
-          expanded={expanded.has(repository)}
+          expanded={isExpanded(repository)}
           label={projectLabel(repository)}
           names={names}
           policy={props.policy}
           repository={repository}
           rules={rules.filter((rule) => sameRepository(rule.repository, repository))}
+          unreadable={unreadable.some((entry) => sameRepository(entry, repository))}
           onAddAgent={(agent) => addAgent(repository, agent)}
           onRemoveAgent={(agent) => removeAgent(repository, agent)}
           onRemoveProject={() => removeProject(repository)}
@@ -429,6 +478,12 @@ function AddProjectForm(props: {
   const [typed, setTyped] = useState("");
   const [error, setError] = useState<string | undefined>();
   const errorId = useId();
+  const projectSelectRef = useRef<HTMLButtonElement>(null);
+  const repositoryInputRef = useRef<HTMLInputElement>(null);
+  // The form replaces nothing, so focus moves into it as it opens.
+  useEffect(() => {
+    (projectSelectRef.current ?? repositoryInputRef.current)?.focus();
+  }, []);
   const submit = (): void => {
     if (typed.trim()) {
       const repository = normalizeForgeRuleRepository(typed);
@@ -447,6 +502,7 @@ function AddProjectForm(props: {
         <div className="forge-rules__picker-field">
           <span aria-hidden="true" className="forge-rules__picker-label">Project</span>
           <Select
+            ref={projectSelectRef}
             aria-label="Project"
             className="settings-select settings-select--chip"
             placeholder="Choose a project"
@@ -471,6 +527,7 @@ function AddProjectForm(props: {
           {props.knownProjects.length > 0 ? "Or enter a repository" : "Repository"}
         </span>
         <input
+          ref={repositoryInputRef}
           aria-describedby={error ? errorId : undefined}
           aria-invalid={error ? true : undefined}
           className="settings-input settings-input--inline"
@@ -518,9 +575,11 @@ function ProjectRules(props: {
   repository: string;
   /** This repository's rules, in config order. */
   rules: readonly ForgeAgentToolRule[];
+  /** config.toml holds an entry for this repository that cannot be read. */
+  unreadable: boolean;
   onAddAgent: (agent: ForgeAgentRuleAgent) => Promise<boolean>;
   onRemoveAgent: (agent: ForgeAgentRuleAgent) => void;
-  onRemoveProject: () => Promise<void>;
+  onRemoveProject: () => Promise<boolean>;
   onSetCell: (agent: ForgeAgentRuleAgent, group: ForgeAgentToolRuleGroup, value: CellValue) => void;
   onToggle: () => void;
 }) {
@@ -528,6 +587,21 @@ function ProjectRules(props: {
   const offNoteId = useId();
   const [addingAgent, setAddingAgent] = useState(false);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const addAgentRef = useRef<HTMLButtonElement>(null);
+  const removeProjectRef = useRef<HTMLButtonElement>(null);
+  const keepRef = useRef<HTMLButtonElement>(null);
+  const focusWhenReady = usePendingFocus();
+  // Without the button (the form is open), the project's header is next.
+  const focusAddAgent = (): void => focusWhenReady(() => addAgentRef.current ?? toggleRef.current);
+  const closeAddAgent = (): void => {
+    setAddingAgent(false);
+    focusAddAgent();
+  };
+  const confirmRemove = (confirming: boolean): void => {
+    setConfirmingRemove(confirming);
+    focusWhenReady(() => (confirming ? keepRef.current : removeProjectRef.current));
+  };
   const allAgentsRule = props.rules.find((rule) => rule.agent.backend === FORGE_AGENT_RULE_ALL_AGENTS);
   const agentRules = props.rules.filter((rule) => rule.agent.backend !== FORGE_AGENT_RULE_ALL_AGENTS);
   const rows: Array<{ agent: ForgeAgentRuleAgent; rule?: ForgeAgentToolRule }> = [
@@ -544,6 +618,7 @@ function ProjectRules(props: {
   return (
     <div className="forge-rules__project" data-repository={props.repository}>
       <button
+        ref={toggleRef}
         aria-controls={bodyId}
         aria-expanded={props.expanded}
         className="forge-rules__project-toggle"
@@ -589,13 +664,22 @@ function ProjectRules(props: {
                     policy={props.policy}
                     repository={props.repository}
                     rule={row.rule}
-                    onRemove={() => props.onRemoveAgent(row.agent)}
+                    onRemove={() => {
+                      props.onRemoveAgent(row.agent);
+                      focusAddAgent();
+                    }}
                     onSetCell={(group, value) => props.onSetCell(row.agent, group, value)}
                   />
                 ))}
               </tbody>
             </table>
           </div>
+          {props.unreadable ? (
+            <p className="settings-warning forge-rules__warning" role="note">
+              config.toml has a rule for {repositoryLabel} that PwrAgent cannot read, so every agent asks before
+              writing here, whatever these rows say. Fix or remove that rule in config.toml.
+            </p>
+          ) : null}
           {offGroups.length > 0 ? (
             <p className="forge-rules__note" id={offNoteId}>
               {joinLabels(offGroups.map((group) => RULE_GROUP_COLUMN_LABELS[group]))}
@@ -616,14 +700,15 @@ function ProjectRules(props: {
               existing={rows.map((row) => row.agent)}
               names={props.names}
               onAdd={async (agent) => {
-                if (await props.onAddAgent(agent)) setAddingAgent(false);
+                if (await props.onAddAgent(agent)) closeAddAgent();
               }}
-              onCancel={() => setAddingAgent(false)}
+              onCancel={closeAddAgent}
             />
           ) : null}
           <div className="forge-rules__foot">
             {addingAgent ? null : (
               <button
+                ref={addAgentRef}
                 className="button button--secondary forge-rules__add"
                 disabled={props.disabled}
                 type="button"
@@ -645,25 +730,30 @@ function ProjectRules(props: {
                     type="button"
                     onClick={() => {
                       setConfirmingRemove(false);
-                      void props.onRemoveProject();
+                      void props.onRemoveProject().then((removed) => {
+                        // Still here: the write failed, so offer it again.
+                        if (!removed) focusWhenReady(() => removeProjectRef.current);
+                      });
                     }}
                   >
                     Remove
                   </button>
                   <button
+                    ref={keepRef}
                     className="button button--ghost"
                     type="button"
-                    onClick={() => setConfirmingRemove(false)}
+                    onClick={() => confirmRemove(false)}
                   >
                     Keep
                   </button>
                 </span>
               ) : (
                 <button
+                  ref={removeProjectRef}
                   className="button button--ghost forge-rules__remove-project"
                   disabled={props.disabled}
                   type="button"
-                  onClick={() => setConfirmingRemove(true)}
+                  onClick={() => confirmRemove(true)}
                 >
                   Remove project
                 </button>
@@ -806,6 +896,11 @@ function AddAgentForm(props: {
   const [typedModel, setTypedModel] = useState("");
   const [error, setError] = useState<string | undefined>();
   const [adding, setAdding] = useState(false);
+  const agentSelectRef = useRef<HTMLButtonElement>(null);
+  // The form replaces "+ Add agent", so focus moves into it as it opens.
+  useEffect(() => {
+    agentSelectRef.current?.focus();
+  }, []);
   const choice = props.choices.find((entry) => entry.key === choiceKey);
   const knownModels = choice?.models ?? [];
   const typing = knownModels.length === 0 || modelChoice === OTHER_MODEL_VALUE;
@@ -838,6 +933,7 @@ function AddAgentForm(props: {
       <div className="forge-rules__picker-field">
         <span aria-hidden="true" className="forge-rules__picker-label">Agent</span>
         <Select
+          ref={agentSelectRef}
           aria-label="Agent"
           className="settings-select settings-select--chip"
           placeholder="Choose an agent"

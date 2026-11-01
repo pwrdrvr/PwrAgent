@@ -2215,6 +2215,9 @@ export class DesktopSettingsService {
         FORGE_AGENT_TOOL_GROUPS.map((group) => [group, settings.access[group].value]),
       ) as ForgeAgentToolPolicy["access"],
       rules: settings.rules ?? [],
+      ...(settings.unreadableRuleRepositories?.length
+        ? { unreadableRuleRepositories: settings.unreadableRuleRepositories }
+        : {}),
     };
   }
 
@@ -2247,6 +2250,7 @@ export class DesktopSettingsService {
         enabled?: boolean;
         access?: Partial<ForgeAgentToolPolicy["access"]>;
         rules?: ForgeAgentToolRule[];
+        unreadableRuleRepositories?: string[];
       }
       | undefined,
   ): DesktopSettingsSnapshot["git"]["agentTools"] {
@@ -2265,6 +2269,9 @@ export class DesktopSettingsService {
         }),
       ) as DesktopSettingsSnapshot["git"]["agentTools"]["access"],
       rules: config?.rules ?? [],
+      ...(config?.unreadableRuleRepositories?.length
+        ? { unreadableRuleRepositories: config.unreadableRuleRepositories }
+        : {}),
     };
   }
 

@@ -132,7 +132,7 @@ describe("forge tool project rules config", () => {
     ])).toThrow(/Invalid forge tool rule 1/);
   });
 
-  it("skips invalid entries with a warning and never widens access", () => {
+  it("leaves unreadable entries out and caps their repository at Ask", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const parsed = parseDesktopSettingsToml([
       "[git.agent_tools]",
@@ -175,39 +175,89 @@ describe("forge tool project rules config", () => {
       "comments = \"ask\"",
       "",
     ].join("\n"), "test.toml");
-    const rules = parsed.git?.agentTools?.rules ?? [];
-    expect(rules).toEqual([
+    const agentTools = parsed.git?.agentTools;
+    expect(agentTools?.rules).toEqual([
       {
         repository: "github.com/pwrdrvr/pwragent",
         agent: { backend: "*" },
         access: { pull_requests: "allow", comments: "ask" },
       },
-      {
-        repository: "github.com/pwrdrvr/pwragent",
-        agent: { backend: "acp:grok" },
-        access: { pull_requests: "ask" },
-      },
     ]);
+    expect(agentTools?.unreadableRuleRepositories).toEqual(["github.com/pwrdrvr/pwragent"]);
     const messages = warn.mock.calls.map((call) => String(call[0]));
-    expect(messages.some((message) => message.includes("entry 2") && message.includes("\"ask\""))).toBe(true);
-    expect(messages.some((message) => message.includes("entry 2") && message.includes("ignoring read"))).toBe(true);
-    expect(messages.some((message) => message.includes("entry 3: missing repository"))).toBe(true);
-    expect(messages.some((message) => message.includes("entry 4: unknown agent"))).toBe(true);
-    expect(messages.some((message) => message.includes("entry 5: the All agents rule"))).toBe(true);
-    expect(messages.some((message) => message.includes("entry 6: codex_model_provider"))).toBe(true);
+    const entry = (index: number, text: string) =>
+      messages.some((message) => message.includes(`entry ${index} cannot be read`) && message.includes(text));
+    expect(entry(2, "pull_requests has unknown level \"of\"")).toBe(true);
+    expect(entry(2, "unknown key read")).toBe(true);
+    expect(entry(3, "missing repository")).toBe(true);
+    expect(entry(3, "applies nowhere")).toBe(true);
+    expect(entry(4, "unknown agent")).toBe(true);
+    expect(entry(5, "the All agents rule")).toBe(true);
+    expect(entry(6, "codex_model_provider")).toBe(true);
 
-    // The misspelled Grok rule still asks rather than falling back to the
-    // All agents Allow.
+    // The misspelled Grok rule meant to restrict, so no agent gets the All
+    // agents Allow until it is fixed.
     const policy = {
       ...DEFAULT_FORGE_AGENT_TOOL_POLICY,
-      rules,
+      rules: agentTools?.rules ?? [],
+      unreadableRuleRepositories: agentTools?.unreadableRuleRepositories ?? [],
     };
+    const repository = { provider: "github" as const, host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" };
+    for (const backend of ["acp:grok", "claude"]) {
+      expect(resolveForgeAgentToolAccess(policy, "pull_requests", repository, { backend }))
+        .toMatchObject({ level: "ask", source: "unreadable_rule" });
+    }
+  });
+
+  it("caps a repository whose rule misspells a group", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const agentTools = parseDesktopSettingsToml([
+      "[[git.agent_tools.rules]]",
+      "repository = \"github.com/pwrdrvr/pwragent\"",
+      "agent = \"codex\"",
+      "pull_request = \"off\"",
+      "",
+    ].join("\n"), "test.toml").git?.agentTools;
+    expect(agentTools?.rules).toEqual([]);
     expect(resolveForgeAgentToolAccess(
-      policy,
+      { ...DEFAULT_FORGE_AGENT_TOOL_POLICY, rules: [], unreadableRuleRepositories: agentTools?.unreadableRuleRepositories },
       "pull_requests",
-      { provider: "github", host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" },
-      { backend: "acp:grok" },
+      "github.com/pwrdrvr/pwragent",
+      { backend: "codex" },
     ).level).toBe("ask");
+  });
+
+  it("reads a built-in agent name in any case", () => {
+    const agentTools = parseDesktopSettingsToml([
+      "[[git.agent_tools.rules]]",
+      "repository = \"github.com/pwrdrvr/pwragent\"",
+      "agent = \"Claude\"",
+      "pull_requests = \"ask\"",
+      "",
+    ].join("\n"), "test.toml").git?.agentTools;
+    expect(agentTools?.rules).toEqual([
+      { repository: "github.com/pwrdrvr/pwragent", agent: { backend: "claude" }, access: { pull_requests: "ask" } },
+    ]);
+    expect(agentTools?.unreadableRuleRepositories).toBeUndefined();
+  });
+
+  it("writes an unreadable entry back as it was when the list is replaced", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const existing = [
+      "[[git.agent_tools.rules]]",
+      "repository = \"github.com/pwrdrvr/pwragent\"",
+      "agent = \"acp:grok\"",
+      "pull_request = \"off\"",
+      "",
+    ].join("\n");
+    const written = writePatch(existing, [RULES[2]]);
+    expect(written).toContain("pull_request = \"off\"");
+    const agentTools = parseDesktopSettingsToml(written, "test.toml").git?.agentTools;
+    expect(agentTools?.rules).toEqual([RULES[2]]);
+    expect(agentTools?.unreadableRuleRepositories).toEqual(["github.com/pwrdrvr/pwragent"]);
+    const cleared = parseDesktopSettingsToml(writePatch(written, []), "test.toml").git?.agentTools;
+    expect(cleared?.rules).toEqual([]);
+    expect(cleared?.unreadableRuleRepositories).toEqual(["github.com/pwrdrvr/pwragent"]);
   });
 });
 
@@ -269,6 +319,49 @@ describe("forge tool project rules in the settings service", () => {
     const contents = fs.readFileSync(configPath, "utf8");
     expect(contents).toContain("# keep me");
     expect(parseDesktopSettingsToml(contents, "test.toml").git?.agentTools?.access).toEqual({ ci: "ask" });
+  });
+
+  it("exposes repositories with unreadable entries in the policy and snapshot", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { service } = createService([
+      "[[git.agent_tools.rules]]",
+      "repository = \"github.com/pwrdrvr/pwragent\"",
+      "agent = \"gemini\"",
+      "pull_requests = \"off\"",
+      "",
+    ].join("\n"));
+    expect(service.resolveForgeAgentToolPolicy().unreadableRuleRepositories).toEqual(["github.com/pwrdrvr/pwragent"]);
+    expect((await service.readSettingsProjection()).git.agentTools.unreadableRuleRepositories)
+      .toEqual(["github.com/pwrdrvr/pwragent"]);
+    // An approval card's rule keeps the unreadable entry beside it.
+    await service.upsertForgeAgentToolRule({
+      repository: "github.com/other/repo",
+      agent: { backend: "claude" },
+      group: "comments",
+      level: "allow",
+    });
+    expect(service.resolveForgeAgentToolPolicy().unreadableRuleRepositories).toEqual(["github.com/pwrdrvr/pwragent"]);
+  });
+
+  it("updates a GitHub Enterprise rule stored in another case instead of adding a second", async () => {
+    const { service } = createService(writePatch("", [
+      { repository: "ghe.example.com/Acme/Widget", agent: { backend: "codex" }, access: { comments: "auto" } },
+    ]));
+    const saved = await service.upsertForgeAgentToolRule({
+      repository: "ghe.example.com/acme/widget",
+      agent: { backend: "codex" },
+      group: "comments",
+      level: "allow",
+    });
+    expect(saved).toEqual([
+      { repository: "ghe.example.com/Acme/Widget", agent: { backend: "codex" }, access: { comments: "allow" } },
+    ]);
+    expect(resolveForgeAgentToolAccess(
+      service.resolveForgeAgentToolPolicy(),
+      "comments",
+      { provider: "github", host: "ghe.example.com", owner: "Acme", repo: "Widget" },
+      { backend: "codex", model: "gpt-5.5" },
+    ).level).toBe("allow");
   });
 
   it("rejects an invalid upsert without writing", async () => {
