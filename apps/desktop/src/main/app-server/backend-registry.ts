@@ -22283,6 +22283,45 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * Reviewer for a review an agent schedules with `start_review`. The tool
+   * has no reviewer argument, so this matches the composer's default: the
+   * thread's own provider when it can review, else the first provider that
+   * can. Undefined means no provider can.
+   */
+  private async resolveAgentToolReviewBackend(
+    threadBackend: AppServerBackendKind,
+  ): Promise<AppServerBackendKind | undefined> {
+    try {
+      this.assertReviewBackendSupported(threadBackend);
+      return threadBackend;
+    } catch {
+      // A Claude thread reviews on another provider.
+    }
+    try {
+      const methods = (await this.getClient("codex").getInitializeResult()).methods ?? [];
+      if (buildCapabilities(methods, "codex").reviewRunner) return "codex";
+    } catch (error) {
+      backendRegistryLog.debug("codex reviewer lookup failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    try {
+      const acpReviewer = (await this.acpBackend.describeInstalledBackends()).find(
+        (summary) =>
+          summary.available
+          && isAcpBackendId(summary.kind)
+          && this.acpBackend.supportsManagedReview(summary.kind),
+      );
+      return acpReviewer?.kind;
+    } catch (error) {
+      backendRegistryLog.debug("ACP reviewer lookup failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
   /** Owner-side submission boundary. Caller snapshots are never authoritative. */
   async prepareReviewRequest(
     params: StartReviewRequest,
@@ -41103,6 +41142,24 @@ export class DesktopBackendRegistry {
         "Selected backend does not support review/start.",
       );
     }
+    // The start runs after this turn ends, where a failure reaches only the
+    // log. Choose the reviewer now, so a review that cannot run fails here.
+    const reviewBackend = await this.resolveAgentToolReviewBackend(
+      request.context.backend,
+    );
+    if (!reviewBackend) {
+      return threadOrchestrationFailure(
+        "unsupported_backend",
+        `${request.context.backend} cannot run reviews, and no other installed provider can run one for this thread.`,
+      );
+    }
+    const reviewBackendDiffers = reviewBackend !== request.context.backend;
+    if (reviewBackendDiffers && request.args.runMode === "codex-sub-agent") {
+      return threadOrchestrationFailure(
+        "invalid_arguments",
+        `This thread's reviews run on ${reviewBackend}, which requires runMode pwragent-sub-agent.`,
+      );
+    }
 
     try {
       const pending = this.scheduleReviewStart({
@@ -41115,6 +41172,7 @@ export class DesktopBackendRegistry {
           target: request.args.target,
           runMode: request.args.runMode,
           delivery: "inline",
+          ...(reviewBackendDiffers ? { reviewBackend } : {}),
           ...(request.args.cwd ? { cwd: request.args.cwd } : {}),
         }),
       });
