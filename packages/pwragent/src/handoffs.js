@@ -77,7 +77,9 @@ export function setupHandoffs(federation, directory) {
         const file = await runtime.codex.request("fs/readFile", { path: result.thread.path });
         if (typeof file.dataBase64 !== "string") throw new Error("Codex protocol thread export is unavailable");
         return { rolloutBase64: file.dataBase64, replay: (await backend.readThread(id)).replay,
-          cwd: runtime.projects.resolve(owned.cwd || runtime.workspace), title: owned.title };
+          cwd: runtime.projects.resolve(owned.cwd || runtime.workspace),
+          // A placeholder would become the destination's explicit name.
+          ...(owned.titleSource === "fallback" ? {} : { title: owned.title }) };
       },
       forkThread: async (request) => {
         if (runtime.active || backend.creating) throw new Error("Outpost is busy");

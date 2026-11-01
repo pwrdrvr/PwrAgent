@@ -16,7 +16,7 @@ export * from "@pwragent/federation/git-instance-handoff";
 export * from "@pwragent/federation/federation-file-push";
 
 export { AgentToolRouter } from "@pwragent/agent-tools/agent-tool-router";
-export { mergeCausalMessagingContext } from "@pwragent/shared";
+export { mergeCausalMessagingContext, shortenDerivedThreadTitle } from "@pwragent/shared";
 export { authenticateMessageOrigin } from "@pwragent/federation/federation-message-origin";
 
 export { resolveMessagingOutboundFile, validateMessagingFileMetadata } from "@pwragent/agent-tools/messaging-outbound-file";
