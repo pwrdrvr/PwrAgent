@@ -187,10 +187,11 @@ export function IntegratedTerminal({
         // mount. Every pane of every thread mounts and attaches, most of them
         // under `hidden`. An opened xterm still redraws every row while
         // hidden (a resize from its idle queue, a selection clear on reset or
-        // on an alternate-screen switch), and its width cache measures each
-        // cell of a display:none row as 0, keeps nothing, and forces a style
-        // flush per cell. Until it opens, the Terminal is a buffer: output,
-        // reset, and resize still apply, with nothing to draw.
+        // on an alternate-screen switch). Its width cache measures each cell
+        // of a display:none row as 0 and keeps no zero, so every such redraw
+        // measures every cell again and leaves a wrong default letter-spacing
+        // behind. Until it opens, the Terminal is a buffer: output, reset,
+        // and resize still apply, with nothing to draw.
         let opened = false;
         const openWhenShown = () => {
           if (opened || disposed || !visibleRef.current) return;
