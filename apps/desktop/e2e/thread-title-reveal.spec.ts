@@ -248,9 +248,6 @@ test("quick jump opens with ten recent threads and restores them after searching
     await expect(input).toBeFocused();
     await dialog.screenshot({ path: test.info().outputPath("jump-recent-threads.png") });
 
-    // A stationary pointer over the expanding results can select a hovered
-    // row on Linux and Windows. Keep it on the field for keyboard steering.
-    await input.hover();
     await input.fill("Hidden linked child thread");
     await expect(titles).toHaveText(["Hidden linked child thread"]);
     await input.fill("");

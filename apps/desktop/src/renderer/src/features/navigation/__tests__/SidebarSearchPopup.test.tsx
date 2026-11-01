@@ -206,23 +206,69 @@ describe("SidebarSearchPopup", () => {
   });
 
   it("restores recent activity after clearing a search and ignores stale history responses", async () => {
-    let finishRecent!: (page: NavigationQueryPage) => void;
-    getNavigationQueryPage.mockImplementationOnce(() => new Promise((resolve) => { finishRecent = resolve; }));
+    let finishStale!: (page: NavigationQueryPage) => void;
+    getNavigationQueryPage.mockImplementationOnce(() => new Promise((resolve) => { finishStale = resolve; }));
     const match = localThread({ id: "match", title: "Search match", updatedAt: 1_000 });
     render(<SidebarSearchPopup threads={[match]} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
     await act(async () => {});
     const input = screen.getByRole("textbox");
     fireEvent.change(input, { target: { value: "search" } });
-    await act(async () => { finishRecent(recentPage([localThread({ title: "Stale history" })])); });
-    expect(resultTitles()).toEqual([match.title]);
     await settleRemoteSearch();
-    const newest = localThread({ id: "newest", title: "New assistant reply", updatedAt: 4_000 });
-    getNavigationQueryPage.mockResolvedValue(recentPage([newest, match]));
+    let finishFresh!: (page: NavigationQueryPage) => void;
+    getNavigationQueryPage.mockImplementationOnce(() => new Promise((resolve) => { finishFresh = resolve; }));
     fireEvent.change(input, { target: { value: "  " } });
     await act(async () => {});
+    // The first open's page lands only after the empty query asked again.
+    await act(async () => { finishStale(recentPage([localThread({ id: "stale", title: "Stale history", updatedAt: 9_000 })])); });
+    expect(resultTitles()).toEqual([match.title]);
+    const newest = localThread({ id: "newest", title: "New assistant reply", updatedAt: 4_000 });
+    await act(async () => { finishFresh(recentPage([newest, match])); });
     expect(resultTitles()).toEqual([newest.title, match.title]);
     expect(screen.queryByText("Other instances")).not.toBeInTheDocument();
     expect(screen.queryByText("No threads match")).not.toBeInTheDocument();
+  });
+
+  it("selects a row on hover only once the pointer moves", async () => {
+    const threads = Array.from({ length: 10 }, (_, index) => localThread({
+      id: `thread-${index}`, title: `Thread ${index}`, updatedAt: 2_000 - index,
+    }));
+    getNavigationQueryPage.mockResolvedValue(recentPage(threads));
+    const select = vi.fn();
+    render(<SidebarSearchPopup threads={[]} onJumpToThread={select} onClose={vi.fn()} />);
+    await act(async () => {});
+    const row = screen.getByText("Thread 4").closest("button")!;
+    const selected = (): string | null | undefined => screen.getByRole("option", { selected: true })
+      .querySelector(".jump-palette__row-title")?.textContent;
+
+    // Rows that open under a resting pointer get hover events, and Chromium
+    // can follow them with a move at the same coordinates.
+    fireEvent.mouseOver(row);
+    fireEvent.mouseEnter(row);
+    fireEvent.mouseMove(row, { clientX: 40, clientY: 80 });
+    fireEvent.mouseMove(row, { clientX: 40, clientY: 80 });
+    expect(selected()).toBe("Thread 0");
+    fireEvent.mouseMove(row, { clientX: 42, clientY: 80 });
+    expect(selected()).toBe("Thread 4");
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ id: "thread-4" }));
+  });
+
+  it("keeps the picked thread selected when the recent page replaces the loaded rows", async () => {
+    let finishRecent!: (page: NavigationQueryPage) => void;
+    getNavigationQueryPage.mockImplementationOnce(() => new Promise((resolve) => { finishRecent = resolve; }));
+    const [first, second, third] = [3_000, 2_000, 1_000].map((updatedAt, index) =>
+      localThread({ id: `loaded-${index}`, title: `Loaded ${index}`, updatedAt }));
+    const select = vi.fn();
+    render(<SidebarSearchPopup threads={[first!, second!, third!]} onJumpToThread={select} onClose={vi.fn()} />);
+    await act(async () => {});
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "ArrowDown" });
+    const offPage = localThread({ id: "off-page", title: "Newer off-page reply", updatedAt: 5_000 });
+    await act(async () => { finishRecent(recentPage([offPage, first!, second!, third!])); });
+
+    expect(resultTitles()).toEqual([offPage.title, first!.title, second!.title, third!.title]);
+    expect(screen.getByRole("option", { selected: true })).toHaveTextContent(second!.title);
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ id: second!.id }));
   });
 
   it("scopes recent activity to the owning instance in a remote window", async () => {

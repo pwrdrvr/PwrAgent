@@ -54,6 +54,10 @@ function foreignProjectPlatform(path: string | undefined, platform: string | und
 type JumpResult = { kind: "project"; directory: NavigationDirectoryView }
   | { kind: "thread"; thread: NavigationThreadSummary };
 
+function jumpResultKey(row: JumpResult): string {
+  return row.kind === "project" ? `project:${row.directory.key}` : threadSummaryIdentityKey(row.thread);
+}
+
 type SidebarSearchPopupProps = {
   threads: readonly NavigationThreadSummary[];
   projects?: readonly NavigationDirectoryView[];
@@ -97,6 +101,13 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
+  // The row the operator chose with an arrow or the pointer. Rows can be
+  // replaced under it (owner results, the recent-threads page), and Enter
+  // must still open the row they chose.
+  const pickedRowKey = useRef<string | undefined>(undefined);
+  // Chromium re-runs hover when rows appear under a still pointer. Only a
+  // move to new coordinates is the operator pointing at a row.
+  const lastPointer = useRef<{ x: number; y: number } | undefined>(undefined);
   const inputRef = useRef<HTMLInputElement>(null);
   const pendingCursor = useRef<number | undefined>(undefined);
   const listRef = useRef<HTMLUListElement>(null);
@@ -267,8 +278,22 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   );
 
   useEffect(() => {
+    pickedRowKey.current = undefined;
     setActiveIndex(0);
   }, [query]);
+
+  const pickRow = (index: number): void => {
+    const row = combinedRows[index];
+    pickedRowKey.current = row ? jumpResultKey(row) : undefined;
+    setActiveIndex(index);
+  };
+
+  const pointAtRow = (event: ReactMouseEvent<HTMLButtonElement>, index: number): void => {
+    const previous = lastPointer.current;
+    lastPointer.current = { x: event.clientX, y: event.clientY };
+    if (!previous || (previous.x === event.clientX && previous.y === event.clientY)) return;
+    if (index !== activeIndex) pickRow(index);
+  };
 
   useLayoutEffect(() => {
     if (pendingCursor.current === undefined) return;
@@ -294,12 +319,18 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   };
 
   useEffect(() => {
+    const picked = pickedRowKey.current;
+    const pickedIndex = picked === undefined
+      ? -1
+      : combinedRows.findIndex((row) => jumpResultKey(row) === picked);
     setActiveIndex((index) =>
-      combinedRows.length === 0
-        ? 0
-        : Math.min(index, combinedRows.length - 1),
+      pickedIndex >= 0
+        ? pickedIndex
+        : combinedRows.length === 0
+          ? 0
+          : Math.min(index, combinedRows.length - 1),
     );
-  }, [combinedRows.length]);
+  }, [combinedRows]);
 
   // Keyboard steering is the point of this surface, so the active row has to
   // stay on screen once the list scrolls past its own height.
@@ -384,7 +415,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
       const count = combinedRows.length;
       if (count === 0) return;
       const step = event.key === "ArrowDown" ? 1 : -1;
-      setActiveIndex((index) => (index + step + count) % count);
+      pickRow((activeIndex + step + count) % count);
       return;
     }
     if (event.key === "Enter") {
@@ -425,7 +456,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
           // Not a tab stop: focus stays in the field so typing never breaks,
           // and the active row is published via aria-activedescendant.
           tabIndex={-1}
-          onMouseEnter={() => setActiveIndex(index)}
+          onMouseMove={(event) => pointAtRow(event, index)}
           onClick={() => jump(thread)}
         >
           <span className="jump-palette__row-title">{thread.title}</span>
@@ -484,7 +515,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     <li key={`project:${directory.key}`} id={rowId(index)} role="option" aria-selected={index === activeIndex}>
       <button type="button" tabIndex={-1}
         className={`jump-palette__row${index === activeIndex ? " is-active" : ""}`}
-        onMouseEnter={() => setActiveIndex(index)}
+        onMouseMove={(event) => pointAtRow(event, index)}
         onClick={() => chooseProject(directory)}
         title={directory.path}
       >
