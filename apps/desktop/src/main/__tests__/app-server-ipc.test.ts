@@ -8670,15 +8670,16 @@ describe("app server ipc", () => {
       } satisfies RefreshThreadPullRequestsRequest;
       const oldUrl = "https://gitlab.com/team/legacy/tools/api/-/merge_requests/41";
       const newUrl = "https://gitlab.com/platform/api/-/merge_requests/41";
-      const lookupMr = githubPr({
-        provider: "gitlab.com", number: 41, org: "platform", repo: "api", state: "pending",
+      const gitlabMr = (pr: Parameters<typeof githubPr>[0]): PrSummary => ({ ...githubPr(pr), provider: "gitlab.com" });
+      const lookupMr = gitlabMr({
+        number: 41, org: "platform", repo: "api", state: "pending",
         headRefName: "fix/transferred-project", url: newUrl, linkedDirectoryPaths: ["/repo/api"],
       });
-      const typedMr = githubPr({
-        provider: "gitlab.com", number: 41, org: "team/legacy/tools", repo: "api", state: "pending", url: oldUrl,
+      const typedMr = gitlabMr({
+        number: 41, org: "team/legacy/tools", repo: "api", state: "pending", url: oldUrl,
       });
-      const forgeMr = githubPr({
-        provider: "gitlab.com", number: 41, org: "platform", repo: "api", state: "passing",
+      const forgeMr = gitlabMr({
+        number: 41, org: "platform", repo: "api", state: "passing",
         headRefName: "fix/transferred-project", url: newUrl,
       });
       await store.setThreadPullRequests({
