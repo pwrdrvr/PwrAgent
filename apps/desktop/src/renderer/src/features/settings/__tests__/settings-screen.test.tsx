@@ -10385,7 +10385,7 @@ describe("SettingsScreen", () => {
     await waitFor(() => expect(createMcpConnection).toHaveBeenCalledWith({ displayName: "Native app", serverUrl: connection.serverUrl, ipcBearerToken: "approved-session-ticket" }));
     expect(probeMcpConnection).toHaveBeenCalledWith({ serverUrl: connection.serverUrl });
     expect(authorizeMcpConnection).not.toHaveBeenCalled();
-    await screen.findByRole("button", { name: "More actions for native-app" });
+    await screen.findByText("Native app", { exact: true });
     expect(listMcpConnectionTools).not.toHaveBeenCalled();
   });
 

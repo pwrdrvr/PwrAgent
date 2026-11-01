@@ -1140,7 +1140,7 @@ export function PluginsSettings(props: {
           });
       closeConnectionEdit();
       // A failed sign-in describes the server it was attempted against.
-      if (editDraftRepointsServer(draft)) {
+      if (editDraftRepointsServer(draft) && !isMcpIpcUrl(draft.serverUrl)) {
         setAuthorizationError(draft.connectionId);
       }
       await loadConnections();
@@ -1149,7 +1149,7 @@ export function PluginsSettings(props: {
         // Re-pointing drops the credentials the old server issued, so say so
         // rather than letting the row look merely renamed.
         text: editDraftRepointsServer(draft)
-          ? `${draft.displayName} now points at a different server. Authorize it again.`
+          ? `${draft.displayName} now points at a different server.${isMcpIpcUrl(draft.serverUrl) ? " Approve a new session in the server app if required." : " Authorize it again."}`
           : draft.local && draft.local.runningIn > 0
             ? `${draft.displayName} was updated. Threads using it get the new version on their next tool call.`
             : `${draft.displayName} was updated.`,
@@ -2268,7 +2268,7 @@ function useManagedConnectionTools(params: {
   useEffect(() => {
     if (!listable || !list || !autoRead) {
       latestRead.current += 1;
-      setInventory(listable ? { status: "unavailable" } : undefined);
+      setInventory(listable && autoRead ? { status: "unavailable" } : undefined);
       setTestResult(undefined);
       return;
     }
@@ -2335,6 +2335,7 @@ function ManagedMcpConnectionRow(props: {
   const localSandboxer = sandboxer && connection.authMode === "local_cli";
   const [transportBusy, setTransportBusy] = useState(false);
   const stdio = connection.kind === "stdio";
+  const ipc = isMcpIpcUrl(connection.serverUrl);
   const app = connection.kind === "pwrgit"
     ? "PwrGit"
     : connection.kind === "pwrsnap" ? "PwrSnap" : undefined;
@@ -2353,7 +2354,7 @@ function ManagedMcpConnectionRow(props: {
     listable,
     // Opening a session can consume a ticket approved in the native app.
     // Only an explicit test or a selected thread may do that for IPC.
-    autoRead: !isMcpIpcUrl(connection.serverUrl),
+    autoRead: !ipc,
     signIns: props.signIns,
   });
   const inventory = reconcileManagedMcpInventory(fetchedInventory, connection.discovery);
@@ -2364,7 +2365,7 @@ function ManagedMcpConnectionRow(props: {
   // point at the wrong one. Credentials held from before still say something.
   // A local command has no sign-in; its chip only ever reports a secret
   // that encrypted storage could not hand back.
-  const showAuthChip = stdio
+  const showAuthChip = stdio || ipc
     ? !connection.configured
     : connection.configured
       || (setup.state !== "app_not_installed" && setup.state !== "app_not_running");
@@ -2500,7 +2501,8 @@ function ManagedMcpConnectionRow(props: {
               className="button button--secondary"
               disabled={disabled || !listable || inventory?.status === "loading" || inventory?.status === "unavailable"}
               title={listable
-                ? `Verify ${connection.displayName} by connecting and reading its available tools.`
+                ? ipc ? `Open and close an MCP session to test ${connection.displayName}. This can consume a one-use ticket; approve a fresh ticket before connecting a thread.`
+                  : `Verify ${connection.displayName} by connecting and reading its available tools.`
                 : setup.detail}
               type="button"
               onClick={testConnection}
@@ -2559,7 +2561,7 @@ function ManagedMcpConnectionRow(props: {
                   }}
                   onNotice={props.onNotice}
                 />
-              ) : stdio ? null : (
+              ) : stdio || ipc ? null : (
                 <button
                   className="button button--secondary"
                   disabled={props.disabled}
@@ -2582,12 +2584,13 @@ function ManagedMcpConnectionRow(props: {
                 * by side with no way to tell which one you wanted.
                 */}
               {connection.configured
-                && connection.authMode !== "local_cli"
-                && connection.authMode !== "none" ? (
+                && (ipc || (connection.authMode !== "local_cli"
+                  && connection.authMode !== "none")) ? (
                 <button
                   className="button button--ghost"
                   disabled={props.disabled}
-                  title={`Discard the credentials PwrAgent holds for ${connection.displayName} and close its open sessions. The connection stays in this list, so you can authorize it again without retyping its URL.`}
+                  title={ipc ? `Clear the saved IPC session token for ${connection.displayName}, close its sessions and stop offering it to threads. The server app owns revocation of its approval.`
+                    : `Discard the credentials PwrAgent holds for ${connection.displayName} and close its open sessions. The connection stays in this list, so you can authorize it again without retyping its URL.`}
                   type="button"
                   onClick={props.onDisconnect}
                 >
