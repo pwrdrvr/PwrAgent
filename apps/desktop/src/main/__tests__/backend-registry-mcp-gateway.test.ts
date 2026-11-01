@@ -832,7 +832,7 @@ select_for_new_threads = true
       const answers: unknown[] = [];
       operation.mockImplementation(async (params) => {
         if (params.operation === "gateway/tools/list") {
-          return (await implementation(params) as Array<Record<string, unknown>>)
+          return (await implementation(params) as McpGatewayTool[])
             .map((tool) => ({ ...tool, serverName: "browser" }));
         }
         try {
