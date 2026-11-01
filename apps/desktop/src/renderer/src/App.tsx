@@ -47,7 +47,6 @@ import {
   type NavigationThreadSummary,
   type PrAutoDispatchBudgetStatus,
   type PrSummary,
-  type ThreadPullRequestWatchSummary,
   type ThreadToolAccounting,
   type ThreadToolIncidentNoticeState,
   type ThreadToolInvocationAlert,
@@ -85,6 +84,7 @@ import {
   buildWatchCiRequestText,
   ThreadPrWatchIndicatorsContext,
   useThreadPrWatchIndicators,
+  type PrWatchStopTarget,
 } from "./features/pr-watches/useThreadPrWatchIndicators";
 import {
   ThreadProvidersContext,
@@ -3274,22 +3274,28 @@ function DesktopAppShell(props: {
     }),
     [threadDependencyIndicators, canContinueAfter],
   );
-  // PR watches that wake threads. A federation window lists none and stops
-  // none: the owner runs them, and no signed request carries a cancel.
+  // PR watches that wake threads. A federation window lists none of this
+  // instance's. A peer's thread is stopped and armed on its owner, where
+  // `canManageThreadPrWatches` says the owner accepts it.
   const threadPrWatchIndicators = useThreadPrWatchIndicators(desktopApi);
-  const canManagePrWatches = Boolean(desktopApi?.manageThreadPrWatches)
-    && !readRendererFederationTarget();
-  const stopPrWatch = useEventCallback(async (watch: ThreadPullRequestWatchSummary) => {
+  const canManagePrWatches = Boolean(desktopApi?.manageThreadPrWatches);
+  const canAskAgentToWatchCi = canManagePrWatches && !readRendererFederationTarget();
+  const stopPrWatch = useEventCallback(async (
+    watch: PrWatchStopTarget,
+    thread?: Pick<NavigationThreadSummary, "federation">,
+  ) => {
     const failed = (message: string) => showAppNotice({
       id: `pr-watch-stop:${watch.watchId}`,
       title: "The watch is still running",
       message,
     });
     try {
+      const federationTarget = thread?.federation?.ref.target;
       const response = await desktopApi?.manageThreadPrWatches?.({
         action: "cancel",
         backend: watch.backend,
         threadId: watch.threadId,
+        ...(federationTarget ? { federationTarget } : {}),
         watchId: watch.watchId,
       });
       // The list refreshes from `thread/prWatches/updated`.
@@ -3315,10 +3321,12 @@ function DesktopAppShell(props: {
   const watchPrCi = useEventCallback(async (thread: NavigationThreadSummary, pr: PrSummary) => {
     const id = `pr-watch-ci:${threadSummaryIdentityKey(thread)}:${pr.url}`;
     try {
+      const federationTarget = thread.federation?.ref.target;
       const response = await desktopApi?.manageThreadPrWatches?.({
         action: "watch",
         backend: thread.source,
         threadId: thread.id,
+        ...(federationTarget ? { federationTarget } : {}),
         prUrl: pr.url,
       });
       if (!response) return;
@@ -3365,14 +3373,14 @@ function DesktopAppShell(props: {
     () => ({
       byThreadKey: threadPrWatchIndicators,
       ...(prAutoFixAvailable !== undefined ? { autoFixAvailable: prAutoFixAvailable } : {}),
-      ...(canManagePrWatches
-        ? { stop: stopPrWatch, watchCi: watchPrCi, askAgentToWatchCi }
-        : {}),
+      ...(canManagePrWatches ? { stop: stopPrWatch, watchCi: watchPrCi } : {}),
+      ...(canAskAgentToWatchCi ? { askAgentToWatchCi } : {}),
     }),
     [
       threadPrWatchIndicators,
       prAutoFixAvailable,
       canManagePrWatches,
+      canAskAgentToWatchCi,
       stopPrWatch,
       watchPrCi,
       askAgentToWatchCi,

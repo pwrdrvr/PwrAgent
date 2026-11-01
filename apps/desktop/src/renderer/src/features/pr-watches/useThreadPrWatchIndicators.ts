@@ -3,6 +3,7 @@ import type {
   NavigationThreadSummary,
   PrSummary,
   ThreadPrAutoFixState,
+  ThreadPrCiWatchMark,
   ThreadPullRequestWatchEvent,
   ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
@@ -10,6 +11,7 @@ import {
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
   pullRequestMatchesRepositoryKey,
+  THREAD_PR_WATCH_CONTROL_CAPABILITY,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
@@ -41,7 +43,10 @@ export type PrAutoFixBlock =
   | { reason: "paused" }
   | { reason: "handled_by_other_thread"; threadTitle?: string };
 
-/** One local thread's active PR watches. */
+/**
+ * One thread's active PR watches. A peer's row carries only its owner's CI
+ * watch marks, so its `watches` is empty and `byPrKey` holds CI watches only.
+ */
 export type ThreadPrWatches = {
   /** Oldest first. */
   watches: readonly ThreadPullRequestWatchSummary[];
@@ -61,8 +66,15 @@ export type ThreadPrWatchIndicatorsValue = {
    * polling or Auto-fix PR is off. Absent where this window cannot tell.
    */
   autoFixAvailable?: boolean;
-  /** Stops one watch. Absent where this window cannot stop watches. */
-  stop?: (watch: ThreadPullRequestWatchSummary) => Promise<void>;
+  /**
+   * Stops one watch, on the owner of `thread` when it is a peer's. Absent
+   * where this window cannot stop watches. Check `canManageThreadPrWatches`
+   * before offering it on a thread.
+   */
+  stop?: (
+    watch: PrWatchStopTarget,
+    thread?: Pick<NavigationThreadSummary, "federation">,
+  ) => Promise<void>;
   /**
    * Arms a success and failure watch on one of the thread's PRs, as the
    * agent tool would, without a turn. Absent where this window cannot.
@@ -74,6 +86,9 @@ export type ThreadPrWatchIndicatorsValue = {
    */
   askAgentToWatchCi?: (thread: NavigationThreadSummary, pr: PrSummary) => void;
 };
+
+/** What Stop needs to name one watch on its owner. */
+export type PrWatchStopTarget = Pick<ThreadPullRequestWatchSummary, "backend" | "threadId" | "watchId">;
 
 export const ThreadPrWatchIndicatorsContext = createContext<ThreadPrWatchIndicatorsValue | undefined>(undefined);
 
@@ -108,13 +123,63 @@ export function useThreadAutoFixRepository(
   return resolveThreadAutoFixRepository(thread, context?.autoFixAvailable);
 }
 
-/** A local thread's watches. Watches run on the owning machine, so a peer's row has none. */
+/**
+ * A thread's watches: this instance's list for a local thread, the owner's
+ * CI watch marks for a peer's. An owner that predates the marks sends none.
+ */
 export function useThreadPrWatches(
-  thread: Pick<NavigationThreadSummary, "id" | "source" | "federation"> | undefined,
+  thread: Pick<NavigationThreadSummary, "id" | "source" | "federation" | "prCiWatches"> | undefined,
 ): ThreadPrWatches | undefined {
   const context = useContext(ThreadPrWatchIndicatorsContext);
-  if (!context || !thread || thread.federation) return undefined;
+  if (!context || !thread) return undefined;
+  if (thread.federation) return summarizePeerPrCiWatches(thread.prCiWatches);
   return context.byThreadKey.get(buildThreadIdentityKey(thread.source, thread.id));
+}
+
+const peerWatchesCache = new WeakMap<readonly ThreadPrCiWatchMark[], ThreadPrWatches>();
+
+/**
+ * A peer row's CI watch marks as a chip reads them. One object per marks
+ * array, so a row that kept its marks keeps its chip's props.
+ */
+export function summarizePeerPrCiWatches(
+  marks: readonly ThreadPrCiWatchMark[] | undefined,
+): ThreadPrWatches | undefined {
+  if (!marks?.length) return undefined;
+  const cached = peerWatchesCache.get(marks);
+  if (cached) return cached;
+  const byPrKey = new Map<string, PrChipWatch>();
+  for (const mark of [...marks].sort((left, right) => left.createdAt - right.createdAt)) {
+    byPrKey.set(mark.prKey, {
+      ci: {
+        ...(mark.runAttempt !== undefined ? { runAttempt: mark.runAttempt } : {}),
+        createdAt: mark.createdAt,
+        notifyOn: mark.notifyOn,
+      },
+    });
+  }
+  const summary: ThreadPrWatches = { watches: NO_WATCH_SUMMARIES, byPrKey };
+  peerWatchesCache.set(marks, summary);
+  return summary;
+}
+
+const NO_WATCH_SUMMARIES: readonly ThreadPullRequestWatchSummary[] = [];
+
+/**
+ * Whether this window can stop and arm the thread's watches. A local thread
+ * needs a local window. A peer's owner must accept the request, which it
+ * says by advertising the control capability and granting turn control.
+ * An older owner's watches stay read-only.
+ */
+export function canManageThreadPrWatches(
+  context: Pick<ThreadPrWatchIndicatorsValue, "stop"> | undefined,
+  thread: Pick<NavigationThreadSummary, "federation">,
+): boolean {
+  if (!context?.stop) return false;
+  if (!thread.federation) return !readRendererFederationTarget();
+  const capabilities = thread.federation.capabilities ?? [];
+  return capabilities.includes(THREAD_PR_WATCH_CONTROL_CAPABILITY)
+    && capabilities.includes("turn_control");
 }
 
 /**

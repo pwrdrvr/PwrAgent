@@ -28,6 +28,7 @@ import {
 } from "../federation/federation-backend-bridge";
 import { FederationRouter } from "../federation/federation-router";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
+import { THREAD_PR_WATCHES_UNSUPPORTED_MESSAGE } from "../pr-status/thread-pr-watches-federation";
 import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
@@ -5241,5 +5242,78 @@ describe("federation workspace recovery methods", () => {
     });
 
     expect(JSON.stringify(reply)).toContain("method_not_found");
+  });
+});
+
+describe("backend.manageThreadPrWatchesV1", () => {
+  const connectOwner = (params: {
+    backend: Partial<FederationBackendOperations>;
+    viewerCapabilities: FederationCapability[];
+  }) => {
+    const router = new FederationRouter({
+      localInstanceId: "owner",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    let rpc: FederationRpcEndpoint;
+    router.registerConnection({
+      peerId: "viewer",
+      capabilities: params.viewerCapabilities,
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); },
+    });
+    registerFederationBackendHandlers({
+      router,
+      backend: params.backend as FederationBackendOperations,
+    });
+    rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer",
+      remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); },
+    });
+    return new FederationRemoteBackendClient(rpc);
+  };
+  const cancel = { action: "cancel" as const, backend: "codex" as const, threadId: "thread-1", watchId: "watch-1" };
+
+  it("stops a watch on its owner for a viewer granted turn control", async () => {
+    const manageThreadPrWatchesV1 = vi.fn(async () => ({ ok: true as const, cancelled: true }));
+    const client = connectOwner({
+      backend: { manageThreadPrWatchesV1 },
+      viewerCapabilities: ["turn_control"],
+    });
+
+    await expect(client.manageThreadPrWatchesV1(cancel)).resolves.toEqual({ ok: true, cancelled: true });
+    expect(manageThreadPrWatchesV1).toHaveBeenCalledExactlyOnceWith(cancel);
+    expect(FEDERATION_BACKEND_METHOD_CAPABILITIES[FEDERATION_BACKEND_METHODS.manageThreadPrWatchesV1])
+      .toBe("turn_control");
+  });
+
+  it("refuses a viewer without turn control, and leaves the watch alone", async () => {
+    const manageThreadPrWatchesV1 = vi.fn();
+    const client = connectOwner({
+      backend: { manageThreadPrWatchesV1 },
+      viewerCapabilities: ["thread_navigation", "thread_detail"],
+    });
+
+    await expect(client.manageThreadPrWatchesV1(cancel)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "forbidden" },
+    });
+    expect(manageThreadPrWatchesV1).not.toHaveBeenCalled();
+  });
+
+  it("tells the viewer to update an owner that predates the request", async () => {
+    const client = connectOwner({ backend: {}, viewerCapabilities: ["turn_control"] });
+
+    await expect(client.manageThreadPrWatchesV1(cancel)).resolves.toEqual({
+      ok: false,
+      error: { code: "federation_unsupported", message: THREAD_PR_WATCHES_UNSUPPORTED_MESSAGE },
+    });
+  });
+
+  it("passes other failures through", async () => {
+    const offline = vi.fn(async () => { throw new Error("Peer disconnected."); });
+    await expect(
+      new FederationRemoteBackendClient({ request: offline } as unknown as FederationRpcEndpoint)
+        .manageThreadPrWatchesV1(cancel),
+    ).rejects.toThrow("Peer disconnected.");
   });
 });

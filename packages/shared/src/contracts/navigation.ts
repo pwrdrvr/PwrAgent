@@ -298,6 +298,12 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * `activeSubAgents`. Never written to the navigation store.
    */
   activePrWatches?: import("./thread-tools").ThreadPullRequestWatchSummary[];
+  /**
+   * The owner's active CI watches on the thread, set on navigation rows from
+   * one read per index build. A viewer draws a peer row's eye from it. Never
+   * written to the navigation store.
+   */
+  prCiWatches?: import("./thread-pr-watches").ThreadPrCiWatchMark[];
   /** Durable origin metadata for threads created by an Agent handoff tool. */
   handoffOrigin?: ThreadHandoffOrigin;
   /**
@@ -2093,6 +2099,8 @@ export type NavigationRow = {
   queueState: "unknown" | "ready";
   queuedExecutionMode?: ThreadExecutionMode;
   prAutoDispatchEnabled?: boolean;
+  /** The owner's active CI watches; absent from an owner that predates them. */
+  prCiWatches?: import("./thread-pr-watches").ThreadPrCiWatchMark[];
   scheduledStart?: ThreadScheduledStart;
 };
 

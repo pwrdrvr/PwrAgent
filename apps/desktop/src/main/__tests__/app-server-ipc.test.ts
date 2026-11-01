@@ -69,6 +69,7 @@ const withThreadLifecycleMutation = vi.hoisted(() => vi.fn(
 const overlayStoreFixture = vi.hoisted(() => ({ stable: undefined as unknown }));
 const federationMock = vi.hoisted(() => {
   const remoteBackend = {
+    manageThreadPrWatchesV1: vi.fn(async (): Promise<ThreadPrWatchesResponse> => ({ ok: true, cancelled: true })),
     continueThreadEnvironmentStartup: vi.fn(async (request: { backend: string; threadId: string }) => ({ ...request, turnId: "owner-turn" })),
     acknowledgeThreadEnvironmentFailure: vi.fn(async (request: { backend: string; threadId: string }) => ({ ...request, acknowledged: true })),
     setThreadAgent: vi.fn(),
@@ -743,6 +744,7 @@ const setThreadPullRequestWatchToolHandler = vi.fn();
 const setThreadDependencyToolHandler = vi.fn();
 const setThreadPrAutoDispatchHandler = vi.fn();
 const setThreadPullRequestDetachHandler = vi.fn();
+const setThreadPrWatchesPeerHandler = vi.fn();
 const setThreadPullRequestRefreshHandler = vi.fn();
 const setThreadGitWorkingStateRefreshHandler = vi.fn();
 const setDirectoryGitStatusWriter = vi.fn();
@@ -1219,6 +1221,7 @@ vi.mock("../app-server/backend-registry", () => {
     setThreadDependencyToolHandler,
     setThreadPrAutoDispatchHandler,
     setThreadPullRequestDetachHandler,
+    setThreadPrWatchesPeerHandler,
     setThreadPullRequestRefreshHandler,
     setThreadGitWorkingStateRefreshHandler,
     setDirectoryGitStatusWriter,
@@ -1487,6 +1490,7 @@ describe("app server ipc", () => {
     setThreadDependencyToolHandler.mockClear();
     setThreadPrAutoDispatchHandler.mockClear();
     setThreadPullRequestDetachHandler.mockClear();
+    setThreadPrWatchesPeerHandler.mockClear();
     setThreadPullRequestRefreshHandler.mockClear();
     setThreadGitWorkingStateRefreshHandler.mockClear();
     setDirectoryGitStatusWriter.mockClear();
@@ -3453,7 +3457,7 @@ describe("app server ipc", () => {
     });
   });
 
-  it("lists, explains, and stops PR watches over thread:prWatches, from local windows only", async () => {
+  it("lists, explains, and stops PR watches over thread:prWatches, and sends a peer's to its owner", async () => {
     const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
     const { appServerService } = await import("../ipc/app-server");
     const appState = await import("../state/app-state");
@@ -3503,10 +3507,60 @@ describe("app server ipc", () => {
         })],
       });
 
+      // A peer's thread is stopped on its owner, never in this store.
       const remote = { scope: "remote" as const, instanceId: "peer_watch_owner" };
+      const manageRemote = federationMock.remoteBackend.manageThreadPrWatchesV1;
+      manageRemote.mockClear();
+      await expect(handler(local, {
+        action: "cancel", backend: "codex", threadId: "thread-1", watchId: "merge", federationTarget: remote,
+      })).resolves.toEqual({ ok: true, cancelled: true });
+      expect(federationMock.runtime.remoteBackend).toHaveBeenLastCalledWith(remote);
+      expect(manageRemote).toHaveBeenCalledExactlyOnceWith({
+        action: "cancel", backend: "codex", threadId: "thread-1", watchId: "merge",
+      });
+      // A federation window stops a peer's watch the same way.
+      await expect(handler({ sender: { id: 999 } }, {
+        action: "watch", backend: "codex", threadId: "thread-1", prUrl: base.prUrl, federationTarget: remote,
+      })).resolves.toEqual({ ok: true, cancelled: true });
+      expect(manageRemote).toHaveBeenLastCalledWith({
+        action: "watch", backend: "codex", threadId: "thread-1", prUrl: base.prUrl,
+      });
+      // An owner without the capability keeps its watches read-only.
+      const supports = federationMock.runtime.remoteTargetSupportsCapability;
+      supports.mockClear();
+      supports.mockReturnValueOnce(false);
       await expect(handler(local, {
         action: "cancel", backend: "codex", threadId: "thread-1", watchId: "merge", federationTarget: remote,
       })).resolves.toMatchObject({ ok: false, error: { code: "federation_unsupported" } });
+      expect(supports).toHaveBeenLastCalledWith(remote, "thread_pr_watch_control_v1");
+      // So does one that grants this instance no turn control.
+      supports.mockReturnValueOnce(true).mockReturnValueOnce(false);
+      await expect(handler(local, {
+        action: "history", backend: "codex", threadId: "thread-1", federationTarget: remote,
+      })).resolves.toMatchObject({ ok: false, error: { code: "federation_unsupported" } });
+      expect(supports).toHaveBeenLastCalledWith(remote, "turn_control");
+      expect(manageRemote).toHaveBeenCalledTimes(2);
+
+      // The owner's side: a viewer's request reaches only the named thread,
+      // with no target and no list of every watch.
+      const peerHandler = setThreadPrWatchesPeerHandler.mock.calls.at(-1)![0] as (
+        request: unknown,
+      ) => Promise<ThreadPrWatchesResponse>;
+      await expect(peerHandler({ action: "active" }))
+        .resolves.toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
+      await expect(peerHandler({
+        action: "history", backend: "codex", threadId: "thread-1", federationTarget: remote,
+      })).resolves.toEqual({
+        ok: true,
+        history: [expect.objectContaining({ watchId: "ci", endedReason: "cancelled_by_operator" })],
+      });
+      await store.registerThreadPrStatusWatch({
+        watch: { ...base, watchId: "peer-ci", notifyOn: ["success", "failure"], kind: "checks" }, now: 2,
+      });
+      await expect(peerHandler({ action: "cancel", backend: "codex", threadId: "thread-1", watchId: "peer-ci" }))
+        .resolves.toEqual({ ok: true, cancelled: true });
+      await expect(peerHandler({ action: "cancel", backend: "codex", threadId: "other-thread", watchId: "merge" }))
+        .resolves.toMatchObject({ ok: false, error: { code: "not_found" } });
       await expect(handler({ sender: { id: 999 } }, { action: "active" }))
         .resolves.toMatchObject({ ok: false, error: { code: "federation_unsupported" } });
       await expect(handler({ sender: { id: 999 } }, {

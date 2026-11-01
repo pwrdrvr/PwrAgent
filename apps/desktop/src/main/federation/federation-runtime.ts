@@ -660,6 +660,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "operator_questions",
   "operator_requests",
   "thread_display_bulk_reads",
+  "thread_pr_watch_control_v1",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -771,6 +772,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "thread/reactions/updated",
   "thread/prAutoDispatch/pendingUpdated",
   "thread/prAutoDispatch/updated",
+  "thread/prWatches/updated",
   "thread/pullRequests/updated",
   "thread/started",
   "thread/status/changed",
@@ -7415,6 +7417,10 @@ function localBackendOperations(): FederationBackendOperations {
       return await getDesktopBackendRegistry().sendThreadPrAutoDispatchNow(
         request,
       );
+    },
+    async manageThreadPrWatchesV1(request) {
+      // The router already required the viewer's turn_control grant.
+      return await getDesktopBackendRegistry().manageThreadPrWatchesForPeer(request);
     },
     async reorderThreadPins(
       request: ReorderThreadPinsRequest,

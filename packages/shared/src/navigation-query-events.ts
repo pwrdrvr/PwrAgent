@@ -17,6 +17,7 @@ const ROW_CHANGE_METHODS = new Set([
   "thread/subthreadOrder/updated", "thread/subthreadsCollapsed/updated", "thread/subAgents/updated",
   "thread/backgroundTasks/updated", "thread/modelSettings/updated", "thread/executionMode/updated", "thread/executionMode/queued",
   "thread/executionMode/queueCleared", "thread/prAutoDispatch/updated", "thread/prAutoDispatch/pendingUpdated",
+  "thread/prWatches/updated",
   "thread/automations/updated", "automation/run/updated",
   "directory/pin/added", "directory/pin/removed", "directory/pin/reordered", "directory/threadsCollapsed/updated",
   "navigation/providerThreads/refreshed", "navigation/remoteThreadPins/changed",
@@ -42,6 +43,8 @@ const THREAD_ROW_ONLY_METHODS = new Set([
   "thread/modelSettings/updated", "thread/executionMode/updated", "thread/executionMode/queued",
   "thread/executionMode/queueCleared", "thread/prAutoDispatch/updated", "thread/prAutoDispatch/pendingUpdated",
   "thread/turnQueue/updated", "thread/turnQueue/reordered",
+  // A row's CI watch marks; watches never move a thread between groups.
+  "thread/prWatches/updated",
   "navigation/threadGitWorkingState/updated", "navigation/directoryGitStatus/updated",
   // Subagent detail and native-group presence belong to the named parent.
   // Ordinary child discovery uses thread/started and thread/parent/set.

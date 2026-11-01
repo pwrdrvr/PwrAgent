@@ -6,14 +6,17 @@ import type {
   NavigationThreadSummary,
   PrSummary,
   ThreadPrAutoFixState,
+  ThreadPrCiWatchMark,
   ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import {
   buildWatchCiRequestText,
+  canManageThreadPrWatches,
   canWatchPrCi,
   resolvePrChipWatch,
   resolveThreadAutoFixRepository,
+  summarizePeerPrCiWatches,
   summarizeThreadPrWatches,
   ThreadPrWatchIndicatorsContext,
   useThreadPrWatches,
@@ -305,6 +308,62 @@ describe("useThreadPrWatches", () => {
       </ThreadPrWatchIndicatorsContext.Provider>,
     );
     expect(screen.getByRole("status")).toHaveTextContent("none");
+  });
+});
+
+describe("peer PR watches", () => {
+  const peer = (capabilities: NonNullable<NavigationThreadSummary["federation"]>["capabilities"]) => ({
+    ref: { backend: "codex" as const, target: { scope: "remote" as const, instanceId: "peer" }, threadId: "consumer" },
+    instanceLabel: "Laptop",
+    peerStatus: "connected" as const,
+    capabilities,
+  });
+  const marks: ThreadPrCiWatchMark[] = [
+    { prKey: pr.url, watchId: "old", notifyOn: ["failure"], createdAt: 1 },
+    { prKey: ciWatch.prKey, watchId: "peer-ci", notifyOn: ["success", "failure"], createdAt: 5, runAttempt: 3 },
+  ];
+
+  function Reader(props: { thread: NavigationThreadSummary }) {
+    const watches = useThreadPrWatches(props.thread);
+    const chip = resolvePrChipWatch(watches, pr, undefined);
+    return <output>{chip?.ci ? `ci ${chip.ci.runAttempt ?? "-"} ${chip.ci.notifyOn.join("+")}` : "none"}</output>;
+  }
+
+  it("draws a peer row's CI watch from its owner's marks, not this instance's list", () => {
+    const value = { byThreadKey: summarizeThreadPrWatches([{ ...ciWatch, runAttempt: 9 }]) };
+    const peerThread = { ...thread, prCiWatches: marks, federation: peer([]) } as NavigationThreadSummary;
+    const { rerender } = render(
+      <ThreadPrWatchIndicatorsContext.Provider value={value}>
+        <Reader thread={peerThread} />
+      </ThreadPrWatchIndicatorsContext.Provider>,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("ci 3 success+failure");
+    rerender(
+      <ThreadPrWatchIndicatorsContext.Provider value={value}>
+        <Reader thread={{ ...peerThread, prCiWatches: undefined }} />
+      </ThreadPrWatchIndicatorsContext.Provider>,
+    );
+    // An owner that predates the marks draws no eye.
+    expect(screen.getByRole("status")).toHaveTextContent("none");
+  });
+
+  it("keeps one summary per marks array, so an unchanged row keeps its chip's props", () => {
+    expect(summarizePeerPrCiWatches(marks)).toBe(summarizePeerPrCiWatches(marks));
+    expect(summarizePeerPrCiWatches(marks)?.watches).toEqual([]);
+    expect(summarizePeerPrCiWatches([])).toBeUndefined();
+  });
+
+  it("manages a peer's watches only where the owner advertises control and grants turn control", () => {
+    const stop = vi.fn(async () => undefined);
+    expect(canManageThreadPrWatches({ stop }, thread)).toBe(true);
+    expect(canManageThreadPrWatches({}, thread)).toBe(false);
+    expect(canManageThreadPrWatches(undefined, thread)).toBe(false);
+    expect(canManageThreadPrWatches({ stop }, { federation: peer(["turn_control", "thread_pr_watch_control_v1"]) }))
+      .toBe(true);
+    // An older owner, or one that grants no turn control, stays read-only.
+    expect(canManageThreadPrWatches({ stop }, { federation: peer(["turn_control"]) })).toBe(false);
+    expect(canManageThreadPrWatches({ stop }, { federation: peer(["thread_pr_watch_control_v1"]) })).toBe(false);
+    expect(canManageThreadPrWatches({ stop }, { federation: peer(undefined) })).toBe(false);
   });
 });
 

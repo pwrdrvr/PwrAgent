@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   BackendSummary,
   DesktopPwrAgentProfileSummary,
+  FederationCapability,
   NavigationDirectorySummary,
   NavigationThreadSummary,
   ThreadPullRequestWatchSummary,
@@ -8788,7 +8789,7 @@ describe("Sidebar", () => {
       expect(labels).not.toContain("Watch CI");
 
       await clickElement(screen.getByRole("menuitem", { name: /^Stop Waiting for CI/ }));
-      expect(stop).toHaveBeenCalledWith(ciWatch);
+      expect(stop).toHaveBeenCalledWith(ciWatch, expect.objectContaining({ id: "thread-1" }));
       expect(screen.queryByRole("menu")).toBeNull();
     });
 
@@ -8822,7 +8823,7 @@ describe("Sidebar", () => {
       expect(screen.queryByRole("menu")).toBeNull();
     });
 
-    it("shows no watch items for a peer's thread", () => {
+    it("shows no watch items for an older peer's thread", () => {
       renderWithWatches([ciWatch], {
         ...pullRequestThread,
         federation: {
@@ -8834,6 +8835,47 @@ describe("Sidebar", () => {
       } as NavigationThreadSummary);
       const labels = within(screen.getByRole("menu")).getAllByRole("menuitem").map(menuItemLabel);
       expect(labels).toContain("Copy Pull Request URL");
+      expect(labels.filter((label) => /Watch|Waiting/.test(label))).toEqual([]);
+    });
+
+    const peerThread = (capabilities: FederationCapability[]): NavigationThreadSummary => ({
+      ...pullRequestThread,
+      primaryGitRepository: "github.com/exampleorg/exampleapp",
+      // The owner's marks, not this instance's list, draw a peer row's eye.
+      prCiWatches: [{
+        prKey: ciWatch.prKey, watchId: "peer-ci", notifyOn: ["success", "failure"], createdAt: 1, runAttempt: 3,
+      }],
+      federation: {
+        ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "thread-1" },
+        instanceLabel: "Laptop",
+        peerStatus: "connected",
+        capabilities,
+      },
+    });
+
+    it("draws a peer row's eye from its owner's marks and stops the watch there", async () => {
+      const thread = peerThread(["thread_navigation", "turn_control", "thread_pr_watch_control_v1"]);
+      // A local watch with the same thread id must not reach the peer's row.
+      const { chip, stop } = renderWithWatches([terminalWatch], thread);
+      expect(chip).toHaveAccessibleName(
+        "Open ExampleOrg/ExampleApp#202 (ready for review · checks passing) in browser, waiting for CI",
+      );
+      expect(chip.querySelector(".pr-chip__watch")).not.toBeNull();
+      const labels = within(screen.getByRole("menu")).getAllByRole("menuitem").map(menuItemLabel);
+      expect(labels).toContain("Stop Waiting for CIattempt 3");
+      expect(labels).not.toContain("Stop Watching for Merge");
+      expect(labels).not.toContain("Watch CI");
+      await clickElement(screen.getByRole("menuitem", { name: /^Stop Waiting for CI/ }));
+      expect(stop).toHaveBeenCalledWith(
+        { backend: "codex", threadId: "thread-1", watchId: "peer-ci" },
+        expect.objectContaining({ federation: thread.federation }),
+      );
+    });
+
+    it("draws the eye but offers no stop when the peer grants no turn control", () => {
+      const { chip } = renderWithWatches([], peerThread(["thread_navigation", "thread_pr_watch_control_v1"]));
+      expect(chip.querySelector(".pr-chip__watch")).not.toBeNull();
+      const labels = within(screen.getByRole("menu")).getAllByRole("menuitem").map(menuItemLabel);
       expect(labels.filter((label) => /Watch|Waiting/.test(label))).toEqual([]);
     });
   });

@@ -299,7 +299,7 @@ describe("PullRequestsPanel", () => {
     }
 
     it("lists each watch and Auto-fix with a way to stop each", async () => {
-      const { stop, onSetThreadPrAutoDispatch } = renderPanel({ watches: [ciWatch, terminalWatch] });
+      const { stop, onSetThreadPrAutoDispatch, thread } = renderPanel({ watches: [ciWatch, terminalWatch] });
       const card = screen.getByRole("listitem");
       expect(within(card).getByText("Wakes this thread")).toBeInTheDocument();
       expect(within(card).getByText("Waiting for CI · attempt 2")).toBeInTheDocument();
@@ -315,11 +315,11 @@ describe("PullRequestsPanel", () => {
       await act(async () => {
         fireEvent.click(within(card).getByRole("button", { name: "Stop waiting for CI on #3174" }));
       });
-      expect(stop).toHaveBeenCalledWith(ciWatch);
+      expect(stop).toHaveBeenCalledWith(ciWatch, thread);
       await act(async () => {
         fireEvent.click(within(card).getByRole("button", { name: "Stop watching #3174 for merge" }));
       });
-      expect(stop).toHaveBeenCalledWith(terminalWatch);
+      expect(stop).toHaveBeenCalledWith(terminalWatch, thread);
       // The setting is the thread's, so the button says so.
       fireEvent.click(within(card).getByRole("button", { name: "Turn off Auto-fix for this thread" }));
       expect(onSetThreadPrAutoDispatch).toHaveBeenCalledWith(false);
@@ -495,6 +495,74 @@ describe("PullRequestsPanel", () => {
       expect(within(card).queryByText("Waiting for merge or close")).toBeNull();
       expect(within(card).getByText("Watches run on Laptop. Stop them there.")).toBeInTheDocument();
       expect(within(card).queryByRole("button", { name: /^Stop|^Turn off|History|Ask Agent|Watch CI/ })).toBeNull();
+    });
+
+    const capablePeer = {
+      ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "thread-1" },
+      instanceLabel: "Laptop",
+      peerStatus: "connected",
+      capabilities: ["thread_navigation", "turn_control", "thread_pr_watch_control_v1"],
+    } as NonNullable<NavigationThreadSummary["federation"]>;
+
+    it("stops a peer's watch and reads its history on the owner that accepts it", async () => {
+      const manageThreadPrWatches = vi.fn(async () => ({ ok: true as const, history: [] }));
+      const { stop, thread } = renderPanel({
+        thread: {
+          ...autoFixThread([openPr]),
+          activePrWatches: [{ ...ciWatch, createdBy: "operator" }],
+          federation: capablePeer,
+        },
+        desktopApi: { manageThreadPrWatches },
+      });
+      const card = screen.getByRole("listitem");
+      expect(within(card).getByText(/^On pass or fail\. Operator, /)).toBeInTheDocument();
+      expect(within(card).queryByText("Watches run on Laptop. Stop them there.")).toBeNull();
+      await act(async () => {
+        fireEvent.click(within(card).getByRole("button", { name: "Stop waiting for CI on #3174" }));
+      });
+      expect(stop).toHaveBeenCalledWith({ ...ciWatch, createdBy: "operator" }, thread);
+      await act(async () => {
+        fireEvent.click(within(card).getByRole("button", { name: "History" }));
+      });
+      expect(manageThreadPrWatches).toHaveBeenCalledExactlyOnceWith({
+        action: "history",
+        backend: "codex",
+        threadId: "thread-1",
+        federationTarget: { scope: "remote", instanceId: "peer" },
+        limit: 20,
+      });
+      expect(within(card).getByText("No watch has ended yet.")).toBeInTheDocument();
+    });
+
+    it("offers Watch CI on a peer that accepts it and sent no watch", async () => {
+      const watchCi = vi.fn(async () => undefined);
+      const { thread } = renderPanel({
+        thread: { ...autoFixThread([openPr]), federation: capablePeer },
+        context: { watchCi },
+      });
+      const card = screen.getByRole("listitem");
+      expect(within(card).getByText("Not waiting for CI.")).toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(within(card).getByRole("button", { name: "Watch CI on #3174" }));
+      });
+      expect(watchCi).toHaveBeenCalledWith(thread, openPr);
+    });
+
+    it("keeps an owner's watches read-only when it predates control or grants no turn control", () => {
+      for (const capabilities of [["turn_control"], ["thread_pr_watch_control_v1"]] as const) {
+        renderPanel({
+          thread: {
+            ...autoFixThread([openPr]),
+            activePrWatches: [ciWatch],
+            federation: { ...capablePeer, capabilities: [...capabilities] },
+          },
+          context: { watchCi: vi.fn(async () => undefined) },
+        });
+        const card = screen.getByRole("listitem");
+        expect(within(card).getByText("Watches run on Laptop. Stop them there.")).toBeInTheDocument();
+        expect(within(card).queryByRole("button", { name: /^Stop|History|Watch CI/ })).toBeNull();
+        cleanup();
+      }
     });
 
     it("draws no watch list on a merged PR", () => {

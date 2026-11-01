@@ -1,4 +1,4 @@
-import type { FederationTarget } from "./federation";
+import type { FederationCapability, FederationTarget } from "./federation";
 import type { AppServerBackendKind } from "./normalized-app-server";
 import type {
   ThreadPullRequestWatchEvent,
@@ -8,12 +8,15 @@ import type {
 
 /**
  * The operator's view of the PR watches that wake threads. Agents create
- * watches through `watch_thread_pull_request`; this channel lists them, lets
- * a local window stop one, and arms a CI watch with the tool's own logic. A
- * federation window can do neither: the owner instance is authoritative and
- * no signed request carries a watch or a cancel.
+ * watches through `watch_thread_pull_request`; this channel lists them, stops
+ * one, and arms a CI watch with the tool's own logic. A peer's thread is
+ * managed on its owner, through `FederationThreadPrWatchesRequestV1`, when
+ * the owner advertises `THREAD_PR_WATCH_CONTROL_CAPABILITY`.
  */
 export const THREAD_PR_WATCHES_CHANNEL = "thread:prWatches";
+
+/** The owner manages its watches for a viewer, and marks its rows' CI watches. */
+export const THREAD_PR_WATCH_CONTROL_CAPABILITY = "thread_pr_watch_control_v1" satisfies FederationCapability;
 
 /** Most history rows one request returns. */
 export const THREAD_PR_WATCH_HISTORY_MAX_LIMIT = 20;
@@ -24,7 +27,7 @@ export type ThreadPrWatchesRequest =
       action: "history";
       backend: AppServerBackendKind;
       threadId: string;
-      /** Set for a peer's thread; history is read on the owner only. */
+      /** Set for a peer's thread; history is read on the owner. */
       federationTarget?: FederationTarget;
       /** At most `THREAD_PR_WATCH_HISTORY_MAX_LIMIT`. */
       limit?: number;
@@ -33,7 +36,7 @@ export type ThreadPrWatchesRequest =
       action: "cancel";
       backend: AppServerBackendKind;
       threadId: string;
-      /** Set for a peer's thread, which this instance cannot stop. */
+      /** Set for a peer's thread; its owner stops the watch. */
       federationTarget?: FederationTarget;
       watchId: string;
     }
@@ -45,10 +48,48 @@ export type ThreadPrWatchesRequest =
       action: "watch";
       backend: AppServerBackendKind;
       threadId: string;
-      /** Set for a peer's thread, which this instance cannot watch. */
+      /** Set for a peer's thread; its owner arms the watch. */
       federationTarget?: FederationTarget;
       prUrl: string;
     };
+
+/**
+ * A viewer's request to the thread's owner, as `backend.manageThreadPrWatchesV1`.
+ * It names one of the owner's own threads. The owner never lists every watch
+ * for a peer: its navigation rows carry `prCiWatches` instead. The owner
+ * answers with a `ThreadPrWatchesResponse`.
+ */
+export type FederationThreadPrWatchesRequestV1 =
+  | {
+      action: "history";
+      backend: AppServerBackendKind;
+      threadId: string;
+      limit?: number;
+    }
+  | {
+      action: "cancel";
+      backend: AppServerBackendKind;
+      threadId: string;
+      watchId: string;
+    }
+  | {
+      action: "watch";
+      backend: AppServerBackendKind;
+      threadId: string;
+      prUrl: string;
+    };
+
+/**
+ * One active CI watch, as the owner marks it on a navigation row so a viewer
+ * draws the row's eye without the owner's full watch list.
+ */
+export type ThreadPrCiWatchMark = {
+  prKey: string;
+  watchId: string;
+  notifyOn: ThreadPullRequestWatchEvent[];
+  createdAt: number;
+  runAttempt?: number;
+};
 
 /** `forbidden`: Git settings turned background PR polling off. */
 export type ThreadPrWatchesErrorCode =

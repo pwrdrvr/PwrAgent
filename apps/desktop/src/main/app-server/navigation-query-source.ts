@@ -12,6 +12,7 @@ import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
 import { buildNavigationIndexMessagingBindings } from "../messaging/messaging-bindings-snapshot";
+import { attachNavigationPrCiWatchMarks } from "./navigation-pr-watch-marks";
 import { NavigationIndexReadPool, type NavigationIndexCheckpoint } from "./navigation-index-read-pool";
 import { nextNavigationObservation } from "./navigation-observation-clock";
 import {
@@ -35,7 +36,8 @@ function sourceId(value: object): number {
  * reads. This intentionally does not hydrate queue entries, launchpad
  * environments, or any other selected-thread collection. Messaging bindings
  * are the exception: every row draws its binding chips and Unbind items from
- * them, so they come from one read of the active bindings.
+ * them, so they come from one read of the active bindings. CI watch marks
+ * come from one read of the active watches the same way.
  */
 export async function loadLocalNavigationQueryIndex(params: {
   backend?: AppServerBackendScope;
@@ -161,8 +163,14 @@ async function buildLocalNavigationQueryIndex(params: {
     const messagingBindings = bindings.get(buildThreadIdentityKey(thread.source, thread.id));
     return messagingBindings ? { ...thread, messagingBindings } : thread;
   });
-  const canonicalThreads = await registry.canonicalizeNavigationThreadPullRequests(
+  // One read of every active watch, for the rows' CI watch marks.
+  const watchedThreads = await attachNavigationPrCiWatchMarks(
     boundThreads,
+    async () => await overlayStore.listAllActivePrStatusWatches(),
+  );
+  params.signal?.throwIfAborted();
+  const canonicalThreads = await registry.canonicalizeNavigationThreadPullRequests(
+    watchedThreads,
   );
   params.signal?.throwIfAborted();
   const threads = await registry.hydrateThreadGitWorkingStates(canonicalThreads, {

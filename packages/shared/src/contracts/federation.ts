@@ -101,6 +101,13 @@ export const FEDERATION_CAPABILITIES = [
    * reads a transcript page at every bound turn end.
    */
   "turn_assistant_reply",
+  /**
+   * The owner answers `backend.manageThreadPrWatchesV1`: a viewer reads a
+   * thread's watch history, stops a watch, and arms Watch CI there. Its
+   * navigation rows also carry `prCiWatches`. A viewer shows an older
+   * owner's watches read-only.
+   */
+  "thread_pr_watch_control_v1",
 ] as const;
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";

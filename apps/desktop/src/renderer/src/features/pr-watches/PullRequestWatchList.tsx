@@ -26,8 +26,8 @@ type PullRequestWatchListProps = {
    */
   autoFixBlocked?: PrAutoFixBlock;
   /**
-   * Set for a peer's thread: its watches run there, and no signed request can
-   * stop one from here, so the list is read-only.
+   * Set for a peer's thread: its watches run there. Without `onStop` the
+   * owner takes no request from here, and the list is read-only.
    */
   ownerLabel?: string;
   onStop?: (watch: ThreadPullRequestWatchSummary) => Promise<void>;
@@ -53,7 +53,8 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
   const [stopping, setStopping] = useState<ReadonlySet<string>>(() => new Set());
   const [arming, setArming] = useState(false);
   const now = props.now ?? Date.now();
-  const readOnly = props.ownerLabel !== undefined;
+  const onPeer = props.ownerLabel !== undefined;
+  const readOnly = onPeer && !props.onStop;
   const ciWatches = props.watches.filter(isCiWatch);
   const terminalWatches = props.watches.filter((watch) => !isCiWatch(watch));
   const stop = (watch: ThreadPullRequestWatchSummary): void => {
@@ -87,7 +88,7 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
             <span className="pr-watch-list__title">
               {describeCiWatchTitle(watch)}
             </span>
-            <span className="pr-watch-list__sub">{describeCiWatch(watch, now, readOnly)}</span>
+            <span className="pr-watch-list__sub">{describeCiWatch(watch, now, onPeer)}</span>
           </span>
           {!readOnly && props.onStop ? (
             <button
@@ -109,7 +110,7 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
           </span>
           <span className="pr-watch-list__text">
             <span className="pr-watch-list__title">Waiting for merge or close</span>
-            <span className="pr-watch-list__sub">{describeCreator(watch, now, readOnly)}</span>
+            <span className="pr-watch-list__sub">{describeCreator(watch, now, onPeer)}</span>
           </span>
           {!readOnly && props.onStop ? (
             <button

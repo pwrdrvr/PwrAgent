@@ -2,17 +2,20 @@ import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
 import { buildPullRequestStatusKey } from "@pwragent/shared";
 import { resolveLifecycleState } from "../pr-status/pr-chip-state";
 import {
+  canManageThreadPrWatches,
   canWatchPrCi,
   isCiWatch,
   readWatchRunAttempt,
   useThreadPrWatches,
   useThreadPrWatchIndicatorsContext,
+  type PrWatchStopTarget,
 } from "./useThreadPrWatchIndicators";
 
 /**
  * The watch items in a PR chip's sidebar menu, between Copy Pull Request URL
- * and Detach Pull Request. Local threads only: a peer's watches run on the
- * peer, which no signed request can start or stop from here.
+ * and Detach Pull Request. A peer's thread shows them when its owner accepts
+ * them (`canManageThreadPrWatches`). Its row marks only CI watches, so a
+ * peer's menu has no Stop Watching for Merge.
  *
  * Watch CI arms the watch at once. Ask Agent to Watch CI stays beside it: it
  * drafts the request so the operator can add instructions for the wake, and
@@ -28,12 +31,19 @@ export function PullRequestWatchMenuItems(props: {
 }) {
   const context = useThreadPrWatchIndicatorsContext();
   const threadWatches = useThreadPrWatches(props.thread);
-  if (!context || props.thread.federation) {
+  if (!context || !canManageThreadPrWatches(context, props.thread)) {
     return null;
   }
   const prKey = buildPullRequestStatusKey(props.pr);
   const watches = threadWatches?.watches.filter((watch) => watch.prKey === prKey) ?? [];
-  const ciWatch = watches.find(isCiWatch);
+  const localCiWatch = watches.find(isCiWatch);
+  // A peer's row names its CI watch by mark.
+  const peerMark = props.thread.federation
+    ? props.thread.prCiWatches?.filter((mark) => mark.prKey === prKey).at(-1)
+    : undefined;
+  const ciWatch: PrWatchStopTarget | undefined = localCiWatch ?? (peerMark
+    ? { backend: props.thread.source, threadId: props.thread.id, watchId: peerMark.watchId }
+    : undefined);
   const terminalWatch = watches.find((watch) => !isCiWatch(watch));
   const stop = context.stop;
   const ask = context.askAgentToWatchCi;
@@ -43,7 +53,7 @@ export function PullRequestWatchMenuItems(props: {
   if (!(stop && (ciWatch || terminalWatch)) && !canAsk && !canWatch) {
     return null;
   }
-  const runAttempt = ciWatch ? readWatchRunAttempt(ciWatch) : undefined;
+  const runAttempt = localCiWatch ? readWatchRunAttempt(localCiWatch) : peerMark?.runAttempt;
   return (
     <>
       <div className="thread-context-menu__separator" role="separator" />
@@ -53,7 +63,7 @@ export function PullRequestWatchMenuItems(props: {
           type="button"
           onClick={() => {
             props.onClose();
-            void stop(ciWatch);
+            void stop(ciWatch, props.thread);
           }}
         >
           <span>Stop Waiting for CI</span>
@@ -70,7 +80,7 @@ export function PullRequestWatchMenuItems(props: {
           type="button"
           onClick={() => {
             props.onClose();
-            void stop(terminalWatch);
+            void stop(terminalWatch, props.thread);
           }}
         >
           Stop Watching for Merge

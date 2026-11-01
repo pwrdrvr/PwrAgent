@@ -437,6 +437,11 @@ import {
   isFederationWindowWebContents,
 } from "../window";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
+import {
+  manageRemoteThreadPrWatches,
+  readFederationThreadPrWatchesRequest,
+  readThreadPrWatchesRemoteTarget,
+} from "../pr-status/thread-pr-watches-federation";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
@@ -9739,6 +9744,11 @@ export function registerAppServerIpcHandlers(): void {
   });
   ipcMain.removeHandler(THREAD_PR_WATCHES_CHANNEL);
   ipcMain.handle(THREAD_PR_WATCHES_CHANNEL, async (event, request: ThreadPrWatchesRequest): Promise<ThreadPrWatchesResponse> => {
+    // A peer's thread is managed on its owner, from any window.
+    const remoteTarget = readThreadPrWatchesRemoteTarget(request);
+    if (remoteTarget && request.action !== "active") {
+      return await manageRemoteThreadPrWatches(request, remoteTarget, getDesktopFederationRuntime());
+    }
     if (isFederationWindowWebContents(event.sender)) {
       return {
         ok: false,
@@ -9749,6 +9759,17 @@ export function registerAppServerIpcHandlers(): void {
       };
     }
     return await appServerService.manageThreadPrWatches(request);
+  });
+  getDesktopBackendRegistry().setThreadPrWatchesPeerHandler(async (request) => {
+    // Envelope params are the viewer's; only the named fields reach the store.
+    const owned = readFederationThreadPrWatchesRequest(request);
+    if (!owned) {
+      return {
+        ok: false,
+        error: { code: "invalid_arguments", message: "backend, threadId and the action's argument are required." },
+      };
+    }
+    return await appServerService.manageThreadPrWatches(owned);
   });
   getDesktopBackendRegistry().setThreadPullRequestWatchToolHandler(
     async (args) => await appServerService.watchThreadPullRequestForTool(args),
@@ -11116,6 +11137,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   registry?.setDirectoryGitStatusWriter(undefined);
   registry?.setThreadPrAutoDispatchHandler(undefined);
   registry?.setThreadPullRequestDetachHandler(undefined);
+  registry?.setThreadPrWatchesPeerHandler(undefined);
   registry?.setThreadPullRequestRefreshHandler(undefined);
   await appServerService.close();
 }

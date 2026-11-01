@@ -20,6 +20,7 @@ import { PrChip } from "../../pr-status/PrChip";
 import { openExternalUrl } from "../../../lib/open-external-url";
 import { PullRequestWatchList } from "../../pr-watches/PullRequestWatchList";
 import {
+  canManageThreadPrWatches,
   canWatchPrCi,
   resolvePrChipWatch,
   useThreadAutoFixRepository,
@@ -37,8 +38,8 @@ type PullRequestsPanelProps = {
 
 type WatchHistoryState = {
   threadKey: string;
-  /** The active list it was read against; a change re-reads it. */
-  source: readonly ThreadPullRequestWatchSummary[] | undefined;
+  /** The active watch ids it was read against; a change re-reads it. */
+  source: string;
   /** Undefined when the read failed; the next expand reads again. */
   entries: readonly ThreadPrWatchHistoryEntry[] | undefined;
 };
@@ -60,39 +61,53 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
   const [pendingDetachPr, setPendingDetachPr] = useState<PrSummary>();
   const watchContext = useThreadPrWatchIndicatorsContext();
   const threadKey = buildThreadIdentityKey(props.thread.source, props.thread.id);
-  // A peer's thread, or any thread in a federation window, is read-only: its
-  // owner runs the watches and projects them onto selected detail.
+  // A peer's thread, or any thread in a federation window, runs its watches
+  // on its owner, which projects them onto selected detail. The rail stops
+  // and arms them there when the owner accepts it, else it reads only.
   const federationWindow = Boolean(readRendererFederationTarget());
   const ownerLabel = props.thread.federation
     ? props.thread.federation.instanceLabel
     : federationWindow
       ? "the thread's own machine"
       : undefined;
+  const manageable = canManageThreadPrWatches(watchContext, props.thread);
+  const peerManaged = ownerLabel !== undefined && manageable;
   const localWatches = ownerLabel === undefined && watchContext
     ? watchContext.byThreadKey.get(threadKey)?.watches ?? NO_WATCHES
     : undefined;
   // Undefined means unknown: no watch UI at all, rather than a false "none".
-  const watches = ownerLabel !== undefined ? props.thread.activePrWatches : localWatches;
+  // An owner that accepts control projects every watch, so none sent is none.
+  const watches = ownerLabel !== undefined
+    ? props.thread.activePrWatches ?? (peerManaged ? NO_WATCHES : undefined)
+    : localWatches;
+  const watchIds = watches?.map((watch) => watch.watchId).join(",") ?? "";
   const autoFixRepository = useThreadAutoFixRepository(props.thread);
-  const canReadHistory = localWatches !== undefined && Boolean(props.desktopApi?.manageThreadPrWatches);
+  const canReadHistory = (localWatches !== undefined || peerManaged)
+    && Boolean(props.desktopApi?.manageThreadPrWatches);
+  const ownerTarget = props.thread.federation?.ref.target;
+  // A string, so a detail refresh that rebuilt the target re-reads nothing.
+  const ownerInstanceId = ownerTarget?.scope === "remote" ? ownerTarget.instanceId : undefined;
   const [openHistory, setOpenHistory] = useState<ReadonlySet<string>>(() => new Set());
   const [history, setHistory] = useState<WatchHistoryState>();
   const [historyAttempt, setHistoryAttempt] = useState(0);
   const historyWanted = canReadHistory
     && [...openHistory].some((key) => key.startsWith(`${threadKey}|`));
   const historyCurrent = history?.threadKey === threadKey
-    && history.source === localWatches
+    && history.source === watchIds
     && history.entries !== undefined;
   const historyFailed = history?.threadKey === threadKey && history.entries === undefined;
   useEffect(() => {
     // History is read on first expand, then again whenever a watch changes.
     if (!historyWanted || historyCurrent) return;
     let cancelled = false;
-    const source = localWatches;
+    const source = watchIds;
     void props.desktopApi!.manageThreadPrWatches!({
       action: "history",
       backend: props.thread.source,
       threadId: props.thread.id,
+      ...(ownerInstanceId
+        ? { federationTarget: { scope: "remote" as const, instanceId: ownerInstanceId } }
+        : {}),
       limit: 20,
     }).then(
       (response) => {
@@ -110,7 +125,8 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
     historyWanted,
     historyCurrent,
     historyAttempt,
-    localWatches,
+    watchIds,
+    ownerInstanceId,
     props.desktopApi,
     props.thread.source,
     props.thread.id,
@@ -227,11 +243,13 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
                       : pullRequestMatchesRepositoryKey(pr, autoFixRepository)}
                     autoFixBlocked={chipWatch?.autoFixBlocked}
                     ownerLabel={ownerLabel}
-                    onStop={watchContext?.stop}
+                    onStop={manageable && watchContext?.stop
+                      ? async (watch) => await watchContext.stop!(watch, props.thread)
+                      : undefined}
                     onTurnOffAutoFix={props.onSetThreadPrAutoDispatch
                       ? () => void props.onSetThreadPrAutoDispatch!(false)
                       : undefined}
-                    onWatchCi={watchContext?.watchCi && canWatchPrCi(props.thread, pr)
+                    onWatchCi={manageable && watchContext?.watchCi && canWatchPrCi(props.thread, pr)
                       ? async () => await watchContext.watchCi!(props.thread, pr)
                       : undefined}
                     history={historyEntries?.filter((entry) => entry.prKey === statusKey)}

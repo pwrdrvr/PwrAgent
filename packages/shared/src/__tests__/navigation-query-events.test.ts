@@ -19,6 +19,15 @@ describe("navigation query events", () => {
     expect(navigationInvalidationMayChangeMembership("thread/backgroundTasks/updated")).toBe(false);
   });
 
+  // A row carries its owner's CI watch marks, so a viewer's peer row must
+  // re-read when a watch is armed, stopped or ends.
+  it("refreshes a row, and only that row, when its PR watches change", () => {
+    expect(navigationQueryEventRequiresRefresh("thread/prWatches/updated", {
+      backend: "codex", threadId: "thread",
+    })).toBe(true);
+    expect(navigationInvalidationMayChangeMembership("thread/prWatches/updated")).toBe(false);
+  });
+
   it("ignores streamed output", () => {
     expect(navigationQueryEventRequiresRefresh("item/commandExecution/outputDelta")).toBe(false);
   });

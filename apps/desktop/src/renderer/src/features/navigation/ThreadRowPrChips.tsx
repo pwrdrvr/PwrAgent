@@ -10,7 +10,7 @@ import {
 
 type WatchedThread = Pick<
   NavigationThreadSummary,
-  "id" | "source" | "federation" | "prAutoDispatchEnabled" | "primaryGitRepository"
+  "id" | "source" | "federation" | "prAutoDispatchEnabled" | "primaryGitRepository" | "prCiWatches"
 >;
 
 /**

@@ -2121,6 +2121,10 @@ type ThreadPullRequestDetachHandler = (
   request: DetachThreadPullRequestRequest,
 ) => Promise<DetachThreadPullRequestResponse>;
 
+type ThreadPrWatchesPeerHandler = (
+  request: import("@pwragent/shared").FederationThreadPrWatchesRequestV1,
+) => Promise<import("@pwragent/shared").ThreadPrWatchesResponse>;
+
 type ThreadPullRequestRefreshHandler = (
   request: RefreshOwnedThreadPullRequestsRequest,
 ) => Promise<RefreshThreadPullRequestsResponse>;
@@ -9966,6 +9970,7 @@ export class DesktopBackendRegistry {
   private threadPullRequestDetachHandler:
     | ThreadPullRequestDetachHandler
     | undefined;
+  private threadPrWatchesPeerHandler: ThreadPrWatchesPeerHandler | undefined;
   private threadPullRequestRefreshHandler:
     | ThreadPullRequestRefreshHandler
     | undefined;
@@ -12108,6 +12113,26 @@ export class DesktopBackendRegistry {
     handler: ThreadPullRequestDetachHandler | null | undefined,
   ): void {
     this.threadPullRequestDetachHandler = handler ?? undefined;
+  }
+
+  setThreadPrWatchesPeerHandler(
+    handler: ThreadPrWatchesPeerHandler | null | undefined,
+  ): void {
+    this.threadPrWatchesPeerHandler = handler ?? undefined;
+  }
+
+  /** A viewer's history, Stop or Watch CI on one of this owner's threads. */
+  async manageThreadPrWatchesForPeer(
+    request: import("@pwragent/shared").FederationThreadPrWatchesRequestV1,
+  ): Promise<import("@pwragent/shared").ThreadPrWatchesResponse> {
+    const handler = this.threadPrWatchesPeerHandler;
+    if (!handler) {
+      return {
+        ok: false,
+        error: { code: "not_found", message: "PR watches are not available on this instance yet." },
+      };
+    }
+    return await handler(request);
   }
 
   setThreadPullRequestRefreshHandler(
