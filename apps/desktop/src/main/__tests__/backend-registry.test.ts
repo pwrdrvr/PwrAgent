@@ -32320,9 +32320,10 @@ command = "pnpm dev"
       linkedDirectories: [{ id: worktreePath, kind: "local", label: "claude-tool-review", path: worktreePath }],
     } });
     const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["thread/start", "turn/start"] },
+      initializeResult: { methods: ["thread/start", "turn/start", "turn/interrupt"] },
       models: [{ id: "gpt-5.5", label: "GPT-5.5", current: true, supportsReasoning: true }],
       startThreadResult: { threadId: "codex-review-child" },
+      interruptEndsTurn: true,
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -32418,6 +32419,17 @@ command = "pnpm dev"
       });
       expect(response).toMatchObject({ isError: true });
       expect(JSON.stringify(response)).toContain("unsupported_backend");
+      await registry.publishLocalEvent({
+        backend: "claude",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "claude-thread",
+            turnId: "claude-turn-1",
+            turn: { id: "claude-turn-1", status: "completed", output: [] },
+          },
+        },
+      });
     } finally {
       await registry.close();
     }
