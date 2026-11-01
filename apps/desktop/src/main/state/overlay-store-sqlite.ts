@@ -5498,9 +5498,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     /**
      * The owner's live children. Each carries its own provider: a child can
      * run on another provider than its parent. Absent `backend` means the
-     * parent's.
+     * parent's. `ownerInstanceId` marks a peer's thread, whose link lives on
+     * that peer: the caller listed it from this machine's pin, so it has no
+     * overlay row here to check.
      */
-    children?: { backend?: ThreadOverlayState["backend"]; id: string; createdAt?: number }[];
+    children?: {
+      backend?: ThreadOverlayState["backend"];
+      id: string;
+      createdAt?: number;
+      ownerInstanceId?: string;
+    }[];
   }): Promise<string[]> {
     return this.stateDb.raw.transaction(() => {
       const parentKey = buildThreadIdentityKey(params.backend, params.parentThreadId);
@@ -5508,10 +5515,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       // per provider only, so an id two providers share is refused rather
       // than guessed. An unlisted id (a just-created child the owner's index
       // has not read yet) falls back to the parent's provider.
+      const ownersOf = (id: string) => params.children?.filter((entry) => entry.id === id) ?? [];
       const childKey = (id: string, listed: boolean): string | undefined => {
-        const owners = params.children?.filter((entry) => entry.id === id) ?? [];
+        const owners = ownersOf(id);
         if (owners.length > 1 || (listed && owners.length === 0)) return undefined;
         return buildThreadIdentityKey(owners[0]?.backend ?? params.backend, id);
+      };
+      const isPeerChild = (id: string): boolean => {
+        const owners = ownersOf(id);
+        return owners.length === 1 && Boolean(owners[0]!.ownerInstanceId);
       };
       const parent = this.getThread(parentKey) ?? {
         backend: params.backend,
@@ -5528,6 +5540,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           throw new Error("A relative child move requires distinct live children and an owner order.");
         }
         for (const id of [threadId, anchorThreadId]) {
+          if (isPeerChild(id)) continue;
           const key = childKey(id, true);
           const child = key ? this.getThread(key) : undefined;
           if (!child || child.archiveTombstonedAt !== undefined || child.parentThreadId !== params.parentThreadId
@@ -5549,7 +5562,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         }
         const { threadId, sourceThreadId } = params.insertAfter;
         for (const id of [threadId, sourceThreadId]) {
-          if (id === params.parentThreadId && id === sourceThreadId) continue;
+          if ((id === params.parentThreadId && id === sourceThreadId) || isPeerChild(id)) continue;
           const key = childKey(id, false);
           // A just-created child is often missing from the owner's listing,
           // and it may run on another provider than its parent. Its own link

@@ -5794,6 +5794,50 @@ describe("app server ipc", () => {
     });
   });
 
+  it("nests a pinned peer thread under a local thread and drops this viewer's pin", async () => {
+    const { NAVIGATION_SET_THREAD_PARENT_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    const federationTarget = { scope: "remote" as const, instanceId: "windows-peer" };
+    const ref = { backend: "codex" as const, target: federationTarget, threadId: "thread-peer" };
+    listRemoteThreadPins.mockResolvedValueOnce([{
+      ref,
+      instanceLabel: "Win PC / dev",
+      pinnedVia: "explicit",
+      addedAt: 1_000,
+      localPinnedRank: "1024",
+      summary: {
+        source: "codex",
+        id: "thread-peer",
+        title: "Windows E2E",
+        titleSource: "explicit",
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      },
+    }]);
+    setRemoteThreadLocalPin.mockClear();
+
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_SET_THREAD_PARENT_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-peer",
+      parentThreadId: "thread-root",
+      parentThreadBackend: "codex",
+      parentThreadInstanceId: "viewer",
+    } satisfies SetThreadParentRequest);
+
+    expect(federationMock.remoteBackend.setThreadParent).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-peer",
+      parentThreadId: "thread-root",
+      parentThreadBackend: "codex",
+      parentThreadInstanceId: "viewer",
+    });
+    expect(setRemoteThreadLocalPin.mock.calls.map(([params]) => params)).toEqual([{ ref, pinned: false }]);
+  });
+
   it("marks Grok threads seen without rejecting the backend", async () => {
     const { NAVIGATION_MARK_THREAD_SEEN_CHANNEL } = await import("../../shared/ipc");
 

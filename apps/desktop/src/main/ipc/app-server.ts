@@ -7784,6 +7784,11 @@ class DesktopAppServerService {
             instanceLabel: pin.instanceLabel,
           }]);
         }
+        // Nesting unpins, as a local thread's link does. This viewer's own
+        // rank would otherwise bring the row back to its pins on refresh.
+        if (pin?.localPinnedRank && response.parentThreadId) {
+          await this.getOverlayStore().setRemoteThreadLocalPin({ ref: pin.ref, pinned: false });
+        }
       } catch (error) {
         // The relationship mutation already committed on the owner. Keep that
         // success authoritative even if this viewer's cached pin cannot patch.
@@ -7857,7 +7862,9 @@ class DesktopAppServerService {
         .remoteBackend(federationTarget)
         .updateSubthreadOrder(ownerRequest);
     }
-    const response = await updateLocalSubthreadOrder(request);
+    const response = await updateLocalSubthreadOrder(request, {
+      resolveLocalInstanceId: async () => (await getDesktopFederationRuntime().health()).instanceId,
+    });
     logDebug("updateSubthreadOrder", {
       backend: response.backend,
       parentThreadId: request.parentThreadId,
