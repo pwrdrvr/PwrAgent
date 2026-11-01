@@ -26,12 +26,12 @@ Use an exact version to match a desktop installation. See the
 and publication verification.
 
 ```sh
-npm install --global pwragent@next
+npm install --global pwragent@latest
 pwragent --help
-# Update to the newest headless prerelease:
+# Or choose a reproducible version that matches your desktop:
+npm install --global pwragent@1.3.7
+# Prerelease desktop versions publish to next, once one has shipped:
 npm install --global pwragent@next
-# Or choose a reproducible version:
-npm install --global pwragent@1.3.6
 ```
 
 Provide **Node >=22 and npm separately**, on Linux (macOS is also supported for
@@ -70,7 +70,7 @@ shell's Node version-manager initialization does not run under systemd.
 After publication, install a pinned version into the service prefix:
 
 ```sh
-sudo npm install --prefix /opt/pwragent --omit=dev --ignore-scripts pwragent@1.3.6
+sudo npm install --prefix /opt/pwragent --omit=dev --ignore-scripts pwragent@1.3.7
 sudo install -m 0644 /opt/pwragent/node_modules/pwragent/examples/pwragent-headless.service /etc/systemd/system/pwragent-headless.service
 # Review the account, paths, profile and Codex configuration before enabling:
 sudo systemctl daemon-reload
@@ -90,7 +90,7 @@ sudo -u pwragent env PWRAGENT_HOME=/var/lib/pwragent PWRAGENT_PROFILE=outpost \
 
 For a service update, finish or interrupt active work, run
 `sudo systemctl stop pwragent-headless.service`, repeat the prefix installation
-with the chosen new version (or `pwragent@next`), then run
+with the chosen new version (or `pwragent@latest`), then run
 `sudo systemctl start pwragent-headless.service`. Compare the new example unit
 with the installed one before deliberately updating it; npm does not overwrite
 `/etc/systemd/system`. Stopping during a turn can leave its outcome `unknown`.
