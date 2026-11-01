@@ -534,7 +534,8 @@ describe("MessagingStatusBar", () => {
       readMessagingSettings: vi.fn(async () => ({ snapshot })),
     };
     const { container } = render(<MessagingStatusBar desktopApi={desktopApi} />);
-    fireEvent.click(await screen.findByRole("button", { name: new RegExp(`LINE: ${label}`) }));
+    const controller = await screen.findByRole("button", { name: new RegExp(`LINE: ${label}`) });
+    await act(async () => fireEvent.click(controller));
     const dialog = screen.getByRole("dialog", { name: "Messaging platforms" });
     expect(dialog.querySelector(".messaging-status-popover__state")).toHaveTextContent(label);
     expect(dialog.querySelector(".messaging-status-popover__row-sub")).toHaveTextContent(reason);
