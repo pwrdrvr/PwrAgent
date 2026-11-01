@@ -121,21 +121,12 @@ export function createMcpIpcHttp(serverUrl: string, options: { executable?: stri
   validateMcpIpcPlatform(endpoint);
   const url = new URL(endpoint.requestTarget, IPC_ORIGIN);
   const lifetime = new AbortController();
-  const agent = new Agent({ keepAlive: false });
+  const agents = new Set<Agent>();
   const pending = new Set<RelaySocket>();
   const close = (reason?: Error): void => {
     lifetime.abort(reason);
     for (const socket of pending) socket.destroy();
-    agent.destroy();
-  };
-  agent.createConnection = (_options, callback) => {
-    void openRelay(endpoint.path, options.executable ?? helperPath(), lifetime.signal).then((socket) => {
-      pending.add(socket);
-      socket.once("close", () => pending.delete(socket));
-      if (lifetime.signal.aborted) { socket.destroy(); callback?.(new Error("MCP IPC session closed."), socket); }
-      else callback?.(null, socket);
-    }, (error: Error) => callback?.(error, undefined as unknown as Socket));
-    return undefined as unknown as Socket;
+    for (const agent of agents) agent.destroy();
   };
   const fetch: FetchLike = async (input, init) => {
     lifetime.signal.throwIfAborted();
@@ -147,6 +138,19 @@ export function createMcpIpcHttp(serverUrl: string, options: { executable?: stri
       throw new Error("MCP IPC requires an HTTP JSON request body.");
     }
     const signal = AbortSignal.any([lifetime.signal, ...(init?.signal ? [init.signal] : [])]);
+    // Each HTTP request owns its connection attempt as well as its stream.
+    // Aborting before native verification must kill that helper immediately.
+    const agent = new Agent({ keepAlive: false });
+    agents.add(agent);
+    agent.createConnection = (_options, callback) => {
+      void openRelay(endpoint.path, options.executable ?? helperPath(), signal).then((socket) => {
+        pending.add(socket);
+        socket.once("close", () => pending.delete(socket));
+        if (signal.aborted) { socket.destroy(); callback?.(new Error("MCP IPC request closed."), socket); }
+        else callback?.(null, socket);
+      }, (error: Error) => callback?.(error, undefined as unknown as Socket));
+      return undefined as unknown as Socket;
+    };
     return await new Promise<Response>((resolveResponse, reject) => {
       const headers = new Headers(init?.headers);
       // Host/connection framing belongs to this transport, never credentials
@@ -179,6 +183,7 @@ export function createMcpIpcHttp(serverUrl: string, options: { executable?: stri
         if (!signal.aborted) close(error);
         reject(error);
       });
+      req.once("close", () => { agents.delete(agent); agent.destroy(); });
       req.end(init?.body ?? undefined);
     });
   };
