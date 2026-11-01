@@ -16,6 +16,7 @@ import {
   parseThreadCorrespondenceMessage,
   stripCodexGitActionDirectives,
   summarizeThreadDependencyPrompt,
+  threadTodoMessageOriginFromUnknown,
 } from "@pwragent/shared";
 import type {
   AppServerBackendKind,
@@ -1235,6 +1236,16 @@ function renderMessageHeader(params: {
     : "transcript-message__attribution";
   const sourceThread = params.message.origin?.sourceThread;
   const threadTitle = params.threadTitle ?? sourceThread?.title;
+  // Peer-asserted, and thread reads skip the live parser: check it here.
+  const threadTodo = params.message.origin?.kind === "agent"
+    ? threadTodoMessageOriginFromUnknown(params.message.origin.threadTodo)
+    : undefined;
+  const showsSourceThread = Boolean(
+    (params.sourceThreadLink && params.threadLinks) || threadTitle,
+  );
+  // "To-do from" needs a thread after it.
+  const roleLabel = params.label
+    ?? (threadTodo && !showsSourceThread ? "To-do" : labelForMessage(params.message));
   const rendererFederationTarget = readRendererFederationTarget();
   const sourceInstanceChip =
     sourceThread?.instanceId
@@ -1252,9 +1263,18 @@ function renderMessageHeader(params: {
   return (
     <header className="transcript-message__header">
       <span className={attributionClassName}>
-        <span className="transcript-message__role">
-          {params.label ?? labelForMessage(params.message)}
-        </span>
+        {threadTodo?.title ? (
+          <span
+            className="transcript-message__role tooltip-target"
+            data-tooltip={`Sent from the to-do “${threadTodo.title}”.`}
+          >
+            {roleLabel}
+          </span>
+        ) : (
+          <span className="transcript-message__role">
+            {roleLabel}
+          </span>
+        )}
         {params.sourceThreadLink && params.threadLinks ? (
           <ThreadChip
             fallbackLabel={threadTitle}
@@ -1552,6 +1572,9 @@ function labelForOrigin(origin: AppServerThreadMessageOrigin): string {
   }
   if (origin.kind === "pwragent" && origin.dependencyId) {
     return "Continue after";
+  }
+  if (origin.kind === "agent" && threadTodoMessageOriginFromUnknown(origin.threadTodo)) {
+    return origin.sourceThread ? "To-do from" : "To-do";
   }
   if (origin.kind === "agent") {
     return origin.sourceThread ? "From thread" : "Agent";

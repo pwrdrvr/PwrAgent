@@ -7,6 +7,7 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
+  AppServerThreadMessageOrigin,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import {
@@ -505,6 +506,129 @@ describe("TranscriptList", () => {
       backend: "codex",
       instanceId: "pwr_remote",
       threadId: "remote-source-thread",
+    });
+  });
+
+  describe("to-do dispatched prompts", () => {
+    const raisingThread = {
+      id: "source-thread",
+      title: "Branch picker error handling",
+      titleSource: "derived",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: true, unread: false },
+    } as NavigationThreadSummary;
+
+    const renderTodoMessage = (
+      origin: AppServerThreadMessageOrigin,
+      threads: NavigationThreadSummary[] = [raisingThread],
+    ) => {
+      const onShowThread = vi.fn();
+      const view = render(
+        <ThreadLinkProvider onShowThread={onShowThread} threads={threads}>
+          <TranscriptList
+            entries={[
+              {
+                type: "message",
+                id: "message-todo",
+                role: "user",
+                text: "Stabilize the sync test before the release branch.",
+                origin,
+              },
+            ]}
+            loading={false}
+            loadingMore={false}
+            onLoadOlder={async () => undefined}
+          />
+        </ThreadLinkProvider>,
+      );
+      return { ...view, onShowThread };
+    };
+
+    it("says a to-do from the raising thread sent it and links that thread", () => {
+      const { container, onShowThread } = renderTodoMessage({
+        kind: "agent",
+        sourceThread: { backend: "codex", threadId: "source-thread" },
+        threadTodo: { id: "todo-1", title: "Fix flaky sync test" },
+      });
+
+      const role = screen.getByText("To-do from");
+      expect(screen.queryByText("From thread")).not.toBeInTheDocument();
+      expect(screen.queryByText("User")).not.toBeInTheDocument();
+      expect(container.querySelector(".transcript-message--injected")).toBeInTheDocument();
+      expect(role).toHaveAttribute("data-tooltip", "Sent from the to-do “Fix flaky sync test”.");
+      expect(role).toHaveClass("tooltip-target");
+      // The card is resolved by now: nothing links or expands it.
+      expect(container.querySelector("[aria-expanded]")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Open thread Branch picker error handling" }));
+      expect(onShowThread).toHaveBeenCalledWith({ backend: "codex", threadId: "source-thread" });
+    });
+
+    it("adds no tooltip for a card without a title", () => {
+      renderTodoMessage({
+        kind: "agent",
+        sourceThread: { backend: "codex", threadId: "source-thread" },
+        threadTodo: { id: "todo-1" },
+      });
+
+      expect(screen.getByText("To-do from")).not.toHaveAttribute("data-tooltip");
+    });
+
+    it("says only To-do when no raising thread can be shown", () => {
+      // No thread links and no source title: nothing can follow "from".
+      render(
+        <TranscriptList
+          entries={[
+            {
+              type: "message",
+              id: "message-todo",
+              role: "user",
+              text: "Stabilize the sync test before the release branch.",
+              origin: {
+                kind: "agent",
+                sourceThread: { backend: "codex", threadId: "unknown-thread" },
+                threadTodo: { id: "todo-1", title: "Fix flaky sync test" },
+              },
+            },
+          ]}
+          loading={false}
+          loadingMore={false}
+          onLoadOlder={async () => undefined}
+        />,
+      );
+
+      expect(screen.getByText("To-do")).toBeInTheDocument();
+      expect(screen.queryByText("To-do from")).not.toBeInTheDocument();
+    });
+
+    it("names a remote raising thread's instance", () => {
+      renderTodoMessage({
+        kind: "agent",
+        sourceThread: {
+          backend: "codex",
+          instanceId: "pwr_remote",
+          instanceLabel: "Studio Mac",
+          threadId: "remote-source-thread",
+          title: "Remote pagination audit",
+        },
+        threadTodo: { id: "todo-1", title: "Fix flaky sync test" },
+      }, []);
+
+      expect(screen.getByText("To-do from")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Open thread Remote pagination audit" })).toBeInTheDocument();
+      expect(screen.getByLabelText("Runs on Studio Mac")).toBeInTheDocument();
+    });
+
+    it("reads a malformed marker as an ordinary thread message", () => {
+      renderTodoMessage({
+        kind: "agent",
+        sourceThread: { backend: "codex", threadId: "source-thread" },
+        threadTodo: { id: 7 } as never,
+      });
+
+      expect(screen.getByText("From thread")).toBeInTheDocument();
+      expect(screen.queryByText("To-do from")).not.toBeInTheDocument();
     });
   });
 
