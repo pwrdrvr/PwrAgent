@@ -28,12 +28,6 @@ describe("ThinkingScanner", () => {
       },
     });
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(ON_SCREEN);
-    // The travel custom property comes from app.css, which jsdom does not load.
-    vi.spyOn(window, "getComputedStyle").mockImplementation((element) => ({
-      getPropertyValue: (name: string) => name === "--thinking-scanner-travel"
-        ? (element.closest(".thinking-scanner--mini") ? "10px" : "44px")
-        : "",
-    }) as CSSStyleDeclaration);
   });
 
   afterEach(() => {
@@ -68,10 +62,14 @@ describe("ThinkingScanner", () => {
     for (const call of calls) {
       expect(call.options).toEqual({ duration: THINKING_SCAN_DURATION_MS, id: THINKING_SCAN_ANIMATION_ID });
     }
-    // Pixel keyframes per track width: centre → right edge → left edge → centre.
-    expect(calls.map((call) => call.keyframes.map((frame) => frame.transform))).toEqual([
-      ["translateX(22px)", "translateX(44px)", "translateX(0px)", "translateX(22px)"],
-      ["translateX(5px)", "translateX(10px)", "translateX(0px)", "translateX(5px)"],
+    // Both sizes share one list: centre → right edge → left edge → centre,
+    // each resolved against the beam's own travel.
+    expect(calls[1].keyframes).toBe(calls[0].keyframes);
+    expect(calls[0].keyframes.map((frame) => frame.transform)).toEqual([
+      "translateX(calc(var(--thinking-scanner-travel) / 2))",
+      "translateX(var(--thinking-scanner-travel))",
+      "translateX(0)",
+      "translateX(calc(var(--thinking-scanner-travel) / 2))",
     ]);
     expect(calls[0].keyframes.map((frame) => frame.easing)).toEqual([
       "steps(14, end)", "steps(27, end)", "steps(14, end)", undefined,

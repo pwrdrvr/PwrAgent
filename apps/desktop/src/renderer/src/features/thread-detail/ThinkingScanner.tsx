@@ -31,27 +31,16 @@ export const THINKING_SCAN_ANIMATION_ID = "pwragent-thinking-scanner-scan";
 // former sweep: a quarter of the scan out, half across, a quarter back.
 const SCAN_STEPS = { out: 14, across: 27, back: 14 } as const;
 
-const keyframesByTravel = new Map<number, Keyframe[]>();
-
-/**
- * Pixel keyframes for one track width, read once per width from the beam's
- * `--thinking-scanner-travel`. Each step is then a plain transform on the
- * beam's existing layer: no paint and no raster during a scan.
- */
-function scanKeyframes(travel: number): Keyframe[] {
-  let keyframes = keyframesByTravel.get(travel);
-  if (!keyframes) {
-    const centre = `translateX(${travel / 2}px)`;
-    keyframes = [
-      { offset: 0, transform: centre, easing: `steps(${SCAN_STEPS.out}, end)` },
-      { offset: 0.25, transform: `translateX(${travel}px)`, easing: `steps(${SCAN_STEPS.across}, end)` },
-      { offset: 0.75, transform: "translateX(0px)", easing: `steps(${SCAN_STEPS.back}, end)` },
-      { offset: 1, transform: centre },
-    ];
-    keyframesByTravel.set(travel, keyframes);
-  }
-  return keyframes;
-}
+// `var()` resolves per beam, so one list serves both track sizes. Each step is
+// a plain transform on the beam's existing layer (`will-change` in app.css):
+// no paint and no raster during a scan.
+const CENTRE = "translateX(calc(var(--thinking-scanner-travel) / 2))";
+const SCAN_KEYFRAMES: Keyframe[] = [
+  { offset: 0, transform: CENTRE, easing: `steps(${SCAN_STEPS.out}, end)` },
+  { offset: 0.25, transform: "translateX(var(--thinking-scanner-travel))", easing: `steps(${SCAN_STEPS.across}, end)` },
+  { offset: 0.75, transform: "translateX(0)", easing: `steps(${SCAN_STEPS.back}, end)` },
+  { offset: 1, transform: CENTRE },
+];
 
 const reducedMotion = typeof window !== "undefined" && typeof window.matchMedia === "function"
   ? window.matchMedia("(prefers-reduced-motion: reduce)")
@@ -104,11 +93,7 @@ function runScan(): void {
       if (typeof beam.animate !== "function" || !isOnScreen(beam)) {
         continue;
       }
-      const travel = Number.parseFloat(getComputedStyle(beam).getPropertyValue("--thinking-scanner-travel"));
-      if (!Number.isFinite(travel)) {
-        continue;
-      }
-      beam.animate(scanKeyframes(travel), {
+      beam.animate(SCAN_KEYFRAMES, {
         duration: THINKING_SCAN_DURATION_MS,
         id: THINKING_SCAN_ANIMATION_ID,
       });
