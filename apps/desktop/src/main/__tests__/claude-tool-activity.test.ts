@@ -68,8 +68,16 @@ describe("Claude tool activity", () => {
   });
 
   it("shows the operator only the artifact results written for them", () => {
-    expect(["list", "comments", "read_db"].every(claudeArtifactShowsOutput)).toBe(true);
-    expect(["publish", "quickstart", "read", "delete"].some(claudeArtifactShowsOutput)).toBe(false);
+    const page = { url: "https://claude.ai/artifact/x", title: "Deck" };
+    expect(["list", "comments", "read_db", "read_asset"].every((action) => claudeArtifactShowsOutput(action, {}))).toBe(true);
+    expect(claudeArtifactShowsOutput("quickstart", {})).toBe(false);
+    expect(claudeArtifactShowsOutput("publish", page)).toBe(false);
+    expect(claudeArtifactShowsOutput("read", { read: page })).toBe(false);
+    expect(claudeArtifactShowsOutput("delete", { artifact_delete: { url: page.url, deleted: true } })).toBe(false);
+    // A result that does not confirm the row keeps the text that explains it.
+    expect(claudeArtifactShowsOutput("publish", undefined)).toBe(true);
+    expect(claudeArtifactShowsOutput("read", { read: {} })).toBe(true);
+    expect(claudeArtifactShowsOutput("delete", { artifact_delete: { url: page.url, deleted: false } })).toBe(true);
   });
 
   it("names the page a publish or read returned", () => {
@@ -90,6 +98,7 @@ describe("Claude tool activity", () => {
     expect(claudeArtifactResult(read, "pin", { url: "https://claude.ai/artifact/x" })).toBeUndefined();
     expect(claudeArtifactResult(published, "publish", "Published")).toBeUndefined();
     expect(claudeArtifactResult(published, "publish", { url: "http://claude.ai/artifact/x" })).toBeUndefined();
+    expect(claudeArtifactResult(published, "publish", { url: "https://user:secret@claude.ai/artifact/x" })).toBeUndefined();
   });
 
   it("keeps one section per file in a turn diff, in first-edit order", () => {

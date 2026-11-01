@@ -23,31 +23,34 @@ const CLAUDE_PLAN_HANDOFF = "The operator has your plan and will reply when it s
   + "Stay in plan mode and end your turn now.";
 
 /**
- * The input a card shows. Claude Code adds its own `__`-prefixed fields to
- * some calls, such as an artifact publish's consent and source pin. They are
- * returned to the CLI unchanged, never shown.
+ * The input a card shows. Claude Code adds its own `__`-prefixed fields to an
+ * artifact call, such as a publish's consent and source pin. They are
+ * returned to the CLI unchanged, never shown. Another tool's input is shown
+ * whole: its `__` fields are arguments the call sends.
  */
-function displayInput(input: Record<string, unknown>): Record<string, unknown> {
+function displayInput(toolName: string, input: Record<string, unknown>): Record<string, unknown> {
+  if (!CLAUDE_ARTIFACT_TOOLS.has(toolName)) return input;
   return Object.fromEntries(Object.entries(input).filter(([key]) => !key.startsWith("__")));
 }
 
 /**
  * What an approval card says. Claude Code writes its own question for an
  * artifact request (a publish to claude.ai, a public share, a delete), so
- * the card asks that instead of showing the call's input as a command.
+ * the card asks that instead of showing the call's input as a command. An
+ * artifact request without one shows its input, as any other tool's does.
  */
 function claudeApprovalText(
   toolName: string, input: Record<string, unknown>, context: Parameters<CanUseTool>[2],
 ): { command?: string; prompt?: string; reason: string } {
-  const reason = context.decisionReason ?? `Claude requests permission to use ${toolName}.`;
-  if (CLAUDE_ARTIFACT_TOOLS.has(toolName)) {
-    const question = context.decisionReason ?? context.description ?? context.title
-      ?? `Claude requests permission to use ${toolName}.`;
-    return { prompt: question, reason: question };
-  }
+  const question = CLAUDE_ARTIFACT_TOOLS.has(toolName)
+    ? context.decisionReason ?? context.description ?? context.title
+    : undefined;
+  if (question) return { prompt: question, reason: question };
   return {
-    command: toolName === "Bash" ? String(input.command ?? "") : `${toolName}: ${JSON.stringify(displayInput(input))}`,
-    reason,
+    command: toolName === "Bash"
+      ? String(input.command ?? "")
+      : `${toolName}: ${JSON.stringify(displayInput(toolName, input))}`,
+    reason: context.decisionReason ?? `Claude requests permission to use ${toolName}.`,
   };
 }
 
@@ -99,7 +102,7 @@ export function createClaudePermissionHandler(options: {
             requestId,
             itemId: context.toolUseID,
             toolName,
-            arguments: displayInput(input),
+            arguments: displayInput(toolName, input),
             ...claudeApprovalText(toolName, input, context),
             availableDecisions: ["accept", "decline", "cancel"],
           },

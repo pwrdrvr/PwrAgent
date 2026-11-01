@@ -2079,12 +2079,14 @@ export class ClaudeBackend {
         const artifactAction = turn.artifactCalls.get(block.tool_use_id);
         const artifact = artifactAction !== undefined && !block.is_error
           ? claudeArtifactResult(entry.details[0], artifactAction, message.tool_use_result) : undefined;
+        // An artifact result written for the model stays out of the row.
+        const hideOutput = artifactAction !== undefined && !block.is_error
+          && !claudeArtifactShowsOutput(artifactAction, message.tool_use_result);
         const edit = entry.details[0].kind === "write" && !block.is_error && artifactAction === undefined
           ? claudeFileDiff(message.tool_use_result, live.session.cwd) : undefined;
-        if (artifact) {
-          entry.summary = artifact.label;
-          entry.details = [artifact, ...entry.details.slice(1)];
-        }
+        if (artifact) entry.summary = artifact.label;
+        // The invocation was recorded while the call ran; it takes the call's final status.
+        entry.details = [{ ...artifact ?? entry.details[0], status: entry.status }, ...entry.details.slice(1)];
         if (command !== undefined) {
           const details = claudeCommandActivity({ id: entry.id, command, status: entry.status, output }).details;
           entry.details = images.length ? [{ ...details[0], images }, ...details.slice(1)] : details;
@@ -2100,15 +2102,10 @@ export class ClaudeBackend {
             turn.fileDiffs.push(edit.diff);
             await this.emit({ method: "turn/diff/updated", params: { threadId, turnId, diff: claudeTurnDiff(turn.fileDiffs) } });
           }
-        } else if (artifactAction !== undefined && !block.is_error && !claudeArtifactShowsOutput(artifactAction)) {
-          // An artifact result written for the model stays out of the row.
-          entry.details = [{ ...entry.details[0], status: entry.status }, ...entry.details.slice(1)];
-        } else {
-          // Keep the invocation when updating generic tools, too, with the
-          // call's final status: it was recorded while the call ran.
+        } else if (!hideOutput) {
+          // Keep the invocation when updating generic tools, too.
           const outputId = `${entry.id}:output`;
-          const [invocation, ...rest] = entry.details.filter((detail) => detail.id !== outputId);
-          entry.details = [...(invocation ? [{ ...invocation, status: entry.status }] : []), ...rest, {
+          entry.details = [...entry.details.filter((detail) => detail.id !== outputId), {
             id: outputId, kind: entry.details[0].kind, label: `${entry.summary} output`,
             ...(output || !images.length ? { markdown: output } : {}),
             ...(images.length ? { images } : {}),

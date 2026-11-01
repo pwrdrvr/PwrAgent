@@ -41,12 +41,16 @@ PwrAgent sets it.
 - Most artifact results are written for the model: a quickstart's or a
   publish's instructions run to tens of thousands of characters, and a read
   returns raw HTML. A successful row keeps its result text only for a listing,
-  comments or data (`claudeArtifactShowsOutput`). A failed call keeps its
-  output.
+  comments, data or a saved file's location, or when the result does not
+  confirm what the row says: a publish or read with no readable page, or a
+  delete that did not delete (`claudeArtifactShowsOutput`). A failed call
+  keeps its output.
 - Artifact permission requests carry Claude Code's own question in
   `decisionReason`, and CLI-only `__artifact…` fields in their input.
   The approval card shows the question, and the fields go back to the CLI
-  unchanged ([claude-permissions.ts](claude-permissions.ts)).
+  unchanged ([claude-permissions.ts](claude-permissions.ts)). A request
+  without a question shows its input instead. Only artifact tools lose their
+  `__` fields on the card; another tool's are arguments it sends.
 - A Full Access thread runs Claude Code in `bypassPermissions`, which it
   treats as unattended. An artifact action that needs a person's yes, such
   as a delete, a public share or an access change, is refused there without

@@ -2601,6 +2601,27 @@ describe("Claude permission bridge", () => {
     expect(result).toEqual({ behavior: "allow", updatedInput: input });
   });
 
+  it("shows an artifact request's input when Claude Code gives no question", async () => {
+    const request = vi.fn().mockResolvedValue({ decision: "decline" });
+    const handler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", request, cancelRequest: async () => {} });
+    await handler("ArtifactData", { action: "set", url: "https://claude.ai/artifact/x", __artifactPublishTarget: null }, {
+      signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request",
+    });
+    const params = request.mock.calls[0]?.[0].params as Record<string, unknown>;
+    expect(params.command).toBe("ArtifactData: {\"action\":\"set\",\"url\":\"https://claude.ai/artifact/x\"}");
+    expect(params).not.toHaveProperty("prompt");
+  });
+
+  it("shows another tool's `__` arguments, which the call sends", async () => {
+    const request = vi.fn().mockResolvedValue({ decision: "decline" });
+    const handler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", request, cancelRequest: async () => {} });
+    const input = { query: "x", __meta: { scope: "all" } };
+    await handler("mcp__crm__search", input, { signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request" });
+    expect(request.mock.calls[0]?.[0].params).toMatchObject({
+      arguments: input, command: `mcp__crm__search: ${JSON.stringify(input)}`,
+    });
+  });
+
   it("falls back to the CLI's short description of an artifact request", async () => {
     const request = vi.fn().mockResolvedValue({ decision: "decline" });
     const handler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", request, cancelRequest: async () => {} });
@@ -3041,6 +3062,8 @@ describe("Claude transcript fidelity", () => {
       yield answer("read-1", "<h1>Settings</h1>", { read: { url: page, title: "Settings screen", code: 200, result: "<h1>Settings</h1>" } });
       yield call("list-1", "Artifact", { action: "list", limit: 3 });
       yield answer("list-1", "1. Settings screen", { artifacts: [{ title: "Settings screen", url: page }] });
+      yield call("publish-3", "Artifact", { file_path: "/repo/plain.html" });
+      yield answer("publish-3", `Published /repo/plain.html at ${page}`);
       yield call("publish-2", "Artifact", { file_path: "/repo/broken.html" });
       yield { type: "user", parent_tool_use_id: null, message: { content: [
         { type: "tool_result", tool_use_id: "publish-2", content: "Not signed in to claude.ai", is_error: true },
@@ -3064,6 +3087,10 @@ describe("Claude transcript fidelity", () => {
     expect(group.details.some((detail) => detail.id === "read-1:output")).toBe(false);
     expect(group.details.find((detail) => detail.id === "list-1")).toMatchObject({ label: "Listed artifacts", status: "completed" });
     expect(group.details.find((detail) => detail.id === "list-1:output")).toMatchObject({ markdown: "1. Settings screen" });
+    // A publish whose result names no page keeps the text that does.
+    expect(group.details.find((detail) => detail.id === "publish-3:output")).toMatchObject({
+      markdown: `Published /repo/plain.html at ${page}`,
+    });
     // A failed publish keeps the reason it failed.
     expect(group.details.find((detail) => detail.id === "publish-2")).toMatchObject({ label: "Published broken.html", status: "failed" });
     expect(group.details.find((detail) => detail.id === "publish-2:output")).toMatchObject({ markdown: "Not signed in to claude.ai" });

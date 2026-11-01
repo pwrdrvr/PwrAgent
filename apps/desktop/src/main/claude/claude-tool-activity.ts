@@ -23,10 +23,12 @@ function inPath(input: Record<string, unknown>): string {
   return target ? ` in ${path.basename(target)}` : "";
 }
 
+/** An https link the row may open. A link carrying credentials is not one. */
 function httpsUrl(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   try {
-    return new URL(value).protocol === "https:" ? value : undefined;
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password ? value : undefined;
   } catch {
     return undefined;
   }
@@ -104,16 +106,40 @@ function claudeArtifactDetail(params: {
   return row ? { id, kind: row.kind, label: row.label, ...(url ? { url } : {}), status } : undefined;
 }
 
-/**
- * Artifact actions whose result the operator reads: listings, comments and
- * data. Any other result, such as a quickstart's or a publish's, is written
- * for the model, and a read returns the page's raw HTML.
- */
-const ARTIFACT_OPERATOR_OUTPUT = new Set(["list", "comments", "read_db", "list_files", "list_assets"]);
+function resultRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? value as Record<string, unknown> : undefined;
+}
 
-/** Whether a successful artifact call's row shows the result text. */
-export function claudeArtifactShowsOutput(action: string): boolean {
-  return ARTIFACT_OPERATOR_OUTPUT.has(action);
+/** The page a publish or read result names. */
+function artifactPage(action: string, result: unknown): { url: string; title?: string } | undefined {
+  if (action !== "publish" && action !== "read") return undefined;
+  const record = resultRecord(result);
+  const page = resultRecord(action === "read" ? record?.read : record);
+  const url = httpsUrl(page?.url);
+  return page && url ? { url, title: stringField(page, "title") } : undefined;
+}
+
+/**
+ * Artifact actions whose result the operator reads: listings, comments, data,
+ * and where a downloaded file was saved. Any other result, such as a
+ * quickstart's or a publish's, is written for the model, and a read returns
+ * the page's raw HTML.
+ */
+const ARTIFACT_OPERATOR_OUTPUT = new Set([
+  "list", "comments", "read_db", "list_files", "list_assets", "read_file", "read_asset",
+]);
+
+/**
+ * Whether a successful artifact call's row shows the result text: when the
+ * text is for the operator, or when the result does not confirm what the
+ * row says. A publish or read with no readable page keeps the text that
+ * names it, and a delete keeps it unless the result says it deleted.
+ */
+export function claudeArtifactShowsOutput(action: string, result: unknown): boolean {
+  if (ARTIFACT_OPERATOR_OUTPUT.has(action)) return true;
+  if (action === "publish" || action === "read") return !artifactPage(action, result);
+  if (action === "delete") return resultRecord(resultRecord(result)?.artifact_delete)?.deleted !== true;
+  return false;
 }
 
 /**
@@ -124,15 +150,10 @@ export function claudeArtifactShowsOutput(action: string): boolean {
 export function claudeArtifactResult(
   detail: AppServerThreadActivityDetail, action: string, result: unknown,
 ): AppServerThreadActivityDetail | undefined {
-  if (!result || typeof result !== "object" || (action !== "publish" && action !== "read")) return undefined;
-  const record = result as Record<string, unknown>;
-  const page = action === "read" ? record.read : record;
-  if (!page || typeof page !== "object") return undefined;
-  const url = httpsUrl((page as Record<string, unknown>).url);
-  if (!url) return undefined;
-  const title = stringField(page as Record<string, unknown>, "title");
+  const page = artifactPage(action, result);
+  if (!page) return undefined;
   const verb = action === "read" ? "Read" : "Published";
-  return { ...detail, url, ...(title ? { label: `${verb} ${title}` } : {}) };
+  return { ...detail, url: page.url, ...(page.title ? { label: `${verb} ${page.title}` } : {}) };
 }
 
 /**
