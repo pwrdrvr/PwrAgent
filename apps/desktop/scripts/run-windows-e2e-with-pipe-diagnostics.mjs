@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, watch, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ancestry, bindPipeNames, exactLauncherPipes, packageManagerCommand, parseHandleOutput } from "./windows-pipe-observation.mjs";
+import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, packageManagerCommand, parseHandleOutput } from "./windows-pipe-observation.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
 const root = path.join(desktop, ".local", "windows-pipe-diagnostics", randomUUID());
@@ -66,9 +66,16 @@ async function run(file, args, timeout = 3000, urgent = false) {
         scanners.delete(child);
         let value;
         try { value = JSON.parse(stdout.trim()); } catch { /* An absent native result is explicit below. */ }
-        resolve({ value, toolText: file === handleExecutable ? stdout : undefined, error: error && { message: error.message, code: error.code, signal: error.signal, killed: error.killed },
+        const isHandle = file === handleExecutable;
+        const failure = error && { message: isHandle ? "Handle query execution failed." : error.message,
+          code: error.code, signal: error.signal, killed: error.killed };
+        const stderrBytes = Buffer.byteLength(stderr);
+        const parsed = isHandle ? parseHandleOutput(stdout, args.includes("-p") ? Number(args[args.indexOf("-p") + 1]) : undefined,
+          { error: failure, stderrBytes }) : undefined;
+        resolve({ value: isHandle ? undefined : value, toolText: isHandle ? stdout : undefined, error: failure,
+          inventoryStatus: parsed?.status, recognizedHandleCount: parsed?.recognizedHandleCount, unrecognizedLineCount: parsed?.unrecognizedLineCount,
           compilerOutput: file.toLowerCase().endsWith("csc.exe") ? stdout.slice(0, 2048) : undefined,
-          stderr: stderr.slice(0, 1024), requested, started, ended: Date.now(), stdoutBytes: Buffer.byteLength(stdout) });
+          stderr: isHandle ? undefined : stderr.slice(0, 1024), stderrBytes, requested, started, ended: Date.now(), stdoutBytes: Buffer.byteLength(stdout) });
       });
       scanners.add(child);
     });
@@ -84,11 +91,12 @@ async function namedInventory(pid, deadline = Date.now() + 5000) {
     ? Promise.resolve({ error: { message: "Capture window elapsed; query omitted." } })
     : run(file, args, Math.min(cap, Math.max(1, deadline - Date.now())), true);
   const before = await query(executable, ["identity", String(pid)], 2000);
-  const tool = await query(handleExecutable, ["-accepteula", "-nobanner", "-p", String(pid)], 1500);
+  const tool = await query(handleExecutable, [...HANDLE_INVENTORY_OPTIONS, "-p", String(pid)], Math.max(1, deadline - Date.now()));
   const after = await query(executable, ["identity", String(pid)], 2000);
   const queries = { before, tool, after };
-  if (before.error || tool.error || after.error) return { error: "Identity or name query failed.", queries };
-  return { source: bindPipeNames(before.value?.process, after.value?.process, tool.toolText ?? ""), queries };
+  if (before.error || after.error) return { error: "Identity query failed.", queries };
+  const source = bindPipeNames(before.value?.process, after.value?.process, tool.toolText ?? "", tool);
+  return { source, error: source.error, queries };
 }
 async function inventory(event) {
   const result = await namedInventory(event.pid);
@@ -147,11 +155,11 @@ async function capture(event) {
     globalSearchStatus = "capture-window-expired";
     if (Date.now() < deadline) {
       // The fragment narrows enumeration only. Complete equality is required.
-      global = await run(handleExecutable, ["-accepteula", "-nobanner", "\\Device\\NamedPipe\\uv\\"],
+      global = await run(handleExecutable, [...HANDLE_INVENTORY_OPTIONS, "\\Device\\NamedPipe\\uv\\"],
         Math.min(1500, Math.max(1, deadline - Date.now())), true);
-      parsed = parseHandleOutput(global.toolText ?? "");
-      globalSearchStatus = global.error ? "failed" : "completed";
-      const candidates = parsed.processes.filter((source) => {
+      parsed = parseHandleOutput(global.toolText ?? "", undefined, global);
+      globalSearchStatus = parsed.status;
+      const candidates = (parsed.status === "inventory" ? parsed.processes : []).filter((source) => {
         const found = new Set(source.pipes.map((pipe) => pipe.name));
         return launch.endpoints.names.every((name) => found.has(name));
       });
@@ -174,6 +182,7 @@ async function capture(event) {
       before: result.queries.before.value?.process, after: result.queries.after.value?.process,
       queryStarted: result.queries.tool.started, queryEnded: result.queries.tool.ended,
       error: result.error ?? result.source?.error,
+      inventoryStatus: result.queries.tool.inventoryStatus,
     })) });
 }
 
