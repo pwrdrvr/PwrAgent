@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { createRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
+import { DEFAULT_PROJECT_FORGE_AUTOMATION, type BackendSummary, type NavigationThreadSummary } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../../lib/navigation-loaded-rows";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import { ProjectIndex, type ProjectIndexEntry } from "../ProjectIndex";
@@ -368,5 +368,54 @@ describe("Sidebar project index", () => {
     expect(screen.queryByRole("navigation", { name: "Project index" })).not.toBeInTheDocument();
     fireEvent.focus(screen.getByRole("button", { name: "Project index" }));
     expect(screen.getByText("Hide project index · Shown with two or more projects")).toBeInTheDocument();
+  });
+});
+
+describe("Project index Forge Automation", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("marks a project whose forge activity is paused, in its name too", () => {
+    renderIndex({
+      projects: entries.map((entry) => entry.key === "dir:harbor"
+        ? { ...entry, forgeActivityPaused: true } : entry),
+    });
+    const harbor = screen.getByRole("button", { name: "Jump to harbor, unread, forge activity paused" });
+    const glyph = harbor.querySelector(".project-index__paused");
+    expect(glyph).toHaveAttribute("aria-hidden", "true");
+    expect(glyph).toHaveAttribute("data-tooltip", "Forge activity paused");
+    expect(screen.getByRole("button", { name: "Jump to atlas-api" }).querySelector(".project-index__paused")).toBeNull();
+  });
+
+  it("asks for the project's menu on a right-click, at the pointer", () => {
+    const onOpenContextMenu = vi.fn();
+    renderIndex({ onOpenContextMenu });
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Jump to harbor, unread" }), {
+      clientX: 40,
+      clientY: 120,
+    });
+    expect(onOpenContextMenu).toHaveBeenCalledWith("dir:harbor", expect.objectContaining({ x: 40, y: 120 }));
+  });
+
+  it("opens the project header's menu, Forge Automation included, from the index", async () => {
+    const onSetProjectForgeAutomation = vi.fn(async () => undefined);
+    renderSidebar({ onSetProjectForgeAutomation });
+    const nav = screen.getByRole("navigation", { name: "Project index" });
+    fireEvent.contextMenu(within(nav).getByRole("button", { name: /^Jump to relay/ }));
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByRole("menuitemcheckbox", { name: "Pause Forge Activity" }))
+      .toHaveAttribute("aria-checked", "false");
+    expect(within(menu).getByRole("menuitem", { name: "Forge Automation…" })).toBeInTheDocument();
+  });
+
+  it("draws the pause glyph for a paused project", () => {
+    const paused = {
+      ...directory("relay", "t-relay"),
+      forgeAutomation: { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 1_000 },
+    };
+    renderSidebar({ directories: [directory("quill", "t-quill"), paused] });
+    const nav = screen.getByRole("navigation", { name: "Project index" });
+    expect(within(nav).getByRole("button", { name: /^Jump to relay.*, forge activity paused$/ })).toBeInTheDocument();
   });
 });

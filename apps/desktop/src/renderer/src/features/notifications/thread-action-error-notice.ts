@@ -35,6 +35,7 @@ export type ThreadActionErrorKind =
   | "archive-thread"
   | "create-thread"
   | "discard-launchpad"
+  | "forge-automation"
   | "rename-thread"
   | "reorder-sidebar"
   | "save-collapsed"
@@ -53,6 +54,7 @@ const THREAD_ACTION_ERROR_TITLES: Record<ThreadActionErrorKind, string> = {
   "archive-thread": "Archive failed",
   "create-thread": "Could not start thread",
   "discard-launchpad": "Discard failed",
+  "forge-automation": "Could not change Forge Automation",
   "rename-thread": "Rename failed",
   "reorder-sidebar": "Reorder failed",
   "save-collapsed": "Could not save collapsed state",

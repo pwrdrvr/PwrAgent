@@ -4479,6 +4479,13 @@ function DesktopAppShell(props: {
           onSetDirectoryThreadsCollapsed={
             navigation.setDirectoryThreadsCollapsed
           }
+          onSetProjectForgeAutomation={
+            desktopApi?.setProjectForgeAutomation
+              ? navigation.setProjectForgeAutomation
+              : undefined
+          }
+          onListProjectHeldWakeups={navigation.listProjectHeldWakeups}
+          onResolveProjectHeldWakeups={navigation.resolveProjectHeldWakeups}
           onRemoveDirectory={(directory) =>
             navigation.removeDirectory(directory.key)}
           onOpenForgePermissions={readRendererFederationTarget()
