@@ -3590,7 +3590,7 @@ describe("DesktopBackendRegistry", () => {
       const submitted = await registry.submitTurnIfIdle({ backend: "claude", threadId,
         input: [{ type: "text", text: "PwrAgent resumed this thread because its pull request watch saw the PR merged." }],
         origin: "automation", messageOrigin });
-      expect(submitted.status).toBe("started");
+      if (submitted.status !== "started") throw new Error(`Expected the wake to start, got ${submitted.status}`);
       await turnFinished.promise;
       const userItem = events.find((event) => event.notification.method === "item/completed"
         && (event.notification.params as { item: { type: string } }).item.type === "userMessage");
