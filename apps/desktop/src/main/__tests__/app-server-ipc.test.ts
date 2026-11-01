@@ -3014,6 +3014,31 @@ describe("app server ipc", () => {
       .resolves.toMatchObject({ ok: true });
   });
 
+  it("watches a PR requested by its pre-rename URL", async () => {
+    const attached = githubPr({
+      number: 3179, org: "pwrdrvr", repo: "PwrAgent", state: "pending",
+      headRefName: "fix/renamed-repo", headSha: "3".repeat(40),
+      explicitlyAttached: true,
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3179",
+    });
+    registerThreadPrStatusWatch.mockClear();
+    fetchPullRequestByUrl.mockImplementation(async ({ url }) =>
+      url === "https://github.com/pwrdrvr/PwrAgnt/pull/3179" ? attached : undefined
+    );
+    const response = await requestWatchForAttachedPr(attached, ["failure"], {
+      url: "https://github.com/pwrdrvr/PwrAgnt/pull/3179",
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: { pullRequestWatch: { watch: { prKey: "github.com/pwrdrvr/pwragent#3179", notifyOn: ["failure"] } } },
+    });
+    expect(fetchPullRequestByUrl).toHaveBeenCalledWith(expect.objectContaining({
+      url: "https://github.com/pwrdrvr/PwrAgnt/pull/3179",
+    }));
+    expect(registerThreadPrStatusWatch).toHaveBeenCalledOnce();
+  });
+
   it("watches a PR on a thread the owner navigation refresh has not listed yet", async () => {
     // A thread handed off mid-session attached its PR and asked for a
     // merge/close watch before any navigation refresh listed it. The watch
@@ -8298,6 +8323,144 @@ describe("app server ipc", () => {
         fetchedAt: expect.any(Number),
         refreshKey: requestKey,
       });
+    });
+  });
+
+  async function withRenamedRepositoryStore<T>(
+    prefix: string,
+    run: (fixture: {
+      store: InstanceType<typeof import("../state/overlay-store-sqlite").SqliteOverlayStore>;
+      refresh: (request: RefreshThreadPullRequestsRequest) => Promise<PrSummary[]>;
+    }) => Promise<T>,
+  ): Promise<T> {
+    const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
+    const { StateDb } = await import("../state/state-db");
+    const { SQLITE_WRITE_METRICS_ENV } = await import("../state/sqlite-write-metrics");
+    const { createTempStateDb, removeTempStateDbDir } = await import("./sqlite-test-utils");
+    const { appServerService } = await import("../ipc/app-server");
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb(prefix);
+    const db = StateDb.open(temp.dbPath);
+    const store = new SqliteOverlayStore(db);
+    const service = appServerService as unknown as {
+      getOverlayStore: () => typeof store;
+      pendingPrLookupRefreshes: Map<string, { promise: Promise<void> }>;
+    };
+    const overlay = vi.spyOn(service, "getOverlayStore").mockReturnValue(store);
+    // A user refresh answers from what is stored and runs the lookup in the
+    // background. Wait for that lookup, so each call is one whole refresh.
+    const refresh = async (request: RefreshThreadPullRequestsRequest) => {
+      const response = await appServerService.refreshThreadPullRequests(request);
+      await service.pendingPrLookupRefreshes.get(buildPrLookupKey(request))?.promise;
+      return response.prs;
+    };
+    try {
+      return await run({ store, refresh });
+    } finally {
+      overlay.mockRestore();
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+      vi.unstubAllEnvs();
+    }
+  }
+
+  const PRE_RENAME_PR_URL = "https://github.com/pwrdrvr/PwrAgnt/pull/3179";
+  const RENAMED_PR_URL = "https://github.com/pwrdrvr/PwrAgent/pull/3179";
+
+  it("collapses a renamed repository's duplicate PR once the forge names it", async () => {
+    // The agent attached #3179 by the repository's pre-rename URL while the
+    // branch lookup had already stored it under the new name. GitHub answers
+    // the old URL with the renamed PR; that answer must merge the two rows.
+    const { measureSqliteWrites } = await import("../state/sqlite-write-metrics");
+    const { expectSqliteWriteBudget } = await import("./fixtures/sqlite-write-budget");
+    await withRenamedRepositoryStore("renamed-repo-prs-", async ({ store, refresh }) => {
+      const request = {
+        backend: "codex",
+        threadId: "renamed-repo",
+        branch: "fix/renamed-repo",
+        directoryPaths: ["/repo/PwrAgent"],
+        trigger: "user",
+      } satisfies RefreshThreadPullRequestsRequest;
+      const earlierPr = githubPr({
+        number: 3171, org: "pwrdrvr", repo: "PwrAgent", state: "passing", lifecycleState: "merged",
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/3171", linkedDirectoryPaths: ["/repo/PwrAgent"],
+      });
+      const lookupPr = githubPr({
+        number: 3179, org: "pwrdrvr", repo: "PwrAgent", state: "pending", headRefName: "fix/renamed-repo",
+        url: RENAMED_PR_URL, linkedDirectoryPaths: ["/repo/PwrAgent"],
+      });
+      const typedPr = githubPr({
+        number: 3179, org: "pwrdrvr", repo: "PwrAgnt", state: "pending", url: PRE_RENAME_PR_URL,
+      });
+      const forgePr = githubPr({
+        number: 3179, org: "pwrdrvr", repo: "PwrAgent", state: "passing", headRefName: "fix/renamed-repo",
+        url: RENAMED_PR_URL,
+      });
+      await store.setThreadPullRequests({
+        backend: "codex", threadId: request.threadId, prs: [earlierPr, lookupPr],
+        fetchedAt: Date.now() - 120_000, refreshKey: buildThreadPrRequestKey(request),
+      });
+      await store.addThreadPullRequestReference({ backend: "codex", threadId: request.threadId, pr: typedPr });
+      expect((await store.getThreadOverlayState(request))?.prs?.map((pr) => pr.url)).toEqual([
+        earlierPr.url, RENAMED_PR_URL, PRE_RENAME_PR_URL,
+      ]);
+      detectPullRequestsForThread.mockResolvedValue([forgePr]);
+      fetchPullRequestByUrl.mockImplementation(async ({ url }) => url === PRE_RENAME_PR_URL ? forgePr : undefined);
+      const { writes } = await measureSqliteWrites(async () => {
+        await refresh(request);
+        await refresh(request);
+      });
+      expect(fetchPullRequestByUrl).toHaveBeenCalledWith(expect.objectContaining({ url: PRE_RENAME_PR_URL }));
+      const stored = (await store.getThreadOverlayState(request))?.prs ?? [];
+      expect(stored.map((pr) => pr.url)).toEqual([earlierPr.url, RENAMED_PR_URL]);
+      expect(stored[1]).toMatchObject({
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        number: 3179,
+        checkState: "passing",
+        explicitlyAttached: true,
+        linkedDirectoryPaths: ["/repo/PwrAgent"],
+      });
+      expect((await refresh(request)).map((pr) => pr.url)).toEqual([earlierPr.url, RENAMED_PR_URL]);
+      expect(publishLocalEvent).toHaveBeenCalledWith(expect.objectContaining({ notification: expect.objectContaining({
+        method: "thread/pullRequests/updated",
+        params: expect.objectContaining({ prs: [
+          expect.objectContaining({ url: earlierPr.url }),
+          expect.objectContaining({ url: RENAMED_PR_URL, explicitlyAttached: true }),
+        ] }),
+      }) }));
+      expectSqliteWriteBudget({ scenario: "renamed-repository-pr-collapse", writes,
+        note: "Two user refreshes of a thread holding one PR under its pre-rename and renamed URLs: the forge's answer collapses the rows in one threads commit, once; the repeat refresh adds no thread write. Aliases live in memory, so steady state is 0 MB/day.",
+      });
+    });
+  });
+
+  it("keeps a detached pre-rename PR detached after the forge renames it", async () => {
+    await withRenamedRepositoryStore("renamed-repo-detached-", async ({ store, refresh }) => {
+      const request = {
+        backend: "codex",
+        threadId: "renamed-repo-detached",
+        branch: "fix/renamed-repo",
+        directoryPaths: ["/repo/PwrAgent"],
+        trigger: "user",
+      } satisfies RefreshThreadPullRequestsRequest;
+      const typedPr = githubPr({
+        number: 3179, org: "pwrdrvr", repo: "PwrAgnt", state: "pending", url: PRE_RENAME_PR_URL,
+      });
+      const forgePr = githubPr({
+        number: 3179, org: "pwrdrvr", repo: "PwrAgent", state: "passing", url: RENAMED_PR_URL,
+      });
+      await store.addThreadPullRequestReference({ backend: "codex", threadId: request.threadId, pr: typedPr });
+      await store.detachThreadPullRequest({ backend: "codex", threadId: request.threadId, pr: typedPr });
+      detectPullRequestsForThread.mockResolvedValue([]);
+      fetchPullRequestByUrl.mockImplementation(async ({ url }) => url === PRE_RENAME_PR_URL ? forgePr : undefined);
+      await refresh(request);
+      expect(fetchPullRequestByUrl).toHaveBeenCalledWith(expect.objectContaining({ url: PRE_RENAME_PR_URL }));
+      const stored = await store.getThreadOverlayState(request);
+      expect(stored?.prs ?? []).toEqual([]);
+      expect(stored?.detachedPrKeys).toEqual(["github.com/pwrdrvr/pwragent#3179"]);
+      expect(await refresh(request)).toEqual([]);
+      expect((await store.getThreadOverlayState(request))?.prs ?? []).toEqual([]);
     });
   });
 
