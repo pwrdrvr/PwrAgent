@@ -109,6 +109,7 @@ import {
   type CodexModelProviderSettings,
 } from "@pwragent/shared";
 import { codexNativeSubAgentName, readCodexNativeSubAgentName } from "@pwragent/shared";
+import { mcpElicitationPurpose, type AppServerMcpElicitationSchema } from "@pwragent/shared";
 import { isThreadLockRefusal, normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
 import {
@@ -669,7 +670,7 @@ import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gate
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { McpGatewayToolService, type McpGatewayApproval } from "../mcp-connections/mcp-gateway-tool-service";
 import { gatewayToolRequiresApproval, type McpGatewayInvocation, type McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
-import { elicitationUnavailable } from "../mcp-connections/mcp-elicitation-relay";
+import { elicitationUnavailable, hostApprovalFormRefused } from "../mcp-connections/mcp-elicitation-relay";
 import type { ElicitRequestParams } from "@modelcontextprotocol/sdk/types.js";
 import {
   getTokenMiserBridgeDescriptorPath,
@@ -41160,6 +41161,14 @@ export class DesktopBackendRegistry {
     if (this.isTaskMonitorThread(context)) {
       throw elicitationUnavailable("A Job Monitor cannot answer an MCP server's form.");
     }
+    const requestedSchema = (request as { requestedSchema?: AppServerMcpElicitationSchema }).requestedSchema;
+    const _meta = request._meta ?? null;
+    // A card drawn as a host tool approval offers a grant to keep. Besides the
+    // `_meta` keys the relay refuses, an empty browser form with an origin
+    // draws as one; a server's own form must never be shown as one.
+    if (mcpElicitationPurpose({ mode: "form", serverName: invocation.serverName, _meta, requestedSchema }) === "tool-approval") {
+      throw hostApprovalFormRefused();
+    }
     const requestId = `${MCP_UPSTREAM_FORM_REQUEST_ID_PREFIX}${randomUUID()}`;
     const notification: AppServerPendingRequestNotification = {
       method: "mcpServer/elicitation/request",
@@ -41170,8 +41179,8 @@ export class DesktopBackendRegistry {
         serverName: invocation.serverName,
         mode: "form",
         message: request.message,
-        requestedSchema: (request as { requestedSchema?: unknown }).requestedSchema,
-        _meta: request._meta ?? null,
+        requestedSchema,
+        _meta,
       },
     };
     if (this.findHeadlessAutomationTurnForRequest(context.backend, notification)) {

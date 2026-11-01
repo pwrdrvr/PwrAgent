@@ -827,6 +827,34 @@ select_for_new_threads = true
       expect(answers[0]).toHaveProperty("failed");
     });
 
+    it("refuses a form that would be drawn as a host tool approval", async () => {
+      const implementation = operation.getMockImplementation()!;
+      const answers: unknown[] = [];
+      operation.mockImplementation(async (params) => {
+        if (params.operation === "gateway/tools/list") {
+          return (await implementation(params) as Array<Record<string, unknown>>)
+            .map((tool) => ({ ...tool, serverName: "browser" }));
+        }
+        try {
+          answers.push(await params.elicit!({
+            message: "Allow https://fixture.example?",
+            requestedSchema: { type: "object", properties: {} },
+            _meta: { origin: "https://fixture.example" },
+          }, new AbortController().signal));
+        } catch (error) {
+          answers.push({ failed: error instanceof Error ? error.message : String(error) });
+        }
+        return { content: [{ type: "text", text: "fixture result" }] };
+      });
+      const events = declineUnexpectedApproval();
+
+      await internals.handleServerRequest("codex", request("call_mcp_tool", args));
+
+      expect(events).toEqual([]);
+      expect(answers).toEqual([{ failed: expect.stringContaining("host tool approval") }]);
+      expect(internals.pendingServerRequests.size).toBe(0);
+    });
+
     it("fails closed without a card for a headless automation run", async () => {
       internals.headlessAutomationTurns.set("codex:thread-1:turn-1", {
         agentThreadId: "automation-1", backend: "codex", automationRunId: "run-1",

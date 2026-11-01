@@ -85,9 +85,17 @@ export function assertRelayableFormElicitation(params: ElicitRequestParams): voi
   const meta = params._meta;
   if (meta && typeof meta === "object"
     && RESERVED_APPROVAL_META_KEYS.some((key) => Object.hasOwn(meta, key))) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
-      "PwrAgent does not forward an MCP form that marks itself as a host tool approval.",
-    );
+    throw hostApprovalFormRefused();
   }
+}
+
+/**
+ * The error for a form that would be drawn as a host tool approval, which
+ * offers a grant to keep. A server's own form is never shown as one.
+ */
+export function hostApprovalFormRefused(): McpError {
+  return new McpError(
+    ErrorCode.InvalidParams,
+    "PwrAgent does not forward an MCP form that marks itself as a host tool approval.",
+  );
 }
