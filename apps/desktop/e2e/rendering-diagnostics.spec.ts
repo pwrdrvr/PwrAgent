@@ -3,6 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
+import { seedThreadSubAgents } from "./fixtures/sub-agent-state-seeding";
 import { tolerateTransientRpcFailure } from "./fixtures/transient-rpc-poll";
 import type { RenderingCaptureResult } from "../src/shared/rendering-diagnostics";
 
@@ -340,6 +342,128 @@ test("production usage warning settles without sustaining compositor frames", as
     console.log(JSON.stringify({ usageWarningFrames: {
       formerWithScanners, formerPingOnly, allPaused, settledPingOnly, settledWithScanners,
     } }));
+  } finally {
+    await app.close();
+  }
+});
+
+test("status dots dip from one shared timer and leave offscreen dots still", async () => {
+  // Five captures, 25 seconds of tracing in all.
+  test.setTimeout(90_000);
+  const app = await launchElectronApp({
+    fixturePath: path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/smoke/replay.fixture.json"),
+  });
+  try {
+    // Running sub-agents mount real `.status-dot--blink` rows in the main
+    // window, the surface a live capture found with six offscreen loops.
+    const now = Date.now();
+    seedThreadSubAgents({
+      stateDbPath: stateDbPathForHomeRoot(app.homeRoot),
+      subAgents: Array.from({ length: 6 }, (_, index) => ({
+        monitorId: `pulse-${index}`,
+        task: `Contrived running task ${index}`,
+        status: "running" as const,
+        createdAt: now - 60_000 - index,
+        updatedAt: now - 60_000 - index,
+        backend: "codex",
+        monitorThreadId: `pulse-thread-${index}`,
+        monitorTurnId: `pulse-turn-${index}`,
+      })),
+      threadId: "thread-smoke",
+    });
+    await app.window.reload();
+    await app.window.emulateMedia({ reducedMotion: "no-preference" });
+    await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
+    const strip = app.window.getByRole("button", { name: /^Active sub-agents, 6$/ });
+    await strip.click();
+    await expect(strip).toHaveAttribute("aria-expanded", "true");
+    const dots = app.window.locator(".live-strip__list .status-dot--blink");
+    await expect(dots).toHaveCount(6);
+    await app.window.evaluate(() => {
+      // Keep only the dots moving. The strip header's thinking scanner has its
+      // own loop, and the composer caret blinks on its own timer.
+      const style = document.createElement("style");
+      style.textContent = ".thinking-scanner { display: none !important; }";
+      document.head.append(style);
+      (document.activeElement as HTMLElement | null)?.blur();
+    });
+    const pid = await app.electronApp.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0]!.webContents.getOSProcessId());
+
+    type Summary = {
+      bufferUsage: { percentage: number };
+      samples: { state: { windows: { pid: number; renderer: {
+        animations: { state: [string, string, string, boolean, boolean] }[];
+      } | null }[] } }[];
+      trace: { pid: number; events: { name: string; count: number }[] }[];
+    };
+    const capture = async (seconds: number) => {
+      const result = await app.window.evaluate((seconds) => (window as unknown as { pwragent: {
+        captureRenderingDiagnostics: (seconds: number) => Promise<RenderingCaptureResult>;
+      } }).pwragent.captureRenderingDiagnostics(seconds), seconds);
+      const summary = JSON.parse(await readFile(result.summaryPath, "utf8")) as Summary;
+      expect(summary.bufferUsage.percentage).toBeLessThan(0.9);
+      const events = summary.trace.filter((process) => process.pid === pid).flatMap((process) => process.events);
+      const perSecond = (name: string) => Math.round(events.filter((event) => event.name === name)
+        .reduce((total, event) => total + event.count, 0) / seconds * 10) / 10;
+      const animations = summary.samples.flatMap((sample) => sample.state.windows)
+        .filter((window) => window.pid === pid)
+        .flatMap((window) => window.renderer?.animations ?? [])
+        .map((group) => group.state);
+      return {
+        drawFrames: perSecond("DrawFrame"),
+        beginFrames: perSecond("BeginFrame"),
+        paints: perSecond("Paint"),
+        animations,
+      };
+    };
+
+    // Baseline: the preference holds every dot at rest.
+    await app.window.emulateMedia({ reducedMotion: "reduce" });
+    const still = await capture(5);
+    expect(still.animations.filter(([, , playState, infinite]) => infinite && playState === "running")).toEqual([]);
+
+    // Two full 4.5s periods, so the capture holds two dips whatever its phase.
+    await app.window.emulateMedia({ reducedMotion: "no-preference" });
+    const pulses = await capture(9);
+    expect(pulses.animations).toContainEqual(["status-blink", ".status-dot", "running", false, true]);
+    expect(pulses.animations.some(([, , , infinite]) => infinite)).toBe(false);
+
+    // The former rule, restored in the same window.
+    await app.window.evaluate(() => {
+      const style = document.createElement("style");
+      style.id = "former-blink";
+      style.textContent = `@keyframes former-status-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+        .status-dot--blink { animation: former-status-blink 1.6s ease-in-out infinite; }`;
+      document.head.append(style);
+    });
+    const formerLoop = await capture(3);
+
+    // Every dot offscreen, as in a scrolled-away row or rail card.
+    await app.window.evaluate(() => {
+      const style = document.createElement("style");
+      style.textContent = ".live-strip__list .status-dot--blink { translate: 0 -10000px; }";
+      document.head.append(style);
+    });
+    await expect.poll(() => dots.evaluateAll((elements) =>
+      elements.every((element) => element.getBoundingClientRect().bottom < 0))).toBe(true);
+    const formerOffscreen = await capture(3);
+    await app.window.evaluate(() => document.getElementById("former-blink")!.remove());
+    const pulsesOffscreen = await capture(5);
+
+    console.log(JSON.stringify({ statusPulseFramesPerSecond: {
+      still, pulses, formerLoop, formerOffscreen, pulsesOffscreen,
+    } }, (key, value) => key === "animations" ? undefined : value));
+
+    // The dips draw, and the compositor sleeps between them.
+    expect(pulses.drawFrames).toBeGreaterThan(still.drawFrames + 5);
+    expect(formerLoop.beginFrames).toBeGreaterThan(pulses.beginFrames * 1.6);
+    // Offscreen, the former loop drew nothing and still woke every refresh;
+    // the shared timer starts no animation there at all.
+    expect(formerOffscreen.beginFrames).toBeGreaterThan(30);
+    expect(formerOffscreen.beginFrames).toBeGreaterThan(pulsesOffscreen.beginFrames * 4);
+    expect(pulsesOffscreen.beginFrames).toBeLessThanOrEqual(still.beginFrames + 3);
+    expect(pulsesOffscreen.animations.some(([name]) => name === "status-blink")).toBe(false);
   } finally {
     await app.close();
   }

@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { CodexEnvironmentActionRun } from "@pwragent/shared";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { statusPulseRef } from "../../lib/status-pulse";
 import {
   formatDurationMs,
   formatRunningDurationMs,
@@ -239,6 +240,7 @@ export function EnvActionRunEntry(props: {
           <span
             className="status-dot status-dot--active status-dot--blink"
             aria-hidden="true"
+            ref={statusPulseRef}
           />
         ) : null}
         <span className="composer__queued-env-action-summary-text">

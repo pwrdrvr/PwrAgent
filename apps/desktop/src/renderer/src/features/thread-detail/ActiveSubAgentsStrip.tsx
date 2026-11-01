@@ -10,6 +10,7 @@ import { SignalCount } from "../../components/SignalCount";
 import { ThinkingScanner } from "./ThinkingScanner";
 import { formatRunningDurationMs } from "../../lib/format-duration";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { statusPulseRef } from "../../lib/status-pulse";
 
 /**
  * `subAgentTone` treats both spellings as an error state, but
@@ -252,6 +253,7 @@ export function ActiveSubAgentsStrip(props: {
                         ? "status-dot status-dot--warning"
                         : "status-dot status-dot--active status-dot--blink"
                   }
+                  ref={failedRow || blockedRow ? undefined : statusPulseRef}
                 />
                 <span className="live-strip__item-text" title={label}>
                   {label}

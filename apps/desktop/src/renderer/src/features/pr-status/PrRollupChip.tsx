@@ -14,6 +14,7 @@ import type { PrSummary } from "@pwragent/shared";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { useHoverTransitionGrace } from "../../lib/useHoverTransitionGrace";
 import { TOOLTIP_HOVER_DELAY_MS, useViewportTooltip } from "../../lib/useViewportTooltip";
+import { statusPulseRef } from "../../lib/status-pulse";
 import { PrChip } from "./PrChip";
 import { PrStatusCard } from "./PrStatusCard";
 import {
@@ -265,6 +266,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
     "pr-chip--rollup",
     ...prChipModifierClasses(presentation),
   ].join(" ");
+  const dotRef = presentation.hasFailingChecksStillRunning ? statusPulseRef : undefined;
 
   return (
     <span
@@ -310,7 +312,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
             {/* The draft bar marks the lead PR, so it centers under its
                 dot and number rather than the whole pill. */}
             <span className="pr-chip__lead">
-              <span className="pr-chip__dot" aria-hidden="true" />
+              <span className="pr-chip__dot" aria-hidden="true" ref={dotRef} />
               <span className="pr-chip__label">{leadLabel}</span>
               {presentation.isDraft
                 ? <span className="pr-chip__draft-bar" aria-hidden="true" />
@@ -320,7 +322,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
           </>
         ) : (
           <>
-            <span className="pr-chip__dot" aria-hidden="true" />
+            <span className="pr-chip__dot" aria-hidden="true" ref={dotRef} />
             <span className="pr-chip__label">{prRollupLabel(props.prs)}</span>
             {presentation.isDraft
               ? <span className="pr-chip__draft-bar" aria-hidden="true" />
@@ -361,6 +363,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                 const status = behind
                   ? `${prStatusLabel(pr)} · ${behind}`
                   : prStatusLabel(pr);
+                const rowPresentation = resolvePrChipPresentation(pr);
                 return (
                   <li key={pr.url}>
                     <button
@@ -396,10 +399,13 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                         aria-hidden="true"
                         className={[
                           "pr-chip",
-                          ...prChipModifierClasses(resolvePrChipPresentation(pr)),
+                          ...prChipModifierClasses(rowPresentation),
                         ].join(" ")}
                       >
-                        <span className="pr-chip__dot" />
+                        <span
+                          className="pr-chip__dot"
+                          ref={rowPresentation.hasFailingChecksStillRunning ? statusPulseRef : undefined}
+                        />
                         <span className="pr-chip__label">{label}</span>
                       </span>
                       <span className="pr-rollup-popover__text">

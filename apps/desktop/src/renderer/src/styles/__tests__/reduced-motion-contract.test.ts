@@ -191,7 +191,7 @@ describe("app.css reduced-motion contract", () => {
     expect(reducedSelectors.has(".automations-table__disclosure")).toBe(false);
     expect(reducedSelectors.has(".settings-nav__sublist")).toBe(false);
     // While a rule that does settle the animation still registers.
-    expect(reducedSelectors.has(".status-dot--blink")).toBe(true);
+    expect(reducedSelectors.has(".settings-pending .pending-spinner")).toBe(true);
     expect(reducedSelectors.has(".thinking-scanner__beam")).toBe(true);
   });
 
