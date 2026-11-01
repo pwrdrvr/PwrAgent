@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState } from "react";
 import type {
   NavigationThreadSummary,
   PrSummary,
+  ThreadPrAutoFixState,
   ThreadPullRequestWatchEvent,
   ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
@@ -27,8 +28,18 @@ export type PrChipWatch = {
     notifyOn: readonly ThreadPullRequestWatchEvent[];
   };
   terminal?: { createdAt: number };
+  /** Auto-fix starts a repair turn on this thread when the PR fails CI. */
   autoFix?: boolean;
+  /**
+   * Auto-fix is on for the thread, but main will not wake it for this PR:
+   * the repair budget is paused, or another thread owns this PR's repairs.
+   */
+  autoFixBlocked?: PrAutoFixBlock;
 };
+
+export type PrAutoFixBlock =
+  | { reason: "paused" }
+  | { reason: "handled_by_other_thread"; threadTitle?: string };
 
 /** One local thread's active PR watches. */
 export type ThreadPrWatches = {
@@ -36,6 +47,11 @@ export type ThreadPrWatches = {
   watches: readonly ThreadPullRequestWatchSummary[];
   /** Keyed by `buildPullRequestStatusKey`, the key every watch carries. */
   byPrKey: ReadonlyMap<string, PrChipWatch>;
+  /**
+   * What Auto-fix does for each of the thread's PRs, by PR key, as main
+   * projects it. Absent when main sent no projection.
+   */
+  autoFixByPrKey?: ReadonlyMap<string, ThreadPrAutoFixState>;
 };
 
 export type ThreadPrWatchIndicatorsValue = {
@@ -116,7 +132,7 @@ export function useThreadPrWatchIndicators(desktopApi?: DesktopApi): ReadonlyMap
       try {
         const response = await desktopApi.manageThreadPrWatches!({ action: "active" });
         if (disposed || sequence !== latest || !response.ok) return;
-        const next = summarizeThreadPrWatches(response.active ?? []);
+        const next = summarizeThreadPrWatches(response.active ?? [], response.autoFix);
         // Rows read this through context; an unchanged thread keeps its entry,
         // and an unchanged list keeps its identity, so no chip re-renders.
         setIndicators((current) => reuseUnchanged(current, next));
@@ -143,8 +159,18 @@ export function isCiWatch(watch: ThreadPullRequestWatchSummary): boolean {
   return (watch.kind ?? "checks") === "checks";
 }
 
+/** The attempt a CI watch waits for. Rows from before `runAttempt` carry it on the baseline. */
+export function readWatchRunAttempt(watch: ThreadPullRequestWatchSummary): number | undefined {
+  return watch.runAttempt ?? watch.baseline?.runAttempt;
+}
+
+/**
+ * `autoFix` is main's Auto-fix projection, absent from an owner that predates
+ * it. A thread with Auto-fix states and no watch still gets an entry.
+ */
 export function summarizeThreadPrWatches(
   watches: readonly ThreadPullRequestWatchSummary[],
+  autoFix?: readonly ThreadPrAutoFixState[],
 ): ReadonlyMap<string, ThreadPrWatches> {
   const byThread = new Map<string, ThreadPullRequestWatchSummary[]>();
   for (const watch of watches) {
@@ -153,31 +179,50 @@ export function summarizeThreadPrWatches(
     if (items) items.push(watch);
     else byThread.set(key, [watch]);
   }
+  const autoFixByThread = new Map<string, Map<string, ThreadPrAutoFixState>>();
+  for (const state of autoFix ?? []) {
+    const key = buildThreadIdentityKey(state.backend, state.threadId);
+    if (!byThread.has(key)) byThread.set(key, []);
+    const states = autoFixByThread.get(key) ?? new Map<string, ThreadPrAutoFixState>();
+    states.set(state.prKey, state);
+    autoFixByThread.set(key, states);
+  }
   const summaries = new Map<string, ThreadPrWatches>();
   for (const [key, items] of byThread) {
     items.sort((left, right) => left.createdAt - right.createdAt);
     const byPrKey = new Map<string, PrChipWatch>();
     for (const watch of items) {
       const current = byPrKey.get(watch.prKey) ?? {};
+      const runAttempt = readWatchRunAttempt(watch);
       byPrKey.set(watch.prKey, isCiWatch(watch)
         ? {
             ...current,
             ci: {
-              ...(watch.baseline?.runAttempt !== undefined ? { runAttempt: watch.baseline.runAttempt } : {}),
+              ...(runAttempt !== undefined ? { runAttempt } : {}),
               createdAt: watch.createdAt,
               notifyOn: watch.notifyOn,
             },
           }
         : { ...current, terminal: { createdAt: watch.createdAt } });
     }
-    summaries.set(key, { watches: items, byPrKey });
+    summaries.set(key, {
+      watches: items,
+      byPrKey,
+      ...(autoFix ? { autoFixByPrKey: autoFixByThread.get(key) ?? NO_AUTO_FIX_STATES } : {}),
+    });
   }
   return summaries;
 }
 
+const NO_AUTO_FIX_STATES: ReadonlyMap<string, ThreadPrAutoFixState> = new Map();
+
 const AUTO_FIX_ONLY: PrChipWatch = { autoFix: true };
+const NO_CHIP_WATCH: PrChipWatch = {};
 // One object per watch entry, so a chip keeps its props across row renders.
 const withAutoFixCache = new WeakMap<PrChipWatch, PrChipWatch>();
+// Keyed by main's Auto-fix state object, which keeps its identity while the
+// thread's entry is unchanged, then by the watch entry.
+const withBlockedAutoFixCache = new WeakMap<ThreadPrAutoFixState, WeakMap<PrChipWatch, PrChipWatch>>();
 
 /**
  * The chip's `watch` prop. Identity is stable for unchanged data, so the
@@ -189,18 +234,49 @@ export function resolvePrChipWatch(
   pr: PrSummary,
   autoFixRepository: string | undefined,
 ): PrChipWatch | undefined {
-  const base = watches?.byPrKey.get(buildPullRequestStatusKey(pr));
+  const prKey = buildPullRequestStatusKey(pr);
+  const base = watches?.byPrKey.get(prKey);
   // Auto-fix repairs open PRs on the primary workspace's repository only; it
   // means nothing on a merged card or a linked directory's PR.
   if (
     resolveLifecycleState(pr) !== "open"
     || !pullRequestMatchesRepositoryKey(pr, autoFixRepository)
   ) return base;
+  // Main says when it will not repair here. No entry yet reads as active:
+  // the candidate list catches up on main's next refresh.
+  const autoFixState = watches?.autoFixByPrKey?.get(prKey);
+  if (autoFixState && autoFixState.state !== "active") {
+    return withBlockedAutoFix(base, autoFixState);
+  }
   if (!base) return AUTO_FIX_ONLY;
   let combined = withAutoFixCache.get(base);
   if (!combined) {
     combined = { ...base, autoFix: true };
     withAutoFixCache.set(base, combined);
+  }
+  return combined;
+}
+
+function withBlockedAutoFix(
+  base: PrChipWatch | undefined,
+  state: ThreadPrAutoFixState,
+): PrChipWatch {
+  let byBase = withBlockedAutoFixCache.get(state);
+  if (!byBase) {
+    byBase = new WeakMap();
+    withBlockedAutoFixCache.set(state, byBase);
+  }
+  const key = base ?? NO_CHIP_WATCH;
+  let combined = byBase.get(key);
+  if (!combined) {
+    const title = state.handledBy?.title?.trim();
+    combined = {
+      ...base,
+      autoFixBlocked: state.state === "paused"
+        ? { reason: "paused" }
+        : { reason: "handled_by_other_thread", ...(title ? { threadTitle: title } : {}) },
+    };
+    byBase.set(key, combined);
   }
   return combined;
 }
@@ -218,7 +294,11 @@ function reuseUnchanged(
   const merged = new Map<string, ThreadPrWatches>();
   for (const [key, entry] of next) {
     const previous = current.get(key);
-    if (previous && sameWatches(previous.watches, entry.watches)) {
+    if (
+      previous
+      && sameWatches(previous.watches, entry.watches)
+      && sameAutoFixStates(previous.autoFixByPrKey, entry.autoFixByPrKey)
+    ) {
       merged.set(key, previous);
     } else {
       merged.set(key, entry);
@@ -241,7 +321,27 @@ function sameWatches(
       && watch.notifyOn.join(",") === other.notifyOn.join(",")
       && watch.baseline?.outcome === other.baseline?.outcome
       && watch.baseline?.runAttempt === other.baseline?.runAttempt
+      && watch.runAttempt === other.runAttempt
       && watch.baseline?.failedCheckUrl === other.baseline?.failedCheckUrl
       && watch.prTitle === other.prTitle;
   });
+}
+
+function sameAutoFixStates(
+  left: ReadonlyMap<string, ThreadPrAutoFixState> | undefined,
+  right: ReadonlyMap<string, ThreadPrAutoFixState> | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  if (left.size !== right.size) return false;
+  for (const [prKey, state] of left) {
+    const other = right.get(prKey);
+    if (
+      !other
+      || state.state !== other.state
+      || state.handledBy?.backend !== other.handledBy?.backend
+      || state.handledBy?.threadId !== other.handledBy?.threadId
+      || state.handledBy?.title !== other.handledBy?.title
+    ) return false;
+  }
+  return true;
 }

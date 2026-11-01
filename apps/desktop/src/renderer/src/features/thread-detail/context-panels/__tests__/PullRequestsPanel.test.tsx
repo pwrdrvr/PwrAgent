@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   NavigationThreadSummary,
   PrSummary,
+  ThreadPrAutoFixState,
   ThreadPrWatchHistoryEntry,
   ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
@@ -272,6 +273,7 @@ describe("PullRequestsPanel", () => {
     function renderPanel(options: {
       thread?: NavigationThreadSummary;
       watches?: ThreadPullRequestWatchSummary[];
+      autoFix?: ThreadPrAutoFixState[];
       context?: Partial<ThreadPrWatchIndicatorsValue>;
       desktopApi?: Pick<DesktopApi, "manageThreadPrWatches">;
     } = {}) {
@@ -281,7 +283,7 @@ describe("PullRequestsPanel", () => {
       const thread = options.thread ?? autoFixThread([openPr]);
       render(
         <ThreadPrWatchIndicatorsContext.Provider value={{
-          byThreadKey: summarizeThreadPrWatches(options.watches ?? []),
+          byThreadKey: summarizeThreadPrWatches(options.watches ?? [], options.autoFix),
           stop,
           askAgentToWatchCi,
           ...options.context,
@@ -343,6 +345,32 @@ describe("PullRequestsPanel", () => {
       renderPanel({ context: { autoFixAvailable: false } });
       expect(within(screen.getByRole("listitem")).queryByText("Auto-fix")).toBeNull();
       expect(screen.queryByRole("button", { name: "Turn off Auto-fix for this thread" })).toBeNull();
+    });
+
+    it("says Auto-fix is paused or handled by another thread instead of claiming a wake", () => {
+      const state: ThreadPrAutoFixState = {
+        backend: "codex", threadId: "thread-1", prKey: ciWatch.prKey, state: "paused",
+      };
+      const paused = renderPanel({ autoFix: [state], context: { autoFixAvailable: true } });
+      let card = screen.getByRole("listitem");
+      expect(within(card).getByText("Auto-fix paused")).toBeInTheDocument();
+      expect(within(card).queryByText("Starts a repair turn when a new push fails CI.")).toBeNull();
+      // Paused, the opt-in still resumes here, so it can still be turned off.
+      fireEvent.click(within(card).getByRole("button", { name: "Turn off Auto-fix for this thread" }));
+      expect(paused.onSetThreadPrAutoDispatch).toHaveBeenCalledWith(false);
+      cleanup();
+
+      renderPanel({
+        autoFix: [{
+          ...state, state: "handled_by_other_thread",
+          handledBy: { backend: "codex", threadId: "thread-2", title: "Owns the repairs" },
+        }],
+        context: { autoFixAvailable: true },
+      });
+      card = screen.getByRole("listitem");
+      expect(within(card).getByText("Auto-fix handled by Owns the repairs")).toBeInTheDocument();
+      expect(within(card).queryByText("Starts a repair turn when a new push fails CI.")).toBeNull();
+      expect(within(card).queryByRole("button", { name: "Turn off Auto-fix for this thread" })).toBeNull();
     });
 
     it("hints at asking for a CI watch when nothing waits for CI", () => {

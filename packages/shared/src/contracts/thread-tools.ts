@@ -446,6 +446,14 @@ export type ThreadPullRequestWatchSummary = {
   /** Absent on rows written before terminal watches existed: those are `checks`. */
   kind?: ThreadPullRequestWatchKind;
   baseline?: ThreadPullRequestWatchBaseline;
+  /**
+   * The CI run attempt this watch waits for, when PwrAgent requested the
+   * re-run. Unlike the baseline's copy, it stays while checks run, and a
+   * push drops it. Rows written before it existed carry only the baseline's.
+   */
+  runAttempt?: number;
+  /** The re-run's workflow run, beside `runAttempt`. */
+  runId?: number;
   /** Absent means an agent: today only `watch_thread_pull_request` creates watches. */
   createdBy?: "agent";
   /** The head this CI watch was armed at before a push moved it. */

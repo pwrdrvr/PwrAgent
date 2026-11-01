@@ -5,6 +5,7 @@ import type {
   AgentEvent,
   NavigationThreadSummary,
   PrSummary,
+  ThreadPrAutoFixState,
   ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -74,6 +75,27 @@ describe("summarizeThreadPrWatches", () => {
     });
   });
 
+  it("keeps a re-run's attempt once the baseline clears, preferring the watch's own copy", () => {
+    // The baseline clears as soon as checks run; the attempt must outlive it.
+    const running = { ...ciWatch, baseline: undefined, runAttempt: 3 };
+    expect(summarizeThreadPrWatches([running]).get("codex:consumer")?.byPrKey.get(ciWatch.prKey))
+      .toMatchObject({ ci: { runAttempt: 3 } });
+    // Rows written before the top-level field carry it on the baseline only.
+    expect(summarizeThreadPrWatches([{ ...ciWatch, runAttempt: 4 }]).get("codex:consumer")
+      ?.byPrKey.get(ciWatch.prKey)).toMatchObject({ ci: { runAttempt: 4 } });
+  });
+
+  it("gives a thread with only Auto-fix states an entry", () => {
+    const state: ThreadPrAutoFixState = {
+      backend: "codex", threadId: "consumer", prKey: ciWatch.prKey, state: "paused",
+    };
+    const summary = summarizeThreadPrWatches([], [state]).get("codex:consumer");
+    expect(summary?.watches).toEqual([]);
+    expect(summary?.autoFixByPrKey?.get(ciWatch.prKey)).toBe(state);
+    // An owner that sends no projection leaves it absent.
+    expect(summarizeThreadPrWatches([ciWatch]).get("codex:consumer")).not.toHaveProperty("autoFixByPrKey");
+  });
+
   it("treats a row written before kinds existed as a CI watch", () => {
     const legacy = { ...ciWatch, kind: undefined, baseline: undefined };
     expect(summarizeThreadPrWatches([legacy]).get("codex:consumer")?.byPrKey.get(ciWatch.prKey))
@@ -93,6 +115,27 @@ describe("resolvePrChipWatch", () => {
     expect(resolvePrChipWatch(undefined, pr, REPOSITORY)).toBe(resolvePrChipWatch(undefined, pr, REPOSITORY));
     expect(resolvePrChipWatch(undefined, { ...pr, lifecycleState: "merged" }, REPOSITORY)).toBeUndefined();
     expect(resolvePrChipWatch(undefined, pr, undefined)).toBeUndefined();
+  });
+
+  it("says why Auto-fix will not wake the thread when main projects it paused or elsewhere", () => {
+    const paused: ThreadPrAutoFixState = {
+      backend: "codex", threadId: "consumer", prKey: ciWatch.prKey, state: "paused",
+    };
+    const pausedWatches = summarizeThreadPrWatches([ciWatch], [paused]).get("codex:consumer");
+    const blocked = resolvePrChipWatch(pausedWatches, pr, REPOSITORY);
+    expect(blocked).toMatchObject({ ci: { runAttempt: 2 }, autoFixBlocked: { reason: "paused" } });
+    expect(blocked).not.toHaveProperty("autoFix");
+    expect(resolvePrChipWatch(pausedWatches, { ...pr }, REPOSITORY)).toBe(blocked);
+
+    const elsewhere: ThreadPrAutoFixState = {
+      ...paused, state: "handled_by_other_thread",
+      handledBy: { backend: "codex", threadId: "owner", title: "Owns the repairs" },
+    };
+    expect(resolvePrChipWatch(summarizeThreadPrWatches([], [elsewhere]).get("codex:consumer"), pr, REPOSITORY))
+      .toEqual({ autoFixBlocked: { reason: "handled_by_other_thread", threadTitle: "Owns the repairs" } });
+    const active: ThreadPrAutoFixState = { ...paused, state: "active" };
+    expect(resolvePrChipWatch(summarizeThreadPrWatches([], [active]).get("codex:consumer"), pr, REPOSITORY))
+      .toEqual({ autoFix: true });
   });
 
   it("claims no Auto-fix for a PR outside the primary workspace's repository", () => {

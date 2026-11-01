@@ -15436,6 +15436,11 @@ export class DesktopBackendRegistry {
           this.codexClient.listNativeSubAgentThreads?.({ all: true }, { callerReason: "auto-archive" }) ?? [],
         ])).flat();
         const threads = [...codexThreads, ...await this.listAllInstalledAcpThreads(undefined, false)];
+        // One read for every thread a PR watch will wake.
+        const watchedThreadKeys = new Set(
+          (await this.overlayStore.listAllActivePrStatusWatches()).map((watch) =>
+            buildThreadIdentityKey(watch.backend, watch.threadId)),
+        );
         const candidates: ThreadArchiveCandidate[] = [];
         for (const backend of new Set(threads.map((thread) => thread.source))) {
           const backendThreads = threads.filter((thread) => thread.source === backend);
@@ -15446,6 +15451,7 @@ export class DesktopBackendRegistry {
             candidates.push({
               thread, overlay: overlays[thread.id],
               activeSubAgent: await this.hasArchiveActiveSubAgent(backend, thread.id),
+              activePrWatch: watchedThreadKeys.has(buildThreadIdentityKey(backend, thread.id)),
             });
           }
         }
@@ -15702,6 +15708,7 @@ export class DesktopBackendRegistry {
       },
       overlay: await this.overlayStore.getThreadOverlayState({ backend, threadId }),
       activeSubAgent: await this.hasArchiveActiveSubAgent(backend, threadId),
+      activePrWatch: (await this.overlayStore.listActiveThreadPrStatusWatches({ backend, threadId })).length > 0,
     };
   }
 

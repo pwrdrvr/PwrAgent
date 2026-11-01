@@ -6907,6 +6907,36 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return undefined;
   }
 
+  /**
+   * Every opted-in thread's Auto-fix candidacy, in election order within
+   * each PR: the first row for a PR is the thread Auto-fix wakes. Read-only.
+   */
+  async listPrAutoDispatchCandidates(): Promise<PrAutoDispatchCandidate[]> {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT pr_key, backend, thread_id, eligible_since
+         FROM pr_auto_dispatch_candidates
+         ORDER BY pr_key ASC, eligible_since ASC, backend ASC, thread_id ASC`,
+      )
+      .all() as Array<{
+        backend: ThreadOverlayState["backend"];
+        eligible_since: number;
+        pr_key: string;
+        thread_id: string;
+      }>;
+    return rows.flatMap((row) =>
+      this.getThread(buildThreadIdentityKey(row.backend, row.thread_id))
+        ?.prAutoDispatchEnabled === true
+        ? [{
+            backend: row.backend,
+            eligibleSince: row.eligible_since,
+            prKey: row.pr_key,
+            threadId: row.thread_id,
+          }]
+        : [],
+    );
+  }
+
   async resetThreadPrAutoDispatchForOperator(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -7913,6 +7943,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           failureHandledByAutoFix:
             existing.failureHandledByAutoFix
             && params.watch.failureHandledByAutoFix,
+          // A later re-run's attempt replaces the one the watch waited for.
+          ...(params.watch.runAttempt !== undefined
+            ? { runAttempt: params.watch.runAttempt }
+            : {}),
+          ...(params.watch.runId !== undefined ? { runId: params.watch.runId } : {}),
           ...(baseline ? { baseline } : {}),
         };
         this.stateDb.raw
@@ -8376,7 +8411,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           watch
           && !activeAtHead.get(row.backend, row.thread_id, row.pr_key, params.headSha)
         ) {
-          const { baseline: _baseline, ...rest } = watch;
+          // A run belongs to its head: the new head starts from attempt 1.
+          const {
+            baseline: _baseline,
+            runAttempt: _runAttempt,
+            runId: _runId,
+            ...rest
+          } = watch;
           const follower: ThreadPullRequestWatchSummary = {
             ...rest,
             watchId: randomUUID(),
@@ -11965,6 +12006,7 @@ export type OverlayStoreLike = Pick<
   | "syncThreadPrAutoDispatchCandidates"
   | "syncThreadPrAutoDispatchCandidatesBatch"
   | "getPrAutoDispatchCandidateWinner"
+  | "listPrAutoDispatchCandidates"
   | "resetThreadPrAutoDispatchForOperator"
   | "scheduleThreadPrAutoDispatch"
   | "beginThreadPrAutoDispatch"

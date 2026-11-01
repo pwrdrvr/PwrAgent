@@ -221,7 +221,10 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
                   <PullRequestWatchList
                     pr={pr}
                     watches={prWatches}
-                    autoFix={pullRequestMatchesRepositoryKey(pr, autoFixRepository)}
+                    autoFix={chipWatch
+                      ? chipWatch.autoFix === true
+                      : pullRequestMatchesRepositoryKey(pr, autoFixRepository)}
+                    autoFixBlocked={chipWatch?.autoFixBlocked}
                     ownerLabel={ownerLabel}
                     onStop={watchContext?.stop}
                     onTurnOffAutoFix={props.onSetThreadPrAutoDispatch

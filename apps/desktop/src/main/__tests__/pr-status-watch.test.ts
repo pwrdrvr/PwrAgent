@@ -744,6 +744,40 @@ describe("advanceThreadPrStatusWatches", () => {
     expect(moved).toMatchObject({ headSha: newHead });
     expect(moved).not.toHaveProperty("baseline");
   });
+
+  it("keeps the re-run's attempt while checks run, and drops it when a push moves the watch", async () => {
+    // The attempt lived only in the baseline, which clears as soon as checks
+    // run, so "attempt 2" vanished for the whole run it named.
+    await registerBaselineWatch({ runAttempt: 2, runId: 42 });
+    await store.advanceThreadPrStatusWatches({
+      prKey: buildPullRequestStatusKey(pr()), headSha: pr().headSha!, checksRunning: true, now: now + 1,
+    });
+    const [running] = await activeWatches();
+    expect(running).not.toHaveProperty("baseline");
+    expect(running).toMatchObject({ runAttempt: 2, runId: 42 });
+
+    const newHead = "b".repeat(40);
+    await store.advanceThreadPrStatusWatches({
+      prKey: buildPullRequestStatusKey(pr()), headSha: newHead, checksRunning: false, now: now + 2,
+    });
+    const [moved] = await activeWatches();
+    expect(moved).toMatchObject({ headSha: newHead });
+    expect(moved).not.toHaveProperty("runAttempt");
+    expect(moved).not.toHaveProperty("runId");
+  });
+
+  it("takes a later re-run's attempt when the watch is armed again at the same head", async () => {
+    const first = await registerBaselineWatch({ runAttempt: 2, runId: 42 });
+    const again = await store.registerThreadPrStatusWatch({
+      watch: ciWatch({ watchId: "again", runAttempt: 3, runId: 42 }),
+      now: now + 1,
+    });
+    expect(again).toMatchObject({
+      existed: true,
+      watch: { watchId: first.watchId, runAttempt: 3, runId: 42 },
+    });
+    expect((await activeWatches())[0]).toMatchObject({ runAttempt: 3 });
+  });
 });
 
 describe("cancelThreadPrStatusWatch", () => {

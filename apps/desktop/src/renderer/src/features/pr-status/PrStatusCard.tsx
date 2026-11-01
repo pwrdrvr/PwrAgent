@@ -330,6 +330,14 @@ function readWatchRows(watch: PrChipWatch | undefined): PrWatchRow[] {
   }
   if (watch.autoFix) {
     rows.push({ label: "Auto-fix", value: "on", muted: true });
+  } else if (watch.autoFixBlocked) {
+    rows.push({
+      label: "Auto-fix",
+      value: watch.autoFixBlocked.reason === "paused"
+        ? "paused"
+        : `handled by ${watch.autoFixBlocked.threadTitle ?? "another thread"}`,
+      muted: true,
+    });
   }
   return rows;
 }

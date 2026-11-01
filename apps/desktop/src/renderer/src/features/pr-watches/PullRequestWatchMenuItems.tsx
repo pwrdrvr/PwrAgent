@@ -3,6 +3,7 @@ import { buildPullRequestStatusKey } from "@pwragent/shared";
 import { resolveLifecycleState } from "../pr-status/pr-chip-state";
 import {
   isCiWatch,
+  readWatchRunAttempt,
   useThreadPrWatches,
   useThreadPrWatchIndicatorsContext,
 } from "./useThreadPrWatchIndicators";
@@ -35,7 +36,7 @@ export function PullRequestWatchMenuItems(props: {
   if (!(stop && (ciWatch || terminalWatch)) && !canAsk) {
     return null;
   }
-  const runAttempt = ciWatch?.baseline?.runAttempt;
+  const runAttempt = ciWatch ? readWatchRunAttempt(ciWatch) : undefined;
   return (
     <>
       <div className="thread-context-menu__separator" role="separator" />

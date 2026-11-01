@@ -38029,6 +38029,11 @@ div.composer-error-row__toggle {
   overflow-wrap: anywhere;
 }
 
+/* Auto-fix is on for the thread but will not wake it for this PR. */
+.pr-watch-list__row--muted .pr-watch-list__title {
+  color: var(--text-secondary);
+}
+
 .pr-watch-list__action,
 .pr-watch-list__hint-action {
   flex: 0 0 auto;

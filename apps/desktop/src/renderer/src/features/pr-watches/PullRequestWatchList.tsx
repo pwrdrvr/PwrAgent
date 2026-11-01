@@ -6,7 +6,11 @@ import type {
 } from "@pwragent/shared";
 import { EyeIcon, MergeIcon, PullRequestIcon } from "../../icons";
 import { describeCiOutcomes } from "../pr-status/PrStatusCard";
-import { isCiWatch } from "./useThreadPrWatchIndicators";
+import {
+  isCiWatch,
+  readWatchRunAttempt,
+  type PrAutoFixBlock,
+} from "./useThreadPrWatchIndicators";
 
 /** History rows one card shows; the rest stay on the owner. */
 const HISTORY_ROWS = 5;
@@ -16,6 +20,11 @@ type PullRequestWatchListProps = {
   /** This PR's active watches, oldest first. */
   watches: readonly ThreadPullRequestWatchSummary[];
   autoFix: boolean;
+  /**
+   * Auto-fix is on for the thread, but main will not wake it for this PR.
+   * The row says why instead of claiming a wake.
+   */
+  autoFixBlocked?: PrAutoFixBlock;
   /**
    * Set for a peer's thread: its watches run there, and no signed request can
    * stop one from here, so the list is read-only.
@@ -57,6 +66,7 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
     });
   };
   const historyRows = props.history?.slice(0, HISTORY_ROWS) ?? [];
+  const autoFixBlocked = props.autoFixBlocked;
 
   return (
     <div className="pr-watch-list">
@@ -68,9 +78,7 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
           </span>
           <span className="pr-watch-list__text">
             <span className="pr-watch-list__title">
-              {watch.baseline?.runAttempt !== undefined
-                ? `Waiting for CI · attempt ${watch.baseline.runAttempt}`
-                : "Waiting for CI"}
+              {describeCiWatchTitle(watch)}
             </span>
             <span className="pr-watch-list__sub">{describeCiWatch(watch, now)}</span>
           </span>
@@ -121,6 +129,36 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
             </span>
           </span>
           {!readOnly && props.onTurnOffAutoFix ? (
+            <button
+              type="button"
+              className="pr-watch-list__action"
+              aria-label="Turn off Auto-fix for this thread"
+              onClick={props.onTurnOffAutoFix}
+            >
+              Turn Off
+            </button>
+          ) : null}
+        </div>
+      ) : autoFixBlocked ? (
+        <div className="pr-watch-list__row pr-watch-list__row--muted">
+          <span className="pr-watch-list__icon" aria-hidden="true">
+            <PullRequestIcon size={12} />
+          </span>
+          <span className="pr-watch-list__text">
+            <span className="pr-watch-list__title">
+              {autoFixBlocked.reason === "paused"
+                ? "Auto-fix paused"
+                : `Auto-fix handled by ${autoFixBlocked.threadTitle ?? "another thread"}`}
+            </span>
+            <span className="pr-watch-list__sub">
+              {autoFixBlocked.reason === "paused"
+                ? "The repair budget is empty. Resume it from the safety notice."
+                : "That thread gets the repair turn when this PR fails CI."}
+            </span>
+          </span>
+          {/* Turning this thread's Auto-fix off changes nothing while another
+              thread owns the PR's repairs. Paused, it still resumes here. */}
+          {!readOnly && props.onTurnOffAutoFix && autoFixBlocked.reason === "paused" ? (
             <button
               type="button"
               className="pr-watch-list__action"
@@ -187,6 +225,11 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
       ) : null}
     </div>
   );
+}
+
+function describeCiWatchTitle(watch: ThreadPullRequestWatchSummary): string {
+  const runAttempt = readWatchRunAttempt(watch);
+  return runAttempt !== undefined ? `Waiting for CI · attempt ${runAttempt}` : "Waiting for CI";
 }
 
 function describeCiWatch(watch: ThreadPullRequestWatchSummary, now: number): string {

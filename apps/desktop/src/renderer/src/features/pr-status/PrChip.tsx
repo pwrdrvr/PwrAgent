@@ -133,6 +133,10 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
     Boolean(props.watch?.ci),
     Boolean(props.watch?.terminal),
     Boolean(props.watch?.autoFix),
+    props.watch?.autoFixBlocked?.reason,
+    props.watch?.autoFixBlocked?.reason === "handled_by_other_thread"
+      ? props.watch.autoFixBlocked.threadTitle
+      : undefined,
     watchStopHint,
   ].join("|");
   const pushedCardKeyRef = useRef<string | undefined>(undefined);

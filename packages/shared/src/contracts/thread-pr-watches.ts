@@ -41,10 +41,33 @@ export type ThreadPrWatchesErrorCode =
   | "federation_unsupported"
   | "invalid_arguments";
 
+/**
+ * Whether Auto-fix starts a repair turn on one opted-in local thread for one
+ * of its PRs. Main repairs a PR on one elected thread only, and not while the
+ * profile's repair budget is paused. `handled_by_other_thread` names the
+ * thread that won the election.
+ */
+export type ThreadPrAutoFixState = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  prKey: string;
+  state: "active" | "paused" | "handled_by_other_thread";
+  handledBy?: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    title?: string;
+  };
+};
+
 export type ThreadPrWatchesResponse =
   | {
       ok: true;
       active?: ThreadPullRequestWatchSummary[];
+      /**
+       * Sent with `active`. An entry exists only where Auto-fix can run. An
+       * owner that predates it sends none.
+       */
+      autoFix?: ThreadPrAutoFixState[];
       history?: ThreadPrWatchHistoryEntry[];
       cancelled?: boolean;
     }

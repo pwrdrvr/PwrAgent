@@ -129,6 +129,7 @@ import {
 import { ThreadPlaceholderHeader } from "./features/thread-detail/ThreadPlaceholderHeader";
 import { handoffLaunchpadComposer } from "./features/composer/launchpad-composer-handoff";
 import { hasComposerDraftContent } from "./features/composer/useComposerDraftStore";
+import { usePendingComposerInsert } from "./features/composer/usePendingComposerInsert";
 import { useRecoverableState, useRecoverableComposerDraftStore } from "./lib/RendererRecoveryState";
 import { readBootstrapLayoutPreferences } from "./lib/layout-preferences";
 import { useAppearance, type AppearanceController } from "./lib/useAppearance";
@@ -3309,37 +3310,24 @@ function DesktopAppShell(props: {
     }
   });
   // "Ask Agent to Watch CI" drafts into the thread's composer and never
-  // sends. From the sidebar it first selects the thread; the composer takes
-  // the request once it shows that thread.
-  const [composerInsertRequest, setComposerInsertRequest] =
-    useState<ThreadViewProps["composerInsertRequest"]>();
-  const composerInsertRequestIdRef = useRef(0);
-  const handleComposerInsertRequestHandled = useEventCallback((id: number) => {
-    setComposerInsertRequest((current) => current?.id === id ? undefined : current);
-  });
-  // Leaving the thread before its composer could take the request drops it,
-  // so it never lands in a draft the operator comes back to later.
-  const shownInsertRequestIdRef = useRef<number | undefined>(undefined);
-  useEffect(() => {
-    const request = composerInsertRequest;
-    if (!request) return;
-    if (mainView === "thread" && navigation.selectedItemKey === request.threadKey) {
-      shownInsertRequestIdRef.current = request.id;
-    } else if (shownInsertRequestIdRef.current === request.id) {
-      handleComposerInsertRequestHandled(request.id);
-    }
-  }, [composerInsertRequest, mainView, navigation.selectedItemKey, handleComposerInsertRequestHandled]);
+  // sends. It first shows the thread; the composer takes the request once
+  // it shows that thread. Showing anything else drops it, so it never lands
+  // in a draft the operator comes back to later.
+  const {
+    request: composerInsertRequest,
+    issue: issueComposerInsertRequest,
+    handled: handleComposerInsertRequestHandled,
+  } = usePendingComposerInsert(mainView === "thread" ? navigation.selectedItemKey : undefined);
   const askAgentToWatchCi = useEventCallback((thread: NavigationThreadSummary, pr: PrSummary) => {
     const threadKey = threadSummaryIdentityKey(thread);
-    setMainView("thread");
-    setComposerInsertRequest({
-      id: ++composerInsertRequestIdRef.current,
-      threadKey,
-      text: buildWatchCiRequestText(pr),
+    // Issued with the switch, not before it: Settings may ask to keep
+    // editing, and then nothing waits.
+    setMainView("thread", () => {
+      issueComposerInsertRequest(threadKey, buildWatchCiRequestText(pr));
+      if (navigation.selectedItemKey !== threadKey) {
+        selectThreadNavigation(thread);
+      }
     });
-    if (navigation.selectedItemKey !== threadKey) {
-      selectThreadNavigation(thread);
-    }
   });
   // Auto-fix rows claim a wake only where main can dispatch one. Until the
   // settings load, or in a federation window, this is unknown.
