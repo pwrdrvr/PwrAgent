@@ -46722,7 +46722,12 @@ button.composer__subthread-source-parent:hover {
      state survives the ring going still. */
   .composer__send-split-pill .pending-spinner,
   /* A to-do's running ring sits beside "Merging…" or "Starting…". */
-  .thread-todo-card__button--busy .pending-spinner {
+  .thread-todo-card__button--busy .pending-spinner,
+  /* A review card's Fix button swaps its arrow for a ring beside "Sending…"
+     or "Working…" and carries `aria-busy`, so it qualifies too. Keyed to the
+     busy attribute rather than the button class, which the idle Fix and
+     Mark handled buttons share. */
+  .thread-todo-card__button[aria-busy="true"] .pending-spinner {
     border-color: var(--accent);
     animation: none;
   }
