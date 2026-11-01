@@ -985,6 +985,13 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "renamed-repository-pr-collapse": {
+    "commits": 3,
+    "note": "Two user refreshes of a thread holding one PR under its pre-rename and renamed URLs: the lookup's own pr_lookup_cache and pr_status_cache writes plus one threads commit that collapses the rows, once per affected thread. Aliases live in memory: 0 MB/day after the collapse.",
+    "observedWalBytes": 37080,
+    "rowsChanged": 3,
+    "statements": 3
+  },
   "runtime-lease-dead-owner-takeover": {
     "commits": 7,
     "note": "observe one dead owner, wait one minute, replace all profile runtime leases",

@@ -482,6 +482,8 @@ import {
   prRepairDecisionTone,
 } from "../pr-status/pr-activity";
 import { PrLookupsInFlight } from "../pr-status/pr-lookups-in-flight";
+import { PullRequestRepositoryAliases } from "../pr-status/pr-repository-aliases";
+import { parsePullRequestReferenceUrl, type PullRequestReferenceIdentity } from "../pr-status/forge-reference";
 import { logPrAutoDispatchOutcome } from "../pr-status/pr-auto-dispatch-log";
 import {
   PrStatusWatchCoordinator,
@@ -1282,12 +1284,13 @@ function normalizePrWatchUrl(url: string | undefined): string | undefined {
 function filterDetachedPullRequests(
   prs: PrSummary[],
   detachedPrKeys: string[] | undefined,
+  canonicalizeKey: (key: string) => string = (key) => key,
 ): PrSummary[] {
   if (!detachedPrKeys?.length) {
     return prs;
   }
   const detached = new Set(
-    detachedPrKeys.map((key) => key.trim().toLowerCase()).filter(Boolean),
+    detachedPrKeys.map((key) => canonicalizeKey(key.trim().toLowerCase())).filter(Boolean),
   );
   return prs.filter((pr) => !detached.has(getPrStatusKey(pr)));
 }
@@ -1559,6 +1562,8 @@ class DesktopAppServerService {
   private readonly pendingPrOverlayWrites = new Map<string, Promise<void>>();
   private readonly prActivity = new PrActivityJournal();
   private readonly prLookupsInFlight = new PrLookupsInFlight();
+  /** Repository renames the forge has answered with. See its class. */
+  private readonly prRepositoryAliases = new PullRequestRepositoryAliases();
   private readonly prStatusTokenBucket = new PrStatusTokenBucket();
   private lastPrObservationTimestamp = 0;
   private prStatusRegistryLoaded = false;
@@ -4259,6 +4264,7 @@ class DesktopAppServerService {
             context.signal?.throwIfAborted();
             if (!this.takePrPollingToken("Agent explicit forge refresh")) throw new ForgeReadError("rate_limited", "The shared PR refresh budget is exhausted.");
             const pr = await fetcher.fetchPullRequestByUrl({ cwd: directories[0] ?? os.homedir(), url, onProviderFailure: () => { failed = true; } });
+            this.learnPullRequestRepository(url, pr);
             if (!pr) failed = true;
             else results.push(pr);
           }
@@ -4434,10 +4440,23 @@ class DesktopAppServerService {
       threadId,
       prs: overlayPrs,
     });
+    const matchesUrl = (url: string | undefined) => {
+      const requested = normalizePrWatchUrl(url);
+      return requested
+        ? attachedPrs.filter((pr) => normalizePrWatchUrl(pr.url) === requested)
+        : attachedPrs;
+    };
     const requestedUrl = normalizePrWatchUrl(args.url);
-    const matches = requestedUrl
-      ? attachedPrs.filter((pr) => normalizePrWatchUrl(pr.url) === requestedUrl)
-      : attachedPrs;
+    let matches = matchesUrl(args.url && this.prRepositoryAliases.canonicalizeUrl(args.url.trim()));
+    if (requestedUrl && matches.length === 0) {
+      // A renamed repository's old URL: ask the forge which PR it names.
+      const cwd = attachedPrs[0]?.linkedDirectoryPaths?.[0];
+      const resolved = await this.resolvePullRequestReference({
+        url: args.url!.trim(),
+        ...(cwd ? { cwd } : {}),
+      });
+      if (resolved) matches = matchesUrl(resolved.url);
+    }
     if (matches.length !== 1) {
       const message = requestedUrl
         ? "The requested pull request is not attached to this thread's primary workspace."
@@ -4683,11 +4702,23 @@ class DesktopAppServerService {
     const backend = request.backend ?? "codex";
     const prKey = getPrStatusKey(request.pr);
     const currentPr = this.prStatusRegistry.get(prKey)?.pr;
-    const overlay = await this.getOverlayStore().detachThreadPullRequest({
+    let overlay = await this.getOverlayStore().detachThreadPullRequest({
       backend,
       threadId: request.threadId,
       pr: request.pr,
     });
+    // A row still stored under a renamed repository's old name is the same
+    // PR; the client only saw its canonical chip.
+    for (const alias of (overlay.prs ?? []).filter((pr) =>
+      getPrStatusKey(pr) !== prKey
+      && getPrStatusKey(this.prRepositoryAliases.canonicalize(normalizePrSummary(pr))) === prKey
+    )) {
+      overlay = await this.getOverlayStore().detachThreadPullRequest({
+        backend,
+        threadId: request.threadId,
+        pr: alias,
+      });
+    }
     await this.getOverlayStore().cancelThreadPrStatusWatchesForPr({
       backend,
       threadId: request.threadId,
@@ -4792,6 +4823,7 @@ class DesktopAppServerService {
             prs,
             fetchedAt: latest.prsFetchedAt ?? 0,
             refreshKey: latest.prsRefreshKey,
+            ...this.detachedPrKeyCanonicalizer(),
           });
           await this.publishThreadPullRequestsUpdated({
             backend,
@@ -4804,7 +4836,11 @@ class DesktopAppServerService {
     }
     let knownPrs = this.mergePrHistory(existingPrs, currentLookupPrs);
     const visibleKnownPrs = (): PrSummary[] =>
-      filterDetachedPullRequests(knownPrs, existing?.detachedPrKeys);
+      filterDetachedPullRequests(
+        knownPrs,
+        existing?.detachedPrKeys,
+        (key) => this.prRepositoryAliases.canonicalizeKey(key),
+      );
     const statusFetchedAt = lookupEntry?.fetchedAt
       ?? (existingPrs.length > 0 || existingLookupMatches
         ? existing?.prsFetchedAt
@@ -5095,6 +5131,11 @@ class DesktopAppServerService {
           }),
       ),
     );
+    // The pairing with the URL asked for is how a renamed repository is
+    // learned: the forge answers its old URL under the new name.
+    refreshed.forEach((pr, index) => {
+      this.learnPullRequestRepository(retainedPrs[index]!.url, pr);
+    });
     return refreshed.filter((pr): pr is PrSummary => Boolean(pr))
       .map(normalizePrSummary);
   }
@@ -5391,6 +5432,7 @@ class DesktopAppServerService {
               // failed-provider observations must keep their old freshness.
               fetchedAt: params.incomplete ? latest?.prsFetchedAt ?? 0 : params.fetchedAt,
               refreshKey: subscriber.requestKey,
+              ...this.detachedPrKeyCanonicalizer(),
             });
             const persistedPrs = updated.prs ?? [];
             if ((updated.prsFetchedAt ?? 0) > params.fetchedAt) {
@@ -5469,6 +5511,7 @@ class DesktopAppServerService {
       prs: nextPrs,
       fetchedAt: params.fetchedAt,
       refreshKey: params.requestKey,
+      ...this.detachedPrKeyCanonicalizer(),
     });
     const persistedPrs = updated.prs ?? [];
     if ((updated.prsFetchedAt ?? 0) > params.fetchedAt) {
@@ -5750,19 +5793,96 @@ class DesktopAppServerService {
     await this.getOverlayStore().writePrLookupCacheEntry(entry);
   }
 
+  /**
+   * Rows under the forge's repository name with the registry's status, one per
+   * PR. A row stored under a renamed repository's old name and the same PR
+   * under the new name share one key here, so they merge: the first keeps its
+   * position, attachment intent and directory provenance are united.
+   */
   private canonicalizePrs(prs: PrSummary[]): PrSummary[] {
-    return prs.map((pr) => {
-      const normalized = normalizePrSummary(pr);
-      const canonical = this.prStatusRegistry.get(getPrStatusKey(normalized))?.pr;
-      if (!canonical) {
-        return normalized;
+    const merged: PrSummary[] = [];
+    const renamed: boolean[] = [];
+    const indexes = new Map<string, number>();
+    for (const pr of prs) {
+      const stored = normalizePrSummary(pr);
+      const aliased = this.prRepositoryAliases.canonicalize(stored);
+      const normalized = aliased === stored ? stored : normalizePrSummary(aliased);
+      const key = getPrStatusKey(normalized);
+      const status = this.prStatusRegistry.get(key)?.pr;
+      const row = status
+        ? normalizePrSummary({
+            ...status,
+            linkedDirectoryPaths: normalized.linkedDirectoryPaths,
+            ...(normalized.explicitlyAttached ? { explicitlyAttached: true } : {}),
+          })
+        : normalized;
+      const existingIndex = indexes.get(key);
+      if (existingIndex === undefined) {
+        indexes.set(key, merged.length);
+        merged.push(row);
+        renamed.push(aliased !== stored);
+        continue;
       }
-      return normalizePrSummary({
-        ...canonical,
-        linkedDirectoryPaths: normalized.linkedDirectoryPaths,
-        ...(normalized.explicitlyAttached ? { explicitlyAttached: true } : {}),
+      const existing = merged[existingIndex]!;
+      // Without a registry status, a row the forge stored under the current
+      // name is fresher than one rewritten from an old name.
+      const base = renamed[existingIndex] && aliased === stored ? row : existing;
+      renamed[existingIndex] = renamed[existingIndex]! && aliased !== stored;
+      merged[existingIndex] = normalizePrSummary({
+        ...base,
+        linkedDirectoryPaths: mergeLinkedDirectoryPaths(
+          existing.linkedDirectoryPaths,
+          row.linkedDirectoryPaths,
+        ),
+        ...((existing.explicitlyAttached || row.explicitlyAttached) ? { explicitlyAttached: true } : {}),
       });
+    }
+    return merged;
+  }
+
+  /** Store option that keeps detachments recorded under a renamed repository's old name. */
+  private detachedPrKeyCanonicalizer(): { canonicalizePrKey?: (key: string) => string } {
+    return this.prRepositoryAliases.hasRenames()
+      ? { canonicalizePrKey: (key) => this.prRepositoryAliases.canonicalizeKey(key) }
+      : {};
+  }
+
+  /** Record what the forge answered for a by-URL fetch. */
+  private learnPullRequestRepository(requestedUrl: string, returned: PrSummary | undefined): void {
+    if (!this.prRepositoryAliases.learn(requestedUrl, returned)) return;
+    const requested = parsePullRequestReferenceUrl(requestedUrl);
+    appServerLog.info("forge answered a pull request under another repository name", {
+      requested: requested ? `${requested.provider}/${requested.org}/${requested.repo}` : requestedUrl,
+      canonical: returned?.url,
     });
+  }
+
+  /**
+   * Ask the forge which repository a PR URL names now, for an attach. One
+   * by-URL fetch from the shared budget; undefined when it cannot answer.
+   */
+  async resolvePullRequestReference(params: {
+    url: string;
+    cwd?: string;
+  }): Promise<PullRequestReferenceIdentity | undefined> {
+    const requested = parsePullRequestReferenceUrl(params.url);
+    if (!requested) return undefined;
+    const known = parsePullRequestReferenceUrl(this.prRepositoryAliases.canonicalizeUrl(params.url));
+    if (known && (known.org !== requested.org || known.repo !== requested.repo)) {
+      return known;
+    }
+    if (!this.takePrPollingToken("Agent PR attach")) return undefined;
+    const pr = await this.getPrFetcher().fetchPullRequestByUrl({
+      cwd: params.cwd ?? os.homedir(),
+      url: params.url,
+    });
+    this.learnPullRequestRepository(params.url, pr);
+    const answered = parsePullRequestReferenceUrl(pr?.url);
+    return answered
+      && answered.provider === requested.provider
+      && answered.number === requested.number
+      ? answered
+      : undefined;
   }
 
   /**
@@ -8572,6 +8692,7 @@ class DesktopAppServerService {
     this.pendingThreadPullRequestRefreshes.clear();
     this.pendingEditCommitResolves.clear();
     this.prStatusRegistry.clear();
+    this.prRepositoryAliases.clear();
     this.lastPrObservationTimestamp = 0;
     this.prLookupRegistry.clear();
     this.pendingPrLookupRefreshes.clear();
@@ -9152,6 +9273,9 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setThreadPullRequestCanonicalizer(
     async (prs) =>
       await appServerService.canonicalizeStoredPullRequests(prs),
+  );
+  getDesktopBackendRegistry().setPullRequestReferenceResolver(
+    async (params) => await appServerService.resolvePullRequestReference(params),
   );
   getDesktopBackendRegistry().setThreadPrimaryGitRepositoryReader((backend, threadId) =>
     appServerService.readPrimaryGitRepository(backend, threadId)
@@ -10531,6 +10655,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   registry?.setThreadDependencyToolHandler(undefined);
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);
+  registry?.setPullRequestReferenceResolver(undefined);
   registry?.setThreadPrimaryGitRepositoryReader(undefined);
   registry?.setLocalPullRequestAuthorityResolver(undefined);
   registry?.setThreadPullRequestWatchToolHandler(undefined);

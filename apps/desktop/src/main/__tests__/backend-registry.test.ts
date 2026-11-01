@@ -50815,7 +50815,7 @@ script = "printf setup"
       overlayStore,
     });
     const resolver = params.resolver ? vi.fn(params.resolver) : undefined;
-    if (resolver) registry.setPullRequestReferenceResolver?.(resolver);
+    if (resolver) registry.setPullRequestReferenceResolver(resolver);
     const events: AgentEvent[] = [];
     registry.onEvent((event) => {
       events.push(event);
@@ -50883,7 +50883,6 @@ script = "printf setup"
       repo: "PwrAgent",
       number: 3179,
       url: "https://github.com/pwrdrvr/PwrAgent/pull/3179",
-      explicitlyAttached: true,
     });
     expect(published).toHaveLength(1);
     expect(published[0]).toHaveLength(1);

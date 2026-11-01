@@ -1198,6 +1198,7 @@ vi.mock("../app-server/backend-registry", () => {
     getLocalFilePrivateStorageRoots: () => [],
     setThreadPullRequestStatusToolHandler,
     setThreadPullRequestCanonicalizer,
+    setPullRequestReferenceResolver: vi.fn(),
     setThreadPrimaryGitRepositoryReader: vi.fn(),
     setLocalPullRequestAuthorityResolver,
     setThreadPullRequestWatchToolHandler,
@@ -8430,7 +8431,7 @@ describe("app server ipc", () => {
         ] }),
       }) }));
       expectSqliteWriteBudget({ scenario: "renamed-repository-pr-collapse", writes,
-        note: "Two user refreshes of a thread holding one PR under its pre-rename and renamed URLs: the forge's answer collapses the rows in one threads commit, once; the repeat refresh adds no thread write. Aliases live in memory, so steady state is 0 MB/day.",
+        note: "Two user refreshes of a thread holding one PR under its pre-rename and renamed URLs: the lookup's own pr_lookup_cache and pr_status_cache writes plus one threads commit that collapses the rows, once per affected thread. Aliases live in memory: 0 MB/day after the collapse.",
       });
     });
   });

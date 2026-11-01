@@ -6017,6 +6017,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     prs: PrSummary[];
     fetchedAt?: number;
     refreshKey?: string;
+    /**
+     * Maps a stored status key to the key its repository has now. A forge
+     * that renamed a repository answers its PRs under the new name, so a
+     * detachment recorded under the old one must keep filtering them.
+     */
+    canonicalizePrKey?: (key: string) => string;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const stored = this.getThread(threadKey);
@@ -6036,14 +6042,25 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     ) {
       return observed;
     }
-    const detachedPrKeys = normalizeDetachedPrKeys(current.detachedPrKeys);
+    const canonicalizePrKey = params.canonicalizePrKey ?? ((key: string) => key);
+    const explicitKeys = new Set((current.prs ?? [])
+      .filter((pr) => pr.explicitlyAttached)
+      .map((pr) => canonicalizePrKey(buildPullRequestStatusKey(pr))));
+    const currentKeys = new Set((current.prs ?? []).map(buildPullRequestStatusKey));
+    const detachedPrKeys = normalizeDetachedPrKeys(
+      normalizeDetachedPrKeys(current.detachedPrKeys).flatMap((key) => {
+        const canonical = canonicalizePrKey(key);
+        // A PR attached under its current name after its old name was
+        // detached is attached: the attach cleared only the key it knew.
+        return canonical !== key && currentKeys.has(canonical) && explicitKeys.has(canonical)
+          ? []
+          : [canonical];
+      }),
+    );
     const detachedPrs = mergePrSummariesByStatusKey(
       current.detachedPrs,
       collectDetachedPrs(params.prs, detachedPrKeys),
     );
-    const explicitKeys = new Set((current.prs ?? [])
-      .filter((pr) => pr.explicitlyAttached)
-      .map(buildPullRequestStatusKey));
     const nextState: ThreadOverlayState = {
       ...current,
       detachedPrKeys,
