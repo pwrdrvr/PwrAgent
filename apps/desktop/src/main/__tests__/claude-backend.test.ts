@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Options, Query, SDKMessage, SDKUserMessage, query } from "@anthropic-ai/claude-agent-sdk";
-import type { AgentEvent, BackendModelOption } from "@pwragent/shared";
+import type { AgentEvent, AppServerThreadMessageOrigin, BackendModelOption } from "@pwragent/shared";
 import { ClaudeBackend, ClaudeTurnActiveError } from "../claude/claude-backend";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { createClaudePermissionHandler, claudePermissionMode } from "../claude/claude-permissions";
@@ -1782,6 +1782,48 @@ describe("Claude SDK backend", () => {
     expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
       turn: { error: { message: "Claude exited before completing the turn." } },
     } });
+  });
+
+  it("labels live prompt and steer items with the sender PwrAgent gave", async () => {
+    // The registry saves the origin only after startTurn returns, which is
+    // after these items are emitted. The live item must carry it, or an open
+    // transcript shows a PwrAgent wake as the operator's message.
+    const finish = Promise.withResolvers<void>();
+    const f = await fixture(async function* () {
+      await finish.promise;
+      yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
+    });
+    const watch: AppServerThreadMessageOrigin = { kind: "pwragent", prAutomation: {
+      kind: "watch", prKey: "github.com/acme/widgets#42", prNumber: 42, headSha: "abc123", outcome: "merged",
+    } };
+    const suggestion: AppServerThreadMessageOrigin = { kind: "pwragent", systemReason: "monitor-job-suggestion" };
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const turn = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "PR merged" }], messageOrigin: watch });
+    const steered = await f.backend.steerTurn({ threadId, expectedTurnId: turn.turnId,
+      input: [{ type: "text", text: "Consider a monitor" }], messageOrigin: suggestion });
+    finish.resolve();
+    await f.waitForTurn();
+    const userItems = f.events.flatMap((event) => event.notification.method === "item/completed"
+      && (event.notification.params as { item: { type: string } }).item.type === "userMessage"
+      ? [(event.notification.params as { item: { id: string; origin?: unknown } }).item] : []);
+    expect(userItems).toEqual([
+      expect.objectContaining({ id: `user:${turn.turnId}`, origin: watch }),
+      expect.objectContaining({ id: steered.messageId, origin: suggestion }),
+    ]);
+  });
+
+  it("leaves the operator's own prompt without an origin", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hello" }] });
+    await f.waitForTurn();
+    const item = f.events.flatMap((event) => event.notification.method === "item/completed"
+      && (event.notification.params as { item: { type: string } }).item.type === "userMessage"
+      ? [(event.notification.params as { item: Record<string, unknown> }).item] : [])[0];
+    expect(item).toBeDefined();
+    expect(item).not.toHaveProperty("origin");
   });
 
   it("ends the turn at its result while a background command keeps the session open, then carries Claude's follow-up", async () => {

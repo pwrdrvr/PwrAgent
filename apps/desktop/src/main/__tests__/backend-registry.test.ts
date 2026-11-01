@@ -3555,6 +3555,55 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("emits a PwrAgent wake on a Claude thread with its origin, not as the operator's message", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-registry-"));
+    const turnFinished = Promise.withResolvers<AgentEvent>();
+    const events: AgentEvent[] = [];
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore,
+      pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store: new ClaudeSessionStore(path.join(root, "sessions")),
+        getSessionInfo: vi.fn().mockResolvedValue(undefined),
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+        query: ({ options = {} }) => {
+          async function* messages(): AsyncGenerator<ClaudeMessage> {
+            yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
+            yield { type: "result", subtype: "success", is_error: false, result: "Done." } as ClaudeMessage;
+          }
+          return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+        },
+      },
+    });
+    registry.onEvent((event) => {
+      events.push(event);
+      if (["turn/completed", "turn/failed", "turn/cancelled"].includes(event.notification.method)) turnFinished.resolve(event);
+    });
+    const messageOrigin: AppServerThreadMessageOrigin = { kind: "pwragent", prAutomation: {
+      kind: "watch", prKey: "github.com/acme/widgets#42", prNumber: 42, headSha: "abc123", outcome: "merged",
+    } };
+    try {
+      const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
+      const submitted = await registry.submitTurnIfIdle({ backend: "claude", threadId,
+        input: [{ type: "text", text: "PwrAgent resumed this thread because its pull request watch saw the PR merged." }],
+        origin: "automation", messageOrigin });
+      expect(submitted.status).toBe("started");
+      await turnFinished.promise;
+      const userItem = events.find((event) => event.notification.method === "item/completed"
+        && (event.notification.params as { item: { type: string } }).item.type === "userMessage");
+      expect(userItem?.notification.params).toMatchObject({ item: { origin: messageOrigin } });
+      expect(overlayStore.upsertThreadMessageOrigin).toHaveBeenCalledWith(expect.objectContaining({
+        backend: "claude", threadId, messageId: `user:${submitted.turnId}`, origin: messageOrigin,
+      }));
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each(["task notification", "registry shutdown"])("keeps a Claude thread busy for quit while its session outlives the turn, and revokes MCP grants as it closes (%s)", async (closure) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-registry-"));
     const turnFinished = Promise.withResolvers<AgentEvent>();

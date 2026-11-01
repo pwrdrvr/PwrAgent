@@ -10,6 +10,7 @@ import type {
   AgentEvent, AppServerAvailableCommandSummary, AppServerBackgroundTask, AppServerCollaborationModeRequest,
   AppServerPendingRequestNotification, AppServerReviewContext,
   AppServerThreadActivityEntry, AppServerThreadEntry, AppServerThreadImagePart, AppServerThreadMessageEntry,
+  AppServerThreadMessageOrigin,
   AppServerThreadMessagePart, AppServerThreadPlanEntry, AppServerThreadPlanStep, AppServerThreadReplay,
   AppServerThreadReviewEntry, AppServerThreadSummary,
   AppServerTurnInputItem, BackendModelOption, LinkedDirectorySummary, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode,
@@ -324,6 +325,11 @@ type ClaudeTurnParams = {
   attachedDirectories?: readonly LinkedDirectorySummary[];
   /** Variables the thread environment's setup captured, such as PATH. */
   shellEnvironment?: Record<string, string>;
+  /**
+   * Who sent the prompt when it was not the operator. The live user item
+   * carries it, so the transcript labels the message before any read.
+   */
+  messageOrigin?: AppServerThreadMessageOrigin;
 };
 
 type ClaudeTurnStart = { backend: "claude"; threadId: string; turnId: string };
@@ -786,7 +792,7 @@ export class ClaudeBackend {
       };
       this.starting.delete(threadId);
       this.sessions.set(threadId, current);
-      await this.beginTurn(current, turn, session, params.input);
+      await this.beginTurn(current, turn, session, params.input, params.messageOrigin);
       const { config } = current;
       // The environment's toolchain (PATH, NVM_DIR, …) reaches every command
       // Claude runs, as it does for Codex and ACP threads.
@@ -930,7 +936,7 @@ export class ClaudeBackend {
     const prompted = claudeDeferred();
     live.inputWrites = live.inputWrites.then(() => prompted.promise);
     try {
-      await this.beginTurn(live, turn, session, params.input);
+      await this.beginTurn(live, turn, session, params.input, params.messageOrigin);
       // The session closed while the turn opened; its prompt was never sent.
       if (live.closing) throw new Error("Claude stopped before the message was sent.");
       // The turn id doubles as the prompt's UUID, which a rewind targets.
@@ -1013,7 +1019,13 @@ export class ClaudeBackend {
   }
 
   /** Show the operator's message and open the desktop turn. */
-  private async beginTurn(live: LiveSession, turn: RunningTurn, session: ClaudeSession, input: AppServerTurnInputItem[]): Promise<void> {
+  private async beginTurn(
+    live: LiveSession,
+    turn: RunningTurn,
+    session: ClaudeSession,
+    input: AppServerTurnInputItem[],
+    origin?: AppServerThreadMessageOrigin,
+  ): Promise<void> {
     const threadId = session.thread.id;
     const parts = claudeUserMessageParts(input);
     const user: AppServerThreadMessageEntry = {
@@ -1041,7 +1053,7 @@ export class ClaudeBackend {
     } });
     await this.emit({ method: "item/completed", params: {
       threadId, turnId: turn.turnId,
-      item: { id: user.id, type: "userMessage", text: user.text, content: parts },
+      item: { id: user.id, type: "userMessage", text: user.text, content: parts, ...(origin ? { origin } : {}) },
     } });
   }
 
@@ -2627,6 +2639,7 @@ export class ClaudeBackend {
 
   async steerTurn(params: {
     threadId: string; expectedTurnId: string; input: AppServerTurnInputItem[]; delivery?: SteerTurnDelivery;
+    messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<{
     threadId: string; turnId: string; messageId: string;
   }> {
@@ -2675,7 +2688,10 @@ export class ClaudeBackend {
       await this.store.append(params.threadId, [entry]).catch(() => {});
       await this.emit({ method: "item/completed", params: {
         threadId: params.threadId, turnId: turn.turnId,
-        item: { id: messageId, type: "userMessage", text: entry.text, content: parts },
+        item: {
+          id: messageId, type: "userMessage", text: entry.text, content: parts,
+          ...(params.messageOrigin ? { origin: params.messageOrigin } : {}),
+        },
       } });
     });
     live.inputWrites = operation.catch(() => {});

@@ -21381,8 +21381,10 @@ export class DesktopBackendRegistry {
           : { type: "stdio" as const, command: server.command, args: server.args, env: server.env }]));
         const instructions = (await this.getThreadAgentMetadata(params))?.instructions;
         handedOver = true;
+        const messageOrigin = resolveThreadMessageOrigin(params);
         const result = await this.claudeBackend.startTurn({
           ...params, input, model: modelSettings.model, reasoningEffort: modelSettings.reasoningEffort,
+          messageOrigin,
           executionMode: params.executionMode ?? overlay?.executionMode,
           instructions,
           mcpServers,
@@ -21396,7 +21398,7 @@ export class DesktopBackendRegistry {
           onSessionClosed: revokeConnections,
         });
         await this.persistThreadMessageOrigin({ backend: "claude", threadId: params.threadId,
-          messageId: `user:${result.turnId}`, origin: resolveThreadMessageOrigin(params) });
+          messageId: `user:${result.turnId}`, origin: messageOrigin });
         return result;
       } catch (error) {
         // A live session shares the thread's grants, so it alone revokes them.
@@ -24370,7 +24372,7 @@ export class DesktopBackendRegistry {
       this.localFilePrivateStorageRoots,
     );
     if (params.backend === "claude") {
-      const result = await this.claudeBackend.steerTurn({ ...params, input });
+      const result = await this.claudeBackend.steerTurn({ ...params, input, messageOrigin });
       await this.persistThreadMessageOrigin({ backend: "claude", threadId: params.threadId,
         messageId: result.messageId, origin: messageOrigin });
       return { backend: "claude", threadId: result.threadId, turnId: result.turnId, disposition: "steered" };
