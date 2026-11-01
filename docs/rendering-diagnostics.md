@@ -146,6 +146,32 @@ instance before changing live state. Pause only the animation under investigatio
 and repeat the same collection. Existing React DevTools and hot-CPU diagnostics
 can then locate a JS/component source when native timeline counters warrant it.
 
+### Status dot pulses
+
+`.status-dot--blink`, `.rail-chip__dot--blink` and a checks-running PR chip's
+dot pulse from one shared timer (`lib/status-pulse.ts`), not a CSS loop. The
+snapshot names a pulse `status-blink` by its script animation `id`, with source
+`.status-dot`, `.rail-chip` or `.pr-chip`, and `infinite` false. A pulse runs
+1.6s of every 4.5s, so a one-second sample can correctly find none.
+
+The spec's status pulse test seeds six running sub-agents in the main window
+and hides the strip's thinking scanner, so only the dots move. It captures the
+dots at rest under reduced motion, pulsing, under the former infinite rule, and
+then offscreen under the former rule and under the pulse. Observed on Ubuntu
+x64 in Sandboxer with Electron 44.9.3 (2026-10-31), per second:
+
+| Main window, six dots | `DrawFrame`/s | `BeginFrame`/s |
+| --- | ---: | ---: |
+| At rest (reduced motion) | 2.4 | 4.6 |
+| Shared-timer pulses | 23.8 | 25.7 |
+| Former infinite loop | 60.3 | 60.3 |
+| Former loop, every dot offscreen | 1.0 | 60.0 |
+| Shared-timer pulses, every dot offscreen | 1.2 | 3.0 |
+
+The offscreen row is what a live v1.3.7 capture found: six `status-blink`
+loops drawing nothing and waking the compositor on every refresh. The resting
+frames come from the rows' once-a-second elapsed counters.
+
 ## Cost and privacy
 
 There are no timers, debugger attachments, trace sessions, IPC samples, or SQLite
