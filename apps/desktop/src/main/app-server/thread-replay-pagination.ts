@@ -4,9 +4,9 @@ import {
   type AppServerThreadEntry,
   type AppServerThreadReplay,
   isAcpBackendId,
-  mintEntryCursorPagination,
+  type ThreadReplayCursorIdSpace,
+  fitThreadReplayWithinByteBudget,
   pageThreadReplay,
-  replayWithEntries,
 } from "@pwragent/shared";
 
 import { getMainLogger } from "../log";
@@ -16,27 +16,7 @@ const threadReplayPaginationLog = getMainLogger(
   "pwragent:thread-replay-pagination",
 );
 
-// "page", not "entry": a page kept whole for a backend-owned cursor sheds
-// bytes by compacting entries that were not themselves oversized.
-const FEDERATION_OMITTED_ENTRY_TEXT =
-  "Content omitted because this page exceeded the federation frame limit.";
-
-/**
- * Which id space a replay's pagination cursor lives in.
- *
- * A cursor is only ever handed back to whoever can resolve it, so the two
- * spaces never mix:
- *
- * - `provider-cursor` — the backend paginates natively and minted the cursor
- *   itself. For Codex that is an opaque `thread/turns/list` cursor, not a
- *   transcript entry id, so nothing downstream may substitute an entry id for
- *   it.
- * - `entry-id` — the backend does not paginate, so this module synthesizes
- *   pages and names the cursor after a transcript entry. Only entries the
- *   provider owns qualify; a read resolves `before` against the provider's own
- *   replay, where an overlay-minted id does not exist.
- */
-export type ThreadReplayCursorIdSpace = "entry-id" | "provider-cursor";
+export type { ThreadReplayCursorIdSpace } from "@pwragent/shared";
 
 /**
  * Whose id space a backend's own page cursor lives in.
@@ -88,89 +68,15 @@ export function fitNormalizedReplayWithinByteBudget(params: {
   maxBytes: number;
   measureBytes: (replay: AppServerThreadReplay) => number;
 }): AppServerThreadReplay {
-  if (params.measureBytes(params.replay) <= params.maxBytes) {
-    return params.replay;
-  }
-
-  // A natively paginated replay carries the backend's own cursor, which is not
-  // a transcript entry id at all — Codex hands back an opaque
-  // `thread/turns/list` cursor. Nothing here can improve on it and nothing may
-  // substitute an entry id for it, so the page's boundaries are the backend's
-  // to keep: shrink it by compacting entries in place rather than by dropping
-  // them, which would leave the preserved cursor naming a boundary the page no
-  // longer has and silently strand everything between the two.
-  if (params.cursorIdSpace === "provider-cursor") {
-    return compactReplayWithinByteBudget(params);
-  }
-
-  // Every entry the trim removes from the front is one the reader can still
-  // ask for, because the cursor this mints names the new page start.
-  let entries = params.replay.entries;
-  while (entries.length > 1) {
-    entries = entries.slice(1);
-    const candidate = replayWithEntries(
-      params.replay,
-      entries,
-      mintedCursorPagination(entries, true),
-    );
-    if (params.measureBytes(candidate) <= params.maxBytes) {
-      return candidate;
-    }
-  }
-
-  const oversizedEntry = entries[0];
-  if (oversizedEntry) {
-    const candidate = replayWithEntries(
-      params.replay,
-      [compactOversizedEntry(oversizedEntry)],
-      // Classify the entry as it arrived. Compaction rewrites an activity's
-      // summary, and a usage row matched by summary rather than by id would
-      // read as provider-owned afterwards — the overlay-id cursor this module
-      // exists to prevent.
-      mintedCursorPagination(
-        [oversizedEntry],
-        params.replay.pagination.hasPreviousPage || params.replay.entries.length > 1,
-      ),
-    );
-    if (params.measureBytes(candidate) <= params.maxBytes) {
-      return candidate;
-    }
-  }
-
-  return replayWithEntries(params.replay, [], mintedCursorPagination([], false));
+  return fitThreadReplayWithinByteBudget({
+    ...params,
+    isCursorEntry: isProviderCursorEntry,
+  });
 }
 
 /**
- * Fits a page whose boundaries belong to the backend.
- *
- * The entry set is what the backend's cursor is defined against, so it is kept
- * whole and the oversized entries inside it are replaced with the omitted-entry
- * marker, oldest first. The reader sees which rows were dropped and can still
- * page back from exactly where the backend said.
- */
-function compactReplayWithinByteBudget(params: {
-  replay: AppServerThreadReplay;
-  maxBytes: number;
-  measureBytes: (replay: AppServerThreadReplay) => number;
-}): AppServerThreadReplay {
-  const entries = [...params.replay.entries];
-  for (let index = 0; index < entries.length; index += 1) {
-    entries[index] = compactOversizedEntry(entries[index]!);
-    const candidate = replayWithEntries(
-      params.replay,
-      [...entries],
-      params.replay.pagination,
-    );
-    if (params.measureBytes(candidate) <= params.maxBytes) {
-      return candidate;
-    }
-  }
-
-  return replayWithEntries(params.replay, [], params.replay.pagination);
-}
-
-/**
- * Names the page's first **provider-owned** entry, not simply its first entry.
+ * A page's cursor names its first **provider-owned** entry, not simply its
+ * first entry.
  *
  * `before` is resolved against the provider's own replay, which never contains
  * an overlay-minted row, so an overlay id as a cursor is a cursor no read can
@@ -185,57 +91,6 @@ function compactReplayWithinByteBudget(params: {
  * sentinel would keep firing it, and each request would resolve having loaded
  * nothing.
  */
-function mintedCursorPagination(
-  entries: AppServerThreadEntry[],
-  hasPreviousPage: boolean,
-): AppServerThreadReplay["pagination"] {
-  return mintEntryCursorPagination(entries, hasPreviousPage, isProviderCursorEntry);
-}
-
 function isProviderCursorEntry(entry: AppServerThreadEntry): boolean {
   return !isOverlayOwnedTranscriptEntry(entry);
-}
-
-function compactOversizedEntry(entry: AppServerThreadEntry): AppServerThreadEntry {
-  switch (entry.type) {
-    case "message":
-      return {
-        type: "message",
-        id: entry.id,
-        role: entry.role,
-        text: FEDERATION_OMITTED_ENTRY_TEXT,
-        ...(entry.createdAt ? { createdAt: entry.createdAt } : {}),
-        ...(entry.phase ? { phase: entry.phase } : {}),
-        ...(entry.turn ? { turn: entry.turn } : {}),
-      };
-    case "activity":
-      return {
-        type: "activity",
-        id: entry.id,
-        summary: FEDERATION_OMITTED_ENTRY_TEXT,
-        details: [],
-        ...(entry.createdAt ? { createdAt: entry.createdAt } : {}),
-        ...(entry.tone ? { tone: entry.tone } : {}),
-        ...(entry.status ? { status: entry.status } : {}),
-        ...(entry.turn ? { turn: entry.turn } : {}),
-      };
-    case "plan":
-      return {
-        type: "plan",
-        id: entry.id,
-        markdown: FEDERATION_OMITTED_ENTRY_TEXT,
-        steps: [],
-        ...(entry.createdAt ? { createdAt: entry.createdAt } : {}),
-        ...(entry.turn ? { turn: entry.turn } : {}),
-      };
-    case "review":
-      return {
-        type: "review",
-        id: entry.id,
-        review: FEDERATION_OMITTED_ENTRY_TEXT,
-        ...(entry.createdAt ? { createdAt: entry.createdAt } : {}),
-        ...(entry.status ? { status: entry.status } : {}),
-        ...(entry.turn ? { turn: entry.turn } : {}),
-      };
-  }
 }

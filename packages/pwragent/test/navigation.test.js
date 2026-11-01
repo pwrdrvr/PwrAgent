@@ -102,6 +102,30 @@ test("federated transcript reads return the newest page and page back by cursor"
   const whole = (await backend.handle("readThread", { threadId: "thread" })).replay;
   assert.equal(whole.entries.length, 6, "an unbounded read still returns the whole transcript");
   assert.equal((await backend.readThread("thread")).replay.entries.length, 6, "handoff export reads stay unpaged");
+  assert.deepEqual((await backend.handle("readThread", { threadId: "thread", includeTurns: false })).replay.entries, []);
+  for (const before of ["", "missing"]) {
+    const unresolved = (await backend.handle("readThread", { threadId: "thread", limit: 1, before })).replay;
+    assert.deepEqual(unresolved.entries, [], `cursor ${JSON.stringify(before)} must not restart at the newest page`);
+    assert.equal(unresolved.pagination.hasPreviousPage, false);
+  }
+});
+
+test("federated transcript pages fit the frame budget and keep a cursor to the trimmed entries", async (t) => {
+  const backend = backendFixture(t, new Map([["job", job("job", "thread", "2026-01-01T00:00:00.000Z")]]));
+  backend.replayByteBudget = 20_000;
+  backend.runtime.codex = { request: async () => ({ thread: { turns: [{ id: "turn-1", status: "completed", items: [
+    { id: "user-1", type: "userMessage", content: [{ type: "text", text: "Run it" }] },
+    { id: "command-1", type: "commandExecution", command: "find /", aggregatedOutput: "x".repeat(200_000), status: "completed" },
+    { id: "answer-1", type: "agentMessage", text: "Done" },
+  ] }] } }) };
+  const response = await backend.handle("readThread", { threadId: "thread", limit: 1 });
+  assert.ok(Buffer.byteLength(JSON.stringify(response)) <= backend.replayByteBudget);
+  assert.deepEqual(response.replay.entries.map((entry) => entry.id), ["answer-1"]);
+  assert.deepEqual(response.replay.pagination, { supportsPagination: true, hasPreviousPage: true, previousCursor: "answer-1" });
+  const older = await backend.handle("readThread", { threadId: "thread", limit: 1, before: "answer-1" });
+  assert.ok(Buffer.byteLength(JSON.stringify(older)) <= backend.replayByteBudget);
+  assert.deepEqual(older.replay.entries.map((entry) => entry.id), ["command-1"], "the oversized entry is compacted, not lost");
+  assert.match(older.replay.entries[0].summary, /exceeded the federation frame limit/);
 });
 
 test("seen acknowledgements retain the displayed update watermark across a newer result and restart", async (t) => {

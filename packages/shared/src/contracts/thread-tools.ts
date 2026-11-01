@@ -146,8 +146,8 @@ export type ReadThreadToolArgs = {
    */
   before?: string;
   /**
-   * Maximum transcript entries to return. Implementations clamp this to a
-   * bounded product limit.
+   * Maximum transcript entries to return. The newest entries of the page are
+   * kept. Implementations clamp this to a bounded product limit.
    */
   limit?: number;
   /**
@@ -676,6 +676,14 @@ export type ThreadReadResult = {
   maxCharsPerEntry: number;
   entries?: ThreadReadEntrySummary[];
   messages?: ThreadReadMessageSummary[];
+  /**
+   * Earlier entries of this page left out to honor `limit`. The pagination
+   * cursor still starts before them, so read again with a larger `limit` to
+   * see them.
+   */
+  omittedEntries?: number;
+  /** Earlier messages of this page left out to honor `limit`. */
+  omittedMessages?: number;
   lastUserMessage?: string;
   lastAssistantMessage?: string;
   pagination: AppServerThreadReplayPagination;
