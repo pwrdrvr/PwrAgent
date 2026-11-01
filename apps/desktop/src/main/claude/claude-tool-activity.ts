@@ -105,14 +105,25 @@ function claudeArtifactDetail(params: {
 }
 
 /**
- * The row of an artifact call Claude Code answered. A publish, including one
- * that creates an artifact from a type, names the page and links to it. Its
- * result text is instructions for the model, so the row keeps the link and
- * not the text. A read names the page it read.
+ * Artifact actions whose result the operator reads: listings, comments and
+ * data. Any other result, such as a quickstart's or a publish's, is written
+ * for the model, and a read returns the page's raw HTML.
  */
-export function claudeArtifactResult(detail: AppServerThreadActivityDetail, action: string, result: unknown): {
-  detail: AppServerThreadActivityDetail; keepOutput: boolean;
-} | undefined {
+const ARTIFACT_OPERATOR_OUTPUT = new Set(["list", "comments", "read_db", "list_files", "list_assets"]);
+
+/** Whether a successful artifact call's row shows the result text. */
+export function claudeArtifactShowsOutput(action: string): boolean {
+  return ARTIFACT_OPERATOR_OUTPUT.has(action);
+}
+
+/**
+ * The row of an artifact call Claude Code answered. A publish, including one
+ * that creates an artifact from a type, names the page and links to it. A
+ * read names the page it read.
+ */
+export function claudeArtifactResult(
+  detail: AppServerThreadActivityDetail, action: string, result: unknown,
+): AppServerThreadActivityDetail | undefined {
   if (!result || typeof result !== "object" || (action !== "publish" && action !== "read")) return undefined;
   const record = result as Record<string, unknown>;
   const page = action === "read" ? record.read : record;
@@ -121,7 +132,7 @@ export function claudeArtifactResult(detail: AppServerThreadActivityDetail, acti
   if (!url) return undefined;
   const title = stringField(page as Record<string, unknown>, "title");
   const verb = action === "read" ? "Read" : "Published";
-  return { detail: { ...detail, url, ...(title ? { label: `${verb} ${title}` } : {}) }, keepOutput: action === "read" };
+  return { ...detail, url, ...(title ? { label: `${verb} ${title}` } : {}) };
 }
 
 /**

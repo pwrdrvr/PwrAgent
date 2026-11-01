@@ -38,8 +38,11 @@ PwrAgent sets it.
   (`claudeArtifactResult` in [claude-tool-activity.ts](claude-tool-activity.ts)).
   The link opens through the normal external-link path. Do not embed
   claude.ai in a webview: the page needs the operator's claude.ai session.
-- A publish's result text is instructions for the model, so a published row
-  keeps only the link. A failed call keeps its output.
+- Most artifact results are written for the model: a quickstart's or a
+  publish's instructions run to tens of thousands of characters, and a read
+  returns raw HTML. A successful row keeps its result text only for a listing,
+  comments or data (`claudeArtifactShowsOutput`). A failed call keeps its
+  output.
 - Artifact permission requests carry Claude Code's own question in
   `decisionReason`, and CLI-only `__artifact…` fields in their input.
   The approval card shows the question, and the fields go back to the CLI

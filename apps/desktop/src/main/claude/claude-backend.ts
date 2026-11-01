@@ -32,8 +32,9 @@ import { backUpRewindFiles, recordRewoundFiles, restoreRewindFiles } from "./cla
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 import { ClaudeTaskTracker, claudeTaskRow, type ClaudeTaskSettlement } from "./claude-tasks";
 import {
-  CLAUDE_ARTIFACT_TOOLS, CLAUDE_TODO_TOOL, claudeArtifactAction, claudeArtifactResult, claudeFileDiff, claudeShellCommand,
-  claudeTodoSteps, claudeToolCallArguments, claudeToolCallDetail, claudeToolDetail, claudeToolResultContent, claudeTurnDiff,
+  CLAUDE_ARTIFACT_TOOLS, CLAUDE_TODO_TOOL, claudeArtifactAction, claudeArtifactResult, claudeArtifactShowsOutput,
+  claudeFileDiff, claudeShellCommand, claudeTodoSteps, claudeToolCallArguments, claudeToolCallDetail, claudeToolDetail,
+  claudeToolResultContent, claudeTurnDiff,
 } from "./claude-tool-activity";
 import { normalizeClaudeTitle, requestClaudeTitle, type ClaudeTitleQuery } from "./claude-titles";
 import {
@@ -2078,11 +2079,11 @@ export class ClaudeBackend {
         const artifactAction = turn.artifactCalls.get(block.tool_use_id);
         const artifact = artifactAction !== undefined && !block.is_error
           ? claudeArtifactResult(entry.details[0], artifactAction, message.tool_use_result) : undefined;
-        const edit = entry.details[0].kind === "write" && !block.is_error && !artifact
+        const edit = entry.details[0].kind === "write" && !block.is_error && artifactAction === undefined
           ? claudeFileDiff(message.tool_use_result, live.session.cwd) : undefined;
         if (artifact) {
-          entry.summary = artifact.detail.label;
-          entry.details = [{ ...artifact.detail, status: entry.status }, ...entry.details.slice(1)];
+          entry.summary = artifact.label;
+          entry.details = [artifact, ...entry.details.slice(1)];
         }
         if (command !== undefined) {
           const details = claudeCommandActivity({ id: entry.id, command, status: entry.status, output }).details;
@@ -2099,7 +2100,10 @@ export class ClaudeBackend {
             turn.fileDiffs.push(edit.diff);
             await this.emit({ method: "turn/diff/updated", params: { threadId, turnId, diff: claudeTurnDiff(turn.fileDiffs) } });
           }
-        } else if (!artifact || artifact.keepOutput) {
+        } else if (artifactAction !== undefined && !block.is_error && !claudeArtifactShowsOutput(artifactAction)) {
+          // An artifact result written for the model stays out of the row.
+          entry.details = [{ ...entry.details[0], status: entry.status }, ...entry.details.slice(1)];
+        } else {
           // Keep the invocation when updating generic tools, too, with the
           // call's final status: it was recorded while the call ran.
           const outputId = `${entry.id}:output`;

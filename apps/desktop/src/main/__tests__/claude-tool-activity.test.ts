@@ -1,7 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  claudeArtifactResult, claudeFileDiff, claudeTodoSteps, claudeToolDetail, claudeTurnDiff,
+  claudeArtifactResult, claudeArtifactShowsOutput, claudeFileDiff, claudeTodoSteps, claudeToolDetail, claudeTurnDiff,
 } from "../claude/claude-tool-activity";
 
 describe("Claude tool activity", () => {
@@ -67,22 +67,24 @@ describe("Claude tool activity", () => {
     expect(detail("Artifact", { action: "watch", url: page })).toBeUndefined();
   });
 
+  it("shows the operator only the artifact results written for them", () => {
+    expect(["list", "comments", "read_db"].every(claudeArtifactShowsOutput)).toBe(true);
+    expect(["publish", "quickstart", "read", "delete"].some(claudeArtifactShowsOutput)).toBe(false);
+  });
+
   it("names the page a publish or read returned", () => {
     const published = { id: "1", kind: "write" as const, label: "Published settings.html", status: "in_progress" as const };
     // Captured from Claude Code 2.1.303's publish result.
     expect(claudeArtifactResult(published, "publish", {
       url: "https://claude.ai/artifact/DEUQW4g8qq7csZHvDLZKyt", path: "/w/settings.html",
       artifact_id: "630f38d3-9e88-4301-bf28-0d6e5f81bd5b", title: "Settings screen", owned: true, audience: "owner",
-    })).toEqual({
-      detail: { ...published, label: "Published Settings screen", url: "https://claude.ai/artifact/DEUQW4g8qq7csZHvDLZKyt" },
-      keepOutput: false,
-    });
+    })).toEqual({ ...published, label: "Published Settings screen", url: "https://claude.ai/artifact/DEUQW4g8qq7csZHvDLZKyt" });
     // A publish that creates the artifact from a type names no source file.
     expect(claudeArtifactResult(published, "publish", { url: "https://claude.ai/artifact/UJ29qnGYNBbYgJY1TAEkoW" }))
-      .toEqual({ detail: { ...published, url: "https://claude.ai/artifact/UJ29qnGYNBbYgJY1TAEkoW" }, keepOutput: false });
+      .toEqual({ ...published, url: "https://claude.ai/artifact/UJ29qnGYNBbYgJY1TAEkoW" });
     const read = { id: "2", kind: "read" as const, label: "Read an artifact" };
     expect(claudeArtifactResult(read, "read", { read: { url: "https://claude.ai/artifact/x", title: "Deck", code: 200, result: "<html>" } }))
-      .toEqual({ detail: { ...read, label: "Read Deck", url: "https://claude.ai/artifact/x" }, keepOutput: true });
+      .toEqual({ ...read, label: "Read Deck", url: "https://claude.ai/artifact/x" });
     expect(claudeArtifactResult(read, "list", { artifacts: [], total: 0 })).toBeUndefined();
     expect(claudeArtifactResult(read, "delete", { artifact_delete: { url: "https://claude.ai/artifact/x", deleted: true } })).toBeUndefined();
     expect(claudeArtifactResult(read, "pin", { url: "https://claude.ai/artifact/x" })).toBeUndefined();

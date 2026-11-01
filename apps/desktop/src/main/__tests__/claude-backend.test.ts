@@ -3039,6 +3039,8 @@ describe("Claude transcript fidelity", () => {
       yield answer("create-1", `Created a new Artifact at ${page}`, { url: page });
       yield call("read-1", "Artifact", { action: "read", url: page });
       yield answer("read-1", "<h1>Settings</h1>", { read: { url: page, title: "Settings screen", code: 200, result: "<h1>Settings</h1>" } });
+      yield call("list-1", "Artifact", { action: "list", limit: 3 });
+      yield answer("list-1", "1. Settings screen", { artifacts: [{ title: "Settings screen", url: page }] });
       yield call("publish-2", "Artifact", { file_path: "/repo/broken.html" });
       yield { type: "user", parent_tool_use_id: null, message: { content: [
         { type: "tool_result", tool_use_id: "publish-2", content: "Not signed in to claude.ai", is_error: true },
@@ -3058,7 +3060,10 @@ describe("Claude transcript fidelity", () => {
       id: "create-1", kind: "write", label: "Published Canvas", url: page, status: "completed",
     }]);
     expect(group.details.find((detail) => detail.id === "read-1")).toMatchObject({ label: "Read Settings screen", url: page });
-    expect(group.details.find((detail) => detail.id === "read-1:output")).toMatchObject({ markdown: "<h1>Settings</h1>" });
+    // A read's raw HTML is for the model; a listing is for the operator.
+    expect(group.details.some((detail) => detail.id === "read-1:output")).toBe(false);
+    expect(group.details.find((detail) => detail.id === "list-1")).toMatchObject({ label: "Listed artifacts", status: "completed" });
+    expect(group.details.find((detail) => detail.id === "list-1:output")).toMatchObject({ markdown: "1. Settings screen" });
     // A failed publish keeps the reason it failed.
     expect(group.details.find((detail) => detail.id === "publish-2")).toMatchObject({ label: "Published broken.html", status: "failed" });
     expect(group.details.find((detail) => detail.id === "publish-2:output")).toMatchObject({ markdown: "Not signed in to claude.ai" });
