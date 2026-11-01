@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { mergeCausalMessagingContext, shortenDerivedThreadTitle } from "../dist/federation-core.js";
+import { FEDERATION_MAX_FRAME_BYTES, fitThreadReplayWithinByteBudget, mergeCausalMessagingContext, pageThreadReplay, shortenDerivedThreadTitle } from "../dist/federation-core.js";
 import { ACTIVE, atomicJson, digest } from "./store.js";
 
 export const METHOD_CAPABILITIES = Object.fromEntries([
@@ -33,6 +33,8 @@ export class HeadlessBackend {
     this.runtime = runtime;
     this.publish = publish;
     this.epoch = randomUUID();
+    // Same headroom as desktop's FEDERATION_RESPONSE_BYTE_BUDGET.
+    this.replayByteBudget = FEDERATION_MAX_FRAME_BYTES - 64 * 1024;
     this.attentionViews = new Map();
     this.file = path.join(path.dirname(runtime.store.directory), "threads.json");
     try {
@@ -153,7 +155,14 @@ export class HeadlessBackend {
         const messages = history.replay.messages.filter((message) => message.role === "assistant" && message.turn?.id === params.turnId);
         return { message: messages.find((message) => params.itemId ? message.id === params.itemId : message.text === params.text) || null };
       }
-      case "readThread": return this.readThread(params.threadId);
+      case "readThread": {
+        // Viewers take the newest page as returned. Page and fit it to one
+        // frame here, as desktop owners do.
+        const history = await this.readThread(params.threadId);
+        return { ...history, replay: fitThreadReplayWithinByteBudget({ cursorIdSpace: "entry-id",
+          replay: pageThreadReplay(history.replay, params), maxBytes: this.replayByteBudget,
+          measureBytes: (replay) => Buffer.byteLength(JSON.stringify({ ...history, replay }), "utf8") }) };
+      }
       case "supportsMessagingPdfTools": return params.backend === "codex" && this.owned(params.threadId).messagingFileTools === true;
       case "startThread": return this.startThread(params);
       case "materializeDirectoryLaunchpad": return this.materializeLaunchpad(params, envelope);

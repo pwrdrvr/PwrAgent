@@ -52817,6 +52817,67 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("keeps the newest entries when an owner's turn page exceeds the read limit", async () => {
+    // Owners page whole turns, so limit 1 returns every entry of the newest
+    // turn. The reply is the entry a reader needs, not the prompt.
+    const turn = { id: "turn-2", status: "completed" as const };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+      replay: {
+        entries: [
+          { type: "message", id: "user-2", role: "user", text: "Run it", turn },
+          { type: "activity", id: "command-2", summary: "Ran command", status: "completed", details: [], turn },
+          { type: "message", id: "answer-2", role: "assistant", text: "Done", turn },
+        ],
+        messages: [
+          { id: "user-2", role: "user", text: "Run it" },
+          { id: "answer-2", role: "assistant", text: "Done" },
+        ],
+        lastUserMessage: "Run it",
+        lastAssistantMessage: "Done",
+        pagination: { supportsPagination: true, hasPreviousPage: true, previousCursor: "cursor-2" },
+        threadStatus: "idle",
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: { threadId: "agent-thread", turnId: "turn-1", turn: { id: "turn-1" } },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "read_thread",
+        arguments: { backend: "codex", threadId: "target-thread", limit: 1 },
+      },
+    } as AppServerPendingRequestNotification);
+
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload.read.entries.map((entry: { id: string }) => entry.id)).toEqual(["answer-2"]);
+    expect(payload.read.messages.map((message: { id: string }) => message.id)).toEqual(["answer-2"]);
+    expect(payload.read).toMatchObject({
+      omittedEntries: 2,
+      omittedMessages: 1,
+      pagination: { previousCursor: "cursor-2" },
+    });
+
+    await registry.close();
+  });
+
   it("combines local search_threads results with connected Federation metadata", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },

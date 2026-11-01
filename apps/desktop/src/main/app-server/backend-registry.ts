@@ -48021,8 +48021,11 @@ export class DesktopBackendRegistry {
             ...(args.includeEntries === false
               ? {}
               : {
+                  // Owners page whole turns, so a page can hold more than
+                  // `limit` entries. Keep its newest ones; clampInteger
+                  // keeps `limit` at 1 or more.
                   entries: replay.entries
-                    .slice(0, limit)
+                    .slice(-limit)
                     .map((entry) =>
                       toThreadReadEntrySummary(
                         entry,
@@ -48036,7 +48039,7 @@ export class DesktopBackendRegistry {
               ? {}
               : {
                   messages: replay.messages
-                    .slice(0, limit)
+                    .slice(-limit)
                     .map((message) =>
                       toThreadReadMessageSummary(
                         message,
@@ -48046,6 +48049,12 @@ export class DesktopBackendRegistry {
                       ),
                     ),
                 }),
+            ...(args.includeEntries !== false && replay.entries.length > limit
+              ? { omittedEntries: replay.entries.length - limit }
+              : {}),
+            ...(args.includeMessages !== false && replay.messages.length > limit
+              ? { omittedMessages: replay.messages.length - limit }
+              : {}),
             ...(replay.lastUserMessage
               ? {
                   lastUserMessage: truncateThreadInspectionText(
