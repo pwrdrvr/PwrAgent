@@ -42,14 +42,17 @@ class RelaySocket extends Duplex {
     child.on("exit", (code) => {
       if (code) this.destroy(new Error("The verified MCP IPC connection closed."));
     });
-    child.stdin.on("error", (error) => this.destroy(error));
+    child.stdin.on("error", (error) => { if (!this.writableEnded) this.destroy(error); });
     child.stdout.on("error", (error) => this.destroy(error));
   }
   override _read(): void { this.child.stdout.resume(); }
   override _write(bytes: Buffer, _encoding: BufferEncoding, done: (error?: Error | null) => void): void {
     this.child.stdin.write(bytes, done);
   }
-  override _final(done: (error?: Error | null) => void): void { this.child.stdin.end(done); }
+  override _final(done: (error?: Error | null) => void): void {
+    if (this.child.stdin.destroyed) done();
+    else this.child.stdin.end(() => done());
+  }
   override _destroy(error: Error | null, done: (error?: Error | null) => void): void {
     this.child.stdin.destroy();
     this.child.stdout.destroy();
