@@ -126,7 +126,7 @@ export class ThreadDependencyCoordinator {
         }
         if (condition.when === "turn_completed" && condition.turnId !== snapshot.activeTurnId
           && !snapshot.turns.some((turn) => turn.id === condition.turnId)) throw new Error("The watched turn was not found in this prerequisite thread.");
-        conditions.push(await this.currentPrCondition(condition, snapshot));
+        conditions.push(await this.currentPrCondition(condition, snapshot) ?? this.canonicalPrCondition(condition));
       }
       const now = this.now();
       const item = this.options.store.register({
@@ -242,14 +242,18 @@ export class ThreadDependencyCoordinator {
           snapshot = await this.options.readThread(condition);
           snapshots.set(snapshotKey, snapshot);
         }
-        condition = await this.currentPrCondition(condition, snapshot);
+        // Only a forge resolve waits: an extra await here would delay every
+        // admission behind the event that triggered it.
+        const resolving = this.currentPrCondition(condition, snapshot);
+        condition = (resolving && await resolving) ?? this.canonicalPrCondition(condition);
         conditions[conditionIndex] = condition;
         const turn = signal && identity(signal.target) === identity(condition) && signal.turn.id === condition.turnId
           ? signal.turn : snapshot.turns.find((entry) => entry.id === condition.turnId);
         // Keep the first unambiguous PR identity even if another PR is attached
         // later. Its current head remains live unless explicitly pinned.
-        const selector = !condition.prUrl && previous?.prUrl
-          ? await this.currentPrCondition({ ...condition, prUrl: previous.prUrl }, snapshot) : condition;
+        const pinned = !condition.prUrl && previous?.prUrl ? { ...condition, prUrl: previous.prUrl } : undefined;
+        const resolvingPinned = pinned && this.currentPrCondition(pinned, snapshot);
+        const selector = pinned ? (resolvingPinned && await resolvingPinned) ?? this.canonicalPrCondition(pinned) : condition;
         const observed = { ...evaluateCondition(selector, snapshot, this.now(), turn, this.options.canonicalizePrUrl), condition };
         if (!observed.prUrl && previous?.prUrl) {
           observed.prUrl = previous.prUrl;
@@ -359,21 +363,31 @@ export class ThreadDependencyCoordinator {
     return this.options.canonicalizePrUrl?.(url) ?? url;
   }
 
-  /**
-   * The condition with its PR URL under the repository's current name. A URL
-   * that matches no attached PR is resolved with the forge only when a PR
-   * with the same number is attached under another repository: what a rename
-   * leaves behind.
-   */
-  private async currentPrCondition(condition: ThreadDependencyCondition, snapshot: DependencyThreadSnapshot): Promise<ThreadDependencyCondition> {
+  /** The condition with its PR URL under the names the forge has already answered. */
+  private canonicalPrCondition(condition: ThreadDependencyCondition): ThreadDependencyCondition {
     if (condition.when === "turn_completed" || !condition.prUrl) return condition;
-    let prUrl = this.canonicalizePrUrl(condition.prUrl);
-    if (this.options.resolvePrUrl && !snapshot.prs.some(({ pr }) => this.canonicalizePrUrl(pr.url) === prUrl)
-      && snapshot.prs.some(({ pr }) => isSameNumberInAnotherRepository(pr.url, prUrl))) {
-      const resolved = await this.options.resolvePrUrl(condition.prUrl).catch(() => undefined);
-      if (resolved) prUrl = this.canonicalizePrUrl(resolved);
-    }
+    const prUrl = this.canonicalizePrUrl(condition.prUrl);
     return prUrl === condition.prUrl ? condition : { ...condition, prUrl };
+  }
+
+  /**
+   * A forge resolve of the condition's PR URL, or undefined when none is
+   * needed. Only a URL that matches no attached PR, while a PR with the same
+   * number is attached under another repository (what a rename leaves
+   * behind), is asked about.
+   */
+  private currentPrCondition(condition: ThreadDependencyCondition, snapshot: DependencyThreadSnapshot): Promise<ThreadDependencyCondition> | undefined {
+    const resolvePrUrl = this.options.resolvePrUrl;
+    const current = this.canonicalPrCondition(condition);
+    const prUrl = current.prUrl;
+    if (!resolvePrUrl || !prUrl || !condition.prUrl
+      || snapshot.prs.some(({ pr }) => this.canonicalizePrUrl(pr.url) === prUrl)
+      || !snapshot.prs.some(({ pr }) => isSameNumberInAnotherRepository(pr.url, prUrl))) return undefined;
+    const asked = condition.prUrl;
+    return resolvePrUrl(asked).catch(() => undefined).then((resolved) => {
+      const answered = resolved ? this.canonicalizePrUrl(resolved) : prUrl;
+      return answered === asked ? condition : { ...condition, prUrl: answered };
+    });
   }
 
   private now(): number { return this.options.now?.() ?? Date.now(); }
