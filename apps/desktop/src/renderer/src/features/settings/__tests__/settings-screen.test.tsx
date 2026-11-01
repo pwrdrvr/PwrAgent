@@ -10362,6 +10362,33 @@ describe("SettingsScreen", () => {
     ).toBeEnabled();
   });
 
+  it("saves an IPC native-approval ticket without probing with it or automatically consuming a session", async () => {
+    const connection: McpConnectionStatus = {
+      id: "native-app", displayName: "Native app", serverUrl: "unix:///tmp/private/server.sock#/mcp",
+      authMode: "none", kind: "remote", enabled: true, createdAt: 1, updatedAt: 1, configured: true, state: "ready",
+    };
+    let connections: McpConnectionStatus[] = [];
+    const createMcpConnection = vi.fn(async () => { connections = [connection]; return { connection }; });
+    const probeMcpConnection = vi.fn(async () => ({ ok: true as const, serverUrl: connection.serverUrl, authMode: "none" as const, needsIpcBearer: true }));
+    const listMcpConnectionTools = vi.fn(async () => ({ connectionId: connection.id, tools: [], fetchedAt: 1 }));
+    const authorizeMcpConnection = vi.fn();
+    render(<SettingsScreen
+      desktopApi={{ createMcpConnection, probeMcpConnection, listMcpConnectionTools, authorizeMcpConnection,
+        listMcpConnections: vi.fn(async () => ({ connections })),
+        listCodexMcpServers: vi.fn(async () => ({ codexHome: "/fixture", detail: "toolsAndAuthOnly" as const, servers: [] })),
+      }} initialSection="plugins" settings={createSettingsState()} onClose={() => undefined} />);
+    fireEvent.change(await screen.findByPlaceholderText("https://mcp.example.com/mcp"), { target: { value: connection.serverUrl } });
+    fireEvent.change(screen.getByPlaceholderText("Datadog"), { target: { value: "Native app" } });
+    fireEvent.change(screen.getByLabelText("Session bearer token (optional)"), { target: { value: "approved-session-ticket" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add connection" }));
+    await waitFor(() => expect(createMcpConnection).toHaveBeenCalledWith({ displayName: "Native app", serverUrl: connection.serverUrl, ipcBearerToken: "approved-session-ticket" }));
+    expect(probeMcpConnection).toHaveBeenCalledWith({ serverUrl: connection.serverUrl });
+    expect(authorizeMcpConnection).not.toHaveBeenCalled();
+    await screen.findByRole("button", { name: "More actions for Native app" });
+    expect(listMcpConnectionTools).not.toHaveBeenCalled();
+  });
+
   it("creates and authorizes a PwrAgent-managed MCP connection", async () => {
     const managedConnection = {
       id: "datadog",
