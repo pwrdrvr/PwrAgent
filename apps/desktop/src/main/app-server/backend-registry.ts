@@ -7414,6 +7414,14 @@ function buildTurnUserMessageOriginId(turnId: string): string {
   return `user:${turnId}`;
 }
 
+/**
+ * The turn's merged causal routing context. No message has this id, and
+ * origins are read by message id, so it never becomes a displayed origin.
+ */
+function buildTurnCausalMessagingContextId(turnId: string): string {
+  return `turn-causal:${turnId}`;
+}
+
 function resolveThreadMessageOrigin(params: {
   origin?: ThreadTurnQueueOrigin;
   messageOrigin?: AppServerThreadMessageOrigin;
@@ -9776,15 +9784,21 @@ export class DesktopBackendRegistry {
   async readCausalMessagingContext(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<
     Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">
   > {
-    const origin = await this.readExactTurnMessageOrigin(context);
+    const origin = await this.readTurnCausalMessagingOrigin(context);
     return { ...(origin?.causalMessagingSource ? { causalMessagingSource: origin.causalMessagingSource } : {}),
       ...(origin?.causalMessagingAmbiguous ? { causalMessagingAmbiguous: true } : {}) };
   }
 
-  private async readExactTurnMessageOrigin(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<AppServerThreadMessageOrigin | undefined> {
+  /**
+   * A causal steer writes the turn's routing record under its own key.
+   * Until one does, the turn's first prompt origin is the record.
+   */
+  private async readTurnCausalMessagingOrigin(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<AppServerThreadMessageOrigin | undefined> {
     if (!context.turnId || !this.overlayStore.readThreadMessageOrigins) return undefined;
-    const messageId = buildTurnUserMessageOriginId(context.turnId);
-    return (await this.overlayStore.readThreadMessageOrigins({ ...context, messageIds: [messageId] }))[messageId];
+    const causalId = buildTurnCausalMessagingContextId(context.turnId);
+    const promptId = buildTurnUserMessageOriginId(context.turnId);
+    const origins = await this.overlayStore.readThreadMessageOrigins({ ...context, messageIds: [causalId, promptId] });
+    return origins[causalId] ?? origins[promptId];
   }
 
   private forgeReadHandler?: ForgeReadHandler;
@@ -10384,6 +10398,7 @@ export class DesktopBackendRegistry {
   private readonly executionModeSelectionLocks = new PerKeyAsyncLock();
   private readonly acpSessionPromptLocks = new PerKeyAsyncLock();
   private readonly activeTurnControlLocks = new PerKeyAsyncLock();
+  private readonly turnCausalContextLocks = new PerKeyAsyncLock();
   private readonly queuedAcpRuntimeOptions = new Map<
     string,
     {
@@ -24560,13 +24575,19 @@ export class DesktopBackendRegistry {
     try {
       const result = await promise;
       if (result.disposition === "steered" && messageOrigin) {
-        const previous = await this.readExactTurnMessageOrigin({ backend: params.backend, threadId: params.threadId, turnId: result.turnId });
-        if (previous?.causalMessagingSource || previous?.causalMessagingAmbiguous
-          || messageOrigin.causalMessagingSource || messageOrigin.causalMessagingAmbiguous) {
-          await this.persistThreadMessageOrigin({ backend: params.backend, threadId: params.threadId,
-            messageId: buildTurnUserMessageOriginId(result.turnId),
-            origin: { ...(previous ?? messageOrigin), ...mergeCausalMessagingContext([previous, messageOrigin]) } });
-        }
+        const turn = { backend: params.backend, threadId: params.threadId, turnId: result.turnId };
+        // Read-modify-write: overlapping steers must merge, not overwrite.
+        await this.turnCausalContextLocks.run(`${turn.backend}:${turn.threadId}:${turn.turnId}`, async () => {
+          const previous = await this.readTurnCausalMessagingOrigin(turn);
+          if (previous?.causalMessagingSource || previous?.causalMessagingAmbiguous
+            || messageOrigin.causalMessagingSource || messageOrigin.causalMessagingAmbiguous) {
+            // `user:<turnId>` is also the first prompt's displayed origin, and
+            // the steerer did not write that prompt. Keep routing in its own row.
+            await this.persistThreadMessageOrigin({ backend: turn.backend, threadId: turn.threadId,
+              messageId: buildTurnCausalMessagingContextId(turn.turnId),
+              origin: { kind: messageOrigin.kind, ...mergeCausalMessagingContext([previous, messageOrigin]) } });
+          }
+        });
       }
       return result;
     } catch (error) {
@@ -24968,6 +24989,7 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: result.threadId,
       turnId: result.turnId,
+      disposition: "steered",
     };
   }
 
