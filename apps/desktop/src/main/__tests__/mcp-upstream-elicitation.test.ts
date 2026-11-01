@@ -397,6 +397,13 @@ describe.skipIf(process.platform === "win32")("upstream MCP elicitation through 
     // The person answers the old card after the server has gone.
     stale.asked[0]!.answer({ action: "accept", content: { confirm: true } });
 
+    // A desktop EOF ends the session for good: nothing reconnects until the
+    // thread turns the connection off and on, and no form is asked meanwhile.
+    const blocked = pendingPerson();
+    await expect(remove(rpc, { onElicit: blocked.onElicit })).rejects.toThrow("turn this connection off and on");
+    expect(blocked.asked).toEqual([]);
+    await service.closeThreadSessions("thread-a", [connectionId]);
+
     const fresh = pendingPerson();
     const secondCall = remove(rpc, { onElicit: fresh.onElicit });
     await waitFor(() => fresh.asked.length === 1, "the replacement form");
