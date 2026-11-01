@@ -2,10 +2,10 @@ import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detac
 import { ForgeReadService, repositoryFromPr } from "../pr-status/forge-read-service";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
 import { GithubPrToolClient } from "../pr-status/github-pr-tool-client";
-import { ForgePrToolService, type ForgePrToolScope } from "../pr-status/forge-pr-tool-service";
+import { ForgePrToolService, type ForgePrToolPreparedCall, type ForgePrToolScope } from "../pr-status/forge-pr-tool-service";
 import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
-import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "../pr-status/forge-tool-contract";
+import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
 import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { createOwnerRoutedForgeReadHandler } from "../federation/federated-forge-read-service";
@@ -4183,9 +4183,9 @@ class DesktopAppServerService {
     });
   }
 
-  /** The GitHub or GitLab repository a call would act in, so an approval prompt can name it. */
-  async resolveForgePrRepositoryForAgent(args: ForgePrToolArgs, context: AgentToolCallContext): Promise<ForgeRepository> {
-    return this.forgePrToolService().resolveRepository(args, await this.forgePrToolScope(context));
+  /** The repository and settled arguments of a call, so an approval prompt names them and a bad call fails first. */
+  async prepareForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<ForgePrToolPreparedCall> {
+    return await this.forgePrToolService().prepare(operation, args, await this.forgePrToolScope(context), context.signal);
   }
 
   /** Pull request and issue tools act only in the calling thread's own repositories. */
@@ -9098,7 +9098,7 @@ export function registerAppServerIpcHandlers(): void {
   }));
   getDesktopBackendRegistry().setForgePrToolHandler(
     async (operation, args, context) => await appServerService.runForgePrToolForAgent(operation, args, context),
-    async (args, context) => await appServerService.resolveForgePrRepositoryForAgent(args, context),
+    async (operation, args, context) => await appServerService.prepareForgePrToolForAgent(operation, args, context),
   );
   getDesktopBackendRegistry().setForgeToolPolicyResolver(
     () => getDesktopSettingsService().resolveForgeAgentToolPolicy(),

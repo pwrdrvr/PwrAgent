@@ -79,9 +79,12 @@ Reads (`read` group):
 
 Writes:
 
-- `create_pull_request`: head defaults to the thread's branch and base to the
-  repository's default branch. Draft, labels and reviewers are optional. The
-  new PR/MR is attached to the calling thread (`attachedToThread`).
+- `create_pull_request`: head is required and must already be pushed. The
+  agent names the branch, so the approval card always shows what opens, and
+  an unpushed branch is refused before the card instead of after approval.
+  Base defaults to the repository's default branch. Draft, labels and
+  reviewers are optional. The new PR/MR is attached to the calling thread
+  (`attachedToThread`).
 - `update_pull_request`: title, body, base, open or closed, draft or ready,
   labels and reviewers.
 - `add_issue_comment`, `reply_to_review_comment` (by `reviewThreadId` or a

@@ -40,8 +40,9 @@ const ctx = (extra: Partial<ForgePrToolContext> = {}): ForgePrToolContext => ({
 
 describe("GitHub tool contract", () => {
   it("rejects unknown fields, missing requirements and cross-repository search", () => {
-    expect(() => validateForgePrToolArgs("create_pull_request", { title: "x", threadId: "other" })).toThrow(/Unknown argument/);
+    expect(() => validateForgePrToolArgs("create_pull_request", { title: "x", head: "topic", threadId: "other" })).toThrow(/Unknown argument/);
     expect(() => validateForgePrToolArgs("merge_pull_request", { number: 1 })).toThrow(/requires expectedHeadSha/);
+    expect(() => validateForgePrToolArgs("create_pull_request", { title: "x" })).toThrow(/requires head/);
     expect(() => validateForgePrToolArgs("search_issues", { query: "repo:other/thing bug" })).toThrow(/this thread's repository only/);
     expect(() => validateForgePrToolArgs("create_pull_request", { title: "x", head: "topic; rm -rf" })).toThrow(/valid branch/);
     expect(() => validateForgePrToolArgs("update_pull_request", { number: 1, attachments: [{ path: "/tmp/a.png" }] })).toThrow(/full new body/);
@@ -133,6 +134,15 @@ describe("GitHub tool client", () => {
     const { calls, client } = harness(() => json({ message: "This workflow run cannot be rerun." }, 403));
     await expect(client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx())).rejects.toMatchObject({ code: "forbidden", message: expect.stringContaining("cannot be rerun") });
     expect(calls).toHaveLength(1);
+  });
+
+  it("reads whether a pull request head is pushed, with slashes kept as path segments", async () => {
+    const { calls, client } = harness((call) => call.url.endsWith("/git/ref/heads/fix/pushed") ? json({ ref: "refs/heads/fix/pushed" }) : json({ message: "Not Found" }, 404));
+    await expect(client.headBranchExists(repo, "fix/pushed")).resolves.toBe(true);
+    expect(calls[0]!.url).toBe("https://api.github.com/repos/fixture/project/git/ref/heads/fix/pushed");
+    await expect(client.headBranchExists(repo, "fix/local-only")).resolves.toBe(false);
+    await expect(client.headBranchExists(repo, "someone:topic")).resolves.toBeUndefined();
+    expect(calls).toHaveLength(2);
   });
 
   it("opens a pull request into the default branch and returns it read back", async () => {
@@ -310,5 +320,18 @@ describe("forge tool service", () => {
   it("honors a provider switched off in Settings → Git", async () => {
     const service = new ForgePrToolService({ enabled: (provider) => provider === "github", clients: { github: { execute: vi.fn() }, gitlab: { execute: vi.fn() } }, defaultMergeMethod: () => "merge" });
     await expect(service.execute("get_issue", { number: 1 }, scope([remotes.gitlab]))).rejects.toMatchObject({ code: "provider_disabled" });
+  });
+  it("refuses a pull request from an unpushed head before approval, and does not guess for forks or unknown answers", async () => {
+    const headBranchExists = vi.fn(async (_repository: ForgeRepository, head: string) => head === "fix/pushed" ? true : head === "fix/local-only" ? false : undefined);
+    const service = new ForgePrToolService({ enabled: () => true, clients: { github: { execute: vi.fn(), headBranchExists }, gitlab: { execute: vi.fn() } }, defaultMergeMethod: () => "merge" });
+    await expect(service.prepare("create_pull_request", { title: "Fix", head: "fix/pushed" }, scope([remotes.github])))
+      .resolves.toEqual({ repository: repo, args: { title: "Fix", head: "fix/pushed" } });
+    await expect(service.prepare("create_pull_request", { title: "Fix", head: "fix/local-only" }, scope([remotes.github])))
+      .rejects.toMatchObject({ code: "invalid_arguments", message: expect.stringContaining("Push it") });
+    await expect(service.prepare("create_pull_request", { title: "Fix", head: "someone:topic" }, scope([remotes.github])))
+      .resolves.toMatchObject({ args: { head: "someone:topic" } });
+    await expect(service.prepare("add_issue_comment", { number: 1, body: "Hi" }, scope([remotes.github])))
+      .resolves.toEqual({ repository: repo, args: { number: 1, body: "Hi" } });
+    expect(headBranchExists).toHaveBeenCalledTimes(3);
   });
 });

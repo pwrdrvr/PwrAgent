@@ -6,7 +6,7 @@ import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwrag
 import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
-import type { ForgePrRepositoryResolver, ForgePrToolHandler } from "../agent-tools/pwragent-forge-pr-agent-tools";
+import type { ForgePrToolHandler, ForgePrToolPreflight } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import { ForgeReadError, repositoryKey, validateForgeReadArgs, type ForgeReadRequest, type ForgeRepository } from "../pr-status/forge-tool-contract";
 import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation, type ForgeReviewComment } from "../pr-status/forge-pr-tool-contract";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
@@ -9672,15 +9672,19 @@ export class DesktopBackendRegistry {
   }
 
   private forgePrToolHandler?: ForgePrToolHandler;
-  private forgePrRepositoryResolver?: ForgePrRepositoryResolver;
+  private forgePrToolPreflight?: ForgePrToolPreflight;
   private forgeToolPolicyResolver?: () => ForgeAgentToolPolicy;
   /** Conversation grants for forge writes, keyed by thread, then tool and repository. Memory only. */
   private readonly forgeToolSessionApprovals = new Map<string, Map<string, string>>();
 
-  /** `resolveRepository` names the repository on an approval card and fails a bad target before asking. */
-  setForgePrToolHandler(handler: ForgePrToolHandler, resolveRepository?: ForgePrRepositoryResolver): void {
+  /**
+   * `preflight` names the repository on an approval card, fills in what the
+   * call would otherwise infer (a pull request's head), and fails a bad call
+   * before asking.
+   */
+  setForgePrToolHandler(handler: ForgePrToolHandler, preflight?: ForgePrToolPreflight): void {
     this.forgePrToolHandler = handler;
-    this.forgePrRepositoryResolver = resolveRepository;
+    this.forgePrToolPreflight = preflight;
   }
 
   setForgeToolPolicyResolver(resolve: () => ForgeAgentToolPolicy): void {
@@ -9721,10 +9725,14 @@ export class DesktopBackendRegistry {
     const access = this.assertForgeToolAllowed(group, operation);
     let target = args;
     if (group !== "read") {
-      const repository = this.forgePrRepositoryResolver ? await this.forgePrRepositoryResolver(args, context) : args.repository;
-      await this.approveForgeToolWrite(operation, args, context, group, access, repository);
-      // Act exactly where the card said, even if the thread's remotes change while it waits.
-      if (repository) target = { ...args, repository };
+      // Settle the call before asking: an approved call that then fails on its
+      // arguments makes the agent retry and the operator approve it twice.
+      const prepared = this.forgePrToolPreflight ? await this.forgePrToolPreflight(operation, args, context) : undefined;
+      const repository = prepared?.repository ?? args.repository;
+      const settled = prepared?.args ?? args;
+      await this.approveForgeToolWrite(operation, settled, context, group, access, repository);
+      // Act exactly where the card said, even if the thread's remotes or branch change while it waits.
+      target = repository ? { ...settled, repository } : settled;
     }
     if (!this.forgePrToolHandler) throw new ForgeReadError("unavailable", "Forge tools are unavailable on this instance.");
     const result = await this.forgePrToolHandler(operation, target, context);
