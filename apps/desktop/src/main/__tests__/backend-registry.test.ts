@@ -19031,6 +19031,73 @@ script = "echo setup"
     await registry.close();
   });
 
+  it.each(["source", "backfill", "selected-thread"] as const)(
+    "preserves an attached sibling worktree during %s directory repair with SQLite",
+    async (repair) => {
+      const repositoryPath = expectedDir("/Users/fixture-user/projects/ProjectA");
+      const primaryPath = expectedDir("/Users/fixture-user/.codex/worktrees/primary/ProjectA");
+      const secondaryPath = expectedDir("/Users/fixture-user/.codex/worktrees/attached/ProjectA");
+      const primary: LinkedDirectorySummary = {
+        id: primaryPath, kind: "worktree", label: "ProjectA", path: repositoryPath, worktreePath: primaryPath,
+      };
+      // attach_thread_directory uses the repository ID, not the primary cwd ID.
+      const attached: LinkedDirectorySummary = {
+        id: repositoryPath, kind: "worktree", label: "ProjectA", path: repositoryPath,
+        worktreePath: secondaryPath, gitBranch: "attached-branch",
+      };
+      const thread: AppServerThreadSummary = {
+        id: "thread-1", title: "Attached worktree", titleSource: "explicit", source: "codex",
+        projectKey: primaryPath, updatedAt: 1000,
+        linkedDirectories: repair === "source" ? [primary] : [{
+          id: primaryPath, kind: "local", label: "ProjectA", path: primaryPath,
+        }],
+      };
+      const temp = createTempStateDb("pwragent-attached-worktree-reconcile-");
+      const db = StateDb.open(temp.dbPath);
+      const overlayStore = new SqliteOverlayStore(db);
+      const identity = { backend: "codex" as const, threadId: thread.id };
+      await overlayStore.addLinkedDirectory({ ...identity, directory: attached });
+      const codexClient = new MockBackendClient({ threads: [thread] });
+      const enrichThreadDirectories = vi.fn(async (threads: AppServerThreadSummary[]) =>
+        threads.map((row) => ({ ...row, linkedDirectories: [primary] })));
+      Object.assign(codexClient, { enrichThreadDirectories });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      try {
+        await registry.listThreads({
+          backend: "codex", enrichDirectories: false,
+          callerReason: repair === "backfill" ? "directory-relationship-reconcile" : "thread-list",
+        });
+        if (repair === "selected-thread") {
+          await registry.refreshThreadDirectoryRelationship(identity);
+        }
+        const overlay = await overlayStore.getThreadOverlayState(identity);
+        expect(overlay?.extraLinkedDirectories).toEqual([attached, primary]);
+        expect(overlay?.retainedWorktrees).toBeUndefined();
+        expect(codexClient.lastUpdateThreadWorkspaceParams).toBeUndefined();
+
+        // The archive projection and a reopened store must still own both
+        // checkouts; an in-memory registry summary cannot establish this.
+        expect((await overlayStore.getArchiveCleanupOverlayStates({
+          backend: "codex", threadIds: [thread.id],
+        }))[thread.id]?.extraLinkedDirectories).toEqual([attached, primary]);
+        await registry.close();
+        db.close();
+        const reopenedDb = StateDb.open(temp.dbPath);
+        try {
+          const reopenedStore = new SqliteOverlayStore(reopenedDb);
+          expect((await reopenedStore.getThreadOverlayState(identity))?.extraLinkedDirectories)
+            .toEqual([attached, primary]);
+        } finally {
+          reopenedDb.close();
+        }
+      } finally {
+        await registry.close();
+        db.close();
+        removeTempStateDbDir(temp.tempDir);
+      }
+    },
+  );
+
   it("does not enrich inactive directory history for startup or navigation listings", async () => {
     const threads = Array.from({ length: 500 }, (_, index): AppServerThreadSummary => ({
       id: `cold-${index}`, source: "codex", title: `Cold ${index}`, titleSource: "explicit",
