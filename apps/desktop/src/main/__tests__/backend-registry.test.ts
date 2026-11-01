@@ -48229,6 +48229,169 @@ script = "printf setup"
     await registry.close();
   });
 
+  describe("causal messaging steers", () => {
+    const causalMessagingSource = { ownerId: "profile", requestId: "telegram-request", surfaceSelector: "telegram-topic" };
+    const steererOrigin: AppServerThreadMessageOrigin = {
+      kind: "messaging",
+      messaging: {
+        platform: "telegram",
+        surface: { id: "chat-1", kind: "dm" },
+        actor: { platformUserId: "telegram-user" },
+      },
+      causalMessagingSource,
+    };
+    const codexReplay = (): AppServerThreadReplay => {
+      const entries: AppServerThreadReplay["entries"] = [
+        {
+          type: "message",
+          id: "message-start",
+          role: "user",
+          text: "Start active work",
+          turn: { id: "turn-1", status: "completed" },
+        },
+        {
+          type: "message",
+          id: "message-steer",
+          role: "user",
+          text: "Course correct from Telegram",
+          turn: { id: "turn-1", status: "completed" },
+        },
+      ];
+      return {
+        entries,
+        messages: entries.flatMap((entry) =>
+          entry.type === "message" ? [{ id: entry.id, role: entry.role, text: entry.text }] : []),
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      };
+    };
+    const steerCodexTurn = async (firstPromptOrigin?: AppServerThreadMessageOrigin) => {
+      const overlayStore = createOverlayStoreMock({ executionMode: "full-access" });
+      const registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({
+          initializeResult: { methods: ["turn/start", "turn/steer"] },
+          replay: codexReplay(),
+        }),
+        overlayStore,
+        threadTitleGenerationService: null,
+      });
+      onTestFinished(() => registry.close());
+      await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "Start active work" }],
+        ...(firstPromptOrigin ? { messageOrigin: firstPromptOrigin } : {}),
+      });
+      await expect(registry.steerTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        expectedTurnId: "turn-1",
+        input: [{ type: "text", text: "Course correct from Telegram" }],
+        requestId: "telegram-steer-1",
+      }, steererOrigin)).resolves.toMatchObject({ disposition: "steered", turnId: "turn-1" });
+      return { overlayStore, registry };
+    };
+
+    it("leaves an operator-started Codex prompt without an origin and keeps the turn's routing", async () => {
+      const { overlayStore, registry } = await steerCodexTurn();
+
+      const response = await registry.readThread({ backend: "codex", threadId: "thread-1" });
+      expect(response.replay.entries[0]).toMatchObject({ id: "message-start" });
+      expect(response.replay.entries[0]).not.toHaveProperty("origin");
+      expect(response.replay.messages[0]).not.toHaveProperty("origin");
+      expect(overlayStore.upsertThreadMessageOrigin).not.toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: "user:turn-1" }));
+      // An operator prompt has no messaging source, so a messaging steer
+      // makes the turn's routing ambiguous rather than the steerer's.
+      await expect(registry.readCausalMessagingContext({ backend: "codex", threadId: "thread-1", turnId: "turn-1" }))
+        .resolves.toEqual({ causalMessagingAmbiguous: true });
+    });
+
+    it("keeps an agent-origin first prompt's kind after a causal steer", async () => {
+      const firstPromptOrigin: AppServerThreadMessageOrigin = {
+        kind: "agent",
+        sourceThread: { backend: "codex", threadId: "sender", title: "Sender" },
+        causalMessagingSource,
+      };
+      const { overlayStore, registry } = await steerCodexTurn(firstPromptOrigin);
+
+      const response = await registry.readThread({ backend: "codex", threadId: "thread-1" });
+      expect(response.replay.entries[0]).toMatchObject({ id: "message-start", origin: firstPromptOrigin });
+      expect((await overlayStore.readThreadMessageOrigins!({
+        backend: "codex", threadId: "thread-1", messageIds: ["user:turn-1"],
+      }))["user:turn-1"]).toEqual(firstPromptOrigin);
+      await expect(registry.readCausalMessagingContext({ backend: "codex", threadId: "thread-1", turnId: "turn-1" }))
+        .resolves.toEqual({ causalMessagingSource });
+    });
+
+    it("still routes a turn whose only causal record is its first prompt origin", async () => {
+      const overlayStore = createOverlayStoreMock();
+      await overlayStore.upsertThreadMessageOrigin!({
+        backend: "codex", threadId: "thread-1", messageId: "user:turn-1",
+        origin: { kind: "messaging", causalMessagingSource },
+      });
+      const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore });
+      onTestFinished(() => registry.close());
+
+      await expect(registry.readCausalMessagingContext({ backend: "codex", threadId: "thread-1", turnId: "turn-1" }))
+        .resolves.toEqual({ causalMessagingSource });
+    });
+
+    it("leaves an operator-started Claude prompt without an origin and keeps the turn's routing", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-registry-"));
+      const finish = Promise.withResolvers<void>();
+      const prompts: Array<{ uuid?: string }> = [];
+      const events: AgentEvent[] = [];
+      const registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({}),
+        overlayStore: createOverlayStoreMock(),
+        agentToolMcpServer: null,
+        pdfToolMcpServer: null,
+        claudeBackendOptions: {
+          store: new ClaudeSessionStore(path.join(root, "sessions")),
+          getSessionInfo: async () => undefined,
+          inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+          discoverModels: async () => [],
+          query: ({ prompt, options = {} }) => {
+            if (typeof prompt === "string") throw new Error("Expected streaming input");
+            const input = prompt[Symbol.asyncIterator]();
+            async function* messages(): AsyncGenerator<ClaudeMessage> {
+              prompts.push((await input.next()).value);
+              yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
+              await finish.promise;
+              prompts.push((await input.next()).value);
+              yield { type: "result", subtype: "success", is_error: false,
+                user_message_uuid: prompts.at(-1)?.uuid,
+              } as ClaudeMessage;
+            }
+            return Object.assign(messages(), { close: () => { finish.resolve(); } }) as unknown as ClaudeQuery;
+          },
+        },
+      });
+      registry.onEvent((event) => { events.push(event); });
+      try {
+        const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
+        const identity = { backend: "claude" as const, threadId };
+        const started = await registry.startTurn({ ...identity, input: [{ type: "text", text: "Start" }] });
+        await vi.waitFor(() => expect(prompts).toHaveLength(1));
+        await expect(registry.steerTurn({ ...identity, expectedTurnId: started.turnId, requestId: "telegram-steer-1",
+          input: [{ type: "text", text: "Course correct from Telegram" }] }, steererOrigin))
+          .resolves.toMatchObject({ disposition: "steered", turnId: started.turnId });
+        finish.resolve();
+        await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+
+        const replay = await registry.readThread(identity);
+        const firstPrompt = replay.replay.messages.find((message) => message.text === "Start");
+        expect(firstPrompt?.id).toBe(`user:${started.turnId}`);
+        expect(firstPrompt).not.toHaveProperty("origin");
+        await expect(registry.readCausalMessagingContext({ ...identity, turnId: started.turnId }))
+          .resolves.toEqual({ causalMessagingAmbiguous: true });
+      } finally {
+        await registry.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("applies the legacy handoff fallback only on a page containing the thread start", async () => {
     const laterPage: AppServerThreadReplay = {
       entries: [
