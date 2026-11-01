@@ -2019,9 +2019,19 @@ describe("Claude SDK backend", () => {
     const first = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Start the dev server" }] });
     await f.waitForTurn();
     const onSessionClosed = vi.fn();
-    const next = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Is it still up?" }], onSessionClosed });
+    // A wake PwrAgent sends into the live session keeps its sender too.
+    const wake: AppServerThreadMessageOrigin = { kind: "pwragent", systemReason: "monitor-job-suggestion" };
+    const next = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Is it still up?" }], onSessionClosed,
+      messageOrigin: wake });
     await f.waitForTurn();
     expect(f.run).toHaveBeenCalledOnce();
+    const userItems = f.events.flatMap((event) => event.notification.method === "item/completed"
+      && (event.notification.params as { item: { type: string } }).item.type === "userMessage"
+      ? [(event.notification.params as { item: Record<string, unknown> }).item] : []);
+    const firstItem = userItems.find((item) => item.id === `user:${first.turnId}`);
+    expect(firstItem).toBeDefined();
+    expect(firstItem).not.toHaveProperty("origin");
+    expect(userItems.find((item) => item.id === `user:${next.turnId}`)).toEqual(expect.objectContaining({ origin: wake }));
     expect(second).toMatchObject({ type: "user", priority: "next", message: { content: [{ type: "text", text: "Is it still up?" }] } });
     expect(f.events.filter((event) => event.notification.method === "thread/tokenUsage/updated").map((event) => event.notification.params))
       .toMatchObject([
