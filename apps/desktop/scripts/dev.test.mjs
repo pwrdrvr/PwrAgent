@@ -64,7 +64,7 @@ describe("dev launch wrapper", () => {
 
   it("checks sandbox permissions after preparing the runtime", () => {
     expect(DEV_SETUP_SCRIPTS).toEqual([
-      "./scripts/build-mcp-ipc-relay.mjs",
+      ["./scripts/build-mcp-ipc-relay.mjs", "--optional"],
       ["./scripts/stage-ripgrep-bundle.mjs", "--platform", "current"],
       "./scripts/ensure-electron-runtime.mjs",
       ["../../scripts/linux-sandbox.mjs", "--warn"],
