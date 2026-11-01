@@ -4,7 +4,7 @@ import { createServer, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -44,6 +44,7 @@ async function fixture() {
       return;
     }
     let text = "";
+    req.setEncoding("utf8");
     for await (const chunk of req) text += chunk;
     const body = text ? JSON.parse(text) : {};
     requests.push({ method: req.method!, target: req.url!, authorization: req.headers.authorization, body });
@@ -147,8 +148,15 @@ describe("verified HTTP MCP over local IPC", () => {
     // Cross several native 16 KiB buffers in both directions, with UTF-8
     // and fragmented HTTP response writes, while the other pipe reader waits.
     const args = { text: "hello ☃".repeat(4096) };
-    expect(await client.callTool({ name: "echo", arguments: args })).toMatchObject({
-      _meta: { fixture: "call" }, content: [{ text: JSON.stringify(args), annotations: { audience: ["user"] } }],
+    const call = await client.callTool({ name: "echo", arguments: args });
+    expect(call).toMatchObject({
+      _meta: { fixture: "call" }, content: [{ type: "text", annotations: { audience: ["user"] } }],
+    });
+    const echoed = (call.content as { text: string }[])[0]!.text;
+    const expected = JSON.stringify(args);
+    // Keep failure output bounded while checking every byte of the payload.
+    expect({ length: echoed.length, digest: createHash("sha256").update(echoed).digest("hex") }).toEqual({
+      length: expected.length, digest: createHash("sha256").update(expected).digest("hex"),
     });
     expect((await client.listResources()).resources[0]).toMatchObject({ _meta: { fixture: "resource" } });
     expect(await client.readResource({ uri: "fixture:///readme" })).toMatchObject({ _meta: { fixture: "read" } });
