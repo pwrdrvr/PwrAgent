@@ -38739,7 +38739,9 @@ button.pricing-token-miser__folded:focus-visible {
 
 @media (prefers-reduced-motion: no-preference) {
   .usage-pace-card__hit::after {
-    animation: usage-pace-ping 1.8s ease-out infinite;
+    /* Announce the projection, then let its dot and label carry the warning
+       without keeping the compositor drawing at the display refresh rate. */
+    animation: usage-pace-ping 1.8s ease-out 2;
   }
 }
 
