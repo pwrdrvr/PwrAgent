@@ -1588,8 +1588,8 @@ export function PluginsSettings(props: {
                   * so first is cheaper than a discovery failure afterwards.
                   */}
                 <p className="settings-mcp-create__constraint">
-                  A remote server that signs in with OAuth. PwrAgent keeps its
-                  credentials and refreshes them.
+                  Network servers sign in with OAuth. Local unix:// and pipe://
+                  HTTP servers use approval in the server app.
                 </p>
                 <div className="settings-mcp-create__fields">
                   <label>

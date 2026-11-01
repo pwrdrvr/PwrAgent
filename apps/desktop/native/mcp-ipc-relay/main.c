@@ -31,30 +31,27 @@ static TOKEN_USER *user_of(HANDLE process) {
   return user;
 }
 
-static HANDLE verified_pipe(const wchar_t *path) {
-  if (wcsncmp(path, L"\\\\.\\pipe\\", 9) || !path[9]
-    || wcspbrk(path + 9, L"\\/:?*\"<>|")) fail("expected a local Windows pipe name");
-  /* SECURITY_IDENTIFICATION prevents the server impersonating this client.
-   * No WaitNamedPipe/retry: a busy, absent or replaced endpoint fails once.
-   */
-  HANDLE pipe = CreateFileW(path, GENERIC_READ | GENERIC_WRITE | READ_CONTROL,
-    0, NULL, OPEN_EXISTING, SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, NULL);
-  if (pipe == INVALID_HANDLE_VALUE) fail("cannot open local pipe");
-  if (GetFileType(pipe) != FILE_TYPE_PIPE) fail("endpoint is not a pipe");
+static void same_user(PSID expected, PSID actual, const char *message) {
+  if (!actual || !IsValidSid(actual) || !EqualSid(actual, expected)) {
+    SetLastError(ERROR_ACCESS_DENIED); fail(message);
+  }
+}
+
+static void verify_pipe_identity(HANDLE pipe) {
   TOKEN_USER *user = user_of(GetCurrentProcess());
   PSID owner = NULL;
   PSECURITY_DESCRIPTOR descriptor = NULL;
   DWORD error = GetSecurityInfo(pipe, SE_KERNEL_OBJECT, OWNER_SECURITY_INFORMATION,
     &owner, NULL, NULL, NULL, &descriptor);
   if (error != ERROR_SUCCESS) { SetLastError(error); fail("cannot verify connected pipe owner"); }
-  if (!owner || !IsValidSid(owner) || !EqualSid(owner, user->User.Sid)) fail("pipe owner is another user");
+  same_user(user->User.Sid, owner, "pipe owner is another user");
   LocalFree(descriptor);
   ULONG pid = 0, checked_pid = 0;
   if (!GetNamedPipeServerProcessId(pipe, &pid) || !pid) fail("cannot verify pipe server process");
   HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
   if (!process) fail("cannot open pipe server identity");
   TOKEN_USER *server = user_of(process);
-  if (!EqualSid(server->User.Sid, user->User.Sid)) fail("pipe server is another user");
+  same_user(user->User.Sid, server->User.Sid, "pipe server is another user");
   /* Hold the process handle through verification and recheck the connected
    * instance. A dead/reused PID is never accepted as an identity lookup.
    */
@@ -65,6 +62,19 @@ static HANDLE verified_pipe(const wchar_t *path) {
   free(server);
   free(user);
   CloseHandle(process);
+}
+
+static HANDLE verified_pipe(const wchar_t *path) {
+  if (wcsncmp(path, L"\\\\.\\pipe\\", 9) || !path[9]
+    || wcspbrk(path + 9, L"\\/:?*\"<>|")) fail("expected a local Windows pipe name");
+  /* SECURITY_IDENTIFICATION prevents the server impersonating this client.
+   * No WaitNamedPipe/retry: a busy, absent or replaced endpoint fails once.
+   */
+  HANDLE pipe = CreateFileW(path, GENERIC_READ | GENERIC_WRITE | READ_CONTROL,
+    0, NULL, OPEN_EXISTING, SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, NULL);
+  if (pipe == INVALID_HANDLE_VALUE) fail("cannot open local pipe");
+  if (GetFileType(pipe) != FILE_TYPE_PIPE) fail("endpoint is not a pipe");
+  verify_pipe_identity(pipe);
   return pipe;
 }
 

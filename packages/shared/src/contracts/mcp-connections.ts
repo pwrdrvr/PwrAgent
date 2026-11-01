@@ -352,8 +352,8 @@ export type McpConnectionsChangedEvent = {
 };
 
 /**
- * Add a connection. Exactly one of `serverUrl` (a remote server that signs in
- * with OAuth) or `stdio` (a local command) is given.
+ * Add a connection. Exactly one of `serverUrl` (network HTTP with OAuth or
+ * verified local HTTP IPC) or `stdio` (a local command) is given.
  */
 export type CreateMcpConnectionRequest = {
   displayName: string;
