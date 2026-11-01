@@ -1,38 +1,21 @@
 import { ForgeReadError, repositoryKey, type ForgeRepository } from "./forge-tool-contract";
-import { repositoryFromPr, resolveForgeRepositories, sameRepository, type ForgeReadScope } from "./forge-read-service";
-import { readCheckedOutBranch, readForgeRepositoryRemotes } from "./git-remote";
+import { repositoryFromPr, resolveForgeRepositories, type ForgeReadScope } from "./forge-read-service";
 import type { ForgePrToolContext } from "./forge-pr-tool-shared";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "./forge-pr-tool-contract";
 
 export type ForgePrToolScope = Pick<ForgeReadScope, "remotes" | "attached" | "branch"> & {
   directories: string[];
   privateRoots: readonly string[];
-  /**
-   * The branch checked out now in the thread's directories for one repository.
-   * Thread metadata can lag a branch the agent made during the turn.
-   */
-  readCheckedOutBranch?: (repository: ForgeRepository) => Promise<string | undefined>;
 };
 
 /** What a call acts on, settled before the operator is asked. */
 export type ForgePrToolPreparedCall = { repository: ForgeRepository; args: ForgePrToolArgs };
 
-/**
- * The branch checked out in the directories whose remotes name `repository`.
- * Undefined when HEAD is detached, git fails, or the directories disagree.
- */
-export async function readCheckedOutBranchForRepository(directories: readonly string[], repository: ForgeRepository): Promise<string | undefined> {
-  const branches = new Set<string>();
-  await Promise.all(directories.map(async (cwd) => {
-    const remotes = await readForgeRepositoryRemotes(cwd);
-    if (!remotes.some((remote) => sameRepository(remote, repository))) return;
-    const branch = await readCheckedOutBranch(cwd);
-    if (branch) branches.add(branch);
-  }));
-  return branches.size === 1 ? [...branches][0] : undefined;
-}
-
-type ProviderClient = { execute(operation: ForgePrToolOperation, args: ForgePrToolArgs, ctx: ForgePrToolContext): Promise<unknown> };
+type ProviderClient = {
+  execute(operation: ForgePrToolOperation, args: ForgePrToolArgs, ctx: ForgePrToolContext): Promise<unknown>;
+  /** Whether a branch exists on the forge. Undefined when that cannot be told. */
+  headBranchExists?(repository: ForgeRepository, head: string, signal?: AbortSignal): Promise<boolean | undefined>;
+};
 
 /** Picks the one GitHub or GitLab repository a call acts in, then runs it with that provider's client. */
 export class ForgePrToolService {
@@ -52,16 +35,20 @@ export class ForgePrToolService {
   }
 
   /**
-   * Settles the repository and the pull request head before any approval
-   * card, so a call that would fail is refused without asking and the card
-   * names the branch it opens from.
+   * Settles what a call acts on before any approval card, so a call that
+   * would fail is refused without asking. An approved pull request whose
+   * head was never pushed fails at the forge, and the agent's retry asks
+   * the operator a second time.
    */
-  async prepare(operation: ForgePrToolOperation, args: ForgePrToolArgs, scope: ForgePrToolScope): Promise<ForgePrToolPreparedCall> {
+  async prepare(operation: ForgePrToolOperation, args: ForgePrToolArgs, scope: ForgePrToolScope, signal?: AbortSignal): Promise<ForgePrToolPreparedCall> {
     const repository = this.resolveRepository(args, scope);
-    if (operation !== "create_pull_request" || args.head) return { repository, args };
-    const head = await scope.readCheckedOutBranch?.(repository) ?? scope.branch;
-    if (!head || head === "HEAD") throw new ForgeReadError("invalid_arguments", "Pass head: this thread has no checked-out branch. Push the branch first.");
-    return { repository, args: { ...args, head } };
+    if (operation === "create_pull_request" && args.head) {
+      const exists = await this.options.clients[repository.provider].headBranchExists?.(repository, args.head, signal);
+      if (exists === false) {
+        throw new ForgeReadError("invalid_arguments", `Branch ${args.head} is not on ${repository.owner}/${repository.repo}. Push it, then open the pull request.`);
+      }
+    }
+    return { repository, args };
   }
 
   async execute(operation: ForgePrToolOperation, args: ForgePrToolArgs, scope: ForgePrToolScope, signal?: AbortSignal): Promise<unknown> {

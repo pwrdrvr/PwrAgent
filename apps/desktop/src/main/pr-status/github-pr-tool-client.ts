@@ -96,6 +96,18 @@ export class GithubPrToolClient {
     tempRoots?: string[];
   }) {}
 
+  /** Whether `head` is a branch of the repository. Undefined for a fork's head or when GitHub cannot say. */
+  async headBranchExists(r: ForgeRepository, head: string, signal?: AbortSignal): Promise<boolean | undefined> {
+    if (r.provider !== "github" || head.includes(":")) return undefined;
+    const ref = head.split("/").map(encodeURIComponent).join("/");
+    try {
+      await this.options.ci.requestGithub(r, { path: `repos/${encodeURIComponent(r.owner)}/${encodeURIComponent(r.repo)}/git/ref/heads/${ref}` }, signal);
+      return true;
+    } catch (error) {
+      return error instanceof ForgeReadError && error.code === "not_found" ? false : undefined;
+    }
+  }
+
   async execute(operation: ForgePrToolOperation, args: ForgePrToolArgs, ctx: ForgePrToolContext): Promise<unknown> {
     const r = ctx.repository;
     if (r.provider !== "github") throw new ForgeReadError("unsupported_provider", "This tool supports GitHub and GitHub Enterprise repositories. GitLab supports the CI read tools.");

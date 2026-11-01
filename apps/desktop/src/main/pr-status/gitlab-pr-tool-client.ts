@@ -94,6 +94,17 @@ export class GitlabPrToolClient {
     tempRoots?: string[];
   }) {}
 
+  /** Whether `head` is a branch of the project. Undefined for a fork's head or when GitLab cannot say. */
+  async headBranchExists(r: ForgeRepository, head: string, signal?: AbortSignal): Promise<boolean | undefined> {
+    if (r.provider !== "gitlab" || head.includes(":")) return undefined;
+    try {
+      await this.options.gitlab.readApi<unknown>(r.host, `projects/${encodeURIComponent(`${r.owner}/${r.repo}`)}/repository/branches/${encodeURIComponent(head)}`, signal);
+      return true;
+    } catch (error) {
+      return error instanceof GitLabReadError && error.status === 404 ? false : undefined;
+    }
+  }
+
   async execute(operation: ForgePrToolOperation, args: ForgePrToolArgs, ctx: ForgePrToolContext): Promise<unknown> {
     try {
       return await this.run(operation, args, ctx);

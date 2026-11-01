@@ -186,20 +186,6 @@ export async function resolveForgeReposForDirectory(
   return [...repos.values()];
 }
 
-/** The branch checked out in `cwd`, or undefined when HEAD is detached or git fails. */
-export async function readCheckedOutBranch(cwd: string): Promise<string | undefined> {
-  try {
-    const { stdout } = await runGitCommand(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"], {
-      env: buildPwrAgentChildProcessEnv(process.env),
-      maxBuffer: 64 * 1024,
-      timeout: GIT_REMOTE_TIMEOUT_MS,
-    });
-    return stdout.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /** Unclassified hosts require explicit product evidence from the caller. */
 export async function readForgeRepositoryRemotes(cwd: string): Promise<GitHubRepoRef[]> {
   return (await readParsedGitRemotes(cwd, {})).flatMap(({ repo }) => repo ? [repo] : []);
