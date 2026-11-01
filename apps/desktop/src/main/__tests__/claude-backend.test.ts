@@ -3021,7 +3021,7 @@ describe("Claude transcript fidelity", () => {
     expect(group.details.filter((detail) => !detail.id.endsWith(":output")).map((detail) => detail.label)).toEqual([
       "Read index.ts", "Searched for TODO in src", "Fetched https://example.com/docs",
     ]);
-    expect(group.details.find((detail) => detail.id === "fetch-1")).toMatchObject({ url: "https://example.com/docs" });
+    expect(group.details.find((detail) => detail.id === "fetch-1")).toMatchObject({ url: "https://example.com/docs", status: "completed" });
   });
 
   it("links a published artifact instead of showing the result's instructions", async () => {

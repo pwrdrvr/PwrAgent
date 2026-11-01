@@ -2099,9 +2099,11 @@ export class ClaudeBackend {
             await this.emit({ method: "turn/diff/updated", params: { threadId, turnId, diff: claudeTurnDiff(turn.fileDiffs) } });
           }
         } else if (!artifact || artifact.keepOutput) {
-          // Keep the invocation when updating generic tools, too.
+          // Keep the invocation when updating generic tools, too, with the
+          // call's final status: it was recorded while the call ran.
           const outputId = `${entry.id}:output`;
-          entry.details = [...entry.details.filter((detail) => detail.id !== outputId), {
+          const [invocation, ...rest] = entry.details.filter((detail) => detail.id !== outputId);
+          entry.details = [...(invocation ? [{ ...invocation, status: entry.status }] : []), ...rest, {
             id: outputId, kind: entry.details[0].kind, label: `${entry.summary} output`,
             ...(output || !images.length ? { markdown: output } : {}),
             ...(images.length ? { images } : {}),
