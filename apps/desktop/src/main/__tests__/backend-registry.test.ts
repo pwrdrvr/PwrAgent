@@ -54721,16 +54721,17 @@ script = "printf setup"
         startThreadResult: { threadId: "codex-monitor-thread" },
       });
       const claimedTurns = new Set<string>();
+      const overlayStore = {
+        ...createOverlayStoreMock(),
+        claimMonitorJobSuggestion: ({ turnId }: { turnId: string }) => {
+          if (claimedTurns.has(turnId)) return false;
+          claimedTurns.add(turnId);
+          return true;
+        },
+      };
       const registry = new DesktopBackendRegistry({
         codexClient,
-        overlayStore: {
-          ...createOverlayStoreMock(),
-          claimMonitorJobSuggestion: ({ turnId }: { turnId: string }) => {
-            if (claimedTurns.has(turnId)) return false;
-            claimedTurns.add(turnId);
-            return true;
-          },
-        },
+        overlayStore,
         agentToolMcpServer: null,
         pdfToolMcpServer: null,
         resolveTaskMonitorModels: () => params.taskMonitorModels ?? {},
@@ -54776,7 +54777,7 @@ script = "printf setup"
         await registry.close();
         await rm(root, { recursive: true, force: true });
       };
-      return { close, codexClient, prompts, registry, release, root, store };
+      return { close, codexClient, overlayStore, prompts, registry, release, root, store };
     }
 
     it("runs on Claude's lightweight model in an ephemeral thread, and can complete", async () => {
@@ -54856,6 +54857,67 @@ script = "printf setup"
         releaseRecovery();
         await vi.waitFor(async () => {
           await expect(store.read(monitorThreadId)).rejects.toBeDefined();
+        });
+      } finally {
+        releaseRecovery();
+        await close();
+      }
+    });
+
+    it.each([
+      { name: "without causal context", causalContext: {} },
+      {
+        name: "with causal context",
+        causalContext: { causalMessagingSource: { ownerId: "owner-1", requestId: "request-1" } },
+      },
+    ])("labels the monitor's brief and recovery prompt as sub-agent input $name", async ({ causalContext }) => {
+      let releaseRecovery!: () => void;
+      const laterQueriesHeld = new Promise<void>((resolve) => { releaseRecovery = resolve; });
+      const { close, overlayStore, prompts, registry, release } = await createClaudeMonitorRegistry({ laterQueriesHeld });
+      try {
+        if (causalContext.causalMessagingSource) {
+          // The parent turn came from messaging, and its tools are allowed.
+          await overlayStore.upsertThreadMessageOrigin!({
+            backend: "claude", threadId: parentThreadId, messageId: "user:parent-turn",
+            origin: { kind: "messaging", ...causalContext },
+          });
+          registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: vi.fn(),
+            checkDynamicToolPermission: () => ({ allowed: true }),
+            authorizeRetainedTool: async () => ({ allowed: true }),
+          });
+        }
+        const response = await callRegistryMcpTool({
+          registry,
+          backend: "claude",
+          threadId: parentThreadId,
+          turnId: "parent-turn",
+          tool: "create_monitor_delegation",
+          args: { task: "Watch PR #8 checks until they finish." },
+        });
+        expect(response.isError).not.toBe(true);
+        const monitorThreadId = String(response.structuredContent?.monitorThreadId);
+        const monitorTurnId = String(response.structuredContent?.monitorTurnId);
+        const origin = { kind: "sub-agent", ...causalContext };
+        const readUserOrigins = async () =>
+          (await registry.readThread({ backend: "claude", threadId: monitorThreadId })).replay.messages
+            .flatMap((message) => message.role === "user" ? [{ id: message.id, origin: message.origin }] : []);
+
+        // The live monitor thread's brief carries its origin.
+        await vi.waitFor(() => expect(prompts).toHaveLength(1));
+        await expect(readUserOrigins()).resolves.toEqual([{ id: `user:${monitorTurnId}`, origin }]);
+
+        // The first turn ends without complete_monitoring, so PwrAgent
+        // writes a recovery instruction into the same thread.
+        release();
+        await vi.waitFor(() => expect(prompts.length).toBeGreaterThanOrEqual(2));
+        await vi.waitFor(async () => {
+          const origins = await readUserOrigins();
+          expect(origins).toHaveLength(2);
+          expect(origins[1]?.id).not.toBe(`user:${monitorTurnId}`);
+          expect(origins[1]?.origin).toEqual(origin);
+        });
+        expect(overlayStore.upsertThreadMessageOrigin).toHaveBeenCalledWith({
+          backend: "claude", threadId: monitorThreadId, messageId: `user:${monitorTurnId}`, origin,
         });
       } finally {
         releaseRecovery();
@@ -66889,6 +66951,119 @@ script = "printf setup"
           }),
         }),
       ],
+    });
+
+    await registry.close();
+  });
+
+  it.each([
+    { name: "without causal context", causalContext: {} },
+    {
+      name: "with causal context",
+      causalContext: { causalMessagingAmbiguous: true },
+    },
+  ])("persists a sub-agent origin for ACP monitor brief and recovery prompts $name", async ({ causalContext }) => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const parentThreadId = "acp-parent";
+    const startPrompt = vi.fn((params: {
+      sessionId: string;
+      prompt: string;
+      turnId?: string;
+    }) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? `turn:${params.sessionId}`,
+    }));
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        [`${acpBackendId}:${parentThreadId}`]: {
+          backend: acpBackendId,
+          threadId: parentThreadId,
+          executionMode: "default",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessions: [{
+        backendId: acpBackendId,
+        sessionId: parentThreadId,
+        title: "ACP Parent",
+        cwd: "/repo/app",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      }],
+      sessionId: "acp-monitor",
+      startPrompt,
+      overlayStore,
+    });
+    if (causalContext.causalMessagingAmbiguous) {
+      // The parent turn came from messaging, and its tools are allowed.
+      await overlayStore.upsertThreadMessageOrigin!({
+        backend: acpBackendId, threadId: parentThreadId, messageId: "user:parent-turn",
+        origin: { kind: "messaging", ...causalContext },
+      });
+      registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: vi.fn(),
+        checkDynamicToolPermission: () => ({ allowed: true }),
+        authorizeRetainedTool: async () => ({ allowed: true }),
+      });
+    }
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: parentThreadId,
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      turnId: "parent-turn",
+      tool: "create_monitor_delegation",
+      args: { task: "Watch the deployment until it finishes." },
+    });
+    expect(response.isError).not.toBe(true);
+    const monitorThreadId = String(
+      response.structuredContent?.monitorThreadId,
+    );
+    const firstMonitorTurnId = String(
+      response.structuredContent?.monitorTurnId,
+    );
+    const origin = { kind: "sub-agent", ...causalContext };
+    expect(overlayStore.upsertThreadMessageOrigin).toHaveBeenCalledWith({
+      backend: acpBackendId,
+      threadId: monitorThreadId,
+      messageId: `user:${firstMonitorTurnId}`,
+      origin,
+    });
+
+    await emitCompletedTurn(
+      registry,
+      acpBackendId,
+      parentThreadId,
+      "parent-turn",
+    );
+    await emitCompletedTurn(
+      registry,
+      acpBackendId,
+      monitorThreadId,
+      firstMonitorTurnId,
+    );
+    expect(startPrompt).toHaveBeenCalledTimes(2);
+    const recoveryTurnId = String(startPrompt.mock.calls[1]?.[0].turnId);
+    expect(recoveryTurnId).not.toBe(firstMonitorTurnId);
+    expect(overlayStore.upsertThreadMessageOrigin).toHaveBeenCalledWith({
+      backend: acpBackendId,
+      threadId: monitorThreadId,
+      messageId: `user:${recoveryTurnId}`,
+      origin,
     });
 
     await registry.close();
