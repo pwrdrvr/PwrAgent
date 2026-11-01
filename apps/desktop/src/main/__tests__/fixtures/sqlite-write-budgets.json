@@ -1258,6 +1258,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "thread-todo-start-origin": {"commits": 1, "note": "One to-do Start thread click: the started thread's first prompt with its to-do origin. The origin row is the only write the card adds; 1 commit, measured 12,360 bytes (~1.2 MB/day at 100 starts/day), zero idle writes.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
   "thread-todo-start-with-plan": {
     "commits": 2,
     "note": "one Start thread from a card with a 3-step plan: one commit for the new thread's plan card and one for marking the start card done; only on an operator's Start click, never per turn or event; ~24 KB WAL per start, ~1.2 MB/day at 50 starts, half of it the plan card",

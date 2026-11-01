@@ -46954,16 +46954,116 @@ script = "printf setup"
       method: "turn/started", params: { threadId: "recipient", turnId: "busy", turn: { id: "busy" } },
     } });
     const prompt = "Refresh #42.\n\nKeep the current worktree.";
+    const todo = { id: "todo-7", title: "Refresh the PR" };
     await registry.sendThreadTodoMessage({ sourceBackend: "codex", sourceThreadId: "sender",
-      target: { backend: "codex", threadId: "recipient" }, prompt });
+      target: { backend: "codex", threadId: "recipient" }, prompt, todo });
     const queued = registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")]!;
     expect(queued).toHaveLength(1);
     const content = await registry.readQueuedTurn({ backend: "codex", threadId: "recipient", queueEntryId: queued[0]!.queueEntryId });
     expect(content.input).toEqual([{ type: "text", text: prompt }]);
-    expect(content.messageOrigin?.sourceThread).toMatchObject({ backend: "codex", threadId: "sender" });
+    // The raising thread and the card; the operator's click is no agent turn.
+    expect(content.messageOrigin).toEqual({
+      kind: "agent",
+      sourceThread: {
+        backend: "codex", threadId: "sender", title: "sender",
+        messageId: expect.stringMatching(/^correspondence:/),
+      },
+      threadTodo: todo,
+    });
     expect(codexClient.startTurnCalls).toHaveLength(0);
     await expect(registry.sendThreadTodoMessage({ sourceBackend: "codex", sourceThreadId: "sender",
-      target: { backend: "codex", threadId: "sender" }, prompt })).rejects.toThrow(/another thread/);
+      target: { backend: "codex", threadId: "sender" }, prompt, todo })).rejects.toThrow(/another thread/);
+  });
+
+  it("carries a to-do request's card to a remote target", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{ id: "sender", title: "Sender", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    const federatedSend = vi.fn(async (request: PwrAgentFederatedThreadMessageRequest) => ({
+      backend: request.backend, threadId: request.threadId, turnId: "remote-turn",
+      instanceId: "peer", instanceLabel: "Studio",
+    }));
+    registry.setFederatedThreadMessageHandler(federatedSend);
+
+    await registry.sendThreadTodoMessage({ sourceBackend: "codex", sourceThreadId: "sender",
+      target: { backend: "codex", threadId: "remote-recipient", instanceId: "peer" },
+      prompt: "Pick this up", todo: { id: "todo-8", title: "Hand it over" } });
+
+    expect(federatedSend).toHaveBeenCalled();
+    expect(federatedSend.mock.lastCall?.[0].messageOrigin).toEqual({
+      kind: "agent",
+      sourceThread: {
+        backend: "codex", threadId: "sender", title: "Sender",
+        messageId: expect.stringMatching(/^correspondence:/),
+      },
+      threadTodo: { id: "todo-8", title: "Hand it over" },
+    });
+  });
+
+  it("never lets an agent's own send claim a to-do card", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{ id: "sender", title: "Sender", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    const federatedSend = vi.fn(async (request: PwrAgentFederatedThreadMessageRequest) => ({
+      backend: request.backend, threadId: request.threadId, turnId: "remote-turn",
+      instanceId: "peer", instanceLabel: "Studio",
+    }));
+    registry.setFederatedThreadMessageHandler(federatedSend);
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "sender", turnId: "turn-1", turn: { id: "turn-1" } },
+    } });
+    const internal = registry as unknown as {
+      threadOrchestrationHandler: (request: PwrAgentThreadOrchestrationRequest) => Promise<PwrAgentThreadOrchestrationResponse>;
+    };
+
+    const response = await internal.threadOrchestrationHandler({
+      operation: "send_message_to_thread",
+      context: { backend: "codex", threadId: "sender", turnId: "turn-1" },
+      args: {
+        backend: "codex", threadId: "remote-recipient", instanceId: "peer", prompt: "Pick this up",
+        threadTodo: { id: "forged", title: "Forged card" },
+      } as never,
+    });
+
+    expect(response.ok).toBe(true);
+    expect(federatedSend).toHaveBeenCalled();
+    for (const [request] of federatedSend.mock.calls) {
+      expect(request.messageOrigin).not.toHaveProperty("threadTodo");
+    }
+    expect(federatedSend.mock.lastCall?.[0].messageOrigin?.sourceThread).toMatchObject({ threadId: "sender", turnId: "turn-1" });
+  });
+
+  it("builds a to-do origin from the raising thread without a fallback title or a turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [
+        { id: "named", title: "Named", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] },
+        { id: "unnamed", title: "New thread", titleSource: "fallback" as const, source: "codex" as const, linkedDirectories: [] },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+
+    await expect(registry.buildThreadTodoMessageOrigin({
+      backend: "codex", threadId: "named", todo: { id: "todo-9", title: "  Ship it  " },
+    })).resolves.toEqual({
+      kind: "agent",
+      sourceThread: { backend: "codex", threadId: "named", title: "Named" },
+      threadTodo: { id: "todo-9", title: "Ship it" },
+    });
+    await expect(registry.buildThreadTodoMessageOrigin({
+      backend: "codex", threadId: "unnamed", todo: { id: "todo-10" },
+    })).resolves.toEqual({
+      kind: "agent",
+      sourceThread: { backend: "codex", threadId: "unnamed" },
+      threadTodo: { id: "todo-10" },
+    });
   });
 
   it("keeps cross-thread queue content lossless and persists sender correspondence through cancellation and reload", async () => {

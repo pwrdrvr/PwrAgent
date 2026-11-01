@@ -110,6 +110,7 @@ import {
 } from "@pwragent/shared";
 import { codexNativeSubAgentName, readCodexNativeSubAgentName } from "@pwragent/shared";
 import { isThreadLockRefusal, normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
+import { threadTodoMessageOriginFromUnknown } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
 import {
   isRemoteLaunchpadStorageKey,
@@ -42718,12 +42719,29 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /** Operator dispatch of a to-do card: the raising thread, never a delegated turn. */
+  async buildThreadTodoMessageOrigin(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    todo: { id: string; title?: string };
+  }): Promise<AppServerThreadMessageOrigin> {
+    // No turnId on purpose: the operator clicked the card, so no agent turn
+    // sent this and no causal messaging or delegated lineage applies.
+    const messageOrigin = await this.buildAgentMessageOrigin({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const threadTodo = threadTodoMessageOriginFromUnknown(params.todo);
+    return threadTodo ? { ...messageOrigin, threadTodo } : messageOrigin;
+  }
+
   /** Operator-approved to-do dispatch uses the same routing, queue and receipts as agent messages. */
   async sendThreadTodoMessage(params: {
     sourceBackend: AppServerBackendKind;
     sourceThreadId: string;
     target: { backend: AppServerBackendKind; threadId: string; instanceId?: string };
     prompt: string;
+    todo: { id: string; title?: string };
   }): Promise<void> {
     const response = await this.deliverMessageToThread({
       operation: "send_message_to_thread",
@@ -42733,7 +42751,7 @@ export class DesktopBackendRegistry {
         includeRemote: params.target.instanceId !== undefined,
         prompt: params.prompt,
       },
-    });
+    }, { threadTodo: params.todo });
     if (!response.ok) throw new Error(response.error.message);
   }
 
@@ -42758,6 +42776,8 @@ export class DesktopBackendRegistry {
 
   private async deliverMessageToThread(
     request: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">,
+    /** Set only by the operator's to-do dispatch, never from tool arguments. */
+    options?: { threadTodo?: { id: string; title?: string } },
   ): Promise<PwrAgentThreadOrchestrationResponse> {
     const backend = request.args.backend;
     if (!isAppServerBackendKind(backend)) {
@@ -42826,6 +42846,8 @@ export class DesktopBackendRegistry {
         threadId: request.context.threadId,
         turnId: request.context.turnId,
       });
+      const threadTodo = threadTodoMessageOriginFromUnknown(options?.threadTodo);
+      if (threadTodo) messageOrigin.threadTodo = threadTodo;
       source.title = messageOrigin.sourceThread?.title;
       if (messageOrigin.sourceThread) {
         messageOrigin.sourceThread = { ...messageOrigin.sourceThread, messageId: correspondenceId };

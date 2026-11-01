@@ -1,4 +1,8 @@
-import type { AppServerThreadMessageOrigin, CelestialIconId } from "@pwragent/shared";
+import {
+  threadTodoMessageOriginFromUnknown,
+  type AppServerThreadMessageOrigin,
+  type CelestialIconId,
+} from "@pwragent/shared";
 
 export type ResolvedSourceInstance = {
   label: string;
@@ -14,7 +18,10 @@ export function authenticateMessageOrigin(params: {
 }): AppServerThreadMessageOrigin | undefined {
   const sourceThread = params.messageOrigin?.sourceThread;
   if (!params.messageOrigin || !sourceThread) {
-    return params.messageOrigin;
+    if (params.messageOrigin?.threadTodo === undefined) return params.messageOrigin;
+    // A to-do marker names the thread that raised the card; without one it is noise.
+    const { threadTodo: _threadTodo, ...messageOrigin } = params.messageOrigin;
+    return messageOrigin;
   }
 
   let sourceInstance: ResolvedSourceInstance | undefined;
@@ -25,8 +32,13 @@ export function authenticateMessageOrigin(params: {
     // temporarily unavailable. Never fall back to caller-provided identity.
   }
 
+  const { threadTodo: rawThreadTodo, ...messageOrigin } = params.messageOrigin;
+  const threadTodo = messageOrigin.kind === "agent"
+    ? threadTodoMessageOriginFromUnknown(rawThreadTodo)
+    : undefined;
   return {
-    ...params.messageOrigin,
+    ...messageOrigin,
+    ...(threadTodo ? { threadTodo } : {}),
     sourceThread: {
       backend: sourceThread.backend,
       instanceId: params.sourceInstanceId,
