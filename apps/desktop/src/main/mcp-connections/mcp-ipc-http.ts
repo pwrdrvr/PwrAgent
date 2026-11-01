@@ -8,6 +8,9 @@ import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { parseMcpIpcUrl, type McpIpcEndpoint } from "@pwragent/shared";
 
 const IPC_ORIGIN = "http://pwragent-ipc.invalid";
+export const MCP_IPC_NO_RECONNECT = {
+  maxRetries: 0, maxReconnectionDelay: 0, initialReconnectionDelay: 0, reconnectionDelayGrowFactor: 1,
+};
 
 export function validateMcpIpcPlatform(endpoint: McpIpcEndpoint, platform = process.platform): void {
   if ((endpoint.scheme === "pipe" && platform !== "win32")
@@ -71,7 +74,7 @@ async function openRelay(path: string, executable: string, signal: AbortSignal):
   return await new Promise((resolveSocket, reject) => {
     let detail = "";
     const timer = setTimeout(() => failed(new Error("Timed out verifying the MCP IPC peer.")), 10_000);
-    const abort = (): void => failed(new Error("MCP IPC connection cancelled."));
+    const abort = (): void => failed(signal.reason instanceof Error ? signal.reason : new Error("MCP IPC connection cancelled."));
     const cleanup = (): void => {
       clearTimeout(timer);
       signal.removeEventListener("abort", abort);
@@ -117,8 +120,8 @@ export function createMcpIpcHttp(serverUrl: string, options: { executable?: stri
   const lifetime = new AbortController();
   const agent = new Agent({ keepAlive: false });
   const pending = new Set<RelaySocket>();
-  const close = (): void => {
-    lifetime.abort();
+  const close = (reason?: Error): void => {
+    lifetime.abort(reason);
     for (const socket of pending) socket.destroy();
     agent.destroy();
   };
@@ -159,7 +162,7 @@ export function createMcpIpcHttp(serverUrl: string, options: { executable?: stri
         if (init?.method === "GET" && responseHeaders.get("content-type")?.startsWith("text/event-stream")) {
           // A notification stream ending must not trigger a new IPC
           // connection/replay during this active MCP session.
-          res.once("end", close);
+          res.once("end", () => close());
         }
         if (empty) res.resume();
         resolveResponse(new Response(empty ? null : Readable.toWeb(res) as ReadableStream<Uint8Array>, {
@@ -170,7 +173,7 @@ export function createMcpIpcHttp(serverUrl: string, options: { executable?: stri
         // Cancellation of one request is not permission to replay it or to
         // invalidate healthy concurrent operations. Other failures end this
         // transport; SDK reconnect attempts fail locally without opening IPC.
-        if (!signal.aborted) close();
+        if (!signal.aborted) close(error);
         reject(error);
       });
       req.end(init?.body ?? undefined);

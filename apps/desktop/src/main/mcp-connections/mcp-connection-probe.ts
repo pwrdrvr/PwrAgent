@@ -5,7 +5,7 @@ import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { ProbeMcpConnectionResponse } from "@pwragent/shared";
 import { MCP_CONNECTION_PROBE_TIMEOUT_MS } from "./mcp-connection-timeouts";
 import { isMcpIpcUrl } from "@pwragent/shared";
-import { createMcpIpcHttp } from "./mcp-ipc-http";
+import { createMcpIpcHttp, MCP_IPC_NO_RECONNECT } from "./mcp-ipc-http";
 
 async function probeIpc(serverUrl: string): Promise<ProbeMcpConnectionResponse> {
   let ipc: ReturnType<typeof createMcpIpcHttp>;
@@ -15,7 +15,7 @@ async function probeIpc(serverUrl: string): Promise<ProbeMcpConnectionResponse> 
     return { ok: false, problem: "not_a_url", message: error instanceof Error ? error.message : String(error) };
   }
   const transport = new StreamableHTTPClientTransport(ipc.url, {
-    fetch: ipc.fetch, reconnectionOptions: { maxRetries: 0 },
+    fetch: ipc.fetch, reconnectionOptions: MCP_IPC_NO_RECONNECT,
   });
   const client = new Client({ name: "PwrAgent", version: "probe" }, { capabilities: {} });
   const signal = AbortSignal.timeout(MCP_CONNECTION_PROBE_TIMEOUT_MS);

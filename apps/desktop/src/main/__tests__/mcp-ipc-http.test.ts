@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
-import { createMcpIpcHttp, validateMcpIpcPlatform } from "../mcp-connections/mcp-ipc-http";
+import { createMcpIpcHttp, MCP_IPC_NO_RECONNECT, validateMcpIpcPlatform } from "../mcp-connections/mcp-ipc-http";
 import { parseMcpIpcUrl } from "@pwragent/shared";
 
 const desktop = resolve("apps/desktop");
@@ -75,7 +75,7 @@ async function fixture() {
 describe("verified HTTP MCP over local IPC", () => {
   it("initializes, discovers, calls, reads and gets prompts without losing metadata", async () => {
     const f = await fixture();
-    const transport = new StreamableHTTPClientTransport(f.ipc.url, { fetch: f.ipc.fetch, reconnectionOptions: { maxRetries: 0 } });
+    const transport = new StreamableHTTPClientTransport(f.ipc.url, { fetch: f.ipc.fetch, reconnectionOptions: MCP_IPC_NO_RECONNECT });
     const client = new Client({ name: "test", version: "1" }, { capabilities: {} });
     cleanups.push(async () => { f.ipc.close(); await client.close(); });
     await client.connect(transport);

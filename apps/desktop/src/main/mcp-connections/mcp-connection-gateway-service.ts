@@ -89,7 +89,7 @@ import {
   McpReauthorizationRequiredError,
 } from "./mcp-oauth-session-coordinator";
 import { createMcpSafeFetch } from "./mcp-safe-fetch";
-import { createMcpIpcHttp } from "./mcp-ipc-http";
+import { createMcpIpcHttp, MCP_IPC_NO_RECONNECT } from "./mcp-ipc-http";
 import { probeMcpConnectionUrl } from "./mcp-connection-probe";
 import {
   MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS,
@@ -2536,7 +2536,7 @@ export class McpConnectionGatewayService {
       const ipc = createMcpIpcHttp(connection.serverUrl);
       const http = new StreamableHTTPClientTransport(ipc.url, {
         fetch: ipc.fetch,
-        reconnectionOptions: { maxRetries: 0 },
+        reconnectionOptions: MCP_IPC_NO_RECONNECT,
       });
       const close = http.close.bind(http);
       http.close = async () => { ipc.close(); await close(); };
