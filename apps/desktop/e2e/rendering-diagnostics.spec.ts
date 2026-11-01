@@ -141,6 +141,42 @@ test("rendering acquisition preserves an external Electron contentTracing owner"
   }
 });
 
+test("rendering trace host stays out of the Window menu during capture", async () => {
+  test.skip(process.platform === "darwin", "macOS owns its native shown-window menu");
+  const app = await launchElectronApp({
+    fixturePath: path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/smoke/replay.fixture.json"),
+  });
+  try {
+    const mainId = await app.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].id);
+    const capture = app.window.evaluate(() => (window as unknown as { pwragent: {
+      captureRenderingDiagnostics: (seconds: number) => Promise<RenderingCaptureResult>;
+    } }).pwragent.captureRenderingDiagnostics(30));
+    void capture.catch(() => {});
+    const hosts = tolerateTransientRpcFailure(() => app.electronApp.evaluate(({ BrowserWindow }, mainId) =>
+      BrowserWindow.getAllWindows().filter((window) => window.id !== mainId).length, mainId));
+    await expect.poll(hosts.read).toBe(1).catch(hosts.rethrowWithLastFailure);
+    const menu = await app.electronApp.evaluate(({ BrowserWindow, Menu }, mainId) => {
+      const main = BrowserWindow.fromId(mainId)!;
+      const host = BrowserWindow.getAllWindows().find((window) => window.id !== mainId)!;
+      host.setTitle("Diagnostic fixture host");
+      // Exercise the production focus handler that rebuilds the menu.
+      main.emit("focus");
+      const rows = Menu.getApplicationMenu()!.items.find((item) => item.label === "Window")!
+        .submenu!.items.filter((item) => !item.role && item.type !== "separator");
+      rows.forEach((item) => item.click(item, main, {} as Electron.KeyboardEvent));
+      return { labels: rows.map((item) => item.label), mainTitle: main.getTitle(), hostVisible: host.isVisible() };
+    }, mainId);
+    expect(menu.labels).toEqual([menu.mainTitle]);
+    expect(menu.hostVisible).toBe(false);
+    await app.window.evaluate(() => (window as unknown as { pwragent: {
+      stopRenderingDiagnostics: () => Promise<RenderingCaptureResult>;
+    } }).pwragent.stopRenderingDiagnostics());
+    await capture;
+  } finally {
+    await app.close();
+  }
+});
+
 test("HotCpuProfiler co-records through rendering capture on independent debugger attachments", async () => {
   const app = await launchElectronApp({
     fixturePath: path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/smoke/replay.fixture.json"),

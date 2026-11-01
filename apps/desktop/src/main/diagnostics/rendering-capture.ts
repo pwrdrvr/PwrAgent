@@ -5,6 +5,13 @@ import { readRenderingSnapshot, type RenderingCaptureResult } from "../../shared
 import { acquireChromiumTrace } from "./chromium-trace-lease";
 import { RENDERER_UPDATE_EVENT_NAMES } from "../../shared/renderer-update-diagnostics";
 
+const traceHosts = new WeakSet<BrowserWindow>();
+
+/** Internal trace targets must never become selectable application windows. */
+export function isRenderingDiagnosticsWindow(window: BrowserWindow): boolean {
+  return traceHosts.has(window);
+}
+
 // No screenshots, JS stacks, user timing, URLs, DOM or trace arguments are exported.
 export const RENDERING_TRACE_CONFIG = {
   recordMode: "recordUntilFull",
@@ -194,6 +201,7 @@ class RenderingCapture {
       // A dedicated, un-navigated target gives this capture an exclusive CDP
       // session. Destroying it cannot detach DevTools or a V8/native CPU profiler.
       const session = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
+      traceHosts.add(session);
       this.session = session;
       const d = session.webContents.debugger;
       this.debuggerApi = d;
