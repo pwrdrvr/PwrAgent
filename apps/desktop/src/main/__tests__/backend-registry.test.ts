@@ -19080,7 +19080,7 @@ script = "echo setup"
           await registry.refreshThreadDirectoryRelationship(identity);
         }
         const overlay = await overlayStore.getThreadOverlayState(identity);
-        expect(overlay?.extraLinkedDirectories).toEqual([attached, primary]);
+        expect(overlay?.extraLinkedDirectories).toEqual([primary, attached]);
         expect(overlay?.retainedWorktrees).toBeUndefined();
         expect(codexClient.lastUpdateThreadWorkspaceParams).toBeUndefined();
 
@@ -19088,7 +19088,7 @@ script = "echo setup"
         // checkouts; an in-memory registry summary cannot establish this.
         expect((await overlayStore.getArchiveCleanupOverlayStates({
           backend: "codex", threadIds: [thread.id],
-        }))[thread.id]?.extraLinkedDirectories).toEqual([attached, primary]);
+        }))[thread.id]?.extraLinkedDirectories).toEqual([primary, attached]);
         const replaceWorkspace = vi.spyOn(overlayStore, "replaceWorkspaceLinkedDirectory");
         await registry.listThreads({
           backend: "codex", enrichDirectories: false, forceRefresh: true,
@@ -19117,7 +19117,7 @@ script = "echo setup"
         try {
           const reopenedStore = new SqliteOverlayStore(reopenedDb);
           expect((await reopenedStore.getThreadOverlayState(identity))?.extraLinkedDirectories)
-            .toEqual([attached, primary]);
+            .toEqual([primary, attached]);
           // The provider does not report the attachment. Archive must find it
           // solely through the persisted overlay, including after restart.
           const archiveClient = Object.assign(new MockBackendClient({

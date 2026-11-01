@@ -37,12 +37,12 @@ describe("SqliteOverlayStore — linked directories", () => {
     const overlay = await store.replaceWorkspaceLinkedDirectory({
       ...identity, directory: repaired, preserveOtherWorktrees: true,
     });
-    expect(overlay.extraLinkedDirectories).toEqual([attached, repaired]);
+    expect(overlay.extraLinkedDirectories).toEqual([repaired, attached]);
     expect(overlay.retainedWorktrees).toEqual([retained]);
     expect((await store.getArchiveCleanupOverlayStates({
       backend: "codex", threadIds: [identity.threadId],
     }))[identity.threadId]).toMatchObject({
-      extraLinkedDirectories: [attached, repaired], retainedWorktrees: [retained],
+      extraLinkedDirectories: [repaired, attached], retainedWorktrees: [retained],
     });
   });
 
