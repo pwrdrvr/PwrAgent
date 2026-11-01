@@ -7531,7 +7531,10 @@ function localBackendOperations(): FederationBackendOperations {
       }
       // A viewer sends relative moves; the owner validates them against its
       // complete child order, the same as a local drag.
-      return await updateLocalSubthreadOrder(request);
+      return await updateLocalSubthreadOrder(request, {
+        localInstanceId: request.move || request.insertAfter
+          ? (await getDesktopFederationRuntime().health()).instanceId : undefined,
+      });
     },
     async setSubthreadsCollapsed(
       request: SetSubthreadsCollapsedRequest,

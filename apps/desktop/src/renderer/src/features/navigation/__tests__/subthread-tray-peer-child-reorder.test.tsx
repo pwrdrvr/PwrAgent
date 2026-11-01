@@ -27,7 +27,7 @@ const POINTER_ID = 41;
  * owns: started on the peer from this machine's tray, so its link names
  * this machine as the parent's owner. The viewer's child page lists both.
  */
-function mount(browseMode: "directories" | "recents") {
+function mount(browseMode: "directories" | "recents", peerParent: "root" | "local-child" = "root") {
   const directory: NavigationDirectoryRow = {
     key: "workspace:/projects", label: "Workspaces", path: "/projects", kind: "workspace",
     counts: { total: 3, active: 0, unread: 0, review: 0 }, pinnedRootCount: 1, unpinnedRootCount: 0, launchpadPresent: false,
@@ -40,10 +40,11 @@ function mount(browseMode: "directories" | "recents") {
     queueCount: 0, queueState: "unknown",
     ...patch,
   });
-  const root = row("root", { title: "Local parent", pinnedRank: "1", ordinaryChildCount: 2, createdAt: 1 });
-  const localChild = row("local-child", { title: "Local child", parentThreadId: "root", parentThreadBackend: "codex", createdAt: 10 });
+  const root = row("root", { title: "Local parent", pinnedRank: "1", ordinaryChildCount: peerParent === "root" ? 2 : 1, createdAt: 1 });
+  const localChild = row("local-child", { title: "Local child", parentThreadId: "root", parentThreadBackend: "codex",
+    createdAt: 10, ordinaryChildCount: peerParent === "root" ? 0 : 1 });
   const peerChild = row("peer-child", {
-    title: "Peer child", parentThreadId: "root", parentThreadBackend: "codex", parentThreadInstanceId: LOCAL, createdAt: 20,
+    title: "Peer child", parentThreadId: peerParent, parentThreadBackend: "codex", parentThreadInstanceId: LOCAL, createdAt: 20,
     ref: { backend: "codex", threadId: "peer-child", ownerInstanceId: PEER },
     federation: { ref: buildFederatedThreadRef({ backend: "codex", instanceId: PEER, threadId: "peer-child" }),
       instanceLabel: "Win PC / dev", capabilities: ["thread_grouping"] },
@@ -63,22 +64,27 @@ function mount(browseMode: "directories" | "recents") {
     add("lens-pins", { kind: "lens", lens: "recents", roots: "pinned" }, [rootEntry]);
   }
   // The owner's saved order: the local child first.
-  add(`children:${navigationIdentityKey(root.ref)}`, { kind: "children", parent: root.ref },
-    [localChild, peerChild].map((child, index) => ({ row: child, orderKey: String(index),
-      placement: { kind: "child", parent: { backend: "codex", threadId: "root" } } })));
+  const childrenOf = { root: peerParent === "root" ? [localChild, peerChild] : [localChild],
+    "local-child": peerParent === "root" ? [] : [peerChild] };
+  for (const owner of [root, localChild]) {
+    add(`children:${navigationIdentityKey(owner.ref)}`, { kind: "children", parent: owner.ref },
+      childrenOf[owner.id as keyof typeof childrenOf].map((child, index) => ({ row: child, orderKey: String(index),
+        placement: { kind: "child", parent: { backend: "codex", threadId: owner.id } } })));
+  }
   const navigation = {
     resources, presentationReady: true, directories: [directory], selectedDirectoryKeys: [directory.key], connected: true,
     invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
     rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined,
   };
   const onUpdateSubthreadOrder = vi.fn(async (_parent: NavigationThreadSummary, _move: unknown) => undefined);
+  const onSetThreadParent = vi.fn(async (..._args: unknown[]) => true);
   render(<Sidebar backends={[]} browseMode={browseMode} directories={[directory]}
     threads={[root, localChild, peerChild]} loading={false}
     selectedItemKey="codex:root" selectedThreadDirectoryKeys={[directory.key]}
-    pagedNavigation={navigation} onUpdateSubthreadOrder={onUpdateSubthreadOrder}
+    pagedNavigation={navigation} onUpdateSubthreadOrder={onUpdateSubthreadOrder} onSetThreadParent={onSetThreadParent}
     onBrowseModeChange={() => undefined} onSelectThread={() => undefined}
     onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />);
-  return { onUpdateSubthreadOrder };
+  return { onUpdateSubthreadOrder, onSetThreadParent };
 }
 
 function rect(element: Element, top: number, height: number): void {
@@ -115,5 +121,31 @@ it.each(["directories", "recents"] as const)(
       expect.objectContaining({ id: "root" }),
       { threadId: "peer-child", anchorThreadId: "local-child", placement: "before" },
     );
+  },
+);
+
+it.each(["directories", "recents"] as const)(
+  "moves a peer-owned grandchild up to a local tray owner (%s)",
+  async (browseMode) => {
+    const { onSetThreadParent } = mount(browseMode, "local-child");
+    const tray = document.querySelector<HTMLElement>("[data-subthread-tray]")!;
+    const owner = [...document.querySelectorAll<HTMLElement>(".thread-row-shell")]
+      .find((element) => !tray.contains(element) && element.querySelector('[aria-label^="Local parent"]'))!;
+    expect(shell("Peer child")).toHaveAttribute("data-nested-depth", "2");
+    expect(shell("Peer child")).toHaveClass("is-draggable");
+    rect(owner, 0, 40);
+    rect(tray, 40, 80);
+    rect(shell("Local child"), 40, 40);
+    rect(shell("Peer child"), 80, 40);
+
+    fireEvent.pointerDown(shell("Peer child"), { button: 0, clientX: 50, clientY: 100, pointerId: POINTER_ID });
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 50, clientY: 20, pointerId: POINTER_ID });
+    await waitFor(() => expect(owner).toHaveClass("is-drop-target-inside"));
+    await act(async () => {
+      fireEvent.pointerUp(window, { button: 0, clientX: 50, clientY: 20, pointerId: POINTER_ID });
+    });
+
+    expect(onSetThreadParent).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "peer-child" }), "root", "codex", true);
   },
 );

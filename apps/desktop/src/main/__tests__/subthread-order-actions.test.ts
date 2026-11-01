@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { buildThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared";
+import { buildFederatedThreadRef, buildThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
@@ -121,6 +121,59 @@ it("places a new Claude child below its Codex source before the owner lists it",
 
   expect((await mocks.store!.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
     .toEqual(["gondola", "fresh", "steam"]);
+});
+
+const LOCAL = "pwr_local";
+const PEER = "pwr_peer";
+
+/** A peer's thread whose link names this machine's `root` as its parent. */
+async function pinPeerChild(threadId: string, extra: Partial<NavigationThreadSummary> = {}) {
+  await mocks.store!.addRemoteThreadPin({
+    ref: buildFederatedThreadRef({ backend: "codex", instanceId: PEER, threadId }),
+    instanceLabel: "Win PC / dev",
+    pinnedVia: "explicit",
+    summary: summary("codex", threadId, { parentThreadId: "root", parentThreadBackend: "codex",
+      parentThreadInstanceId: LOCAL, createdAt: 5, ...extra }),
+  });
+}
+
+it("moves a peer's sub-thread among this machine's children of a local parent", async () => {
+  await mocks.store!.setThreadParent({ backend: "codex", threadId: "gondola", parentThreadId: "root" });
+  await mocks.store!.setThreadParent({ backend: "codex", threadId: "steam", parentThreadId: "root" });
+  await pinPeerChild("windows-e2e");
+  // Another parent's peer child and one linked to a different machine stay out.
+  await pinPeerChild("elsewhere", { parentThreadId: "other" });
+  await pinPeerChild("foreign", { parentThreadInstanceId: "pwr_third" });
+  mocks.loadIndex.mockResolvedValue({ coverage: { state: "complete" }, threads: [
+    summary("codex", "root"),
+    summary("codex", "gondola", { parentThreadId: "root", createdAt: 2 }),
+    summary("codex", "steam", { parentThreadId: "root", createdAt: 1 }),
+  ] });
+
+  await updateLocalSubthreadOrder({ backend: "codex", parentThreadId: "root",
+    move: { threadId: "windows-e2e", anchorThreadId: "steam", placement: "before" } }, { localInstanceId: LOCAL });
+
+  expect((await mocks.store!.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
+    .toEqual(["gondola", "windows-e2e", "steam"]);
+
+  // A local move keeps the peer's child in the saved order.
+  await updateLocalSubthreadOrder({ backend: "codex", parentThreadId: "root",
+    move: { threadId: "steam", anchorThreadId: "gondola", placement: "before" } }, { localInstanceId: LOCAL });
+
+  expect((await mocks.store!.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
+    .toEqual(["steam", "gondola", "windows-e2e"]);
+});
+
+it("refuses a peer's sub-thread when this machine has no federation identity", async () => {
+  await mocks.store!.setThreadParent({ backend: "codex", threadId: "gondola", parentThreadId: "root" });
+  await pinPeerChild("windows-e2e");
+  mocks.loadIndex.mockResolvedValue({ coverage: { state: "complete" }, threads: [
+    summary("codex", "root"),
+    summary("codex", "gondola", { parentThreadId: "root" }),
+  ] });
+
+  await expect(updateLocalSubthreadOrder({ backend: "codex", parentThreadId: "root",
+    move: { threadId: "windows-e2e", anchorThreadId: "gondola", placement: "before" } })).rejects.toThrow("no longer places");
 });
 
 /** Rows written before links recorded the parent's provider name only its id. */

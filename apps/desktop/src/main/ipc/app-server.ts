@@ -7813,7 +7813,10 @@ class DesktopAppServerService {
         .remoteBackend(federationTarget)
         .updateSubthreadOrder(ownerRequest);
     }
-    const response = await updateLocalSubthreadOrder(request);
+    const response = await updateLocalSubthreadOrder(request, {
+      localInstanceId: request.move || request.insertAfter
+        ? (await getDesktopFederationRuntime().health()).instanceId : undefined,
+    });
     logDebug("updateSubthreadOrder", {
       backend: response.backend,
       parentThreadId: request.parentThreadId,

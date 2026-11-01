@@ -453,6 +453,8 @@ type SidebarProps = {
     thread: NavigationThreadSummary,
     parentThreadId?: string,
     parentThreadBackend?: NavigationThreadSummary["source"],
+    /** The parent is this machine's own thread, and the thread may be a peer's. */
+    parentOnThisMachine?: boolean,
   ) => Promise<boolean | void>;
   onUnlinkThreads?: (
     threads: NavigationThreadSummary[],
@@ -1066,7 +1068,7 @@ export function Sidebar(props: SidebarProps) {
             ? props.onSetSubthreadsCollapsed
             : undefined;
           void setCollapsed?.(parent, false);
-          void props.onSetThreadParent!(thread, parent.id, parent.source).then((saved) => {
+          void props.onSetThreadParent!(thread, parent.id, parent.source, !parent.federation).then((saved) => {
             if (saved === false) void setCollapsed?.(parent, true);
           });
         }

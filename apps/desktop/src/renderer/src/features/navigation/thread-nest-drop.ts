@@ -34,8 +34,10 @@ const MAX_PARENT_WALK = 64;
  * belongs to another instance:
  *
  * - A sub-agent row is the provider's, not an ordinary thread.
- * - Both threads must live on one owner. The child's owner stores the
- *   link, and a window cannot write a link to another instance's thread.
+ * - Both threads live on one owner, or a peer's thread moves under one of
+ *   this machine's own threads. The child's owner stores the link; a peer
+ *   keeps one naming this machine, as a sub-thread started here on that
+ *   peer does. A link between two other owners is never written here.
  * - Dropping a child on the parent it already has changes nothing.
  * - A thread cannot move under one of its own sub-threads.
  */
@@ -55,7 +57,12 @@ export function canNestThread(
     return false;
   }
   if (child.federation?.derivedFromMountedParent || parent.federation?.derivedFromMountedParent) return false;
-  if (!federationTargetsEqual(child.federation?.ref.target, parent.federation?.ref.target)) return false;
+  if (
+    !federationTargetsEqual(child.federation?.ref.target, parent.federation?.ref.target)
+    && !isPeerChildOfLocalParent(child, parent)
+  ) {
+    return false;
+  }
   if (resolveThreadParentKey(child, threadByKey) === parentKey) return false;
 
   const seen = new Set<string>();
@@ -69,6 +76,17 @@ export function canNestThread(
     cursor = next ? threadByKey.get(next) : undefined;
   }
   return true;
+}
+
+/**
+ * A peer's thread under a thread this machine owns. Only this machine's own
+ * window lists a local row, so a federation window never offers it.
+ */
+export function isPeerChildOfLocalParent(
+  child: Pick<NavigationThreadSummary, "federation">,
+  parent: Pick<NavigationThreadSummary, "federation">,
+): boolean {
+  return child.federation?.ref.target.scope === "remote" && !parent.federation;
 }
 
 /**
