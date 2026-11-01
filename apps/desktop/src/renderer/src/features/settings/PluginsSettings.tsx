@@ -1017,7 +1017,7 @@ export function PluginsSettings(props: {
       setConnectionPending(undefined);
       // The new row carries the sign-in from here, so "Adding..." is done.
       setConnectionNotice(undefined);
-      await authorizeConnection(response.connection, true);
+      if (response.connection.authMode === "oauth") await authorizeConnection(response.connection, true);
     } catch (error) {
       setConnectionNotice({
         kind: "error",
@@ -1633,7 +1633,7 @@ export function PluginsSettings(props: {
                       : connectionPending?.kind === "create"
                         ? "Adding..."
                         : probe?.ok
-                          ? "Add and authorize"
+                          ? probe.authMode === "none" ? "Add connection" : "Add and authorize"
                           : "Check"}
                   </button>
                 </div>
@@ -1645,7 +1645,7 @@ export function PluginsSettings(props: {
                     role={probe.ok ? "status" : "alert"}
                   >
                     {probe.ok
-                      ? `Found ${probe.serverName ?? "an MCP server"} at ${probe.serverUrl}. It signs in with OAuth${
+                      ? `Found ${probe.serverName ?? "an MCP server"} at ${probe.serverUrl}. ${probe.authMode === "none" ? "Access is approved in the local server app" : "It signs in with OAuth"}${
                           probe.toolCount === undefined
                             ? ""
                             : ` and offers ${probe.toolCount} tools`
