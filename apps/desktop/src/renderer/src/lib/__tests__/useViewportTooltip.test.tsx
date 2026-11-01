@@ -1124,8 +1124,14 @@ describe("tooltip observation budgets", () => {
     let notify = () => {};
     const disconnect = vi.fn();
     vi.stubGlobal("ResizeObserver", class {
-      constructor(callback: (entries: ResizeObserverEntry[]) => void) { notify = () => callback([]); }
-      observe = vi.fn();
+      target?: Element;
+      constructor(callback: (entries: ResizeObserverEntry[]) => void) {
+        notify = () => callback([{
+          target: this.target!,
+          borderBoxSize: [{ inlineSize: 160 + 1 / 64, blockSize: 26 }],
+        } as unknown as ResizeObserverEntry]);
+      }
+      observe(target: Element) { this.target = target; }
       disconnect = disconnect;
     });
     mockAnchorRectangleFromLayout();
@@ -1133,7 +1139,7 @@ describe("tooltip observation budgets", () => {
     const anchor = screen.getByRole("button");
     fireEvent.mouseEnter(anchor);
     await deliverMutations();
-    const geometry = vi.fn(() => rectangle({ left: 20, top: 80, width: 180, height: 26 }));
+    const geometry = vi.fn(() => rectangle({ left: 20, top: 80, width: 160 + 1 / 64, height: 26 }));
     anchor.getBoundingClientRect = geometry;
     let frame: FrameRequestCallback = () => {};
     const request = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
@@ -1149,14 +1155,14 @@ describe("tooltip observation budgets", () => {
     expect(disconnect).toHaveBeenCalledTimes(1);
   });
 
-  it("does not schedule geometry for an unchanged initial native size", async () => {
+  it.each([0, 1e-13])("does not schedule geometry for an unchanged native size with roundoff %s", async (roundoff) => {
     let notify = () => {};
     vi.stubGlobal("ResizeObserver", class {
       target?: Element;
       constructor(private callback: (entries: ResizeObserverEntry[]) => void) {
         notify = () => this.callback([{
           target: this.target!,
-          borderBoxSize: [{ inlineSize: 160, blockSize: 26 }],
+          borderBoxSize: [{ inlineSize: 160 + roundoff, blockSize: 26 + roundoff }],
         } as unknown as ResizeObserverEntry]);
       }
       observe(target: Element) { this.target = target; }
