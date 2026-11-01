@@ -53,13 +53,13 @@ export function buildPwrAgentMcpInstructions(toolNames: readonly string[]): stri
   const has = (name: string) => toolNames.includes(name);
   return PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION
     + (has("watch_thread_pull_request") && has("create_monitor_delegation")
-      ? " For CI, follow prAutomation.guidance; call watch_thread_pull_request and end the turn;"
-        + " for other long waits, call create_monitor_delegation."
+      ? " For CI follow prAutomation.guidance and call watch_thread_pull_request and end the turn."
+        + " Other waits: create_monitor_delegation."
         + " Do not wait in sleep loops, background shells, or Monitor."
       : "")
     + (has("read_tool_guide")
-      ? " Read skill://waiting-on-work/SKILL.md for CI, prerequisites, and long jobs; skill://tool-guide/SKILL.md for tool selection."
-        + " Discover with skills/list or resources/list; skills/get returns metadata, resources/read returns content."
+      ? " Read skill://waiting-on-work/SKILL.md for waits; skill://tool-guide/SKILL.md for tools."
+        + " Find via skills/list or resources/list; skills/get: metadata, resources/read: content."
         + " Read read_tool_guide for the short tool guide."
       : "");
 }
@@ -118,7 +118,7 @@ export type AgentToolMcpAuthorization = {
 };
 
 export type AgentToolMcpServerOptions = {
-  resolveCatalogs: () => AgentToolMcpCatalog[];
+  resolveCatalogs: (context: AgentToolMcpClientContext) => AgentToolMcpCatalog[];
   resolveCallContext: (
     context: AgentToolMcpClientContext,
   ) =>
@@ -298,7 +298,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       enableJsonResponse: true,
       sessionIdGenerator: undefined,
     });
-    const toolNames = this.resolveMcpTools().map((tool) => tool.name);
+    const toolNames = this.resolveMcpTools(params.clientContext).map((tool) => tool.name);
     const hasToolGuide = toolNames.includes("read_tool_guide");
     // The PDF-only MCP surface shares this server but has no workflow tools.
     const skills = hasToolGuide ? PWRAGENT_WORKFLOW_SKILLS : [];
@@ -349,7 +349,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       return { contents: [skill.content] };
     });
     mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: this.resolveMcpTools(),
+      tools: this.resolveMcpTools(params.clientContext),
     }));
     mcpServer.setRequestHandler(
       CallToolRequestSchema,
@@ -378,7 +378,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           );
         }
         const catalog = this.options
-          .resolveCatalogs()
+          .resolveCatalogs(clientContext)
           .find((candidate) =>
             candidate.router.acceptsMcpToolCall({
               tool: request.params.name,
@@ -445,9 +445,9 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     }
   }
 
-  private resolveMcpTools(): AgentMcpTool[] {
+  private resolveMcpTools(context: AgentToolMcpClientContext): AgentMcpTool[] {
     const toolsByName = new Map<string, AgentMcpTool>();
-    for (const catalog of this.options.resolveCatalogs()) {
+    for (const catalog of this.options.resolveCatalogs(context)) {
       for (const tool of catalog.router.buildMcpTools()) {
         if (toolsByName.has(tool.name)) {
           throw new Error(`Duplicate PwrAgent MCP tool name: ${tool.name}`);

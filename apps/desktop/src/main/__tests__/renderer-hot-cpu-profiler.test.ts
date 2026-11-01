@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
-import { holdDebuggerConnection } from "../diagnostics/debugger-connection-hold";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTemporaryTestDirectory } from "../testing/test-harness";
 import type { ProcessMetric } from "electron";
 import { resolveHotCpuProfileConfig } from "../diagnostics/hot-cpu-profile-config";
 import { createHotCpuProfileSession } from "../diagnostics/hot-cpu-profile-session";
+import { acquireDebuggerLease } from "../diagnostics/debugger-lease";
 import { HotCpuProfiler } from "../diagnostics/hot-cpu-profiler";
 import { createMainProcessHotCpuTarget } from "../diagnostics/main-process-hot-cpu-target";
 
@@ -254,22 +254,22 @@ describe("HotCpuProfiler", () => {
       onProfileWritten: () => { hot = false; },
     });
     await profiler.start();
-    const release = holdDebuggerConnection(debuggerApi);
+    const traceLease = acquireDebuggerLease(debuggerApi, "Tracing");
     try {
       hot = true;
       await samplesOf(profiler).waitUntil(
         () => debuggerApi.sendCommand.mock.calls.filter(([m]) => m === "Profiler.start").length >= 2,
-        "V8 recording resumed under native hold",
+        "V8 recording resumed under native trace lease",
       );
       expect(debuggerApi.attach).toHaveBeenCalledOnce();
       expect(debuggerApi.detach).not.toHaveBeenCalled();
       expect(await fs.stat(sessionResult.session.createProfilePath(1))).toMatchObject({ size: expect.any(Number) });
-      release();
+      traceLease.release();
       expect(debuggerApi.detach).not.toHaveBeenCalled();
       await profiler.stop();
       expect(debuggerApi.detach).toHaveBeenCalledOnce();
     } finally {
-      release();
+      traceLease.release();
     }
   });
 
@@ -397,6 +397,31 @@ describe("HotCpuProfiler", () => {
     expect(debuggerApi.sendCommand.mock.calls.filter(([method]) => method === "Profiler.start")).toHaveLength(3);
     expect(debuggerApi.sendCommand.mock.calls.filter(([method]) => method === "Profiler.stop")).toHaveLength(3);
     expect(target.debugger.isAttached()).toBe(false);
+  });
+
+  it("stops its CPU recorder without detaching a rendering lease", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+    const config = createEnabledConfig(workspace.path);
+    const created = await createHotCpuProfileSession({
+      config,
+      versions: { appVersion: "test", electronVersion: "test", chromeVersion: "test", nodeVersion: "test" },
+    });
+    if (!created.ok) throw new Error(created.message);
+    const { target, debuggerApi } = createTarget();
+    const profiler = createProfiler({
+      config, session: created.session, target, getAppMetrics: () => [createMetric(0)],
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    await profiler.start();
+    const trace = acquireDebuggerLease(debuggerApi, "Tracing");
+    await profiler.stop("settings-disabled");
+    expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.stop");
+    expect(debuggerApi.detach).not.toHaveBeenCalled();
+    expect(trace.valid).toBe(true);
+    trace.release();
+    expect(debuggerApi.attach).toHaveBeenCalledOnce();
+    expect(debuggerApi.detach).toHaveBeenCalledOnce();
   });
 
   it("discards an untriggered recorder and waits for an in-flight start during shutdown", async () => {

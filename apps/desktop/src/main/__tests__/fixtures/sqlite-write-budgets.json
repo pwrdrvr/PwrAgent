@@ -79,6 +79,9 @@
     "rowsChanged": 100,
     "statements": 100
   },
+  "archive-retention-restore": {"commits": 1, "note": "One restore boundary clears archive markers and records the restore watermark in one commit (~0.012 MB); 10 restores/day cost ~0.12 MB/day. No recurring writes.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "archive-subthread-promotion": {"commits": 1, "note": "One archive boundary promotes 100 children in one commit (~0.033 MB); 10 such archives/day cost ~0.33 MB/day. No per-child commits or idle writes (0 MB/day).", "observedWalBytes": 32960, "rowsChanged": 103, "statements": 103},
+  "archive-subthread-promotion-repeat": {"commits": 0, "note": "Repeated archive notification or resumed cleanup after promotion: zero commits, 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "archived-worktree-repair-once-marker": {
     "commits": 2,
     "note": "One claim and one completion for a 501-thread pass plus a completed-startup no-op: 2 commits total, no per-item or timer writes; about 0.02 MB once and 0 MB/day afterward.",
@@ -324,6 +327,10 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "federation-archive-ancestor-promotion-repeat": {"commits": 0, "note": "Replay after a committed ancestor promotion preserves placement and newer manual ranks with zero SQLite writes; 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "federation-archive-leaf-preparation": {"commits": 0, "note": "A leaf with an uncached remote parent needs no promotion, peer access, or SQLite writes; 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "federation-archive-subthread-promotion": {"commits": 6, "note": "100 direct children (98 unranked) across four owners: 6 boundary commits including recovery slots and viewer cache (~0.255 MB WAL); 10 such archives/day cost ~2.55 MB/day. No per-child commits; idle cost 0 MB/day.", "observedWalBytes": 255440, "rowsChanged": 306, "statements": 306},
+  "federation-archive-subthread-promotion-repeat": {"commits": 0, "note": "Repeated completed archive promotion: zero commits, 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "federation-owner-project-pages": {
     "commits": 0,
     "note": "cold and warm project-only reads from read-only provider inventory; no navigation maintenance",
@@ -1240,6 +1247,13 @@
   "thread-todo-remember-merge-method": {
     "commits": 1,
     "note": "a merge method picked on a card, then picked again: one upsert, and the unchanged repeat writes nothing; only on an explicit menu pick",
+    "observedWalBytes": 8240,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "thread-todo-send-message": {
+    "commits": 1,
+    "note": "One operator Send click: one card-completion commit, no idle or per-event writes; ~8 KB/send, ~0.4 MB/day at 50 sends. Existing correspondence and queue budgets cover delivery.",
     "observedWalBytes": 8240,
     "rowsChanged": 1,
     "statements": 1

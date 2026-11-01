@@ -19,6 +19,7 @@ import { conditionalThreadRead } from "../app-server/conditional-thread-read";
 import {
   validateArchivedThreadLookup,
   type FederationArchivedThreadLookupRequest,
+  type FederationArchivedThreadLookupResponse,
   type FederationProjectPage,
   type FederationProjectPageRequest,
 } from "./federation-collection-reads";
@@ -831,6 +832,10 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
 export function additionalFederationBackendCapabilities(
   envelope: FederationRequestEnvelope,
 ): readonly FederationCapability[] {
+  if (envelope.method === FEDERATION_BACKEND_METHODS.updateSubthreadOrder
+    && (envelope.params as UpdateSubthreadOrderRequest | undefined)?.archivePromotion) {
+    return ["archive_subthread_promotion_v1"];
+  }
   if (envelope.method === FEDERATION_BACKEND_METHODS.submitTurnRequest
     || envelope.method === FEDERATION_BACKEND_METHODS.getTurnRequest) return ["durable_turn_requests_v1"];
   if (envelope.method === FEDERATION_BACKEND_METHODS.submitSteerRequest
@@ -867,7 +872,7 @@ export type FederationBackendOperations = {
   lookupArchivedThreads?(
     request: FederationArchivedThreadLookupRequest,
     rpcOptions?: FederationRpcRequestOptions,
-  ): Promise<Pick<AppServerListThreadsResponse, "threads">>;
+  ): Promise<FederationArchivedThreadLookupResponse>;
   getNavigationSnapshot(
     request?: GetNavigationSnapshotRequest,
     rpcOptions?: FederationRpcRequestOptions,
@@ -2426,7 +2431,7 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async lookupArchivedThreads(
     request: FederationArchivedThreadLookupRequest,
     rpcOptions?: FederationRpcRequestOptions,
-  ): Promise<Pick<AppServerListThreadsResponse, "threads">> {
+  ): Promise<FederationArchivedThreadLookupResponse> {
     return await this.rpc.request({
       method: FEDERATION_BACKEND_METHODS.lookupArchivedThreads,
       params: request,

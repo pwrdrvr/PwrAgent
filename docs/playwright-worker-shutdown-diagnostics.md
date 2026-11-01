@@ -80,13 +80,23 @@ launcher alive after `quit`. The fixture removes the Chromium directories only
 after closing the app and cleaning up its profile helpers.
 
 On Windows, fixture close also drains each live Electron session before asking
-Playwright to quit: it closes connections and awaits the cookie store flush.
+Playwright to quit: it closes connections, awaits the cookie store flush, and
+disposes the fixture session cache with `clearData({ dataTypes: ["cache"] })`.
 This preparation shares the existing six-second graceful-close deadline.
 Chromium's native `BrowserProcessIOThread::ProcessHostCleanUp` otherwise waits
 for the network service to flush cookies and cache after JavaScript quit has
 finished. That service can retain the launcher's pipes while native storage
 work is still pending. The fixture must await that work while the sessions
 are still reachable over RPC; storage isolation alone does not drain it.
+
+The cache operation also waits for Chromium's network-history completion.
+Unlike `clearCache()`, this reaches `HttpServerProperties::Clear` and the
+`Network/Network Persistent State` preference write. A matching Electron native
+snapshot retained that write and its initial preference read as queued
+`BLOCK_SHUTDOWN` work after the network service entered shutdown. Awaiting the
+cache completion keeps its RPC owner alive until the write finishes. Cache
+disposal applies only to the Playwright-owned fixture sessions. A failed or
+stalled completion still fails teardown under the existing close deadline.
 
 The Windows reproduction left a suspended no-op `cmd.exe` from the startup
 Job-wrapper prewarm alive after the app exited. The app no longer starts this
@@ -132,6 +142,48 @@ remain in place. Diagnostic hooks are inert outside instrumented E2E workers.
 When upgrading Playwright, port both patches and run the real-worker tests and
 `e2e/electron-launcher-ownership.spec.ts` on Windows. A green ordinary E2E run
 does not validate failure capture or native launcher ownership.
+
+## Controlled native Windows pipe inheritance
+
+To reproduce an exited native Electron process whose launcher pipes remain open,
+run this manual probe from the repository root on Windows:
+
+```powershell
+node apps/desktop/scripts/probe-windows-electron-pipe-inheritance.mjs
+```
+
+It loads a minimal Electron entry, without the product or a user profile. Electron
+starts a Node intermediate, which starts a detached Node retainer. Both launches
+request ignored stdio. The probe records all three Windows creation times and
+parent PIDs while they are alive, lets the intermediate exit, and quits Electron.
+The retainer exits on its own after twelve seconds. No surviving descendant is
+terminated by PID. On an error, only the exact Playwright-owned Electron process
+handle may be stopped.
+
+`summary.json`, `events.jsonl`, and process snapshots are retained under
+`apps/desktop/test-results/windows-pipe-inheritance/<timestamp>/`. Use
+`--output-dir <new-directory>` to preserve a run elsewhere. For native handle
+evidence, optionally pass `--handle-exe <path-to-handle64.exe>` using Microsoft's
+[Sysinternals Handle](https://learn.microsoft.com/en-us/sysinternals/downloads/handle).
+The probe uses bounded, read-only queries for its identified PIDs and records
+query errors. It does not download Handle or scan every process.
+
+On Electron 44.9.3 (embedded Node 24.22.0, libuv 1.52.1), the control reproduced
+exit code zero with fd 1–4 still open. The retainer held the same four launcher
+pipe names before and after Electron exited; launcher close followed the
+retainer's natural exit. Electron explicitly enables stdio inheritance in its
+[browser process](https://github.com/electron/electron/blob/v44.9.3/shell/common/node_bindings.cc#L638),
+and this runtime's libuv uses unrestricted handle inheritance when spawning a
+[Windows child](https://github.com/nodejs/node/blob/v24.22.0/deps/uv/src/win/process.c).
+Ignored stdio does not exclude inherited handles outside the child's new stdio
+mapping. A grandchild can outlive both its intermediate parent and Electron.
+
+This is a positive control for the failure mechanism. It does not identify the
+historical retaining process in CI job 124557904187: that artifact has no earlier
+ancestry trace or native handle inventory. A healthy natural run, a late process
+tree, or this control alone cannot establish that process's identity. Preserve
+creation-time ancestry from before quit and matching pipe handles in a natural
+failure before changing product ownership or cleanup.
 
 ## Unit probe timeouts
 
@@ -193,3 +245,61 @@ to approximately twenty launches; pending launches remain tracked.
 
 Set `PWRAGENT_E2E_WORKER_DIAGNOSTICS=0` only to compare instrumentation overhead.
 Failure semantics stay unchanged when capture is disabled.
+
+## Regular hosted Windows pipe evidence
+
+The Windows E2E job uses `pnpm test:desktop-e2e:windows-diagnostics`. It forwards
+the same desktop build, test arguments, shards, workers, retries and deadlines.
+No Electron close promise or cleanup phase waits for this recorder.
+
+An external controller starts native process observation before starting pnpm,
+before Electron launcher pipes exist. Native x64 process snapshots are sampled
+with a 50 ms pause. Identities use PID plus creation FILETIME; retained,
+non-inheritable `PROCESS_QUERY_LIMITED_INFORMATION` handles supply native exit
+FILETIMEs. These are 100 ns units since 1601, not CIM/DateTime ticks since year
+0001. A process may begin and end between samples. Missing or ambiguous
+ancestry remains explicit. A sampled disappearance time cannot substitute for
+a native exit time. Executable paths are recorded; command lines are omitted.
+
+The true Playwright worker guard remains. Each direct native Electron launch
+gets a random `launchId` carried through exit, close and stage events. Only
+launch generates a Node report, retaining pipe names rather than the raw
+report. A worker-PID suffix supplies a candidate pool, not a per-launch mapping.
+The controller narrows that pool against the exact live main's handle-name
+inventory and requires four complete exact names. Creation identity is checked
+before and after each scoped name inventory.
+
+On a natural code-zero exit with all four launcher streams still open, the
+worker captures callback-entry time and flags before reports or queries. It
+immediately preserves the trigger. The controller inspects surviving processes
+from the retained ancestry first, requiring all four exact endpoint names and
+the same creation identity before and after inspection. A bounded global search
+supplies fallback candidates; substring matches do not qualify. Query intervals,
+access failures, timeouts, omissions and unavailable mappings remain explicit.
+The result flags a launch inventory that overlaps the exit callback and marks
+known diagnostic processes so their handles cannot be mistaken for an
+uninstrumented holder.
+
+Names come from the official [Sysinternals Handle utility](https://learn.microsoft.com/en-us/sysinternals/downloads/handle),
+downloaded and checked for a valid Microsoft signature by the Windows job.
+Queries use its File-only default and never request handle closure. The custom
+native helper never duplicates remote handles or opens Job handles. Every
+observer and scanner belongs to the controller, not a Playwright worker.
+Diagnostic setup failure is logged and leaves the original test command running.
+
+The normal `test-results/worker-shutdown/native-controller/` artifact contains
+`native-processes.jsonl`, `launch-<launchId>.json`, `trigger-<launchId>.json`,
+`match-<launchId>.json`, tool/source hashes and a summary. The native journal is
+capped at 8 MiB and the observer at 32,768 starts. There are at most two concurrent
+queries and four triggered captures per run; each capture considers at most
+sixteen preserved descendants and eight global candidates within a five-second
+query window after its main mapping is available. Requests, query outputs and
+log records are bounded too. Raw tool output, environments and raw Node reports
+are not uploaded. On cancellation, `[worker-shutdown-evidence]` retains the
+trigger and `[windows-pipe-evidence]` retains bounded results when available.
+
+Diagnostic work can affect scheduling. A source verified against all four exact
+names is an observed holder during that query interval. It does not prove its
+launch cause, missing Job assignment, or the cause of a separate live-main
+native stall. A controlled probe validates instrumentation; a natural failure
+must establish the holder for this investigation.

@@ -15,6 +15,8 @@ const sources = new Set([
   "scripts/release/install-trusted-signing.ps1",
   "scripts/release/archive-windows-signing-input.ps1",
   "apps/desktop/package.json",
+  "packages/pwragent/package.json",
+  "packages/pwragent/scripts/release.mjs",
   "apps/desktop/electron-builder.yml",
   ".github/workflows/ci.yml",
   ".github/workflows/release.yml",
@@ -58,6 +60,17 @@ afterEach(() => {
 test("accepts the current packaging contract with Linux naming delegated to its helper", () => {
   const result = check(fixture());
   expect(result.status, result.stderr).toBe(0);
+});
+
+test("rejects Outpost version or npm channel drift from the desktop authority", () => {
+  for (const change of [{ version: "0.1.0-alpha.1" }, { publishConfig: { access: "public", registry: "https://registry.npmjs.org", tag: "next" } }]) {
+    const root = fixture();
+    const file = join(root, "packages/pwragent/package.json");
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), ...change }));
+    const result = check(root);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Outpost release metadata");
+  }
 });
 
 test.each(

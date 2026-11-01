@@ -12,6 +12,7 @@ import { PINNED_GROUP_RESOURCE_ID, lensHasPinnedGroup } from "../../lib/navigati
 import { useEventCallback } from "../../lib/useEventCallback";
 import { useMousePress } from "../../lib/useMousePress";
 import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
+import { LENS_KEYBINDING_ACTIONS } from "./useLensHotkeys";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import type {
@@ -4401,6 +4402,8 @@ function AttentionLensTab(props: {
   disabled?: boolean;
   onSelect: () => void;
 }) {
+  const keybindings = useKeybindings();
+  const shortcut = chordLabelFor(keybindings, LENS_KEYBINDING_ACTIONS.attention);
   const counts = {
     activeLocal: props.activeThreadCount,
     activeRemote: props.remoteActiveThreadCount,
@@ -4411,7 +4414,8 @@ function AttentionLensTab(props: {
     title: browseModeLabels.attention,
     caption: "Threads in progress or waiting to be reviewed",
     reviewLabel: "To review",
-    ...(props.disabled ? { footer: NO_THREADS_TOOLTIP_LINE } : {}),
+    footer: props.disabled ? NO_THREADS_TOOLTIP_LINE
+      : shortcut ? withChordHint("Show Attention", shortcut) : undefined,
   });
   const accessibleName = `${browseModeLabels.attention}, ${describeAttentionCounts(
     counts,
@@ -4428,6 +4432,7 @@ function AttentionLensTab(props: {
         // absent element is a dangling reference.
         aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
         aria-selected={props.active}
+        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, LENS_KEYBINDING_ACTIONS.attention)}
         aria-disabled={props.disabled || undefined}
         className={`lens-switch__button lens-switch__button--attention${
           props.active ? " is-active" : ""
@@ -4491,13 +4496,15 @@ function LensTab(props: {
   disabled?: boolean;
   onSelect: () => void;
 }) {
+  const keybindings = useKeybindings();
+  const actionId = LENS_KEYBINDING_ACTIONS[props.mode];
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const Icon = browseModeIcons[props.mode];
   const label = props.countLabel
     ? `${browseModeLabels[props.mode]}, ${props.countLabel}`
     : browseModeLabels[props.mode];
   const tooltipText = [
-    props.tooltipText,
+    withChordHint(props.tooltipText, chordLabelFor(keybindings, actionId)),
     props.countLabel,
     props.disabled ? NO_THREADS_TOOLTIP_LINE : undefined,
   ].filter(Boolean).join("\n");
@@ -4514,6 +4521,7 @@ function LensTab(props: {
         // whole accessible name.
         aria-label={label}
         aria-selected={props.active}
+        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, actionId)}
         aria-disabled={props.disabled || undefined}
         className={`lens-switch__button${props.active ? " is-active" : ""}`}
         type="button"

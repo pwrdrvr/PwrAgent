@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTemporaryTestDirectory } from "../testing/test-harness";
 import { createStartupCpuProfileSession } from "../diagnostics/startup-cpu-profile-session";
+import { acquireDebuggerLease } from "../diagnostics/debugger-lease";
 import { RendererStartupCpuProfiler } from "../diagnostics/renderer-startup-cpu-profiler";
 import { resolveStartupCpuProfileConfig } from "../diagnostics/startup-cpu-profile-config";
 
@@ -86,7 +87,7 @@ describe("RendererStartupCpuProfiler", () => {
     await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   });
 
-  it("attaches, captures, and writes a renderer CPU profile artifact", async () => {
+  it.each([false, true])("captures a renderer CPU profile with native trace overlap=%s", async (tracing) => {
     const workspace = await createTemporaryTestDirectory();
     cleanups.push(workspace.cleanup);
 
@@ -119,12 +120,15 @@ describe("RendererStartupCpuProfiler", () => {
     });
 
     await expect(profiler.start()).resolves.toBe(true);
+    const traceLease = tracing ? acquireDebuggerLease(debuggerApi, "Tracing") : undefined;
     await expect(profiler.stop("startup-window-complete")).resolves.toBe(true);
 
     expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
     expect(debuggerApi.sendCommand).toHaveBeenNthCalledWith(1, "Profiler.enable");
     expect(debuggerApi.sendCommand).toHaveBeenNthCalledWith(2, "Profiler.start");
     expect(debuggerApi.sendCommand).toHaveBeenNthCalledWith(3, "Profiler.stop");
+    expect(debuggerApi.detach).toHaveBeenCalledTimes(tracing ? 0 : 1);
+    traceLease?.release();
     expect(debuggerApi.detach).toHaveBeenCalledTimes(1);
 
     const profile = JSON.parse(

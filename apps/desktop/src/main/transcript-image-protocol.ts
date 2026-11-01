@@ -1,5 +1,6 @@
 import { protocol } from "electron";
 import type {
+  AgentEvent,
   AppServerBackendKind,
   AppServerReadThreadResponse,
   AppServerThreadEntry,
@@ -166,8 +167,46 @@ const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies =
   writeFile: writeCachedTranscriptImage,
 };
 
+// Shared by history appends, store instances, and renderer materialization.
+// A per-append map cannot own concurrent publication of the same destination.
+const cachedImagePublications = new Map<string, Promise<void>>();
+
+async function withCachedImagePublication(filePath: string, publish: () => Promise<void>): Promise<void> {
+  const absolutePath = path.resolve(filePath);
+  const key = process.platform === "win32" ? absolutePath.toLowerCase() : absolutePath;
+  const pending = cachedImagePublications.get(key);
+  if (pending) return pending;
+  const publication = publish();
+  cachedImagePublications.set(key, publication);
+  try {
+    await publication;
+  } finally {
+    cachedImagePublications.delete(key);
+  }
+}
+
 /** Publish complete cache files, reusing images retained by an earlier write or read. */
 async function writeCachedTranscriptImage(filePath: string, data: Buffer): Promise<void> {
+  await withCachedImagePublication(filePath, () => publishCachedTranscriptImage(filePath, data));
+}
+
+async function publishStagedTranscriptImage(temporary: string, filePath: string, data?: Buffer): Promise<void> {
+  try {
+    // Close the staging file before publishing. Windows can deny replacement
+    // when another process has just published this destination.
+    await rename(temporary, filePath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (!["EPERM", "EACCES", "EEXIST", "EBUSY"].includes(code ?? "")) throw error;
+    // Only an identical, complete winner satisfies this publication. Keep
+    // the original error for inaccessible, truncated, or different files.
+    const expected = data ?? await readFile(temporary);
+    const existing = await readFile(filePath).catch(() => undefined);
+    if (!existing?.equals(expected)) throw error;
+  }
+}
+
+async function publishCachedTranscriptImage(filePath: string, data: Buffer): Promise<void> {
   try {
     if ((await stat(filePath)).size === data.byteLength) return;
   } catch (error) {
@@ -177,9 +216,7 @@ async function writeCachedTranscriptImage(filePath: string, data: Buffer): Promi
   const temporary = `${filePath}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, data, { mode: 0o600, flag: "wx" });
-    // Concurrent publishers have identical content-addressed bytes. Rename
-    // publishes a complete file even on filesystems without hard links.
-    await rename(temporary, filePath);
+    await publishStagedTranscriptImage(temporary, filePath, data);
   } finally {
     await rm(temporary, { force: true });
   }
@@ -213,24 +250,29 @@ export async function persistTranscriptEntryImages(
       const filePath = path.join(root, path.basename(sourcePath));
       let write = writes.get(filePath);
       if (!write) {
-        write = (async () => {
+        write = withCachedImagePublication(filePath, async () => {
           await mkdir(root, { recursive: true, mode: 0o700 });
           try {
             await link(sourcePath, filePath);
           } catch (error) {
             const code = (error as NodeJS.ErrnoException).code ?? "";
-            if (code !== "EEXIST") {
-              if (!["EXDEV", "EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "EMLINK"].includes(code)) throw error;
-              const temporary = `${filePath}.${randomUUID()}.tmp`;
-              try {
-                await copyFile(sourcePath, temporary, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
-                await rename(temporary, filePath);
-              } finally {
-                await rm(temporary, { force: true });
-              }
+            if (code === "EEXIST") {
+              // This publisher may also own an inline append waiting to repair
+              // the same legacy file. Do not reuse a truncated fork target.
+              const [source, destination] = await Promise.all([stat(sourcePath), stat(filePath)]);
+              if (source.size === destination.size) return;
+            } else if (!["EXDEV", "EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "EMLINK"].includes(code)) {
+              throw error;
+            }
+            const temporary = `${filePath}.${randomUUID()}.tmp`;
+            try {
+              await copyFile(sourcePath, temporary, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+              await publishStagedTranscriptImage(temporary, filePath);
+            } finally {
+              await rm(temporary, { force: true });
             }
           }
-        })();
+        });
         writes.set(filePath, write);
       }
       await write;
@@ -434,6 +476,53 @@ export async function materializeTranscriptImageUrlsForRenderer(
       ),
     },
   };
+}
+
+/** Live items use the same cache identities and trust checks as history reads. */
+export async function materializeTranscriptImageEventForRenderer(
+  event: AgentEvent,
+  dependencies: Partial<TranscriptImageMaterializerDependencies> = {},
+  options: TranscriptImageMaterializationOptions = {},
+): Promise<AgentEvent> {
+  if (event.notification.method !== "item/completed") return event;
+  const { item, threadId } = event.notification.params;
+  if (!item || typeof item !== "object") return event;
+  const record = item as Record<string, unknown>;
+  if (typeof record.id !== "string") return event;
+  const isMessage = record.type === "agentMessage" && typeof record.text === "string";
+  const isImageView = event.backend === "codex" && record.type === "imageView";
+  if (!isMessage && !isImageView) return event;
+  const sourcePath = isImageView && typeof record.path === "string" && path.isAbsolute(record.path)
+    ? record.path : undefined;
+  const sourceUrl = sourcePath ? pathToFileURL(sourcePath).toString() : undefined;
+  const message: AppServerThreadMessage = {
+    id: record.id,
+    role: "assistant",
+    text: isMessage ? record.text as string : "",
+  };
+  const result = await materializeTranscriptImageUrlsForRenderer({
+    backend: event.backend,
+    threadId,
+    fetchedAt: 0,
+    replay: {
+      messages: isMessage ? [message] : [],
+      entries: sourceUrl && sourcePath ? [{
+        type: "activity", id: record.id, summary: "View image", status: "completed",
+        details: [{
+          id: record.id, kind: "command", label: "View image", status: "completed",
+          images: [{ type: "image", url: sourceUrl, sourceUrl, alt: path.basename(sourcePath) }],
+        }],
+      }] : [],
+      pagination: { supportsPagination: false, hasPreviousPage: false },
+    },
+  }, dependencies, options);
+  const activity = result.replay.entries[0];
+  const images = isImageView
+    ? activity?.type === "activity" ? activity.details[0]?.images ?? [] : []
+    : result.replay.messages[0]?.parts?.filter(
+        (part): part is AppServerThreadImagePart => part.type === "image",
+      ) ?? [];
+  return images.length || isImageView ? { ...event, rendererImageParts: images } : event;
 }
 
 /**
@@ -655,9 +744,22 @@ async function materializeTranscriptEntryImageUrls(
   if (entry.type === "activity") {
     return { ...entry, details: await Promise.all(entry.details.map(async (detail) => ({
       ...detail,
-      ...(detail.images ? { images: await Promise.all(detail.images.map(async (image) =>
-        await materializeTranscriptMessagePartImageUrl(image, response, deps,
-          materializedFileWrites, fetchedLoopbackImages) as AppServerThreadImagePart)) } : {}),
+      ...(detail.images ? { images: (await Promise.all(detail.images.map(async (image) => {
+        // Native imageView placeholders name a local file in both fields.
+        // Retain it through the linked-image cache, keyed by the stable item id.
+        if (image.sourceUrl === image.url && isFileImageUrl(image.url)) {
+          const sourcePath = localImageLinkPath(image.url);
+          if (!sourcePath) return undefined;
+          const retained = await materializeMarkdownLinkedImage(
+            detail.id ?? entry.id, sourcePath, response, deps, materializedFileWrites,
+            markdownLinkImageResolutions, materializedMarkdownLinkedImages,
+            resolveApprovedLocalImageRoots,
+          );
+          return retained ? { ...image, ...retained } : undefined;
+        }
+        return await materializeTranscriptMessagePartImageUrl(image, response, deps,
+          materializedFileWrites, fetchedLoopbackImages) as AppServerThreadImagePart;
+      }))).filter((image): image is AppServerThreadImagePart => image !== undefined) } : {}),
     }))) };
   }
   if (entry.type !== "message") {

@@ -7,6 +7,7 @@ const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const assert = require("node:assert/strict");
 const { captureNativeCpuDiagnostics, NATIVE_CPU_TRACE_CONFIG } = require("../src/main/diagnostics/native-cpu-capture.ts");
+const { acquireDebuggerLease } = require("../src/main/diagnostics/debugger-lease.ts");
 const root = mkdtempSync(join(tmpdir(), "pwragent-native-controls-"));
 app.setPath("userData", join(root, "user-data"));
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -43,7 +44,7 @@ app.whenReady().then(async () => {
   }; void 0;`);
   const pid = w.webContents.getOSProcessId(), d = w.webContents.debugger;
   // CDP must reject an already-owned trace, without ending it.
-  d.attach("1.3");
+  const foreignLease = acquireDebuggerLease(d, "Profiler");
   await d.sendCommand("Tracing.start", { transferMode: "ReturnAsStream", traceConfig: NATIVE_CPU_TRACE_CONFIG });
   await assert.rejects(captureNativeCpuDiagnostics(root, w.webContents), /Native CPU capture failed/);
   const foreignComplete = new Promise(resolve => {
@@ -54,11 +55,12 @@ app.whenReady().then(async () => {
   });
   await d.sendCommand("Tracing.end");
   await d.sendCommand("IO.close", { handle: (await foreignComplete).stream });
-  d.detach();
+  foreignLease.release();
   const rows = [];
   for (const mode of ["baseline", "v8", "trace", "trace-and-v8"]) {
     const profiling = mode === "v8" || mode === "trace-and-v8";
-    if (profiling) { d.attach("1.3"); await d.sendCommand("Profiler.enable"); }
+    const profilerLease = profiling ? acquireDebuggerLease(d, "Profiler") : undefined;
+    if (profiling) await d.sendCommand("Profiler.enable");
     for (const kind of ["idle", "js", "layout", "ipc", "worker"]) {
       const tracing = mode === "trace" || mode === "trace-and-v8";
       if (profiling) await d.sendCommand("Profiler.start");
@@ -116,7 +118,7 @@ app.whenReady().then(async () => {
       rows.push(row);
       console.log(JSON.stringify({ mode, kind, rendererCpuMs: row.rendererCpuMs, mainCpuMs: row.mainCpuMs, bytes: row.native?.bytes }));
     }
-    if (profiling) d.detach();
+    profilerLease?.release();
   }
   require("node:fs").mkdirSync(require("node:path").dirname(output), { recursive: true });
   writeFileSync(output, JSON.stringify({ platform: process.platform, electron: process.versions.electron,

@@ -478,6 +478,23 @@ describe("ThreadMarkdown", () => {
     expect(openApplication).not.toHaveBeenCalled();
   });
 
+  it("opens Windows image links without consuming separators before punctuation", () => {
+    const onOpenImage = vi.fn();
+    const imagePart = {
+      type: "image" as const, url: "pwragent-image://file/cached",
+      sourceUrl: "file:///D:/work/.local/mockup.png",
+    };
+    render(<ThreadMarkdown
+      text={String.raw`[Preview](D:\work\.local\mockup.png)`}
+      imageParts={[imagePart]}
+      onOpenImage={onOpenImage}
+    />);
+    const link = screen.getByRole("link", { name: "Preview" });
+    expect(link).toHaveAttribute("href", imagePart.url);
+    fireEvent.click(link);
+    expect(onOpenImage).toHaveBeenCalledWith(imagePart);
+  });
+
   it.each([undefined, "File pull is disabled on the owning machine.", "The owning machine does not support file pull.", "Remote machine disconnected."])("keeps remote Markdown reads in the local modal: %s", async (error) => {
     const federationTarget = { scope: "remote" as const, instanceId: "owner" };
     const thread = { backend: "codex" as const, threadId: "owner-thread" };
@@ -1493,7 +1510,7 @@ describe("ThreadMarkdown", () => {
     expect(screen.queryByRole("button", { name: /Collapse quote/ })).not.toBeInTheDocument();
   });
 
-  it("renders markdown image syntax as literal text instead of an image", () => {
+  it("keeps external Markdown images inert", () => {
     const { container } = render(
       <ThreadMarkdown
         text={"Keep ![Transcript preview](https://example.com/preview.png) inert for now."}
@@ -1504,6 +1521,39 @@ describe("ThreadMarkdown", () => {
     expect(container.textContent).toContain(
       "![Transcript preview](https://example.com/preview.png)"
     );
+  });
+
+  it("hides materialized image markup while keeping missing references and code examples readable", () => {
+    const { container } = render(<ThreadMarkdown
+      text={"Here: ![Preview](/tmp/mockup.png)\n\n![Missing](/tmp/missing.png)\n\n`![Example](/tmp/mockup.png)`"}
+      imageParts={[{ type: "image", url: "pwragent-image://file/cached", sourceUrl: "file:///tmp/mockup.png" }]}
+    />);
+    expect(container.textContent).toContain("Here:");
+    expect(container.textContent).not.toContain("![Preview]");
+    expect(container.textContent).toContain("![Missing](/tmp/missing.png)");
+    expect(container.textContent).toContain("![Example](/tmp/mockup.png)");
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it.each([
+    { destination: String.raw`D:\a\PwrAgent\PwrAgent\.local\image-preview-worktree-YER6mT\mockup.png`, sourceUrl: "file:///D:/a/PwrAgent/PwrAgent/.local/image-preview-worktree-YER6mT/mockup.png" },
+    { destination: String.raw`D:\work\_private\mockup.png`, sourceUrl: "file:///D:/work/_private/mockup.png" },
+    { destination: String.raw`\\server\share\mockup.png`, sourceUrl: "file://server/share/mockup.png" },
+    { destination: String.raw`D:\a\PwrAgent\mockup.png`, sourceUrl: "file:///D:/a/PwrAgent/mockup.png" },
+    { destination: "D:%5Ca%5CPwrAgent%5Cmockup.png", sourceUrl: "file:///D:/a/PwrAgent/mockup.png" },
+    { destination: "D:/a/PwrAgent/mockup.png", sourceUrl: "file:///D:/a/PwrAgent/mockup.png" },
+    { destination: "file:///D:/a/PwrAgent/mockup.png", sourceUrl: "file:///D:/a/PwrAgent/mockup.png" },
+    { destination: "file://server/share/mockup.png", sourceUrl: "file://server/share/mockup.png" },
+    { destination: "file:///D:/a/mockup%20%2350%25.png", sourceUrl: "file:///D:/a/mockup%20%2350%25.png" },
+  ])("hides materialized Windows image markup for $destination", ({ destination, sourceUrl }) => {
+    const { container } = render(<ThreadMarkdown
+      text={`![Preview](${destination})\n\n![Missing](D:/a/missing.png)\n\n\`![Example](${destination})\``}
+      imageParts={[{ type: "image", url: "pwragent-image://file/cached", sourceUrl }]}
+    />);
+    expect(container.querySelectorAll(".thread-markdown__image-literal")).toHaveLength(1);
+    expect(container.querySelector(".thread-markdown__image-literal")?.textContent).toContain("![Missing]");
+    expect(container.textContent).toContain("![Example]");
+    expect(container.textContent).not.toContain("![Preview]");
   });
 
   it("renders wide review-style markdown tables with transcript table chrome", () => {

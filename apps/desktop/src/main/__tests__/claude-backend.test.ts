@@ -85,6 +85,15 @@ async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUs
 }
 
 describe("Claude SDK backend", () => {
+  it("isolates a monitor's MCP configuration from inherited native servers", async () => {
+    const f = await fixture();
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "full-access", ephemeral: { title: "Task monitor" } });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Inspect status" }], strictMcpConfig: true, mcpServers: {} });
+    await f.waitForTurn();
+    expect(f.queries[0]).toMatchObject({ strictMcpConfig: true, mcpServers: {} });
+    await f.backend.close();
+  });
+
   it("moves a thread to another folder and resumes the same session there", async () => {
     const f = await fixture();
     const previous = path.join(f.root, "checkout");
@@ -124,6 +133,36 @@ describe("Claude SDK backend", () => {
     await f.waitForTurn();
     expect(f.queries[1]).toMatchObject({ cwd: worktree, resume: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" });
     expect(f.queries[1].additionalDirectories).toEqual([path.resolve(secondary)]);
+  });
+
+  it("waits for a starting session to stop before close resolves", async () => {
+    const f = await fixture();
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const enteredRead = Promise.withResolvers<void>();
+    const releaseRead = Promise.withResolvers<void>();
+    const read = f.store.read.bind(f.store);
+    const readSpy = vi.spyOn(f.store, "read").mockImplementation(async (id) => {
+      if (id === threadId) {
+        enteredRead.resolve();
+        await releaseRead.promise;
+      }
+      return await read(id);
+    });
+    const starting = f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    void starting.catch(() => {});
+    let closing: Promise<void> | undefined;
+    try {
+      await enteredRead.promise;
+      let closed = false;
+      closing = f.backend.close().then(() => { closed = true; });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closed).toBe(false);
+    } finally {
+      releaseRead.resolve();
+      await starting.catch(() => {});
+      await closing;
+      readSpy.mockRestore();
+    }
   });
 
   it("refuses to move a thread while its turn runs", async () => {
@@ -1159,14 +1198,24 @@ describe("Claude SDK backend", () => {
         five_hour: { utilization: 98, resets_at: new Date(Date.now() + 400).toISOString() },
         seven_day: { utilization: 20, resets_at: new Date(Date.now() + 86_400_000).toISOString() },
       }, session: { model_usage: {} } })) });
-    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
-    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
-    await f.waitForTurn();
-    f.events.length = 0;
-    await vi.waitFor(() => expect(f.events.map((event) => event.notification.method))
-      .toContain("backend/providerStatus/updated"), { timeout: 3_000 });
-    expect(f.backend.summary().rateLimits).toEqual([expect.objectContaining({ limitId: "seven_day" })]);
-    await f.backend.close();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+      await f.waitForTurn();
+      expect(f.backend.summary().rateLimits).toHaveLength(2);
+      f.events.length = 0;
+      await vi.advanceTimersByTimeAsync(401);
+      expect(f.events.map((event) => event.notification.method))
+        .toContain("backend/providerStatus/updated");
+      expect(f.backend.summary().rateLimits).toEqual([expect.objectContaining({ limitId: "seven_day" })]);
+    } finally {
+      try {
+        await f.backend.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
   });
 
   it("reads saved limits from the first file shape and drops malformed readings", async () => {

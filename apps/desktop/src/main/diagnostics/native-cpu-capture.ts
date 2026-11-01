@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { app, type WebContents } from "electron";
 import type { NativeCpuCaptureResult } from "../../shared/native-cpu-diagnostics";
 import { acquireChromiumTrace } from "./chromium-trace-lease";
-import { holdDebuggerConnection, requestDebuggerDetach } from "./debugger-connection-hold";
+import { acquireDebuggerLease, type DebuggerLease } from "./debugger-lease";
 import { summarizeNativeCpuTrace } from "./native-cpu-trace";
 
 export const NATIVE_CPU_DURATION_MS = 3_000;
@@ -36,7 +36,7 @@ function cpuSnapshot() {
 }
 
 class NativeCpuCapture {
-  private attachedHere = false;
+  private debuggerLease: DebuggerLease | undefined;
   private recording = false;
   private directory = "";
   private stream: string | undefined;
@@ -113,11 +113,10 @@ class NativeCpuCapture {
   private async run(): Promise<NativeCpuCaptureResult> {
     const d = this.target.debugger;
     let saved = false;
-    const releaseConnection = holdDebuggerConnection(d);
     try {
       await mkdir(this.outputRoot, { recursive: true, mode: 0o700 });
       this.directory = await mkdtemp(join(this.outputRoot, "native-cpu-"));
-      if (!d.isAttached()) { d.attach("1.3"); this.attachedHere = true; }
+      this.debuggerLease = acquireDebuggerLease(d, "Tracing");
       d.on("message", this.message);
       d.on("detach", this.detach);
       const pid = this.target.getOSProcessId();
@@ -186,9 +185,7 @@ class NativeCpuCapture {
       }
       d.off("message", this.message);
       d.off("detach", this.detach);
-      // Never detach a debugger owned by the V8 profiler or DevTools.
-      if (this.attachedHere && d.isAttached()) requestDebuggerDetach(d);
-      releaseConnection();
+      this.debuggerLease?.release(this.detached);
       if (!saved && this.directory) await rm(this.directory, { recursive: true, force: true });
     }
   }

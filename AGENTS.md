@@ -34,9 +34,12 @@
   - Out-of-scope gaps.
   - Deferred follow-ups.
   - Code-review findings that you are not fixing but that are still worth doing.
-- Give the card a `start_thread` action.
-  - Its prompt must stand alone. The new thread does not see the original thread.
-  - The operator can then track the item and spawn a thread when ready.
+- If an existing thread owns the work, give the card a `send_message` action
+  with that thread's target and the complete request as its prompt.
+- Otherwise, give the card a `start_thread` action.
+- In either case, its prompt must stand alone. The destination does not see
+  the original card. The operator can preview the request and send it or
+  start a thread when ready.
 - A finding that is not worth doing needs no card.
   - Say so in your reply to the operator instead.
 - Settle every tracked review finding with `update_review_item`:

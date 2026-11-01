@@ -8,11 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const metrics = vi.hoisted(() => vi.fn(() => [{ pid: 21, creationTime: 1, cpu: { cumulativeCPUUsage: 2 } }]));
 vi.mock("electron", () => ({ app: { getAppMetrics: metrics } }));
 import { captureNativeCpuDiagnostics, stopNativeCpuDiagnostics, NATIVE_CPU_TRACE_CONFIG } from "../diagnostics/native-cpu-capture";
-import { requestDebuggerDetach } from "../diagnostics/debugger-connection-hold";
+import { acquireDebuggerLease, type DebuggerLease } from "../diagnostics/debugger-lease";
 import { acquireChromiumTrace } from "../diagnostics/chromium-trace-lease";
 
 class Debugger extends EventEmitter {
-  attached = true;
+  attached = false;
   startedAt = 0;
   attach = vi.fn(() => { this.attached = true; });
   detach = vi.fn(() => { this.attached = false; this.emit("detach", {}, "test"); });
@@ -29,6 +29,7 @@ class Debugger extends EventEmitter {
 }
 let root: string;
 let d: Debugger;
+let profilerLease: DebuggerLease;
 const target = () => ({ debugger: d as unknown as WebContents["debugger"], getOSProcessId: () => 21 });
 const begin = async () => {
   const pending = captureNativeCpuDiagnostics(root, target());
@@ -38,11 +39,14 @@ const begin = async () => {
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "native-cpu-test-"));
   d = new Debugger();
+  profilerLease = acquireDebuggerLease(d, "Profiler");
+  d.attach.mockClear();
   metrics.mockClear();
   vi.useFakeTimers();
 });
 afterEach(async () => {
   await stopNativeCpuDiagnostics()?.catch(() => {});
+  profilerLease.release();
   vi.useRealTimers();
   await rm(root, { recursive: true, force: true });
 });
@@ -51,7 +55,7 @@ describe("bounded opt-in native CPU capture", () => {
   it("has zero off-state work and a two-snapshot active operation budget", async () => {
     await vi.advanceTimersByTimeAsync(86400_000);
     expect(vi.getTimerCount()).toBe(0);
-    expect(d.eventNames()).toEqual([]);
+    expect(d.eventNames()).toEqual(["detach"]);
     expect(metrics).not.toHaveBeenCalled();
     expect(await readdir(root)).toEqual([]);
     const { pending } = await begin();
@@ -61,7 +65,7 @@ describe("bounded opt-in native CPU capture", () => {
     expect(metrics).toHaveBeenCalledTimes(2);
     expect(d.attach).not.toHaveBeenCalled();
     expect(d.detach).not.toHaveBeenCalled();
-    expect(d.eventNames()).toEqual([]);
+    expect(d.eventNames()).toEqual(["detach"]);
     expect(vi.getTimerCount()).toBe(0);
     const text = await readFile(result.summaryPath, "utf8");
     expect(text).not.toContain("operator-content");
@@ -89,7 +93,7 @@ describe("bounded opt-in native CPU capture", () => {
 
   it("defers the V8 owner's detach until native stream cleanup, without sending Profiler commands", async () => {
     const { pending } = await begin();
-    requestDebuggerDetach(d);
+    profilerLease.release();
     expect(d.detach).not.toHaveBeenCalled();
     const stopping = stopNativeCpuDiagnostics("shutdown");
     expect(await pending).toEqual(await stopping);
@@ -99,7 +103,8 @@ describe("bounded opt-in native CPU capture", () => {
   });
 
   it("releases a debugger it attached itself and marks saturation/loss", async () => {
-    d.attached = false;
+    profilerLease.release();
+    d.detach.mockClear();
     const { pending } = await begin();
     d.emit("message", {}, "Tracing.bufferUsage", { percentFull: 1, eventCount: 99, private: "operator-content" });
     await stopNativeCpuDiagnostics();
@@ -109,6 +114,17 @@ describe("bounded opt-in native CPU capture", () => {
     const summary = JSON.parse(await readFile(result.summaryPath, "utf8"));
     expect(summary.buffer).toMatchObject({ peakFraction: 1, tailMayBeMissing: true, reports: 1 });
     expect(summary.trace.coverage.overwritten).toBe(false);
+  });
+
+  it("refuses an unmanaged debugger attachment without commands or detach", async () => {
+    profilerLease.release();
+    d.detach.mockClear();
+    d.attached = true;
+    await expect(captureNativeCpuDiagnostics(root, target())).rejects.toThrow("Native CPU capture failed");
+    expect(d.sendCommand).not.toHaveBeenCalled();
+    expect(d.attach).not.toHaveBeenCalled();
+    expect(d.detach).not.toHaveBeenCalled();
+    expect(await readdir(root)).toEqual([]);
   });
 
   it("rejects local overlap and preserves an external trace when CDP rejects start", async () => {

@@ -30,11 +30,12 @@ drain and decoding, and report deadline overrun.
 - One native/rendering diagnostics capture per instance, enforced before start.
 - CDP `Tracing.start` rejects an existing external trace. A rejected start grants
   no ownership and never sends `Tracing.end`.
-- Native capture uses the WebContents' existing debugger connection. If none is
-  attached it attaches one and releases it after cleanup. It sends no `Profiler`
-  commands and never detaches an existing profiler. A profiler's own requested
-  detach is deferred while the native stream drains; its normal sampling loop
-  can reconnect after release.
+- Native capture shares a managed WebContents debugger connection through an
+  exclusive `Tracing` lease, alongside the V8 profiler's `Profiler` lease. It
+  sends no `Profiler` commands. The last lease releases the connection after
+  cleanup, so profile saving and resuming cannot detach an active native trace.
+  An unmanaged attachment (including DevTools) is refused without commands or
+  detach.
 - Three seconds, 8 MiB `recordUntilFull` buffer. No overwriting or continuous ring.
   This is an instance-wide Chromium trace, including its renderer workers, main,
   GPU and utility processes. `rendererPid` identifies the requesting renderer.
