@@ -144,7 +144,12 @@ describe("verified HTTP MCP over local IPC", () => {
     await client.connect(transport);
     expect(client.getInstructions()).toBe("Fixture server instructions");
     expect((await client.listTools()).tools[0]).toMatchObject({ annotations: { readOnlyHint: true }, _meta: { fixture: "tool" } });
-    expect(await client.callTool({ name: "echo", arguments: { text: "hello ☃" } })).toMatchObject({ _meta: { fixture: "call" }, content: [{ annotations: { audience: ["user"] } }] });
+    // Cross several native 16 KiB buffers in both directions, with UTF-8
+    // and fragmented HTTP response writes, while the other pipe reader waits.
+    const args = { text: "hello ☃".repeat(4096) };
+    expect(await client.callTool({ name: "echo", arguments: args })).toMatchObject({
+      _meta: { fixture: "call" }, content: [{ text: JSON.stringify(args), annotations: { audience: ["user"] } }],
+    });
     expect((await client.listResources()).resources[0]).toMatchObject({ _meta: { fixture: "resource" } });
     expect(await client.readResource({ uri: "fixture:///readme" })).toMatchObject({ _meta: { fixture: "read" } });
     expect((await client.listPrompts()).prompts[0]).toMatchObject({ _meta: { fixture: "prompt" } });
