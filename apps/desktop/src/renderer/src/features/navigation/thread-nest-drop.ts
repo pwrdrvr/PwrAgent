@@ -5,6 +5,7 @@ import {
   threadSummaryIdentityKey,
   threadSupportsFederationCapability,
 } from "../../lib/federated-thread-events";
+import { readRendererFederationTarget } from "../../lib/federation-window";
 import type { PointerReorderTarget } from "./pointer-reorder-drag";
 
 /** Printed on the held card while a drop would nest it. */
@@ -80,13 +81,15 @@ export function canNestThread(
 
 /**
  * A peer's thread under a thread this machine owns. Only this machine's own
- * window lists a local row, so a federation window never offers it.
+ * window can tell: a window fronting a peer may list that peer's rows without
+ * an owner stamp, and those parents are the peer's, not this machine's.
  */
 export function isPeerChildOfLocalParent(
   child: Pick<NavigationThreadSummary, "federation">,
   parent: Pick<NavigationThreadSummary, "federation">,
 ): boolean {
-  return child.federation?.ref.target.scope === "remote" && !parent.federation;
+  return child.federation?.ref.target.scope === "remote" && !parent.federation
+    && !readRendererFederationTarget();
 }
 
 /**

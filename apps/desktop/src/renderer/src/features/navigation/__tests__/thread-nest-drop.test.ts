@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { canNestThread } from "../thread-nest-drop";
@@ -32,6 +32,10 @@ function index(...threads: NavigationThreadSummary[]) {
 }
 
 describe("canNestThread", () => {
+  // This machine's own window: no peer target.
+  beforeEach(() => vi.stubGlobal("window", {}));
+  afterEach(() => vi.unstubAllGlobals());
+
   it("nests a root under another root, across providers", () => {
     const child = thread("child");
     const parent = thread("parent", { source: "acp:gemini" } as Partial<NavigationThreadSummary>);
@@ -82,5 +86,12 @@ describe("canNestThread", () => {
     const threads = index(root, child, peerGrandchild);
     expect(canNestThread(peerGrandchild, root, threads)).toBe(true);
     expect(canNestThread(peerGrandchild, child, threads)).toBe(false);
+  });
+
+  it("never links a peer's thread to this machine from a window fronting a peer", () => {
+    vi.stubGlobal("window", { __pwragentFederationTarget: { scope: "remote", instanceId: "pwr_a" } });
+    const unstamped = thread("unstamped");
+    const peerB = remote("peer-b", "pwr_b");
+    expect(canNestThread(peerB, unstamped, index(unstamped, peerB))).toBe(false);
   });
 });

@@ -9148,7 +9148,10 @@ export function useThreadNavigation(
         ?? readRendererFederationTarget();
 
       let parentThreadInstanceId: string | undefined;
-      if (parentThreadId !== undefined && parentOnThisMachine && federationTarget?.scope === "remote") {
+      if (
+        parentThreadId !== undefined && parentOnThisMachine
+        && federationTarget?.scope === "remote" && !readRendererFederationTarget()
+      ) {
         // A peer stores its thread's link, so it names this machine as the
         // parent's owner, as a sub-thread started here on that peer does.
         try {

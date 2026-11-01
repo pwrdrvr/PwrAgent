@@ -151,14 +151,14 @@ it("moves a peer's sub-thread among this machine's children of a local parent", 
   ] });
 
   await updateLocalSubthreadOrder({ backend: "codex", parentThreadId: "root",
-    move: { threadId: "windows-e2e", anchorThreadId: "steam", placement: "before" } }, { localInstanceId: LOCAL });
+    move: { threadId: "windows-e2e", anchorThreadId: "steam", placement: "before" } }, { resolveLocalInstanceId: async () => LOCAL });
 
   expect((await mocks.store!.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
     .toEqual(["gondola", "windows-e2e", "steam"]);
 
   // A local move keeps the peer's child in the saved order.
   await updateLocalSubthreadOrder({ backend: "codex", parentThreadId: "root",
-    move: { threadId: "steam", anchorThreadId: "gondola", placement: "before" } }, { localInstanceId: LOCAL });
+    move: { threadId: "steam", anchorThreadId: "gondola", placement: "before" } }, { resolveLocalInstanceId: async () => LOCAL });
 
   expect((await mocks.store!.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
     .toEqual(["steam", "gondola", "windows-e2e"]);

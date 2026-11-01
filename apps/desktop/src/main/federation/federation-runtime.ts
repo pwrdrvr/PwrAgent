@@ -6922,12 +6922,15 @@ async function resolveFederatedWorktreeGitReadContext(request: {
 /**
  * A cross-instance child is not legible on its owning instance unless the
  * remote parent is mounted beside it. Import that parent as part of accepting
- * the child creation request, then mirror the normal created-thread visibility
- * rule when the child's Directory Threads section is collapsed.
+ * the child creation request, or a link a viewer moves one of this instance's
+ * threads into, then mirror the normal created-thread visibility rule when the
+ * child's Directory Threads section is collapsed.
  */
 async function mountRemoteParentForLocalChild(
-  request: MaterializeDirectoryLaunchpadRequest,
-  response: MaterializeDirectoryLaunchpadResponse,
+  request: Pick<MaterializeDirectoryLaunchpadRequest,
+    "launchpad" | "parentThreadBackend" | "parentThreadId" | "parentThreadInstanceId">
+    & { directoryKey?: string },
+  response: Pick<MaterializeDirectoryLaunchpadResponse, "backend">,
 ): Promise<void> {
   const parentThreadId = request.parentThreadId?.trim();
   const parentInstanceId = request.parentThreadInstanceId?.trim();
@@ -7476,6 +7479,24 @@ function localBackendOperations(): FederationBackendOperations {
         parentThreadInstanceId: request.parentThreadInstanceId,
         expectedParent: request.expectedParent,
       });
+      if (overlay.parentThreadId && overlay.parentThreadInstanceId) {
+        // A viewer moved this thread under one of its own threads. Without
+        // that parent mounted here, this instance cannot place the thread.
+        try {
+          await mountRemoteParentForLocalChild({
+            parentThreadId: overlay.parentThreadId,
+            parentThreadBackend: overlay.parentThreadBackend,
+            parentThreadInstanceId: overlay.parentThreadInstanceId,
+          }, { backend });
+        } catch (error) {
+          log.warn("failed to mount remote parent for a moved child", {
+            error: error instanceof Error ? error.message : String(error),
+            parentInstanceId: overlay.parentThreadInstanceId,
+            parentThreadId: overlay.parentThreadId,
+            threadId: request.threadId,
+          });
+        }
+      }
       await getDesktopBackendRegistry().publishLocalEvent({
         backend,
         notification: overlay.parentThreadId
@@ -7532,8 +7553,7 @@ function localBackendOperations(): FederationBackendOperations {
       // A viewer sends relative moves; the owner validates them against its
       // complete child order, the same as a local drag.
       return await updateLocalSubthreadOrder(request, {
-        localInstanceId: request.move || request.insertAfter
-          ? (await getDesktopFederationRuntime().health()).instanceId : undefined,
+        resolveLocalInstanceId: async () => (await getDesktopFederationRuntime().health()).instanceId,
       });
     },
     async setSubthreadsCollapsed(

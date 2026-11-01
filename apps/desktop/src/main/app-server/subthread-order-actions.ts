@@ -20,12 +20,13 @@ import { loadLocalNavigationQueryIndex } from "./navigation-query-source";
  * its threads) keeps its link on the peer, naming this machine as the
  * parent's owner. This machine's pin of that thread is what places it here,
  * so its cached link makes it a child too, and its id ranks in the same
- * order as the local children. `localInstanceId` is this machine's
- * federation identity; without one no peer can have linked a child here.
+ * order as the local children. `resolveLocalInstanceId` reads this machine's
+ * federation identity, only for a relative move; without one no peer can
+ * have linked a child here.
  */
 export async function updateLocalSubthreadOrder(
   request: Omit<UpdateSubthreadOrderRequest, "federationTarget">,
-  options: { localInstanceId?: string } = {},
+  options: { resolveLocalInstanceId?: () => Promise<string | undefined> } = {},
 ): Promise<UpdateSubthreadOrderResponse> {
   const backend = request.backend ?? "codex";
   const relative = Boolean(request.move || request.insertAfter);
@@ -56,7 +57,7 @@ export async function updateLocalSubthreadOrder(
       && !thread.parentThreadInstanceId && !thread.archivedAt && !thread.codexNativeSubAgent
       && resolveThreadParentKey(thread, byKey) === parentKey)
       .map(({ source, id, createdAt }) => ({ backend: source, id, createdAt }));
-    const localInstanceId = options.localInstanceId;
+    const localInstanceId = await options.resolveLocalInstanceId?.();
     if (localInstanceId) {
       for (const pin of await store.listRemoteThreadPins()) {
         const summary = pin.summary;

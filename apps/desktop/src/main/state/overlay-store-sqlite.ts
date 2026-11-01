@@ -5515,13 +5515,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       // per provider only, so an id two providers share is refused rather
       // than guessed. An unlisted id (a just-created child the owner's index
       // has not read yet) falls back to the parent's provider.
+      const ownersOf = (id: string) => params.children?.filter((entry) => entry.id === id) ?? [];
       const childKey = (id: string, listed: boolean): string | undefined => {
-        const owners = params.children?.filter((entry) => entry.id === id) ?? [];
+        const owners = ownersOf(id);
         if (owners.length > 1 || (listed && owners.length === 0)) return undefined;
         return buildThreadIdentityKey(owners[0]?.backend ?? params.backend, id);
       };
       const isPeerChild = (id: string): boolean => {
-        const owners = params.children?.filter((entry) => entry.id === id) ?? [];
+        const owners = ownersOf(id);
         return owners.length === 1 && Boolean(owners[0]!.ownerInstanceId);
       };
       const parent = this.getThread(parentKey) ?? {
