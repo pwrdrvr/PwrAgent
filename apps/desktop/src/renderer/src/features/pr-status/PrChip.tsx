@@ -225,9 +225,21 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
         }}
         onDragStart={(event) => event.preventDefault()}
         onFocus={(event) => tooltipController.show(event.currentTarget, card)}
+        // The ✕ is pointer-only, so Delete is the keyboard's way to detach.
+        aria-keyshortcuts={props.onDetach ? "Delete Backspace" : undefined}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") {
             handleActivate(event);
+          } else if (
+            props.onDetach
+            && (event.key === "Delete" || event.key === "Backspace")
+            && !event.metaKey
+            && !event.ctrlKey
+            && !event.altKey
+            && !event.shiftKey
+          ) {
+            tooltipController.hide();
+            handleDetach(event);
           }
         }}
         onMouseEnter={(event) =>
@@ -251,18 +263,15 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
           </span>
         ) : null}
         {props.onDetach ? (
+          // A pointer shortcut, not a second control: a button inside the
+          // chip's button is nested-interactive, and at 16px it is under the
+          // 24px target floor. Keyboards detach with Delete on the chip or
+          // from its menu.
           <span
-            aria-label={`Detach ${pr.org}/${pr.repo}#${pr.number} from thread`}
+            aria-hidden="true"
             className="pr-chip__detach"
-            role="button"
-            tabIndex={0}
             title={`Detach ${pr.org}/${pr.repo}#${pr.number} from thread`}
             onClick={handleDetach}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                handleDetach(event);
-              }
-            }}
           >
             <CloseIcon size={11} aria-hidden="true" />
           </span>
@@ -274,6 +283,7 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
         <PrChipContextMenu
           position={contextMenuPosition}
           pr={pr}
+          onDetach={props.onDetach ? () => props.onDetach?.(pr) : undefined}
           returnFocusTo={contextMenuInvokerRef.current}
           onClose={() => setContextMenuPosition(undefined)}
         />

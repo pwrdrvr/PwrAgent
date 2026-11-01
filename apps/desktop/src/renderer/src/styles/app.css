@@ -8136,15 +8136,10 @@ a.button {
   color: var(--text-muted);
 }
 
-.pr-chip__detach:hover,
-.pr-chip__detach:focus-visible {
+/* Pointer-only: it takes no focus (see PrChip), so it has no focus ring. */
+.pr-chip__detach:hover {
   background: var(--danger-soft);
   color: var(--danger-text);
-}
-
-.pr-chip__detach:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
 }
 
 /* A CI watch waits to wake the thread. Muted, and not a target: the dot

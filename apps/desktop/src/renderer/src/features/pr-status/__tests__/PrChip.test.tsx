@@ -88,6 +88,58 @@ describe("PrChip", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
+  describe("detach", () => {
+    function renderDetachable() {
+      const onDetach = vi.fn();
+      const { container } = render(
+        <PrChip pr={basePr()} showRepoPrefix={false} onOpen={vi.fn()} onDetach={onDetach} />,
+      );
+      return { chip: container.querySelector(".pr-chip") as HTMLElement, onDetach };
+    }
+
+    // axe's nested-interactive: a focusable widget inside the chip's own
+    // role="button". Its 16px box also failed the 24px target-size floor.
+    it("draws the ✕ as a pointer shortcut, not a control inside the chip", () => {
+      const { chip, onDetach } = renderDetachable();
+      expect(chip.querySelectorAll("[role=button], [tabindex]")).toHaveLength(0);
+      const detach = chip.querySelector(".pr-chip__detach") as HTMLElement;
+      expect(detach).toHaveAttribute("aria-hidden", "true");
+      expect(detach).toHaveAttribute("title", "Detach pwrdrvr/PwrAgent#743 from thread");
+
+      fireEvent.click(detach);
+      expect(onDetach).toHaveBeenCalledWith(expect.objectContaining({ number: 743 }));
+    });
+
+    it("detaches from the keyboard with Delete or Backspace on the chip", () => {
+      const { chip, onDetach } = renderDetachable();
+      expect(chip).toHaveAttribute("aria-keyshortcuts", "Delete Backspace");
+
+      fireEvent.keyDown(chip, { key: "Delete" });
+      fireEvent.keyDown(chip, { key: "Backspace" });
+      expect(onDetach).toHaveBeenCalledTimes(2);
+
+      // A chord belongs to whatever owns it, not to the chip.
+      fireEvent.keyDown(chip, { key: "Backspace", metaKey: true });
+      expect(onDetach).toHaveBeenCalledTimes(2);
+    });
+
+    it("offers Detach Pull Request in the chip's own menu", () => {
+      const { chip, onDetach } = renderDetachable();
+      fireEvent.contextMenu(chip, { clientX: 40, clientY: 40 });
+      fireEvent.click(screen.getByRole("menuitem", { name: "Detach Pull Request" }));
+      expect(onDetach).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+
+    it("takes no Delete and offers no Detach where it cannot detach", () => {
+      const chip = renderChip(basePr());
+      expect(chip).not.toHaveAttribute("aria-keyshortcuts");
+      expect(chip.querySelector(".pr-chip__detach")).toBeNull();
+      fireEvent.contextMenu(chip, { clientX: 40, clientY: 40 });
+      expect(screen.queryByRole("menuitem", { name: "Detach Pull Request" })).toBeNull();
+    });
+  });
+
   it("derives canonical copy values for deep pull request links", () => {
     expect(pullRequestCopyTargets(basePr({
       url: "https://github.com/pwrdrvr/PwrAgent/pull/743/files?diff=split",

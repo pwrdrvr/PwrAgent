@@ -519,10 +519,9 @@ describe("sidebar thread row callback stability", () => {
       view.rerender(sidebar({ threads: withPr, onDetachPullRequest: second }));
     }
 
+    // The ✕ is pointer-only; its title names the PR it detaches.
     fireEvent.click(
-      within(row("Thread 7")).getByRole("button", {
-        name: "Detach pwrdrvr/PwrAgent#2119 from thread",
-      }),
+      within(row("Thread 7")).getByTitle("Detach pwrdrvr/PwrAgent#2119 from thread"),
     );
     // Detaching is confirmed once per install; go through the dialog rather
     // than pre-dismissing it, so the test does not encode its storage key.

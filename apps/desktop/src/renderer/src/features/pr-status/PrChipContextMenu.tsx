@@ -7,6 +7,8 @@ import {
 
 type PrChipContextMenuProps = {
   onClose: () => void;
+  /** Adds Detach Pull Request below the copy items. */
+  onDetach?: () => void;
   position: ChipContextMenuPosition;
   pr: PrSummary;
   returnFocusTo: HTMLElement;
@@ -15,7 +17,12 @@ type PrChipContextMenuProps = {
 export function PrChipContextMenu(props: PrChipContextMenuProps) {
   return (
     <ChipContextMenu
-      items={pullRequestCopyTargets(props.pr)}
+      items={props.onDetach
+        ? [
+            ...pullRequestCopyTargets(props.pr),
+            { label: "Detach Pull Request", action: props.onDetach, separated: true },
+          ]
+        : pullRequestCopyTargets(props.pr)}
       onClose={props.onClose}
       position={props.position}
       returnFocusTo={props.returnFocusTo}
