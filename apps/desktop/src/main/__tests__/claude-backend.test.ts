@@ -3034,6 +3034,9 @@ describe("Claude transcript fidelity", () => {
         url: page, path: "/repo/settings.html", artifact_id: "630f38d3-9e88-4301-bf28-0d6e5f81bd5b",
         title: "Settings screen", owned: true, audience: "owner", seq: 1,
       });
+      // A Design artifact starts as a publish from its type, with no file.
+      yield call("create-1", "Artifact", { action: "publish", type_url: "https://claude.ai/artifact/type", title: "Canvas" });
+      yield answer("create-1", `Created a new Artifact at ${page}`, { url: page });
       yield call("read-1", "Artifact", { action: "read", url: page });
       yield answer("read-1", "<h1>Settings</h1>", { read: { url: page, title: "Settings screen", code: 200, result: "<h1>Settings</h1>" } });
       yield call("publish-2", "Artifact", { file_path: "/repo/broken.html" });
@@ -3051,6 +3054,9 @@ describe("Claude transcript fidelity", () => {
       id: "publish-1", kind: "write", label: "Published Settings screen", url: page, status: "completed",
     });
     expect(group.details.some((detail) => detail.id === "publish-1:output")).toBe(false);
+    expect(group.details.filter((detail) => detail.id.startsWith("create-1"))).toEqual([{
+      id: "create-1", kind: "write", label: "Published Canvas", url: page, status: "completed",
+    }]);
     expect(group.details.find((detail) => detail.id === "read-1")).toMatchObject({ label: "Read Settings screen", url: page });
     expect(group.details.find((detail) => detail.id === "read-1:output")).toMatchObject({ markdown: "<h1>Settings</h1>" });
     // A failed publish keeps the reason it failed.

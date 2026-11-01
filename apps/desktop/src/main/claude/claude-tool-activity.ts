@@ -47,6 +47,7 @@ const ARTIFACT_ACTIONS: Record<string, ArtifactRow> = {
   list: { kind: "read", label: "Listed artifacts" },
   read: { kind: "read", label: "Read an artifact" },
   list_types: { kind: "read", label: "Listed artifact types" },
+  quickstart: { kind: "read", label: "Read how to start an artifact" },
   describe_type: { kind: "read", label: "Read an artifact type" },
   list_files: { kind: "read", label: "Listed an artifact's files" },
   read_file: { kind: "read", label: "Read an artifact's file" },
@@ -57,6 +58,7 @@ const ARTIFACT_ACTIONS: Record<string, ArtifactRow> = {
   comments: { kind: "read", label: "Read artifact comments" },
   reply: { kind: "write", label: "Replied to an artifact comment" },
   resolve: { kind: "write", label: "Resolved an artifact comment" },
+  read_page_data: { kind: "read", label: "Read an artifact's page data" },
   read_db: { kind: "read", label: "Read artifact data" },
   write_db: { kind: "write", label: "Wrote artifact data" },
   verify: { kind: "read", label: "Checked an artifact" },
@@ -67,8 +69,8 @@ const ARTIFACT_ACTIONS: Record<string, ArtifactRow> = {
   share: { kind: "write", label: "Changed who can see an artifact" },
 };
 
-/** The `Artifact` action a family tool's own action stands for. */
-function artifactAction(name: string, input: Record<string, unknown>): string {
+/** The `Artifact` action a call takes; a family tool's action maps onto one. */
+export function claudeArtifactAction(name: string, input: Record<string, unknown>): string {
   const action = stringField(input, "action");
   switch (name) {
     case "ArtifactComments":
@@ -91,7 +93,7 @@ function claudeArtifactDetail(params: {
   id: string; name: string; input: Record<string, unknown>; status: ActivityStatus;
 }): AppServerThreadActivityDetail | undefined {
   const { id, name, input, status } = params;
-  const action = artifactAction(name, input);
+  const action = claudeArtifactAction(name, input);
   const url = action === "delete" ? undefined : httpsUrl(input.url);
   if (action === "publish") {
     const file = stringField(input, "file_path");
@@ -103,24 +105,23 @@ function claudeArtifactDetail(params: {
 }
 
 /**
- * The row of an artifact call Claude Code answered. A publish names the page
- * and links to it. Its result text is instructions for the model, so the row
- * keeps the link and not the text. A read names the page it read.
+ * The row of an artifact call Claude Code answered. A publish, including one
+ * that creates an artifact from a type, names the page and links to it. Its
+ * result text is instructions for the model, so the row keeps the link and
+ * not the text. A read names the page it read.
  */
-export function claudeArtifactResult(detail: AppServerThreadActivityDetail, result: unknown): {
+export function claudeArtifactResult(detail: AppServerThreadActivityDetail, action: string, result: unknown): {
   detail: AppServerThreadActivityDetail; keepOutput: boolean;
 } | undefined {
-  if (!result || typeof result !== "object") return undefined;
+  if (!result || typeof result !== "object" || (action !== "publish" && action !== "read")) return undefined;
   const record = result as Record<string, unknown>;
-  const read = record.read && typeof record.read === "object" ? record.read as Record<string, unknown> : undefined;
-  const url = httpsUrl(read ? read.url : record.url);
+  const page = action === "read" ? record.read : record;
+  if (!page || typeof page !== "object") return undefined;
+  const url = httpsUrl((page as Record<string, unknown>).url);
   if (!url) return undefined;
-  const title = stringField(read ?? record, "title");
-  if (read) {
-    return { detail: { ...detail, url, ...(title ? { label: `Read ${title}` } : {}) }, keepOutput: true };
-  }
-  if (typeof record.path !== "string" && typeof record.artifact_id !== "string") return undefined;
-  return { detail: { ...detail, url, ...(title ? { label: `Published ${title}` } : {}) }, keepOutput: false };
+  const title = stringField(page as Record<string, unknown>, "title");
+  const verb = action === "read" ? "Read" : "Published";
+  return { detail: { ...detail, url, ...(title ? { label: `${verb} ${title}` } : {}) }, keepOutput: action === "read" };
 }
 
 /**

@@ -32,8 +32,8 @@ import { backUpRewindFiles, recordRewoundFiles, restoreRewindFiles } from "./cla
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 import { ClaudeTaskTracker, claudeTaskRow, type ClaudeTaskSettlement } from "./claude-tasks";
 import {
-  CLAUDE_ARTIFACT_TOOLS, CLAUDE_TODO_TOOL, claudeArtifactResult, claudeFileDiff, claudeShellCommand, claudeTodoSteps,
-  claudeToolCallArguments, claudeToolCallDetail, claudeToolDetail, claudeToolResultContent, claudeTurnDiff,
+  CLAUDE_ARTIFACT_TOOLS, CLAUDE_TODO_TOOL, claudeArtifactAction, claudeArtifactResult, claudeFileDiff, claudeShellCommand,
+  claudeTodoSteps, claudeToolCallArguments, claudeToolCallDetail, claudeToolDetail, claudeToolResultContent, claudeTurnDiff,
 } from "./claude-tool-activity";
 import { normalizeClaudeTitle, requestClaudeTitle, type ClaudeTitleQuery } from "./claude-titles";
 import {
@@ -216,8 +216,8 @@ type RunningTurn = {
   hasCompletedToolActivity: boolean;
   /** Each successful file edit's diff, in order: the turn's live diff. */
   fileDiffs: string[];
-  /** Artifact tool calls, by tool-use id: their results carry the page's link. */
-  artifactCalls: Set<string>;
+  /** Each artifact tool call's action, by tool-use id: its result carries the page's link. */
+  artifactCalls: Map<string, string>;
   ending?: boolean;
   titlePrompt?: string;
   /** Owned by the turn, but never awaited by the streaming message pump. */
@@ -372,7 +372,7 @@ function claudeTurn(session?: ClaudeSession, followUp = false): RunningTurn {
     ended: claudeDeferred(),
     turnId: randomUUID(), startedAt: Date.now(), entries: new Map(), pendingSteers: new Set(),
     completedMessageText: new Map(), pendingReports: new Map(), hasCompletedToolActivity: false, fileDiffs: [],
-    artifactCalls: new Set(), lastResultSeq: 0,
+    artifactCalls: new Map(), lastResultSeq: 0,
     usageBaseline: session?.modelUsage, needsUsageBaseline: Boolean(session?.sdkSessionId) && !session?.modelUsage,
     ...(followUp ? { followUp, started: true } : {}),
   };
@@ -2023,7 +2023,7 @@ export class ClaudeBackend {
           createdAt: Date.now(), turn: { id: turnId },
         };
         turn.entries.set(block.id, activity);
-        if (CLAUDE_ARTIFACT_TOOLS.has(block.name)) turn.artifactCalls.add(block.id);
+        if (CLAUDE_ARTIFACT_TOOLS.has(block.name)) turn.artifactCalls.set(block.id, claudeArtifactAction(block.name, input));
         // A task this call starts can outlive the turn.
         live.toolRows.set(block.id, { entry: activity, turnId });
         await this.store.append(threadId, [activity]);
@@ -2075,8 +2075,9 @@ export class ClaudeBackend {
         const toolCall = entry.details[0].command?.source === "tool" ? entry.details[0] : undefined;
         // A successful publish links to its page, and a successful edit shows
         // its diff, instead of the tool's acknowledgement.
-        const artifact = turn.artifactCalls.has(block.tool_use_id) && !block.is_error
-          ? claudeArtifactResult(entry.details[0], message.tool_use_result) : undefined;
+        const artifactAction = turn.artifactCalls.get(block.tool_use_id);
+        const artifact = artifactAction !== undefined && !block.is_error
+          ? claudeArtifactResult(entry.details[0], artifactAction, message.tool_use_result) : undefined;
         const edit = entry.details[0].kind === "write" && !block.is_error && !artifact
           ? claudeFileDiff(message.tool_use_result, live.session.cwd) : undefined;
         if (artifact) {

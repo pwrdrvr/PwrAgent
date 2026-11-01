@@ -51,6 +51,7 @@ describe("Claude tool activity", () => {
       .toEqual({ id: "1", kind: "write", label: "Published Settings screen", status: "in_progress" });
     expect(detail("Artifact", { file_path: "/w/settings.html" })).toMatchObject({ label: "Published settings.html" });
     expect(detail("Artifact", { action: "publish", type: "design" })).toMatchObject({ label: "Published an artifact" });
+    expect(detail("Artifact", { action: "quickstart", intent: "design" })).toMatchObject({ kind: "read", label: "Read how to start an artifact" });
     expect(detail("Artifact", { action: "list", limit: 3 })).toEqual({ id: "1", kind: "read", label: "Listed artifacts", status: "in_progress" });
     expect(detail("Artifact", { action: "read", url: page })).toMatchObject({ kind: "read", label: "Read an artifact", url: page });
     // A deleted artifact's link no longer opens.
@@ -69,19 +70,24 @@ describe("Claude tool activity", () => {
   it("names the page a publish or read returned", () => {
     const published = { id: "1", kind: "write" as const, label: "Published settings.html", status: "in_progress" as const };
     // Captured from Claude Code 2.1.303's publish result.
-    expect(claudeArtifactResult(published, {
+    expect(claudeArtifactResult(published, "publish", {
       url: "https://claude.ai/artifact/DEUQW4g8qq7csZHvDLZKyt", path: "/w/settings.html",
       artifact_id: "630f38d3-9e88-4301-bf28-0d6e5f81bd5b", title: "Settings screen", owned: true, audience: "owner",
     })).toEqual({
       detail: { ...published, label: "Published Settings screen", url: "https://claude.ai/artifact/DEUQW4g8qq7csZHvDLZKyt" },
       keepOutput: false,
     });
+    // A publish that creates the artifact from a type names no source file.
+    expect(claudeArtifactResult(published, "publish", { url: "https://claude.ai/artifact/UJ29qnGYNBbYgJY1TAEkoW" }))
+      .toEqual({ detail: { ...published, url: "https://claude.ai/artifact/UJ29qnGYNBbYgJY1TAEkoW" }, keepOutput: false });
     const read = { id: "2", kind: "read" as const, label: "Read an artifact" };
-    expect(claudeArtifactResult(read, { read: { url: "https://claude.ai/artifact/x", title: "Deck", code: 200, result: "<html>" } }))
+    expect(claudeArtifactResult(read, "read", { read: { url: "https://claude.ai/artifact/x", title: "Deck", code: 200, result: "<html>" } }))
       .toEqual({ detail: { ...read, label: "Read Deck", url: "https://claude.ai/artifact/x" }, keepOutput: true });
-    expect(claudeArtifactResult(read, { artifacts: [], total: 0 })).toBeUndefined();
-    expect(claudeArtifactResult(read, { artifact_delete: { url: "https://claude.ai/artifact/x", deleted: true } })).toBeUndefined();
-    expect(claudeArtifactResult(read, "Published")).toBeUndefined();
+    expect(claudeArtifactResult(read, "list", { artifacts: [], total: 0 })).toBeUndefined();
+    expect(claudeArtifactResult(read, "delete", { artifact_delete: { url: "https://claude.ai/artifact/x", deleted: true } })).toBeUndefined();
+    expect(claudeArtifactResult(read, "pin", { url: "https://claude.ai/artifact/x" })).toBeUndefined();
+    expect(claudeArtifactResult(published, "publish", "Published")).toBeUndefined();
+    expect(claudeArtifactResult(published, "publish", { url: "http://claude.ai/artifact/x" })).toBeUndefined();
   });
 
   it("keeps one section per file in a turn diff, in first-edit order", () => {
