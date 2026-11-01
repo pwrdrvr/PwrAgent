@@ -236,6 +236,21 @@ describe("Claude history image persistence", () => {
     await expect(readFile(cached)).resolves.toEqual(png);
     expect(await readdir(root)).toEqual([path.basename(cached)]);
     expect(await f.store.entries(id)).toHaveLength(1);
+    expect(vi.mocked(rename).mock.calls.filter(([, destination]) => destination === cached)).toHaveLength(1);
+  });
+
+  it("releases failed cache publication ownership before a later append", async () => {
+    const f = await fixture();
+    const root = path.join(f.images, id);
+    const cached = path.join(root, `${createHash("sha256").update(png).digest("hex")}.png`);
+    vi.mocked(rename).mockRejectedValueOnce(Object.assign(new Error("Disk full"), { code: "ENOSPC" }));
+    await expect(f.store.append(id, [activity()])).rejects.toMatchObject({ code: "ENOSPC" });
+    expect(await readdir(root)).toEqual([]);
+    await expect(readFile(f.history)).rejects.toMatchObject({ code: "ENOENT" });
+    await f.store.append(id, [activity()]);
+    await expect(readFile(cached)).resolves.toEqual(png);
+    expect(await f.store.entries(id)).toHaveLength(1);
+    expect(vi.mocked(rename).mock.calls.filter(([, destination]) => destination === cached)).toHaveLength(2);
   });
 
   it("owns publication across stores and renderer reads until the complete image is published", async () => {

@@ -1290,7 +1290,7 @@ function renderMessageHeader(params: {
           />
         ) : null}
         {params.message.createdAt ? (
-          <time className="transcript-message__time">
+          <time className="transcript-message__time tooltip-target" dateTime={new Date(params.message.createdAt).toISOString()} data-tooltip={new Date(params.message.createdAt).toISOString()}>
             {new Intl.DateTimeFormat(undefined, {
               month: "short",
               day: "numeric",

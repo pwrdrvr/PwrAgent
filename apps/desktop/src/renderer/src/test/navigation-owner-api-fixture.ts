@@ -57,6 +57,8 @@ export function navigationOwnerApiFixture(source: NavigationOwnerFixtureApi, onL
   const { readPopulation: _read, readPopulationTransport: _transport, ...api } = source;
   return {
     ...api,
+    manageLaunchpadCreation: api.manageLaunchpadCreation
+      ?? (api.materializeDirectoryLaunchpad ? async () => ({}) : undefined),
     onAgentEvent: (listener) => {
       listeners.add(listener);
       if (!unsubscribeSource) unsubscribeSource = api.onAgentEvent?.((event) => {

@@ -13,7 +13,7 @@ import { TranscriptCopyButton } from "../thread-detail/TranscriptCopyButton";
 export type EnvironmentSetupRowModel = {
   /** Changes when a new run starts, so a fresh run opens collapsed. */
   key: string;
-  phase: "setup" | "action";
+  phase: "setup" | "action" | "startup";
   status: "running" | "failed";
   environmentId?: string;
   environmentName?: string;
@@ -24,6 +24,8 @@ export type EnvironmentSetupRowModel = {
   exitCode?: number;
   durationMs?: number;
   startedAt?: number;
+  onCancel?: () => void;
+  cancelling?: boolean;
   /** Existing threads: hides the row. */
   onDismiss?: () => void;
   /**
@@ -92,7 +94,7 @@ export function EnvironmentSetupRow(props: {
     }
   }, [open, output, running]);
 
-  const subject = model.phase === "action" ? "Env action" : "Env setup";
+  const subject = model.phase === "action" ? "Env action" : model.phase === "startup" ? "Thread startup" : "Env setup";
   const label = `${subject} ${running ? "running" : "failed"}`;
   const meta: string[] = [];
   if (model.environmentName) meta.push(model.environmentName);
@@ -159,6 +161,11 @@ export function EnvironmentSetupRow(props: {
           </span>
         </button>
         <span className="composer__queued-env-action-actions">
+          {running && model.onCancel ? (
+            <button className="composer__secondary-action" type="button" disabled={model.cancelling} onClick={model.onCancel}>
+              {model.cancelling ? "Cancelling…" : "Cancel startup"}
+            </button>
+          ) : null}
           {!running && !decision ? retryButton : null}
           {output ? (
             <TranscriptCopyButton
@@ -217,6 +224,7 @@ export function EnvironmentSetupRow(props: {
       ) : null}
       {open ? (
         <div className="composer__queued-env-action-body">
+          {model.startedAt !== undefined ? <p>Started <time dateTime={new Date(model.startedAt).toISOString()}>{new Date(model.startedAt).toLocaleString()}</time></p> : null}
           {model.command?.trim() ? (
             <div className="composer__queued-env-action-section">
               <div className="composer__queued-env-action-section-label">Command</div>

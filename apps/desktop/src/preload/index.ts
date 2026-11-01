@@ -730,6 +730,7 @@ import {
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_STOP_SUB_AGENT_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  AGENT_LAUNCHPAD_CREATION_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_PREVIEW_THREAD_REWIND_CHANNEL,
@@ -2606,6 +2607,8 @@ const desktopApi = Object.freeze({
     request: MaterializeDirectoryLaunchpadRequest
   ): Promise<MaterializeDirectoryLaunchpadResponse> =>
     await ipcRenderer.invoke(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL, request),
+  manageLaunchpadCreation: async (request: import("@pwragent/shared").LaunchpadCreationRequest) =>
+    await ipcRenderer.invoke(AGENT_LAUNCHPAD_CREATION_CHANNEL, request),
   runCodexEnvironmentAction: async (
     request: RunCodexEnvironmentActionRequest,
   ): Promise<RunCodexEnvironmentActionResponse> =>
