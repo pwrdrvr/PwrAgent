@@ -458,6 +458,27 @@ describe("createMainWindow", () => {
     });
   });
 
+  it("lets only an unpackaged E2E main window grow past the screen", async () => {
+    const { app } = await import("electron");
+    const mockedApp = app as { isPackaged?: boolean };
+    const { createMainWindow } = await loadWindowModule();
+    try {
+      createMainWindow();
+      expect(browserWindowState.options).toMatchObject({ enableLargerThanScreen: false });
+
+      vi.stubEnv("PWRAGENT_E2E", "1");
+      createMainWindow();
+      expect(browserWindowState.options).toMatchObject({ enableLargerThanScreen: true });
+
+      mockedApp.isPackaged = true;
+      createMainWindow();
+      expect(browserWindowState.options).toMatchObject({ enableLargerThanScreen: false });
+    } finally {
+      delete mockedApp.isPackaged;
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("registers the main window for messaging push-event channels", async () => {
     const { createMainWindow } = await loadWindowModule();
     const { debugListRegisteredWindows } = await import("../window-channels");
