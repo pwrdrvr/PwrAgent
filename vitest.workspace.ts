@@ -164,6 +164,16 @@ export default defineConfig({
     projects: [
       {
         test: {
+          name: "mobile-client",
+          env: SANDBOX_ENV,
+          pool: "threads",
+          testTimeout: TEST_TIMEOUT_MS,
+          environment: "node",
+          include: ["apps/mobile/src/**/*.test.ts"],
+        },
+      },
+      {
+        test: {
           name: "messaging",
           env: SANDBOX_ENV,
           // Vitest 4 defaults to forks, which execs a fresh Node process for

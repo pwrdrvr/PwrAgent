@@ -1,3 +1,4 @@
+import { startConfiguredMobileGateway } from "./mobile/startup";
 import { nativeVoiceMediaRules, registerNativeVoiceIpcHandlers } from "./ipc/native-voice";
 import { installPermissionPolicy } from "./permission-policy";
 import { markAgentProjectRead } from "./app-server/agent-project-read";
@@ -1747,6 +1748,9 @@ export function bootstrapApp(): void {
     installWindowFrameSync(app);
     registerAppServerIpcHandlers();
     registerNativeVoiceIpcHandlers();
+    void startConfiguredMobileGateway().then((close) => {
+      if (close) app.once("before-quit", () => { void close().catch(() => undefined); });
+    }).catch((error) => mainLog.error("Mobile gateway failed to start", { error: String(error) }));
     void startAppServerOwnerNavigation().catch((error) => {
       mainLog.warn("failed to initialize owner navigation metadata", { error: String(error) });
     });
