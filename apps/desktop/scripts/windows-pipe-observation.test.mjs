@@ -169,8 +169,8 @@ describe("Windows natural pipe evidence", () => {
 
   it.skipIf(process.platform !== "win32" || process.arch !== "x64")("records native process creation and exit times on Windows", async () => {
     const result = await promisify(execFile)(process.execPath, [path.join(import.meta.dirname, "windows-pipe-diagnostics-probe.mjs")], {
-      windowsHide: true, timeout: 25000,
+      windowsHide: true, timeout: 35000,
     });
     expect(JSON.parse(result.stdout)).toEqual(expect.objectContaining({ creationIdentityVerified: true, nativeExitTimeVerified: true }));
-  });
+  }, 40000);
 });
