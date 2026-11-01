@@ -555,6 +555,9 @@ export class McpConnectionGatewayService {
     Promise<ListMcpConnectionToolsResponse>
   >();
   private readonly toolInventoryGenerations = new Map<string, number>();
+  // Inventory eviction must discard stale Settings reads without changing
+  // the schema/consent revisions of unrelated live thread sessions.
+  private readonly toolInventoryCacheGenerations = new Map<string, number>();
   private readonly sessionIdentities = new WeakMap<Client, string>();
   private readonly initializations = new WeakMap<Client, InitializeResult>();
   private readonly disconnectedStdioGrants = new Set<string>();
@@ -1500,7 +1503,7 @@ export class McpConnectionGatewayService {
     if (cached) return cached;
     const pending = this.toolInventoryReads.get(connection.id);
     if (pending) return await pending;
-    const generation = this.toolInventoryGenerations.get(connection.id) ?? 0;
+    const generation = this.toolInventoryCacheGenerations.get(connection.id) ?? 0;
     const read = this.readConnectionTools(connection, generation).finally(() => {
       if (this.toolInventoryReads.get(connection.id) === read) {
         this.toolInventoryReads.delete(connection.id);
@@ -1511,13 +1514,21 @@ export class McpConnectionGatewayService {
   }
 
   private invalidateConnectionTools(connectionId: string): void {
+    this.evictConnectionToolInventory(connectionId);
+    this.toolInventoryGenerations.set(
+      connectionId,
+      (this.toolInventoryGenerations.get(connectionId) ?? 0) + 1,
+    );
+  }
+
+  private evictConnectionToolInventory(connectionId: string): void {
     const health = this.discoveryHealth.get(connectionId);
     if (health) this.discoveryHealth.set(connectionId, { ...health, state: "untested" });
     this.toolInventories.delete(connectionId);
     this.toolInventoryReads.delete(connectionId);
-    this.toolInventoryGenerations.set(
+    this.toolInventoryCacheGenerations.set(
       connectionId,
-      (this.toolInventoryGenerations.get(connectionId) ?? 0) + 1,
+      (this.toolInventoryCacheGenerations.get(connectionId) ?? 0) + 1,
     );
   }
 
@@ -1553,13 +1564,13 @@ export class McpConnectionGatewayService {
         tools,
         fetchedAt: Date.now(),
       };
-      if ((this.toolInventoryGenerations.get(connection.id) ?? 0) === generation) {
+      if ((this.toolInventoryCacheGenerations.get(connection.id) ?? 0) === generation) {
         this.toolInventories.set(connection.id, inventory);
         this.recordDiscoverySuccess(connection.id);
       }
       return inventory;
     } catch (error) {
-      if ((this.toolInventoryGenerations.get(connection.id) ?? 0) === generation) this.recordDiscoveryFailure(connection.id, error);
+      if ((this.toolInventoryCacheGenerations.get(connection.id) ?? 0) === generation) this.recordDiscoveryFailure(connection.id, error);
       throw error;
     } finally {
       discovery.close();
@@ -2467,7 +2478,7 @@ export class McpConnectionGatewayService {
       onClose: (client) => {
         if (this.upstreamSessions.get(token)?.client === client) {
           this.upstreamSessions.delete(token);
-          this.invalidateConnectionTools(connection.id);
+          this.evictConnectionToolInventory(connection.id);
           if (connection.kind === "stdio") this.disconnectedStdioGrants.add(token);
           this.sendBridgeEvent(token, { method: "connection/closed" });
         }
