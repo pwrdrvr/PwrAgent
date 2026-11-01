@@ -41223,6 +41223,11 @@ export class DesktopBackendRegistry {
     if (context.backend === "codex") {
       return await this.resolveCodexToolCallExecutionMode(context, automationMode) === "full-access";
     }
+    // Bypass permissions is Claude's Full Access. Claude asks nothing under
+    // it, so the gateway card would be the only prompt.
+    if (context.backend === "claude") {
+      return await this.resolveClaudeToolCallExecutionMode(context.threadId, automationMode) === "full-access";
+    }
     if (isAcpBackendId(context.backend)) {
       const session = this.acpBackend.getSession(context.backend, context.threadId);
       const runtimeCapabilities = this.acpBackend.getInstalledAgent(context.backend)?.runtimeCapabilities;

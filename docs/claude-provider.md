@@ -110,6 +110,11 @@ transcript. Thinking blocks are not shown, matching the Codex transcript.
 The SDK may reject a mode that the installed CLI or selected model does not
 support. PwrAgent reports that error and retains the previous mode.
 
+PwrAgent's own approval cards for MCP gateway calls and forge tools read the
+mode from the thread's open Claude process. Full Access skips them, as it does
+for Codex. See [MCP gateway tools](mcp-gateway-tools.md) and
+[forge agent tools](forge-agent-tools.md).
+
 The composer's **Plan** toggle runs one turn in Claude's `plan` permission
 mode, which keeps Claude read-only while it investigates; the next turn
 returns to the thread's mode. Claude ends a plan by calling `ExitPlanMode`
