@@ -47,3 +47,9 @@ PwrAgent sets it.
   `decisionReason`, and CLI-only `__artifact…` fields in their input.
   The approval card shows the question, and the fields go back to the CLI
   unchanged ([claude-permissions.ts](claude-permissions.ts)).
+- A Full Access thread runs Claude Code in `bypassPermissions`, which it
+  treats as unattended. An artifact action that needs a person's yes, such
+  as a delete, a public share or an access change, is refused there without
+  reaching `canUseTool` ("No one can answer in this session"). Default and
+  Auto threads show the approval card. This is the CLI's rule; do not route
+  around it.
