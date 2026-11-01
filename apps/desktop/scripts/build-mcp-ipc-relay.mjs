@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -12,6 +12,8 @@ export function buildMcpIpcRelay({ arch = process.arch, outputRoot = root, packa
   const directory = join(outputRoot, "build", "mcp-ipc-relay", packaged ? "packaged" : `${process.platform}-${arch}`);
   mkdirSync(directory, { recursive: true });
   const output = join(directory, `mcp-ipc-${identityTest ? "identity-test" : "relay"}${process.platform === "win32" ? ".exe" : ""}`);
+  // A failed rebuild must not leave a stale security helper usable in dev.
+  rmSync(output, { force: true });
   const source = join(root, "native", "mcp-ipc-relay", identityTest ? "identity-test.c" : "main.c");
   let command;
   let args;
@@ -52,5 +54,12 @@ export function buildMcpIpcRelay({ arch = process.arch, outputRoot = root, packa
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  buildMcpIpcRelay({ identityTest: process.argv.includes("--identity-test") });
+  try {
+    buildMcpIpcRelay({ identityTest: process.argv.includes("--identity-test") });
+  } catch (error) {
+    if (!process.argv.includes("--optional")) throw error;
+    // Native IPC fails closed when its helper is missing; absence of a C
+    // toolchain must not block ordinary network HTTP or stdio development.
+    console.warn(`Local MCP IPC is unavailable: ${error.message}`);
+  }
 }

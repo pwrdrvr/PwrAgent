@@ -95,7 +95,9 @@ and [CreateFile security quality of service](https://learn.microsoft.com/en-us/w
 ## Build and verification
 
 `node apps/desktop/scripts/build-mcp-ipc-relay.mjs` builds a dependency-free C
-helper with the host C toolchain. Development setup builds it before launch.
+helper with the host C toolchain. Development setup attempts the build before
+launch; without a compiler, IPC remains unavailable while network HTTP and
+stdio remain usable. A failed rebuild removes the old helper.
 Packaging builds the target architecture in `beforePack`, copies only the
 executable outside ASAR, and fails if the compiler or identity APIs are
 unavailable. Windows uses the installed Visual Studio C++ toolchain, located
