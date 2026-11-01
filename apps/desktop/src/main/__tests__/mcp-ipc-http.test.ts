@@ -101,6 +101,16 @@ describe("verified HTTP MCP over local IPC", () => {
       expect(result.stdout).toBe("");
     }
   });
+
+  it.skipIf(process.platform !== "win32")("rejects a real connected pipe squatter with a foreign owner SID", (context) => {
+    const result = spawnSync(join(executable, "..", "mcp-ipc-identity-test.exe"), ["squatter"], { encoding: "utf8" });
+    // CI's elevated runner can create this fixture. An ordinary local user
+    // must not elevate itself or alter accounts to manufacture the fixture.
+    if (result.status === 77 && !process.env.CI) context.skip();
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("pipe owner is another user");
+  });
   it("initializes, discovers, calls, reads and gets prompts without losing metadata", async () => {
     const f = await fixture();
     const transport = new StreamableHTTPClientTransport(f.ipc.url, { fetch: f.ipc.fetch, reconnectionOptions: MCP_IPC_NO_RECONNECT });

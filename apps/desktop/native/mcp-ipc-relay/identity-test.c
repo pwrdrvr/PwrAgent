@@ -7,6 +7,7 @@
 #include "main.c"
 #ifdef _WIN32
 #undef wmain
+#include <sddl.h>
 int wmain(int argc, wchar_t **argv) {
   if (argc != 2) return 2;
   if (!wcscmp(argv[1], L"unreadable")) {
@@ -23,6 +24,26 @@ int wmain(int argc, wchar_t **argv) {
   }
   if (!wcscmp(argv[1], L"remote")) {
     verified_pipe(L"\\\\remote-server\\pipe\\squatter");
+    return 2;
+  }
+  if (!wcscmp(argv[1], L"squatter")) {
+    /* A real local pipe with a foreign owner SID and permissive DACL. An
+     * elevated CI token can assign its Administrators owner group without
+     * creating OS accounts. The connected owner check must reject it even
+     * though this process's user SID is the client's user SID.
+     */
+    PSECURITY_DESCRIPTOR descriptor = NULL;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+      L"O:BAD:P(A;;GA;;;WD)", SDDL_REVISION_1, &descriptor, NULL)) return 2;
+    SECURITY_ATTRIBUTES attributes = { sizeof(attributes), descriptor, FALSE };
+    wchar_t name[100];
+    swprintf(name, 100, L"\\\\.\\pipe\\pwragent-squatter-%lu", GetCurrentProcessId());
+    HANDLE server = CreateNamedPipeW(name, PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+      PIPE_TYPE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, 4096, 4096, 0, &attributes);
+    LocalFree(descriptor);
+    if (server == INVALID_HANDLE_VALUE) return 77;
+    HANDLE client = verified_pipe(name);
+    CloseHandle(client); CloseHandle(server);
     return 2;
   }
   return 2;
