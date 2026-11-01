@@ -46,19 +46,30 @@ function compareVersions(a, b) {
   return 0;
 }
 
-export function checkRegistry(metadata, document, expected) {
+export function checkRegistry(metadata, document, expected, { verification = false } = {}) {
   assert.equal(document.name, "pwragent");
   assert.ok(document.maintainers?.some((owner) => owner.name === "huntharo"), "Expected npm owner huntharo; operator must resolve ownership");
   assert.ok(document.versions && typeof document.versions === "object", "Registry versions missing");
   const latest = document["dist-tags"]?.latest;
   assert.ok(latest && Object.hasOwn(document.versions, latest), "Registry latest version missing");
   const existing = document.versions[metadata.version];
+  const pending = { status: "verification-pending", distTag: expected?.distTag ?? metadata.distTag };
+  // A read after an attempted write cannot establish absence. Still reject
+  // conflicting immutable identity and ownership before allowing any delay.
+  if (verification && !existing) return pending;
   if (existing) {
     assert.ok(expected, "This immutable npm version is already published");
     assert.equal(existing.dist?.integrity, expected.integrity, "Occupied npm version has different bytes; restore the original tested artifact or cut a new desktop version");
     assert.deepEqual(existing.pwragentRelease, expected.source, "Occupied npm version has different source metadata");
-    assert.equal(existing.dist?.attestations?.provenance?.predicateType, "https://slsa.dev/provenance/v1",
+    const predicateType = existing.dist?.attestations?.provenance?.predicateType;
+    if (verification && !predicateType) return pending;
+    assert.equal(predicateType, "https://slsa.dev/provenance/v1",
       "Published npm version is missing provenance; inspect npm before retrying");
+  }
+  if (verification && expected?.distTag) {
+    const current = document["dist-tags"]?.[expected.distTag];
+    if (!current || !Object.hasOwn(document.versions, current) || compareVersions(current, metadata.version) < 0) return pending;
+    return { status: "verified-existing", distTag: expected.distTag };
   }
   let distTag = metadata.distTag;
   const train = metadata.version.split(".").slice(0, 2).join(".");
@@ -80,6 +91,7 @@ export function checkRegistry(metadata, document, expected) {
         && compareVersions(maintenanceCurrent, metadata.version) >= 0) {
       return { status: "verified-existing", distTag: maintenanceTag };
     }
+    if (verification && (!current || !Object.hasOwn(document.versions, current) || compareVersions(current, metadata.version) < 0)) return pending;
     assert.ok(current && Object.hasOwn(document.versions, current), "Published version has no valid channel; operator must reconcile npm channel state");
     assert.ok(compareVersions(current, metadata.version) >= 0, "Published version's npm channel was not advanced; operator must reconcile it");
     return { status: "verified-existing", distTag };
@@ -89,10 +101,24 @@ export function checkRegistry(metadata, document, expected) {
   return { status: "unpublished", distTag };
 }
 
-export async function readPublicRegistry() {
+export function registryRetryDelay(headers, now = Date.now()) {
+  const control = headers.get("cache-control") || "";
+  const maxAge = /(?:^|,)\s*s-maxage=(\d+)/i.exec(control) || /(?:^|,)\s*max-age=(\d+)/i.exec(control);
+  const age = Number(headers.get("age")) || 0;
+  const cacheDelay = maxAge ? Math.max(0, Number(maxAge[1]) - age) * 1000 : 0;
+  const retry = headers.get("retry-after");
+  const retryDelay = retry && /^\d+$/.test(retry) ? Number(retry) * 1000 : Math.max(0, Date.parse(retry) - now) || 0;
+  return Math.max(cacheDelay, retryDelay);
+}
+
+export async function readPublicRegistrySnapshot() {
   const response = await fetch(`${registry}/pwragent`, { signal: AbortSignal.timeout(30000) });
   assert.equal(response.status, 200, "npm ownership/version lookup failed; do not assume an absent package");
-  return response.json();
+  return { document: await response.json(), retryAfterMs: registryRetryDelay(response.headers) };
+}
+
+export async function readPublicRegistry() {
+  return (await readPublicRegistrySnapshot()).document;
 }
 
 export async function checkPublicRegistry(metadata, expected) {
