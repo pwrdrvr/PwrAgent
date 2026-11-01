@@ -510,7 +510,8 @@ export type ControlActiveTurnErrorCode =
   | "no_active_turn"
   | "stale_target"
   | "unsupported_backend"
-  | "unsupported_capability";
+  | "unsupported_capability"
+  | "project_paused";
 
 export type ControlActiveTurnResponse =
   | {

@@ -1321,3 +1321,70 @@ describe("ThreadTurnQueue.setEntryPaused", () => {
     expect(queue.getQueuedEntries(thread)[0]?.agentMessages).toHaveLength(1);
   });
 });
+
+describe("ThreadTurnQueue.submitProjectHeld", () => {
+  const thread = { backend: "codex" as const, threadId: "thread-1" };
+  const hold = {
+    reason: "Held because forge activity in openclaw is paused.",
+    projectHold: {
+      directoryKey: "directory:/Users/fixture/src/openclaw",
+      source: "monitor" as const,
+      summary: "Monitor finished: \"Watch the nightly run\"",
+    },
+  };
+
+  it("holds only its own entry: the operator's next message starts at once", async () => {
+    const started: string[] = [];
+    const events: ThreadTurnQueueLifecycleEvent[] = [];
+    const queue = new ThreadTurnQueue({
+      startTurn: async (entry) => {
+        started.push(entry.id);
+        return { backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` };
+      },
+      onLifecycle: (event) => {
+        events.push(event);
+      },
+    });
+
+    await expect(queue.submitProjectHeld(buildEntry({ id: "wake" }), hold)).resolves.toMatchObject({
+      status: "queued",
+      entry: { id: "wake", paused: true, holdReason: hold.reason, projectHold: hold.projectHold },
+    });
+    expect(events.at(-1)).toMatchObject({ type: "queued", entry: { id: "wake", paused: true } });
+    expect(queue.canStartImmediately(thread)).toBe(true);
+
+    await expect(queue.submit(buildEntry({ id: "operator" }))).resolves.toMatchObject({ status: "started" });
+    expect(started).toEqual(["operator"]);
+    expect(queue.getQueuedEntries(thread).map((entry) => entry.id)).toEqual(["wake"]);
+    queue.close();
+  });
+
+  it("returns the queued entry when the same wake is held twice", async () => {
+    const queue = new ThreadTurnQueue({
+      startTurn: async (entry) => ({ backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` }),
+    });
+    await queue.submitProjectHeld(buildEntry({ id: "wake" }), hold);
+    await queue.submitProjectHeld(buildEntry({ id: "wake" }), hold);
+    expect(queue.getQueuedEntries(thread)).toHaveLength(1);
+    queue.close();
+  });
+
+  it("sends a resumed wake and stops reading it as held", async () => {
+    const started: string[] = [];
+    const queue = new ThreadTurnQueue({
+      startTurn: async (entry) => {
+        started.push(entry.id);
+        return { backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` };
+      },
+    });
+    await queue.submitProjectHeld(buildEntry({ id: "wake" }), hold);
+
+    const resumed = await queue.setEntryPaused("wake", false);
+    expect(resumed).toMatchObject({ disposition: "updated", entry: { id: "wake" } });
+    expect(resumed.entry).not.toHaveProperty("paused");
+    expect(resumed.entry).not.toHaveProperty("projectHold");
+    expect(resumed.entry).not.toHaveProperty("holdReason");
+    await vi.waitFor(() => expect(started).toEqual(["wake"]));
+    queue.close();
+  });
+});

@@ -128,7 +128,18 @@ export function buildProjectPausedThreadMessageRefusal(params: {
   threadTitle?: string;
 }): string {
   const subject = params.threadTitle ? `"${params.threadTitle}"` : "That thread";
-  return `${subject} is in ${params.projectLabel}, where forge activity is paused and messages from other threads are refused. The operator can resume it from the project menu. Do not retry. Raise a to-do card if the message matters.`;
+  return `${subject} is in ${params.projectLabel}, ${PROJECT_PAUSED_REFUSAL_PHRASE}. The operator can resume it from the project menu. Do not retry. Raise a to-do card if the message matters.`;
+}
+
+const PROJECT_PAUSED_REFUSAL_PHRASE =
+  "where forge activity is paused and messages from other threads are refused";
+
+/**
+ * Whether an error message is a paused project's refusal. A peer's refusal
+ * reaches the sender as text only, so the sender recognizes it by its words.
+ */
+export function isProjectPausedThreadMessageRefusal(message: string): boolean {
+  return message.includes(PROJECT_PAUSED_REFUSAL_PHRASE);
 }
 
 /** Result text when a PR watch or PR Continue After condition cannot be armed. */
@@ -142,6 +153,38 @@ export function buildProjectPrWatchRefusal(params: {
     ? "where forge activity is paused"
     : "where PR watches are turned off in Forge Automation";
   return `No watch was armed: ${subject} ${params.projectLabel}, ${reason}. Nothing will wake this thread for CI, merge or close. Tell the operator if you need to wait on this PR.`;
+}
+
+/**
+ * Notice returned with a Continue After dependency whose PR conditions wait
+ * because the waiting thread's project holds PR watches.
+ */
+export function buildProjectPrDependencyNotice(params: {
+  projectLabel: string;
+  paused: boolean;
+}): string {
+  const reason = params.paused
+    ? "forge activity is paused"
+    : "PR watches are turned off in Forge Automation";
+  return `The dependency is stored, but this thread is in ${params.projectLabel}, where ${reason}. Its PR conditions wait until the operator turns that back on from the project menu. Tell the operator if the wait matters.`;
+}
+
+/**
+ * Hold reason on a wake-up queued while its project is paused. The thread's
+ * Held chip and queued-message row show it.
+ */
+export function buildProjectPausedWakeupHoldReason(params: {
+  projectLabel: string;
+}): string {
+  return `Held because forge activity in ${params.projectLabel} is paused. Send it or delete it here, or resume the project from its menu.`;
+}
+
+/** Thread note left when a paused project's policy discards a wake-up. */
+export function buildProjectPausedWakeupDiscardNote(params: {
+  projectLabel: string;
+  summary: string;
+}): string {
+  return `PwrAgent discarded a wake-up (${params.summary}) because forge activity in ${params.projectLabel} is paused.`;
 }
 
 export type SetProjectForgeAutomationRequest = {

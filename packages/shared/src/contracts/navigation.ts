@@ -2123,6 +2123,8 @@ export type NavigationDirectoryRow = {
   latestUpdatedAt?: number;
   pinnedRank?: string;
   directoryThreadsCollapsed?: boolean;
+  /** The owner's Forge Automation. Absent means defaults; never set on peer or placeholder rows. */
+  forgeAutomation?: ProjectForgeAutomation;
   gitStatus?: {
     currentBranch?: string;
     defaultBranch?: string;

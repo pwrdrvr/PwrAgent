@@ -111,6 +111,18 @@ import {
 import { codexNativeSubAgentName, readCodexNativeSubAgentName } from "@pwragent/shared";
 import { isThreadLockRefusal, normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
 import { threadTodoMessageOriginFromUnknown } from "@pwragent/shared";
+import {
+  buildProjectPausedThreadMessageRefusal,
+  buildProjectPausedWakeupDiscardNote,
+  buildProjectPausedWakeupHoldReason,
+  isProjectPausedThreadMessageRefusal,
+  PROJECT_PAUSED_ERROR_CODE,
+  projectRefusesThreadMessages,
+  type ProjectHeldWakeup,
+  type ProjectHeldWakeupSource,
+  type ResolveProjectHeldWakeupsRequest,
+  type ResolveProjectHeldWakeupsResponse,
+} from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
 import {
   isRemoteLaunchpadStorageKey,
@@ -845,6 +857,11 @@ import {
   type ThreadTurnQueueSubmissionResult,
 } from "./thread-turn-queue";
 import {
+  getProjectForgeAutomationIndex,
+  summarizeProjectHeldWakeup,
+  type ProjectForgeAutomationResolution,
+} from "./project-forge-automation-index";
+import {
   QueuedMessageTitler,
   queuedMessageTitleContext,
   queuedMessageTitleSource,
@@ -959,6 +976,18 @@ const ACP_LISTINGS_ARE_ENRICHED = true;
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 const backendLifecycleLog = getMainLogger("pwragent:backend-lifecycle");
 class AutomaticArchiveCancelledError extends Error {}
+
+/**
+ * A paused project refused an agent's message from another thread. The
+ * message names the project and how the operator lifts it.
+ */
+export class ProjectPausedThreadMessageError extends Error {
+  readonly code = PROJECT_PAUSED_ERROR_CODE;
+  constructor(message: string) {
+    super(message);
+    this.name = "ProjectPausedThreadMessageError";
+  }
+}
 class ThreadAlreadyActiveError extends Error {}
 const GROK_TITLE_HELPER_SESSION_POLICY = buildMinimalGrokHelperSessionPolicy({
   description: "Generate a concise title for a PwrAgent thread.",
@@ -12644,6 +12673,9 @@ export class DesktopBackendRegistry {
     this.navigationDirectoriesByKey = new Map(
       snapshot.directories.map((directory) => [directory.key, directory]),
     );
+    // Forge Automation files each thread under the project this complete
+    // scan shows it in, worktrees included.
+    getProjectForgeAutomationIndex().rememberDirectories(snapshot.directories);
   }
 
   async publishLocalEvent(event: AgentEvent): Promise<void> {
@@ -20078,6 +20110,11 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /** Whether the operator locked the thread; a lock outranks a project pause. */
+  async isThreadLocked(params: { backend: AppServerBackendKind; threadId: string }): Promise<boolean> {
+    return Boolean(await this.readThreadLock(params.backend, params.threadId));
+  }
+
   private async readThreadLock(backend: AppServerBackendKind, threadId: string): Promise<ThreadLock | undefined> {
     return (await this.overlayStore.getThreadOverlayState({ backend, threadId }))?.lock;
   }
@@ -20574,6 +20611,194 @@ export class DesktopBackendRegistry {
       id: queueEntryId,
       origin,
     }, holdReason, { onAdmission }));
+  }
+
+  /**
+   * The thread's Directories project and its Forge Automation, when that
+   * project stores a setting. Owner-local and synchronous: it reads only the
+   * in-memory index and this registry's cached summary.
+   */
+  resolveThreadForgeProject(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): ProjectForgeAutomationResolution | undefined {
+    return getProjectForgeAutomationIndex().resolveThread(
+      params,
+      () => this.getCachedThreadSummary(params),
+    );
+  }
+
+  /** The thread's project when it is paused; undefined otherwise. */
+  resolvePausedThreadProject(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): ProjectForgeAutomationResolution | undefined {
+    const project = this.resolveThreadForgeProject(params);
+    return project?.automation.paused ? project : undefined;
+  }
+
+  /**
+   * Refusal text when the target's paused project refuses messages from
+   * other threads, or undefined when the message may go through.
+   */
+  projectPausedThreadMessageRefusal(target: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): string | undefined {
+    const project = this.resolveThreadForgeProject(target);
+    if (!project || !projectRefusesThreadMessages(project.automation)) return undefined;
+    const title = this.getCachedThreadSummary(target)?.title.trim();
+    return buildProjectPausedThreadMessageRefusal({
+      projectLabel: project.label,
+      ...(title ? { threadTitle: title } : {}),
+    });
+  }
+
+  /**
+   * Throws when an agent's message from another thread reaches a local
+   * thread whose paused project refuses them. Operator, messaging-app and
+   * PwrAgent deliveries always pass.
+   */
+  assertProjectAcceptsThreadMessage(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    messageOrigin?: AppServerThreadMessageOrigin;
+  }): void {
+    if (params.messageOrigin?.kind !== "agent" || params.messageOrigin.operatorApproved) return;
+    const refusal = this.projectPausedThreadMessageRefusal(params);
+    if (refusal) throw new ProjectPausedThreadMessageError(refusal);
+  }
+
+  /**
+   * Deliver a wake-up, such as a finished monitor or a Continue After
+   * dependency, to a thread whose project is paused. `hold` queues it as a
+   * paused, project-held entry the operator's own sends pass; `discard`
+   * drops it and leaves a note in the thread.
+   */
+  async deliverProjectPausedWakeup(params: {
+    project: ProjectForgeAutomationResolution;
+    queueEntryId: string;
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    origin: ThreadTurnQueueOrigin;
+    messageOrigin?: AppServerThreadMessageOrigin;
+    source: ProjectHeldWakeupSource;
+    summary: string;
+  }): Promise<
+    | Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>
+    | { status: "discarded" }
+  > {
+    const projectLabel = params.project.label;
+    if (params.project.automation.wakeupPolicy === "discard") {
+      backendRegistryLog.info("project paused: wake-up discarded", {
+        backend: params.backend,
+        threadId: params.threadId,
+        directoryKey: params.project.directoryKey,
+        source: params.source,
+      });
+      // The note is history only. Codex accepts injected items only between
+      // turns; a busy Codex thread keeps the log line above instead.
+      if (params.backend !== "codex" || this.canStartThreadTurnImmediately(params)) {
+        await this.injectTaskMonitorCompletionMessage({
+          backend: params.backend,
+          monitorId: `project-pause:${randomUUID()}`,
+          parentThreadId: params.threadId,
+          text: buildProjectPausedWakeupDiscardNote({ projectLabel, summary: params.summary }),
+        }).catch((error: unknown) => {
+          backendRegistryLog.warn("project paused: discard note failed", {
+            backend: params.backend,
+            threadId: params.threadId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+      return { status: "discarded" };
+    }
+    this.assertThreadNotHandingOff(params.backend, params.threadId);
+    const entry = {
+      backend: params.backend,
+      threadId: params.threadId,
+      input: params.input,
+      origin: params.origin,
+      ...(params.messageOrigin ? { messageOrigin: params.messageOrigin } : {}),
+    };
+    return await this.admitThreadAttachments(entry, (input, onAdmission) =>
+      this.threadTurnQueue.submitProjectHeld({
+        ...entry,
+        input,
+        id: params.queueEntryId,
+      }, {
+        reason: buildProjectPausedWakeupHoldReason({ projectLabel }),
+        projectHold: {
+          directoryKey: params.project.directoryKey,
+          source: params.source,
+          summary: params.summary,
+        },
+      }, { onAdmission }));
+  }
+
+  /** Every wake-up a paused project holds, across its threads. */
+  listProjectHeldWakeups(directoryKey: string): ProjectHeldWakeup[] {
+    return this.threadTurnQueue.getAllQueuedEntries()
+      .flatMap((entry): ProjectHeldWakeup[] => {
+        if (entry.projectHold?.directoryKey !== directoryKey) return [];
+        const threadTitle = this.getCachedThreadSummary(entry)?.title.trim();
+        return [{
+          entryId: entry.id,
+          backend: entry.backend,
+          threadId: entry.threadId,
+          ...(threadTitle ? { threadTitle } : {}),
+          source: entry.projectHold.source,
+          summary: entry.projectHold.summary,
+          createdAt: entry.createdAt,
+        }];
+      })
+      .sort((left, right) => left.createdAt - right.createdAt);
+  }
+
+  /**
+   * The operator's answers from the resume dialog. `send` releases the entry
+   * for normal dispatch, an operator action that is allowed while the
+   * project is still paused; `discard` deletes it.
+   */
+  async resolveProjectHeldWakeups(
+    request: ResolveProjectHeldWakeupsRequest,
+  ): Promise<ResolveProjectHeldWakeupsResponse> {
+    const results: ResolveProjectHeldWakeupsResponse["results"] = [];
+    for (const resolution of request.resolutions) {
+      const entry = this.threadTurnQueue.getQueuedEntries(resolution)
+        .find((candidate) => candidate.id === resolution.entryId);
+      if (entry?.projectHold?.directoryKey !== request.directoryKey) {
+        results.push({ entryId: resolution.entryId, status: "not_found" });
+        continue;
+      }
+      try {
+        if (resolution.action === "discard") {
+          const cancelled = this.cancelQueuedTurn(
+            resolution.entryId,
+            "Discarded while resuming forge activity.",
+          );
+          results.push({ entryId: resolution.entryId, status: cancelled ? "discarded" : "not_found" });
+          continue;
+        }
+        const resumed = await this.setQueuedTurnPaused({
+          queueEntryId: resolution.entryId,
+          paused: false,
+        });
+        results.push({
+          entryId: resolution.entryId,
+          status: resumed.disposition === "updated" ? "sent" : "not_found",
+        });
+      } catch (error) {
+        results.push({
+          entryId: resolution.entryId,
+          status: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return { results };
   }
 
   async submitTurnIfIdle(params: {
@@ -23739,6 +23964,20 @@ export class DesktopBackendRegistry {
   async controlActiveTurn(
     request: ControlActiveTurnRequest,
   ): Promise<ControlActiveTurnResponse> {
+    // A peer's agent steering a thread here meets the same project pause a
+    // local agent does. Stopping starts nothing, so it passes.
+    const projectRefusal = request.operation === "steer" && request.messageOrigin?.kind === "agent"
+      ? this.projectPausedThreadMessageRefusal(request)
+      : undefined;
+    if (projectRefusal) {
+      return {
+        ok: false,
+        backend: request.backend,
+        threadId: request.threadId,
+        requestId: request.requestId,
+        error: { code: PROJECT_PAUSED_ERROR_CODE, message: projectRefusal },
+      };
+    }
     const requestKey = [
       request.backend,
       request.threadId,
@@ -42777,7 +43016,13 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
     });
     const threadTodo = threadTodoMessageOriginFromUnknown(params.todo);
-    return threadTodo ? { ...messageOrigin, threadTodo } : messageOrigin;
+    // The operator clicked the card, so a paused project's refusal of
+    // messages from other threads lets it through.
+    return {
+      ...messageOrigin,
+      operatorApproved: true,
+      ...(threadTodo ? { threadTodo } : {}),
+    };
   }
 
   /** Operator-approved to-do dispatch uses the same routing, queue and receipts as agent messages. */
@@ -42796,7 +43041,7 @@ export class DesktopBackendRegistry {
         includeRemote: params.target.instanceId !== undefined,
         prompt: params.prompt,
       },
-    }, { threadTodo: params.todo });
+    }, { threadTodo: params.todo, operatorApproved: true });
     if (!response.ok) throw new Error(response.error.message);
   }
 
@@ -42816,13 +43061,32 @@ export class DesktopBackendRegistry {
         "Thread orchestration tools must be invoked from a live turn.",
       );
     }
+    const refusal = this.agentMessageProjectRefusal(request.args);
+    if (refusal) return threadOrchestrationFailure(PROJECT_PAUSED_ERROR_CODE, refusal);
     return await this.deliverMessageToThread(request);
+  }
+
+  /**
+   * A paused project's refusal of an agent message addressed to one of its
+   * local threads. An explicit instanceId addresses a peer's thread, which
+   * that peer gates.
+   */
+  private agentMessageProjectRefusal(args: {
+    backend: string;
+    threadId: string;
+    instanceId?: string;
+  }): string | undefined {
+    if (args.instanceId?.trim() || !isAppServerBackendKind(args.backend)) return undefined;
+    const threadId = args.threadId.trim();
+    return threadId
+      ? this.projectPausedThreadMessageRefusal({ backend: args.backend, threadId })
+      : undefined;
   }
 
   private async deliverMessageToThread(
     request: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">,
     /** Set only by the operator's to-do dispatch, never from tool arguments. */
-    options?: { threadTodo?: { id: string; title?: string } },
+    options?: { threadTodo?: { id: string; title?: string }; operatorApproved?: boolean },
   ): Promise<PwrAgentThreadOrchestrationResponse> {
     const backend = request.args.backend;
     if (!isAppServerBackendKind(backend)) {
@@ -42897,6 +43161,8 @@ export class DesktopBackendRegistry {
       if (messageOrigin.sourceThread) {
         messageOrigin.sourceThread = { ...messageOrigin.sourceThread, messageId: correspondenceId };
       }
+      // A peer's paused project lets a to-do card's send through.
+      if (options?.operatorApproved) messageOrigin.operatorApproved = true;
       if (!request.args.replaceQueueEntryId) this.correspondenceStore.record({
         id: correspondenceId,
         source,
@@ -43094,11 +43360,14 @@ export class DesktopBackendRegistry {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return threadOrchestrationFailure(
-        error instanceof PwrAgentFederatedThreadMessageError
-          ? error.code
-          : /not found/i.test(message)
-            ? "not_found"
-            : "turn_start_failed",
+        // A peer's paused project refuses through its startTurn error text.
+        isProjectPausedThreadMessageRefusal(message)
+          ? PROJECT_PAUSED_ERROR_CODE
+          : error instanceof PwrAgentFederatedThreadMessageError
+            ? error.code
+            : /not found/i.test(message)
+              ? "not_found"
+              : "turn_start_failed",
         message,
       );
     }
@@ -43107,6 +43376,11 @@ export class DesktopBackendRegistry {
   private async controlThreadTurn(
     request: PwrAgentThreadOrchestrationRequest<"steer_thread" | "stop_thread">,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
+    // Steering is a message; stopping starts nothing, so a pause allows it.
+    const refusal = request.operation === "steer_thread"
+      ? this.agentMessageProjectRefusal(request.args)
+      : undefined;
+    if (refusal) return threadOrchestrationFailure(PROJECT_PAUSED_ERROR_CODE, refusal);
     const requestKey = [
       request.operation,
       request.args.backend,
@@ -43498,6 +43772,27 @@ export class DesktopBackendRegistry {
     return await promise;
   }
 
+  /**
+   * A handoff into a paused project that refuses messages from other
+   * threads. A handoff within the source thread's own project is that
+   * thread's own work, which the operator is driving, so it passes.
+   */
+  private handoffProjectRefusal(
+    request: PwrAgentThreadOrchestrationRequest<"handoff_task">,
+  ): string | undefined {
+    const cwd = request.args.cwd?.trim();
+    if (!cwd) return undefined;
+    const index = getProjectForgeAutomationIndex();
+    const target = index.resolvePath(cwd);
+    if (!target || !projectRefusesThreadMessages(target.automation)) return undefined;
+    const source = index.directoryKeyForThread(
+      request.context,
+      () => this.getCachedThreadSummary(request.context),
+    );
+    if (source === target.directoryKey) return undefined;
+    return buildProjectPausedThreadMessageRefusal({ projectLabel: target.label });
+  }
+
   private async performHandoffTaskToThread(
     request: PwrAgentThreadOrchestrationRequest<"handoff_task">,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
@@ -43517,6 +43812,8 @@ export class DesktopBackendRegistry {
         "Thread handoff tools must be invoked from a live turn.",
       );
     }
+    const handoffRefusal = this.handoffProjectRefusal(request);
+    if (handoffRefusal) return threadOrchestrationFailure(PROJECT_PAUSED_ERROR_CODE, handoffRefusal);
     const backend = request.args.backend ?? sourceBackend;
     if (!isAppServerBackendKind(backend)) {
       return threadOrchestrationFailure(
@@ -45741,6 +46038,9 @@ export class DesktopBackendRegistry {
         messageOrigin,
       };
       const parentLock = await this.readThreadLock(parentWake.backend, parentWake.threadId);
+      // A paused project holds or discards the wake by its policy. A lock
+      // already holds everything, so it wins.
+      const pausedProject = parentLock ? undefined : this.resolvePausedThreadProject(parentWake);
       // A locked parent holds the result rather than refusing it: the monitor
       // finishes either way, and an unlock delivers what it found.
       const submitted = parentLock
@@ -45749,19 +46049,29 @@ export class DesktopBackendRegistry {
             queueEntryId: `task-monitor:${params.record.monitorId}`,
             holdReason: threadLockRefusalMessage(parentLock),
           })
-        : await this.submitTurn(parentWake);
+        : pausedProject
+          ? await this.deliverProjectPausedWakeup({
+              ...parentWake,
+              project: pausedProject,
+              queueEntryId: `task-monitor:${params.record.monitorId}`,
+              source: "monitor",
+              summary: summarizeProjectHeldWakeup(`Monitor finished: "${params.record.task}"`),
+            })
+          : await this.submitTurn(parentWake);
       parentTurn =
-        submitted.status === "started"
-          ? {
-              status: "started",
-              turnId: submitted.turnId,
-              queueEntryId: submitted.entry.id,
-            }
-          : {
-              status: "queued",
-              queueEntryId: submitted.entry.id,
-              position: submitted.position,
-            };
+        submitted.status === "discarded"
+          ? undefined
+          : submitted.status === "started"
+            ? {
+                status: "started",
+                turnId: submitted.turnId,
+                queueEntryId: submitted.entry.id,
+              }
+            : {
+                status: "queued",
+                queueEntryId: submitted.entry.id,
+                position: submitted.position,
+              };
     }
 
     this.taskMonitorDelegations.delete(params.record.monitorId);

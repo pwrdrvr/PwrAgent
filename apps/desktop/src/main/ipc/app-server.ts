@@ -13,6 +13,11 @@ import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import { THREAD_DEPENDENCIES_CHANNEL, type ManageThreadDependenciesRequest, type ManageThreadDependenciesResponse, type ThreadDependencyCondition, type AppServerThreadTurnMetadata, type AppServerNotification } from "@pwragent/shared";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import { ThreadDependencyCoordinator, validateDependencyCreate, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
+import {
+  getProjectForgeAutomationIndex,
+  summarizeProjectHeldWakeup,
+  type ProjectForgeAutomationResolution,
+} from "../app-server/project-forge-automation-index";
 import { getThreadTodoService, readThreadTodoPlacement } from "../thread-todos/thread-todo-runtime";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../shared/ipc";
 import { archiveCandidateProtectionReason } from "../app-server/thread-archive-sweeper";
@@ -187,6 +192,21 @@ import {
   type SetDirectoryPinResponse,
   type SetDirectoryThreadsCollapsedRequest,
   type SetDirectoryThreadsCollapsedResponse,
+  type SetProjectForgeAutomationRequest,
+  type SetProjectForgeAutomationResponse,
+  type ListProjectHeldWakeupsRequest,
+  type ListProjectHeldWakeupsResponse,
+  type ResolveProjectHeldWakeupsRequest,
+  type ResolveProjectHeldWakeupsResponse,
+  type ProjectForgeAutomation,
+  buildProjectPrDependencyNotice,
+  buildProjectPrWatchRefusal,
+  isDefaultProjectForgeAutomation,
+  PROJECT_PAUSED_ERROR_CODE,
+  projectAllowsAutoFixKind,
+  projectAllowsForgePolling,
+  projectAllowsPrWatches,
+  resolveProjectForgeAutomation,
   type SetThreadParentRequest,
   type SetThreadParentResponse,
   type SetThreadAgentRequest,
@@ -384,6 +404,9 @@ import {
   NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL,
   NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
   NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL,
+  NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL,
+  NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL,
+  NAVIGATION_RESOLVE_PROJECT_HELD_WAKEUPS_CHANNEL,
   NAVIGATION_SET_THREAD_PARENT_CHANNEL,
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL,
@@ -476,6 +499,7 @@ import { PrPollingFocusTracker } from "../pr-status/pr-polling-focus";
 import {
   PrAutoDispatchCoordinator,
   buildPrRepositoryKey,
+  getPrAutoDispatchEventKinds,
   pullRequestMatchesRepositoryKey,
 } from "../pr-status/pr-auto-dispatch";
 import {
@@ -600,6 +624,25 @@ type ThreadPrRefreshContext = {
 };
 
 const appServerLog = getMainLogger("pwragent:app-server");
+
+/**
+ * Forge Automation is owner-local and per Directories project. A remote
+ * window's request belongs to the peer that owns the project, which v1 does
+ * not reach.
+ */
+function readLocalProjectDirectoryKey(request: {
+  directoryKey?: unknown;
+  federationTarget?: FederationTarget;
+}): string {
+  if (request?.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+    throw new Error("Forge Automation can only be changed on the instance that owns the project.");
+  }
+  const directoryKey = typeof request?.directoryKey === "string" ? request.directoryKey : "";
+  if (!directoryKey.startsWith("directory:") || directoryKey.length <= "directory:".length) {
+    throw new Error("Forge Automation applies to a Directories project (directory:<path>).");
+  }
+  return directoryKey;
+}
 
 /**
  * Reject directory preference writes that target the synthetic
@@ -2235,8 +2278,10 @@ class DesktopAppServerService {
       rpcOptions?.signal.throwIfAborted();
       const apply = (directory: NavigationDirectoryRow): NavigationDirectoryRow => {
         const collapsed = overlays[directory.key]?.directoryThreadsCollapsed;
-        return collapsed === undefined || collapsed === directory.directoryThreadsCollapsed
-          ? directory : { ...directory, directoryThreadsCollapsed: collapsed };
+        // Forge Automation is owner-only in v1: a peer's row never shows it.
+        const { forgeAutomation: _ownerOnly, ...row } = directory;
+        return collapsed === undefined || collapsed === row.directoryThreadsCollapsed
+          ? row : { ...row, directoryThreadsCollapsed: collapsed };
       };
       const result = { ...page, directories: page.directories?.map(apply),
         selectionDirectory: page.selectionDirectory ? apply(page.selectionDirectory) : undefined };
@@ -2662,17 +2707,18 @@ class DesktopAppServerService {
     let changed = false;
     const directories = snapshot.directories.map((directory) => {
       const collapsed = overlays[directory.key]?.directoryThreadsCollapsed;
+      // Forge Automation is owner-only in v1: a peer's row never shows it.
+      const { forgeAutomation: ownerOnly, ...row } = directory;
       if (
-        collapsed === undefined
-        || directory.directoryThreadsCollapsed === collapsed
+        !ownerOnly
+        && (collapsed === undefined || directory.directoryThreadsCollapsed === collapsed)
       ) {
         return directory;
       }
       changed = true;
-      return {
-        ...directory,
-        directoryThreadsCollapsed: collapsed,
-      };
+      return collapsed === undefined
+        ? row
+        : { ...row, directoryThreadsCollapsed: collapsed };
     });
     return changed
       ? {
@@ -3929,10 +3975,24 @@ class DesktopAppServerService {
 
   async startOwnerNavigation(): Promise<void> {
     this.ownerNavigationActive = true;
+    // Gates read Forge Automation from memory; load it before polling starts.
+    await this.hydrateProjectForgeAutomation();
     this.syncPrPollingSchedulerState();
     const state = getDesktopBackendRegistry().getStartupProviderRefreshStatus()?.state;
     if (state === "ready" || state === "degraded") {
       await this.refreshOwnerNavigationMetadata();
+    }
+  }
+
+  private async hydrateProjectForgeAutomation(): Promise<void> {
+    const index = getProjectForgeAutomationIndex();
+    if (index.isHydrated()) return;
+    try {
+      index.hydrate(await this.getOverlayStore().readAllDirectoryOverlays());
+    } catch (error) {
+      appServerLog.warn("failed to load project Forge Automation", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -4407,6 +4467,21 @@ class DesktopAppServerService {
         },
       };
     }
+    const project = this.resolveThreadForgeProject({ backend: args.backend, threadId });
+    if (project && !projectAllowsPrWatches(project.automation)) {
+      const pullRequest = args.url?.trim().match(/\/(?:pull|merge_requests)\/(\d+)/)?.[1];
+      return {
+        ok: false,
+        error: {
+          code: project.automation.paused ? PROJECT_PAUSED_ERROR_CODE : "forbidden",
+          message: buildProjectPrWatchRefusal({
+            projectLabel: project.label,
+            ...(pullRequest ? { pullRequest: `PR #${pullRequest}` } : {}),
+            paused: project.automation.paused,
+          }),
+        },
+      };
+    }
     const requestedEvents = normalizePrStatusWatchEvents(args.notifyOn);
     if (!requestedEvents) {
       return {
@@ -4642,8 +4717,14 @@ class DesktopAppServerService {
       winner?.backend === params.backend && winner.threadId === params.threadId,
     );
     const waitingForPr = hasPrimaryRepo && primaryPrs.length === 0;
+    // The thread's project can narrow Auto-fix, never widen it.
+    const forgeProject = this.resolveThreadForgeProject(params);
+    const projectSkipsMergeConflicts = !projectAllowsAutoFixKind(forgeProject?.automation, "merge-conflict");
+    const projectSkipsCiFailures = !projectAllowsAutoFixKind(forgeProject?.automation, "ci-failure");
+    const projectBlocksAutoFix = projectSkipsMergeConflicts && projectSkipsCiFailures;
     const autoFixActive =
       autoFixEnabled
+      && !projectBlocksAutoFix
       && this.isPrAutoDispatchAvailable()
       && (waitingForPr || ownsAttachedPr);
     const isInvokingThread =
@@ -4652,7 +4733,7 @@ class DesktopAppServerService {
     const watches = await this.getOverlayStore().listActiveThreadPrStatusWatches(
       params,
     );
-    const guidance = autoFixActive && waitingForPr
+    const baseGuidance = autoFixActive && waitingForPr
       ? "Auto-fix PR monitoring is armed. This is monitoring state, not a repair-turn event. This primary workspace has no linked PR yet; PwrAgent will begin monitoring when one is linked. Do not poll CI or create a monitor thread after a PR is linked."
       : autoFixActive
       ? isInvokingThread
@@ -4675,6 +4756,12 @@ class DesktopAppServerService {
               : "Background PR polling is active, but Auto-fix PR is off for this thread. Use watch_thread_pull_request for a bounded one-shot success, failure, merge, or close notification instead of polling or creating a monitor thread."
             : "Background PR polling is active, but automatic PR repair is disabled globally in Git settings. Use watch_thread_pull_request for a bounded one-shot success, failure, merge, or close notification instead of polling or creating a monitor thread."
           : "Background PR polling and Auto-fix PR are off. PwrAgent will not wake this thread for PR status changes.";
+    const projectSkippedKind = projectSkipsMergeConflicts ? "merge conflicts" : "failing CI";
+    const guidance = autoFixEnabled && forgeProject && projectBlocksAutoFix
+      ? `Auto-fix PR is saved for this thread, but it is in ${forgeProject.label}, where ${forgeProject.automation.paused ? "forge activity is paused" : "Auto-fix is turned off in Forge Automation"}. PwrAgent will not start a repair turn. Do not poll CI or create a monitor in its place. Tell the operator, who can change it from the project menu: Forge Automation.`
+      : autoFixActive && forgeProject && (projectSkipsMergeConflicts || projectSkipsCiFailures)
+        ? `${baseGuidance} ${forgeProject.label} skips ${projectSkippedKind} in Forge Automation, so PwrAgent will not start a repair turn for ${projectSkippedKind}.`
+        : baseGuidance;
     return {
       backgroundPollingEnabled: this.backgroundPrPollingEnabled,
       autoFixAllowed: this.prAutoDispatchAllowed,
@@ -4980,6 +5067,23 @@ class DesktopAppServerService {
           trigger,
         }));
       }
+      return {
+        backend,
+        threadId: request.threadId,
+        provider,
+        prs: visibleKnownPrs(),
+        ...responseFreshness(false),
+        ghAvailable,
+      };
+    }
+
+    // A paused project runs no background lookups. The operator's own
+    // refresh and the post-turn lookup still run; the Auto-fix, watch and
+    // dependency gates keep them from starting automatic turns.
+    if (
+      trigger === "scheduled"
+      && !projectAllowsForgePolling(this.threadForgeAutomation({ backend, threadId: request.threadId }))
+    ) {
       return {
         backend,
         threadId: request.threadId,
@@ -6544,7 +6648,10 @@ class DesktopAppServerService {
     this.prunePrDiscoveryState(threadKeys);
 
     const due = selectDiscoveryDueThreadKeys({
-      threadKeys,
+      // A paused project discovers no PRs; its clocks are kept for resume.
+      threadKeys: threadKeys.filter((threadKey) =>
+        projectAllowsForgePolling(this.threadKeyForgeAutomation(threadKey))
+      ),
       lastRefreshedAt: this.prDiscoveryLastRefreshedAt,
       now,
       cadenceMs: PR_DISCOVERY_CADENCE_MS,
@@ -6707,6 +6814,9 @@ class DesktopAppServerService {
 
     for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
       if (!this.backgroundPrPollingEnabled) break;
+      // A paused project's PRs are not polled; their chips keep the last
+      // status. Another project's thread on the same PR still polls it.
+      if (!projectAllowsForgePolling(this.threadKeyForgeAutomation(threadKey))) continue;
       for (const pr of attachment.prs.filter((candidate) =>
         this.matchesPrimaryRepository(candidate, attachment.primaryRepoKey)
       )) {
@@ -6750,6 +6860,37 @@ class DesktopAppServerService {
     return [...byKey.values()];
   }
 
+  /**
+   * The stored Forge Automation of a thread's project, from the in-memory
+   * index. The registry is read only for a thread the last navigation scan
+   * did not list, and only while some project stores a setting.
+   */
+  private threadForgeAutomation(ref: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): ProjectForgeAutomation | undefined {
+    return getProjectForgeAutomationIndex().automationForThread(
+      ref,
+      () => getDesktopBackendRegistry().getCachedThreadSummary(ref),
+    );
+  }
+
+  private threadKeyForgeAutomation(threadKey: string): ProjectForgeAutomation | undefined {
+    if (!getProjectForgeAutomationIndex().hasAny()) return undefined;
+    const identity = parseThreadIdentityKey(threadKey);
+    return identity ? this.threadForgeAutomation(identity) : undefined;
+  }
+
+  private resolveThreadForgeProject(ref: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): ProjectForgeAutomationResolution | undefined {
+    return getProjectForgeAutomationIndex().resolveThread(
+      ref,
+      () => getDesktopBackendRegistry().getCachedThreadSummary(ref),
+    );
+  }
+
   private recordPrCheck(
     prs: PrSummary[],
     source: string,
@@ -6773,6 +6914,29 @@ class DesktopAppServerService {
     }
   }
 
+  /**
+   * The thread that owns Auto-fix for a PR. A project switch narrows only its
+   * own threads, so the oldest thread whose project allows one of the PR's
+   * current incidents wins. When none does, the plain winner stands and its
+   * outcome reports the project setting.
+   */
+  private async getPrAutoDispatchWinner(pr: PrSummary, prKey: string) {
+    const store = this.getOverlayStore();
+    const eventKinds = getProjectForgeAutomationIndex().hasAny()
+      ? getPrAutoDispatchEventKinds(pr)
+      : [];
+    const allowed = eventKinds.length > 0
+      ? await store.getPrAutoDispatchCandidateWinner({
+          prKey,
+          accepts: (candidate) => {
+            const automation = this.threadForgeAutomation(candidate);
+            return eventKinds.some((kind) => projectAllowsAutoFixKind(automation, kind));
+          },
+        })
+      : undefined;
+    return allowed ?? await store.getPrAutoDispatchCandidateWinner({ prKey });
+  }
+
   private async handlePrAutoDispatchSnapshots(
     prs: PrSummary[],
     observedAt: number,
@@ -6782,8 +6946,7 @@ class DesktopAppServerService {
     const coordinator = this.getPrAutoDispatchCoordinator();
     for (const pr of prs) {
       const prKey = getPrStatusKey(pr);
-      const winner = await this.getOverlayStore()
-        .getPrAutoDispatchCandidateWinner({ prKey });
+      const winner = await this.getPrAutoDispatchWinner(pr, prKey);
       const threadKeys = winner
         ? [buildThreadIdentityKey(winner.backend, winner.threadId)]
         : [];
@@ -6823,7 +6986,14 @@ class DesktopAppServerService {
         });
         logPrAutoDispatchOutcome(appServerLog, prKey, outcome);
       }
-      if (this.backgroundPrPollingEnabled) {
+      // Every thread showing this PR is in a project whose PR watches are
+      // off: skip the claim-and-release a watch would cost on each poll.
+      const watchThreadKeys = this.primaryPrThreadsByKey.get(prKey);
+      const watchesHeld = Boolean(watchThreadKeys?.size)
+        && [...watchThreadKeys!].every((threadKey) =>
+          !projectAllowsPrWatches(this.threadKeyForgeAutomation(threadKey))
+        );
+      if (this.backgroundPrPollingEnabled && !watchesHeld) {
         const failureCoveredThreadKeys = new Set(
           outcomes.flatMap((outcome) =>
             outcome.status === "scheduled"
@@ -8231,6 +8401,144 @@ class DesktopAppServerService {
     };
   }
 
+  /**
+   * Save a local Directories project's Forge Automation in one commit, then
+   * apply it: repairs the project no longer allows are cancelled, and a
+   * resume re-checks its PRs and PR prerequisites at once. Polling follows
+   * on its next tick, since every tick reads the index.
+   */
+  async setProjectForgeAutomation(
+    request: SetProjectForgeAutomationRequest & { federationTarget?: FederationTarget },
+  ): Promise<SetProjectForgeAutomationResponse> {
+    const directoryKey = readLocalProjectDirectoryKey(request);
+    if (!request.automation || typeof request.automation !== "object") {
+      throw new Error("Forge Automation settings are required.");
+    }
+    const index = getProjectForgeAutomationIndex();
+    const previous = index.get(directoryKey);
+    const overlay = await this.getOverlayStore().setDirectoryForgeAutomation({
+      directoryKey,
+      automation: resolveProjectForgeAutomation(request.automation),
+      now: Date.now(),
+    });
+    const automation = resolveProjectForgeAutomation(overlay.forgeAutomation);
+    const stored = isDefaultProjectForgeAutomation(automation) ? undefined : automation;
+    index.set(directoryKey, stored ?? null);
+
+    logDebug("setProjectForgeAutomation", {
+      directoryKey,
+      paused: automation.paused,
+      autoFixMergeConflicts: automation.autoFixMergeConflicts,
+      autoFixCiFailures: automation.autoFixCiFailures,
+      prWatches: automation.prWatches,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "directory/forgeAutomation/updated",
+        params: { directoryKey, automation: stored ?? null },
+      },
+    });
+    await this.applyProjectForgeAutomationChange(directoryKey, previous, stored)
+      .catch((error: unknown) => {
+        appServerLog.warn("failed to apply project Forge Automation", {
+          directoryKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    return { directoryKey, automation };
+  }
+
+  /** Wake-ups the project's paused threads hold, for the resume dialog. */
+  listProjectHeldWakeups(
+    request: ListProjectHeldWakeupsRequest & { federationTarget?: FederationTarget },
+  ): ListProjectHeldWakeupsResponse {
+    const directoryKey = readLocalProjectDirectoryKey(request);
+    return {
+      directoryKey,
+      wakeups: getDesktopBackendRegistry().listProjectHeldWakeups(directoryKey),
+    };
+  }
+
+  /** Send or discard held wake-ups; an operator action, allowed while paused. */
+  async resolveProjectHeldWakeups(
+    request: ResolveProjectHeldWakeupsRequest & { federationTarget?: FederationTarget },
+  ): Promise<ResolveProjectHeldWakeupsResponse> {
+    readLocalProjectDirectoryKey(request);
+    if (!Array.isArray(request.resolutions) || request.resolutions.length > 500) {
+      throw new Error("Provide at most 500 held wake-up resolutions.");
+    }
+    for (const resolution of request.resolutions) {
+      if (
+        !resolution
+        || typeof resolution.entryId !== "string"
+        || typeof resolution.threadId !== "string"
+        || !isAppServerBackendKind(resolution.backend)
+        || (resolution.action !== "send" && resolution.action !== "discard")
+      ) {
+        throw new Error("Each resolution needs entryId, backend, threadId and action send or discard.");
+      }
+    }
+    return await getDesktopBackendRegistry().resolveProjectHeldWakeups(request);
+  }
+
+  /** Threads filed under a project: the last scan's, plus any newer ones. */
+  private projectThreadKeys(directoryKey: string): string[] {
+    const index = getProjectForgeAutomationIndex();
+    const threadKeys = new Set(index.threadKeysForDirectory(directoryKey));
+    for (const threadKey of this.attachedPrsByThreadKey.keys()) {
+      if (threadKeys.has(threadKey)) continue;
+      const identity = parseThreadIdentityKey(threadKey);
+      if (identity && index.directoryKeyForThread(
+        identity,
+        () => getDesktopBackendRegistry().getCachedThreadSummary(identity),
+      ) === directoryKey) {
+        threadKeys.add(threadKey);
+      }
+    }
+    return [...threadKeys];
+  }
+
+  private async applyProjectForgeAutomationChange(
+    directoryKey: string,
+    previous: ProjectForgeAutomation | undefined,
+    next: ProjectForgeAutomation | undefined,
+  ): Promise<void> {
+    const threadKeys = this.projectThreadKeys(directoryKey);
+    if (threadKeys.length === 0) return;
+    const narrowsAutoFix = Boolean(next)
+      && (!projectAllowsAutoFixKind(next, "merge-conflict") || !projectAllowsAutoFixKind(next, "ci-failure"));
+    if (narrowsAutoFix && getAppStateMode()) {
+      const coordinator = this.getPrAutoDispatchCoordinator();
+      for (const threadKey of threadKeys) {
+        const identity = parseThreadIdentityKey(threadKey);
+        if (identity) await coordinator.cancelPendingDisallowedByProject(identity);
+      }
+    }
+    const resumedPolling = !projectAllowsForgePolling(previous) && projectAllowsForgePolling(next);
+    if (resumedPolling) {
+      // Thaw and poll the project's PRs now rather than on their next slot.
+      // Nothing missed while paused is replayed: only current status counts.
+      this.prPollingScheduler?.noteThreadInteraction(threadKeys);
+      void this.prPollingScheduler?.tick().catch((error: unknown) => {
+        appServerLog.debug("resume PR poll failed", {
+          directoryKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+    if (!projectAllowsPrWatches(previous) && projectAllowsPrWatches(next) && getAppStateMode()) {
+      await this.getThreadDependencyCoordinator().handlePrEvent();
+      // A merge or close seen while watches were held left its watch
+      // pending, and the poller no longer fetches a terminal PR. Re-offer it.
+      for (const threadKey of threadKeys) {
+        const identity = parseThreadIdentityKey(threadKey);
+        if (identity) await this.retryPendingPrTerminalWatches(identity);
+      }
+    }
+  }
+
   async ensureDirectoryLaunchpad(
     request: EnsureDirectoryLaunchpadRequest,
   ): Promise<EnsureDirectoryLaunchpadResponse> {
@@ -8804,6 +9112,8 @@ class DesktopAppServerService {
         getBudgetConfig: () => this.prAutoDispatchBudgetConfig,
         onActivity: (event) => this.prActivity.record(event),
         getCurrentPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
+        allowsEventKind: (identity, kind) =>
+          projectAllowsAutoFixKind(this.threadForgeAutomation(identity), kind),
         refreshPendingPrs: async (pending) =>
           await this.refreshPendingPrAutoDispatches(pending),
         isPrAttached: ({ backend, threadId, prKey }) =>
@@ -8831,6 +9141,8 @@ class DesktopAppServerService {
         store: this.getOverlayStore(),
         registry: getDesktopBackendRegistry(),
         isBackgroundPollingEnabled: () => this.backgroundPrPollingEnabled,
+        allowsWatchDispatch: (watch) =>
+          projectAllowsPrWatches(this.threadForgeAutomation(watch)),
         fetchTerminalDetails: async (pr) =>
           await this.getPrFetcher().fetchPullRequestTerminalDetails(pr),
         prepareTerminalWake: async ({ watch }) => {
@@ -8863,10 +9175,15 @@ class DesktopAppServerService {
           publish: (todo) => getThreadTodoService().publish(todo),
         },
         readThread: (condition) => this.readDependencyThread(condition),
-        submit: (request) => getDesktopBackendRegistry().submitTurnIfIdle(request),
+        submit: async (request) => await this.submitDependencyWakeup(request),
         isConsumerBusy: (dependency) => Boolean(getDesktopBackendRegistry().getActiveTurnForThread(dependency)),
+        // PR conditions also wait while the consumer's project holds PR
+        // watches. A paused project's turn-only wake is held or discarded
+        // in submit, by its wake-up policy.
         canDispatch: (dependency) => this.ownerNavigationActive
-          && (dependency.conditions.every((condition) => condition.when === "turn_completed") || this.backgroundPrPollingEnabled),
+          && (dependency.conditions.every((condition) => condition.when === "turn_completed")
+            || (this.backgroundPrPollingEnabled
+              && projectAllowsPrWatches(this.threadForgeAutomation(dependency)))),
         changed: async (dependency) => {
           // Prerequisite threads list their dependents, so they refresh too.
           const targets = new Map<string, { backend: AppServerBackendKind; threadId: string }>();
@@ -8883,6 +9200,38 @@ class DesktopAppServerService {
       });
     }
     return this.threadDependencyCoordinator;
+  }
+
+  /**
+   * A dependency's wake. When the consumer's project is paused, its wake-up
+   * policy holds it as a project-held message or discards it with a note;
+   * the dependency counts as delivered either way.
+   */
+  private async submitDependencyWakeup(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: { type: "text"; text: string }[];
+    origin: "automation";
+    messageOrigin: import("@pwragent/shared").AppServerThreadMessageOrigin;
+  }): Promise<{ status: "started" | "busy" | "held" | "discarded"; turnId?: string }> {
+    const registry = getDesktopBackendRegistry();
+    const project = this.resolveThreadForgeProject(request);
+    // A lock already holds every source, so it wins: the dependency waits
+    // for unlock exactly as it does in an active project.
+    if (!project?.automation.paused || await registry.isThreadLocked(request)) {
+      return await registry.submitTurnIfIdle(request);
+    }
+    // The prompt's first evidence line names the prerequisite that fired.
+    const evidence = (request.input[0]?.text ?? "").split("\n")
+      .find((line) => line.startsWith("- "))?.slice(2);
+    const delivered = await registry.deliverProjectPausedWakeup({
+      ...request,
+      project,
+      queueEntryId: `dependency:${request.messageOrigin.dependencyId ?? randomUUID()}`,
+      source: "dependency",
+      summary: summarizeProjectHeldWakeup(`Continue After: ${evidence ?? "prerequisites met"}`),
+    });
+    return { status: delivered.status === "discarded" ? "discarded" : "held" };
   }
 
   private async readDependencyThread(condition: Pick<ThreadDependencyCondition, "backend" | "threadId"> & Partial<ThreadDependencyCondition>): Promise<DependencyThreadSnapshot> {
@@ -8950,6 +9299,34 @@ class DesktopAppServerService {
       }
     }
     return await this.getThreadDependencyCoordinator().manage({ ...request, backend: request.backend, threadId: request.threadId.trim() }, provenance);
+  }
+
+  /**
+   * An agent's PR prerequisite is stored while the waiting thread's project
+   * holds PR watches, and `canDispatch` keeps it waiting until they return.
+   * The agent is told why. Turn prerequisites need no notice: their wake is
+   * held or discarded by the project's wake-up policy.
+   */
+  dependencyProjectNotice(request: ManageThreadDependenciesRequest): string | undefined {
+    if (
+      request?.action !== "create"
+      || !request.conditions?.some((condition) => condition?.when !== "turn_completed")
+      || typeof request.backend !== "string"
+      || !isAppServerBackendKind(request.backend)
+      || typeof request.threadId !== "string"
+      || !request.threadId.trim()
+    ) {
+      return undefined;
+    }
+    const project = this.resolveThreadForgeProject({
+      backend: request.backend,
+      threadId: request.threadId.trim(),
+    });
+    if (!project || projectAllowsPrWatches(project.automation)) return undefined;
+    return buildProjectPrDependencyNotice({
+      projectLabel: project.label,
+      paused: project.automation.paused,
+    });
   }
 
   async reconcileThreadDependencies(): Promise<void> {
@@ -9358,7 +9735,9 @@ export function registerAppServerIpcHandlers(): void {
   );
   getDesktopBackendRegistry().setThreadDependencyToolHandler(async (request, provenance) => {
     try {
-      return { ok: true, data: { threadDependencies: await appServerService.manageThreadDependencies(request, provenance) } };
+      const threadDependencies = await appServerService.manageThreadDependencies(request, provenance);
+      const projectNotice = appServerService.dependencyProjectNotice(request);
+      return { ok: true, data: { threadDependencies, ...(projectNotice ? { projectNotice } : {}) } };
     } catch (error) {
       return { ok: false, error: { code: "invalid_arguments", message: error instanceof Error ? error.message : String(error) } };
     }
@@ -10102,6 +10481,45 @@ export function registerAppServerIpcHandlers(): void {
       request: SetDirectoryThreadsCollapsedRequest,
     ): Promise<SetDirectoryThreadsCollapsedResponse> => {
       return await appServerService.setDirectoryThreadsCollapsed(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL,
+    async (
+      event,
+      request: SetProjectForgeAutomationRequest,
+    ): Promise<SetProjectForgeAutomationResponse> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error("Forge Automation can only be changed on the instance that owns the project.");
+      }
+      return await appServerService.setProjectForgeAutomation(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL,
+    async (
+      event,
+      request: ListProjectHeldWakeupsRequest,
+    ): Promise<ListProjectHeldWakeupsResponse> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error("Held wake-ups are listed on the instance that owns the project.");
+      }
+      return appServerService.listProjectHeldWakeups(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_RESOLVE_PROJECT_HELD_WAKEUPS_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_RESOLVE_PROJECT_HELD_WAKEUPS_CHANNEL,
+    async (
+      event,
+      request: ResolveProjectHeldWakeupsRequest,
+    ): Promise<ResolveProjectHeldWakeupsResponse> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error("Held wake-ups are resolved on the instance that owns the project.");
+      }
+      return await appServerService.resolveProjectHeldWakeups(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);

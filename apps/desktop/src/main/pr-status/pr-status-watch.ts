@@ -57,6 +57,12 @@ export class PrStatusWatchCoordinator {
       store: PrStatusWatchStore;
       registry: PrStatusWatchRegistry;
       isBackgroundPollingEnabled?: () => boolean;
+      /**
+       * Whether the watching thread's project lets PR watches wake it
+       * (Forge Automation). A refused claim is released without spending an
+       * attempt, so the watch still fires once the project allows it.
+       */
+      allowsWatchDispatch?: (watch: ThreadPullRequestWatchSummary) => boolean;
       /** Reads merge details from the forge; a throw falls back to cached status. */
       fetchTerminalDetails?: (pr: PrSummary) => Promise<PullRequestTerminalDetails | undefined>;
       /**
@@ -132,7 +138,7 @@ export class PrStatusWatchCoordinator {
     const outcome = terminalOutcomeOf(pr);
     if (!outcome) return 0;
     const now = this.now();
-    const claims = await this.options.store.claimThreadPrTerminalWatches({
+    const claimed = await this.options.store.claimThreadPrTerminalWatches({
       prKey: buildPullRequestStatusKey(pr),
       outcome,
       now,
@@ -140,6 +146,22 @@ export class PrStatusWatchCoordinator {
       leaseExpiresAt: now + PR_STATUS_WATCH_LEASE_MS,
       maxAttempts: PR_STATUS_WATCH_MAX_DISPATCH_ATTEMPTS,
     });
+    // A watch its project holds back sleeps before any wake work, such as
+    // sandbox cleanup, so it all happens once the project allows it.
+    const claims: PrStatusWatchClaim[] = [];
+    for (const claim of claimed) {
+      if (this.options.allowsWatchDispatch?.(claim.watch) === false) {
+        await this.options.store.releaseThreadPrStatusWatch({
+          watchId: claim.watch.watchId,
+          ownerId: this.ownerId,
+          now: this.now(),
+          spendAttempt: false,
+          maxAttempts: PR_STATUS_WATCH_MAX_DISPATCH_ATTEMPTS,
+        });
+      } else {
+        claims.push(claim);
+      }
+    }
     if (claims.length === 0) return 0;
     // Hold every lease across the forge read, so a slow lookup cannot let
     // another instance reclaim and deliver the same wake.
@@ -238,7 +260,12 @@ export class PrStatusWatchCoordinator {
         maxAttempts: PR_STATUS_WATCH_MAX_DISPATCH_ATTEMPTS,
       });
     const outcome = terminalOutcomeOf(pr);
-    if (!details || !outcome || this.options.isBackgroundPollingEnabled?.() === false) {
+    if (
+      !details
+      || !outcome
+      || this.options.isBackgroundPollingEnabled?.() === false
+      || this.options.allowsWatchDispatch?.(claim.watch) === false
+    ) {
       await release(false);
       return;
     }
@@ -286,7 +313,10 @@ export class PrStatusWatchCoordinator {
     observedAt: number,
     failureCoveredThreadKeys: ReadonlySet<string>,
   ): Promise<void> {
-    if (this.options.isBackgroundPollingEnabled?.() === false) {
+    if (
+      this.options.isBackgroundPollingEnabled?.() === false
+      || this.options.allowsWatchDispatch?.(claim.watch) === false
+    ) {
       await this.options.store.releaseThreadPrStatusWatch({
         watchId: claim.watch.watchId,
         ownerId: this.ownerId,

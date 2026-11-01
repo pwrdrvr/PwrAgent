@@ -4,6 +4,7 @@ import type {
   AppServerCollaborationModeRequest,
   AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
+  ProjectHeldWakeupSource,
   ThreadExecutionMode,
   ThreadIdentifier,
 } from "@pwragent/shared";
@@ -49,11 +50,25 @@ export type ThreadTurnQueueEntry = {
    */
   pauseRevision?: number;
   /**
+   * A wake-up held because forge activity in its project is paused. The
+   * entry is also `paused`, so the operator's own sends pass it; resuming it
+   * sends it and clears this marker.
+   */
+  projectHold?: ThreadTurnQueueProjectHold;
+  /**
    * Display-only label from `queued-message-title.ts`, set after admission
    * for messages too long to show as typed. Never sent with the turn.
    */
   title?: string;
   createdAt: number;
+};
+
+export type ThreadTurnQueueProjectHold = {
+  /** `directory:<path>` key of the paused project. */
+  directoryKey: string;
+  source: ProjectHeldWakeupSource;
+  /** One line for the resume list. */
+  summary: string;
 };
 
 type QueuedAgentMessage = {
@@ -485,6 +500,40 @@ export class ThreadTurnQueue {
   }
 
   /**
+   * Queue a wake-up that its paused project holds. Unlike `submitHeld`, this
+   * holds only the entry: it waits paused at the back of the FIFO, so turns
+   * the operator sends start or queue as usual. Reusing an id that is still
+   * queued returns that entry.
+   */
+  async submitProjectHeld(
+    input: Omit<ThreadTurnQueueEntry, "id" | "createdAt" | "paused" | "pauseRevision" | "holdReason" | "projectHold"> &
+      Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
+    hold: { reason: string; projectHold: ThreadTurnQueueProjectHold },
+    options?: { onAdmission?: () => void },
+  ): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
+    const entry: ThreadTurnQueueEntry = {
+      ...input,
+      id: input.id ?? `thread-turn:${randomUUID()}`,
+      createdAt: input.createdAt ?? this.now(),
+      paused: true,
+      pauseRevision: 1,
+      holdReason: hold.reason,
+      projectHold: hold.projectHold,
+    };
+    const existing = this.findQueuedEntry(entry.id);
+    if (existing) {
+      options?.onAdmission?.();
+      return { status: "queued", entry: existing.entry, position: existing.position };
+    }
+    const queue = this.queueFor(this.keyFor(entry));
+    queue.push(entry);
+    options?.onAdmission?.();
+    const position = queue.length;
+    await this.emit({ type: "queued", entry, position });
+    return { status: "queued", entry, position };
+  }
+
+  /**
    * Atomically reject instead of queueing when the thread is busy. The
    * availability check and `startingKeys` claim happen in the same JS turn,
    * so another submit cannot slip between them and push this entry on deck.
@@ -648,9 +697,14 @@ export class ThreadTurnQueue {
       }
       const { paused: _previous, ...rest } = entry;
       const pauseRevision = (entry.pauseRevision ?? 0) + 1;
+      // Resuming a project-held wake-up is the operator sending it, so it
+      // stops reading as held.
+      const { projectHold: _projectHold, holdReason: _holdReason, ...released } = rest;
       const updated: ThreadTurnQueueEntry = paused
         ? { ...rest, paused: true, pauseRevision }
-        : { ...rest, pauseRevision };
+        : entry.projectHold
+          ? { ...released, pauseRevision }
+          : { ...rest, pauseRevision };
       queue[index] = updated;
       return { disposition: "updated", entryId, entry: updated };
     });

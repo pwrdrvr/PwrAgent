@@ -697,6 +697,11 @@ export type AppServerThreadMessageOrigin = {
   /** Durable cross-thread prerequisite admission. */
   dependencyId?: string;
   systemReason?: "monitor-job-suggestion" | "thread-correspondence";
+  /**
+   * The operator sent this agent-routed message by acting on a to-do card,
+   * so a paused project's refusal of messages from other threads skips it.
+   */
+  operatorApproved?: boolean;
   sourceThread?: {
     /** Sender correspondence message, when PwrAgent has a durable breadcrumb. */
     messageId?: string;

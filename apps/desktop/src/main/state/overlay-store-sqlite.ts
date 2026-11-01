@@ -6,6 +6,11 @@ import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 import { sqliteUsageLedgerVersions } from "./sqlite-usage-ledger-change-version";
 import { sqliteNavigationChangeVersion } from "./sqlite-navigation-change-version";
 import { buildAppendPinRank, insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared";
+import {
+  isDefaultProjectForgeAutomation,
+  resolveProjectForgeAutomation,
+  type ProjectForgeAutomation,
+} from "@pwragent/shared";
 import path from "node:path";
 import { relativePinRanks } from "./relative-pin-order";
 import { managedChildKeyFromCard, ThreadSubAgentTable } from "./thread-sub-agents";
@@ -5817,6 +5822,37 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   /**
+   * Save a project's Forge Automation in one commit. A value equal to the
+   * defaults removes the field. `pausedAt` comes from `now` when the project
+   * goes from active to paused, survives saves that keep it paused, and is
+   * dropped on resume; a caller-supplied `pausedAt` is ignored.
+   */
+  async setDirectoryForgeAutomation(params: {
+    directoryKey: string;
+    automation: ProjectForgeAutomation;
+    now: number;
+  }): Promise<DirectoryOverlayState> {
+    return this.stateDb.raw.transaction(() => {
+      const current = this.getDirectoryOverlay(params.directoryKey);
+      const previous = current?.forgeAutomation
+        ? resolveProjectForgeAutomation(current.forgeAutomation)
+        : undefined;
+      const { pausedAt: _requested, ...requested } = resolveProjectForgeAutomation(params.automation);
+      const automation: ProjectForgeAutomation = requested.paused
+        ? { ...requested, pausedAt: previous?.paused && previous.pausedAt ? previous.pausedAt : params.now }
+        : requested;
+      const { forgeAutomation: _previous, ...rest } = current ?? { directoryKey: params.directoryKey };
+      const nextState: DirectoryOverlayState = {
+        ...rest,
+        directoryKey: params.directoryKey,
+        ...(isDefaultProjectForgeAutomation(automation) ? {} : { forgeAutomation: automation }),
+      };
+      this.putDirectoryOverlay(params.directoryKey, nextState);
+      return nextState;
+    })();
+  }
+
+  /**
    * Persist a remote window's disclosure locally without changing either the
    * owning instance's overlay or this viewer's same-path local directory.
    */
@@ -6882,6 +6918,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
 
   async getPrAutoDispatchCandidateWinner(params: {
     prKey: string;
+    /** Passes over an eligible thread the caller rules out, such as one whose project narrows Auto-fix. */
+    accepts?: (candidate: { backend: ThreadOverlayState["backend"]; threadId: string }) => boolean;
   }): Promise<PrAutoDispatchCandidate | undefined> {
     const rows = this.stateDb.raw
       .prepare(
@@ -6898,7 +6936,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       }>;
     for (const row of rows) {
       const threadKey = buildThreadIdentityKey(row.backend, row.thread_id);
-      if (this.getThread(threadKey)?.prAutoDispatchEnabled === true) {
+      if (
+        this.getThread(threadKey)?.prAutoDispatchEnabled === true
+        && (params.accepts?.({ backend: row.backend, threadId: row.thread_id }) ?? true)
+      ) {
         return {
           backend: row.backend,
           eligibleSince: row.eligible_since,
@@ -11568,6 +11609,7 @@ export type OverlayStoreLike = Pick<
   | "setDirectoryPin"
   | "reorderDirectoryPins"
   | "setDirectoryThreadsCollapsed"
+  | "setDirectoryForgeAutomation"
   | "setRemoteDirectoryThreadsCollapsed"
   | "readRemoteDirectoryOverlays"
   | "getDirectoryOverlayState"

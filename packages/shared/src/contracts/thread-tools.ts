@@ -76,6 +76,7 @@ export const PWRAGENT_THREAD_INSPECTION_ERROR_CODES = [
   "peer_unavailable",
   "forbidden",
   "unsupported_operation",
+  "project_paused",
   "internal_error",
 ] as const;
 
@@ -781,6 +782,8 @@ export type PwrAgentThreadInspectionResponse =
       data:
         | {
             threadDependencies: import("./thread-dependencies").ManageThreadDependenciesResponse;
+            /** Why the stored PR conditions wait, when the project holds PR watches. */
+            projectNotice?: string;
           }
         | {
             threads: ThreadInspectionSummary[];

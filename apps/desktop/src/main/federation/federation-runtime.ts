@@ -7610,6 +7610,9 @@ function localBackendOperations(): FederationBackendOperations {
     async startTurn(
       request: FederationStartTurnRequest,
     ): Promise<StartTurnResponse> {
+      // A peer agent's message into a paused project here is refused, as a
+      // local agent's is; a remote operator's composer is not.
+      getDesktopBackendRegistry().assertProjectAcceptsThreadMessage(request);
       const submitted = await getDesktopBackendRegistry().submitTurn({
         ...request,
         origin: "manual",
@@ -7631,6 +7634,7 @@ function localBackendOperations(): FederationBackendOperations {
           };
     },
     async replaceQueuedMessage(request) {
+      getDesktopBackendRegistry().assertProjectAcceptsThreadMessage(request);
       return getDesktopBackendRegistry().replaceQueuedAgentMessage(request);
     },
     async startReview(
