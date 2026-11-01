@@ -728,6 +728,7 @@ const publishLocalEvent = vi.fn(async (_event?: unknown) => undefined);
 const setForgeReadHandlers = vi.fn();
 const setForgePrToolHandler = vi.fn();
 const setForgeToolPolicyResolver = vi.fn();
+const setForgeToolRuleWriter = vi.fn();
 const setThreadPullRequestStatusToolHandler = vi.fn();
 const setThreadPullRequestCanonicalizer = vi.fn();
 const setLocalPullRequestAuthorityResolver = vi.fn();
@@ -1195,6 +1196,7 @@ vi.mock("../app-server/backend-registry", () => {
     setForgeReadHandlers,
     setForgePrToolHandler,
     setForgeToolPolicyResolver,
+    setForgeToolRuleWriter,
     getLocalFilePrivateStorageRoots: () => [],
     setThreadPullRequestStatusToolHandler,
     setThreadPullRequestCanonicalizer,
@@ -9688,6 +9690,7 @@ describe("app server ipc", () => {
     getThreadOverlayState.mockResolvedValue({ backend: "codex", threadId: "thread-1", executionMode: "default", prs: [] });
     registerAppServerIpcHandlers();
     expect(setForgeToolPolicyResolver).toHaveBeenCalledWith(expect.any(Function));
+    expect(setForgeToolRuleWriter).toHaveBeenCalledWith(expect.any(Function));
     const github = setForgePrToolHandler.mock.calls.at(-1)?.[0];
     expect(github).toBeTypeOf("function");
     await expect(github("get_issue", { number: 1 }, { backend: "codex", threadId: "thread-1", transport: "mcp" }))

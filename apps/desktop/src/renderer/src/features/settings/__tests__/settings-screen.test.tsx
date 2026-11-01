@@ -598,6 +598,35 @@ describe("SettingsScreen agent forge tools", () => {
     fireEvent.click(within(section).getByRole("switch", { name: /Offer forge tools to threads/ }));
     await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ git: { agentTools: { enabled: false } } }));
   });
+
+  it("opens a project's rules from a deep link and writes the whole list", async () => {
+    const snapshot = createSnapshot();
+    const claudeRule = {
+      repository: "github.com/pwrdrvr/pwragent",
+      agent: { backend: "claude" as const },
+      access: { pull_requests: "allow" as const },
+    };
+    snapshot.git.agentTools.rules = [claudeRule];
+    const settings = createSettingsState(snapshot);
+    render(
+      <SettingsScreen
+        initialSection="git"
+        initialSubsection="agent-forge-tools:github.com/pwrdrvr/pwragent"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+    const table = screen.getByRole("table", { name: "Rules for pwrdrvr/pwragent" });
+    expect(within(table).getByRole("combobox", { name: "Comments for Claude" })).toHaveTextContent("Inherit (Auto)");
+    chooseSelectOption(within(table).getByRole("combobox", { name: "Comments for Claude" }), "Allow");
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+      git: {
+        agentTools: {
+          rules: [{ ...claudeRule, access: { pull_requests: "allow", comments: "allow" } }],
+        },
+      },
+    }));
+  });
 });
 
 describe("SettingsScreen segmented pending", () => {

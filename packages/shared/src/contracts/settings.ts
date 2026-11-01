@@ -12,7 +12,11 @@ import type {
   DesktopCodexModelProvider,
 } from "../codex-model-providers";
 import type { ThreadTodoMergeMethod } from "./thread-todos";
-import type { ForgeAgentToolAccess, ForgeAgentToolGroup } from "./forge-agent-tools";
+import type {
+  ForgeAgentToolAccess,
+  ForgeAgentToolGroup,
+  ForgeAgentToolRule,
+} from "./forge-agent-tools";
 import {
   TOOL_OUTPUT_WARNING_INVOCATIONS,
   TOOL_OUTPUT_WARNING_PERCENT,
@@ -1623,6 +1627,12 @@ export type DesktopSettingsSnapshot = {
     agentTools: {
       enabled: DesktopSettingsValue<boolean>;
       access: Record<ForgeAgentToolGroup, DesktopSettingsValue<ForgeAgentToolAccess>>;
+      /**
+       * Project rules from `[[git.agent_tools.rules]]`, validated and with
+       * duplicates merged. The global `access` levels are their defaults.
+       * Main always sends the list; absent reads as no rules.
+       */
+      rules?: ForgeAgentToolRule[];
     };
   };
   applications: DesktopApplicationsSnapshot;
@@ -1897,6 +1907,8 @@ export type DesktopSettingsConfigPatch = {
     agentTools?: {
       enabled?: boolean;
       access?: Partial<Record<ForgeAgentToolGroup, ForgeAgentToolAccess>>;
+      /** Replaces the whole project rules list; `[]` removes every rule. */
+      rules?: ForgeAgentToolRule[];
     };
   };
   applications?: {

@@ -96,6 +96,7 @@ import { useHistoryNavHotkeys } from "./features/chrome/useHistoryNavHotkeys";
 import { useLayoutChordHotkeys } from "./features/chrome/useLayoutChordHotkeys";
 import type { SettingsSection } from "./features/settings/SettingsScreen";
 import { encodeEnvironmentsRoute } from "./features/settings/environments-route";
+import { encodeForgeRulesRoute } from "./features/settings/forge-rules-route";
 import { checkForManagedCodexUpdates, refreshManagedCodexModelCatalog } from "./features/settings/managed-codex-actions";
 import type { ConfirmSettingsLeave } from "./features/settings/UnsavedSettingsChanges";
 import {
@@ -4480,6 +4481,9 @@ function DesktopAppShell(props: {
           }
           onRemoveDirectory={(directory) =>
             navigation.removeDirectory(directory.key)}
+          onOpenForgePermissions={readRendererFederationTarget()
+            ? undefined
+            : (repository) => openSettingsSection("git", encodeForgeRulesRoute(repository))}
           onPrefetchPullRequests={pullRequests.prefetch}
           onPrefetchGitWorkingState={gitWorkingState.prefetch}
           onDetachPullRequest={detachThreadPullRequest}

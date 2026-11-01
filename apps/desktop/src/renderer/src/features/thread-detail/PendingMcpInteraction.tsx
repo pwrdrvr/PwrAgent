@@ -1,4 +1,8 @@
+import { useEffect, useId, useRef, useState } from "react";
+import type { ForgeApprovalRememberOption, ForgeApprovalRememberOptionId } from "@pwragent/shared";
+import { ChevronDownIcon } from "../../icons";
 import { openExternalUrl } from "../../lib/open-external-url";
+import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import {
   canAcceptMcpElicitation,
   mcpElicitationPurposeLabel,
@@ -7,6 +11,7 @@ import {
   mcpSecretFields,
   redactDisplayValue,
   readMcpApprovalPersistence,
+  readMcpRememberOptions,
   updateMcpFieldValue,
   type McpApprovalPersistence,
   type PendingMcpField,
@@ -23,6 +28,7 @@ type PendingMcpInteractionProps = {
     state: PendingMcpInteractionState,
     action: "accept" | "decline" | "cancel",
     persist?: McpApprovalPersistence,
+    remember?: ForgeApprovalRememberOptionId,
   ) => Promise<void> | void;
 };
 
@@ -40,6 +46,9 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
   const purpose = props.state.purpose;
   const secretFields = mcpSecretFields(props.state);
   const url = props.state.url;
+  // A forge approval can remember the answer as a project rule. Allow then
+  // splits: its menu holds Allow once and each rule the card offers.
+  const rememberOptions = url ? [] : readMcpRememberOptions(props.state);
   const primaryLabel = url
     ? "Open in browser"
     : serverApproval
@@ -48,6 +57,21 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
       ? gatewayApproval ? "Allow this tool for this conversation" : "Allow this conversation"
       // Not "Send": E2E specs find the composer's Send button page-wide.
       : purpose === "form" ? "Submit" : "Allow";
+  const submitPrimary = (): void => {
+    if (url) {
+      // Accept means the operator consented to open the page; the
+      // server learns whether the flow finished on its own.
+      // Open the address exactly as it was shown.
+      openExternalUrl(url.fullUrl);
+      void props.onSubmit(props.state, "accept");
+    } else if (serverApproval) {
+      void props.onSubmit(props.state, "accept", "server-session");
+    } else if (sessionApproval) {
+      void props.onSubmit(props.state, "accept", "session");
+    } else {
+      void props.onSubmit(props.state, "accept");
+    }
+  };
 
   return (
     <div
@@ -160,7 +184,7 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
           primary grant sit together on the right, primary last. DOM order is
           the visual order, so Tab walks the row left to right. */}
       <div className="transcript-mcp__actions">
-        {gatewayApproval && sessionApproval ? (
+        {gatewayApproval && sessionApproval && rememberOptions.length === 0 ? (
           <button
             className="button button--ghost"
             disabled={props.busy || !canAccept}
@@ -217,30 +241,153 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
           >
             Decline
           </button>
-          <button
-            className="button button--primary"
-            disabled={props.busy || !canAccept}
-            type="button"
-            onClick={() => {
-              if (url) {
-                // Accept means the operator consented to open the page; the
-                // server learns whether the flow finished on its own.
-                // Open the address exactly as it was shown.
-                openExternalUrl(url.fullUrl);
+          {rememberOptions.length > 0 ? (
+            <PendingMcpAllowSplit
+              key={props.state.requestId}
+              disabled={Boolean(props.busy) || !canAccept}
+              label={primaryLabel}
+              options={rememberOptions}
+              onAllow={submitPrimary}
+              onAllowOnce={() => {
                 void props.onSubmit(props.state, "accept");
-              } else if (serverApproval) {
-                void props.onSubmit(props.state, "accept", "server-session");
-              } else if (sessionApproval) {
-                void props.onSubmit(props.state, "accept", "session");
-              } else {
-                void props.onSubmit(props.state, "accept");
-              }
-            }}
-          >
-            {primaryLabel}
-          </button>
+              }}
+              onRemember={(id) => {
+                void props.onSubmit(props.state, "accept", undefined, id);
+              }}
+            />
+          ) : (
+            <button
+              className="button button--primary"
+              disabled={props.busy || !canAccept}
+              type="button"
+              onClick={submitPrimary}
+            >
+              {primaryLabel}
+            </button>
+          )}
         </div>
       </div>
+    </div>
+  );
+}
+
+type PendingMcpAllowSplitProps = {
+  disabled: boolean;
+  label: string;
+  options: ForgeApprovalRememberOption[];
+  onAllow: () => void;
+  onAllowOnce: () => void;
+  onRemember: (id: ForgeApprovalRememberOptionId) => void;
+};
+
+/**
+ * Allow with its alternatives one press away. The label runs the card's own
+ * grant; the chevron opens Allow once and the project rules the card offers.
+ * The chevron's name leaves out "allow", because Playwright matches a name as
+ * a substring and a locator for the Allow button must still find one control.
+ */
+function PendingMcpAllowSplit(props: PendingMcpAllowSplitProps) {
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuId = useId();
+  const showMenu = open && !props.disabled;
+  const close = (): void => setOpen(false);
+
+  useMenuNavigation({ open: showMenu, menuRef, triggerRef, onClose: close });
+
+  // The keyboard hook leaves the pointer to the menu: any press outside the
+  // split closes it.
+  useEffect(() => {
+    if (!showMenu) return;
+    const handlePointerDown = (event: PointerEvent): void => {
+      if (!wrapperRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    return () => document.removeEventListener("pointerdown", handlePointerDown, true);
+  }, [showMenu]);
+
+  const items: Array<{ id: string; label: string; description: string; onSelect: () => void }> = [
+    {
+      id: "once",
+      label: "Allow once",
+      description: "Allow this call only. The next one asks again.",
+      onSelect: props.onAllowOnce,
+    },
+    ...props.options.map((option) => ({
+      id: option.id,
+      label: option.label,
+      description: option.description,
+      onSelect: () => props.onRemember(option.id),
+    })),
+  ];
+
+  return (
+    <div
+      ref={wrapperRef}
+      className={`transcript-mcp__split${showMenu ? " transcript-mcp__split--open" : ""}`}
+    >
+      <button
+        className="button button--primary transcript-mcp__split-main"
+        disabled={props.disabled}
+        type="button"
+        onClick={props.onAllow}
+      >
+        {props.label}
+      </button>
+      <button
+        ref={triggerRef}
+        className="button button--primary transcript-mcp__split-toggle"
+        aria-label="More approval choices"
+        aria-haspopup="menu"
+        aria-expanded={showMenu}
+        aria-controls={showMenu ? menuId : undefined}
+        disabled={props.disabled}
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <ChevronDownIcon size={12} />
+      </button>
+      {showMenu ? (
+        <div
+          ref={menuRef}
+          id={menuId}
+          className="transcript-mcp__split-menu"
+          role="menu"
+          aria-label="Approval choices"
+          tabIndex={-1}
+        >
+          {items.map((item) => (
+            <button
+              key={item.id}
+              className="transcript-mcp__split-item"
+              role="menuitem"
+              type="button"
+              aria-labelledby={`${menuId}-${item.id}-label`}
+              aria-describedby={item.description ? `${menuId}-${item.id}-description` : undefined}
+              onClick={() => {
+                close();
+                item.onSelect();
+              }}
+            >
+              <span id={`${menuId}-${item.id}-label`} className="transcript-mcp__split-item-label">
+                {item.label}
+              </span>
+              {item.description ? (
+                <span
+                  id={`${menuId}-${item.id}-description`}
+                  className="transcript-mcp__split-item-description"
+                >
+                  {item.description}
+                </span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

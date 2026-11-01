@@ -5,8 +5,13 @@ import {
   codexModelProviderApiKeyEnv,
   isValidCodexModelProviderId,
   normalizeThreadArchivePolicy,
+  upsertForgeAgentToolRule,
   type CodexModelProviderSettings,
+  type ForgeAgentRuleAgent,
+  type ForgeAgentToolAccess,
   type ForgeAgentToolPolicy,
+  type ForgeAgentToolRule,
+  type ForgeAgentToolRuleGroup,
 } from "@pwragent/shared";
 import { bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import { gitRuntimeEnvironment } from "../git-runtime";
@@ -610,6 +615,8 @@ export class DesktopSettingsService {
   private readonly configPath: string;
   private readonly configStore: DesktopConfigStore;
   private readonly configWriteListeners = new Set<() => void>();
+  /** Serializes read-modify-write updates of the forge tool rules list. */
+  private forgeAgentToolRuleWrites: Promise<unknown> = Promise.resolve();
   private readonly now: () => number;
   private readonly startupCodexHome?: string;
   private loggedObsoleteComposerConfig = false;
@@ -2207,11 +2214,41 @@ export class DesktopSettingsService {
       access: Object.fromEntries(
         FORGE_AGENT_TOOL_GROUPS.map((group) => [group, settings.access[group].value]),
       ) as ForgeAgentToolPolicy["access"],
+      rules: settings.rules ?? [],
     };
   }
 
+  /**
+   * Set or clear one group of one (repository, agent) project rule, as an
+   * approval card's "Always allow" does, and return the saved list. `level`
+   * undefined clears the group. Updates are serialized so two cards answered
+   * together cannot drop each other's rule; the write goes through the same
+   * targeted path as Settings, so only `[[git.agent_tools.rules]]` changes.
+   */
+  async upsertForgeAgentToolRule(update: {
+    repository: string;
+    agent: ForgeAgentRuleAgent;
+    group: ForgeAgentToolRuleGroup;
+    level: ForgeAgentToolAccess | undefined;
+  }): Promise<ForgeAgentToolRule[]> {
+    const write = this.forgeAgentToolRuleWrites.then(async () => {
+      const current = this.configStore.read("git")?.agentTools?.rules ?? [];
+      const rules = upsertForgeAgentToolRule(current, update);
+      await this.writeConfigPatchTargeted({ git: { agentTools: { rules } } });
+      return rules;
+    });
+    this.forgeAgentToolRuleWrites = write.catch(() => undefined);
+    return await write;
+  }
+
   private resolveForgeAgentToolSettings(
-    config: { enabled?: boolean; access?: Partial<ForgeAgentToolPolicy["access"]> } | undefined,
+    config:
+      | {
+        enabled?: boolean;
+        access?: Partial<ForgeAgentToolPolicy["access"]>;
+        rules?: ForgeAgentToolRule[];
+      }
+      | undefined,
   ): DesktopSettingsSnapshot["git"]["agentTools"] {
     return {
       enabled: this.resolveConfigBoolean(
@@ -2227,6 +2264,7 @@ export class DesktopSettingsService {
           }];
         }),
       ) as DesktopSettingsSnapshot["git"]["agentTools"]["access"],
+      rules: config?.rules ?? [],
     };
   }
 

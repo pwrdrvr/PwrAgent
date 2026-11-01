@@ -1,0 +1,382 @@
+/* Settings → Git → Agent forge tools → Project rules (ForgeProjectRules.tsx).
+   A table per repository: one row per agent, one Select per write group.
+   A dashed, muted cell inherits and names the level it would get; a solid
+   cell is set by the rule. Colors come from the theme tokens only. */
+
+.forge-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.forge-rules__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.forge-rules__head-copy {
+  min-width: 0;
+}
+
+.forge-rules__title {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+
+.forge-rules__sub,
+.forge-rules__hint {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.forge-rules__hint {
+  margin: 0;
+  flex: 1 1 220px;
+  font-size: 11.5px;
+}
+
+.forge-rules__empty {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.forge-rules__note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* The color comes from `.settings-warning`. */
+.forge-rules__warning {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.forge-rules__status {
+  margin: 0;
+  font-size: 12px;
+}
+
+.forge-rules__add {
+  flex: 0 0 auto;
+  border-style: dashed;
+}
+
+.forge-rules__project {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.forge-rules__project-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.forge-rules__project-toggle:hover {
+  background: var(--bg-panel-hover);
+}
+
+.forge-rules__project-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.forge-rules__caret {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--text-muted);
+  border-bottom: 1.5px solid var(--text-muted);
+  transform: rotate(-45deg);
+}
+
+.forge-rules__caret.is-open {
+  transform: rotate(45deg) translate(-2px, -2px);
+}
+
+.forge-rules__project-name {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.forge-rules__project-path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forge-rules__project-count {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.forge-rules__project-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 0 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.forge-rules__project-body > .forge-rules__note,
+.forge-rules__project-body > .forge-rules__warning,
+.forge-rules__project-body > .forge-rules__picker,
+.forge-rules__project-body > .forge-rules__foot {
+  margin-right: 14px;
+  margin-left: 14px;
+}
+
+.forge-rules__table-wrap {
+  overflow-x: auto;
+}
+
+.forge-rules__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.forge-rules__table th,
+.forge-rules__table td {
+  padding: 7px 6px;
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.forge-rules__table thead th {
+  padding-top: 8px;
+  padding-bottom: 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.forge-rules__table thead th.is-locked {
+  color: var(--text-subtle);
+}
+
+.forge-rules__table th:first-child,
+.forge-rules__table td:first-child {
+  padding-left: 14px;
+}
+
+.forge-rules__table th:last-child,
+.forge-rules__table td:last-child {
+  padding-right: 10px;
+}
+
+.forge-rules__table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.forge-rules__table tr.is-base > * {
+  background: color-mix(in srgb, var(--bg-panel-elevated) 70%, transparent);
+}
+
+.forge-rules__agent {
+  min-width: 140px;
+  font-weight: inherit;
+}
+
+.forge-rules__agent-name {
+  display: block;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.forge-rules__agent-model {
+  display: block;
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A cell's Select trigger, or the locked stand-in for a globally Off group. */
+.forge-rules__cell {
+  width: 100%;
+  min-width: 96px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.forge-rules__cell:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.select-trigger.forge-rules__cell:hover:not(:disabled) {
+  border-color: var(--accent-border);
+}
+
+.forge-rules__cell.is-inherited {
+  border-style: dashed;
+  border-color: var(--border-subtle);
+  background: transparent;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.forge-rules__cell.is-allow {
+  border-color: color-mix(in srgb, var(--status-ok) 45%, transparent);
+  color: var(--status-ok);
+}
+
+.forge-rules__cell.is-ask {
+  color: var(--accent-bright);
+}
+
+.forge-rules__cell.is-off {
+  color: var(--text-muted);
+}
+
+.forge-rules__cell.is-risk {
+  border-color: var(--status-warning);
+  color: var(--status-warning-text);
+}
+
+.forge-rules__cell.is-locked {
+  border-style: dashed;
+  border-color: var(--border-subtle);
+  background: transparent;
+  color: var(--text-subtle);
+  font-weight: 500;
+  text-align: left;
+  cursor: not-allowed;
+}
+
+.forge-rules__remove-cell {
+  width: 30px;
+}
+
+.forge-rules__remove {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.forge-rules__remove:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.forge-rules__remove:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.forge-rules__remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.forge-rules__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.forge-rules__remove-project {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.forge-rules__picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+}
+
+.forge-rules > .forge-rules__picker {
+  margin: 0;
+}
+
+.forge-rules__picker-field {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.forge-rules__picker-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.forge-rules__model-list {
+  font-family: var(--font-mono);
+}
+
+.forge-rules__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

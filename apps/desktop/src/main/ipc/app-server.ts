@@ -9104,6 +9104,9 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setForgeToolPolicyResolver(
     () => getDesktopSettingsService().resolveForgeAgentToolPolicy(),
   );
+  getDesktopBackendRegistry().setForgeToolRuleWriter(
+    async (update) => await getDesktopSettingsService().upsertForgeAgentToolRule(update),
+  );
   getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(
     async (args, context) =>
       await appServerService.checkThreadPullRequestStatusForTool(args, context),
