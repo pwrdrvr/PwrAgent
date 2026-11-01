@@ -9891,7 +9891,7 @@ export class DesktopBackendRegistry {
       const label = await Promise.race([
         this.forgeProjectLabelResolver(key),
         new Promise<undefined>((resolve) => {
-          timer = setTimeout(resolve, FORGE_PROJECT_LABEL_TIMEOUT_MS);
+          timer = setTimeout(() => resolve(undefined), FORGE_PROJECT_LABEL_TIMEOUT_MS);
         }),
       ]);
       return label?.trim() || fallback;
