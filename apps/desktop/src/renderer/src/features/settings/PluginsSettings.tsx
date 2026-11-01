@@ -1603,7 +1603,7 @@ export function PluginsSettings(props: {
                     />
                   </label>
                   <label>
-                    <span>Remote MCP URL</span>
+                    <span>MCP server URL</span>
                     <input
                       className="settings-input"
                       disabled={Boolean(connectionPending)}

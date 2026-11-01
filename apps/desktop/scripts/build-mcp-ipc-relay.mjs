@@ -5,14 +5,14 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-export function buildMcpIpcRelay({ arch = process.arch, outputRoot = root, packaged = false } = {}) {
+export function buildMcpIpcRelay({ arch = process.arch, outputRoot = root, packaged = false, identityTest = false } = {}) {
   if (!["darwin", "linux", "win32"].includes(process.platform)) {
     throw new Error(`MCP IPC peer verification is unsupported on ${process.platform}.`);
   }
   const directory = join(outputRoot, "build", "mcp-ipc-relay", packaged ? "packaged" : `${process.platform}-${arch}`);
   mkdirSync(directory, { recursive: true });
-  const output = join(directory, `mcp-ipc-relay${process.platform === "win32" ? ".exe" : ""}`);
-  const source = join(root, "native", "mcp-ipc-relay", "main.c");
+  const output = join(directory, `mcp-ipc-${identityTest ? "identity-test" : "relay"}${process.platform === "win32" ? ".exe" : ""}`);
+  const source = join(root, "native", "mcp-ipc-relay", identityTest ? "identity-test.c" : "main.c");
   let command;
   let args;
   if (process.platform === "win32") {
@@ -52,5 +52,5 @@ export function buildMcpIpcRelay({ arch = process.arch, outputRoot = root, packa
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  buildMcpIpcRelay();
+  buildMcpIpcRelay({ identityTest: process.argv.includes("--identity-test") });
 }
