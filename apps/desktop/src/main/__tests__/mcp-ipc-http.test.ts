@@ -31,6 +31,8 @@ async function fixture() {
   let handler: ((res: ServerResponse) => void) | undefined;
   let sse = false;
   let connections = 0;
+  let holdCalls = false;
+  const heldCalls = new Map<number, ServerResponse>();
   const server = createServer(async (req, res) => {
     if (handler) { handler(res); return; }
     if (req.method === "GET") {
@@ -43,7 +45,16 @@ async function fixture() {
     for await (const chunk of req) text += chunk;
     const body = text ? JSON.parse(text) : {};
     requests.push({ method: req.method!, target: req.url!, authorization: req.headers.authorization, body });
+    if (body.method === "notifications/cancelled") {
+      const held = heldCalls.get(body.params.requestId);
+      if (held) {
+        heldCalls.delete(body.params.requestId);
+        held.writeHead(200, { "content-type": "application/json" });
+        held.end(JSON.stringify({ jsonrpc: "2.0", id: body.params.requestId, error: { code: -32800, message: "Cancelled fixture call" } }));
+      }
+    }
     if (body.id === undefined) { res.writeHead(202).end(); return; }
+    if (holdCalls && body.method === "tools/call") { heldCalls.set(body.id, res); return; }
     let result: unknown;
     switch (body.method) {
       case "initialize": result = {
@@ -75,7 +86,7 @@ async function fixture() {
   });
   const ipc = createMcpIpcHttp(url, { executable });
   cleanups.push(ipc.close);
-  return { ipc, path, directory, url, requests, server, setSse: () => { sse = true; }, connections: () => connections, setHandler: (next: typeof handler) => { handler = next; }, notice: () => notice };
+  return { ipc, path, directory, url, requests, server, holdCalls: () => { holdCalls = true; }, setSse: () => { sse = true; }, connections: () => connections, setHandler: (next: typeof handler) => { handler = next; }, notice: () => notice };
 }
 
 describe("verified HTTP MCP over local IPC", () => {
@@ -193,6 +204,24 @@ describe("verified HTTP MCP over local IPC", () => {
     controller.abort();
     await expect(response).rejects.toThrow();
     await expect.poll(() => closed).toBe(true);
+  });
+
+  it("forwards SDK tool cancellation once without replaying the call", async () => {
+    const f = await fixture();
+    f.holdCalls();
+    const transport = new StreamableHTTPClientTransport(f.ipc.url, { fetch: f.ipc.fetch, reconnectionOptions: MCP_IPC_NO_RECONNECT });
+    const client = new Client({ name: "cancel-test", version: "1" }, { capabilities: {} });
+    cleanups.push(async () => { f.ipc.close(); await client.close(); });
+    await client.connect(transport);
+    const controller = new AbortController();
+    const call = client.callTool({ name: "echo" }, undefined, { signal: controller.signal });
+    const rejected = expect(call).rejects.toThrow();
+    await expect.poll(() => f.requests.some((r) => r.body.method === "tools/call")).toBe(true);
+    controller.abort(new Error("operator cancelled"));
+    await rejected;
+    await expect.poll(() => f.requests.filter((r) => r.body.method === "notifications/cancelled").length).toBe(1);
+    expect(f.requests.filter((r) => r.body.method === "tools/call")).toHaveLength(1);
+    expect((await client.listTools()).tools[0]?.name).toBe("echo");
   });
 
   it("fails missing endpoints and never retries a failed request", async () => {
