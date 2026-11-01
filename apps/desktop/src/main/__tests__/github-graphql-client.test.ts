@@ -168,6 +168,8 @@ describe("buildBranchPrQuery", () => {
     expect(query).toContain("r1: repository(owner: $o1, name: $n1)");
     expect(query).toContain("pullRequests(headRefName: $b0");
     expect(query).toContain("pullRequests(headRefName: $b1");
+    // The forge's current name rides along, for remotes with a renamed repository's old name.
+    expect(query).toContain("r0: repository(owner: $o0, name: $n0) { nameWithOwner pullRequests(");
     // Merged/closed included, so a branch whose PR already landed still resolves.
     expect(query).toContain("states: [OPEN, MERGED, CLOSED]");
     expect(variables).toEqual({
@@ -197,7 +199,7 @@ describe("buildCommitPrQuery", () => {
     ]);
 
     expect(query).toContain("$s0: GitObjectID!");
-    expect(query).toContain("r0: repository(owner: $o0, name: $n0) { object(oid: $s0)");
+    expect(query).toContain("r0: repository(owner: $o0, name: $n0) { nameWithOwner object(oid: $s0)");
     expect(query).toContain("associatedPullRequests(first: 5");
     expect(query).not.toContain(sha);
     expect(variables).toEqual({ o0: "pwrdrvr", n0: "PwrAgent", s0: sha });
@@ -846,9 +848,7 @@ describe("GithubGraphqlPrClient", () => {
     });
 
     it("asks only for repositories GitHub has not named since launch", async () => {
-      const request = vi.fn(async (_query: string, variables: Record<string, string | number>) => ({
-        r0: { nameWithOwner: variables.n0 === "PwrAgnt" ? "pwrdrvr/PwrAgent" : "other/infra" },
-      }));
+      const request = vi.fn(async () => ({ r0: { nameWithOwner: "pwrdrvr/PwrAgent" } }));
       const graphqlClient = client(request);
 
       await graphqlClient.resolveRepositoryNames([
