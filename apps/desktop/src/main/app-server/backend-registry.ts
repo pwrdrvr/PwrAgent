@@ -156,7 +156,7 @@ import type {
   WorktreeGitWorkingStateCacheEntry,
 } from "../state/overlay-store-sqlite";
 import { requestShowThread } from "../window-show-thread";
-import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
+import { materializeTranscriptImageEventForRenderer, toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import type { AcpMcpServerRegistration } from "../acp/acp-client";
 import { MCP_CONNECTION_STARTUP_TIMEOUT_SECONDS, MCP_CONNECTION_TOOL_TIMEOUT_SECONDS } from "../mcp-connections/mcp-connection-timeouts";
@@ -48632,6 +48632,47 @@ export class DesktopBackendRegistry {
       && this.archiveCleanupCompletions.has(buildThreadIdentityKey(backend, notification.params.threadId));
   }
 
+  private readonly transcriptImageWork = new Map<string, Promise<void>>();
+
+  private emitWithTranscriptImages(event: AgentEvent): Promise<void> {
+    const notification = event.notification;
+    if (!("threadId" in notification.params) || typeof notification.params.threadId !== "string") return this.emitEvent(event);
+    const threadId = notification.params.threadId;
+    const key = `${event.backend}:${threadId}`;
+    const previous = this.transcriptImageWork.get(key);
+    const item = notification.method === "item/completed" ? readRecord(notification.params.item) : undefined;
+    const materializeImages = item?.type === "agentMessage" || item?.type === "imageView";
+    // Keep lifecycle bookkeeping (including queue release) and subsequent
+    // transcript events behind image work, in arrival order. Extend the chain
+    // through delivery, so idle or the next turn cannot overtake a held terminal.
+    const orderedNotification = notification.method.startsWith("turn/")
+      || notification.method === "thread/status/changed"
+      || notification.method.startsWith("item/");
+    if (!materializeImages && (!previous || !orderedNotification)) {
+      return this.emitEvent(event);
+    }
+    const work = (async () => {
+      await previous?.catch(() => undefined);
+      const materialized = materializeImages ? await materializeTranscriptImageEventForRenderer(event, {}, {
+        includeTemporaryImageRoots: true,
+        resolveApprovedLocalImageRoots: async () => await this.getThreadTranscriptImageRoots({
+          backend: event.backend, threadId,
+        }),
+      }).catch((error) => {
+        backendRegistryLog.warn("live transcript image materialization failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return event;
+      }) : event;
+      await this.emitEvent(materialized);
+    })();
+    this.transcriptImageWork.set(key, work);
+    void work.finally(() => {
+      if (this.transcriptImageWork.get(key) === work) this.transcriptImageWork.delete(key);
+    }).catch(() => undefined);
+    return work;
+  }
+
   private emit(event: AgentEvent): Promise<void> {
     this.invalidateArchiveCleanupForNotification(event.backend, event.notification);
     if (event.notification.method === "thread/unarchived" || event.notification.method === "thread/deleted") {
@@ -48644,8 +48685,8 @@ export class DesktopBackendRegistry {
     const emitted = event.notification.method === "thread/deleted"
       ? deleteThreadAssets({ backend: event.backend, threadId: event.notification.params.threadId })
           .catch((error) => backendRegistryLog.warn("thread asset cleanup failed", { error: error instanceof Error ? error.message : String(error) }))
-          .then(() => this.emitEvent(event))
-      : this.emitEvent(event);
+          .then(() => this.emitWithTranscriptImages(event))
+      : this.emitWithTranscriptImages(event);
     const method = event.notification.method;
     if (
       this.stoppingRunningTurnsForShutdown

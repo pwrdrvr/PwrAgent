@@ -53,13 +53,13 @@ export function buildPwrAgentMcpInstructions(toolNames: readonly string[]): stri
   const has = (name: string) => toolNames.includes(name);
   return PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION
     + (has("watch_thread_pull_request") && has("create_monitor_delegation")
-      ? " For CI, follow prAutomation.guidance; call watch_thread_pull_request and end the turn;"
-        + " for other long waits, call create_monitor_delegation."
+      ? " For CI follow prAutomation.guidance and call watch_thread_pull_request and end the turn."
+        + " Other waits: create_monitor_delegation."
         + " Do not wait in sleep loops, background shells, or Monitor."
       : "")
     + (has("read_tool_guide")
-      ? " Read skill://waiting-on-work/SKILL.md for CI, prerequisites, and long jobs; skill://tool-guide/SKILL.md for tool selection."
-        + " Discover with skills/list or resources/list; skills/get returns metadata, resources/read returns content."
+      ? " Read skill://waiting-on-work/SKILL.md for waits; skill://tool-guide/SKILL.md for tools."
+        + " Find via skills/list or resources/list; skills/get: metadata, resources/read: content."
         + " Read read_tool_guide for the short tool guide."
       : "");
 }
