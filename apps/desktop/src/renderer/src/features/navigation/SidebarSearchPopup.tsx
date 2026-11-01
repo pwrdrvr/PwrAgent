@@ -40,6 +40,7 @@ import { useNavigationQueryResource } from "../../lib/useNavigationQueryResource
 import { readRendererFederationLabel, readRendererFederationTarget } from "../../lib/federation-window";
 
 const MAX_RESULTS = 8;
+const MAX_RECENT_THREADS = 10;
 
 /** Provider history can include foreign paths without a federation owner. */
 function foreignProjectPlatform(path: string | undefined, platform: string | undefined): string | undefined {
@@ -75,8 +76,9 @@ type SidebarSearchPopupProps = {
 };
 
 /**
- * Quick-jump palette (⌘K, or ⌘F while the sidebar is focused). Local threads
- * filter instantly from the in-memory thread set by title, PR number, branch,
+ * Quick-jump palette (⌘K, or ⌘F while the sidebar is focused). An empty query
+ * shows the ten most recently active threads. Local threads filter instantly
+ * from the in-memory thread set by title, PR number, branch,
  * and linked directory; connected federation peers are queried asynchronously
  * (debounced) and append below the local hits with an instance chip. ↑/↓ move
  * the active row across both sections, Enter (or click) jumps, Escape closes.
@@ -129,6 +131,15 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   const ownerInstanceId = federationTarget?.instanceId;
   const platform = getDesktopApi()?.platform;
   const ownerSearch = useNavigationOwnerSearch({ query: threadQuery, desktopApi: getDesktopApi() });
+  const recentThreads = useNavigationQueryResource({
+    desktopApi: getDesktopApi(),
+    request: !trimmed ? {
+      protocol: 2, consumer: "search",
+      inventory: federationTarget ? "owner" : "viewer",
+      federationTarget,
+      query: { kind: "lens", lens: "inbox" }, pageSize: MAX_RECENT_THREADS,
+    } : undefined,
+  });
 
   const projectSearch = useNavigationQueryResource({
     desktopApi: getDesktopApi(),
@@ -168,6 +179,21 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   }, [projectFilter, props.projects, projectSearch.state, ownerInstanceId, platform]);
 
   const results = useMemo(() => {
+    if (!trimmed) {
+      // The Updated lens covers the full inventory without floating pins.
+      // Loaded rows give an immediate first paint while that page arrives.
+      const page = recentThreads.state?.request.query.kind === "lens"
+        ? recentThreads.state.page : undefined;
+      const candidates = page ? page.entries.map(({ row }) => row)
+        : props.threads.filter((thread) => thread.codexNativeSubAgent === undefined);
+      const unique = new Map(candidates
+        .filter((thread) => thread.archivedAt === undefined)
+        .map((thread) => [threadSummaryIdentityKey(thread), thread]));
+      return [...unique.values()].sort((left, right) =>
+        (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
+        || threadSummaryIdentityKey(left).localeCompare(threadSummaryIdentityKey(right)))
+        .slice(0, MAX_RECENT_THREADS);
+    }
     if (!threadQuery) {
       return [];
     }
@@ -181,7 +207,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
       .slice(0, MAX_RESULTS);
     const ownerKeys = new Set(ownerSearch.rows.map(threadSummaryIdentityKey));
     return [...ownerSearch.rows, ...immediate.filter((thread) => !ownerKeys.has(threadSummaryIdentityKey(thread)))].slice(0, MAX_RESULTS);
-  }, [threadQuery, jumpText, props.threads, ownerSearch.rows]);
+  }, [trimmed, threadQuery, jumpText, props.threads, ownerSearch.rows, recentThreads.state]);
 
   const {
     available: remoteSearchAvailable,
@@ -204,10 +230,10 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
         threadSummaryIdentityKey(thread),
       ),
     );
-    return mention ? [] : remoteResults.filter(
+    return !threadQuery ? [] : remoteResults.filter(
       (thread) => !localKeys.has(threadSummaryIdentityKey(thread)),
     );
-  }, [mention, remoteResults, results]);
+  }, [threadQuery, remoteResults, results]);
 
   // Only a project named by the whole query leads the threads. The first row
   // is the one Enter opens, and a prefix or path match is usually incidental:
@@ -450,7 +476,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   // The listbox is only in the DOM once it has rows, so `aria-controls` has to
   // come and go with it — a dangling idref is an invalid attribute value, not
   // a harmless one.
-  const listVisible = Boolean(trimmed) && (projectCount > 0 || results.length > 0 || showRemoteSection);
+  const listVisible = projectCount > 0 || results.length > 0 || showRemoteSection;
   // Trailing projects sit under their own divider once anything precedes them,
   // as peer threads do under "Other instances".
   const showProjectSection = trailingProjects.length > 0 && leadProjects.length + results.length > 0;
@@ -596,9 +622,12 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
           {projectSearch.state?.error ? <span className="jump-palette__foot-remote" role="status">
             Project search unavailable
           </span> : null}
-          {remoteLoading || ownerSearch.loading || projectSearch.loading ? (
+          {!trimmed && recentThreads.state?.error ? <span className="jump-palette__foot-remote" role="status">
+            Recent threads unavailable
+          </span> : null}
+          {remoteLoading || ownerSearch.loading || projectSearch.loading || (!trimmed && recentThreads.loading) ? (
             <span className="jump-palette__foot-remote">
-              {remoteLoading ? "Searching other instances…" : projectSearch.loading ? "Searching projects…" : "Searching threads…"}
+              {!trimmed ? "Loading recent threads…" : remoteLoading ? "Searching other instances…" : projectSearch.loading ? "Searching projects…" : "Searching threads…"}
               {remoteTotalPeerCount > 0
                 ? ` ${remoteCompletedPeerCount}/${remoteTotalPeerCount}`
                 : ""}
