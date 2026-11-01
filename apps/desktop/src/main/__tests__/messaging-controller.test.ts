@@ -28484,7 +28484,10 @@ function buildAcpRuntimeBackendSummary(
   });
 }
 
-/** Grok as discovered without its own permission selector. */
+/**
+ * Grok as discovered without its own permission selector. Its native modes
+ * control planning, so Permissions must not open them.
+ */
 function buildGrokBackendSummary(): BackendSummary {
   return buildBackendSummary({
     kind: "acp:grok",
@@ -28500,6 +28503,17 @@ function buildGrokBackendSummary(): BackendSummary {
       installStatus: "installed",
       authStatus: "authenticated",
       verificationStatus: "not-applicable",
+      runtime: {
+        schemaVersion: 1,
+        status: "discovered",
+        modes: {
+          currentModeId: "default",
+          availableModes: [
+            { id: "default", label: "Default" },
+            { id: "plan", label: "Plan" },
+          ],
+        },
+      },
     },
     launchpadOptions: {
       models: [{ id: "grok-4.7", label: "Grok 4.7" }],
