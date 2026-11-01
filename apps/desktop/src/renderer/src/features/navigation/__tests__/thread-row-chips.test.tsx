@@ -1154,6 +1154,52 @@ describe("ThreadRow chip flow", () => {
     expect(screen.queryByText("pwrdrvr/PwrAgent#1024")).not.toBeInTheDocument();
   });
 
+  it("follows the owner's primary repository after a move to another project", () => {
+    const pr = (org: string, repo: string, number: number): PrSummary => ({
+      provider: "github.com",
+      number,
+      org,
+      repo,
+      state: "pending",
+      lifecycleState: "open",
+      headRefName: "fix/desktop-mcp-lifecycle",
+      url: `https://github.com/${org}/${repo}/pull/${number}`,
+    });
+    renderRow({
+      thread: {
+        ...baseThread,
+        // The provider's origin still names the project the session started in.
+        gitOriginUrl: "git@github.com:pwrdrvr/PwrDisk.git",
+        primaryGitRepository: "github.com/pwrdrvr/pwragent",
+        gitBranch: "fix/desktop-mcp-lifecycle",
+        gitWorkingState: {
+          dirtyFiles: 0,
+          dirtyAdditions: 0,
+          dirtyDeletions: 0,
+          untrackedFiles: 0,
+          unpushedCommits: 0,
+          baseBranch: "main",
+          baseBehindCommitCount: 3,
+          baseAheadCommitCount: 1,
+          isBehindBase: true,
+        },
+        prs: [pr("pwrdrvr", "PwrDisk", 39), pr("pwrdrvr", "PwrAgent", 3160)],
+      },
+    });
+
+    expect(screen.getByText("#3160")).toBeInTheDocument();
+    expect(screen.getByText("pwrdrvr/PwrDisk#39")).toBeInTheDocument();
+    const hasLocalBranch = (): boolean =>
+      [...screen.getByRole("tooltip").querySelectorAll(".pr-status-card__section-title")]
+        .some((title) => title.textContent === "Local branch");
+    const moved = screen.getByRole("button", { name: /Open pwrdrvr\/PwrAgent#3160/ });
+    fireEvent.focus(moved);
+    expect(hasLocalBranch()).toBe(true);
+    fireEvent.blur(moved);
+    fireEvent.focus(screen.getByRole("button", { name: /Open pwrdrvr\/PwrDisk#39/ }));
+    expect(hasLocalBranch()).toBe(false);
+  });
+
   it("keeps PR chips with missing repository metadata unqualified", () => {
     renderRow({
       thread: {

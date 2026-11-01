@@ -111,6 +111,7 @@ import {
   type GlabStatus,
   type GhStatus,
   type LinkedDirectorySummary,
+  isWorkspaceHandoffDirectory,
   type ListModelSettingsRecentsRequest,
   type ListModelSettingsRecentsResponse,
   type ListRecentFileReferencesRequest,
@@ -8861,12 +8862,18 @@ async function resolvePrimaryThreadRepoKey(
   >,
   resolutionByPath = new Map<string, Promise<string | undefined>>(),
 ): Promise<string | undefined> {
-  const origin = thread.gitOriginUrl
+  // A workspace move (move_thread_workspace) is the thread's primary
+  // workspace. The provider's origin describes the checkout the session
+  // started in, which can be another project after a to-project move.
+  const movedWorkspace = thread.linkedDirectories.findLast(
+    isWorkspaceHandoffDirectory,
+  );
+  const origin = !movedWorkspace && thread.gitOriginUrl
     ? parseForgeRemote(thread.gitOriginUrl)
     : undefined;
   if (origin) return buildPrRepositoryKey(origin.host, origin.owner, origin.repo);
 
-  const primaryDirectory = thread.linkedDirectories[0];
+  const primaryDirectory = movedWorkspace ?? thread.linkedDirectories[0];
   const primaryPath = primaryDirectory
     ? resolvePullRequestDirectoryPath(primaryDirectory)
     : undefined;

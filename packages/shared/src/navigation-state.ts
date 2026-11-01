@@ -30,7 +30,7 @@ type AppServerThreadSummaryWithEnvironmentOptions = AppServerThreadSummary & {
 };
 
 /** Check whether a linked directory was created by the handoff service. */
-function isHandoffDirectory(directory: LinkedDirectorySummary): boolean {
+export function isWorkspaceHandoffDirectory(directory: LinkedDirectorySummary): boolean {
   return (
     directory.id.startsWith("pwragent-handoff:") ||
     directory.id.startsWith("pwragnt-handoff:")  // legacy prefix from pre-rebrand data
@@ -44,7 +44,7 @@ export function mergeThreadLinkedDirectories(
   const normalizedDirectories = directories.map(normalizeLinkedDirectoryKind);
   let overlayWorkspace: LinkedDirectorySummary | undefined;
   for (const directory of normalizedDirectories) {
-    if (isHandoffDirectory(directory)) {
+    if (isWorkspaceHandoffDirectory(directory)) {
       overlayWorkspace = directory;
     }
   }
@@ -97,7 +97,7 @@ function normalizeLinkedDirectoryKind(
 }
 
 function hasHandoffWorkspace(directories: LinkedDirectorySummary[]): boolean {
-  return directories.map(normalizeLinkedDirectoryKind).some(isHandoffDirectory);
+  return directories.map(normalizeLinkedDirectoryKind).some(isWorkspaceHandoffDirectory);
 }
 
 function resolveNavigationGitBranch(params: {
