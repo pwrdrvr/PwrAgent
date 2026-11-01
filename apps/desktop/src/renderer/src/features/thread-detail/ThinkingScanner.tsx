@@ -18,9 +18,9 @@ type ThinkingScannerProps = {
  * due, every visible beam starts a finite Web Animation in the same task, so
  * they share one start time and every beam moves in the same frames. The timer
  * is aligned to the wall clock, so other windows scan in the same frames too.
- * There is no registry of mounted beams: each scan reads the live set from the
- * DOM, so an unmounted beam cannot leak, and the timer stops once no beam is
- * left. A mount restarts it.
+ * Each scan reads the live set of beams from the DOM, so an unmounted beam
+ * cannot leak. Only a count of mounted beams is kept: the last one to unmount
+ * clears the timer, so no tick outlives the scanners, and a mount restarts it.
  */
 export const THINKING_SCAN_PERIOD_MS = 4500;
 export const THINKING_SCAN_DURATION_MS = 1800;
@@ -61,6 +61,7 @@ reducedMotion?.addEventListener("change", () => {
 });
 
 let scanTimer: ReturnType<typeof setTimeout> | undefined;
+let mountedBeams = 0;
 
 function scheduleNextScan(): void {
   if (scanTimer !== undefined) {
@@ -102,10 +103,19 @@ function runScan(): void {
   scheduleNextScan();
 }
 
-function startScanning(element: HTMLDivElement | null): void {
-  if (element) {
-    scheduleNextScan();
+function startScanning(element: HTMLDivElement | null): (() => void) | undefined {
+  if (!element) {
+    return undefined;
   }
+  mountedBeams += 1;
+  scheduleNextScan();
+  return () => {
+    mountedBeams -= 1;
+    if (mountedBeams === 0 && scanTimer !== undefined) {
+      clearTimeout(scanTimer);
+      scanTimer = undefined;
+    }
+  };
 }
 
 export function ThinkingScanner(props: ThinkingScannerProps = {}) {

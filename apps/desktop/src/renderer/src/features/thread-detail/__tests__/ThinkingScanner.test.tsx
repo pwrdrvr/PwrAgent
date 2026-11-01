@@ -32,8 +32,6 @@ describe("ThinkingScanner", () => {
 
   afterEach(() => {
     cleanup();
-    // Drain the scheduler: with no beam left, the next scan stops the timer.
-    vi.advanceTimersByTime(THINKING_SCAN_PERIOD_MS);
     vi.useRealTimers();
     vi.restoreAllMocks();
     Reflect.deleteProperty(HTMLElement.prototype, "animate");
@@ -86,6 +84,9 @@ describe("ThinkingScanner", () => {
     const setTimeoutSpy = vi.spyOn(window, "setTimeout");
     const view = renderFleet();
     view.unmount();
+    // Cleared at the last unmount, not at the next tick: a tick that outlived
+    // its document would fire after the page (or a test's DOM) is gone.
+    expect(vi.getTimerCount()).toBe(0);
     act(() => { vi.advanceTimersByTime(THINKING_SCAN_PERIOD_MS * 3); });
     expect(calls).toHaveLength(0);
     expect(setTimeoutSpy).toHaveBeenCalledTimes(1);
@@ -149,6 +150,6 @@ describe("ThinkingScanner under reduced motion", () => {
     expect(scan.cancel).toHaveBeenCalledTimes(1);
     expect(other.cancel).not.toHaveBeenCalled();
     cleanup();
-    act(() => { vi.advanceTimersByTime(fresh.THINKING_SCAN_PERIOD_MS); });
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
