@@ -2163,6 +2163,16 @@ type ThreadPullRequestCanonicalizer = (
 
 type LocalPullRequestAuthorityResolver = (prKey: string) => boolean;
 
+/**
+ * Asks the forge which repository a PR URL names now. A renamed repository's
+ * old URL still resolves, and the answer carries the current name. Undefined
+ * means the forge could not say (offline, no CLI, budget, not found).
+ */
+type PullRequestReferenceResolver = (params: {
+  url: string;
+  cwd?: string;
+}) => Promise<Pick<PullRequestReferenceIdentity, "provider" | "org" | "repo" | "url"> | undefined>;
+
 type ThreadPullRequestWatchToolHandler = (
   args: WatchThreadPullRequestToolArgs,
 ) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
@@ -9896,7 +9906,11 @@ export class DesktopBackendRegistry {
     const url = readRecord(result)?.url;
     if (typeof url !== "string") return result;
     try {
-      const attached = await this.handleAttachThreadPullRequestInspectionRequest({ backend: context.backend, threadId: context.threadId, url });
+      // The forge just returned this URL, so it already names the repository.
+      const attached = await this.handleAttachThreadPullRequestInspectionRequest(
+        { backend: context.backend, threadId: context.threadId, url },
+        { forgeUrl: true },
+      );
       return { ...readRecord(result), attachedToThread: attached.ok };
     } catch (error) {
       backendRegistryLog.warn("could not attach created pull request", { threadId: context.threadId, error: String(error) });
@@ -10348,6 +10362,9 @@ export class DesktopBackendRegistry {
     | undefined;
   private threadPullRequestCanonicalizer:
     | ThreadPullRequestCanonicalizer
+    | undefined;
+  private pullRequestReferenceResolver:
+    | PullRequestReferenceResolver
     | undefined;
   private localPullRequestAuthorityResolver:
     | LocalPullRequestAuthorityResolver
@@ -12426,6 +12443,12 @@ export class DesktopBackendRegistry {
     canonicalizer: ThreadPullRequestCanonicalizer | null | undefined,
   ): void {
     this.threadPullRequestCanonicalizer = canonicalizer ?? undefined;
+  }
+
+  setPullRequestReferenceResolver(
+    resolver: PullRequestReferenceResolver | null | undefined,
+  ): void {
+    this.pullRequestReferenceResolver = resolver ?? undefined;
   }
 
   private threadPrimaryGitRepositoryReader?: (backend: AppServerBackendKind, threadId: string) => string | undefined;
@@ -46981,6 +47004,7 @@ export class DesktopBackendRegistry {
 
   private async handleAttachThreadPullRequestInspectionRequest(
     args: AttachThreadPullRequestToolArgs,
+    options: { forgeUrl?: boolean } = {},
   ): Promise<PwrAgentThreadInspectionResponse> {
     if (!args.backend || !isAppServerBackendKind(args.backend)) {
       return {
@@ -47026,18 +47050,21 @@ export class DesktopBackendRegistry {
       };
     }
 
+    const ref = options.forgeUrl
+      ? resolved.ref
+      : await this.resolveForgePullRequestReference(resolved.ref, summary);
     const pr: PrSummary = {
-      provider: normalizePullRequestProvider(resolved.ref.provider),
-      org: resolved.ref.org,
-      repo: resolved.ref.repo,
-      number: resolved.ref.number,
+      provider: normalizePullRequestProvider(ref.provider),
+      org: ref.org,
+      repo: ref.repo,
+      number: ref.number,
       ...(args.title?.trim() ? { title: args.title.trim() } : {}),
       state: "pending",
       checkState: "pending",
       lifecycleState: "open",
       reviewState: "ready_for_review",
       mergeState: "unknown",
-      url: resolved.ref.url,
+      url: ref.url,
     };
 
     const overlay = await this.overlayStore.addThreadPullRequestReference({
@@ -47045,7 +47072,9 @@ export class DesktopBackendRegistry {
       threadId,
       pr,
     });
-    const prs = overlay.prs ?? [];
+    // Rows stored before the forge named a renamed repository collapse here,
+    // so the tool reply and the chips show one PR.
+    const prs = (await this.projectCanonicalPullRequests(overlay))?.prs ?? [];
     await this.publishLocalEvent({
       backend: args.backend,
       notification: {
@@ -47068,6 +47097,49 @@ export class DesktopBackendRegistry {
         },
       },
     };
+  }
+
+  /**
+   * The identity the forge gives a PR the agent named. Attaching never fails
+   * because the forge cannot answer; it keeps the typed identity, and a later
+   * lookup's by-URL refresh merges the rows.
+   */
+  private async resolveForgePullRequestReference(
+    ref: PullRequestReferenceIdentity,
+    summary: ThreadInspectionSummary,
+  ): Promise<PullRequestReferenceIdentity> {
+    if (!this.pullRequestReferenceResolver) return ref;
+    const directory = summary.linkedDirectories[0];
+    const cwd = directory?.worktreePath?.trim() || directory?.path.trim() || undefined;
+    try {
+      const resolved = await this.pullRequestReferenceResolver({
+        url: ref.url,
+        ...(cwd ? { cwd } : {}),
+      });
+      const parsed = parsePullRequestReferenceUrl(resolved?.url);
+      if (
+        !resolved
+        || normalizePullRequestProvider(resolved.provider) !== normalizePullRequestProvider(ref.provider)
+        || parsed?.number !== ref.number
+      ) {
+        return ref;
+      }
+      return {
+        ...ref,
+        provider: normalizePullRequestProvider(resolved.provider),
+        org: resolved.org,
+        repo: resolved.repo,
+        url: resolved.url,
+        ...(parsed?.kind ? { kind: parsed.kind } : {}),
+        ...(parsed?.urlBase ? { urlBase: parsed.urlBase } : {}),
+      };
+    } catch (error) {
+      backendRegistryLog.warn("could not resolve pull request reference with its forge", {
+        url: ref.url,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return ref;
+    }
   }
 
   private async readThreadInspectionSummaryForMutation(params: {
@@ -47210,8 +47282,13 @@ export class DesktopBackendRegistry {
         explicitProvider && explicitProvider !== parsedUrl.provider
           ? "provider"
           : undefined,
-        explicitOrg && explicitOrg !== parsedUrl.org ? "org" : undefined,
-        explicitRepo && explicitRepo !== parsedUrl.repo ? "repo" : undefined,
+        // Forges fold the case of owner and repository names.
+        explicitOrg && explicitOrg.toLowerCase() !== parsedUrl.org.toLowerCase()
+          ? "org"
+          : undefined,
+        explicitRepo && explicitRepo.toLowerCase() !== parsedUrl.repo.toLowerCase()
+          ? "repo"
+          : undefined,
       ].filter((field): field is string => Boolean(field));
       if (conflicts.length > 0) {
         return {
@@ -47232,8 +47309,9 @@ export class DesktopBackendRegistry {
     }
 
     const provider = explicitProvider ?? parsedUrl?.provider;
-    const org = explicitOrg || parsedUrl?.org;
-    const repo = explicitRepo || parsedUrl?.repo;
+    // The URL's casing wins over fields that match it case-insensitively.
+    const org = parsedUrl?.org || explicitOrg;
+    const repo = parsedUrl?.repo || explicitRepo;
     if (provider && org && repo) {
       return {
         ok: true,

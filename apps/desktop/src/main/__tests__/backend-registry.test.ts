@@ -51526,6 +51526,168 @@ script = "printf setup"
     await registry.close();
   });
 
+  async function attachRenamedRepositoryPullRequest(params: {
+    resolver?: (request: { url: string; cwd?: string }) => Promise<
+      { provider: string; org: string; repo: string; url: string } | undefined
+    >;
+    arguments: Record<string, unknown>;
+  }) {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "target-thread",
+          title: "Renamed repository work",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          updatedAt: 2000,
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:agent-thread": createAgentOverlay(),
+        "codex:target-thread": {
+          backend: "codex",
+          threadId: "target-thread",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          prs: [
+            {
+              provider: "github.com",
+              org: "pwrdrvr",
+              repo: "PwrAgent",
+              number: 3179,
+              title: "Found by the branch lookup",
+              state: "passing",
+              checkState: "passing",
+              lifecycleState: "open",
+              reviewState: "ready_for_review",
+              mergeState: "unknown",
+              url: "https://github.com/pwrdrvr/PwrAgent/pull/3179",
+            },
+          ],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+    });
+    const resolver = params.resolver ? vi.fn(params.resolver) : undefined;
+    if (resolver) registry.setPullRequestReferenceResolver(resolver);
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "attach_thread_pull_request",
+        arguments: {
+          backend: "codex",
+          threadId: "target-thread",
+          ...params.arguments,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "target-thread",
+    });
+    const published = events.flatMap((event) =>
+      event.notification.method === "thread/pullRequests/updated"
+        ? [(event.notification.params as { prs: PrSummary[] }).prs]
+        : []
+    );
+    await registry.close();
+    return { overlay, published, resolver, response };
+  }
+
+  it("stores a pre-rename PR URL under the forge's canonical repository", async () => {
+    // GitHub redirects a renamed repository's old name and answers with the
+    // new one. The attach must store the forge's identity, not the typed one,
+    // or the same PR shows as two chips.
+    const { overlay, published, resolver, response } = await attachRenamedRepositoryPullRequest({
+      resolver: async () => ({
+        provider: "github.com",
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/3179",
+      }),
+      arguments: { url: "https://github.com/pwrdrvr/PwrAgnt/pull/3179" },
+    });
+
+    expect(response).toMatchObject({ success: true });
+    expect(overlay?.prs?.map((pr) => pr.url)).toEqual([
+      "https://github.com/pwrdrvr/PwrAgent/pull/3179",
+    ]);
+    expect(overlay?.prs?.[0]).toMatchObject({
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      number: 3179,
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3179",
+    });
+    expect(published).toHaveLength(1);
+    expect(published[0]).toHaveLength(1);
+    expect(published[0]![0]).toMatchObject({
+      repo: "PwrAgent",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3179",
+    });
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+      url: "https://github.com/pwrdrvr/PwrAgnt/pull/3179",
+    }));
+  });
+
+  it("keeps the typed PR identity when the forge cannot resolve it", async () => {
+    const { overlay, response } = await attachRenamedRepositoryPullRequest({
+      resolver: async () => undefined,
+      arguments: { url: "https://github.com/pwrdrvr/OtherRepo/pull/42" },
+    });
+
+    expect(response).toMatchObject({ success: true });
+    expect(overlay?.prs?.map((pr) => pr.url)).toEqual([
+      "https://github.com/pwrdrvr/PwrAgent/pull/3179",
+      "https://github.com/pwrdrvr/OtherRepo/pull/42",
+    ]);
+    expect(overlay?.prs?.[1]).toMatchObject({ org: "pwrdrvr", repo: "OtherRepo", number: 42 });
+  });
+
+  it("accepts explicit repo fields that differ from the URL only by letter case", async () => {
+    const { overlay, response } = await attachRenamedRepositoryPullRequest({
+      arguments: {
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/3179",
+        org: "PWRDRVR",
+        repo: "pwragent",
+      },
+    });
+
+    expect(response).toMatchObject({ success: true });
+    expect(overlay?.prs).toHaveLength(1);
+    expect(overlay?.prs?.[0]).toMatchObject({
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3179",
+    });
+  });
+
   it("defaults PR reference attachment to the invoking thread", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
