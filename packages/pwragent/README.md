@@ -50,6 +50,19 @@ stop the daemon, install the selected version, and start it again. Do not remove
 the PwrAgent root, Codex home or workspace during updates. There is no automatic
 CLI updater or automatic systemd enablement.
 
+`pwragent --version` prints the installed package version. A published package
+also prints its release tag and source commit, for example
+`pwragent 1.3.8 (v1.3.8, commit 0123…)`. `pwragent version` prints the same
+fields as JSON. Neither needs a running daemon.
+
+`pwragent status` reports the daemon's version as `running`, read when that
+daemon started, and the package files as `installed`. `restartRequired` is
+`true` when they differ, so the update has not taken effect yet. A daemon
+started before version reporting has no `running` field and also reports
+`true`. Run `status` from the same installation as the daemon, such as the
+`/opt/pwragent` path in the systemd example; another installation compares its
+own files.
+
 ## systemd installation example
 
 On a Linux host with systemd, an administrator must first create the dedicated
@@ -91,7 +104,8 @@ sudo -u pwragent env PWRAGENT_HOME=/var/lib/pwragent PWRAGENT_PROFILE=outpost \
 For a service update, finish or interrupt active work, run
 `sudo systemctl stop pwragent-headless.service`, repeat the prefix installation
 with the chosen new version (or `pwragent@latest`), then run
-`sudo systemctl start pwragent-headless.service`. Compare the new example unit
+`sudo systemctl start pwragent-headless.service`. Run the `status` command above
+and check that `restartRequired` is `false`. Compare the new example unit
 with the installed one before deliberately updating it; npm does not overwrite
 `/etc/systemd/system`. Stopping during a turn can leave its outcome `unknown`.
 
