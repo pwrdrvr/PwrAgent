@@ -8630,7 +8630,7 @@ describe("app server ipc", () => {
     prefix: string,
     run: (fixture: {
       store: InstanceType<typeof import("../state/overlay-store-sqlite").SqliteOverlayStore>;
-      db: InstanceType<typeof import("../state/state-db").StateDb>;
+      db: import("../state/state-db").StateDb;
       refresh: (request: RefreshThreadPullRequestsRequest) => Promise<PrSummary[]>;
     }) => Promise<T>,
   ): Promise<T> {
