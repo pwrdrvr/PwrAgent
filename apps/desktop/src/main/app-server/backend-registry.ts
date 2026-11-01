@@ -1646,6 +1646,8 @@ function shouldRepairCachedDirectoryRelationship(params: {
   }
 
   if (params.directory.kind === "worktree") {
+    // An attached sibling from the same repository does not cache the primary
+    // cwd's relationship. Repair the primary without replacing that sibling.
     return true;
   }
 
@@ -30817,6 +30819,7 @@ export class DesktopBackendRegistry {
     gitBranch?: string;
     threadId: string;
     retainWorktree?: LinkedDirectorySummary;
+    preserveOtherWorktrees?: boolean;
   }): Promise<ThreadOverlayState> {
     const overlay =
       await this.overlayStore.replaceWorkspaceLinkedDirectory(params);
@@ -30967,6 +30970,7 @@ export class DesktopBackendRegistry {
         backend: "codex",
         threadId: params.threadId,
         directory,
+        preserveOtherWorktrees: true,
       });
       this.invalidateThreadListCache("codex");
       await this.emitCodexDirectoryRelationshipsUpdated({
@@ -32108,6 +32112,7 @@ export class DesktopBackendRegistry {
           backend: "codex",
           threadId: thread.id,
           directory,
+          preserveOtherWorktrees: true,
         });
     }
 
@@ -32209,6 +32214,7 @@ export class DesktopBackendRegistry {
             backend: "codex",
             threadId: thread.id,
             directory,
+            preserveOtherWorktrees: true,
           });
       }
 
