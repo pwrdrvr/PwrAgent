@@ -19,6 +19,7 @@ import { useFederationPeerConnectivity } from "../../lib/useFederationPeerConnec
 import { SettingsIcon } from "../../icons/SettingsIcon";
 import { useMessagingPlatformStatuses } from "./useMessagingPlatformStatuses";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { statusPulseRef } from "../../lib/status-pulse";
 
 const HEALTH_LABEL: Record<MessagingPlatformHealth, string> = {
   enabled: "Enabled",
@@ -521,6 +522,7 @@ function PlatformGlyph(props: {
           blink ? " status-dot--blink" : ""
         }`}
         aria-hidden="true"
+        ref={blink ? statusPulseRef : undefined}
       />
     </span>
   );

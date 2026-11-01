@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import type { AutomationDetail, NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatRunningDurationMs } from "../../lib/format-duration";
+import { statusPulseRef } from "../../lib/status-pulse";
 import { SignalCount } from "../../components/SignalCount";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 import { useNowWhileActive } from "../thread-detail/context-panels/RailCardTiming";
@@ -121,6 +122,7 @@ export function ActiveAutomationRunsStrip(props: {
                     ? "status-dot status-dot--error"
                     : "status-dot status-dot--active status-dot--blink"
                 }
+                ref={failedRow ? undefined : statusPulseRef}
               />
               <span className="live-strip__item-text" title={automation.name}>
                 {automation.name}
