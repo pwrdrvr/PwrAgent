@@ -800,7 +800,7 @@ describe("PluginsSettings", () => {
     for (const name of ["Reauthorize", "Disconnect", "Edit", "Remove"]) {
       expect(datadogRow.getByRole("button", { name })).toBeEnabled();
     }
-    expect(screen.getByLabelText("Remote MCP URL")).toBeEnabled();
+    expect(screen.getByLabelText("MCP server URL")).toBeEnabled();
 
     // So a second sign-in can run beside the first.
     fireEvent.click(datadogRow.getByRole("button", { name: "Reauthorize" }));

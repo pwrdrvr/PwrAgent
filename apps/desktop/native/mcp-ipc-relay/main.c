@@ -95,7 +95,6 @@ static DWORD WINAPI copy_bytes(void *arg) {
    * on the other thread. Windows cancels process-owned synchronous I/O.
    */
   ExitProcess(0);
-  return 0;
 }
 
 int wmain(int argc, wchar_t **argv) {
@@ -109,7 +108,6 @@ int wmain(int argc, wchar_t **argv) {
   HANDLE worker = CreateThread(NULL, 0, copy_bytes, &up, 0, NULL);
   if (!worker) fail("cannot start relay");
   copy_bytes(&down);
-  return 0;
 }
 #else
 #include <errno.h>
