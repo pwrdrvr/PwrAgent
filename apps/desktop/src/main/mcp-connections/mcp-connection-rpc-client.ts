@@ -29,6 +29,7 @@ export class ConnectionRpcClient {
       const socket: Socket = connect(this.socketPath);
       let buffer = "";
       let settled = false;
+      let attached = false;
       const finish = (attached: boolean): void => {
         if (settled) return;
         settled = true;
@@ -52,6 +53,7 @@ export class ConnectionRpcClient {
             const response = JSON.parse(line) as RpcResponse & { event?: McpBridgeEvent };
             if (!settled) {
               if (response.ok) socket.unref();
+              attached = response.ok;
               finish(response.ok);
             } else if (response.event && typeof response.event.method === "string") {
               onEvent?.(response.event);
@@ -64,7 +66,7 @@ export class ConnectionRpcClient {
       });
       socket.on("error", () => finish(false));
       socket.on("close", () => {
-        if (settled) onEvent?.({ method: "connection/closed" });
+        if (attached) onEvent?.({ method: "connection/closed" });
         finish(false);
       });
     });

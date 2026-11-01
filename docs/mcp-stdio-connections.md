@@ -162,3 +162,43 @@ agent receives PwrAgent's one-sentence message, never server output.
 - Tools a server adds after an agent has loaded its bridge reach that agent
   through the fixed gateway entry tools, or after the agent reloads its MCP
   servers.
+
+## Desktop-owned session contract
+
+A desktop relay is a local command whose MCP surface belongs to an already
+running application. PwrAgent starts the configured relay only. The built-in
+PwrSnap and PwrGit Connect flows also require a running endpoint; they do not
+launch an installed desktop as a side effect of connecting.
+
+The native bridge forwards the upstream initialization identity, instructions
+and `_meta`, including desktop/relay versions when the server supplies them.
+Gateway search returns those identities in `servers`. Ownership metadata stays
+as supplied: a standalone process is not described as desktop-authoritative.
+Application release numbers are not a compatibility test or a reason to stop
+a live session.
+
+Tool revisions bind to the actual upstream session as well as its definitions
+and authorization generation. Every gateway call lists and validates again
+after approval. A replacement session therefore cannot consume an outstanding
+approval, even if its tool definition is byte-identical. Calls are never
+replayed on failure. Existing connection-wide consent remains tied to the
+catalog and authorization; a new schema does not broaden it.
+
+The native bridge advertises upstream tool, prompt and resource list-change
+capabilities. Supported notifications travel over the existing authenticated
+attach socket. Resource subscriptions are explicit and their update
+notifications are forwarded; PwrAgent keeps no resource-content cache here.
+A tool-list change also invalidates the separate Settings tool-name cache.
+The SDK still owns protocol negotiation; the metadata transport preserves
+initialize extensions without replacing its negotiation or client capability
+handling.
+
+Stdio EOF ends the native bridge and blocks reopening that grant implicitly.
+The error instructs the operator to start the desktop independently, turn the
+connection off and on in the thread MCP access panel, then rediscover tools
+and reread relevant skills/resources. A native host must reconnect its MCP
+bridge to receive fresh initialization data. Already injected instructions
+or resource text can remain in conversation history. Neither a reconnect nor
+fresh discovery authorizes replaying writes or reusing elicitation responses.
+The existing off/on action is explicit and leaves other threads' sessions
+alone; discovery refresh does not terminate active sessions.

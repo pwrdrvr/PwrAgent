@@ -22,6 +22,7 @@ export class McpInitializationTransport implements Transport {
       if ("result" in message && message.id === this.initializeId) {
         const parsed = InitializeResultSchema.safeParse(message.result);
         if (parsed.success) this.initialization = parsed.data;
+        this.initializeId = undefined;
       }
       this.onmessage?.(message, extra);
     };
@@ -32,8 +33,11 @@ export class McpInitializationTransport implements Transport {
     if ("method" in message && message.method === "initialize" && "id" in message) this.initializeId = message.id;
     // Leave negotiation and client capabilities with the SDK. Only restore
     // metadata from the upstream handshake on the bridge's matching answer.
-    if (this.metadata && "result" in message && message.id === this.initializeId) {
-      message = { ...message, result: { ...message.result, _meta: this.metadata } };
+    if ("result" in message && message.id === this.initializeId) {
+      if (this.metadata) {
+        message = { ...message, result: { ...message.result, _meta: this.metadata } };
+      }
+      this.initializeId = undefined;
     }
     await this.inner.send(message, options);
   }

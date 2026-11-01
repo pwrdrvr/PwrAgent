@@ -202,8 +202,6 @@ export type McpConnectionGatewayServiceOptions = {
   fetchFn?: FetchLike;
   openExternal?: (url: string) => Promise<void>;
   openPath?: (path: string) => Promise<string>;
-  launchPollAttempts?: number;
-  launchPollDelayMs?: number;
   resolveInstallPaths?: () => string[];
   settings?: GatewaySettings;
   registry?: McpConnectionRegistry;
@@ -268,9 +266,7 @@ function resolveDefaultPwrSnapInstallPaths(): string[] {
   ];
 }
 
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
+
 
 /**
  * The page the browser lands on after the MCP server's authorization screen.
@@ -495,8 +491,6 @@ export class McpConnectionGatewayService {
       >
     | null;
   private readonly brokerDiscovery: McpConnectionBrokerDiscovery;
-  private readonly launchPollAttempts: number;
-  private readonly launchPollDelayMs: number;
   private bridgeServer?: NetServer;
   private bridgeSocketPath?: string;
   private bridgeSocketDirectory?: string;
@@ -633,8 +627,6 @@ export class McpConnectionGatewayService {
       : options.leaseManager;
     this.brokerDiscovery =
       options.brokerDiscovery ?? new McpConnectionBrokerDiscovery();
-    this.launchPollAttempts = options.launchPollAttempts ?? 16;
-    this.launchPollDelayMs = options.launchPollDelayMs ?? 500;
     this.stdioSecrets = options.stdioSecrets ?? new McpStdioSecretVault(
       hasStdioSecretStore(this.settings) ? { settings: this.settings } : {},
     );
@@ -2016,19 +2008,10 @@ export class McpConnectionGatewayService {
 
   private async connectNow(): Promise<ConnectPwrSnapResponse> {
     if (!(await this.isEndpointAvailable())) {
-      if (this.findInstalledPath()) {
-        await this.openApplication();
-        for (let attempt = 0; attempt < this.launchPollAttempts; attempt += 1) {
-          await delay(this.launchPollDelayMs);
-          if (await this.isEndpointAvailable()) break;
-        }
-      }
-      if (!(await this.isEndpointAvailable())) {
-        return {
-          outcome: "needs_local_agent_access",
-          status: await this.readStatus(),
-        };
-      }
+      return {
+        outcome: "needs_local_agent_access",
+        status: await this.readStatus(),
+      };
     }
 
     await this.authorizeConnection(PWRSNAP_MCP_CONNECTION_ID);
@@ -2697,6 +2680,7 @@ export class McpConnectionGatewayService {
     const session = this.upstreamSessions.get(token);
     this.upstreamSessions.delete(token);
     if (!session) return;
+    this.sendBridgeEvent(token, { method: "connection/closed" });
     await session.client.close().catch(async () => {
       await session.transport.close().catch(() => undefined);
     });
