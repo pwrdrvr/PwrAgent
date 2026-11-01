@@ -8,14 +8,13 @@ import { launchElectronApp } from "./fixtures/electron-app";
 /**
  * Windows pipe-holder probe.
  *
- * Windows Desktop E2E lanes intermittently pass every test and then fail
- * worker teardown in `registered-processes`: Playwright's Electron launcher
- * (`cmd.exe`, because `_electron.launch()` uses `shell: true` on win32) has
- * exited with code 0, but its stdio pipes never close, so the launcher's
- * `gracefullyClose` stays registered until the 30s worker teardown budget runs
- * out. The owning test's fixture close logged `gracefulCloseOutcome: "timeout"`
- * with `forceExitOutcome: "not-needed"`: `hasExited()` saw the exited launcher
- * and skipped the tree kill, while something else still held the pipes.
+ * Windows Desktop E2E can fail worker teardown in `registered-processes`
+ * after native Electron exits with code 0 but its stdio pipes remain open.
+ * Playwright launches native Windows Electron without a shell; its process
+ * PID is the Electron main PID. Only explicit .cmd/.bat wrappers use cmd.exe.
+ * An older failure had `forceExitOutcome: "not-needed"`; CI job 124557904187
+ * instead recorded `forceExitOutcome: "timed-out"` with all four pipes open.
+ * Neither late snapshot identifies the process retaining those handles.
  *
  * The CI process-tree snapshot cannot name that holder: it walks descendants
  * from live tracked PIDs, and the chain breaks at the dead launcher. This probe
@@ -493,6 +492,7 @@ async function probeLaunch(params: {
     trackedProcesses: [...tracker.processes.values()].slice(0, 80).map((tracked) => ({
       pid: tracked.pid,
       ppid: tracked.ppid,
+      started: tracked.started,
       process: describeProcess(tracked),
       firstSeenBeforeQuitMs: quitStartedAt - tracked.firstSeenAt,
       goneAfterMainMs: tracked.goneAt === undefined || mainGoneAt === undefined

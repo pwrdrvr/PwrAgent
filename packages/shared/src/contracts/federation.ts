@@ -16,6 +16,7 @@ export const FEDERATION_CAPABILITIES = [
   "navigation_snapshot_deltas",
   "navigation_group_invalidations",
   "thread_grouping",
+  "archive_subthread_promotion_v1",
   "thread_parent_mutation_v1",
   "thread_detail",
   "turn_control",
@@ -70,6 +71,8 @@ export const FEDERATION_CAPABILITIES = [
    * card with its model chip only.
    */
   "thread_todo_dispatch_target",
+  /** The owner accepts messageTarget on a handoff instead of starting a thread. */
+  "thread_todo_message",
   /**
    * The owner answers `threadTodos.raisePlan`, raising a handoff card's
    * steps as the started thread's own `plan` card. A viewer starting a

@@ -368,6 +368,8 @@ jobs:
           cache-electron: "true"
 
       - name: Test
+        env:
+          PWRAGENT_UNBORN_WORKSPACE_TRACE: "1"
         timeout-minutes: 20
         # Keep a common MSYS parent alive while parallel workers launch Git
         # and Bash. Independent starts from PowerShell can race MSYS shared
@@ -957,6 +959,22 @@ jobs:
           working-directory: .
           cache-electron: "true"
 
+      - name: Prepare official Windows handle diagnostics
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $diagnosticToolDirectory = Join-Path $env:RUNNER_TEMP "pwragent-pipe-handles"
+          New-Item -ItemType Directory -Path $diagnosticToolDirectory -Force | Out-Null
+          $diagnosticArchive = Join-Path $diagnosticToolDirectory "Handle.zip"
+          Invoke-WebRequest "https://download.sysinternals.com/files/Handle.zip" -OutFile $diagnosticArchive
+          Expand-Archive -LiteralPath $diagnosticArchive -DestinationPath $diagnosticToolDirectory -Force
+          $diagnosticHandlePath = Join-Path $diagnosticToolDirectory "handle64.exe"
+          $diagnosticSignature = Get-AuthenticodeSignature -LiteralPath $diagnosticHandlePath
+          if ($diagnosticSignature.Status -ne "Valid" -or $diagnosticSignature.SignerCertificate.Subject -notmatch "(^|, )O=Microsoft Corporation(,|$)") {
+            throw "Official Handle signature verification failed; diagnostics will be unavailable."
+          }
+          "PWRAGENT_WINDOWS_HANDLE_EXE=$diagnosticHandlePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Run desktop replay-backed Electron tests
         # windows-latest provides an interactive desktop session, so unlike the
         # Linux lane this needs neither xvfb nor a window manager.
@@ -969,7 +987,7 @@ jobs:
         env:
           PWTEST_SHARD_WEIGHTS: "9:12:12:14"
         run: >-
-          pnpm --filter @pwragent/desktop test:e2e
+          pnpm test:desktop-e2e:windows-diagnostics
           --shard=${{ matrix.lane }}/4
 
       - name: Upload desktop Playwright artifacts

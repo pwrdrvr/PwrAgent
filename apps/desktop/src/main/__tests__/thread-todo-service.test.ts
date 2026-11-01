@@ -80,6 +80,53 @@ describe("ThreadTodoService", () => {
     expect(reopened).toMatchObject({ title: "Check the docs", cwd: "/repo", kind: "reminder" });
   });
 
+  it("sends a proposed request only on click, preserves the prompt, and budgets the card completion", async () => {
+    const sendMessage = vi.fn(async () => ({ summary: "Sent to PR owner" }));
+    const startThread = vi.fn();
+    const service = createService({ mergePullRequest: vi.fn(), startThread, sendMessage });
+    const target = { backend: "codex" as const, threadId: "pr-owner", title: "PR owner" };
+    const prompt = "Refresh #42.\n\nKeep the owner's existing worktree.";
+    const { todo } = service.add({ ...THREAD, input: {
+      title: "Refresh the PR", items: ["Resolve the conflict"],
+      action: { type: "send_message", target, prompt },
+    } });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(todo.kind).toBe("handoff");
+    const { writes, result } = await measureSqliteWrites(() => service.runAction(todo.id));
+    expect(result).toMatchObject({ status: "done", result: "Sent to PR owner" });
+    expect(sendMessage).toHaveBeenCalledWith({ sourceBackend: THREAD.backend, sourceThreadId: THREAD.threadId, target, prompt });
+    expect(startThread).not.toHaveBeenCalled();
+    expectSqliteWriteBudget({ scenario: "thread-todo-send-message", writes,
+      note: "One operator Send click: one card-completion commit, no idle or per-event writes; ~8 KB/send, ~0.4 MB/day at 50 sends. Existing correspondence and queue budgets cover delivery." });
+  });
+
+  it("redirects an existing start-thread proposal and leaves a failed send open", async () => {
+    const sendMessage = vi.fn().mockRejectedValueOnce(new Error("Owner is offline"))
+      .mockResolvedValue({ summary: "Sent to owner" });
+    const startThread = vi.fn();
+    const service = createService({ mergePullRequest: vi.fn(), startThread, sendMessage });
+    const { todo } = service.add({ ...THREAD, input: {
+      title: "Refresh the PR", action: { type: "start_thread", prompt: "Refresh #42" },
+    } });
+    const messageTarget = { backend: "codex" as const, threadId: "owner", instanceId: "peer" };
+    expect(await service.runAction(todo.id, { messageTarget })).toMatchObject({ status: "open", error: "Owner is offline" });
+    expect(await service.runAction(todo.id, { messageTarget })).toMatchObject({ status: "done" });
+    expect(startThread).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps prerequisites blocking and rejects sending to the raising thread", async () => {
+    const sendMessage = vi.fn();
+    const service = createService({ mergePullRequest: vi.fn(), startThread: vi.fn(), sendMessage });
+    const { todo } = service.add({ ...THREAD, input: {
+      title: "Refresh the PR", prerequisites: ["Restore the peer"],
+      action: { type: "send_message", prompt: "Refresh #42", target: THREAD },
+    } });
+    await expect(service.runAction(todo.id)).rejects.toThrow(/prerequisite/);
+    expect(await service.runAction(todo.id, { allowOpenItems: true })).toMatchObject({ status: "open", error: expect.stringContaining("Do it here") });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("replaces an open card with the same key instead of stacking it", () => {
     const service = createService();
     service.add({ ...THREAD, input: { key: "review", title: "Ready for review" } });
