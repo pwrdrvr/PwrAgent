@@ -19096,6 +19096,21 @@ script = "echo setup"
         });
         await registry.refreshThreadDirectoryRelationship(identity);
         expect(replaceWorkspace).not.toHaveBeenCalled();
+        await registry.publishLocalEvent({ backend: "codex", notification: {
+          method: "turn/started",
+          params: { threadId: thread.id, turnId: "move-turn", turn: { id: "move-turn" } },
+        } });
+        const moveResponse = await codexClient.emitRequest({
+          method: "item/tool/call", params: {
+            threadId: thread.id, turnId: "move-turn", callId: "implicit-move", requestId: "implicit-move",
+            namespace: "pwragent", tool: "move_thread_workspace", arguments: {},
+          },
+        } as AppServerPendingRequestNotification);
+        expect(moveResponse).toMatchObject({ success: true });
+        const move = JSON.parse((moveResponse as { contentItems: Array<{ text: string }> }).contentItems[0]!.text);
+        expect(move).toMatchObject({
+          status: "queued", direction: "worktree-to-worktree", repositoryPath, sourcePath: primaryPath,
+        });
         await registry.close();
         db.close();
         const reopenedDb = StateDb.open(temp.dbPath);
