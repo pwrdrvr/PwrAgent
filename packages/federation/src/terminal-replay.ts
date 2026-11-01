@@ -91,9 +91,9 @@ export class TerminalReplay {
 
   resize(cols: number, rows: number): void {
     this.queue = this.queue.then(() => {
-      const before = `${this.terminal.cols}x${this.terminal.rows}`;
+      const { cols: beforeCols, rows: beforeRows } = this.terminal;
       this.terminal.resize(clampTerminalColumns(cols), clampTerminalRows(rows));
-      if (`${this.terminal.cols}x${this.terminal.rows}` !== before) this.serialized = undefined;
+      if (this.terminal.cols !== beforeCols || this.terminal.rows !== beforeRows) this.serialized = undefined;
     });
   }
 
@@ -106,19 +106,22 @@ export class TerminalReplay {
       this.serialized ??= this.serialize();
       return { ...this.serialized };
     });
-    this.queue = result.then(() => undefined);
+    // A failed snapshot must not stop later output from being parsed.
+    this.queue = result.then(() => undefined, () => undefined);
     return result;
   }
 
   private serialize(): TerminalSnapshot {
     let scrollback = 2_000;
     let data = this.serializer.serialize({ scrollback });
-    while (Buffer.byteLength(data) > TERMINAL_SNAPSHOT_LIMIT && scrollback > 0) {
+    let bytes = Buffer.byteLength(data);
+    while (bytes > TERMINAL_SNAPSHOT_LIMIT && scrollback > 0) {
       scrollback = Math.floor(scrollback / 2);
       data = this.serializer.serialize({ scrollback });
+      bytes = Buffer.byteLength(data);
     }
     const truncated = scrollback < 2_000;
-    if (Buffer.byteLength(data) > TERMINAL_SNAPSHOT_LIMIT) {
+    if (bytes > TERMINAL_SNAPSHOT_LIMIT) {
       // A pathological screen with an SGR change per cell can exceed the
       // byte cap even without scrollback. Keep safe text, never cut ANSI.
       data = this.plainText().slice(-64 * 1024).replace(/\n/g, "\r\n");
@@ -162,7 +165,7 @@ export class TerminalReplay {
       seq: this.parsedSeq,
       timestamp: this.updatedAt,
     }));
-    this.queue = result.then(() => undefined);
+    this.queue = result.then(() => undefined, () => undefined);
     return result;
   }
 

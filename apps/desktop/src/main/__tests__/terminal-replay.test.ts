@@ -141,6 +141,22 @@ describe("TerminalReplay snapshot budget", () => {
     expect(serializeCalls).toHaveBeenCalledTimes(3);
     await replay.dispose();
   });
+
+  it("keeps parsing output after a snapshot fails", async () => {
+    vi.spyOn(SerializeAddon.prototype, "serialize").mockImplementationOnce(() => {
+      throw new Error("serialize failed");
+    });
+    const replay = new TerminalReplay(80, 4);
+    replay.append("before\r\n", 1);
+    await expect(replay.snapshot()).rejects.toThrow("serialize failed");
+
+    replay.append("after", 2);
+    const snapshot = await replay.snapshot();
+    expect(snapshot).toMatchObject({ seq: 2, timestamp: 2 });
+    expect(snapshot.data).toContain("after");
+    expect(await replay.readPlain()).toMatchObject({ data: "before\nafter", seq: 2 });
+    await replay.dispose();
+  });
 });
 
 describe("TerminalHistoryStore", () => {
