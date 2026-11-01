@@ -18155,6 +18155,121 @@ script = "echo setup"
     await registry.close();
   });
 
+  it.each<{ name: string; messageOrigin: AppServerThreadMessageOrigin }>([
+    {
+      name: "a PR automation origin",
+      messageOrigin: {
+        kind: "pwragent",
+        prAutomation: {
+          kind: "auto-fix",
+          prKey: "github:pwrdrvr/example#42",
+          prNumber: 42,
+          prTitle: "Fix the widget",
+          failedCheckUrl: "https://github.com/pwrdrvr/example/actions/runs/1",
+          headSha: "abc123",
+        },
+      },
+    },
+    {
+      name: "a dependency origin",
+      messageOrigin: {
+        kind: "pwragent",
+        dependencyId: "dependency-1",
+        sourceThread: {
+          backend: "codex",
+          threadId: "thread-prerequisite",
+          title: "Prerequisite thread",
+        },
+      },
+    },
+  ])(
+    "keeps $name on the turn retried after an invalid message-ID repair",
+    async ({ messageOrigin }) => {
+      const threadId = "thread-invalid-id-retry-keeps-origin";
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+        startTurnResults: [
+          { threadId, turnId: "turn-failed-invalid-id" },
+          { threadId, turnId: "turn-retried-once" },
+        ],
+      });
+      const overlayStore = createOverlayStoreMock();
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore,
+        threadTitleGenerationService: null,
+      });
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => {
+        events.push(event);
+      });
+
+      await registry.startTurn({
+        backend: "codex",
+        threadId,
+        input: [{ type: "text", text: "automated prompt" }],
+        messageOrigin,
+      });
+      await codexClient.emit({
+        method: "turn/failed",
+        params: {
+          threadId,
+          turnId: "turn-failed-invalid-id",
+          turn: {
+            id: "turn-failed-invalid-id",
+            status: "failed",
+            error: {
+              message:
+                "[ApiIdParam] [input[2].id] [invalid_id_prefix] "
+                + "Invalid 'input[2].id': 'review_rollout_user'. "
+                + "Expected an ID that begins with 'msg'.",
+            },
+          },
+        },
+      });
+      await waitForCondition(() => codexClient.startTurnCallCount === 2);
+
+      await codexClient.emit({
+        method: "item/completed",
+        params: {
+          threadId,
+          turnId: "turn-retried-once",
+          item: {
+            id: "msg-automatic-retry",
+            type: "userMessage",
+            text: "automated prompt",
+          },
+        },
+      });
+      expect(
+        events.find(
+          (event) =>
+            event.notification.method === "item/completed"
+            && (
+              event.notification.params.item as { id?: string } | undefined
+            )?.id === "msg-automatic-retry",
+        ),
+      ).toMatchObject({
+        notification: {
+          params: {
+            item: { origin: messageOrigin },
+          },
+        },
+      });
+      expect(
+        await overlayStore.readThreadMessageOrigins?.({
+          backend: "codex",
+          threadId,
+          messageIds: ["msg-automatic-retry"],
+        }),
+      ).toEqual({
+        "msg-automatic-retry": messageOrigin,
+      });
+
+      await registry.close();
+    },
+  );
+
   describe("invalid message-ID recovery beside live turns on other threads", () => {
     const threadId = "019fb6c7-1545-77c1-be52-98f86cae3c11";
     const invalidIdFailure =

@@ -30219,7 +30219,12 @@ export class DesktopBackendRegistry {
           : await this.startTurnNow({
               ...recovery.params,
               invalidIdRecoveryAttempted: true,
-              messageOrigin: { kind: "pwragent" },
+              // Keep automation, messaging, dependency and monitor origins so
+              // the retried prompt keeps its card. Only a prompt with no
+              // origin is attributed to PwrAgent's resubmission.
+              messageOrigin:
+                resolveThreadMessageOrigin(recovery.params)
+                ?? { kind: "pwragent" },
             });
         recovery.audit = {
           ...recovery.audit,
