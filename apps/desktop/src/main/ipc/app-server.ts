@@ -270,6 +270,7 @@ import {
   isFederationInstanceId,
   isRemoteFederationTarget,
   type FederationTarget,
+  mergeThreadLinkedDirectories,
   normalizePullRequestProvider as normalizeSharedPullRequestProvider,
   parseThreadIdentityKey,
   rankInboxThreadKeys,
@@ -3025,18 +3026,44 @@ class DesktopAppServerService {
     prs: PrSummary[];
   }): Promise<void> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    const current = this.attachedPrsByThreadKey.get(threadKey);
+    const primaryRepoKey =
+      this.attachedPrsByThreadKey.get(threadKey)?.primaryRepoKey
+      ?? await this.resolveUncachedPrimaryRepoKey(params);
     this.setThreadPrAttachment(
       threadKey,
       {
         backend: params.backend,
-        ...(current?.primaryRepoKey
-          ? { primaryRepoKey: current.primaryRepoKey }
-          : {}),
+        ...(primaryRepoKey ? { primaryRepoKey } : {}),
         prs: params.prs,
       },
     );
     await this.syncThreadPrAutoDispatchCandidates(params);
+  }
+
+  /**
+   * The owner navigation refresh normally supplies a thread's primary
+   * repository. A thread created mid-session can attach and watch a PR before
+   * that refresh lists it; without this, its PR would not count as primary
+   * and the watch tool would refuse it until the next refresh.
+   */
+  private async resolveUncachedPrimaryRepoKey(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<string | undefined> {
+    const summary = getDesktopBackendRegistry().getCachedThreadSummary(params);
+    if (!summary) return undefined;
+    const overlay = await this.getOverlayStore().getThreadOverlayState(params);
+    const primaryRepoKey = await resolvePrimaryThreadRepoKey({
+      gitOriginUrl: summary.gitOriginUrl,
+      linkedDirectories: mergeThreadLinkedDirectories([
+        ...summary.linkedDirectories,
+        ...(overlay?.extraLinkedDirectories ?? []),
+      ]),
+    });
+    // A navigation refresh may have filled the cache while this resolved.
+    return this.attachedPrsByThreadKey.get(
+      buildThreadIdentityKey(params.backend, params.threadId),
+    )?.primaryRepoKey ?? primaryRepoKey;
   }
 
   readPrimaryGitRepository(backend: AppServerBackendKind, threadId: string): string | undefined {
@@ -4387,10 +4414,18 @@ class DesktopAppServerService {
       backend: args.backend,
       threadId,
     });
+    const overlayPrs = this.canonicalizePrs(overlay?.prs ?? []);
+    if (!this.readPrimaryGitRepository(args.backend, threadId)) {
+      await this.rememberThreadPrAttachmentUpdate({
+        backend: args.backend,
+        threadId,
+        prs: overlayPrs,
+      });
+    }
     const attachedPrs = this.primaryAttachedPrsForThread({
       backend: args.backend,
       threadId,
-      prs: this.canonicalizePrs(overlay?.prs ?? []),
+      prs: overlayPrs,
     });
     const requestedUrl = normalizePrWatchUrl(args.url);
     const matches = requestedUrl
