@@ -7,10 +7,11 @@ import {
   type MouseEvent,
 } from "react";
 import type { PrSummary } from "@pwragent/shared";
-import { CloseIcon } from "../../icons";
+import { CloseIcon, EyeIcon } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { observeElementVisibility } from "../../lib/observe-element-visibility";
 import { statusPulseRef } from "../../lib/status-pulse";
+import type { PrChipWatch } from "../pr-watches/useThreadPrWatchIndicators";
 import { PrChipContextMenu } from "./PrChipContextMenu";
 import type { PrBranchDrift } from "./pr-branch-drift";
 import {
@@ -39,6 +40,12 @@ type PrChipProps = {
    * card shows it as its Local branch section.
    */
   branchDrift?: PrBranchDrift;
+  /**
+   * What wakes this chip's thread for the PR. A CI watch draws the eye; the
+   * card lists every kind. Keep its identity stable for unchanged data, or the
+   * memo stops bailing out.
+   */
+  watch?: PrChipWatch;
   onOpen: (url: string) => void;
   onOpenContextMenu?: (
     pr: PrSummary,
@@ -76,11 +83,15 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
   // Creating this element is not rendering it: it stays an inert object until
   // `show` hands it to the portal on hover/focus, so a sidebar full of chips
   // mounts exactly zero cards.
+  // Only a supplied menu can stop a watch; the standalone menu copies.
+  const watchStopHint = Boolean(props.onOpenContextMenu);
   const card = (
     <PrStatusCard
       pr={pr}
       withStatusPills={props.withStatusPills}
       branchDrift={props.branchDrift}
+      watch={props.watch}
+      watchStopHint={watchStopHint}
     />
   );
   const latestCardRef = useRef(card);
@@ -117,6 +128,12 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
     props.branchDrift?.baseBranch,
     props.branchDrift?.behind,
     props.branchDrift?.ahead,
+    props.watch?.ci?.runAttempt,
+    props.watch?.ci?.notifyOn.join(","),
+    Boolean(props.watch?.ci),
+    Boolean(props.watch?.terminal),
+    Boolean(props.watch?.autoFix),
+    watchStopHint,
   ].join("|");
   const pushedCardKeyRef = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -130,9 +147,11 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
         pr={pr}
         withStatusPills={props.withStatusPills}
         branchDrift={props.branchDrift}
+        watch={props.watch}
+        watchStopHint={watchStopHint}
       />,
     );
-  }, [cardKey, pr, props.withStatusPills, props.branchDrift, tooltipVisible, updateTooltip]);
+  }, [cardKey, pr, props.withStatusPills, props.branchDrift, props.watch, watchStopHint, tooltipVisible, updateTooltip]);
 
   // `resolvePrChipPresentation` owns the draft / conflict / checks-running
   // rules, including the "defer to the sibling status pills" case, so the
@@ -168,7 +187,9 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
         role="button"
         tabIndex={0}
         aria-haspopup="menu"
-        aria-label={`Open ${pr.org}/${pr.repo}#${pr.number} (${status}) in browser`}
+        aria-label={`Open ${pr.org}/${pr.repo}#${pr.number} (${status}) in browser${
+          props.watch?.ci ? ", waiting for CI" : ""
+        }`}
         // The card's numbers are a DESCRIPTION, not part of this control's
         // name — packing them into the label makes every chip in a sidebar
         // read like a paragraph. The portal sits outside this subtree, so
@@ -219,6 +240,12 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
           ref={presentation.hasFailingChecksStillRunning ? statusPulseRef : undefined}
         />
         <span className="pr-chip__label">{label}</span>
+        {props.watch?.ci ? (
+          // Not a target: the chip is the control, and the card explains it.
+          <span className="pr-chip__watch" aria-hidden="true">
+            <EyeIcon size={12} />
+          </span>
+        ) : null}
         {props.onDetach ? (
           <span
             aria-label={`Detach ${pr.org}/${pr.repo}#${pr.number} from thread`}

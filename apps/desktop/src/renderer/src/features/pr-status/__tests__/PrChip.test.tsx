@@ -220,6 +220,70 @@ describe("PrChip", () => {
     expect(document.querySelector(".pr-status-card")).toBeNull();
   });
 
+  it("draws a muted eye for a CI watch only, and says so in the chip's name", () => {
+    const { container, rerender } = render(
+      <PrChip
+        pr={basePr()}
+        showRepoPrefix={false}
+        onOpen={vi.fn()}
+        watch={{ ci: { runAttempt: 2, createdAt: 1, notifyOn: ["success", "failure"] } }}
+      />,
+    );
+    const chip = container.querySelector(".pr-chip") as HTMLElement;
+    expect(chip).toHaveAccessibleName(
+      "Open pwrdrvr/PwrAgent#743 (ready for review · checks passing) in browser, waiting for CI",
+    );
+    const eye = chip.querySelector(".pr-chip__watch") as HTMLElement;
+    expect(eye).toHaveAttribute("aria-hidden", "true");
+    expect(eye).not.toHaveAttribute("tabindex");
+    expect(eye.querySelector("[tabindex], button, [role='button']")).toBeNull();
+    // The eye sits between the number and the detach control.
+    expect(eye.previousElementSibling).toHaveClass("pr-chip__label");
+
+    // A merge watch and Auto-fix are listed on the card, not drawn on the row.
+    rerender(
+      <PrChip
+        pr={basePr()}
+        showRepoPrefix={false}
+        onOpen={vi.fn()}
+        watch={{ terminal: { createdAt: 1 }, autoFix: true }}
+      />,
+    );
+    expect(chip.querySelector(".pr-chip__watch")).toBeNull();
+    expect(chip).toHaveAccessibleName(
+      "Open pwrdrvr/PwrAgent#743 (ready for review · checks passing) in browser",
+    );
+  });
+
+  it("lists what wakes the thread on the card, with the stop hint only where a menu can stop it", () => {
+    vi.useFakeTimers();
+    const watch = { ci: { runAttempt: 2, createdAt: 1, notifyOn: ["success", "failure"] as const } };
+    const { container } = render(
+      <PrChip
+        pr={basePr()}
+        showRepoPrefix={false}
+        onOpen={vi.fn()}
+        onOpenContextMenu={vi.fn()}
+        watch={watch}
+      />,
+    );
+    const chip = container.querySelector(".pr-chip") as HTMLElement;
+    fireEvent.mouseEnter(chip);
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    const card = document.querySelector(".pr-status-card") as HTMLElement;
+    expect(card.textContent).toContain("Wakes this thread");
+    expect(card.textContent).toContain("Waiting for CIattempt 2");
+    expect(card.textContent).toContain("Right-click the chip to stop a watch.");
+    fireEvent.mouseLeave(chip);
+    cleanup();
+
+    const standalone = renderChip(basePr());
+    expect(standalone.querySelector(".pr-chip__watch")).toBeNull();
+    fireEvent.mouseEnter(standalone);
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    expect(document.querySelector(".pr-status-card")?.textContent).not.toContain("Wakes this thread");
+  });
+
   it("opens delayed hover content with the latest PR data", () => {
     vi.useFakeTimers();
     const initialPr = basePr({

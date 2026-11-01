@@ -1,5 +1,11 @@
-import { memo, useState } from "react";
-import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
+import { memo, useEffect, useState } from "react";
+import type {
+  NavigationThreadSummary,
+  PrSummary,
+  ThreadPrWatchHistoryEntry,
+  ThreadPullRequestWatchSummary,
+} from "@pwragent/shared";
+import { buildPullRequestStatusKey, buildThreadIdentityKey } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
 import {
@@ -8,13 +14,29 @@ import {
 } from "../../pr-status/DetachPullRequestWarning";
 import { PrChip } from "../../pr-status/PrChip";
 import { openExternalUrl } from "../../../lib/open-external-url";
+import { PullRequestWatchList } from "../../pr-watches/PullRequestWatchList";
+import {
+  resolvePrChipWatch,
+  useThreadPrWatchIndicatorsContext,
+} from "../../pr-watches/useThreadPrWatchIndicators";
 import { RailStatusChip, type RailChipTone } from "./RailStatusChip";
 
 type PullRequestsPanelProps = {
-  desktopApi?: Pick<DesktopApi, "detachThreadPullRequest">;
+  desktopApi?: Pick<DesktopApi, "detachThreadPullRequest" | "manageThreadPrWatches">;
   onRefreshNavigation?: () => Promise<void>;
+  /** Backs the Auto-fix row's Turn Off. */
+  onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
   thread: NavigationThreadSummary;
 };
+
+type WatchHistoryState = {
+  threadKey: string;
+  /** The active list it was read against; a change re-reads it. */
+  source: readonly ThreadPullRequestWatchSummary[] | undefined;
+  entries: readonly ThreadPrWatchHistoryEntry[];
+};
+
+const NO_WATCHES: readonly ThreadPullRequestWatchSummary[] = [];
 
 type CheckState = NonNullable<PrSummary["checkState"]>;
 
@@ -29,6 +51,61 @@ type CheckState = NonNullable<PrSummary["checkState"]>;
  */
 export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequestsPanelProps) {
   const [pendingDetachPr, setPendingDetachPr] = useState<PrSummary>();
+  const watchContext = useThreadPrWatchIndicatorsContext();
+  const threadKey = buildThreadIdentityKey(props.thread.source, props.thread.id);
+  // A peer's thread, or any thread in a federation window, is read-only: its
+  // owner runs the watches and projects them onto selected detail.
+  const federationWindow = Boolean(readRendererFederationTarget());
+  const ownerLabel = props.thread.federation
+    ? props.thread.federation.instanceLabel
+    : federationWindow
+      ? "the thread's own machine"
+      : undefined;
+  const localWatches = ownerLabel === undefined && watchContext
+    ? watchContext.byThreadKey.get(threadKey)?.watches ?? NO_WATCHES
+    : undefined;
+  // Undefined means unknown: no watch UI at all, rather than a false "none".
+  const watches = ownerLabel !== undefined ? props.thread.activePrWatches : localWatches;
+  const autoFix = props.thread.prAutoDispatchEnabled === true;
+  const canReadHistory = localWatches !== undefined && Boolean(props.desktopApi?.manageThreadPrWatches);
+  const [openHistory, setOpenHistory] = useState<ReadonlySet<string>>(() => new Set());
+  const [history, setHistory] = useState<WatchHistoryState>();
+  const historyWanted = canReadHistory
+    && [...openHistory].some((key) => key.startsWith(`${threadKey}|`));
+  const historyCurrent = history?.threadKey === threadKey && history.source === localWatches;
+  useEffect(() => {
+    // History is read on first expand, then again whenever a watch changes.
+    if (!historyWanted || historyCurrent) return;
+    let cancelled = false;
+    const source = localWatches;
+    void props.desktopApi!.manageThreadPrWatches!({
+      action: "history",
+      backend: props.thread.source,
+      threadId: props.thread.id,
+      limit: 20,
+    }).then(
+      (response) => {
+        if (cancelled) return;
+        setHistory({ threadKey, source, entries: response.ok ? response.history ?? [] : [] });
+      },
+      () => {
+        if (!cancelled) setHistory({ threadKey, source, entries: [] });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [historyWanted, historyCurrent, localWatches, props.desktopApi, props.thread.source, props.thread.id, threadKey]);
+  const historyEntries = history?.threadKey === threadKey ? history.entries : undefined;
+  const toggleHistory = (prKey: string): void => {
+    setOpenHistory((current) => {
+      const next = new Set(current);
+      const key = `${threadKey}|${prKey}`;
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
   // Newest first. `PrSummary` carries no creation timestamp, so sort by PR
   // number (monotonic with creation within a repo); for the rare multi-repo
   // thread, group by repo first so the numbers stay comparable.
@@ -69,6 +146,11 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
             const lifecycle = resolveLifecycleState(pr);
             const isOpen = lifecycle === "open";
             const checkState = resolveCheckState(pr);
+            const statusKey = buildPullRequestStatusKey(pr);
+            const prWatches = watches?.filter((watch) => watch.prKey === statusKey) ?? NO_WATCHES;
+            const chipWatch = ownerLabel === undefined && watchContext
+              ? resolvePrChipWatch(watchContext.byThreadKey.get(threadKey), pr, autoFix)
+              : undefined;
             return (
               <li key={prKey(pr)} className="rail-card">
                 <p className="rail-card__status-line">
@@ -77,6 +159,7 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
                     showRepoPrefix={false}
                     onOpen={openExternalUrl}
                     withStatusPills
+                    watch={chipWatch}
                     onDetach={requestDetachPr}
                   />
                   {lifecycle === "merged" ? (
@@ -110,6 +193,24 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
                   {prTitle(pr)}
                 </p>
                 <p className="rail-card__meta">{repositoryLabel(pr)}</p>
+                {isOpen && watches !== undefined ? (
+                  <PullRequestWatchList
+                    pr={pr}
+                    watches={prWatches}
+                    autoFix={autoFix}
+                    ownerLabel={ownerLabel}
+                    onStop={watchContext?.stop}
+                    onTurnOffAutoFix={props.onSetThreadPrAutoDispatch
+                      ? () => void props.onSetThreadPrAutoDispatch!(false)
+                      : undefined}
+                    onAskAgentToWatchCi={watchContext?.askAgentToWatchCi
+                      ? () => watchContext.askAgentToWatchCi!(props.thread, pr)
+                      : undefined}
+                    history={historyEntries?.filter((entry) => entry.prKey === statusKey)}
+                    historyOpen={openHistory.has(`${threadKey}|${statusKey}`)}
+                    onToggleHistory={canReadHistory ? () => toggleHistory(statusKey) : undefined}
+                  />
+                ) : null}
               </li>
             );
           })}

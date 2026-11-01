@@ -47,6 +47,7 @@ import {
   type NavigationThreadSummary,
   type PrAutoDispatchBudgetStatus,
   type PrSummary,
+  type ThreadPullRequestWatchSummary,
   type ThreadToolAccounting,
   type ThreadToolIncidentNoticeState,
   type ThreadToolInvocationAlert,
@@ -80,6 +81,11 @@ import {
   ThreadDependencyIndicatorsContext,
   useThreadDependencyIndicators,
 } from "./features/thread-dependencies/useThreadDependencyIndicators";
+import {
+  buildWatchCiRequestText,
+  ThreadPrWatchIndicatorsContext,
+  useThreadPrWatchIndicators,
+} from "./features/pr-watches/useThreadPrWatchIndicators";
 import {
   ThreadProvidersContext,
   useStableThreadProviders,
@@ -3267,6 +3273,72 @@ function DesktopAppShell(props: {
     }),
     [threadDependencyIndicators, canContinueAfter],
   );
+  // PR watches that wake threads. A federation window lists none and stops
+  // none: the owner runs them, and no signed request carries a cancel.
+  const threadPrWatchIndicators = useThreadPrWatchIndicators(desktopApi);
+  const canManagePrWatches = Boolean(desktopApi?.manageThreadPrWatches)
+    && !readRendererFederationTarget();
+  const stopPrWatch = useEventCallback(async (watch: ThreadPullRequestWatchSummary) => {
+    const failed = (message: string) => showAppNotice({
+      id: `pr-watch-stop:${watch.watchId}`,
+      title: "The watch is still running",
+      message,
+    });
+    try {
+      const response = await desktopApi?.manageThreadPrWatches?.({
+        action: "cancel",
+        backend: watch.backend,
+        threadId: watch.threadId,
+        watchId: watch.watchId,
+      });
+      // The list refreshes from `thread/prWatches/updated`.
+      if (response && !response.ok) failed(response.error.message);
+    } catch (error) {
+      failed(error instanceof Error ? error.message : String(error));
+    }
+  });
+  // "Ask Agent to Watch CI" drafts into the thread's composer and never
+  // sends. From the sidebar it first selects the thread; the composer takes
+  // the request once it shows that thread.
+  const [composerInsertRequest, setComposerInsertRequest] =
+    useState<ThreadViewProps["composerInsertRequest"]>();
+  const composerInsertRequestIdRef = useRef(0);
+  const handleComposerInsertRequestHandled = useEventCallback((id: number) => {
+    setComposerInsertRequest((current) => current?.id === id ? undefined : current);
+  });
+  // Leaving the thread before its composer could take the request drops it,
+  // so it never lands in a draft the operator comes back to later.
+  const shownInsertRequestIdRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const request = composerInsertRequest;
+    if (!request) return;
+    if (mainView === "thread" && navigation.selectedItemKey === request.threadKey) {
+      shownInsertRequestIdRef.current = request.id;
+    } else if (shownInsertRequestIdRef.current === request.id) {
+      handleComposerInsertRequestHandled(request.id);
+    }
+  }, [composerInsertRequest, mainView, navigation.selectedItemKey, handleComposerInsertRequestHandled]);
+  const askAgentToWatchCi = useEventCallback((thread: NavigationThreadSummary, pr: PrSummary) => {
+    const threadKey = threadSummaryIdentityKey(thread);
+    setMainView("thread");
+    setComposerInsertRequest({
+      id: ++composerInsertRequestIdRef.current,
+      threadKey,
+      text: buildWatchCiRequestText(pr),
+    });
+    if (navigation.selectedItemKey !== threadKey) {
+      selectThreadNavigation(thread);
+    }
+  });
+  const threadPrWatchContext = useMemo(
+    () => ({
+      byThreadKey: threadPrWatchIndicators,
+      ...(canManagePrWatches
+        ? { stop: stopPrWatch, askAgentToWatchCi }
+        : {}),
+    }),
+    [threadPrWatchIndicators, canManagePrWatches, stopPrWatch, askAgentToWatchCi],
+  );
   const threadHandoffTargets = useMemo(
     () =>
       desktopApi?.handoffThreadToInstance && !readRendererFederationTarget()
@@ -4063,6 +4135,8 @@ function DesktopAppShell(props: {
     launchpadCancelRequest,
     composerFocusRequest,
     onComposerFocusRequestHandled: handleComposerFocusRequestHandled,
+    composerInsertRequest,
+    onComposerInsertRequestHandled: handleComposerInsertRequestHandled,
     onDetachLaunchpadParent: handleDetachLaunchpadParent,
     onSelectLaunchpadParent: handleSelectLaunchpadParent,
     // The composer's 5th argument is `extraDirectoryPaths` (draft
@@ -4203,6 +4277,7 @@ function DesktopAppShell(props: {
     >
     <OperatorWaitsContext.Provider value={operatorWaitsContext}>
     <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
+    <ThreadPrWatchIndicatorsContext.Provider value={threadPrWatchContext}>
     <ThreadProvidersContext.Provider value={threadProviders}>
     <TranscriptLinkProvider
       localInstanceId={liveFederationHealth?.instanceId}
@@ -4840,6 +4915,7 @@ function DesktopAppShell(props: {
       {todoFullAccessRiskDialog}
     </TranscriptLinkProvider>
     </ThreadProvidersContext.Provider>
+    </ThreadPrWatchIndicatorsContext.Provider>
     </ThreadDependencyIndicatorsContext.Provider>
     </OperatorWaitsContext.Provider>
     </TodoDispatchProvider>

@@ -1028,6 +1028,9 @@ export type ThreadViewProps = {
   /** Focus the composer once it shows this thread (a mouse click on its sidebar row). */
   composerFocusRequest?: ComposerProps["focusRequest"];
   onComposerFocusRequestHandled?: ComposerProps["onFocusRequestHandled"];
+  /** Append a drafted request to this thread's composer ("Ask Agent to Watch CI"). */
+  composerInsertRequest?: ComposerProps["composerInsertRequest"];
+  onComposerInsertRequestHandled?: ComposerProps["onComposerInsertRequestHandled"];
   onDetachLaunchpadParent?: (directoryKey: string) => void;
   onSelectLaunchpadParent?: (launchpad: NavigationLaunchpadDraft) => void;
   onPendingStatusChange?: (status?: string) => void;
@@ -4126,6 +4129,8 @@ export function ThreadView(props: ThreadViewProps) {
           reviewRequest: todoReviewRequest,
           focusRequest: props.composerFocusRequest,
           onFocusRequestHandled: props.onComposerFocusRequestHandled,
+          composerInsertRequest: props.composerInsertRequest,
+          onComposerInsertRequestHandled: props.onComposerInsertRequestHandled,
           onReviewStarted: handleReviewStarted,
           workspaceActionsBlocked: props.workspaceActionsBlocked,
           onEditEnvironments: props.onEditEnvironments,
@@ -4850,6 +4855,7 @@ export function ThreadView(props: ThreadViewProps) {
           onDismissEnvActionRun: dismissEnvActionRun,
           onStopEnvActionRun: stopEnvActionRun,
           onRefreshNavigation: props.onRefreshNavigation,
+          onSetThreadPrAutoDispatch: props.onSetThreadPrAutoDispatch,
           platform: props.platform,
           thread: selectedThread,
           pricing: props.pricing,

@@ -426,6 +426,14 @@ export type ComposerProps = {
    */
   focusRequest?: { threadKey: string; id: number; origin: HTMLElement };
   onFocusRequestHandled?: (id: number) => void;
+  /**
+   * Appends text to the named thread's draft, on a new line when the draft
+   * is not empty, and focuses the input. It never sends: the operator reads
+   * and sends the request. Each id applies once, when this composer shows
+   * that thread and can take input.
+   */
+  composerInsertRequest?: { threadKey: string; id: number; text: string };
+  onComposerInsertRequestHandled?: (id: number) => void;
   launchpad?: NavigationLaunchpadDraft;
   /** Which machine the launchpad starts its thread on, and how to move it. */
   launchpadMachine?: LaunchpadMachineControl;
@@ -4297,6 +4305,42 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
     props.onFocusRequestHandled?.(request.id);
   }, [props.focusRequest, props.onFocusRequestHandled, props.thread, props.disabled, editorScope.scopeKey, composerScopeKey]);
+  const handledInsertRequestIdRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const request = props.composerInsertRequest;
+    if (
+      !request
+      || handledInsertRequestIdRef.current === request.id
+      || !props.thread
+      || threadSummaryIdentityKey(props.thread) !== request.threadKey
+      || props.disabled
+      || editorScope.scopeKey !== composerScopeKey
+    ) {
+      return;
+    }
+    handledInsertRequestIdRef.current = request.id;
+    const current = canonicalDraft.replace(/\s+$/, "");
+    const nextDraft = current ? `${current}\n${request.text}` : request.text;
+    const hydrated = hydrateComposerDraft(
+      nextDraft,
+      props.skills,
+      threadLinks,
+      pullRequestLinks,
+    );
+    // The editor replays its current content once before it takes the new
+    // value; the guard drops that stale replay, as for a draft restore.
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: hydrated.draft,
+      expectedSkillTokensSignature: getComposerSkillTokensSignature(hydrated.skillTokens),
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
+    setComposerDraftFromCanonical(nextDraft);
+    props.onComposerInsertRequestHandled?.(request.id);
+    requestAnimationFrame(() => inputRef.current?.focus());
+    // The helpers are recreated each render; the id guard applies once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.composerInsertRequest, props.thread, props.disabled, editorScope.scopeKey, composerScopeKey]);
   const appliedReviewRequestId = useRef<number | undefined>(undefined);
   useEffect(() => {
     const request = props.reviewRequest;
@@ -11359,7 +11403,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     : !prAutoDispatchAllowed
       ? "Auto-fix PR disabled globally — allow it in Git settings"
       : hasAttachedPullRequest
-        ? "Auto-fix PR — handle new CI failures or merge conflicts"
+        ? "Auto-fix PR — starts a repair turn when a new push fails CI or hits a merge conflict. To hear about a pass or a re-run, ask the agent to watch CI."
         : "Auto-fix PR — starts when a PR for this workspace is linked";
   // Environments are edited on the machine that runs them, so a peer's
   // thread or a remote execution workspace gets no editor here.

@@ -2,6 +2,7 @@ import type { PrSummary } from "@pwragent/shared";
 import { BranchIcon } from "../../icons";
 import { DiffStat } from "../../lib/DiffStat";
 import { formatRunningDurationMs } from "../../lib/format-duration";
+import type { PrChipWatch } from "../pr-watches/useThreadPrWatchIndicators";
 import { readPrBranchDrift, type PrBranchDrift } from "./pr-branch-drift";
 import {
   prPhaseLabel,
@@ -42,6 +43,10 @@ export function PrStatusCard(props: {
    * card draws no Local branch section.
    */
   branchDrift?: PrBranchDrift;
+  /** What wakes the chip's thread for this PR: CI, merge or close, Auto-fix. */
+  watch?: PrChipWatch;
+  /** The chip's context menu can stop its watches, so the card says how. */
+  watchStopHint?: boolean;
   /** Injected by tests so age rows are deterministic. */
   now?: number;
 }) {
@@ -54,6 +59,8 @@ export function PrStatusCard(props: {
   const timeline = readPrTimeline(pr, now);
   const branch = readPrBranch(pr);
   const drift = readBranchDriftRows(props.branchDrift);
+  const wakes = readWatchRows(props.watch);
+  const stoppable = Boolean(props.watch?.ci || props.watch?.terminal);
 
   return (
     <>
@@ -120,6 +127,28 @@ export function PrStatusCard(props: {
           ) : null}
           {changes.commits ? (
             <div className="pr-status-card__caption">{changes.commits}</div>
+          ) : null}
+        </div>
+      ) : null}
+      {wakes.length > 0 ? (
+        <div className="pr-status-card__section">
+          <span className="pr-status-card__section-title">Wakes this thread</span>
+          {wakes.map((row) => (
+            <div className="pr-status-card__row" key={row.label}>
+              <span className="pr-status-card__row-label">{row.label}</span>
+              <span
+                className={`pr-status-card__row-value${
+                  row.muted ? " pr-status-card__row-value--muted" : ""
+                }`}
+              >
+                {row.value}
+              </span>
+            </div>
+          ))}
+          {props.watchStopHint && stoppable ? (
+            <div className="pr-status-card__caption">
+              Right-click the chip to stop a watch.
+            </div>
           ) : null}
         </div>
       ) : null}
@@ -276,6 +305,40 @@ function readPrChanges(pr: PrSummary): PrChanges | undefined {
 }
 
 type PrTimelineRow = { label: string; value: string };
+
+type PrWatchRow = PrTimelineRow & { muted?: boolean };
+
+/**
+ * One row per thing that wakes the thread. The attempt is the useful number
+ * after a re-run: it says which run's result the watch is waiting for.
+ */
+function readWatchRows(watch: PrChipWatch | undefined): PrWatchRow[] {
+  if (!watch) {
+    return [];
+  }
+  const rows: PrWatchRow[] = [];
+  if (watch.ci) {
+    rows.push({
+      label: "Waiting for CI",
+      value: watch.ci.runAttempt !== undefined
+        ? `attempt ${watch.ci.runAttempt}`
+        : describeCiOutcomes(watch.ci.notifyOn),
+    });
+  }
+  if (watch.terminal) {
+    rows.push({ label: "Merge or close", value: "watching" });
+  }
+  if (watch.autoFix) {
+    rows.push({ label: "Auto-fix", value: "on", muted: true });
+  }
+  return rows;
+}
+
+export function describeCiOutcomes(notifyOn: readonly string[]): string {
+  const success = notifyOn.includes("success");
+  const failure = notifyOn.includes("failure");
+  return success && failure ? "pass or fail" : success ? "pass" : "fail";
+}
 
 /**
  * The branch chip's "Behind base" and "Ahead of base" counts, named after the

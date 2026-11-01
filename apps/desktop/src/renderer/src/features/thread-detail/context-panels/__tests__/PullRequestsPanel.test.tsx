@@ -1,7 +1,18 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
+import type {
+  NavigationThreadSummary,
+  PrSummary,
+  ThreadPrWatchHistoryEntry,
+  ThreadPullRequestWatchSummary,
+} from "@pwragent/shared";
+import type { DesktopApi } from "../../../../lib/desktop-api";
+import {
+  summarizeThreadPrWatches,
+  ThreadPrWatchIndicatorsContext,
+  type ThreadPrWatchIndicatorsValue,
+} from "../../../pr-watches/useThreadPrWatchIndicators";
 import { PullRequestsPanel } from "../PullRequestsPanel";
 
 afterEach(() => {
@@ -217,5 +228,163 @@ describe("PullRequestsPanel", () => {
     expect(
       screen.getByText("No pull requests linked to this thread yet."),
     ).toBeInTheDocument();
+  });
+
+  describe("Wakes this thread", () => {
+    const openPr: PrSummary = {
+      provider: "github.com",
+      number: 3174,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "fix(desktop): arm CI watches after re-runs",
+      state: "pending",
+      checkState: "pending",
+      lifecycleState: "open",
+      reviewState: "ready_for_review",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3174",
+    };
+    const ciWatch: ThreadPullRequestWatchSummary = {
+      watchId: "watch-ci",
+      backend: "codex",
+      threadId: "thread-1",
+      prKey: "github.com/pwrdrvr/pwragent#3174",
+      prUrl: openPr.url,
+      prNumber: 3174,
+      headSha: "9f2c41a0000000000000000000000000000000000",
+      notifyOn: ["success", "failure"],
+      createdAt: Date.now(),
+      failureHandledByAutoFix: false,
+      kind: "checks",
+      baseline: { outcome: "failure", observedAt: Date.now(), runAttempt: 2 },
+    };
+    const terminalWatch: ThreadPullRequestWatchSummary = {
+      ...ciWatch,
+      watchId: "watch-merge",
+      notifyOn: ["merged", "closed"],
+      kind: "terminal",
+      baseline: undefined,
+    };
+
+    function renderPanel(options: {
+      thread?: NavigationThreadSummary;
+      watches?: ThreadPullRequestWatchSummary[];
+      context?: Partial<ThreadPrWatchIndicatorsValue>;
+      desktopApi?: Pick<DesktopApi, "manageThreadPrWatches">;
+    } = {}) {
+      const stop = vi.fn(async () => undefined);
+      const askAgentToWatchCi = vi.fn();
+      const onSetThreadPrAutoDispatch = vi.fn(async () => undefined);
+      const thread = options.thread ?? { ...threadWithPrs([openPr]), prAutoDispatchEnabled: true };
+      render(
+        <ThreadPrWatchIndicatorsContext.Provider value={{
+          byThreadKey: summarizeThreadPrWatches(options.watches ?? []),
+          stop,
+          askAgentToWatchCi,
+          ...options.context,
+        }}>
+          <PullRequestsPanel
+            desktopApi={options.desktopApi}
+            onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+            thread={thread}
+          />
+        </ThreadPrWatchIndicatorsContext.Provider>,
+      );
+      return { stop, askAgentToWatchCi, onSetThreadPrAutoDispatch, thread };
+    }
+
+    it("lists each watch and Auto-fix with a way to stop each", async () => {
+      const { stop, onSetThreadPrAutoDispatch } = renderPanel({ watches: [ciWatch, terminalWatch] });
+      const card = screen.getByRole("listitem");
+      expect(within(card).getByText("Wakes this thread")).toBeInTheDocument();
+      expect(within(card).getByText("Waiting for CI · attempt 2")).toBeInTheDocument();
+      const ciSub = within(card).getByText(/^On pass or fail\. Agent, /);
+      expect(ciSub).toHaveTextContent("Attempt 1's failure will not wake it.");
+      expect(within(card).getByText("Waiting for merge or close")).toBeInTheDocument();
+      expect(within(card).getByText("Starts a repair turn when a new push fails CI.")).toBeInTheDocument();
+      expect(within(card).queryByText("Not waiting for CI.")).toBeNull();
+      // The chip in the card wears the eye too.
+      expect(card.querySelector(".pr-chip .pr-chip__watch")).not.toBeNull();
+
+      // Each Stop disables itself until the stop settles.
+      await act(async () => {
+        fireEvent.click(within(card).getByRole("button", { name: "Stop waiting for CI on #3174" }));
+      });
+      expect(stop).toHaveBeenCalledWith(ciWatch);
+      await act(async () => {
+        fireEvent.click(within(card).getByRole("button", { name: "Stop watching #3174 for merge" }));
+      });
+      expect(stop).toHaveBeenCalledWith(terminalWatch);
+      fireEvent.click(within(card).getByRole("button", { name: "Turn off Auto-fix for #3174" }));
+      expect(onSetThreadPrAutoDispatch).toHaveBeenCalledWith(false);
+    });
+
+    it("hints at asking for a CI watch when nothing waits for CI", () => {
+      const { askAgentToWatchCi, thread } = renderPanel({
+        thread: threadWithPrs([openPr]),
+        watches: [terminalWatch],
+      });
+      const card = screen.getByRole("listitem");
+      expect(within(card).getByText("Not waiting for CI.")).toBeInTheDocument();
+      expect(within(card).queryByText("Auto-fix")).toBeNull();
+      fireEvent.click(within(card).getByRole("button", { name: "Ask Agent to Watch CI" }));
+      expect(askAgentToWatchCi).toHaveBeenCalledWith(thread, openPr);
+    });
+
+    it("loads the history on first expand and counts this PR's ended watches", async () => {
+      const history: ThreadPrWatchHistoryEntry[] = [
+        { ...ciWatch, watchId: "ended-1", status: "dispatched", updatedAt: Date.now(), endedReason: "woke", wokeOn: "failure" },
+        { ...ciWatch, watchId: "ended-2", status: "superseded", updatedAt: Date.now() - 1, endedReason: "moved", movedTo: "watch-ci" },
+        { ...ciWatch, watchId: "other-pr", prKey: "github.com/pwrdrvr/pwragent#1", status: "cancelled", updatedAt: 1 },
+      ];
+      const manageThreadPrWatches = vi.fn(async () => ({ ok: true as const, history }));
+      renderPanel({ watches: [ciWatch], desktopApi: { manageThreadPrWatches } });
+      expect(manageThreadPrWatches).not.toHaveBeenCalled();
+      const toggle = screen.getByRole("button", { name: "History" });
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+      await act(async () => {
+        fireEvent.click(toggle);
+      });
+      expect(manageThreadPrWatches).toHaveBeenCalledWith({
+        action: "history",
+        backend: "codex",
+        threadId: "thread-1",
+        limit: 20,
+      });
+      expect(screen.getByRole("button", { name: "History (2)" })).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getByText("Woke the thread · CI failed")).toBeInTheDocument();
+      expect(screen.getByText("Moved to new head · 9f2c41a")).toBeInTheDocument();
+      expect(screen.queryByText("Stopped")).toBeNull();
+    });
+
+    it("shows a peer's watches read-only and names where to stop them", () => {
+      renderPanel({
+        thread: {
+          ...threadWithPrs([openPr]),
+          prAutoDispatchEnabled: true,
+          activePrWatches: [ciWatch],
+          federation: {
+            ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "thread-1" },
+            instanceLabel: "Laptop",
+            peerStatus: "connected",
+            capabilities: [],
+          },
+        } as NavigationThreadSummary,
+        // A local list for the same id must not leak onto the peer's card.
+        watches: [terminalWatch],
+      });
+      const card = screen.getByRole("listitem");
+      expect(within(card).getByText("Waiting for CI · attempt 2")).toBeInTheDocument();
+      expect(within(card).queryByText("Waiting for merge or close")).toBeNull();
+      expect(within(card).getByText("Watches run on Laptop. Stop them there.")).toBeInTheDocument();
+      expect(within(card).queryByRole("button", { name: /^Stop|^Turn off|History|Ask Agent/ })).toBeNull();
+    });
+
+    it("draws no watch list on a merged PR", () => {
+      renderPanel({
+        thread: threadWithPrs([{ ...openPr, lifecycleState: "merged", state: "merged" }]),
+        watches: [terminalWatch],
+      });
+      expect(screen.queryByText("Wakes this thread")).toBeNull();
+    });
   });
 });

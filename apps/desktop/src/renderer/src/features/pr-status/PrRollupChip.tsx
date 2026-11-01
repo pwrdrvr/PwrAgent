@@ -11,10 +11,15 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import type { PrSummary } from "@pwragent/shared";
+import { EyeIcon } from "../../icons";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { useHoverTransitionGrace } from "../../lib/useHoverTransitionGrace";
 import { TOOLTIP_HOVER_DELAY_MS, useViewportTooltip } from "../../lib/useViewportTooltip";
 import { statusPulseRef } from "../../lib/status-pulse";
+import {
+  resolvePrChipWatch,
+  type ThreadPrWatches,
+} from "../pr-watches/useThreadPrWatchIndicators";
 import { PrChip } from "./PrChip";
 import { PrStatusCard } from "./PrStatusCard";
 import {
@@ -38,6 +43,10 @@ type PrRollupChipProps = {
   ) => void;
   /** The thread branch's base drift, for the PR on that branch. */
   branchDrift?: PrBranchDrift;
+  /** The thread's active PR watches; a CI watch draws the eye. */
+  prWatches?: ThreadPrWatches;
+  /** The thread's Auto-fix setting, which the hover card lists. */
+  autoFix?: boolean;
   /**
    * The row's hover prefetch. The chips line arms it for the chips in the
    * flow; this chip sits on the title line, outside that line.
@@ -76,6 +85,7 @@ export const PrRollupChip = memo(function PrRollupChip(props: PrRollupChipProps)
           pr={pr}
           showRepoPrefix={props.repoPrefixedUrls.split("\n").includes(pr.url)}
           branchDrift={props.branchDrift?.url === pr.url ? props.branchDrift : undefined}
+          watch={resolvePrChipWatch(props.prWatches, pr, props.autoFix === true)}
           onOpen={props.onOpen}
           onOpenContextMenu={props.onOpenContextMenu}
         />
@@ -114,6 +124,10 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
       popoverRef.current?.getBoundingClientRect() ?? target.getBoundingClientRect(),
   });
   const [cardUrl, setCardUrl] = useState<string>();
+  const watchFor = (pr: PrSummary) =>
+    resolvePrChipWatch(props.prWatches, pr, props.autoFix === true);
+  const watchStopHint = Boolean(props.onOpenContextMenu);
+  const waitingForCi = rollup.ordered.some((pr) => watchFor(pr)?.ci);
   // Read from the live list, so a status update reaches an open card.
   const cardPr = rollup.ordered.find((pr) => pr.url === cardUrl);
   const cardDrift = props.branchDrift?.url === cardUrl ? props.branchDrift : undefined;
@@ -124,8 +138,15 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
       hideRowCard();
       return;
     }
-    updateCard(<PrStatusCard pr={cardPr} branchDrift={cardDrift} />);
-  }, [cardVisible, cardPr, cardDrift, hideRowCard, updateCard]);
+    updateCard(
+      <PrStatusCard
+        pr={cardPr}
+        branchDrift={cardDrift}
+        watch={resolvePrChipWatch(props.prWatches, cardPr, props.autoFix === true)}
+        watchStopHint={watchStopHint}
+      />,
+    );
+  }, [cardVisible, cardPr, cardDrift, props.prWatches, props.autoFix, watchStopHint, hideRowCard, updateCard]);
 
   const clearHoverTimer = (): void => {
     if (hoverTimerRef.current !== null) {
@@ -140,6 +161,8 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
       <PrStatusCard
         pr={pr}
         branchDrift={props.branchDrift?.url === pr.url ? props.branchDrift : undefined}
+        watch={watchFor(pr)}
+        watchStopHint={watchStopHint}
       />
     );
     if (immediate || cardVisible) {
@@ -282,7 +305,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
         aria-expanded={open}
         aria-label={`${props.prs.length} pull requests, ${
           leadLabel ? `${leadLabel} open, ` : ""
-        }${rollup.summary}`}
+        }${rollup.summary}${waitingForCi ? ", waiting for CI" : ""}`}
         className={className}
         data-pr-rollup=""
         draggable={false}
@@ -319,11 +342,21 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                 : null}
             </span>
             <span className="pr-chip__more">+{props.prs.length - 1}</span>
+            {waitingForCi ? (
+              <span className="pr-chip__watch" aria-hidden="true">
+                <EyeIcon size={12} />
+              </span>
+            ) : null}
           </>
         ) : (
           <>
             <span className="pr-chip__dot" aria-hidden="true" ref={dotRef} />
             <span className="pr-chip__label">{prRollupLabel(props.prs)}</span>
+            {waitingForCi ? (
+              <span className="pr-chip__watch" aria-hidden="true">
+                <EyeIcon size={12} />
+              </span>
+            ) : null}
             {presentation.isDraft
               ? <span className="pr-chip__draft-bar" aria-hidden="true" />
               : null}
@@ -364,6 +397,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                   ? `${prStatusLabel(pr)} · ${behind}`
                   : prStatusLabel(pr);
                 const rowPresentation = resolvePrChipPresentation(pr);
+                const rowWaitingForCi = Boolean(watchFor(pr)?.ci);
                 return (
                   <li key={pr.url}>
                     <button
@@ -371,7 +405,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                       className="pr-rollup-popover__row"
                       aria-label={`Open ${pr.org}/${pr.repo}#${pr.number}${
                         pr.title ? `, ${pr.title}` : ""
-                      } (${status}) in browser`}
+                      } (${status}) in browser${rowWaitingForCi ? ", waiting for CI" : ""}`}
                       aria-describedby={
                         cardUrl === pr.url && cardVisible ? cardId : undefined
                       }
@@ -407,6 +441,11 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                           ref={rowPresentation.hasFailingChecksStillRunning ? statusPulseRef : undefined}
                         />
                         <span className="pr-chip__label">{label}</span>
+                        {rowWaitingForCi ? (
+                          <span className="pr-chip__watch">
+                            <EyeIcon size={12} />
+                          </span>
+                        ) : null}
                       </span>
                       <span className="pr-rollup-popover__text">
                         <span className="pr-rollup-popover__title">
