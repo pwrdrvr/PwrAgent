@@ -107,7 +107,10 @@ test("production thinking scanners draw only during their shared scans", async (
         0%, 100% { opacity: 0.76; transform: translateX(0); }
         50% { opacity: 1; transform: translateX(var(--thinking-scanner-travel)); }
       }
-      .thinking-scanner__beam { animation: former-sweep 1800ms steps(27, end) infinite; }`;
+      .thinking-scanner__beam {
+        animation: former-sweep 1800ms steps(27, end) infinite;
+        will-change: opacity, transform;
+      }`;
       document.head.append(style);
       document.querySelectorAll(".thinking-scanner__beam").forEach((element) =>
         element.getAnimations().forEach((animation) => {
