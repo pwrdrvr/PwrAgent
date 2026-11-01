@@ -12831,7 +12831,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   Resume
                 </button>
               ) : isLaunchpad ? (
-                supportsSteering ? (
+                supportsSteering && !queued.reviewCommand ? (
                   <button
                     className="composer__secondary-action"
                     disabled={queued.backendQueuePending}

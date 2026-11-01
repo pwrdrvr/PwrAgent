@@ -1044,9 +1044,12 @@ describe("Composer", () => {
     }));
     const startTurn = vi.fn();
     const createScheduledThreadAction = vi.fn();
+    const steerTurn = vi.fn();
+    const backend = backendSummary("codex");
+    backend.capabilities.steerTurn = true;
     const baseProps = {
-      backends: [backendSummary("codex")], directory: retargetingPwrSnap, draftStore, skills: [],
-      desktopApi: { startReview, startTurn, createScheduledThreadAction },
+      backends: [backend], directory: retargetingPwrSnap, draftStore, skills: [],
+      desktopApi: { startReview, startTurn, createScheduledThreadAction, steerTurn },
       onMaterializeLaunchpad,
     };
     const view = render(<Composer {...baseProps} launchpad={launchpad} />);
@@ -1071,6 +1074,9 @@ describe("Composer", () => {
       await clickButton("Start review");
     }
     await waitFor(() => expect(screen.getByLabelText("Queued message")).toHaveTextContent("Review changes against main"));
+    expect(within(screen.getByLabelText("Queued message")).queryByRole("button", {
+      name: "Steer when ready",
+    })).not.toBeInTheDocument();
     expect(draftStore.getQueuedTurns(scopeKey)[0].reviewCommand).toMatchObject({
       target: { type: "baseBranch", branch: "main" },
     });
@@ -1080,6 +1086,9 @@ describe("Composer", () => {
     view.unmount();
     const remounted = render(pendingComposer);
     expect(screen.getByLabelText("Queued message")).toHaveTextContent("Review changes against main");
+    expect(within(screen.getByLabelText("Queued message")).queryByRole("button", {
+      name: "Steer when ready",
+    })).not.toBeInTheDocument();
 
     const thread: NavigationThreadSummary = {
       id: "checkout-thread", source: "codex", title: "Check out PR #42", titleSource: "explicit",
@@ -1094,6 +1103,8 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Queued message")).toHaveTextContent("Review changes against main");
     expect(startReview).not.toHaveBeenCalled();
     expect(draftStore.getQueuedTurns(scopeKey)).toEqual([]);
+    expect(steerTurn).not.toHaveBeenCalled();
+    expect(draftStore.getQueuedTurns(buildThreadComposerScopeKey("codex", thread.id))[0].manualReleaseRequired).not.toBe(true);
 
     remounted.rerender(<Composer {...baseProps} thread={{ ...thread, optimisticActiveTurn: undefined }} />);
     await waitFor(() => expect(startReview).toHaveBeenCalledTimes(1));
