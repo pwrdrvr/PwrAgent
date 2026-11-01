@@ -42248,13 +42248,110 @@ script = "printf setup"
     }
   });
 
-  it("requires trust before adopting an untrusted existing workspace in Default Access", async () => {
+  describe.each(["default", "auto"] as const)("existing-worktree trust in %s mode", (executionMode) => {
+    it.each([
+      "repository", "ancestor", "symlink", "worktree-only", "remote-only", "other-clone",
+      "unregistered-primary-gitdir", "unregistered-linked-gitdir",
+    ] as const)(
+      "checks the destination's Git repository against %s trust",
+      async (trustSource) => {
+        const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-trust-")));
+        onTestFinished(() => rm(root, { recursive: true, force: true }));
+        const repositoryPath = path.join(root, "projects", "demo");
+        const sourcePath = path.join(root, "worktrees", "source", "demo");
+        const targetPath = path.join(root, "worktrees", "target", "demo");
+        await mkdir(repositoryPath, { recursive: true });
+        await git(repositoryPath, ["init", "-b", "main"]);
+        await writeFile(path.join(repositoryPath, "README.md"), "fixture\n");
+        await git(repositoryPath, ["add", "README.md"]);
+        await git(repositoryPath, ["commit", "-m", "initial"]);
+        await git(repositoryPath, ["worktree", "add", "--detach", sourcePath, "main"]);
+        if (trustSource === "unregistered-primary-gitdir" || trustSource === "unregistered-linked-gitdir") {
+          await mkdir(targetPath, { recursive: true });
+          const gitDir = trustSource === "unregistered-primary-gitdir"
+            ? path.join(repositoryPath, ".git")
+            : await git(sourcePath, ["rev-parse", "--absolute-git-dir"]);
+          await writeFile(path.join(targetPath, ".git"), `gitdir: ${expectedDir(gitDir)}\n`);
+          expect(await git(targetPath, ["rev-parse", "--show-toplevel"])).toBe(expectedDir(targetPath));
+          const worktreeList = await git(targetPath, ["worktree", "list", "--porcelain"]);
+          expect(worktreeList).not.toContain(`worktree ${expectedDir(targetPath)}\n`);
+        } else if (trustSource === "other-clone") {
+          const clonePath = path.join(root, "clone");
+          await git(root, ["clone", repositoryPath, clonePath]);
+          await git(clonePath, ["worktree", "add", "--detach", targetPath, "HEAD"]);
+        } else {
+          await git(repositoryPath, ["worktree", "add", "--detach", targetPath, "main"]);
+        }
+        let trustedPath = repositoryPath;
+        if (trustSource === "ancestor") trustedPath = path.dirname(repositoryPath);
+        if (trustSource === "worktree-only") trustedPath = sourcePath;
+        if (trustSource === "symlink") {
+          trustedPath = path.join(root, "trusted-alias");
+          await symlink(repositoryPath, trustedPath, "junction");
+        }
+        const thread: AppServerThreadSummary = {
+          id: "ordinary-thread", title: "Move worktree", titleSource: "explicit", source: "codex",
+          projectKey: expectedDir(sourcePath), updatedAt: 1000,
+          linkedDirectories: [{
+            id: expectedDir(sourcePath), kind: "worktree", label: "demo",
+            path: expectedDir(repositoryPath), worktreePath: expectedDir(sourcePath),
+          }],
+        };
+        const overlayStore = createOverlayStoreMock({ overlays: {
+          "codex:ordinary-thread": {
+            backend: "codex", threadId: thread.id, executionMode, extraLinkedDirectories: [],
+          },
+        } });
+        await overlayStore.upsertDirectoryLaunchpad({
+          directoryKey: trustSource === "remote-only"
+            ? launchpadStorageKey(`directory:${expectedDir(trustedPath)}`, { scope: "remote", instanceId: "peer-instance" })
+            : `directory:${expectedDir(trustedPath)}`,
+          directoryKind: "directory", directoryLabel: "demo", directoryPath: expectedDir(trustedPath),
+          backend: "codex", executionMode, workMode: "worktree", prompt: "", createdAt: 1000, updatedAt: 1000,
+        });
+        const codexClient = new MockBackendClient({ threads: [thread] });
+        const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+        onTestFinished(() => registry.close());
+        await registry.publishLocalEvent({ backend: "codex", notification: {
+          method: "turn/started", params: { threadId: thread.id, turnId: "turn-1", turn: { id: "turn-1" } },
+        } });
+        let settled = false;
+        const pending = codexClient.emitRequest({ method: "item/tool/call", params: {
+          threadId: thread.id, turnId: "turn-1", callId: "move", requestId: "move", namespace: "pwragent",
+          tool: "move_thread_workspace", arguments: { direction: "to-project", targetPath },
+        } } as AppServerPendingRequestNotification).then((response) => {
+          settled = true;
+          return response;
+        });
+        await vi.waitFor(() => expect(settled || registry.getPendingRequestForThread({
+          backend: "codex", threadId: thread.id,
+        })).toBeTruthy());
+        const inputRequest = registry.getPendingRequestForThread({ backend: "codex", threadId: thread.id });
+        if (inputRequest?.method === "item/tool/requestUserInput") {
+          await registry.submitServerRequest({
+            backend: "codex", threadId: thread.id, turnId: "turn-1", requestId: inputRequest.params.requestId,
+            response: { answers: { trust_directory: { answers: ["Cancel move"] } } },
+          });
+        }
+        const response = await pending;
+        const trusted = ["repository", "ancestor", "symlink"].includes(trustSource);
+        expect(response).toMatchObject({ success: trusted });
+        const payload = JSON.parse((response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text);
+        expect(payload).toMatchObject(trusted
+          ? { status: "queued", targetPath }
+          : { code: "forbidden" });
+        expect(Boolean(inputRequest)).toBe(!trusted);
+      },
+    );
+  });
+
+  it.each(["default", "auto"] as const)("requires trust before adopting an untrusted existing workspace in %s mode", async (executionMode) => {
     const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-adopt-trust-")));
     onTestFinished(() => rm(root, { recursive: true, force: true }));
     const handoff = vi.fn();
     const codexClient = new MockBackendClient({});
     const registry = new DesktopBackendRegistry({
-      codexClient, overlayStore: createOverlayStoreMock({ overlays: { "codex:agent-thread": createAgentOverlay() } }),
+      codexClient, overlayStore: createOverlayStoreMock({ overlays: { "codex:agent-thread": { ...createAgentOverlay(), executionMode } } }),
       gitWorkspaceHandoffService: { handoff } as never,
     });
     onTestFinished(() => registry.close());
@@ -42272,7 +42369,13 @@ script = "printf setup"
     const request = events.find((event) => event.notification.method === "item/tool/requestUserInput")!.notification;
     if (request.method !== "item/tool/requestUserInput") throw new Error("Expected trust confirmation");
     expect(handoff).not.toHaveBeenCalled();
-    expect(request.params.questions).toEqual([expect.objectContaining({ question: expect.stringContaining(expectedDir(root)) })]);
+    const modeLabel = executionMode === "auto" ? "Auto" : "Default Access";
+    expect(request.params.questions).toEqual([expect.objectContaining({
+      question: `Trust ${expectedDir(root)} and allow ${modeLabel} agent threads to read, write, and delete files in it?`,
+      options: expect.arrayContaining([expect.objectContaining({
+        description: `Trust this directory for future ${modeLabel} agent work.`,
+      })]),
+    })]);
     await registry.submitServerRequest({ backend: "codex", threadId: "agent-thread", turnId: "turn-1",
       requestId: request.params.requestId, response: { answers: { trust_directory: { answers: ["Cancel move"] } } },
     });
