@@ -1610,6 +1610,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     threadId: string;
     /** A worktree the thread is leaving on disk but still owns. */
     retainWorktree?: LinkedDirectorySummary;
+    /** Directory enrichment repairs one checkout; it must not detach siblings. */
+    preserveOtherWorktrees?: boolean;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const { retainedWorktrees: previousRetained, ...current } = this.getThread(threadKey) ?? {
@@ -1631,6 +1633,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       ...current.extraLinkedDirectories.filter((directory) => {
         if (directory.id === params.directory.id) return false;
         if (isHandoffDirectory(directory)) return false;
+        if (params.preserveOtherWorktrees
+          && directory.worktreePath?.trim()
+          && params.directory.worktreePath?.trim()) {
+          return !sameWorktreeCheckout(directory, params.directory);
+        }
         return directory.path !== params.directory.path;
       }),
       params.directory,

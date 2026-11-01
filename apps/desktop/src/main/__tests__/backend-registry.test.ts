@@ -19061,7 +19061,16 @@ script = "echo setup"
       const enrichThreadDirectories = vi.fn(async (threads: AppServerThreadSummary[]) =>
         threads.map((row) => ({ ...row, linkedDirectories: [primary] })));
       Object.assign(codexClient, { enrichThreadDirectories });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      const archiveWorktree = vi.fn(async (params: { worktreePath: string; repositoryPath: string }) => ({
+        id: `snapshot:${params.worktreePath}`, backend: "codex", threadId: thread.id,
+        worktreePath: params.worktreePath, repositoryPath: params.repositoryPath,
+        snapshotRef: "refs/pwragent/snapshot", snapshotCommit: "abc123",
+        createdAt: 1, archivedAt: 1, state: "archived", ignoredFilesExcluded: true,
+      }));
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore,
+        worktreeArchiveService: { archive: archiveWorktree } as unknown as WorktreeArchiveService,
+      });
       try {
         await registry.listThreads({
           backend: "codex", enrichDirectories: false,
@@ -19080,6 +19089,13 @@ script = "echo setup"
         expect((await overlayStore.getArchiveCleanupOverlayStates({
           backend: "codex", threadIds: [thread.id],
         }))[thread.id]?.extraLinkedDirectories).toEqual([attached, primary]);
+        const replaceWorkspace = vi.spyOn(overlayStore, "replaceWorkspaceLinkedDirectory");
+        await registry.listThreads({
+          backend: "codex", enrichDirectories: false, forceRefresh: true,
+          callerReason: "directory-relationship-reconcile",
+        });
+        await registry.refreshThreadDirectoryRelationship(identity);
+        expect(replaceWorkspace).not.toHaveBeenCalled();
         await registry.close();
         db.close();
         const reopenedDb = StateDb.open(temp.dbPath);
@@ -19087,6 +19103,24 @@ script = "echo setup"
           const reopenedStore = new SqliteOverlayStore(reopenedDb);
           expect((await reopenedStore.getThreadOverlayState(identity))?.extraLinkedDirectories)
             .toEqual([attached, primary]);
+          // The provider does not report the attachment. Archive must find it
+          // solely through the persisted overlay, including after restart.
+          const archiveRegistry = new DesktopBackendRegistry({
+            codexClient: new MockBackendClient({ threads: [{ ...thread, linkedDirectories: [primary] }] }),
+            overlayStore: reopenedStore,
+            worktreeArchiveService: { archive: archiveWorktree } as unknown as WorktreeArchiveService,
+          });
+          try {
+            const archived = await archiveRegistry.archiveThread(identity);
+            expect(archived.cleanup).toEqual(expect.arrayContaining([
+              expect.objectContaining({ worktreePath: primaryPath, removedWorktree: true }),
+              expect.objectContaining({ worktreePath: secondaryPath, removedWorktree: true }),
+            ]));
+            expect(archiveWorktree.mock.calls.map(([params]) => params.worktreePath).sort())
+              .toEqual([primaryPath, secondaryPath].sort());
+          } finally {
+            await archiveRegistry.close();
+          }
         } finally {
           reopenedDb.close();
         }
