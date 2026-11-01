@@ -293,6 +293,12 @@ import type {
   SetDirectoryPinResponse,
   SetDirectoryThreadsCollapsedRequest,
   SetDirectoryThreadsCollapsedResponse,
+  SetProjectForgeAutomationRequest,
+  SetProjectForgeAutomationResponse,
+  ListProjectHeldWakeupsRequest,
+  ListProjectHeldWakeupsResponse,
+  ResolveProjectHeldWakeupsRequest,
+  ResolveProjectHeldWakeupsResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
   SetThreadLockRequest,
@@ -1603,6 +1609,16 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setDirectoryThreadsCollapsed?: (
     request: SetDirectoryThreadsCollapsedRequest
   ) => Promise<SetDirectoryThreadsCollapsedResponse>;
+  /** Owner-scoped per-project Forge Automation; local `directory:` keys only. */
+  setProjectForgeAutomation?: (
+    request: SetProjectForgeAutomationRequest
+  ) => Promise<SetProjectForgeAutomationResponse>;
+  listProjectHeldWakeups?: (
+    request: ListProjectHeldWakeupsRequest
+  ) => Promise<ListProjectHeldWakeupsResponse>;
+  resolveProjectHeldWakeups?: (
+    request: ResolveProjectHeldWakeupsRequest
+  ) => Promise<ResolveProjectHeldWakeupsResponse>;
   refreshThreadPullRequests?: (
     request: RefreshThreadPullRequestsRequest
   ) => Promise<RefreshThreadPullRequestsResponse>;

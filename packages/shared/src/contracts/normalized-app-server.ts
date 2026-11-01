@@ -1,4 +1,5 @@
 import type { SubAgentLens } from "../subagent-kind";
+import type { ProjectForgeAutomation } from "../project-forge-automation";
 import type { ToolAccountingTotals } from "../thread-tool-display";
 import type { ThreadIncidentSummary } from "../thread-incident-summary";
 import type { ThreadPricingDisplay } from "../thread-pricing-display";
@@ -2836,6 +2837,14 @@ export type AppServerNotification =
       params: {
         directoryKey: string;
         collapsed: boolean;
+      };
+    }
+  | {
+      method: "directory/forgeAutomation/updated";
+      params: {
+        directoryKey: string;
+        /** Null when the project is back to the defaults. */
+        automation: ProjectForgeAutomation | null;
       };
     }
   | { method: "federation/shutdown/changed"; params: { notices: FederationPeerShutdown[] } }

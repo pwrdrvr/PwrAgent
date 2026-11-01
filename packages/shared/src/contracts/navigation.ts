@@ -1,4 +1,5 @@
 import type { ForgeCli } from "../forge-product";
+import type { ProjectForgeAutomation } from "../project-forge-automation";
 import type { AppServerTurnInputItem } from "./normalized-app-server";
 import type {
   AcpBackendId,
@@ -1351,6 +1352,11 @@ export type NavigationDirectorySummary = {
    * "Directory threads" section while keeping pinned threads visible.
    */
   directoryThreadsCollapsed?: boolean;
+  /**
+   * The owner's Forge Automation for this project. Absent means the
+   * defaults, and is always absent on peer and placeholder rows.
+   */
+  forgeAutomation?: ProjectForgeAutomation;
 };
 
 export type NavigationDirectoryGitStatusUpdatedNotification = {
@@ -3064,6 +3070,11 @@ export type DirectoryOverlayState = {
   pinnedRank?: string;
   /** Hide unpinned directory threads while leaving pinned threads visible. */
   directoryThreadsCollapsed?: boolean;
+  /**
+   * Per-project Forge Automation. Absent means the defaults. Owner-scoped:
+   * only the instance that owns the project's threads stores or enforces it.
+   */
+  forgeAutomation?: ProjectForgeAutomation;
 };
 
 export type ThreadOverlayState = {

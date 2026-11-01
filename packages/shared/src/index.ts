@@ -84,6 +84,7 @@ export * from "./linear-paste";
 export * from "./mcp-elicitation-purpose";
 export * from "./secret-field-names";
 export * from "./thread-lock";
+export * from "./project-forge-automation";
 export * from "./thread-terminal";
 export * from "./thread-titles";
 export * from "./tool-activity-burst";
