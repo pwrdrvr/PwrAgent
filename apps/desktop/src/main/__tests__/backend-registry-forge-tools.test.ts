@@ -375,7 +375,7 @@ describe("backend forge tool dispatch", () => {
     };
     let live: ThreadExecutionMode | undefined;
     let saved: ThreadExecutionMode;
-    let prompts: ReturnType<typeof vi.fn>;
+    let prompts: ReturnType<typeof vi.fn<() => void>>;
     const claudeCall = (operation: Parameters<ForgePrToolHandler>[0], args: Parameters<ForgePrToolHandler>[1]) =>
       (registry as unknown as { gatedForgePrToolHandler: ForgePrToolHandler }).gatedForgePrToolHandler(
         operation, args, { backend: "claude", threadId: "thread-1", turnId: "turn-1", transport: "mcp" });
@@ -396,7 +396,7 @@ describe("backend forge tool dispatch", () => {
       const claude = (registry as unknown as { claudeBackend: ClaudeModes }).claudeBackend;
       vi.spyOn(claude, "liveExecutionMode").mockImplementation(() => live);
       vi.spyOn(claude, "executionMode").mockImplementation(async () => saved);
-      prompts = vi.fn();
+      prompts = vi.fn<() => void>();
       registry.onEvent((event) => { if (event.notification.method === "mcpServer/elicitation/request") prompts(); });
     });
 
