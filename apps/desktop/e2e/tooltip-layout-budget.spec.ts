@@ -82,6 +82,33 @@ test("tooltip ignores sibling streaming and still detects sibling layout movemen
     const rail = app.window.getByRole("complementary", { name: "Thread context" });
     await rail.getByRole("tab", { name: "Linked projects" }).click();
     const anchor = rail.getByLabel("Path for PwrAgent", { exact: true });
+    if (process.env.PWRAGENT_TOOLTIP_OBSERVER_DIAGNOSTICS === "1") {
+      await anchor.evaluate((target) => {
+        const diagnostics = { frames: [] as string[], sizes: [] as object[], activeFrame: "" };
+        Object.assign(window, { tooltipBudgetDiagnostics: diagnostics });
+        const request = window.requestAnimationFrame.bind(window);
+        window.requestAnimationFrame = (callback) => {
+          const stack = new Error().stack ?? "";
+          return request((time) => {
+            diagnostics.activeFrame = stack;
+            try { callback(time); } finally { diagnostics.activeFrame = ""; }
+          });
+        };
+        const NativeResizeObserver = ResizeObserver;
+        window.ResizeObserver = class extends NativeResizeObserver {
+          constructor(callback: ResizeObserverCallback) {
+            super((entries, observer) => {
+              for (const entry of entries) {
+                if (entry.target === target && diagnostics.sizes.length < 8) {
+                  diagnostics.sizes.push({ ...entry.borderBoxSize[0] });
+                }
+              }
+              callback(entries, observer);
+            });
+          }
+        };
+      });
+    }
     await anchor.focus();
     await expect(app.window.getByRole("tooltip")).toBeVisible();
     await anchor.evaluate(async (target) => {
@@ -105,7 +132,17 @@ test("tooltip ignores sibling streaming and still detects sibling layout movemen
       // Drain the native initial deliveries after the motion's completion.
       await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
       let reads = 0;
-      target.getBoundingClientRect = () => { reads += 1; return original(); };
+      const diagnostics = (window as unknown as { tooltipBudgetDiagnostics?: {
+        activeFrame: string; frames: string[]; baseline?: object;
+      } }).tooltipBudgetDiagnostics;
+      if (diagnostics) diagnostics.baseline = original().toJSON();
+      target.getBoundingClientRect = () => {
+        reads += 1;
+        if (diagnostics && diagnostics.frames.length < 8) {
+          diagnostics.frames.push(diagnostics.activeFrame || new Error().stack || "unknown");
+        }
+        return original();
+      };
       Object.assign(window, { tooltipBudgetReads: () => reads });
     });
     if (process.env.PWRAGENT_TOOLTIP_PERFORMANCE_TRACE === "1") {
@@ -126,6 +163,9 @@ test("tooltip ignores sibling streaming and still detects sibling layout movemen
     });
     await capture?.finish();
     console.log(JSON.stringify({ tooltipStreaming: { deliveries: 100, anchorGeometryReads: reads } }));
+    if (reads !== 0) console.log(JSON.stringify(await app.window.evaluate(() =>
+      (window as unknown as { tooltipBudgetDiagnostics?: object }).tooltipBudgetDiagnostics,
+    )));
     expect(reads).toBe(0);
     await expect(app.window.getByRole("tooltip")).toBeVisible();
     // A sibling's descendants resize without mutating any observed ancestor
