@@ -620,8 +620,11 @@ select_for_new_threads = true
     try {
       await peer.setThreadMcpConnections({ backend: "codex", threadId: "thread-1", connectionIds: [] });
       await peer.setThreadMcpConnections({ backend: "codex", threadId: "thread-1", connectionIds: ["pwrsnap"] });
-      expect((await f.readArgs()).schemaRevision).toBe(first.schemaRevision);
+      const reselected = await f.readArgs();
+      expect(reselected.schemaRevision).not.toBe(first.schemaRevision);
       expect((await internals.handleServerRequest("codex", request("call_mcp_tool", first, "call-2"))).success).toBe(false);
+      expect(events).toHaveLength(1);
+      expect((await internals.handleServerRequest("codex", request("call_mcp_tool", reselected, "call-3"))).success).toBe(false);
       expect(events).toHaveLength(2);
       expect(f.callTool).toHaveBeenCalledOnce();
     } finally {
