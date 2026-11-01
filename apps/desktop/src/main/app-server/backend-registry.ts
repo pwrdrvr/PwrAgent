@@ -26861,10 +26861,10 @@ export class DesktopBackendRegistry {
     }
     if (trustedPaths.length === 0) return false;
 
-    // Worktrees may live outside the trusted directory. Use Git's repository
-    // relationship rather than the worktree's name or linked-directory metadata.
+    // A .git reference alone does not establish a worktree relationship. Only
+    // registered worktrees outside the trusted directory inherit repository trust.
     const primaryPath = await this.gitDirectoryService
-      .resolvePrimaryWorkspacePath(resolvedCwd)
+      .resolvePrimaryWorkspacePath(resolvedCwd, { requireRegisteredWorktree: true })
       .catch(() => undefined);
     if (!primaryPath) return false;
     const resolvedPrimaryPath = await realpath(primaryPath).catch(() => path.resolve(primaryPath));
