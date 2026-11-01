@@ -1,7 +1,9 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { ElicitRequestSchema, ToolListChangedNotificationSchema, PromptListChangedNotificationSchema, ResourceListChangedNotificationSchema, ResourceUpdatedNotificationSchema, type ElicitRequestParams, type InitializeResult } from "@modelcontextprotocol/sdk/types.js";
+import { McpInitializationTransport } from "../mcp-connections/mcp-initialization-transport";
+import type { McpBridgeEvent } from "../mcp-connections/mcp-connection-rpc-client";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { ElicitRequestSchema, type ElicitRequestParams } from "@modelcontextprotocol/sdk/types.js";
 import type { ElicitationRoute } from "../mcp-connections/mcp-elicitation-relay";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +11,8 @@ const bridge = vi.hoisted(() => ({
   attach: vi.fn(async () => true),
   request: vi.fn(),
   transport: undefined as Transport | undefined,
+  event: undefined as ((event: McpBridgeEvent) => void) | undefined,
+  initialization: undefined as InitializeResult | undefined,
 }));
 
 vi.mock("@modelcontextprotocol/sdk/server/stdio.js", () => ({
@@ -24,7 +28,8 @@ let now: number;
 beforeEach(() => {
   vi.resetModules();
   bridge.request.mockReset();
-  bridge.attach.mockClear();
+  bridge.attach.mockReset();
+  bridge.attach.mockImplementation(async (_timeout?: number, onEvent?: (event: McpBridgeEvent) => void) => { bridge.event = onEvent; return true; });
   now = 1_000_000;
   vi.spyOn(Date, "now").mockImplementation(() => now);
   vi.spyOn(process, "exit").mockImplementation(() => { throw new Error("Unexpected native bridge exit."); });
@@ -46,7 +51,9 @@ async function openBridge(
   bridge.transport = serverTransport;
   await import("../mcp-connections/mcp-connection-bridge-entry");
   clients.push(client);
-  await client.connect(transport);
+  const observed = new McpInitializationTransport(transport);
+  await client.connect(observed);
+  bridge.initialization = observed.initialization;
   return client;
 }
 
@@ -209,5 +216,51 @@ describe("native bridge upstream forms", () => {
     await client.callTool({ name: "remove", arguments: {} });
 
     expect(routes).toEqual([undefined]);
+  });
+});
+
+describe("desktop-owned native bridge discovery", () => {
+  it("preserves desktop identity, relay metadata, instructions and advertised subscriptions", async () => {
+    const metadata = { "com.pwrdrvr.pwrdisk/interface": { owner: "desktop", desktopVersion: "2.0.0", relayVersion: "0.1.0" } };
+    let skill = "Original safety brief.";
+    bridge.request.mockImplementation(async (operation: string) => {
+      if (operation === "describe") return {
+        tools: true, resources: true, prompts: true,
+        serverInfo: { name: "desktop", version: "2.0.0" }, instructions: "Read the current skill.", metadata,
+        capabilities: { tools: { listChanged: true }, resources: { listChanged: true, subscribe: true }, prompts: { listChanged: true } },
+      };
+      if (operation.endsWith("subscribe")) return {};
+      if (operation === "resources/read") return { contents: [{ uri: "skill://fixture/SKILL.md", text: skill }] };
+      return tail;
+    });
+    const client = await openBridge();
+    expect(client.getServerVersion()).toEqual({ name: "desktop", version: "2.0.0" });
+    expect(client.getInstructions()).toBe("Read the current skill.");
+    expect(bridge.initialization?._meta).toEqual(metadata);
+    expect(await client.readResource({ uri: "skill://fixture/SKILL.md" })).toMatchObject({ contents: [{ text: skill }] });
+    const notifications: string[] = [];
+    for (const schema of [ToolListChangedNotificationSchema, PromptListChangedNotificationSchema, ResourceListChangedNotificationSchema, ResourceUpdatedNotificationSchema]) {
+      client.setNotificationHandler(schema, (notification) => { notifications.push(notification.method); });
+    }
+    for (const method of ["notifications/tools/list_changed", "notifications/prompts/list_changed", "notifications/resources/list_changed"]) bridge.event?.({ method });
+    await client.subscribeResource({ uri: "skill://fixture/SKILL.md", _meta: { "fixture/approval": "retained" } });
+    skill = "Updated safety brief.";
+    bridge.event?.({ method: "notifications/resources/updated", params: { uri: "skill://fixture/SKILL.md", _meta: { revision: 2 } } });
+    await vi.waitFor(() => expect(notifications).toHaveLength(4));
+    expect(await client.readResource({ uri: "skill://fixture/SKILL.md" })).toMatchObject({ contents: [{ text: "Updated safety brief." }] });
+    await client.unsubscribeResource({ uri: "skill://fixture/SKILL.md" });
+    expect(bridge.request).toHaveBeenCalledWith("resources/subscribe", { uri: "skill://fixture/SKILL.md", _meta: { "fixture/approval": "retained" } }, expect.any(AbortSignal));
+    expect(client.getServerCapabilities()?.resources).toEqual({ listChanged: true, subscribe: true });
+  });
+
+  it("ends the host connection on desktop EOF instead of reopening it under cached definitions", async () => {
+    bridge.request.mockResolvedValue({ tools: true });
+    const client = await openBridge();
+    const onclose = vi.fn();
+    client.onclose = onclose;
+    bridge.event?.({ method: "connection/closed" });
+    await vi.waitFor(() => expect(onclose).toHaveBeenCalledOnce());
+    await expect(client.listTools()).rejects.toThrow();
+    expect(bridge.request).toHaveBeenCalledTimes(1);
   });
 });

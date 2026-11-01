@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ancestry, bindPipeNames, exactLauncherPipes, normalizePipeName, parseHandleOutput, observeWindowsLauncher, packageManagerCommand } from "./windows-pipe-observation.mjs";
+import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, normalizePipeName, parseHandleOutput, observeWindowsLauncher, packageManagerCommand } from "./windows-pipe-observation.mjs";
 
 const roots = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -71,9 +71,45 @@ describe("Windows natural pipe evidence", () => {
     expect(bindPipeNames(before, { ...before }, text).pipes.map((pipe) => pipe.name)).toEqual(names);
     expect(bindPipeNames(before, { ...before }, text.replaceAll("File  ", "")).pipes.map((pipe) => pipe.name)).toEqual(names);
     expect(bindPipeNames(before, { ...before }, "Access denied").nameQueryErrorCount).toBe(1);
-    expect(bindPipeNames(before, { ...before }, "Access denied").pipes).toEqual([]);
+    expect(bindPipeNames(before, { ...before }, "Access denied")).toMatchObject({ nameQueryStatus: "query-failed", error: expect.any(String) });
     expect(bindPipeNames(before, { ...before, created: "134379500000000001" }, text).error).toBeDefined();
     expect(bindPipeNames(before, { ...before, liveAfter: false }, text).error).toBeDefined();
+  });
+
+  it("distinguishes a recognized inventory without uv pipes from unknown output and rejected queries", () => {
+    expect(HANDLE_INVENTORY_OPTIONS).toEqual(["-accepteula", "-nobanner", "-a"]);
+    const identity = { pid: 77, created: "134379500000000000", verified: true, liveAfter: true };
+    const nonPipe = "  58: File          C:\\contrived\\fixture.txt\r\n  2B0: Section       \\contrived\\section\r\n";
+    const valid = bindPipeNames(identity, { ...identity }, nonPipe);
+    expect(valid).toMatchObject({ nameQueryStatus: "inventory", parsedProcessCount: 1, recognizedHandleCount: 2, pipes: [], verified: true });
+    expect(valid.error).toBeUndefined();
+    const empty = bindPipeNames(identity, { ...identity }, "No matching handles found.\r\n", { error: { code: 1, killed: false } });
+    expect(empty).toMatchObject({ nameQueryStatus: "empty", parsedProcessCount: 0, pipes: [], verified: true });
+    expect(empty.error).toBeUndefined();
+    for (const [text, status] of [
+      ["", "unrecognized"],
+      ["FutureHandle,Pid,Object,Name\ncontrived,77,10,synthetic", "unrecognized"],
+      ["node.exe pid: 77", "unrecognized"],
+      ["usage: handle [[-a] [-p <pid>]] [name]", "usage"],
+      ["Error opening process 77: Access denied: C:\\contrived\\private.txt", "query-failed"],
+      [nonPipe + "  20: File changed-format \\Device\\NamedPipe\\uv\\1-123", "unrecognized"],
+      [nonPipe + "  20: File changed-format \\DEVICE\\NAMEDPIPE\\uv\\1-123", "unrecognized"],
+      [nonPipe + "No matching handles found.", "unrecognized"],
+    ]) {
+      const rejected = bindPipeNames(identity, { ...identity }, text);
+      expect(rejected).toMatchObject({ nameQueryStatus: status, error: expect.any(String) });
+      expect(rejected.verified).toBeUndefined();
+      expect(exactLauncherPipes(names, rejected).names).toBeUndefined();
+      expect(JSON.stringify(rejected)).not.toContain("private.txt");
+    }
+    const text = names.map((name, i) => `  ${i + 16}: File  ${name}`).join("\n");
+    for (const query of [{ error: { code: 2 } }, { error: { code: 1, killed: true } }, { stderrBytes: 1 }]) {
+      expect(bindPipeNames(identity, { ...identity }, text, query)).toMatchObject({ nameQueryStatus: "query-failed", error: expect.any(String) });
+      expect(bindPipeNames(identity, { ...identity }, "No matching handles found.", query).error).toBeDefined();
+    }
+    expect(bindPipeNames(identity, { ...identity }, text + "\nusage: handle").nameQueryStatus).toBe("usage");
+    expect(bindPipeNames(identity, { ...identity }, "node.exe pid: 78\n  10: File  C:\\contrived\\fixture.txt").error).toMatch(/Unexpected PID/);
+    expect(bindPipeNames(identity, { ...identity, created: "134379500000000001" }, "No matching handles found.").error).toMatch(/identity/);
   });
 
   it("parses global search records and rejects substring lookalikes at exact matching", () => {
@@ -84,6 +120,9 @@ describe("Windows natural pipe evidence", () => {
     expect(parsed.processes[0].pipes.map((pipe) => pipe.name)).toEqual(names);
     expect(parseHandleOutput(text.replaceAll("type: File ", "")).processes[0].pipes.map((pipe) => pipe.name)).toEqual(names);
     expect(parsed.errorCount).toBe(1);
+    expect(parsed.status).toBe("query-failed");
+    expect(parsed.errors).toEqual(["access-denied"]);
+    expect(parseHandleOutput(text).status).toBe("inventory");
     expect(parseHandleOutput("node.exe pid: 98\n  10: File " + names[0]).processes[0].pid).toBe(98);
   });
   function fake() {
@@ -130,8 +169,8 @@ describe("Windows natural pipe evidence", () => {
 
   it.skipIf(process.platform !== "win32" || process.arch !== "x64")("records native process creation and exit times on Windows", async () => {
     const result = await promisify(execFile)(process.execPath, [path.join(import.meta.dirname, "windows-pipe-diagnostics-probe.mjs")], {
-      windowsHide: true, timeout: 25000,
+      windowsHide: true, timeout: 35000,
     });
     expect(JSON.parse(result.stdout)).toEqual(expect.objectContaining({ creationIdentityVerified: true, nativeExitTimeVerified: true }));
-  });
+  }, 40000);
 });

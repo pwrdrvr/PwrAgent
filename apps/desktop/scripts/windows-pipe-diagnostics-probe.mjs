@@ -8,7 +8,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
-import { bindPipeNames, exactLauncherPipes } from "./windows-pipe-observation.mjs";
+import { bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS } from "./windows-pipe-observation.mjs";
 
 const directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-native-pipe-proof-"));
 const executable = path.join(directory, "native.exe");
@@ -17,7 +17,17 @@ const stop = path.join(directory, "watch.stop");
 const stopSource = path.join(directory, "source.stop");
 const readySource = path.join(directory, "source.ready");
 const records = [];
-const exec = promisify(execFile);
+const execute = promisify(execFile);
+async function exec(...args) {
+  try { return await execute(...args); }
+  catch (error) {
+    // execFile errors embed raw stdout/stderr. Even a failed controlled probe
+    // must not dump unrelated object names into test or CI logs.
+    throw new Error("Controlled diagnostic command failed: " + JSON.stringify({
+      code: error.code, signal: error.signal, killed: error.killed,
+    }));
+  }
+}
 let watcher, child, lines, sourceClosed, watcherClosed;
 async function bounded(promise, ms, message) {
   let timer;
@@ -40,7 +50,7 @@ async function stopOwned(process, closing, marker) {
 }
 try {
   await exec(compiler, ["/nologo", "/platform:x64", "/r:System.Web.Extensions.dll", "/out:" + executable,
-    path.join(import.meta.dirname, "windows-pipe-diagnostics.cs")], { windowsHide: true, timeout: 10000 });
+    path.join(import.meta.dirname, "windows-pipe-diagnostics.cs")], { windowsHide: true, timeout: 20000 });
   const ready = Promise.withResolvers();
   watcher = spawn(executable, ["watch", stop], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
   watcherClosed = once(watcher, "close");
@@ -62,15 +72,17 @@ try {
   void sourceClosed.catch(() => {});
   for (const stream of child.stdio.filter(Boolean)) stream.resume();
   await waitFor(() => existsSync(readySource), "Controlled source did not become ready");
+  const inventoryDeadline = Date.now() + 5000;
   const result = JSON.parse((await exec(executable, ["identity", String(child.pid)], { timeout: 3000, windowsHide: true })).stdout);
   assert.equal(result.process.verified, true);
   assert.equal(result.process.liveAfter, true);
   let exactPipes;
   const handle = process.env.PWRAGENT_WINDOWS_HANDLE_EXE;
   if (handle) {
-    const tool = await exec(handle, ["-accepteula", "-nobanner", "-p", String(child.pid)], { timeout: 1500, windowsHide: true });
+    const tool = await exec(handle, [...HANDLE_INVENTORY_OPTIONS, "-p", String(child.pid)], { timeout: Math.max(1, inventoryDeadline - Date.now()), windowsHide: true });
     const after = JSON.parse((await exec(executable, ["identity", String(child.pid)], { timeout: 3000, windowsHide: true })).stdout);
     const named = bindPipeNames(result.process, after.process, tool.stdout);
+    assert.equal(named.nameQueryStatus, "inventory");
     const candidates = process.report.getReport().libuv.flatMap((entry) => [entry.localEndpoint, entry.remoteEndpoint])
       .filter((name) => typeof name === "string" && !oldNames.has(name) && name.endsWith("-" + process.pid));
     const endpoints = exactLauncherPipes(candidates, named);

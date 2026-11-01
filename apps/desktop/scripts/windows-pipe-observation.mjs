@@ -90,50 +90,92 @@ export function observeWindowsLauncher(child, { directory, logEvidence, now = Da
   return launchId;
 }
 
-export function parseHandleOutput(output, defaultPid) {
+// File-only Handle inventories can omit named pipes. Keep every query (including
+// the controlled native probe) on the same all-handle invocation.
+export const HANDLE_INVENTORY_OPTIONS = Object.freeze(["-accepteula", "-nobanner", "-a"]);
+
+export function parseHandleOutput(output, defaultPid, query = {}) {
   const processes = new Map();
   const errors = [];
-  let errorCount = 0;
+  let errorCount = 0, recognizedHandleCount = 0, unrecognizedLineCount = 0;
+  let usage = false, explicitEmpty = false;
   let current = defaultPid ? { pid: defaultPid, pipes: [] } : undefined;
   const get = (pid) => {
     if (!processes.has(pid)) processes.set(pid, { pid, pipes: [] });
     return processes.get(pid);
   };
-  for (const line of output.split("\n")) {
-    // Search mode is one process/handle per line. A scoped numeric -p dump
-    // omits the header entirely; its PID is supplied by the bracketed query.
-    // File-only mode can also omit the redundant File/type column.
-    const search = line.match(/\bpid:\s*(\d+)\s+(?:type:\s+File\s+)?([a-f0-9]+):\s+(\\Device\\NamedPipe\\uv\\[^\r\n]+)\r?$/i);
+  const recordError = (reason) => {
+    errorCount++;
+    // Error lines can contain unrelated names, paths or account information.
+    if (errors.length < 8) errors.push(reason);
+  };
+  for (const raw of output.split("\n")) {
+    const line = raw.replace(/\r$/, "");
+    if (!line.trim()) continue;
+    if (/^\s*usage:/i.test(line)) { usage = true; continue; }
+    if (/^\s*No matching handles found\.\s*$/i.test(line)) { explicitEmpty = true; continue; }
+    // Search mode is one process/handle per line. Scoped -nobanner dumps omit
+    // the process header; only the bracketed native identity supplies that PID.
+    const search = line.match(/\bpid:\s*(\d+)\s+(?:type:\s+File\s+)?([a-f0-9]+):\s+(\\Device\\NamedPipe\\uv\\[^\r\n]+)$/i);
     if (search) {
       get(Number(search[1])).pipes.push({ handle: search[2].toLowerCase(), name: search[3] });
+      recognizedHandleCount++;
       continue;
     }
-    const header = line.match(/\bpid:\s*(\d+)\b/);
+    const header = line.match(/^.+?\s+pid:\s*(\d+)\s*$/i);
     if (header) { current = get(Number(header[1])); continue; }
-    const pipe = line.match(/^\s*([a-f0-9]+):\s+(?:File\s+(?:\([^)]*\)\s+)?)?(\\Device\\NamedPipe\\uv\\[^\r\n]+)\r?$/i);
+    const pipe = line.match(/^\s*([a-f0-9]+):\s+(?:File\s+(?:\([^)]*\)\s+)?)?(\\Device\\NamedPipe\\uv\\[^\r\n]+)$/i);
     if (pipe && current) {
       current = get(current.pid);
       current.pipes.push({ handle: pipe[1].toLowerCase(), name: pipe[2] });
+      recognizedHandleCount++;
+      continue;
     }
-    if (/\berror\b|access denied|unable to|could not/i.test(line)) {
-      errorCount++;
-      if (errors.length < 8) errors.push(line.slice(0, 256));
+    // Recognize non-pipe records without retaining their names. A malformed uv
+    // record must not turn into a successful inventory with zero named pipes.
+    const scopedRecord = /^\s*[a-f0-9]+:\s+(?:[a-z][\w]*|<Unknown type>)(?:\s.*)?$/i.test(line);
+    const searchRecord = line.match(/^.+?\s+pid:\s*(\d+)\s+type:\s+\S+\s+[a-f0-9]+:(?:\s.*)?$/i);
+    if (!/\\Device\\NamedPipe\\uv\\/i.test(line) && ((scopedRecord && current) || searchRecord)) {
+      get(searchRecord ? Number(searchRecord[1]) : current.pid);
+      recognizedHandleCount++;
+      continue;
     }
+    if (/access (?:is )?denied/i.test(line)) recordError("access-denied");
+    else if (/administrat(?:or|ive)|requires? elevation/i.test(line)) recordError("privilege-required");
+    else if (/\berror\b|unable to|could not|invalid (?:argument|option|parameter)|unknown (?:option|parameter)/i.test(line)) recordError("query-rejected");
+    else if (!/^-{3,}\s*$|^(?:Nthandle|Handle) v[\d.]+ - Handle viewer\s*$|^Copyright \(C\) |^Sysinternals - /i.test(line)) unrecognizedLineCount++;
   }
-  return { processes: [...processes.values()], errors, errorCount, omittedErrors: errorCount - errors.length };
+  // Handle 5.0 returns exit 1 for its explicit, otherwise clean no-match result.
+  // A timeout, signal, stderr, or any other unsuccessful exit is not emptiness.
+  const cleanEmpty = explicitEmpty && !recognizedHandleCount && !processes.size && !unrecognizedLineCount && !errorCount;
+  const executionFailed = query.stderrBytes > 0 || (query.error
+    && !(cleanEmpty && query.error.code === 1 && !query.error.killed && !query.error.signal));
+  const status = usage ? "usage"
+    : executionFailed || errorCount ? "query-failed"
+    : unrecognizedLineCount || (explicitEmpty && !cleanEmpty) ? "unrecognized"
+    : recognizedHandleCount ? "inventory"
+    : cleanEmpty ? "empty" : "unrecognized";
+  return { status, recognizedHandleCount, unrecognizedLineCount,
+    processes: [...processes.values()], errors, errorCount, omittedErrors: errorCount - errors.length };
 }
 
-export function bindPipeNames(before, after, output) {
-  const parsed = parseHandleOutput(output, before?.pid);
-  const source = parsed.processes.find((entry) => entry.pid === before?.pid);
+export function bindPipeNames(before, after, output, query) {
+  const parsed = parseHandleOutput(output, before?.pid, query);
+  const details = { nameQueryStatus: parsed.status, parsedProcessCount: parsed.processes.length,
+    recognizedHandleCount: parsed.recognizedHandleCount, unrecognizedLineCount: parsed.unrecognizedLineCount,
+    nameQueryErrors: parsed.errors, nameQueryErrorCount: parsed.errorCount, omittedNameQueryErrors: parsed.omittedErrors };
   if (!before?.verified || !after?.verified || !before.liveAfter || !after.liveAfter
     || before.pid !== after.pid || before.created !== after.created) {
-    return { error: "Source creation identity was not verified around the name inventory." };
+    return { ...details, error: "Source creation identity was not verified around the name inventory." };
+  }
+  if (parsed.status !== "inventory" && parsed.status !== "empty") {
+    return { ...details, error: "Name inventory was unavailable: " + parsed.status + "." };
   }
   if (parsed.processes.some((entry) => entry.pid !== before.pid)) {
-    return { error: "Unexpected PID in the scoped name inventory.", observedPids: parsed.processes.slice(0, 8).map((entry) => entry.pid) };
+    return { ...details, error: "Unexpected PID in the scoped name inventory.", observedPids: parsed.processes.slice(0, 8).map((entry) => entry.pid) };
   }
-  return { ...after, pipes: source?.pipes ?? [], parsedProcessCount: parsed.processes.length, nameQueryErrors: parsed.errors, nameQueryErrorCount: parsed.errorCount, omittedNameQueryErrors: parsed.omittedErrors };
+  const source = parsed.processes.find((entry) => entry.pid === before.pid);
+  return { ...after, ...details, pipes: source?.pipes ?? [] };
 }
 
 export function packageManagerCommand(pnpm, args) {

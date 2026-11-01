@@ -2,10 +2,10 @@ import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detac
 import { ForgeReadService, repositoryFromPr } from "../pr-status/forge-read-service";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
 import { GithubPrToolClient } from "../pr-status/github-pr-tool-client";
-import { ForgePrToolService, type ForgePrToolScope } from "../pr-status/forge-pr-tool-service";
+import { ForgePrToolService, type ForgePrToolPreparedCall, type ForgePrToolScope } from "../pr-status/forge-pr-tool-service";
 import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
-import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "../pr-status/forge-tool-contract";
+import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
 import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { createOwnerRoutedForgeReadHandler } from "../federation/federated-forge-read-service";
@@ -270,6 +270,7 @@ import {
   isFederationInstanceId,
   isRemoteFederationTarget,
   type FederationTarget,
+  mergeThreadLinkedDirectories,
   normalizePullRequestProvider as normalizeSharedPullRequestProvider,
   parseThreadIdentityKey,
   rankInboxThreadKeys,
@@ -3026,6 +3027,8 @@ class DesktopAppServerService {
   }): Promise<void> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const current = this.attachedPrsByThreadKey.get(threadKey);
+    // Write the PR list before any await so overlapping updates keep their
+    // arrival order.
     this.setThreadPrAttachment(
       threadKey,
       {
@@ -3036,7 +3039,38 @@ class DesktopAppServerService {
         prs: params.prs,
       },
     );
+    if (!current?.primaryRepoKey) {
+      const primaryRepoKey = await this.resolveUncachedPrimaryRepoKey(params);
+      // Patch only the key onto whatever list is now current. A refresh may
+      // have supplied a key, or dropped the thread, while this resolved.
+      const latest = this.attachedPrsByThreadKey.get(threadKey);
+      if (primaryRepoKey && latest && !latest.primaryRepoKey) {
+        this.setThreadPrAttachment(threadKey, { ...latest, primaryRepoKey });
+      }
+    }
     await this.syncThreadPrAutoDispatchCandidates(params);
+  }
+
+  /**
+   * The owner navigation refresh normally supplies a thread's primary
+   * repository. A thread created mid-session can attach and watch a PR before
+   * that refresh lists it; without this, its PR would not count as primary
+   * and the watch tool would refuse it until the next refresh.
+   */
+  private async resolveUncachedPrimaryRepoKey(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<string | undefined> {
+    const summary = getDesktopBackendRegistry().getCachedThreadSummary(params);
+    if (!summary) return undefined;
+    const overlay = await this.getOverlayStore().getThreadOverlayState(params);
+    return await resolvePrimaryThreadRepoKey({
+      gitOriginUrl: summary.gitOriginUrl,
+      linkedDirectories: mergeThreadLinkedDirectories([
+        ...summary.linkedDirectories,
+        ...(overlay?.extraLinkedDirectories ?? []),
+      ]),
+    });
   }
 
   readPrimaryGitRepository(backend: AppServerBackendKind, threadId: string): string | undefined {
@@ -4183,9 +4217,9 @@ class DesktopAppServerService {
     });
   }
 
-  /** The GitHub or GitLab repository a call would act in, so an approval prompt can name it. */
-  async resolveForgePrRepositoryForAgent(args: ForgePrToolArgs, context: AgentToolCallContext): Promise<ForgeRepository> {
-    return this.forgePrToolService().resolveRepository(args, await this.forgePrToolScope(context));
+  /** The repository and settled arguments of a call, so an approval prompt names them and a bad call fails first. */
+  async prepareForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<ForgePrToolPreparedCall> {
+    return await this.forgePrToolService().prepare(operation, args, await this.forgePrToolScope(context), context.signal);
   }
 
   /** Pull request and issue tools act only in the calling thread's own repositories. */
@@ -4387,10 +4421,18 @@ class DesktopAppServerService {
       backend: args.backend,
       threadId,
     });
+    const overlayPrs = this.canonicalizePrs(overlay?.prs ?? []);
+    if (!this.readPrimaryGitRepository(args.backend, threadId)) {
+      await this.rememberThreadPrAttachmentUpdate({
+        backend: args.backend,
+        threadId,
+        prs: overlayPrs,
+      });
+    }
     const attachedPrs = this.primaryAttachedPrsForThread({
       backend: args.backend,
       threadId,
-      prs: this.canonicalizePrs(overlay?.prs ?? []),
+      prs: overlayPrs,
     });
     const requestedUrl = normalizePrWatchUrl(args.url);
     const matches = requestedUrl
@@ -9098,7 +9140,7 @@ export function registerAppServerIpcHandlers(): void {
   }));
   getDesktopBackendRegistry().setForgePrToolHandler(
     async (operation, args, context) => await appServerService.runForgePrToolForAgent(operation, args, context),
-    async (args, context) => await appServerService.resolveForgePrRepositoryForAgent(args, context),
+    async (operation, args, context) => await appServerService.prepareForgePrToolForAgent(operation, args, context),
   );
   getDesktopBackendRegistry().setForgeToolPolicyResolver(
     () => getDesktopSettingsService().resolveForgeAgentToolPolicy(),

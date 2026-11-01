@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import Ajv from "ajv";
 import Ajv2019 from "ajv/dist/2019.js";
 import Ajv2020 from "ajv/dist/2020.js";
-import { ErrorCode, McpError, type Tool } from "@modelcontextprotocol/sdk/types.js";
+import { ErrorCode, McpError, type Tool, type Implementation, type InitializeResult } from "@modelcontextprotocol/sdk/types.js";
 import type { McpConnectionToolApproval } from "@pwragent/shared";
 
 export type McpGatewaySource = {
@@ -12,7 +12,10 @@ export type McpGatewaySource = {
   schemaRevision: string;
 };
 
+export type McpGatewayIdentity = { serverInfo?: Implementation; metadata?: InitializeResult["_meta"] };
+
 export type McpGatewayTool = McpGatewaySource & {
+  serverIdentity?: McpGatewayIdentity;
   /** Owner-issued schema/authorization identity, stable across worker scopes. */
   consentRevision?: string;
   definition: Tool;

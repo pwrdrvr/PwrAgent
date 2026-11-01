@@ -109,7 +109,7 @@ describe("MCP discovery lifecycle with the real SDK and a fake HTTP endpoint", (
     f.configure({ initializeMs: 35_000 });
     const startup = f.run("describe");
     await vi.advanceTimersByTimeAsync(35_000);
-    await expect(startup).resolves.toEqual({ tools: true, resources: false, prompts: false });
+    await expect(startup).resolves.toMatchObject({ tools: true, resources: false, prompts: false });
     expect(f.posts.some((post) => post.method === "tools/list")).toBe(false);
     await expect(f.run()).resolves.toMatchObject([{ toolName: "lookup_1" }]);
     expect(f.posts.filter((post) => post.method === "initialize")).toHaveLength(1);

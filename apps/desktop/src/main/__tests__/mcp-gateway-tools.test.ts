@@ -39,6 +39,15 @@ function fixture() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("fixed MCP gateway tools", () => {
+  it("reports supplied process identity once without inferring a desktop owner", async () => {
+    const f = fixture();
+    const serverIdentity = { serverInfo: { name: "fixture", version: "3" }, metadata: { interface: { owner: "standalone", relayVersion: null } } };
+    f.catalog.set("one", [{ ...tool(), serverIdentity }, tool("one", "lookup_again")]);
+    const result = await f.service.search({ query: "lookup" }, context);
+    expect(result.servers).toEqual([{ connectionId: "one", serverName: "one", ...serverIdentity }]);
+    expect(result.tools.every((entry) => !("serverIdentity" in entry))).toBe(true);
+  });
+
   it("binds server consent to every tool revision, independent of listing order", () => {
     const first = tool("one", "lookup");
     const second = tool("one", "write");
