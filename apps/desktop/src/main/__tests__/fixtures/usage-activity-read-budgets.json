@@ -1,0 +1,4 @@
+{
+  "narrow": { "materializingQueries": 5, "ledgerRows": 4 },
+  "monitors": { "materializingQueries": 4, "ledgerRows": 2 }
+}

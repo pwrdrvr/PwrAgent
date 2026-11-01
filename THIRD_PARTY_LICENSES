@@ -1268,7 +1268,7 @@ MIT
 - web-namespaces@2.0.1 | wooorm/web-namespaces
 - whatwg-url@5.0.0 | jsdom/whatwg-url
 - ws@8.22.0 | https://github.com/websockets/ws
-- zod@4.4.3 | https://github.com/colinhacks/zod
+- zod@4.6.6 | https://github.com/colinhacks/zod
 - zwitch@2.0.4 | wooorm/zwitch
 
 OFL-1.1
@@ -13406,13 +13406,13 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-zod@4.4.3 (MIT)
+zod@4.6.6 (MIT)
 ---------------
 
 Applies to:
-- zod@4.4.3 (MIT)
+- zod@4.6.6 (MIT)
 
-Representative file: zod@4.4.3/LICENSE
+Representative file: zod@4.6.6/LICENSE
 
 MIT License
 

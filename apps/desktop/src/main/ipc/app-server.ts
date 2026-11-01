@@ -2,10 +2,10 @@ import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detac
 import { ForgeReadService, repositoryFromPr } from "../pr-status/forge-read-service";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
 import { GithubPrToolClient } from "../pr-status/github-pr-tool-client";
-import { ForgePrToolService, type ForgePrToolScope } from "../pr-status/forge-pr-tool-service";
+import { ForgePrToolService, type ForgePrToolPreparedCall, type ForgePrToolScope } from "../pr-status/forge-pr-tool-service";
 import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
-import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "../pr-status/forge-tool-contract";
+import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
 import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { createOwnerRoutedForgeReadHandler } from "../federation/federated-forge-read-service";
@@ -18,7 +18,8 @@ import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../shared/ipc";
 import { archiveCandidateProtectionReason } from "../app-server/thread-archive-sweeper";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../../shared/ipc";
 import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../../shared/ipc";
-import { readThreadFamilyPricing } from "../app-server/thread-family-pricing";
+import { readFederatedThreadFamilyPricing } from "../app-server/thread-family-pricing";
+import { createLocalThreadFamilyPricingReader } from "../app-server/thread-family-pricing-source";
 import { conditionalThreadRead } from "../app-server/conditional-thread-read";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../../shared/ipc";
 import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
@@ -200,6 +201,8 @@ import {
   type SetThreadLockResponse,
   type SetThreadToolIncidentNoticeRequest,
   type SetThreadToolIncidentNoticeResponse,
+  type ContinueThreadEnvironmentStartupRequest,
+  type ContinueThreadEnvironmentStartupResponse,
   type AcknowledgeThreadEnvironmentFailureRequest,
   type AcknowledgeThreadEnvironmentFailureResponse,
   type ListPendingThreadSpendAlertsRequest,
@@ -207,6 +210,7 @@ import {
   type AcknowledgeThreadSpendAlertRequest,
   type AcknowledgeThreadSpendAlertResponse,
   type SetNavigationBrowseModeRequest,
+  type NavigationResumeState,
   type SetNavigationBrowseModeResponse,
   type SetPinnedGroupCollapsedRequest,
   type SetPinnedGroupCollapsedResponse,
@@ -389,6 +393,7 @@ import {
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
   NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
+  NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL,
   NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -405,6 +410,7 @@ import {
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
+  NAVIGATION_SET_RESUME_STATE_CHANNEL,
   NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL,
   NAVIGATION_QUERY_PAGE_CHANNEL,
   NAVIGATION_QUERY_RELEASE_CHANNEL,
@@ -1871,15 +1877,25 @@ class DesktopAppServerService {
     return await getDesktopBackendRegistry().readUsageActivity(request);
   }
 
+  /**
+   * A family can span machines: each owner keeps its own threads' totals, so
+   * this machine asks each one for its part, wherever the root lives.
+   */
   async readThreadFamilyPricing(request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse> {
-    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
-      const { federationTarget, ...remoteRequest } = request;
-      return await getDesktopFederationRuntime().remoteBackend(federationTarget).readThreadFamilyPricing(remoteRequest);
-    }
-    return await readThreadFamilyPricing({
-      request,
-      loadIndex: () => loadLocalNavigationQueryIndex({ callerReason: "thread-family-pricing" }),
-      readSummaries: (threads) => getDesktopOverlayStore().readThreadPricingSummaries(threads),
+    const federation = getDesktopFederationRuntime();
+    // Without health, pins still resolve by their recorded owner; only the
+    // alias for this machine's own id is lost.
+    const health = await Promise.resolve().then(() => federation.health()).catch(() => undefined);
+    const localInstanceId = health?.instanceId;
+    const owner = request.federationTarget && isRemoteFederationTarget(request.federationTarget)
+      ? request.federationTarget.instanceId : undefined;
+    return await readFederatedThreadFamilyPricing({
+      root: { backend: request.backend, threadId: request.threadId, ...(owner ? { ownerInstanceId: owner } : {}) },
+      readLocal: createLocalThreadFamilyPricingReader(localInstanceId),
+      readRemote: (instanceId, root, deadlineAt) => federation.remoteBackend({ scope: "remote", instanceId })
+        .readThreadFamilyPricing(root, { deadlineAt }),
+      localInstanceId,
+      peerLabel: (instanceId) => health?.peers?.find((peer) => peer.id === instanceId)?.label,
     });
   }
 
@@ -1948,14 +1964,10 @@ class DesktopAppServerService {
         .archiveThread(remoteRequest);
     }
     const backend = request.backend ?? "codex";
-    const response = await getDesktopBackendRegistry().archiveThread({
-      ...request,
-      backend,
-    });
     await getDesktopFederationRuntime().ungroupRemoteChildrenOfArchivedThread({
-      backend: response.backend,
-      parentThreadId: response.threadId,
+      backend, parentThreadId: request.threadId, expectedParent: request.expectedParent,
     });
+    const response = await getDesktopBackendRegistry().archiveThread({ ...request, backend });
 
     logDebug("archiveThread", {
       backend,
@@ -2369,6 +2381,10 @@ class DesktopAppServerService {
         },
       });
     } finally { if (!consumerId) navigationQueryPool.release(token); }
+  }
+
+  setNavigationResumeState(state: NavigationResumeState): void {
+    this.getOverlayStore().setNavigationResumeState?.(state);
   }
 
   async setNavigationBrowseMode(
@@ -3131,6 +3147,7 @@ class DesktopAppServerService {
         return normalizePrSummary({
           ...pr,
           linkedDirectoryPaths: candidate.linkedDirectoryPaths,
+          ...(candidate.explicitlyAttached ? { explicitlyAttached: true } : {}),
         });
       });
       if (changed) {
@@ -3934,7 +3951,6 @@ class DesktopAppServerService {
           }
           const liveDirectories = new Set(index.directories.map((directory) => directory.key));
           for (const key of this.lastDirectoriesByKey.keys()) if (!liveDirectories.has(key)) this.lastDirectoriesByKey.delete(key);
-          getDesktopBackendRegistry().rememberNavigationVisibilityIndex(index);
         }
         await this.getPrAutoDispatchCoordinator().resume();
         if (isCurrent()) return;
@@ -4167,9 +4183,9 @@ class DesktopAppServerService {
     });
   }
 
-  /** The GitHub or GitLab repository a call would act in, so an approval prompt can name it. */
-  async resolveForgePrRepositoryForAgent(args: ForgePrToolArgs, context: AgentToolCallContext): Promise<ForgeRepository> {
-    return this.forgePrToolService().resolveRepository(args, await this.forgePrToolScope(context));
+  /** The repository and settled arguments of a call, so an approval prompt names them and a bad call fails first. */
+  async prepareForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<ForgePrToolPreparedCall> {
+    return await this.forgePrToolService().prepare(operation, args, await this.forgePrToolScope(context), context.signal);
   }
 
   /** Pull request and issue tools act only in the calling thread's own repositories. */
@@ -7065,26 +7081,26 @@ class DesktopAppServerService {
     };
   }
 
+  async continueThreadEnvironmentStartup(
+    request: ContinueThreadEnvironmentStartupRequest,
+  ): Promise<ContinueThreadEnvironmentStartupResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget)
+        .continueThreadEnvironmentStartup(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().continueThreadEnvironmentStartup(request);
+  }
+
   async acknowledgeThreadEnvironmentFailure(
     request: AcknowledgeThreadEnvironmentFailureRequest,
   ): Promise<AcknowledgeThreadEnvironmentFailureResponse> {
-    const backend = request.backend ?? "codex";
-    const acknowledged = await this.getOverlayStore()
-      .acknowledgeThreadEnvironmentFailure({
-        acknowledgedAt: request.acknowledgedAt,
-        backend,
-        threadId: request.threadId,
-      });
-    logDebug("acknowledgeThreadEnvironmentFailure", {
-      acknowledged,
-      backend,
-      threadId: request.threadId,
-    });
-    return {
-      acknowledged,
-      backend,
-      threadId: request.threadId,
-    };
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget)
+        .acknowledgeThreadEnvironmentFailure(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().acknowledgeThreadEnvironmentFailure(request);
   }
 
   async setThreadReaction(
@@ -9082,7 +9098,7 @@ export function registerAppServerIpcHandlers(): void {
   }));
   getDesktopBackendRegistry().setForgePrToolHandler(
     async (operation, args, context) => await appServerService.runForgePrToolForAgent(operation, args, context),
-    async (args, context) => await appServerService.resolveForgePrRepositoryForAgent(args, context),
+    async (operation, args, context) => await appServerService.prepareForgePrToolForAgent(operation, args, context),
   );
   getDesktopBackendRegistry().setForgeToolPolicyResolver(
     () => getDesktopSettingsService().resolveForgeAgentToolPolicy(),
@@ -9559,6 +9575,10 @@ export function registerAppServerIpcHandlers(): void {
     ): Promise<NavigationQueueProjection | NavigationReadFailure> =>
       withNavigationConsumer(event, consumerId, (token) => appServerService.getNavigationQueueProjection(request, token)),
   );
+  ipcMain.removeHandler(NAVIGATION_SET_RESUME_STATE_CHANNEL);
+  ipcMain.handle(NAVIGATION_SET_RESUME_STATE_CHANNEL, (event, state: NavigationResumeState) => {
+    if (!federationWindowTargetForWebContents(event.sender)) appServerService.setNavigationResumeState(state);
+  });
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
   ipcMain.handle(
     NAVIGATION_SET_BROWSE_MODE_CHANNEL,
@@ -9658,6 +9678,12 @@ export function registerAppServerIpcHandlers(): void {
     ): Promise<AcknowledgeThreadSpendAlertResponse> => {
       return await appServerService.acknowledgeThreadSpendAlert(request);
     },
+  );
+  ipcMain.removeHandler(NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL,
+    async (_event, request: ContinueThreadEnvironmentStartupRequest): Promise<ContinueThreadEnvironmentStartupResponse> =>
+      await appServerService.continueThreadEnvironmentStartup(request),
   );
   ipcMain.removeHandler(NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL);
   ipcMain.handle(
@@ -10415,6 +10441,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SELECTED_DETAIL_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_QUEUE_PROJECTION_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_SET_RESUME_STATE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);

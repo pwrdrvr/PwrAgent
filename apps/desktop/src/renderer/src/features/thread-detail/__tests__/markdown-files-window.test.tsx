@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReadMarkdownFileViewerSnapshotResponse } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -65,12 +65,13 @@ describe("MarkdownFilesWindow", () => {
     render(<MarkdownFilesWindow />);
 
     expect(
-      await screen.findByRole("heading", { name: `docs/${fileName}` }),
+      await screen.findByRole("heading", { name: fileName }),
     ).toBeInTheDocument();
     expect(
       screen.getByLabelText("PwrAgent > Slack-to-Agent automation plan > Files"),
     ).toBeInTheDocument();
-    expect(screen.getByText("Project: /repo/PwrAgent")).toBeInTheDocument();
+    // The folder is shown once, beside the name, and copies the full path.
+    expect(screen.getByRole("button", { name: "Copy path" })).toHaveTextContent("/repo/PwrAgent/docs");
     if (kind === "JSON") {
       expect(await screen.findByLabelText("JSON contents")).toHaveTextContent('"title": "Widget"');
     } else {
@@ -103,5 +104,38 @@ describe("MarkdownFilesWindow", () => {
         targetColumn: undefined,
       });
     });
+  });
+
+  it("puts an HTML page's permissions in the header row", async () => {
+    window.location.hash = "#files/codex%3Athread-1";
+    const path = "/repo/PwrAgent/docs/brief.html";
+    (window as Window & { pwragent?: DesktopApi }).pwragent = {
+      onMarkdownFileViewerSnapshotChanged: () => () => undefined,
+      onHtmlPreviewNavigation: () => () => undefined,
+      readHtmlPreviewAssets: async () => ({ assets: [], skipped: [] }),
+      readMarkdownFile: async () => ({ path, content: '<p>Hi</p><img src="https://example.com/a.png">' }),
+      readMarkdownFileViewerSnapshot: async () => ({
+        snapshot: {
+          context: {
+            thread: { backend: "codex" as const, threadId: "thread-1" },
+            key: "codex:thread-1",
+            title: "Files - Brief",
+            threadTitle: "Brief",
+            projectPath: "/repo/PwrAgent",
+          },
+          files: [{ path, label: "docs/brief.html" }],
+          selectedPath: path,
+        },
+      }),
+    };
+
+    const { container } = render(<MarkdownFilesWindow />);
+
+    expect(await screen.findByRole("heading", { level: 1, name: "brief.html" })).toBeInTheDocument();
+    const header = container.querySelector<HTMLElement>(".file-viewer-header")!;
+    const scripts = await within(header).findByRole("switch", { name: "Scripts" });
+    expect(scripts).toHaveAttribute("aria-checked", "false");
+    expect(await within(header).findByText("1 blocked")).toBeInTheDocument();
+    expect(container.querySelector(".html-preview__bar")).toBeNull();
   });
 });

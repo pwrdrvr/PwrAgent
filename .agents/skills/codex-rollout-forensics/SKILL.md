@@ -40,6 +40,14 @@ This skill is for human/operator forensics. Do not add product runtime code that
 
    Use `--json` when further local aggregation is needed. Save large JSON results to `.local/rollout-forensics/` or another ignored disposable location and summarize them, instead of pasting them into chat.
 
+   Thread discovery first matches rollout filenames ending in `-<thread-id>.jsonl`.
+   If any match, it does not inspect other rollout contents. Otherwise it checks
+   only the first JSONL record within the first 64 KiB of each file for a matching
+   `session_meta.payload.id` or `session_id`. Mentions in transcript bodies do not
+   select a rollout. Supply an explicit path for renamed files with larger metadata
+   headers. Selected rollouts are read one JSONL record at a time; an individual
+   record still needs to fit in memory.
+
 3. Correlate with PwrAgent pricing rows when requested:
 
    ```bash

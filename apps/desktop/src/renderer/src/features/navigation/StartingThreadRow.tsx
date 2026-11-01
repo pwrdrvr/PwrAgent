@@ -9,6 +9,7 @@ import type {
   SubthreadLaunchpadDraft,
 } from "../../lib/useThreadNavigation";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
+import { StartupTiming } from "../composer/StartupTiming";
 
 /**
  * A row a list draws before its thread exists: a sub-thread still being
@@ -120,7 +121,7 @@ export function StartingThreadRow(props: {
             </span>
             <span className="thread-row__title">{title}</span>
           </span>
-          <span className="thread-row__time">Starting</span>
+          <span className="thread-row__time"><StartupTiming submittedAt={creation.submittedAt} startedAt={creation.startup?.startedAt} compact /></span>
         </span>
         <span aria-hidden="true" className="thread-row__chips">
           {showProvider ? (

@@ -1030,6 +1030,7 @@ describe("Sidebar", () => {
   });
 
   it("describes each thread lens with a custom tooltip and preserves selection", async () => {
+    stubMacPlatform();
     const onBrowseModeChange = vi.fn();
 
     render(
@@ -1050,9 +1051,10 @@ describe("Sidebar", () => {
     );
 
     const updatedTab = screen.getByRole("tab", { name: "Updated" });
+    expect(updatedTab).toHaveAttribute("aria-keyshortcuts", "Meta+Alt+3");
     fireEvent.mouseEnter(updatedTab);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "Updated — all threads, most recently updated first"
+      "Updated — all threads, most recently updated first  (⌥⌘3)"
     );
     fireEvent.mouseLeave(updatedTab);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
@@ -1060,7 +1062,7 @@ describe("Sidebar", () => {
     const createdTab = screen.getByRole("tab", { name: "Created" });
     fireEvent.focus(createdTab);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "Created — all threads, newest created first"
+      "Created — all threads, newest created first  (⌥⌘4)"
     );
 
     // Selecting a lens still works and the tooltip dismisses on click.
@@ -1107,7 +1109,7 @@ describe("Sidebar", () => {
     const updatedTab = within(tablist).getByRole("tab", { name: "Updated" });
     fireEvent.focus(updatedTab);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "Updated — all threads, most recently updated first\nNo threads yet"
+      "Updated — all threads, most recently updated first  (Ctrl+Alt+3)\nNo threads yet"
     );
     fireEvent.blur(updatedTab);
 
@@ -1522,6 +1524,105 @@ describe("Sidebar", () => {
     expect(onUpdateSubthreadOrder).toHaveBeenCalledWith(parent, {
       threadId: "design", anchorThreadId: "steam", placement: "before",
     });
+  });
+
+  it("nests a top-level thread dropped on another row and opens that row's closed tray", async () => {
+    const loose = { ...sharedThread, id: "loose", title: "Loose thread" };
+    const target = { ...sharedThread, id: "target", title: "Target thread", subthreadsCollapsed: true };
+    const threads = [loose, target];
+    const onSetThreadParent = vi.fn(async () => undefined);
+    const onSetSubthreadsCollapsed = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={[]}
+        inboxThreads={threads}
+        loading={false}
+        selectedItemKey={undefined}
+        threads={threads}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetThreadParent={onSetThreadParent}
+        onSetSubthreadsCollapsed={onSetSubthreadsCollapsed}
+      />,
+    );
+
+    const shell = (name: string) => screen.getByRole("button", { name }).closest<HTMLElement>(".thread-row-shell")!;
+    expect(shell("Loose thread")).toHaveClass("is-draggable");
+    mockElementRect(shell("Loose thread"), 0, 40);
+    mockElementRect(shell("Target thread"), 40, 40);
+
+    startThreadPinPointerDrag(shell("Loose thread"), { x: 50, y: 20 });
+    moveThreadPinPointer({ x: 50, y: 70 });
+    await waitFor(() => expect(shell("Target thread")).toHaveClass("is-drop-target-inside"));
+    expect(document.querySelector(".thread-row--drag-image")?.textContent).toContain("Make sub-thread");
+    await act(async () => {
+      releaseThreadPinPointer({ x: 50, y: 70 });
+    });
+
+    expect(onSetThreadParent).toHaveBeenCalledWith(loose, "target", "codex");
+    expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(target, false);
+    expect(shell("Target thread")).not.toHaveClass("is-drop-target-inside");
+  });
+
+  it("moves a sole sub-thread to another row but never under its own parent or its own sub-thread", async () => {
+    const parent = { ...sharedThread, id: "parent", title: "First parent" };
+    const child = { ...sharedThread, id: "child", title: "Only child", parentThreadId: "parent",
+      parentThreadBackend: "codex" as const };
+    const grandchild = { ...sharedThread, id: "grandchild", title: "Grandchild", parentThreadId: "child",
+      parentThreadBackend: "codex" as const };
+    const other = { ...sharedThread, id: "other", title: "Other root" };
+    const threads = [parent, child, grandchild, other];
+    const onSetThreadParent = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={[]}
+        inboxThreads={threads}
+        loading={false}
+        selectedItemKey={undefined}
+        threads={threads}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetThreadParent={onSetThreadParent}
+      />,
+    );
+
+    const shell = (name: string) => screen.getByRole("button", { name }).closest<HTMLElement>(".thread-row-shell")!;
+    expect(shell("Only child")).toHaveClass("is-draggable");
+    const tray = shell("Only child").closest<HTMLElement>("[data-subthread-tray]")!;
+    mockElementRect(shell("First parent"), 0, 40);
+    mockElementRect(tray, 40, 80);
+    mockElementRect(shell("Only child"), 40, 40);
+    mockElementRect(shell("Grandchild"), 80, 40);
+    mockElementRect(shell("Other root"), 200, 40);
+
+    startThreadPinPointerDrag(shell("Only child"), { x: 50, y: 60 });
+    // Its own parent: already there. Its own sub-thread: a loop.
+    moveThreadPinPointer({ x: 50, y: 20 });
+    await waitFor(() => expect(document.querySelector(".thread-row--drag-image")).not.toBeNull());
+    expect(document.querySelector(".is-drop-target-inside")).toBeNull();
+    moveThreadPinPointer({ x: 50, y: 100 });
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(document.querySelector(".is-drop-target-inside")).toBeNull();
+    moveThreadPinPointer({ x: 50, y: 220 });
+    await waitFor(() => expect(shell("Other root")).toHaveClass("is-drop-target-inside"));
+    await act(async () => {
+      releaseThreadPinPointer({ x: 50, y: 220 });
+    });
+
+    expect(onSetThreadParent).toHaveBeenCalledTimes(1);
+    expect(onSetThreadParent).toHaveBeenCalledWith(child, "other", "codex");
   });
 
   it("does not expose sub-thread disclosure controls for an older remote peer", () => {
@@ -2291,6 +2392,7 @@ describe("Sidebar", () => {
     render(
       <Sidebar
         backends={remoteBackends}
+        remoteBackends={new Map([["peer-mini", remoteBackends]])}
         browseMode="inbox"
         directories={directories}
         inboxThreads={[remoteChild]}
@@ -4544,6 +4646,8 @@ describe("Sidebar", () => {
       expect(card).toHaveTextContent(
         /AttentionThreads in progress or waiting to be reviewedIn progress1To review1/,
       );
+      expect(card).toHaveTextContent("Show Attention (Ctrl+Alt+1)");
+      expect(tab).toHaveAttribute("aria-keyshortcuts", "Control+Alt+1");
       // Unfederated: no machine named, because there is nothing to tell apart.
       expect(card.textContent).not.toContain("Quitting");
       // The consequence lines exist nowhere else, so the card has to be
@@ -4739,7 +4843,7 @@ describe("Sidebar", () => {
 
       fireEvent.mouseEnter(screen.getByRole("tab", { name: /^Drafts,/ }));
       expect((await screen.findByRole("tooltip")).textContent).toBe(
-        "Drafts — threads with a reply you started and never sent"
+        "Drafts — threads with a reply you started and never sent  (Ctrl+Alt+2)"
           + "\n1 thread with an unsent draft",
       );
     });
@@ -6540,6 +6644,52 @@ describe("Sidebar", () => {
       releaseThreadPinPointer({ x: 50, y: 90 });
     });
     expect(onSetThreadPin).toHaveBeenCalledWith(sharedThread, true);
+    expect(onReorderThreadPins).not.toHaveBeenCalled();
+  });
+
+  it("nests a dragged pin on the middle of another pin and keeps its edges for order", async () => {
+    const onReorderThreadPins = vi.fn(async () => undefined);
+    const onSetThreadParent = vi.fn(async () => undefined);
+    const first = { ...sharedThread, id: "thread-first", title: "First pin", pinnedRank: "1024" };
+    const second = { ...sharedThread, id: "thread-second", title: "Second pin", pinnedRank: "2048" };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[{ ...directories[0]!, ...{ threadKeys: ["codex:thread-first", "codex:thread-second"] } }]}
+        inboxThreads={[first, second]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-first"
+        threads={[first, second]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSetThreadPin={vi.fn(async () => undefined)}
+        onReorderThreadPins={onReorderThreadPins}
+        onSetThreadParent={onSetThreadParent}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const row = (name: RegExp) => screen.getByRole("button", { name }).closest<HTMLElement>(".thread-row-shell")!;
+    mockElementRect(row(/First pin/), 0, 40);
+    mockElementRect(row(/Second pin/), 40, 40);
+
+    startThreadPinPointerDrag(row(/Second pin/), { x: 50, y: 60 });
+    // The top quarter of the other pin is still the order line.
+    moveThreadPinPointer({ x: 50, y: 4 });
+    await waitFor(() => expect(row(/First pin/)).toHaveClass("is-drop-target-before"));
+    // Its middle nests.
+    moveThreadPinPointer({ x: 50, y: 20 });
+    await waitFor(() => expect(row(/First pin/)).toHaveClass("is-drop-target-inside"));
+    expect(row(/First pin/)).not.toHaveClass("is-drop-target-before");
+    await act(async () => {
+      releaseThreadPinPointer({ x: 50, y: 20 });
+    });
+
+    expect(onSetThreadParent).toHaveBeenCalledWith(second, "thread-first", "codex");
     expect(onReorderThreadPins).not.toHaveBeenCalled();
   });
 
@@ -9087,6 +9237,36 @@ describe("Sidebar directory pinning", () => {
     ], { key: pinnedB.key, anchorKey: pinnedA.key, placement: "before" });
   });
 
+  it("drops a folder drop's release-click suppression when the list unmounts", async () => {
+    const pinnedA: NavigationDirectorySummary = { ...projectADirectory, pinnedRank: "1024" };
+    const pinnedB: NavigationDirectorySummary = { ...projectBDirectory, pinnedRank: "2048" };
+    renderSidebar([pinnedA, pinnedB], {
+      onSetDirectoryPin: async () => undefined,
+      onReorderDirectoryPins: async () => undefined,
+    });
+    layoutDirectoryHeaders([[/ProjectA/i, 0], [/ProjectB/i, 30]], 60);
+    const list = document.querySelector<HTMLElement>(".directory-list")!;
+
+    startThreadPinPointerDrag(directoryHeader(/ProjectB/i), { x: 50, y: 40 });
+    moveThreadPinPointer({ x: 50, y: 5 });
+    await waitFor(() => expect(getDirectorySummary(/ProjectA/i).closest(".directory-row"))
+      .toHaveClass("is-drop-target-before"));
+    // Fake only the release timer, so it cannot expire before the unmount.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await act(async () => {
+        releaseThreadPinPointer({ x: 50, y: 5 });
+      });
+      cleanup();
+
+      const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+      list.dispatchEvent(click);
+      expect(click.defaultPrevented).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("folds the lens to project headers while a folder is held, then restores it", async () => {
     const pinnedA: NavigationDirectorySummary = { ...projectADirectory, pinnedRank: "1024" };
     renderSidebar([pinnedA, projectBDirectory], {
@@ -10673,6 +10853,75 @@ describe("Sidebar thread shortcuts", () => {
     }
   });
 
+  // Binds Mark Unread / Read to the macOS default and renders a focused reply
+  // field. jsdom has no platform, so ProseMirror's Mod is Ctrl here; the
+  // chord pressed with Ctrl meets the same Mod-U binding ⌘ does on macOS.
+  async function withMarkReadInComposer(
+    sidebarProps: Partial<ComponentProps<typeof Sidebar>>,
+    run: (field: HTMLElement) => Promise<void> | void,
+  ): Promise<void> {
+    const { _resetKeybindingsStoreForTests } = await import("../../../lib/keybindings-store");
+    _resetKeybindingsStoreForTests({
+      overrides: { "threads.toggle_unread": ["CmdOrCtrl+Shift+U"] },
+      filePath: "/tmp/keybindings.toml",
+    });
+    try {
+      renderShortcutSidebar(sidebarProps);
+      render(<form className="composer">
+        <ComposerTiptapInput id="reply" label="Reply" value="Draft" skillTokens={[]}
+          placeholder="Ask anything" onChange={() => undefined} />
+      </form>);
+      const field = screen.getByRole("textbox", { name: "Reply" });
+      Object.defineProperty(field, "isContentEditable", { value: true });
+      field.focus();
+      await run(field);
+    } finally {
+      act(() => _resetKeybindingsStoreForTests());
+    }
+  }
+  const markReadChord = { key: "U", code: "KeyU", keyCode: 85, ctrlKey: true, shiftKey: true };
+
+  it("marks the open thread read from the composer, where the editor also binds the chord", async () => {
+    // Attention keeps an opened thread unread, so Mark Read is pressed with
+    // focus in the reply. The composer binds Mod-U to block native underline,
+    // and ProseMirror retries a shifted letter without Shift, so the editor
+    // took ⇧⌘U first.
+    const onMarkThreadsSeen = vi.fn(async () => undefined);
+    await withMarkReadInComposer({ browseMode: "attention", onMarkThreadsSeen }, async (field) => {
+      await pressAndSettle(field, markReadChord);
+    });
+    expect(onMarkThreadsSeen).toHaveBeenCalledTimes(1);
+    expect(onMarkThreadsSeen).toHaveBeenCalledWith([sharedThread]);
+  });
+
+  it("leaves the editor its chord when there is no thread to act on", async () => {
+    const onMarkThreadsSeen = vi.fn(async () => undefined);
+    await withMarkReadInComposer({ selectedItemKey: undefined, onMarkThreadsSeen }, (field) => {
+      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...markReadChord });
+      act(() => { field.dispatchEvent(event); });
+      // Unhandled, the chord stays with editing: the composer's Mod-U claims it.
+      expect(event.defaultPrevented).toBe(true);
+    });
+    expect(onMarkThreadsSeen).not.toHaveBeenCalled();
+  });
+
+  it("marks the focused unread row read in Attention", async () => {
+    stubMacPlatform();
+    const onMarkThreadsSeen = vi.fn(async () => undefined);
+    const onMarkThreadUnread = vi.fn(async () => undefined);
+    renderShortcutSidebar({
+      browseMode: "attention",
+      selectedItemKey: undefined,
+      onMarkThreadsSeen,
+      onMarkThreadUnread,
+    });
+    const row = screen.getByRole("button", { name: "Cross-project cleanup" });
+    row.focus();
+    await pressAndSettle(row, { key: "U", code: "KeyU", keyCode: 85, metaKey: true, shiftKey: true });
+    expect(onMarkThreadsSeen).toHaveBeenCalledWith([sharedThread]);
+    expect(onMarkThreadUnread).not.toHaveBeenCalled();
+  });
+
   it("does nothing while Settings covers the window", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     renderShortcutSidebar({ onSetThreadPin, inert: true });
@@ -10966,5 +11215,140 @@ describe("⌘K jump keeps the lens", () => {
     );
     expect(document.querySelector(".sidebar-visiting")).toBeNull();
     expect(lensRowTitles()).toEqual(["Running thread"]);
+  });
+});
+
+
+describe("Sidebar row owner provider capabilities", () => {
+  const capable = (kind: BackendSummary["kind"]): BackendSummary => ({
+    ...backends[0]!, kind,
+    capabilities: { ...backends[0]!.capabilities, forkThread: true },
+  });
+  const local = { ...sharedThread, title: "Viewer thread" };
+  const remote: NavigationThreadSummary = {
+    ...sharedThread, id: "owner-thread", title: "Owner thread", source: "acp:grok", pinnedRank: "1024",
+    federation: {
+      ref: { backend: "acp:grok", threadId: "owner-thread", target: { scope: "remote", instanceId: "owner" } },
+      instanceLabel: "Owner", peerStatus: "connected", capabilities: ["thread_navigation", "turn_control"],
+    },
+  };
+  function view(overrides: Partial<ComponentProps<typeof Sidebar>> = {}) {
+    return <Sidebar backends={[capable("codex")]}
+      remoteBackends={new Map([["owner", [capable("acp:grok")]]])}
+      browseMode="recents" directories={directories} threads={[local, remote]} loading={false}
+      selectedItemKey={threadSummaryIdentityKey(local)}
+      onBrowseModeChange={() => undefined} onCreateThread={async () => undefined}
+      onOpenLaunchpad={async () => undefined} onSelectThread={() => undefined}
+      onRenameThread={async () => undefined} onArchiveThread={async () => undefined}
+      onForkThread={async () => undefined} {...overrides} />;
+  }
+  const mutationItems = ["Rename Thread", "Archive Thread", "Fork into Same Worktree"];
+
+  it.each(["acp:grok", "codex"] as const)("offers management actions for %s installed only on the row owner", (kind) => {
+    const row = { ...remote, source: kind,
+      federation: { ...remote.federation!, ref: { ...remote.federation!.ref, backend: kind } } };
+    render(view({ backends: [], threads: [row], remoteBackends: new Map([["owner", [capable(kind)]]]) }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Owner thread(?:,|$)/ }));
+    for (const name of mutationItems.slice(0, kind === "codex" ? 3 : 2)) {
+      expect(screen.getByRole("menuitem", { name })).toBeInTheDocument();
+    }
+  });
+
+  it.each(["missing", "unavailable", "unsupported", "pending", "disconnected", "no turn control"]
+    .flatMap((reason) => (["acp:grok", "codex"] as const).map((kind) => ({ reason, kind }))))(
+    "does not borrow viewer $kind capabilities when the owner is $reason", ({ reason, kind }) => {
+      const ownerBackend = capable(kind);
+      if (reason === "unavailable") ownerBackend.available = false;
+      if (reason === "unsupported") ownerBackend.capabilities = {
+        ...ownerBackend.capabilities, renameThread: false, archiveThread: false, forkThread: false,
+      };
+      const row: NavigationThreadSummary = { ...remote, source: kind, federation: { ...remote.federation!,
+        ref: { ...remote.federation!.ref, backend: kind },
+        ...(reason === "disconnected" ? { peerStatus: "disconnected" as const } : {}),
+        ...(reason === "no turn control" ? { capabilities: ["thread_navigation"] } : {}),
+      } };
+      render(view({ backends: [capable(kind)], threads: [row],
+        remoteBackends: reason === "pending" ? undefined : new Map([["owner", reason === "missing" ? [] : [ownerBackend]]]),
+      }));
+      fireEvent.contextMenu(screen.getByRole("button", { name: new RegExp(`^${row.title}(?:,|$)`) }));
+      for (const name of mutationItems) expect(screen.queryByRole("menuitem", { name })).not.toBeInTheDocument();
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+      const button = screen.getByRole("button", { name: new RegExp(`^${row.title}(?:,|$)`) });
+      button.focus();
+      fireEvent.keyDown(button, { key: "F2", code: "F2" });
+      expect(screen.queryByRole("textbox", { name: "Thread name" })).not.toBeInTheDocument();
+      fireEvent.doubleClick(button);
+      expect(screen.queryByRole("textbox", { name: "Thread name" })).not.toBeInTheDocument();
+    },
+  );
+
+  it("uses the window owner's catalog for rows in a federation window", () => {
+    Object.defineProperty(window, "__pwragentFederationTarget", {
+      configurable: true, value: remote.federation!.ref.target,
+    });
+    render(view({ backends: [capable("acp:grok")], remoteBackends: undefined, threads: [remote] }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Owner thread(?:,|$)/ }));
+    expect(screen.getByRole("menuitem", { name: "Rename Thread" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Archive Thread" })).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    fireEvent.doubleClick(screen.getByRole("button", { name: /^Owner thread(?:,|$)/ }));
+    expect(screen.getByRole("textbox", { name: "Thread name" })).toHaveValue(remote.title);
+  });
+
+  it.each(["menu", "keyboard", "double-click"])("renames inline through the owner from %s", (path) => {
+    const onRenameThread = vi.fn(async () => undefined);
+    render(view({ onRenameThread }));
+    const button = screen.getByRole("button", { name: /^Owner thread(?:,|$)/ });
+    if (path === "menu") {
+      fireEvent.contextMenu(button);
+      fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
+    } else if (path === "keyboard") {
+      button.focus();
+      fireEvent.keyDown(button, { key: "F2", code: "F2" });
+    } else fireEvent.doubleClick(button);
+    const input = screen.getByRole("textbox", { name: "Thread name" });
+    expect(input.closest("[data-thread-key]")).toHaveAttribute("data-thread-key", threadSummaryIdentityKey(remote));
+    fireEvent.change(input, { target: { value: "Owner renamed" } });
+    if (path === "double-click") fireEvent.blur(input);
+    else fireEvent.keyDown(input, { key: "Enter" });
+    expect(onRenameThread).toHaveBeenCalledWith(remote, "Owner renamed");
+  });
+
+  it("keeps local row actions when the selected remote owner lacks the local provider", () => {
+    render(view({ selectedItemKey: threadSummaryIdentityKey(remote) }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: local.title }));
+    for (const name of mutationItems) expect(screen.getByRole("menuitem", { name })).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    fireEvent.doubleClick(screen.getByRole("button", { name: local.title }));
+    expect(screen.getByRole("textbox", { name: "Thread name" })).toHaveValue(local.title);
+  });
+
+  it.each(["menu", "keyboard"])("filters mixed-owner bulk archives through each provider and turn control from %s", async (path) => {
+    const onArchiveThread = vi.fn(async (_thread: NavigationThreadSummary) => undefined);
+    const blocked: NavigationThreadSummary = { ...remote, id: "blocked", title: "Blocked owner", pinnedRank: "2048",
+      federation: { ...remote.federation!, ref: { ...remote.federation!.ref, threadId: "blocked",
+        target: { scope: "remote", instanceId: "blocked-owner" } }, capabilities: ["thread_navigation"] } };
+    const offline: NavigationThreadSummary = { ...blocked, id: "offline", title: "Offline owner", pinnedRank: "3072",
+      federation: { ...blocked.federation!, ref: { ...blocked.federation!.ref, threadId: "offline" },
+        peerStatus: "disconnected", capabilities: ["turn_control"] } };
+    render(view({ threads: [local, remote, blocked, offline], onArchiveThread,
+      remoteBackends: new Map([["owner", [capable("acp:grok")]], ["blocked-owner", [capable("acp:grok")]]]),
+    }));
+    const localButton = screen.getByRole("button", { name: local.title });
+    fireEvent.click(localButton);
+    for (const row of [remote, blocked, offline]) {
+      fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${row.title}(?:,|$)`) }), { ctrlKey: true, metaKey: true });
+    }
+    if (path === "menu") {
+      fireEvent.contextMenu(localButton);
+      await act(async () => { fireEvent.click(screen.getByRole("menuitem", { name: "Archive 2 Threads" })); });
+    } else {
+      localButton.focus();
+      await act(async () => { fireEvent.keyDown(localButton, {
+        key: "Backspace", code: "Backspace", ctrlKey: true, shiftKey: true,
+      }); });
+    }
+    expect(onArchiveThread.mock.calls).toHaveLength(2);
+    expect(onArchiveThread.mock.calls.map((call) => call[0])).toEqual(expect.arrayContaining([local, remote]));
   });
 });

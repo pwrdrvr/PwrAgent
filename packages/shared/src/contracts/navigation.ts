@@ -66,6 +66,7 @@ export type AcknowledgeThreadSpendAlertResponse = {
 };
 
 export type AcknowledgeThreadEnvironmentFailureRequest = {
+  federationTarget?: FederationTarget;
   acknowledgedAt?: number;
   backend?: AppServerBackendKind;
   threadId: string;
@@ -660,6 +661,24 @@ export function buildPullRequestStatusKey(
 ): string {
   const identity = resolvePullRequestIdentity(pr);
   return `${identity.provider}/${identity.org.toLowerCase()}/${identity.repo.toLowerCase()}#${identity.number}`;
+}
+
+/**
+ * Automatic fork attachments belong to their source workspace. An explicit
+ * attachment also belongs to its destination workspace, so an upstream checkout
+ * can monitor a deliberately attached contribution without admitting other forks.
+ */
+export function pullRequestMatchesRepositoryKey(
+  pr: PrSummary,
+  repositoryKey: string | undefined,
+): boolean {
+  if (!repositoryKey) return false;
+  const identity = resolvePullRequestIdentity(pr);
+  const key = (repository: Pick<PrSummary, "provider" | "org" | "repo">): string =>
+    [repository.provider, repository.org, repository.repo]
+      .map((part) => part.trim().toLowerCase()).join("/");
+  return key(identity.sourceRepository ?? identity) === repositoryKey
+    || (pr.explicitlyAttached === true && key(identity) === repositoryKey);
 }
 
 export type DirectorySummaryKind = "directory" | "workspace" | "unlinked";
@@ -2722,14 +2741,29 @@ export type NavigationRelativeChildMove = {
   placement: "before" | "after";
 };
 
+/** Versioned, per-owner archive boundary. Remote rows remain cached pins. */
+export type ArchiveSubthreadPromotion = {
+  archived: { backend: AppServerBackendKind; threadId: string; instanceId: string };
+  /** The direct slot under the surviving ancestor, including older archives. */
+  anchor: { backend: AppServerBackendKind; threadId: string; instanceId: string };
+  expectedParent: { threadId: string; backend: AppServerBackendKind; instanceId?: string } | null;
+  expectedChildOrder: string[];
+  parent: { backend: AppServerBackendKind; threadId: string; instanceId: string } | null;
+  parentSummary?: NavigationThreadSummary;
+  parentInstanceLabel?: string;
+  children: { ref: FederatedThreadRef; summary: NavigationThreadSummary; instanceLabel: string }[];
+  dryRun?: boolean;
+};
+
 export type UpdateSubthreadOrderRequest = {
   federationTarget?: FederationTarget;
   backend?: AppServerBackendKind;
   parentThreadId: ThreadIdentifier;
 } & (
-  | { threadIds: ThreadIdentifier[]; insertAfter?: never; move?: never }
-  | { threadIds?: never; move?: never; insertAfter: { threadId: ThreadIdentifier; sourceThreadId: ThreadIdentifier } }
-  | { threadIds?: never; insertAfter?: never; move: NavigationRelativeChildMove }
+  | { threadIds: ThreadIdentifier[]; insertAfter?: never; move?: never; archivePromotion?: never }
+  | { threadIds?: never; move?: never; archivePromotion?: never; insertAfter: { threadId: ThreadIdentifier; sourceThreadId: ThreadIdentifier } }
+  | { threadIds?: never; insertAfter?: never; archivePromotion?: never; move: NavigationRelativeChildMove }
+  | { threadIds?: never; insertAfter?: never; move?: never; archivePromotion: ArchiveSubthreadPromotion }
 );
 
 export type UpdateSubthreadOrderResponse = {
@@ -3112,6 +3146,12 @@ export type ThreadOverlayState = {
   archiveRetentionStartedAt?: number;
   retainedBranchDriftPairs?: ThreadBranchDriftPair[];
   extraLinkedDirectories: LinkedDirectorySummary[];
+  /**
+   * Worktrees this thread created and then left with a fresh-start move.
+   * They stay on disk and are not the thread's workspace. Only thread
+   * archive reads them, so it can checkpoint and remove them as before.
+   */
+  retainedWorktrees?: LinkedDirectorySummary[];
   worktreeSnapshots?: WorktreeSnapshotSummary[];
   /**
    * Cached repository resolution for an ACP worktree thread. ACP sessions

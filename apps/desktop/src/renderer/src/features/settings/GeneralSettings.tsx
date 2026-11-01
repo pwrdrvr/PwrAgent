@@ -203,19 +203,7 @@ const PASTED_IMAGE_PATCH_OPTIONS: Array<{
 }> = [
   {
     description:
-      "Caps square images at about 1024 32px patches before model-specific multipliers.",
-    label: "1024 patches",
-    value: 1024,
-  },
-  {
-    description:
-      "Default. Limits large pasted images to roughly 1536 image patches before model-specific multipliers.",
-    label: "1536 patches",
-    value: 1536,
-  },
-  {
-    description:
-      "Allows roughly a 2048 x 2048 square image before model-specific multipliers.",
+      "Default. Resizes large still images to about 4096 patches (2048 x 2048 pixels for a square image).",
     label: "4096 patches",
     value: 4096,
   },
@@ -262,6 +250,7 @@ export function GeneralSettings(props: {
     interactiveSvgSkipNotice?: boolean;
     interactiveSvgAutoOpen?: boolean;
   }) => Promise<void>;
+  onHtmlPreviewRunScriptsChange: (value: boolean) => Promise<void>;
   onPdfAnalysisEnabledChange: (value: boolean) => Promise<void>;
   onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
   onNotificationsEnabledChange: (value: boolean) => Promise<void>;
@@ -288,6 +277,7 @@ export function GeneralSettings(props: {
     interactiveSvgSkipNotice.value || !interactiveSvgAutoOpen.value
       ? interactiveSvgSkipNotice
       : interactiveSvgAutoOpen;
+  const htmlPreviewRunScripts = props.snapshot.general.htmlPreviewRunScripts;
   const pdfAnalysisEnabled = props.snapshot.general.pdfAnalysisEnabled;
   const notificationsEnabled = props.snapshot.general.notificationsEnabled;
   const themedDockIcon = props.snapshot.general.appearance.themedDockIcon;
@@ -540,6 +530,25 @@ export function GeneralSettings(props: {
 
       <SettingsSection
         eyebrow="General"
+        title="HTML previews"
+        chip={sourceBadge(htmlPreviewRunScripts)}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={htmlPreviewRunScripts.value}
+            disabled={props.saving}
+            label="Run scripts in HTML previews"
+            sub="Pages open with their scripts running. Off, a page opens without them, and Run Scripts turns them on for that page. Either way, a previewed page cannot reach the network."
+            source={sourceBadge(htmlPreviewRunScripts)}
+            onChange={(next) => {
+              return props.onHtmlPreviewRunScriptsChange(next);
+            }}
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="General"
         title="Quit confirmation"
         chip={sourceBadge(confirmQuitWithInProgressThreads)}
       >
@@ -585,7 +594,7 @@ export function GeneralSettings(props: {
         <div className="settings-fields">
           <SegmentedField
             label="Image patch budget"
-            sub="Resize pasted desktop images before upload to control image-token usage."
+            sub="Keep ordinary screenshots unchanged and limit large still images before upload."
             help={
               <>
                 {activeOption?.description ??
@@ -594,6 +603,7 @@ export function GeneralSettings(props: {
                 model-specific multipliers. Images within 20% of the selected
                 patch budget are left unchanged to avoid marginal re-encodes.
                 Tile-based models use their own image resizing rules.
+                Animated GIF and WebP images keep their original bytes and dimensions.
               </>
             }
             error={pastedImageMaxPatches.error}

@@ -109,6 +109,7 @@ describe("desktop settings contracts", () => {
         messagingAcknowledgment: { value: null, source: "default" },
         interactiveSvgSkipNotice: { value: false, source: "default" },
         interactiveSvgAutoOpen: { value: false, source: "default" },
+        htmlPreviewRunScripts: { value: false, source: "default" },
       },
       onboarding: {
         completed: { value: true, source: "default" },
@@ -177,6 +178,8 @@ describe("desktop settings contracts", () => {
       ui: {
         sidebarHidden: { value: false, source: "default" },
         contextRailPinned: { value: false, source: "default" },
+        projectIndexHidden: { value: false, source: "default" },
+        projectIndexWidth: { value: null, source: "default" },
         activeContextTab: { value: "info", source: "default" },
         editedFilesDock: { value: "above", source: "default" },
         actionRunsDock: { value: "above", source: "default" },
@@ -453,6 +456,7 @@ describe("desktop settings contracts", () => {
             pull_requests: { value: "auto", source: "default" },
             comments: { value: "auto", source: "default" },
             issues: { value: "auto", source: "default" },
+            ci: { value: "auto", source: "default" },
             approve_merge: { value: "ask", source: "default" },
           },
         },

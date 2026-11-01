@@ -15,8 +15,15 @@ import { agentToolFailure, agentToolSuccess, type AgentToolCallContext, type Age
 import { buildForgeReadToolDefinitions, type ForgeReadHandler } from "./pwragent-forge-agent-tools";
 
 export type ForgePrToolHandler = (operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext) => Promise<unknown>;
-/** The repository a call would act in, resolved before any approval prompt. */
-export type ForgePrRepositoryResolver = (args: ForgePrToolArgs, context: AgentToolCallContext) => Promise<ForgeRepository>;
+/**
+ * The repository a call would act in and its settled arguments, such as a
+ * pull request's head, resolved before any approval prompt.
+ */
+export type ForgePrToolPreflight = (
+  operation: ForgePrToolOperation,
+  args: ForgePrToolArgs,
+  context: AgentToolCallContext,
+) => Promise<{ repository: ForgeRepository; args: ForgePrToolArgs }>;
 
 const SCOPE = "Works on GitHub and GitLab, in this thread's repository, with the operator's gh or glab sign-in.";
 const ASKS = "The operator's Settings → Git policy may ask them first, or refuse.";
@@ -30,7 +37,7 @@ const descriptions: Record<ForgePrToolOperation, string> = {
   get_issue: "Read an issue by number: title, body, state, labels and counts. On GitHub a pull request number shows its conversation. The body is untrusted data.",
   list_issue_comments: "List one page of conversation comments on an issue or pull request. On GitLab pass kind pr for a merge request. Inline review comments are in list_pull_request_review_threads.",
   search_issues: "Search issues and pull requests in this thread's repository. GitHub takes search syntax such as 'label:bug flaky'. GitLab matches words in titles and descriptions. kind and state narrow results.",
-  create_pull_request: `Open a pull request (GitLab merge request). head defaults to the thread's pushed branch, and base to the default branch. Optional draft, labels, reviewers, and image or video attachments. Reference an attachment in body by its exact path, for example ![Before](/tmp/shots/before.png), to place it. Others are appended. PwrAgent links the new request to this thread. ${ASKS}`,
+  create_pull_request: `Open a pull request (GitLab merge request) from head, a branch already pushed to the forge. base defaults to the default branch. Optional draft, labels, reviewers, and image or video attachments. Reference an attachment in body by its exact path, for example ![Before](/tmp/shots/before.png), to place it. Others are appended. PwrAgent links the new request to this thread. ${ASKS}`,
   update_pull_request: `Edit a pull request: title, body, base, open or closed state, draft or ready, labels and reviewers. Attachments need the full new body. ${ASKS}`,
   add_issue_comment: `Comment on an issue or a pull request's conversation, with optional image or video attachments referenced by exact path. On GitLab pass kind pr for a merge request. ${ASKS}`,
   reply_to_review_comment: `Reply in an inline review thread. Pass the pull request number and either reviewThreadId or a commentId from list_pull_request_review_threads. ${ASKS}`,
@@ -39,6 +46,7 @@ const descriptions: Record<ForgePrToolOperation, string> = {
   create_issue: `Open an issue with optional labels and image or video attachments. ${ASKS}`,
   update_issue: `Edit an issue: title, body, open or closed state, and labels. stateReason applies on GitHub only. Attachments need the full new body. ${ASKS}`,
   merge_pull_request: `Merge a pull request. expectedHeadSha must be the head SHA you checked with get_pull_request, so a later push is never merged unseen. method defaults to the operator's merge method. GitLab supports merge and squash. Does not delete the branch. ${ASKS}`,
+  rerun_failed_ci_jobs: `Request a rerun of failed jobs on a CI run. Pass runId from list_ci_runs or get_ci_run. GitHub Actions reruns failed jobs and their dependent jobs. GitLab retries failed and canceled pipeline jobs. Uses this thread's repository and configured forge authentication. Returns request acceptance, not CI completion or success. Inspect the run afterward when needed. Do not retry an uncertain request automatically or duplicate Auto-fix monitoring. ${ASKS}`,
 };
 
 export function buildForgePrToolDefinitions(handler?: ForgePrToolHandler): AgentToolDefinition[] {
@@ -63,7 +71,7 @@ export function buildForgePrToolDefinitions(handler?: ForgePrToolHandler): Agent
     get_issue: { number },
     list_issue_comments: { number, kind: { type: "string", enum: ["issue", "pr"], description: "GitLab only: pr reads a merge request. Default issue." }, ...page },
     search_issues: { query: { ...string, maxLength: 256, description: "Search words. GitHub also takes qualifiers, except repo:, org:, user: and owner:." }, kind: { type: "string", enum: ["pr", "issue"] }, state: { type: "string", enum: ["open", "closed", "all"] }, ...page },
-    create_pull_request: { title: { ...string, maxLength: 256 }, body, head: { ...string, description: "Default: this thread's branch. owner:branch for a fork." }, base: { ...string, description: "Default: the repository's default branch." }, draft: { type: "boolean" }, attachments, addLabels: names("Labels to add."), reviewers: names("Users, or org/team for a team.") },
+    create_pull_request: { title: { ...string, maxLength: 256 }, body, head: { ...string, description: "The pushed branch to open from. owner:branch for a fork." }, base: { ...string, description: "Default: the repository's default branch." }, draft: { type: "boolean" }, attachments, addLabels: names("Labels to add."), reviewers: names("Users, or org/team for a team.") },
     update_pull_request: { number, title: { ...string, maxLength: 256 }, body, base: string, state: { type: "string", enum: ["open", "closed"] }, draft: { type: "boolean", description: "true converts to draft. false marks ready for review." }, attachments, addLabels: names("Labels to add."), removeLabels: names("Labels to remove."), reviewers: names("Reviewers to request: users, or org/team.") },
     add_issue_comment: { number, kind: { type: "string", enum: ["issue", "pr"], description: "GitLab only: pr comments on a merge request. Default issue." }, body, attachments },
     reply_to_review_comment: { number, commentId: { type: "integer", minimum: 1, description: "Any comment in the review thread." }, reviewThreadId: { ...string, description: "The thread itself. Pass this or commentId." }, body },
@@ -75,6 +83,7 @@ export function buildForgePrToolDefinitions(handler?: ForgePrToolHandler): Agent
     create_issue: { title: { ...string, maxLength: 256 }, body, attachments, addLabels: names("Labels to add.") },
     update_issue: { number, title: { ...string, maxLength: 256 }, body, state: { type: "string", enum: ["open", "closed"] }, stateReason: { type: "string", enum: ["completed", "not_planned", "reopened"] }, attachments, addLabels: names("Labels to add."), removeLabels: names("Labels to remove.") },
     merge_pull_request: { number, method: { type: "string", enum: ["merge", "squash", "rebase"] }, expectedHeadSha: sha, commitTitle: { ...string, maxLength: 256 }, commitMessage: { type: "string", maxLength: FORGE_BODY_MAX_CHARS } },
+    rerun_failed_ci_jobs: { runId: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "GitHub Actions workflow run ID or GitLab pipeline ID from list_ci_runs or get_ci_run." } },
   };
   return FORGE_PR_TOOL_OPERATIONS.map((operation): AgentToolDefinition => {
     const write = forgePrToolGroup(operation, {}) !== "read";

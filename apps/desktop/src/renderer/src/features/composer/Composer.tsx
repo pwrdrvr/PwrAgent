@@ -1,7 +1,13 @@
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
 import { codexProviderIdOfModel, formatModelOptionLabel } from "@pwragent/shared";
+import { mayContainLinearPastedImages } from "@pwragent/shared";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
+import {
+  hasLinearPastedImages,
+  readLinearPastedImagesResponse,
+  requestLinearPastedImages,
+} from "./linear-pasted-images";
 import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-update-diagnostics";
 import {
   EXPLICIT_REVIEW_PULL_REQUEST_URL,
@@ -10,6 +16,12 @@ import {
   findCheckedOutPullRequest,
 } from "../../../../shared/pull-request-review";
 import { hydrateComposerDraft } from "./composer-draft-hydration";
+import {
+  getShortTermRateLimitResetAt,
+  getRateLimitResetSendAt,
+  RATE_LIMIT_RESET_BUFFER_MS,
+  RATE_LIMIT_RESET_JITTER_MS,
+} from "./rate-limit-schedule";
 import { useLaunchpadComposerFocusHandoff } from "./useLaunchpadComposerFocusHandoff";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
@@ -105,6 +117,7 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
+  HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
   buildThreadIdentityKey,
   buildReviewBranchOptions,
   federatedThreadIdentityKey,
@@ -149,6 +162,7 @@ import { openImageGallery } from "../thread-detail/ImageGalleryLayer";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { resolveReviewRunMode } from "../../lib/review-run-mode";
 import { readRendererFederationTarget } from "../../lib/federation-window";
@@ -239,10 +253,9 @@ import {
 import {
   formatPastedImageAlt,
   formatPastedImageName,
-  getImageFilesFromDataTransfer,
-  getNonImageFilesFromDataTransfer,
+  getComposerFilesFromDataTransfer,
   hasAnyFiles,
-  isGifFile,
+  getAnimationPreservingImageType,
   readFileAsImageDataUrl,
   type ComposerImageFile,
 } from "./composer-image-files";
@@ -453,6 +466,9 @@ export type ComposerProps = {
   ) => Promise<void>;
   /** Discard this launchpad draft (the "Cancel" button next to "Start thread"). */
   onCancelLaunchpad?: (directoryKey: string) => void;
+  onCancelLaunchpadStartup?: () => void;
+  launchpadStartupCancelling?: boolean;
+  launchpadStartupCancellable?: boolean;
   /**
    * Cancel this launchpad as its Cancel button does, asked from outside the
    * composer (a sub-thread draft row's menu). The composer must run it: its
@@ -646,7 +662,8 @@ async function refreshProviderCatalogOnFirstSelection(
   }
 }
 
-type LocalHandoffStrategy = ThreadWorkspaceHandoffStrategy;
+// "fresh-from-base" starts a new worktree at another branch and moves nothing.
+type LocalHandoffStrategy = ThreadWorkspaceHandoffStrategy | "fresh-from-base";
 
 type ComposerImageAttachment = NavigationLaunchpadImageAttachment;
 
@@ -917,12 +934,14 @@ const SCHEDULED_SEND_OPTIONS = [
   { label: "Send in 30m", delayMs: 30 * 60_000 },
   { label: "Send in 1h", delayMs: 60 * 60_000 },
   { label: "Send in 2h", delayMs: 2 * 60 * 60_000 },
+  { label: "Send in 5h", delayMs: 5 * 60 * 60_000 },
 ] as const;
 
 type ScheduledSendMenuOption = {
   delayMs?: number;
   label: string;
-  scheduledSendAt?: number;
+  description?: string;
+  rateLimitResetAt?: number;
 };
 
 const globalQueuedTurnReleaseScopeKeys = new Set<string>();
@@ -942,69 +961,6 @@ function formatScheduledSendCountdown(
   now = Date.now(),
 ): string {
   return formatRunningDurationMs(Math.max(0, scheduledSendAt - now));
-}
-
-function isFiveHourRateLimitName(value?: string): boolean {
-  return value?.toLowerCase().endsWith("5h limit") ?? false;
-}
-
-function rateLimitMatchesModel(
-  rateLimit: NonNullable<BackendSummary["rateLimits"]>[number],
-  selectedModelOption?: ModelOption,
-): boolean {
-  const modelTerms = [
-    selectedModelOption?.id,
-    selectedModelOption?.label,
-  ]
-    .filter((term): term is string => Boolean(term))
-    .map((term) => term.toLowerCase());
-  if (modelTerms.length === 0) {
-    return false;
-  }
-
-  const searchable = [
-    rateLimit.limitId,
-    rateLimit.name,
-  ]
-    .filter((term): term is string => Boolean(term))
-    .map((term) => term.toLowerCase());
-  return modelTerms.some((term) =>
-    searchable.some((candidate) => candidate.includes(term))
-  );
-}
-
-function getFiveHourRateLimitResetAt(params: {
-  backend?: BackendSummary;
-  now: number;
-  selectedModelOption?: ModelOption;
-}): number | undefined {
-  const candidates = (params.backend?.rateLimits ?? []).filter((rateLimit) => {
-    const resetAt = rateLimit.resetAt;
-    return (
-      typeof resetAt === "number" &&
-      Number.isFinite(resetAt) &&
-      resetAt > params.now &&
-      (isFiveHourRateLimitName(rateLimit.name) ||
-        isFiveHourRateLimitName(rateLimit.limitId))
-    );
-  });
-  if (candidates.length === 0) {
-    return undefined;
-  }
-
-  const modelSpecific = candidates.filter((candidate) =>
-    rateLimitMatchesModel(candidate, params.selectedModelOption)
-  );
-  const generic = candidates.filter(
-    (candidate) => candidate.name.toLowerCase() === "5h limit",
-  );
-  const ordered =
-    modelSpecific.length > 0
-      ? modelSpecific
-      : generic.length > 0
-        ? generic
-        : candidates;
-  return Math.min(...ordered.map((candidate) => candidate.resetAt!));
 }
 
 const SLASH_COMMANDS: SlashCommandSuggestion[] = [
@@ -3305,6 +3261,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     useState<"keep-local-branch" | "move-branch">("keep-local-branch");
   const [leaveLocalBranch, setLeaveLocalBranch] = useState("");
   const [newLocalBranch, setNewLocalBranch] = useState("");
+  // Empty until the operator picks one; the default follows the branch list.
+  const [pickedFreshBaseRef, setFreshBaseRef] = useState("");
+  const [freshBranchName, setFreshBranchName] = useState("");
   const [projectTargetPath, setProjectTargetPath] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
   const projectDestinations = useNavigationQueryResource({
@@ -3440,6 +3399,21 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>(
     latestDraftSnapshotRef.current.snapshot.imageAttachments
   );
+  const pendingImageBatchesRef = useRef(new Map<{ scopeKey: string }, number>());
+  const [pendingImageBatches, setPendingImageBatches] = useState(
+    pendingImageBatchesRef.current,
+  );
+  const preparingImages = Array.from(pendingImageBatches.keys()).some(
+    (destination) => destination.scopeKey === composerScopeKey,
+  );
+  const updatePendingImageBatches = (destination: { scopeKey: string }, delta: number): void => {
+    const next = new Map(pendingImageBatchesRef.current);
+    const count = (next.get(destination) ?? 0) + delta;
+    if (count > 0) next.set(destination, count);
+    else next.delete(destination);
+    pendingImageBatchesRef.current = next;
+    setPendingImageBatches(next);
+  };
   const [fileAttachments, setFileAttachments] = useState<ComposerFileAttachment[]>(
     latestDraftSnapshotRef.current.snapshot.fileAttachments ?? []
   );
@@ -6700,8 +6674,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       setSendError("Choose a project to review.");
       return;
     }
-    if (!options?.queued && shouldQueueThreadSubmit()) {
-      queueReviewCommand(reviewCommand);
+    if (!options?.queued && (
+      (props.launchpad && (props.launchpadMaterializing || sendingRef.current))
+      || shouldQueueThreadSubmit()
+    )) {
+      await queueReviewCommand(reviewCommand);
       return;
     }
 
@@ -7201,7 +7178,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         ? runModeDecision.runMode : undefined,
     };
     if (futureScheduledDraftSendAt) {
-      if (props.launchpad) {
+      if (props.launchpad && !props.launchpadMaterializing && !sendingRef.current) {
         await scheduleLaunchpadMaterialization(
           futureScheduledDraftSendAt,
           routedReviewCommand.target,
@@ -7873,6 +7850,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       globalQueuedTurnReleaseScopeKeys.has(composerScopeKey) ||
       props.threadBusy ||
       activeTurnId ||
+      activeTurnIdRef.current ||
       sending ||
       props.launchpad ||
       props.disabled
@@ -8043,9 +8021,42 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       displayText: string;
       runMode?: ReviewRunMode;
       target: AppServerReviewTarget;
+      reviewer?: ModelSettingsRecent;
     },
     options?: { scheduledSendAt?: number },
   ): Promise<void> | undefined => {
+    // Setup has no thread id yet. Keep the review in the starting composer's
+    // FIFO; handoffLaunchpadComposer moves it to the thread before selection.
+    if (props.launchpad && (props.launchpadMaterializing || sendingRef.current)) {
+      const reviewer = reviewCommand.reviewer
+        ?? ((reviewConfig?.reviewer || reviewerSelection.fallback)
+          && reviewerSelection.backend
+          ? {
+              backend: reviewerSelection.backend,
+              model: reviewerSelection.model?.id,
+              reasoningEffort: reviewerSelection.reasoningEffort,
+            }
+          : undefined);
+      enqueueQueuedTurnInScope(composerScopeKey, {
+        id: createQueuedTurnId(),
+        text: formatReviewCommand(reviewCommand.target),
+        imageAttachments: [],
+        fileAttachments: [],
+        reviewCommand: { ...reviewCommand, ...(reviewer ? { reviewer } : {}) },
+        ...(options?.scheduledSendAt ? { scheduledSendAt: options.scheduledSendAt } : {}),
+      });
+      recordComposerDraftHistory(
+        composerScopeKey,
+        latestDraftSnapshotRef.current.snapshot,
+        "unsent",
+      );
+      resetComposerDraftAndState(composerScopeKey);
+      setScheduledDraftSendAt(undefined);
+      setScheduleArmed(true);
+      setReviewConfig(undefined);
+      setSendError(undefined);
+      return;
+    }
     const enqueue = async (): Promise<void> => {
       const text = formatReviewCommand(reviewCommand.target);
       if (!props.thread || !props.desktopApi?.createScheduledThreadAction) {
@@ -8862,7 +8873,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   ): Promise<void> => {
     // The status line under the tray says why: the message would reference
     // files the owner does not have yet.
-    if (remoteFileUploads.uploads.length > 0) {
+    if (
+      remoteFileUploads.uploads.length > 0
+      || Array.from(pendingImageBatchesRef.current.keys()).some(
+        (destination) => destination.scopeKey === composerScopeKey,
+      )
+    ) {
       return;
     }
     if (forkCommand) {
@@ -8882,6 +8898,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
     if (props.launchpad && (props.launchpadMaterializing || sendingRef.current)) {
       if (props.disabled || !hasLiveComposerContent()) return;
+      if (reviewCommand) {
+        if (isBareReviewCommand) {
+          setReviewConfig(reviewConfig ?? createReviewConfig({
+            directory: props.directory,
+            thread: props.thread,
+          }));
+          setSendError(undefined);
+        } else {
+          await submitReviewCommand(reviewCommand);
+        }
+        return;
+      }
       const scopeKey = composerScopeKey;
       const destination = getLaunchpadComposerDestination(draftStore, scopeKey);
       const snapshot = latestDraftSnapshotRef.current.snapshot;
@@ -9181,7 +9209,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           draftStore.pushDraft(submittedScopeKey, submittedSnapshot);
         }
         props.onPendingStatusChange?.(undefined);
-        if (!launchpadMaterializingRef.current) {
+        if (!launchpadMaterializingRef.current && !(error instanceof LaunchpadStartupCancelledError)) {
           setSendError(error instanceof Error ? error.message : String(error));
         }
       } finally {
@@ -10087,13 +10115,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       applyThreadReference(pastedThread);
       return;
     }
+    if (mayContainLinearPastedImages(pastedText)) {
+      // The text pastes as usual; its images follow once they download.
+      void attachLinearPastedImages(pastedText);
+    }
 
-    const pastedFiles = getImageFilesFromDataTransfer(event.clipboardData);
-    // Non-image FILES only (kind === "file" items) — plain text paste
-    // must fall through to the editor untouched.
-    const pastedNonImageFiles = getNonImageFilesFromDataTransfer(
-      event.clipboardData,
-    );
+    const { images: pastedFiles, files: pastedNonImageFiles, readMs } =
+      getComposerFilesFromDataTransfer(event.clipboardData);
     if (pastedFiles.length === 0 && pastedNonImageFiles.length === 0) {
       return;
     }
@@ -10110,7 +10138,39 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (!accepted || accepted.length === 0) {
       return;
     }
-    void attachImages(accepted);
+    void attachImages(accepted, readMs);
+  };
+
+  /**
+   * Text copied from Linear names its images by a link that expires five
+   * minutes after the copy. Main fetches a link that is still valid and reads
+   * an expired one through the Linear connection, and the images join the
+   * tray of the composer the text was pasted into. A thread switch before
+   * they arrive drops them.
+   */
+  const attachLinearPastedImages = async (text: string): Promise<void> => {
+    const fetchImages = props.desktopApi?.fetchLinearPastedImages;
+    if (!fetchImages || !imagesSupported || !hasLinearPastedImages(text)) return;
+    const pasteScope = pasteScopeRef.current;
+    // Hold Send while they download, as a pasted screenshot does while it
+    // resizes; otherwise a quick Enter sends the text without them.
+    // `attachImages` takes over the hold synchronously once they arrive.
+    const destination = getLaunchpadComposerDestination(draftStore, pasteScope.key);
+    updatePendingImageBatches(destination, 1);
+    let response: Awaited<ReturnType<typeof fetchImages>>;
+    try {
+      response = await requestLinearPastedImages(fetchImages, text);
+    } finally {
+      updatePendingImageBatches(destination, -1);
+    }
+    if (pasteScopeRef.current.key !== pasteScope.key) return;
+    const outcome = readLinearPastedImagesResponse(response);
+    if (!outcome) return;
+    if (outcome.notice) showComposerNotice(outcome.notice);
+    if (outcome.files.length === 0) return;
+    const accepted = gateImageFilesForAttachment(outcome.files);
+    if (!accepted || accepted.length === 0) return;
+    await attachImages(accepted, outcome.decodeMs);
   };
 
   const handleDragOver = (event: DragEvent<HTMLElement>): void => {
@@ -10123,10 +10183,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   };
 
   const handleDrop = (event: DragEvent<HTMLElement>): void => {
-    const droppedFiles = getImageFilesFromDataTransfer(event.dataTransfer);
-    const droppedNonImageFiles = getNonImageFilesFromDataTransfer(
-      event.dataTransfer,
-    );
+    const { images: droppedFiles, files: droppedNonImageFiles, readMs } =
+      getComposerFilesFromDataTransfer(event.dataTransfer);
     if (droppedFiles.length === 0 && droppedNonImageFiles.length === 0) {
       return;
     }
@@ -10143,30 +10201,32 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (!accepted || accepted.length === 0) {
       return;
     }
-    void attachImages(accepted);
+    void attachImages(accepted, readMs);
   };
 
-  const attachImages = async (files: ComposerImageFile[]): Promise<void> => {
+  const attachImages = async (files: ComposerImageFile[], transferMs: number): Promise<void> => {
     const pasteScope = pasteScopeRef.current;
     const destination = getLaunchpadComposerDestination(draftStore, pasteScope.key);
     const pasteDraft = draft;
     const pasteEditorDocument = editorDocument;
     const pasteImageAttachments = imageAttachments;
     const pasteFileAttachments = fileAttachments;
+    updatePendingImageBatches(destination, 1);
 
     try {
       const nextAttachments = await Promise.all(
         files.map(async ({ file, type }, index) => {
           const fallbackName = formatPastedImageName(type, index);
-          if (isGifFile(file, type)) {
-            // GIFs skip normalization (to preserve animation), so they have no
+          const preservedType = await getAnimationPreservingImageType(file, type);
+          if (preservedType) {
+            // Animations skip normalization, so they have no
             // measured dimensions — the card shows only the size chip for them.
             return {
               id: `pasted-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
               name: file.name || fallbackName,
               size: file.size,
-              type: "image/gif",
-              url: await readFileAsImageDataUrl(file, "image/gif"),
+              type: preservedType,
+              url: await readFileAsImageDataUrl(file, preservedType),
             };
           }
 
@@ -10176,6 +10236,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             sourceMimeType: type,
           });
           void props.desktopApi?.recordImageUploadNormalization?.({
+            timing: normalized.timing ? { ...normalized.timing, transferMs } : undefined,
             fileName: file.name || fallbackName,
             original: {
               height: normalized.original.height,
@@ -10301,6 +10362,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       setSendError(
         error instanceof Error ? error.message : "The pasted image could not be read."
       );
+    } finally {
+      updatePendingImageBatches(destination, -1);
     }
   };
 
@@ -10995,31 +11058,41 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     abandonComposerDraftSnapshot(composerScopeKey);
     props.onCancelLaunchpad?.(request.directoryKey);
   }, [props.launchpadCancelRequest]);
-  const fiveHourResetAt = getFiveHourRateLimitResetAt({
-    backend,
-    now: scheduleNow,
-    selectedModelOption,
-  });
+  const backendsDescribeScheduleOwner =
+    filesystemFederationTarget?.scope !== "remote"
+    || rendererFederationTarget?.instanceId === filesystemFederationTarget.instanceId;
+  const shortTermResetAt = backendsDescribeScheduleOwner
+    ? getShortTermRateLimitResetAt({
+        rateLimits: backend?.rateLimits,
+        now: scheduleNow,
+        selectedModelOption,
+      })
+    : undefined;
   const scheduledSendOptions: ScheduledSendMenuOption[] = [
+    ...(shortTermResetAt
+      ? [
+          {
+            label: "Send after rate limit reset",
+            description: `In ${formatScheduledSendCountdown(
+              shortTermResetAt + RATE_LIMIT_RESET_BUFFER_MS,
+              scheduleNow,
+            )}–${formatScheduledSendCountdown(
+              shortTermResetAt + RATE_LIMIT_RESET_BUFFER_MS + RATE_LIMIT_RESET_JITTER_MS,
+              scheduleNow,
+            )} · 5–10m buffer`,
+            rateLimitResetAt: shortTermResetAt,
+          },
+        ]
+      : []),
     ...SCHEDULED_SEND_OPTIONS.map((option) => ({
       delayMs: option.delayMs,
       label: option.label,
     })),
-    ...(fiveHourResetAt
-      ? [
-          {
-            label: `Send in ${formatScheduledSendCountdown(
-              fiveHourResetAt,
-              scheduleNow,
-            )} (5h context reset)`,
-            scheduledSendAt: fiveHourResetAt,
-          },
-        ]
-      : []),
   ];
   const sendButtonDisabled =
     forking ||
     preparingSend ||
+    preparingImages ||
     props.disabled ||
     remoteFileUploads.uploads.length > 0 ||
     steering ||
@@ -11136,7 +11209,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const launchpadBranchPickerOptions = useMemo(
     () =>
       props.launchpad
-        ? buildLaunchpadBranchPickerOptions(props.launchpad, props.directory)
+        ? buildLaunchpadBranchPickerOptions(props.launchpad.branchName, props.directory)
         : [],
     [props.launchpad, props.directory],
   );
@@ -11351,6 +11424,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     [sourceBranch, props.directory],
   );
   const branchOptions = leaveLocalBranchOptions.map((option) => option.name);
+  const freshBaseOptions = useMemo(
+    () => buildLaunchpadBranchPickerOptions(undefined, props.directory),
+    [props.directory],
+  );
+  const defaultFreshBaseRef = useMemo(
+    () => pickFreshHandoffBaseRef(freshBaseOptions, props.directory),
+    [freshBaseOptions, props.directory],
+  );
+  const freshBaseRef = pickedFreshBaseRef || defaultFreshBaseRef;
   const canMoveThreadProject = Boolean(
     props.thread &&
       !props.workspaceActionsBlocked &&
@@ -11376,6 +11458,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
   }, [activeTurnId]);
 
+  // Both directions create a new worktree and offer the same strategies.
+  const toNewWorktree = handoffDialog === "local-to-worktree"
+    || handoffDialog === "worktree-to-worktree";
+  const fromWorktreeToNew = handoffDialog === "worktree-to-worktree";
   const openHandoffDialog = (
     direction: HandoffThreadWorkspaceRequest["direction"]
   ): void => {
@@ -11389,10 +11475,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         props.onMoveThreadToMainCheckout ? "keep-local-branch" : "move-branch",
       );
     }
-    if (direction === "local-to-worktree") {
+    if (direction === "local-to-worktree" || direction === "worktree-to-worktree") {
       setLocalHandoffStrategy("detached-changes");
       setLeaveLocalBranch(branchOptions[0] ?? "");
       setNewLocalBranch(buildHandoffBranchSuggestion(sourceBranch));
+      setFreshBaseRef("");
+      setFreshBranchName("");
     }
   };
   const handoffDialogRef = useModalDialog({
@@ -11410,10 +11498,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     setHandoffSubmitting(true);
     setHandoffError(undefined);
     try {
-      const handoffStrategy =
-        handoffDialog === "local-to-worktree"
-          ? localHandoffStrategy
-          : undefined;
+      const freshFromBase = toNewWorktree && localHandoffStrategy === "fresh-from-base";
+      const handoffStrategy = !toNewWorktree
+        ? undefined
+        : freshFromBase
+          ? (freshBranchName.trim() ? "new-branch" : "detached-changes")
+          : localHandoffStrategy as ThreadWorkspaceHandoffStrategy;
       if (handoffDialog === "to-project") {
         await props.onHandoffThreadWorkspace({
           direction: "to-project",
@@ -11436,20 +11526,23 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         ...(handoffDialog === "local-to-worktree" && handoffStrategy === "move-branch"
           ? { leaveLocalBranch: leaveLocalBranch || undefined }
           : {}),
-        ...(handoffDialog === "local-to-worktree" && handoffStrategy === "new-branch"
-          ? { newBranchName: newLocalBranch || undefined }
+        ...(toNewWorktree && handoffStrategy === "new-branch"
+          ? { newBranchName: (freshFromBase ? freshBranchName.trim() : newLocalBranch) || undefined }
           : {}),
+        ...(freshFromBase ? { baseRef: freshBaseRef } : {}),
       });
       setHandoffDialog(undefined);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       // An owner that predates the keep-branch handoff answers
       // method_not_found; nothing moved. The text survives IPC, the code does not.
-      const outdated = keepLocalBranchSelected && isOutdatedOwnerError(message);
       const owner = props.thread?.federation?.instanceLabel ?? "the other machine";
-      setHandoffError(outdated
+      // New-worktree moves use their own method; the bridge names its refusal.
+      setHandoffError(keepLocalBranchSelected && isOutdatedOwnerError(message)
         ? `${owner} runs an older PwrAgent that can only hand off by switching Local’s branch. Update PwrAgent on ${owner}, or choose Move ${sourceBranch ?? "the branch"} to Local.`
-        : message);
+        : message.includes(HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE)
+          ? `${owner} runs an older PwrAgent that cannot make this move. Update PwrAgent on ${owner}. Nothing moved.`
+          : message);
     } finally {
       setHandoffSubmitting(false);
     }
@@ -11492,8 +11585,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       ? !projectTargetPath.trim()
       : !keepLocalBranchSelected && !sourceBranch) ||
     (handoffDialog === "local-to-worktree" &&
-      ((localHandoffStrategy === "move-branch" && !leaveLocalBranch) ||
-        (localHandoffStrategy === "new-branch" && !newLocalBranch.trim())));
+      localHandoffStrategy === "move-branch" && !leaveLocalBranch) ||
+    (fromWorktreeToNew &&
+      localHandoffStrategy === "move-branch" && (!sourceBranch || sourceBranch === "HEAD")) ||
+    (toNewWorktree &&
+      localHandoffStrategy === "new-branch" && !newLocalBranch.trim()) ||
+    (toNewWorktree &&
+      localHandoffStrategy === "fresh-from-base" && !freshBaseRef.trim());
 
   const commitActiveAutocomplete = (): void => {
     if (autocompleteKind === "skills") {
@@ -11989,7 +12087,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               aria-label={
                 handoffDialog === "to-project"
                   ? "Move to Project"
-                  : handoffDialog === "local-to-worktree"
+                  : toNewWorktree
                     ? "Handoff to New Worktree"
                     : "Handoff to Local"
               }
@@ -12000,14 +12098,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               <h2>
                 {handoffDialog === "to-project"
                   ? "Move to Project"
-                  : handoffDialog === "local-to-worktree"
+                  : toNewWorktree
                     ? "Handoff to New Worktree"
                     : "Handoff to Local"}
               </h2>
               <p>
                 {handoffDialog === "to-project"
                   ? "Continue this conversation in another Git project. Files and branches stay in their current locations."
-                  : handoffDialog === "local-to-worktree"
+                  : toNewWorktree
                     ? "Choose how this thread should move into a new worktree."
                     : keepLocalBranchAvailable
                       ? <>Continue this thread in the main checkout, <code>{threadWorkspace.repositoryPath}</code>.</>
@@ -12090,8 +12188,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     <dt>
                       {handoffDialog === "worktree-to-local" && sourceBranch === "HEAD"
                         ? "Detached HEAD to move"
-                        : handoffDialog === "local-to-worktree" &&
-                            localHandoffStrategy === "detached-changes"
+                        : (handoffDialog === "local-to-worktree" &&
+                            (localHandoffStrategy === "detached-changes"
+                              || localHandoffStrategy === "fresh-from-base"))
+                          || (fromWorktreeToNew && localHandoffStrategy !== "move-branch")
                           ? "Current branch"
                           : "Branch to move"}
                     </dt>
@@ -12099,7 +12199,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   </div>
                 </dl>
               )}
-              {handoffDialog === "local-to-worktree" ? (
+              {toNewWorktree ? (
                 <>
                   <div
                     aria-label="Handoff strategy"
@@ -12118,8 +12218,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                         Handoff to Detached HEAD
                       </span>
                       <span>
-                        Keep Local on the current branch. Create a detached worktree at
-                        the current branch tip and move dirty non-ignored changes on top.
+                        {fromWorktreeToNew
+                          ? "Create a detached worktree at the current commit and move dirty non-ignored changes on top."
+                          : "Keep Local on the current branch. Create a detached worktree at the current branch tip and move dirty non-ignored changes on top."}
                       </span>
                     </button>
                     <button
@@ -12134,14 +12235,17 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                         Handoff to New Branch
                       </span>
                       <span>
-                        Keep Local on this branch. Create a named branch in the new
-                        worktree and move dirty non-ignored changes on top.
+                        {fromWorktreeToNew
+                          ? "Create a named branch in the new worktree and move dirty non-ignored changes on top."
+                          : "Keep Local on this branch. Create a named branch in the new worktree and move dirty non-ignored changes on top."}
                       </span>
                     </button>
                     <button
                       aria-checked={localHandoffStrategy === "move-branch"}
                       className="workspace-handoff-dialog__strategy"
-                      disabled={handoffSubmitting || branchOptions.length === 0}
+                      disabled={handoffSubmitting || (fromWorktreeToNew
+                        ? !sourceBranch || sourceBranch === "HEAD"
+                        : branchOptions.length === 0)}
                       role="radio"
                       type="button"
                       onClick={() => setLocalHandoffStrategy("move-branch")}
@@ -12150,12 +12254,56 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                         Handoff Current Branch
                       </span>
                       <span>
-                        Move this branch into the new worktree, then switch this checkout to
-                        a selected branch.
+                        {fromWorktreeToNew
+                          ? "Move this branch into the new worktree. The old worktree lets go of it first."
+                          : "Move this branch into the new worktree, then switch this checkout to a selected branch."}
+                      </span>
+                    </button>
+                    <button
+                      aria-checked={localHandoffStrategy === "fresh-from-base"}
+                      className="workspace-handoff-dialog__strategy"
+                      disabled={handoffSubmitting || freshBaseOptions.length === 0}
+                      role="radio"
+                      type="button"
+                      onClick={() => setLocalHandoffStrategy("fresh-from-base")}
+                    >
+                      <span className="workspace-handoff-dialog__strategy-title">
+                        Start Fresh from a Branch
+                      </span>
+                      <span>
+                        Create a new worktree from another branch, such as origin/main. Uncommitted changes stay here.
                       </span>
                     </button>
                   </div>
-                  {localHandoffStrategy === "move-branch" ? (
+                  {localHandoffStrategy === "fresh-from-base" ? (
+                    <>
+                      <div className="workspace-handoff-dialog__field">
+                        <span aria-hidden="true">Base branch</span>
+                        <BranchPicker
+                          ariaLabel="Base branch"
+                          className="branch-picker--dialog"
+                          disabled={handoffSubmitting}
+                          options={freshBaseOptions}
+                          value={freshBaseRef}
+                          onChange={setFreshBaseRef}
+                        />
+                      </div>
+                      <label className="workspace-handoff-dialog__field">
+                        New branch name (optional)
+                        <input
+                          aria-label="New branch name"
+                          className="workspace-handoff-dialog__text-input"
+                          disabled={handoffSubmitting}
+                          placeholder="Leave empty for a detached HEAD"
+                          spellCheck={false}
+                          type="text"
+                          value={freshBranchName}
+                          onChange={(event) => setFreshBranchName(event.target.value)}
+                        />
+                      </label>
+                    </>
+                  ) : null}
+                  {handoffDialog === "local-to-worktree" && localHandoffStrategy === "move-branch" ? (
                     <div className="workspace-handoff-dialog__field">
                       <span aria-hidden="true">Leave current checkout on</span>
                       <BranchPicker
@@ -12191,7 +12339,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   No available local branch can be checked out before moving this branch.
                 </p>
               ) : null}
-              {handoffDialog === "local-to-worktree" &&
+              {toNewWorktree &&
               localHandoffStrategy === "detached-changes" ? (
                 <p className="workspace-handoff-dialog__note">
                   The new worktree starts at the current tip of{" "}
@@ -12199,7 +12347,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   top.
                 </p>
               ) : null}
-              {handoffDialog === "local-to-worktree" &&
+              {toNewWorktree &&
               localHandoffStrategy === "new-branch" ? (
                 <p className="workspace-handoff-dialog__note">
                   The new worktree creates{" "}
@@ -12212,7 +12360,29 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   dirty non-ignored changes on top.
                 </p>
               ) : null}
-              {keepLocalBranchSelected ? (
+              {toNewWorktree &&
+              localHandoffStrategy === "fresh-from-base" ? (
+                <>
+                  <p className="workspace-handoff-dialog__note">
+                    The new worktree starts at{" "}
+                    {freshBaseRef.trim() ? <code>{freshBaseRef.trim()}</code> : "the base branch"}{" "}
+                    with no changes from here.
+                  </p>
+                  <p className="workspace-handoff-dialog__note">
+                    {!fromWorktreeToNew
+                      ? "This checkout keeps its branch and its uncommitted changes."
+                      // Claude and ACP thread archive keeps every worktree.
+                      : props.thread?.source === "codex"
+                        ? "The current worktree stays on disk with its branch and its uncommitted changes. Archiving this thread later checkpoints and removes it, unless it was created outside PwrAgent."
+                        : "The current worktree stays on disk with its branch and its uncommitted changes."}
+                  </p>
+                </>
+              ) : fromWorktreeToNew ? (
+                <p className="workspace-handoff-dialog__note">
+                  The current worktree is archived with a checkpoint. Its branch stays where it is.
+                </p>
+              ) : null}
+              {toNewWorktree && localHandoffStrategy === "fresh-from-base" ? null : keepLocalBranchSelected ? (
                 <p className="workspace-handoff-dialog__note">
                   Uncommitted changes stay in the checkpoint; they are not copied into Local.
                 </p>
@@ -12665,7 +12835,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   Resume
                 </button>
               ) : isLaunchpad ? (
-                supportsSteering ? (
+                supportsSteering && !queued.reviewCommand ? (
                   <button
                     className="composer__secondary-action"
                     disabled={queued.backendQueuePending}
@@ -12892,6 +13062,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         ref={queuedReorder.announcerRef}
       />
 
+      {preparingImages ? (
+        <p className="composer__meta" aria-live="polite">
+          Preparing image attachments…
+        </p>
+      ) : null}
       {hasVisibleAttachments ? (
         <div
           className="composer__attachments"
@@ -14245,6 +14420,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     {workspaceLabel}
                   </button>
                   <div className="composer-dropdown__separator" role="separator" />
+                  {threadWorkspace.mode === "worktree" ? (
+                    <button
+                      className="composer-dropdown__option"
+                      disabled={!canHandoffThreadWorkspace}
+                      role="menuitem"
+                      type="button"
+                      onClick={() => openHandoffDialog("worktree-to-worktree")}
+                    >
+                      <span aria-hidden="true" className="composer-dropdown__check" />
+                      Handoff to New Worktree
+                    </button>
+                  ) : null}
                   <button
                     className="composer-dropdown__option"
                     disabled={!canHandoffThreadWorkspace}
@@ -14892,7 +15079,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               {interrupting ? "Stopping…" : "Stop"}
             </button>
           ) : null}
-          {props.launchpad && props.onCancelLaunchpad ? (
+          {props.launchpadMaterializing && props.onCancelLaunchpadStartup ? (
+            <button className="button button--ghost" type="button" disabled={props.launchpadStartupCancelling || props.launchpadStartupCancellable === false} onClick={props.onCancelLaunchpadStartup}>
+              {props.launchpadStartupCancelling ? "Cancelling…" : "Cancel startup"}
+            </button>
+          ) : props.launchpad && props.onCancelLaunchpad ? (
             <button
               className="button button--ghost"
               disabled={launchpadSubmitting}
@@ -15097,24 +15288,38 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     </div>
                   </>
                 ) : null}
-                {scheduledSendOptions.map((option) => (
-                  <button
-                    className="composer__schedule-menu-item"
-                    key={option.label}
-                    role="menuitem"
-                    type="button"
-                    onClick={() => {
-                      setScheduleMenuOpen(false);
-                      scheduleCurrentDraft(
-                        option.scheduledSendAt ?? Date.now() + option.delayMs!,
-                      );
-                    }}
-                  >
-                    {props.launchpad
-                      ? option.label.replace(/^Send /, "Start ")
-                      : option.label}
-                  </button>
-                ))}
+                {scheduledSendOptions.map((option) => {
+                  const label = props.launchpad
+                    ? option.label.replace(/^Send /, "Start ")
+                    : option.label;
+                  const onSelect = () => {
+                    setScheduleMenuOpen(false);
+                    if (option.rateLimitResetAt !== undefined) {
+                      if (option.rateLimitResetAt <= Date.now()) return;
+                      scheduleCurrentDraft(getRateLimitResetSendAt(option.rateLimitResetAt));
+                    } else {
+                      scheduleCurrentDraft(Date.now() + option.delayMs!);
+                    }
+                  };
+                  return option.description ? (
+                    <ComposerSendMenuItem
+                      key={option.label}
+                      label={label}
+                      description={option.description}
+                      onSelect={onSelect}
+                    />
+                  ) : (
+                    <button
+                      className="composer__schedule-menu-item"
+                      key={option.label}
+                      role="menuitem"
+                      type="button"
+                      onClick={onSelect}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
               </div>
             ) : null}
           </div>
@@ -15819,7 +16024,7 @@ function normalizeSelectableLaunchpadBranch(branch?: string): string | undefined
  * picker still functions before directory git status has loaded.
  */
 function buildLaunchpadBranchPickerOptions(
-  launchpad: NavigationLaunchpadDraft,
+  selectedBranch: string | undefined,
   directory?: NavigationDirectorySummary,
 ): LaunchpadBranchOption[] {
   const details =
@@ -15859,10 +16064,26 @@ function buildLaunchpadBranchPickerOptions(
   for (const name of orderedNames) {
     push(name);
   }
-  push(launchpad.branchName);
+  push(selectedBranch);
   push(directory?.gitStatus?.currentBranch);
   push(directory?.gitStatus?.defaultBranch);
   return ordered;
+}
+
+/**
+ * The fresh-worktree base the handoff dialog selects first: the remote copy of
+ * the default branch when it is listed, since it is usually the newest.
+ */
+function pickFreshHandoffBaseRef(
+  options: LaunchpadBranchOption[],
+  directory?: NavigationDirectorySummary,
+): string {
+  const names = new Set(options.map((option) => option.name));
+  const defaultBranch = normalizeSelectableLaunchpadBranch(directory?.gitStatus?.defaultBranch);
+  for (const candidate of defaultBranch ? [`origin/${defaultBranch}`, defaultBranch] : []) {
+    if (names.has(candidate)) return candidate;
+  }
+  return options.find((option) => option.isDefault)?.name ?? options[0]?.name ?? "";
 }
 
 /**

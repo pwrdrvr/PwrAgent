@@ -3158,6 +3158,31 @@ describe("DesktopSettingsService", () => {
     expect(service.resolvePassSetupVariablesToAgents()).toBe(false);
   });
 
+  it("defaults HTML preview scripts off and persists the override", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettingsProjection()).general.htmlPreviewRunScripts).toEqual({
+      value: false,
+      source: "default",
+    });
+
+    await service.writeConfigPatchTargeted({
+      general: { htmlPreviewRunScripts: true },
+    });
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain("html_preview_run_scripts = true");
+    expect((await service.readSettingsProjection()).general.htmlPreviewRunScripts).toEqual({
+      value: true,
+      source: "config",
+    });
+  });
+
   it("defaults both interactive SVG preferences off and persists overrides", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
@@ -3622,36 +3647,53 @@ describe("DesktopSettingsService", () => {
 
     const initial = await service.readSettingsProjection();
     expect(initial.imageUploads.pastedImageMaxPatches).toEqual({
-      value: 1536,
+      value: 4096,
       source: "default",
     });
 
     await service.writeConfigPatchTargeted({
       imageUploads: {
-        pastedImageMaxPatches: 1024,
+        pastedImageMaxPatches: 0,
       },
     });
 
     const afterCompact = fs.readFileSync(configPath, "utf8");
     expect(afterCompact).toContain("[image_uploads]");
-    expect(afterCompact).toContain("pasted_image_max_patches = 1024");
+    expect(afterCompact).toContain("pasted_image_max_patches = 0");
     expect((await service.readSettingsProjection()).imageUploads.pastedImageMaxPatches).toEqual({
-      value: 1024,
+      value: 0,
       source: "config",
     });
 
     await service.writeConfigPatchTargeted({
       imageUploads: {
-        pastedImageMaxPatches: 1536,
+        pastedImageMaxPatches: 4096,
       },
     });
 
     const afterDefault = fs.readFileSync(configPath, "utf8");
     expect(afterDefault).not.toContain("pasted_image_max_patches");
     expect((await service.readSettingsProjection()).imageUploads.pastedImageMaxPatches).toEqual({
-      value: 1536,
+      value: 4096,
       source: "default",
     });
+  });
+
+  it.each([1024, 1536])("uses the safety limit for a legacy %i preset without rewriting config", async (budget) => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const content = `[image_uploads]\n# Keep this comment.\npasted_image_max_patches = ${budget}\n`;
+    fs.writeFileSync(configPath, content);
+    const service = new DesktopSettingsService({
+      configPath, env: {}, secretStore: new MemoryDesktopSecretStore(),
+    });
+    expect((await service.readSettingsProjection()).imageUploads.pastedImageMaxPatches).toEqual({
+      value: 4096, source: "config",
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toBe(content);
+    await service.writeConfigPatchTargeted({ imageUploads: { pastedImageMaxPatches: 4096 } });
+    expect(fs.readFileSync(configPath, "utf8")).toContain("# Keep this comment.");
+    expect(fs.readFileSync(configPath, "utf8")).not.toContain("pasted_image_max_patches");
   });
 
   it("marks legacy chat reply composer config when another setting is saved", async () => {

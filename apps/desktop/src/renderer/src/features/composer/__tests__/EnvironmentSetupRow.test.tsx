@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { EnvironmentSetupRow, type EnvironmentSetupRowModel } from "../EnvironmentSetupRow";
 
 afterEach(() => {
@@ -31,6 +31,15 @@ function summary(row: HTMLElement): string {
 }
 
 describe("EnvironmentSetupRow", () => {
+  it("routes cancellation independently of expanding setup output", () => {
+    const onCancel = vi.fn();
+    const { rerender } = render(<EnvironmentSetupRow model={model({ onCancel })} />);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel startup" }));
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(screen.queryByLabelText("Env setup output")).toBeNull();
+    rerender(<EnvironmentSetupRow model={model({ onCancel, cancelling: true })} />);
+    expect(screen.getByRole("button", { name: "Cancelling…" })).toBeDisabled();
+  });
   it("keeps output out of the collapsed summary while the command runs", () => {
     const { rerender } = render(<EnvironmentSetupRow model={model({})} />);
     const row = screen.getByLabelText("Env setup running");

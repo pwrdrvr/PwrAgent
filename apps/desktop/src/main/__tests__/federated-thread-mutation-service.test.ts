@@ -93,6 +93,82 @@ describe("federated thread mutation service", () => {
     expect(backend.renameThread).not.toHaveBeenCalled();
   });
 
+  describe("parent changes", () => {
+    function setup(capabilities = ["thread_navigation", "thread_grouping", "thread_parent_mutation_v1"]) {
+      const backend = {
+        resolveThread: vi.fn(async () => ({ thread: {
+          source: "codex" as const, id: "remote-thread", title: "Remote thread", linkedDirectories: [],
+        } })),
+        mutateThreadParentV1: vi.fn(async () => ({ ok: true as const, data: {} })),
+        setThreadParent: vi.fn(),
+        renameThread: vi.fn(),
+      };
+      const runtime = {
+        connectedPeerTargets: () => [{
+          target: { scope: "remote" as const, instanceId: "pwr_owner" }, label: "Owner Mac", capabilities,
+        }],
+        remoteBackend: vi.fn(() => backend),
+      };
+      return { backend, runtime, handler: createFederatedThreadMutationHandler({
+        runtime: () => runtime as unknown as DesktopFederationRuntime,
+      }) };
+    }
+
+    it.each([false, true])("sends parent changes and detach to the owner, including dryRun=%s", async (dryRun) => {
+      const { backend, handler } = setup();
+      expect(await handler({ backend: "codex", threadId: "remote-thread", instanceId: "pwr_owner",
+        parentThreadId: "parent", parentBackend: "claude", dryRun }))
+        .toEqual({ instanceId: "pwr_owner", instanceLabel: "Owner Mac" });
+      expect(backend.mutateThreadParentV1).toHaveBeenLastCalledWith({
+        backend: "codex", threadId: "remote-thread", parentThreadId: "parent", parentBackend: "claude", dryRun,
+      });
+      await handler({ backend: "codex", threadId: "remote-thread", parentThreadId: "parent", dryRun });
+      expect(backend.mutateThreadParentV1).toHaveBeenLastCalledWith({
+        backend: "codex", threadId: "remote-thread", parentThreadId: "parent", parentBackend: "codex", dryRun,
+      });
+      await handler({ backend: "codex", threadId: "remote-thread", detachFromParent: true, dryRun });
+      expect(backend.mutateThreadParentV1).toHaveBeenLastCalledWith({
+        backend: "codex", threadId: "remote-thread", detachFromParent: true, dryRun,
+      });
+      expect(backend.setThreadParent).not.toHaveBeenCalled();
+    });
+
+    it.each(["thread_grouping", "thread_parent_mutation_v1"])("refuses a peer without %s before changing any field", async (missing) => {
+      const { backend, handler } = setup(["thread_navigation", "thread_grouping", "thread_parent_mutation_v1", "turn_control"]
+        .filter((capability) => capability !== missing));
+      await expect(handler({ backend: "codex", threadId: "remote-thread", parentThreadId: "parent",
+        title: "Must stay unchanged", dryRun: false })).rejects.toThrow(missing);
+      expect(backend.mutateThreadParentV1).not.toHaveBeenCalled();
+      expect(backend.renameThread).not.toHaveBeenCalled();
+      expect(backend.setThreadParent).not.toHaveBeenCalled();
+    });
+
+    it.each(["not_found", "invalid_arguments"] as const)("preserves owner refusal %s before other mutations", async (code) => {
+      const { backend, handler } = setup(["thread_navigation", "thread_grouping", "thread_parent_mutation_v1", "turn_control"]);
+      backend.mutateThreadParentV1.mockResolvedValueOnce({ ok: false, error: { code, message: "Owner refused parent" } } as never);
+      await expect(handler({ backend: "codex", threadId: "remote-thread", parentThreadId: "parent",
+        title: "Must stay unchanged", dryRun: false })).rejects.toMatchObject({ code, message: "Owner refused parent" });
+      expect(backend.renameThread).not.toHaveBeenCalled();
+    });
+
+    it("keeps the selected owner when peers report the same thread id", async () => {
+      const { backend, runtime, handler } = setup();
+      const other = { ...backend, mutateThreadParentV1: vi.fn() };
+      runtime.connectedPeerTargets = () => ["pwr_owner", "pwr_other"].map((instanceId) => ({
+        target: { scope: "remote" as const, instanceId }, label: instanceId,
+        capabilities: ["thread_navigation", "thread_grouping", "thread_parent_mutation_v1"],
+      }));
+      runtime.remoteBackend.mockImplementation((target?: { instanceId: string }) => target?.instanceId === "pwr_other" ? other : backend);
+      await handler({ backend: "codex", threadId: "remote-thread", instanceId: "pwr_owner", detachFromParent: true, dryRun: false });
+      expect(backend.mutateThreadParentV1).toHaveBeenCalledOnce();
+      expect(other.mutateThreadParentV1).not.toHaveBeenCalled();
+      await expect(handler({ backend: "codex", threadId: "remote-thread", detachFromParent: true, dryRun: false }))
+        .rejects.toThrow(/multiple federation instances/);
+      expect(backend.mutateThreadParentV1).toHaveBeenCalledOnce();
+      expect(other.mutateThreadParentV1).not.toHaveBeenCalled();
+    });
+  });
+
   describe("archive, restore, pins, read state and project moves", () => {
     function peerOwning(
       threadStatus: "active" | "idle",

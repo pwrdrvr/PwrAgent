@@ -8,7 +8,9 @@ import {
 import { copyTextAsCodeBlock } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
+import { statusPulseRef } from "../../lib/status-pulse";
 import { ThreadChip } from "../thread-detail/ThreadChip";
+import { TodoSplitButton, type TodoSplitMenuEntry } from "../thread-todos/TodoSplitButton";
 
 const AUTO_DISMISS_MS = 9_000;
 
@@ -17,6 +19,15 @@ export type AppNoticeToastNotice = {
     label: string;
     onClick: () => void;
     tone?: "primary" | "secondary";
+    /**
+     * Makes the button a split pill, as the composer's Send: the label runs
+     * `onClick` and the chevron offers these.
+     */
+    menu?: {
+      /** Names the chevron, e.g. "Approval options". */
+      label: string;
+      entries: TodoSplitMenuEntry[];
+    };
   }[];
   autoDismiss?: boolean;
   /** Retain only the highest-priority durable notice in this logical slot. */
@@ -173,7 +184,8 @@ export function AppNoticeToast(props: {
     || props.navigation?.dismissAll !== undefined;
   // One dot carries the state: a status when the notice reports one, the
   // tone otherwise. The card itself stays neutral.
-  const dotState = props.notice.status?.state === "progress"
+  const pulsing = props.notice.status?.state === "progress";
+  const dotState = pulsing
     ? "warning status-dot--blink"
     : props.notice.status?.state === "success"
       ? "ok"
@@ -241,6 +253,7 @@ export function AppNoticeToast(props: {
         <span
           className={`status-dot status-dot--${dotState} app-notice-toast__dot`}
           aria-hidden="true"
+          ref={pulsing ? statusPulseRef : undefined}
         />
         <p className="app-notice-toast__title">{props.notice.title}</p>
         <div className="app-notice-toast__actions">
@@ -356,7 +369,18 @@ export function AppNoticeToast(props: {
           ) : null}
           {hasFooterActions ? (
             <div className="app-notice-toast__custom-actions">
-              {customActions.map((action) => (
+              {customActions.map((action) => action.menu && action.menu.entries.length > 0 ? (
+                <TodoSplitButton
+                  // Keyed by notice: the stack reuses one card as the active
+                  // notice changes, and an open menu must not carry another
+                  // notice's answers.
+                  key={`${noticeId}:${action.label}`}
+                  label={action.label}
+                  menuLabel={action.menu.label}
+                  entries={action.menu.entries}
+                  onClick={action.onClick}
+                />
+              ) : (
                 <button
                   key={action.label}
                   className={`button button--${action.tone ?? "secondary"} app-notice-toast__button`}

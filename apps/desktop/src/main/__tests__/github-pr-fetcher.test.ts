@@ -7,6 +7,7 @@ import {
   deriveMergeState,
   deriveReviewState,
   hasChecksStillRunning,
+  mergeScopeHint,
   parseGhAuthStatus,
   parseGhPrPayload,
 } from "../pr-status/github-pr-fetcher";
@@ -996,5 +997,19 @@ describe("GithubPrFetcher", () => {
       expect(runGhAuthStatus).not.toHaveBeenCalled();
       expect(probeGhAvailable).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("mergeScopeHint", () => {
+  it("names the command when gh reports the missing workflow scope", () => {
+    expect(mergeScopeHint(
+      "GraphQL: refusing to allow an OAuth App to create or update workflow "
+      + "`.github/workflows/release.yml` without `workflow` scope (mergePullRequest)",
+    )).toBe(". Run `gh auth refresh -s workflow`, then retry.");
+  });
+
+  it("adds nothing to other merge failures", () => {
+    expect(mergeScopeHint("Pull request #12 is not mergeable: the base branch policy prohibits the merge."))
+      .toBe("");
   });
 });

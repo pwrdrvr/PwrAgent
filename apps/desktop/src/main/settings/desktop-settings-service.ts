@@ -31,6 +31,7 @@ import type {
   DesktopCodexAuthProfileDiscoverySnapshot,
   DesktopCodexCandidateSource,
   DesktopHelperModelSettings,
+  DesktopTaskMonitorModelChoice,
   DesktopDecisionModelSettings,
   DecisionProviderId,
   DesktopCodexDiscoverySnapshot,
@@ -980,6 +981,12 @@ export class DesktopSettingsService {
           config.general?.interactiveSvgAutoOpen,
           false,
         ),
+        // Default off for the same reason. The page has no network access
+        // either way; this only decides whether its scripts start on open.
+        htmlPreviewRunScripts: this.resolveConfigBoolean(
+          config.general?.htmlPreviewRunScripts,
+          false,
+        ),
         // Default on: the gateway only does work for connections the
         // operator explicitly added and authorized, so an empty registry
         // costs nothing. The switch exists to revoke thread access
@@ -1221,6 +1228,15 @@ export class DesktopSettingsService {
           config.ui?.contextRailPinned,
           DESKTOP_UI_LAYOUT_DEFAULTS.contextRailPinned,
         ),
+        projectIndexHidden: this.resolveConfigBoolean(
+          config.ui?.projectIndexHidden,
+          DESKTOP_UI_LAYOUT_DEFAULTS.projectIndexHidden,
+        ),
+        projectIndexWidth: {
+          value: config.ui?.projectIndexWidth
+            ?? DESKTOP_UI_LAYOUT_DEFAULTS.projectIndexWidth,
+          source: config.ui?.projectIndexWidth === undefined ? "default" : "config",
+        },
         activeContextTab: {
           value: config.ui?.activeContextTab ?? "info",
           source: config.ui?.activeContextTab === undefined ? "default" : "config",
@@ -1589,6 +1605,7 @@ export class DesktopSettingsService {
         providerThreadMigrations:
           config.models?.providerThreadMigrations ?? {},
         helperModels: config.models?.helperModels ?? { helpers: {} },
+        taskMonitorModels: config.models?.taskMonitorModels ?? {},
         decisionModels: config.models?.decisionModels ?? {},
         decisionSecrets: { localApiKey: decisionLocalApiKey, jevApiKey: typesafeJevApiKey },
         codex: {
@@ -3135,6 +3152,10 @@ export class DesktopSettingsService {
     return this.readModelsConfig().helperModels ?? { helpers: {} };
   }
 
+  resolveTaskMonitorModels(): Record<string, DesktopTaskMonitorModelChoice> {
+    return this.readModelsConfig().taskMonitorModels ?? {};
+  }
+
   resolveUsageAccountGroups(): Record<string, string> {
     return this.readModelsConfig().usageAccountGroups ?? {};
   }
@@ -3733,8 +3754,13 @@ export class DesktopSettingsService {
       configValue !== undefined && Number.isFinite(configValue)
         ? Math.max(0, Math.floor(configValue))
         : undefined;
+    // Legacy 1024/1536 presets now use the 4096-patch safety limit. Keep the
+    // original TOML intact until this setting is explicitly saved.
+    const effective = normalized === 1024 || normalized === 1536
+      ? DEFAULT_PASTED_IMAGE_MAX_PATCHES
+      : normalized;
     return {
-      value: normalized ?? DEFAULT_PASTED_IMAGE_MAX_PATCHES,
+      value: effective ?? DEFAULT_PASTED_IMAGE_MAX_PATCHES,
       source: normalized === undefined ? "default" : "config",
     };
   }

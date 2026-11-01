@@ -4,9 +4,11 @@ import {
   isAcpBackendId,
   isForgeAgentToolAccess,
   isThreadTodoMergeMethod,
+  normalizeTaskMonitorModelChoice,
   validateCodexModelProviders,
   validateLocalModelIds,
   type CodexModelProviderSettings,
+  type DesktopTaskMonitorModelChoice,
   type ForgeAgentToolAccess,
   type ForgeAgentToolGroup,
 } from "@pwragent/shared";
@@ -126,6 +128,7 @@ export type DesktopSettingsConfig = {
     passSetupVariablesToAgents?: boolean;
     interactiveSvgSkipNotice?: boolean;
     interactiveSvgAutoOpen?: boolean;
+    htmlPreviewRunScripts?: boolean;
     mcpGatewayEnabled?: boolean;
     pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
@@ -198,6 +201,8 @@ export type DesktopSettingsConfig = {
   ui?: {
     sidebarHidden?: boolean;
     contextRailPinned?: boolean;
+    projectIndexHidden?: boolean;
+    projectIndexWidth?: number;
     activeContextTab?: string;
     editedFilesDock?: string;
     actionRunsDock?: string;
@@ -321,6 +326,7 @@ export type DesktopSettingsConfig = {
       DesktopProviderThreadModelMigration
     >;
     helperModels?: DesktopHelperModelSettings;
+    taskMonitorModels?: Record<string, DesktopTaskMonitorModelChoice>;
     decisionModels?: DesktopDecisionModelSettings;
     codex?: {
       path?: string;
@@ -705,6 +711,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["general", "interactive_svg_auto_open"],
       patch.general.interactiveSvgAutoOpen,
+    );
+  }
+  if (patch.general?.htmlPreviewRunScripts !== undefined) {
+    set(
+      ["general", "html_preview_run_scripts"],
+      patch.general.htmlPreviewRunScripts,
     );
   }
   if (patch.general?.mcpGatewayEnabled !== undefined) {
@@ -1146,6 +1158,24 @@ export function desktopSettingsPatchToEdits(
       edits.push({ op: "delete", path: ["ui", "context_rail_pinned"] });
     } else {
       set(["ui", "context_rail_pinned"], false);
+    }
+  }
+  // The project index defaults to shown, so only an explicit hide persists.
+  if (patch.ui?.projectIndexHidden !== undefined) {
+    if (patch.ui.projectIndexHidden) {
+      set(["ui", "project_index_hidden"], true);
+    } else {
+      edits.push({ op: "delete", path: ["ui", "project_index_hidden"] });
+    }
+  }
+  // `null` (a double-click on the grip) returns the column to the width of
+  // its longest name, which is the absence of the key.
+  if (patch.ui?.projectIndexWidth !== undefined) {
+    const width = patch.ui.projectIndexWidth;
+    if (width === null || !Number.isFinite(width) || width <= 0) {
+      edits.push({ op: "delete", path: ["ui", "project_index_width"] });
+    } else {
+      set(["ui", "project_index_width"], Math.round(width));
     }
   }
   if (patch.ui?.activeContextTab !== undefined) {
@@ -1865,6 +1895,23 @@ export function desktopSettingsPatchToEdits(
       });
     }
   }
+  if (patch.models?.taskMonitorModels !== undefined) {
+    const entries = Object.entries(
+      normalizeTaskMonitorModels(patch.models.taskMonitorModels),
+    )
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([provider, choice]) => ({
+        provider,
+        source: choice.source,
+        ...(choice.model ? { model: choice.model } : {}),
+        ...(choice.reasoningEffort
+          ? { reasoning_effort: choice.reasoningEffort }
+          : {}),
+      }));
+    edits.push(entries.length
+      ? { op: "setTableArray", path: ["models", "task_monitor_models"], value: entries }
+      : { op: "deleteTableArray", path: ["models", "task_monitor_models"] });
+  }
   if (patch.models?.decisionModels !== undefined) {
     // `[models.decision]`: new keys with no legacy shape. A key left at its
     // default is removed rather than written.
@@ -2134,6 +2181,7 @@ function normalizeDesktopConfig(
         general?.interactive_svg_skip_notice,
       ),
       interactiveSvgAutoOpen: readBoolean(general?.interactive_svg_auto_open),
+      htmlPreviewRunScripts: readBoolean(general?.html_preview_run_scripts),
       mcpGatewayEnabled: readBoolean(general?.mcp_gateway_enabled),
       pdfAnalysisEnabled: readBoolean(general?.pdf_analysis_enabled),
       developerMode: readBoolean(general?.developer_mode),
@@ -2281,6 +2329,8 @@ function normalizeDesktopConfig(
     ui: {
       sidebarHidden: readBoolean(ui?.sidebar_hidden),
       contextRailPinned: readBoolean(ui?.context_rail_pinned),
+      projectIndexHidden: readBoolean(ui?.project_index_hidden),
+      projectIndexWidth: readPositiveWidth(ui?.project_index_width),
       activeContextTab: readString(ui?.active_context_tab),
       editedFilesDock: readString(ui?.edited_files_dock),
       actionRunsDock: readString(ui?.action_runs_dock),
@@ -2488,6 +2538,7 @@ function normalizeDesktopConfig(
         models?.helper_default_reasoning_effort,
         models?.helper_models,
       ),
+      taskMonitorModels: readTaskMonitorModels(models?.task_monitor_models),
       decisionModels: normalizeDecisionModelSettings({
         model: decision?.model,
         cameraCues: decision?.camera_cues,
@@ -2608,6 +2659,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const passSetupVariablesToAgents = config.general?.passSetupVariablesToAgents;
   const interactiveSvgSkipNotice = config.general?.interactiveSvgSkipNotice;
   const interactiveSvgAutoOpen = config.general?.interactiveSvgAutoOpen;
+  const htmlPreviewRunScripts = config.general?.htmlPreviewRunScripts;
   const pdfAnalysisEnabled = config.general?.pdfAnalysisEnabled;
   const notificationsEnabled = config.general?.notificationsEnabled;
   const toolOutputAlerts = config.general?.toolOutputAlerts;
@@ -2633,6 +2685,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     passSetupVariablesToAgents !== undefined ||
     interactiveSvgSkipNotice !== undefined ||
     interactiveSvgAutoOpen !== undefined ||
+    htmlPreviewRunScripts !== undefined ||
     pdfAnalysisEnabled !== undefined ||
     notificationsEnabled !== undefined ||
     toolOutputAlertsDefined ||
@@ -2684,6 +2737,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (interactiveSvgAutoOpen !== undefined) {
       pruned.general.interactiveSvgAutoOpen = interactiveSvgAutoOpen;
+    }
+    if (htmlPreviewRunScripts !== undefined) {
+      pruned.general.htmlPreviewRunScripts = htmlPreviewRunScripts;
     }
     if (pdfAnalysisEnabled !== undefined) {
       pruned.general.pdfAnalysisEnabled = pdfAnalysisEnabled;
@@ -2838,6 +2894,10 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const providerDefaults = config.models?.providerDefaults;
   const providerThreadMigrations = config.models?.providerThreadMigrations;
   const helperModels = config.models?.helperModels;
+  const taskMonitorModels = config.models?.taskMonitorModels;
+  const hasTaskMonitorModels = Boolean(
+    taskMonitorModels && Object.keys(taskMonitorModels).length > 0,
+  );
   const usageAccountGroups = config.models?.usageAccountGroups;
   const usageAccountNames = config.models?.usageAccountNames;
   const decisionModels = config.models?.decisionModels;
@@ -2857,6 +2917,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
       && Object.keys(providerThreadMigrations).length > 0
     )
     || hasHelperModels
+    || hasTaskMonitorModels
     || (usageAccountGroups && Object.keys(usageAccountGroups).length > 0)
     || (usageAccountNames && Object.keys(usageAccountNames).length > 0)
     || decisionModels
@@ -2865,6 +2926,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
       ...(usageAccountGroups && Object.keys(usageAccountGroups).length > 0 ? { usageAccountGroups } : {}),
       ...(usageAccountNames && Object.keys(usageAccountNames).length > 0 ? { usageAccountNames } : {}),
       ...(hasHelperModels ? { helperModels } : {}),
+      ...(hasTaskMonitorModels ? { taskMonitorModels } : {}),
       ...(decisionModels ? { decisionModels } : {}),
       ...(providerDefaults && Object.keys(providerDefaults).length > 0
         ? { providerDefaults }
@@ -3471,6 +3533,39 @@ function readHelperModelSettings(
   };
 }
 
+function normalizeTaskMonitorModels(
+  value: Record<string, DesktopTaskMonitorModelChoice>,
+): Record<string, DesktopTaskMonitorModelChoice> {
+  return Object.fromEntries(Object.entries(value).flatMap(([provider, choice]) => {
+    const normalizedProvider = provider.trim();
+    const normalized = normalizeTaskMonitorModelChoice(choice);
+    return normalizedProvider && normalized ? [[normalizedProvider, normalized]] : [];
+  }));
+}
+
+/**
+ * `[[models.task_monitor_models]]` rows. A new key with no legacy shape: a
+ * malformed row is skipped, never the section.
+ */
+function readTaskMonitorModels(
+  value: TomlScalar | undefined,
+): Record<string, DesktopTaskMonitorModelChoice> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const choices: Record<string, DesktopTaskMonitorModelChoice> = {};
+  for (const item of value) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+    const provider = typeof item.provider === "string" ? item.provider.trim() : "";
+    if (!provider || choices[provider]) continue;
+    const choice = normalizeTaskMonitorModelChoice({
+      source: item.source,
+      model: item.model,
+      reasoningEffort: item.reasoning_effort,
+    });
+    if (choice) choices[provider] = choice;
+  }
+  return Object.keys(choices).length > 0 ? choices : undefined;
+}
+
 function normalizeProviderModelDefaults(
   value: Record<string, DesktopProviderModelDefaults>,
 ): Record<string, DesktopProviderModelDefaults> {
@@ -3785,6 +3880,12 @@ function legacyTokenMiserGeneralComment(): string {
 
 function readNumber(value: TomlScalar | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/** A remembered pane width: a positive whole number of px, or nothing. */
+function readPositiveWidth(value: TomlScalar | undefined): number | undefined {
+  const width = readNumber(value);
+  return width !== undefined && width > 0 ? Math.round(width) : undefined;
 }
 
 function readImageProfile(

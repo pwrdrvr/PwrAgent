@@ -9,6 +9,7 @@ export const FORGE_AGENT_TOOL_GROUPS = [
   "pull_requests",
   "comments",
   "issues",
+  "ci",
   "approve_merge",
 ] as const;
 
@@ -35,6 +36,7 @@ export const DEFAULT_FORGE_AGENT_TOOL_POLICY: ForgeAgentToolPolicy = {
     pull_requests: "auto",
     comments: "auto",
     issues: "auto",
+    ci: "auto",
     approve_merge: "ask",
   },
 };
@@ -44,6 +46,7 @@ export const FORGE_AGENT_TOOL_GROUP_LABELS: Record<ForgeAgentToolGroup, string> 
   pull_requests: "Pull requests",
   comments: "Comments and reviews",
   issues: "Issues",
+  ci: "CI reruns",
   approve_merge: "Approve and merge",
 };
 
@@ -78,6 +81,7 @@ export const FORGE_AGENT_WRITE_TOOL_GROUPS = {
   resolve_review_thread: "comments",
   create_issue: "issues",
   update_issue: "issues",
+  rerun_failed_ci_jobs: "ci",
   merge_pull_request: "approve_merge",
 } as const satisfies Record<string, Exclude<ForgeAgentToolGroup, "read">>;
 

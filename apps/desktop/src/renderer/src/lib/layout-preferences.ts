@@ -22,6 +22,8 @@ import { DESKTOP_UI_LAYOUT_DEFAULTS } from "@pwragent/shared";
 export type RendererLayoutPreferences = {
   contextRailPinned: boolean;
   sidebarHidden: boolean;
+  projectIndexHidden: boolean;
+  projectIndexWidth: number | null;
 };
 
 export const RENDERER_LAYOUT_FALLBACK: RendererLayoutPreferences =
@@ -38,5 +40,13 @@ export function readBootstrapLayoutPreferences(): RendererLayoutPreferences {
     sidebarHidden: typeof bridged?.sidebarHidden === "boolean"
       ? bridged.sidebarHidden
       : RENDERER_LAYOUT_FALLBACK.sidebarHidden,
+    projectIndexHidden: typeof bridged?.projectIndexHidden === "boolean"
+      ? bridged.projectIndexHidden
+      : RENDERER_LAYOUT_FALLBACK.projectIndexHidden,
+    projectIndexWidth: typeof bridged?.projectIndexWidth === "number"
+      && Number.isFinite(bridged.projectIndexWidth)
+      && bridged.projectIndexWidth > 0
+      ? bridged.projectIndexWidth
+      : RENDERER_LAYOUT_FALLBACK.projectIndexWidth,
   };
 }

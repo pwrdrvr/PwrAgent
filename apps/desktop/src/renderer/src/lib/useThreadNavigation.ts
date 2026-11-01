@@ -1,5 +1,8 @@
 import type { NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
+import type { LaunchpadCreationStatus } from "@pwragent/shared";
+import { materializeObservableLaunchpad, LaunchpadStartupCancelledError } from "./launchpad-creation-client";
 import { readNavigationQueryRange } from "./read-navigation-query-range";
+import { readBridgedNavigationResumeState } from "./navigation-resume-state";
 import { findPeerCounterpartDirectory, type ProjectIdentity } from "./federation-project-match";
 import { FederatedDirectoryIndexCache } from "./federated-directory-index-cache";
 import { useBoundedNavigationWindow } from "./useBoundedNavigationWindow";
@@ -38,6 +41,7 @@ import type {
   RecreateThreadWorktreeRequest,
   RecreateThreadWorktreeResponse,
   NavigationBrowseMode,
+  NavigationResumeState,
   NavigationDirectoryGitStatus,
   NavigationDirectoryGitStatusUpdatedNotification,
   NavigationLaunchpadDefaults,
@@ -71,6 +75,7 @@ import {
   isRemoteFederationTarget,
   isSubthreadLaunchpadKey,
   normalizeNavigationBrowseMode,
+  normalizeNavigationResumeState,
   normalizeRenamedTitleSource,
   resolveThreadParentKey,
   shortenDerivedThreadTitle,
@@ -841,6 +846,7 @@ function prSummariesEqual(
       candidate.sourceRepository?.provider === pr.sourceRepository?.provider &&
       candidate.sourceRepository?.org === pr.sourceRepository?.org &&
       candidate.sourceRepository?.repo === pr.sourceRepository?.repo &&
+      candidate.explicitlyAttached === pr.explicitlyAttached &&
       candidate.title === pr.title &&
       candidate.state === pr.state &&
       candidate.checkState === pr.checkState &&
@@ -2051,7 +2057,8 @@ function applyPullRequestStatusUpdate(
     if (buildPullRequestStatusKey(currentPr) !== params.prKey) {
       continue;
     }
-    if (prSummariesEqual([currentPr], [params.pr])) {
+    const updatedPr = { ...params.pr, explicitlyAttached: currentPr.explicitlyAttached };
+    if (prSummariesEqual([currentPr], [updatedPr])) {
       continue;
     }
 
@@ -2065,7 +2072,7 @@ function applyPullRequestStatusUpdate(
       };
       updatedThreadIndexes.add(location.threadIndex);
     }
-    threads[location.threadIndex]!.prs![location.prIndex] = params.pr;
+    threads[location.threadIndex]!.prs![location.prIndex] = updatedPr;
   }
 
   if (!threads) {
@@ -2711,7 +2718,8 @@ function mergeHydratedThreadWithOptimisticState(
 }
 
 function buildOptimisticUserMessage(
-  input: AppServerTurnInputItem[] | undefined
+  input: AppServerTurnInputItem[] | undefined,
+  submittedAt: number,
 ): NavigationThreadSummary["optimisticUserMessage"] {
   if (!input?.length) {
     return undefined;
@@ -2740,7 +2748,7 @@ function buildOptimisticUserMessage(
   return {
     text,
     ...(imageParts.length > 0 ? { imageParts } : {}),
-    createdAt: Date.now(),
+    createdAt: submittedAt,
   };
 }
 
@@ -2811,6 +2819,14 @@ function reviewDisplayTextFromTarget(
 }
 
 export type PendingLaunchpadCreation = {
+  operationId: string;
+  submittedAt: number;
+  target?: FederationTarget;
+  startup?: LaunchpadCreationStatus;
+  cancelling?: boolean;
+  cancelError?: string;
+  connectionLost?: boolean;
+  onCancel?: () => void;
   federatedSession?: FederatedLaunchpadSession;
   setupProgress?: LaunchpadEnvironmentSetupProgress;
   selectionKey: string;
@@ -3224,10 +3240,12 @@ export function useThreadNavigation(
    * pinned order across all backends (thread identity keys), top first.
    */
   reorderThreadPins: (orderedThreadKeys: string[], move?: NavigationRelativePinMove) => Promise<void>;
+  /** Resolves false when the owner refused the change. */
   setThreadParent: (
     thread: NavigationThreadSummary,
     parentThreadId?: string,
-  ) => Promise<void>;
+    parentThreadBackend?: AppServerBackendKind,
+  ) => Promise<boolean>;
   unlinkThreads: (threads: NavigationThreadSummary[]) => Promise<void>;
   updateSubthreadOrder: (
     parent: NavigationThreadSummary,
@@ -3259,7 +3277,21 @@ export function useThreadNavigation(
   refreshSelectedLaunchpadConfiguration: () => Promise<void>;
   threads: NavigationThreadSummary[];
 } {
-  const directoryDisclosure = useNavigationDirectoryDisclosure();
+  const [resumeState] = useState(readBridgedNavigationResumeState);
+  const directoryDisclosure = useNavigationDirectoryDisclosure(resumeState);
+  const [loadedRowsByQuery, setLoadedRowsByQuery] = useRecoverableState<Record<string, number>>(
+    "navigation.loadedRowsByQuery", () => resumeState?.loadedRowsByQuery ?? {});
+  const rememberLoadedRows = useCallback((key: string, rows: number) => {
+    setLoadedRowsByQuery((current) => current[key] === rows ? current : { ...current, [key]: rows });
+  }, [setLoadedRowsByQuery]);
+  const forgetLoadedRows = useCallback((key: string) => {
+    setLoadedRowsByQuery((current) => {
+      if (current[key] === undefined) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }, [setLoadedRowsByQuery]);
   const { setUnpinnedExpandedByKey } = directoryDisclosure;
   const markThreadSeen = desktopApi?.markThreadSeen;
   const forkThreadRequest = desktopApi?.forkThread;
@@ -3293,13 +3325,14 @@ export function useThreadNavigation(
   const [bridgedPinnedThreadsOnTop] = useState(readBridgedPinnedThreadsOnTop);
   const pinnedThreadsOnTop = options.pinnedThreadsOnTop ?? bridgedPinnedThreadsOnTop;
   const [selectedItemKey, setSelectedItemKey] = useRecoverableState<string | undefined>(
-    "navigation.selection", undefined,
+    "navigation.selection", () => resumeState?.selection ? navigationThreadSelectionKey(resumeState.selection) : undefined,
     // Materialization remains main-owned, but its old hook's pending row and
     // completion callback cannot be rebound to the recovered subtree. Return
     // to the ordinary empty selection instead of retaining an unresolved key.
     (saved) => isStartingLaunchpadSelectionKey(saved) ? undefined : saved,
   );
-  const initialSelectionEstablishedRef = useRecoverableRef("navigation.initialSelectionEstablished", false);
+  const initialSelectionEstablishedRef = useRecoverableRef("navigation.initialSelectionEstablished", Boolean(resumeState));
+  const restoringSelectionKeyRef = useRef(resumeState?.selection ? navigationThreadSelectionKey(resumeState.selection) : undefined);
   const [pendingSeenThreadKey, setPendingSeenThreadKey] = useState<string>();
   const [retainedUnreadThread, setRetainedUnreadThread] =
     useState<NavigationThreadSummary>();
@@ -3382,6 +3415,8 @@ export function useThreadNavigation(
     let changed = false;
     for (const [key, creation] of pendingLaunchpadCreationsRef.current) {
       if (creation.setupProgressKey !== event.directoryKey) continue;
+      if (event.operationId && creation.operationId !== event.operationId) continue;
+      if (!federationTargetsEqual(creation.target, event.federationTarget)) continue;
       pendingLaunchpadCreationsRef.current.set(key, {
         ...creation,
         setupProgress: applyLaunchpadEnvironmentSetupProgress(creation.setupProgress, event),
@@ -3539,6 +3574,9 @@ export function useThreadNavigation(
     | undefined
   >(undefined);
   const suppressedArchivedThreadKeysRef = useRef<Set<string>>(new Set());
+  const deferredArchiveRemovalsRef = useRef(new Map<string, {
+    resourceId: string; request: unknown; sequence: number;
+  }>());
   const removedDirectoryKeysRef = useRef(new Set<string>());
   const updateRemovedDirectoryKey = useCallback((key: string, removed: boolean): void => {
     if (removedDirectoryKeysRef.current.has(key) === removed) return;
@@ -3676,6 +3714,7 @@ export function useThreadNavigation(
     [state.rows?.threadRows]);
   disclosedParentsRef.current = disclosedParents;
   const boundedNavigation = useBoundedNavigationWindow({ desktopApi, enabled, visible: viewVisible, observeEvents: false,
+    loadedRowsByQuery, onLoadMore: rememberLoadedRows, onRangeReset: forgetLoadedRows,
     browseMode, target: rendererFederationTarget, attentionView,
     pinnedThreadsOnTop,
     expandedByKey: directoryDisclosure.expandedByKey, unpinnedExpandedByKey: directoryDisclosure.unpinnedExpandedByKey,
@@ -3697,6 +3736,26 @@ export function useThreadNavigation(
   const directoryPatchReadsRef = useRef(new Map<string, ReadonlyMap<string, { request: unknown; sequence: number }>>());
   const navigationResourcesRef = useRef(boundedNavigation.resources);
   navigationResourcesRef.current = boundedNavigation.resources;
+  const deferNestedArchiveRemoval = useCallback((thread: NavigationThreadSummary): boolean => {
+    const key = threadSummaryIdentityKey(thread);
+    if (suppressedArchivedThreadKeysRef.current.has(key)) return false;
+    if (deferredArchiveRemovalsRef.current.has(key)) return true;
+    if (!thread.parentThreadId || thread.parentThreadInstanceId || thread.federation) return false;
+    const rows = loadedThreadRows(stateRef.current.rows);
+    const byKey = new Map(rows.map((row) => [threadSummaryIdentityKey(row), row]));
+    if (!rows.some((row) => resolveThreadParentKey(row, byKey) === key)) return false;
+    const parentKey = resolveThreadParentKey(thread, byKey);
+    const resource = [...navigationResourcesRef.current.values()].find(({ state }) =>
+      state.request.query.kind === "children"
+      && navigationThreadSelectionKey(state.request.query.parent) === parentKey);
+    if (!resource) return false;
+    // Keep this row as the tray's bridge until its owning child page can
+    // publish the replacement rows together. An eager removal loses the
+    // grandchildren even after their durable relationships have been fixed.
+    deferredArchiveRemovalsRef.current.set(key, { resourceId: resource.id,
+      request: resource.state.request, sequence: resource.state.pendingSequence });
+    return true;
+  }, []);
   const noteDirectoryPatch = useCallback((directoryKeys: Iterable<string>): void => {
     const reads = new Map([...navigationResourcesRef.current].map(([id, resource]) =>
       [id, { request: resource.state.request, sequence: resource.state.pendingSequence }]));
@@ -3720,6 +3779,16 @@ export function useThreadNavigation(
     const loading = enabled && primary.some((resource) => !resource.state.page && !resource.state.error);
     if (changed && pages.size) {
       const changedPages = [...pages].filter(([id, page]) => acceptedPages.get(id) !== page);
+      for (const [key, pending] of deferredArchiveRemovalsRef.current) {
+        const resource = boundedNavigation.resources.get(pending.resourceId);
+        const page = resource?.state.page;
+        if (!resource || !page || resource.state.stale || page.coverage.state !== "complete"
+          || acceptedPages.get(pending.resourceId) === page
+          || (resource.state.request === pending.request && resource.state.pendingSequence <= pending.sequence)
+          || page.entries.some(({ row }) => threadSummaryIdentityKey(row) === key)) continue;
+        suppressedArchivedThreadKeysRef.current.add(key);
+        deferredArchiveRemovalsRef.current.delete(key);
+      }
       // Directories this pass may rebuild: those in a page that landed now,
       // from a read that began after the directory's last patch. An earlier
       // read can still land between an unpin and the owner's event.
@@ -4528,7 +4597,9 @@ export function useThreadNavigation(
           threadId: string;
         };
         const threadKey = agentEventThreadIdentityKey(event, threadId);
-        suppressedArchivedThreadKeysRef.current.add(threadKey);
+        const row = stateRef.current.rows?.threadRows.get(threadKey);
+        const deferRemoval = row && deferNestedArchiveRemoval(row);
+        if (!deferRemoval) suppressedArchivedThreadKeysRef.current.add(threadKey);
         setPendingEnvironmentFailures((current) => {
           if (!current[threadKey]) return current;
           const next = { ...current };
@@ -4538,7 +4609,7 @@ export function useThreadNavigation(
 
         setState((current) => ({
           ...current,
-          rows: removeThreadFromLoadedRows(current.rows, {
+          rows: deferRemoval ? current.rows : removeThreadFromLoadedRows(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             threadId,
@@ -5043,6 +5114,7 @@ export function useThreadNavigation(
         suppressedArchivedThreadKeysRef.current.delete(
           agentEventThreadIdentityKey(event, threadId)
         );
+        deferredArchiveRemovalsRef.current.delete(agentEventThreadIdentityKey(event, threadId));
         scheduleEventRefresh();
         return;
       }
@@ -5067,6 +5139,7 @@ export function useThreadNavigation(
     scheduleRefresh,
     state.rows,
     invalidateNavigation,
+    deferNestedArchiveRemoval,
     noteDirectoryPatch,
     setSelectedItemKey,
   ]);
@@ -5266,6 +5339,49 @@ export function useThreadNavigation(
     initialSelectionEstablishedRef,
     setSelectedItemKey,
   ]);
+
+  const initialSavedResume = useMemo(() => resumeState ? JSON.stringify(resumeState) : undefined, [resumeState]);
+  const lastSavedResumeRef = useRef(initialSavedResume);
+  useEffect(() => {
+    const restoring = restoringSelectionKeyRef.current;
+    if (!restoring) return;
+    if (restoring !== selectedItemKey) {
+      restoringSelectionKeyRef.current = undefined;
+      return;
+    }
+    const detail = selectedDetail.state?.detail;
+    const exact = boundedNavigation.resources.get("selected-context");
+    const query = exact?.state.request.query;
+    const missing = detail?.identity === "unresolved" && exact?.state.page?.coverage.state === "complete"
+      && exact.state.page.complete && !exact.loading && !exact.state.stale && !exact.state.error
+      && query?.kind === "exact" && query.identities.some((ref) => navigationThreadSelectionKey(ref) === restoring)
+      && !exact.state.page.entries.some((entry) => navigationThreadSelectionKey(entry.row.ref) === restoring);
+    if (!detail || navigationThreadSelectionKey(detail.ref) !== restoring
+      || (detail.identity !== "archived" && detail.identity !== "deleted" && !missing)) return;
+    restoringSelectionKeyRef.current = undefined;
+    initialSelectionEstablishedRef.current = false;
+    setSelectedItemKey(undefined);
+  }, [selectedItemKey, selectedDetail.state?.detail, boundedNavigation.resources, initialSelectionEstablishedRef, setSelectedItemKey]);
+  useEffect(() => {
+    if (!enabled || isRendererFederationWindow || !desktopApi?.setNavigationResumeState
+      || !initialSelectionEstablishedRef.current || initialFallbackSelectionKey) return;
+    const snapshot = normalizeNavigationResumeState({
+      version: 1, selection: selectedItemKey ? navigationIdentityFromThreadKey(selectedItemKey) ?? null : null,
+      expandedByKey: directoryDisclosure.expandedByKey,
+      unpinnedExpandedByKey: directoryDisclosure.unpinnedExpandedByKey,
+      loadedRowsByQuery,
+    } satisfies NavigationResumeState);
+    if (!snapshot) return;
+    const serialized = JSON.stringify(snapshot);
+    if (serialized === lastSavedResumeRef.current) return;
+    lastSavedResumeRef.current = serialized;
+    void desktopApi.setNavigationResumeState(snapshot).catch((error: unknown) => {
+      if (lastSavedResumeRef.current === serialized) lastSavedResumeRef.current = undefined;
+      console.warn("Saving navigation state failed.", error);
+    });
+  }, [enabled, isRendererFederationWindow, desktopApi, selectedItemKey, initialFallbackSelectionKey,
+    directoryDisclosure.expandedByKey, directoryDisclosure.unpinnedExpandedByKey, loadedRowsByQuery,
+    initialSelectionEstablishedRef]);
 
   const activeFederatedLaunchpad =
     federatedLaunchpad
@@ -7793,7 +7909,7 @@ export function useThreadNavigation(
 
       const editableSelectionKey = buildLaunchpadSelectionKey(directoryKey);
       const submittedFederationTarget =
-        launchpad.federationTarget ?? readRendererFederationTarget();
+        federatedSelection?.target ?? launchpad.federationTarget ?? readRendererFederationTarget();
       // A local launchpad hands its draft slot back as soon as it is
       // submitted, so the operator can start another thread in this directory
       // while this one sets up. A federated launchpad is one session per
@@ -7813,9 +7929,9 @@ export function useThreadNavigation(
       const composerScopeKey = releasesLaunchpad
         ? buildStartingLaunchpadComposerScopeKey(creationId, directoryKey)
         : undefined;
-      const setupProgressKey = releasesLaunchpad
-        ? `${STARTING_LAUNCHPAD_SELECTION_PREFIX}${creationId}`
-        : directoryKey;
+      const operationId = crypto.randomUUID();
+      const submittedAt = Date.now();
+      const setupProgressKey = `${STARTING_LAUNCHPAD_SELECTION_PREFIX}${operationId}`;
       const materializeParentThreadId =
         parentThreadId ??
         launchpad.parentThreadId ??
@@ -7827,6 +7943,27 @@ export function useThreadNavigation(
       const materializeParentThreadInstanceId =
         launchpad.parentThreadInstanceId;
       const pendingCreation: PendingLaunchpadCreation = {
+        operationId,
+        submittedAt,
+        target: submittedFederationTarget,
+        onCancel: () => {
+          const current = pendingLaunchpadCreationsRef.current.get(launchpadSelectionKey);
+          if (!current || current.cancelling || !desktopApi.manageLaunchpadCreation) return;
+          pendingLaunchpadCreationsRef.current.set(launchpadSelectionKey, { ...current, cancelling: true, cancelError: undefined });
+          setPendingLaunchpadCreations([...pendingLaunchpadCreationsRef.current.values()]);
+          void desktopApi.manageLaunchpadCreation({ operationId, action: "cancel", federationTarget: submittedFederationTarget })
+            .then((response) => {
+              if (!response.cancellationAccepted) throw new Error("The first turn is already being dispatched. Open the thread to stop it.");
+            }).catch((error: unknown) => {
+              const latest = pendingLaunchpadCreationsRef.current.get(launchpadSelectionKey);
+              if (!latest) return;
+              pendingLaunchpadCreationsRef.current.set(launchpadSelectionKey, {
+                ...latest, cancelling: false,
+                cancelError: `Cancellation was not confirmed: ${error instanceof Error ? error.message : String(error)}`,
+              });
+              setPendingLaunchpadCreations([...pendingLaunchpadCreationsRef.current.values()]);
+            });
+        },
         federatedSession: federatedSelection,
         selectionKey: launchpadSelectionKey,
         directoryKey,
@@ -7895,7 +8032,25 @@ export function useThreadNavigation(
         }
         let response: Awaited<ReturnType<NonNullable<DesktopApi["materializeDirectoryLaunchpad"]>>>;
         try {
-          response = await desktopApi.materializeDirectoryLaunchpad({
+          response = await materializeObservableLaunchpad({ api: desktopApi, onConnectionLost: (connectionLost) => {
+            const current = pendingLaunchpadCreationsRef.current.get(launchpadSelectionKey);
+            if (!current || current.connectionLost === connectionLost) return;
+            pendingLaunchpadCreationsRef.current.set(launchpadSelectionKey, { ...current, connectionLost });
+            setPendingLaunchpadCreations([...pendingLaunchpadCreationsRef.current.values()]);
+          }, onStatus: (startup) => {
+            const current = pendingLaunchpadCreationsRef.current.get(launchpadSelectionKey);
+            if (!current) return;
+            pendingLaunchpadCreationsRef.current.set(launchpadSelectionKey, {
+              ...current, startup,
+              setupProgress: startup.setupProgress
+                ? applyLaunchpadEnvironmentSetupProgress(current.setupProgress, startup.setupProgress)
+                : current.setupProgress,
+            });
+            setPendingLaunchpadCreations([...pendingLaunchpadCreationsRef.current.values()]);
+          }, request: {
+            operationId,
+            submittedAt,
+            codexEnvironmentSetupProgressKey: setupProgressKey,
             directoryKey,
             federationTarget,
             launchpad,
@@ -7906,7 +8061,6 @@ export function useThreadNavigation(
             ...(releasesLaunchpad
               ? {
                   releaseLaunchpadOnSubmit: true,
-                  codexEnvironmentSetupProgressKey: setupProgressKey,
                 }
               : {}),
             ...(materializeParentThreadId
@@ -7918,9 +8072,11 @@ export function useThreadNavigation(
                     : {}),
                 }
               : {}),
-          });
+          } });
         } catch (error) {
-          setLaunchpadError(error instanceof Error ? error.message : String(error));
+          if (!(error instanceof LaunchpadStartupCancelledError)) {
+            setLaunchpadError(error instanceof Error ? error.message : String(error));
+          }
           throw error;
         }
         let localDraftResetFailure: string | undefined;
@@ -7964,7 +8120,7 @@ export function useThreadNavigation(
           optimisticUserMessage: response.turnStartFailure
             || response.scheduledAction
             ? undefined
-            : buildOptimisticUserMessage(input),
+            : buildOptimisticUserMessage(input, submittedAt),
           optimisticActiveTurn: response.turnId && !response.turnStartFailure
             ? {
                 id: response.turnId,
@@ -8377,9 +8533,10 @@ export function useThreadNavigation(
           threadSummaryIdentityKey(target)
         )
       );
+      const deferRemoval = !options?.includeSubthreads && deferNestedArchiveRemoval(thread);
 
       for (const targetKey of targetThreadKeys) {
-        suppressedArchivedThreadKeysRef.current.add(targetKey);
+        if (!deferRemoval) suppressedArchivedThreadKeysRef.current.add(targetKey);
       }
       setArchiveThreadError(undefined);
       setArchiveThreadNotice(undefined);
@@ -8389,7 +8546,7 @@ export function useThreadNavigation(
       setSetThreadModelSettingsError(undefined);
       setState((current) => ({
         ...current,
-        rows: targetThreads.reduce(
+        rows: deferRemoval ? current.rows : targetThreads.reduce(
           (snapshot, target) =>
             removeThreadFromLoadedRows(snapshot, {
               backend: target.source,
@@ -8478,7 +8635,10 @@ export function useThreadNavigation(
         await refresh(undefined, undefined, false, refreshOptions);
       } catch (error) {
         for (const targetKey of targetThreadKeys) {
-          if (!archivedKeys.has(targetKey)) suppressedArchivedThreadKeysRef.current.delete(targetKey);
+          if (!archivedKeys.has(targetKey)) {
+            suppressedArchivedThreadKeysRef.current.delete(targetKey);
+            deferredArchiveRemovalsRef.current.delete(targetKey);
+          }
         }
         setArchiveThreadError(error instanceof Error ? error.message : String(error));
         await refresh(archivedKeys.has(threadKey) ? undefined : threadKey, undefined, !archivedKeys.has(threadKey), refreshOptions);
@@ -8487,6 +8647,7 @@ export function useThreadNavigation(
     },
     [
       archiveThreadRequest,
+      deferNestedArchiveRemoval,
       desktopApi,
       optimisticThread,
       refresh,
@@ -8520,6 +8681,7 @@ export function useThreadNavigation(
           suppressedArchivedThreadKeysRef.current.delete(
             buildThreadIdentityKey(thread.backend, thread.threadId),
           );
+          deferredArchiveRemovalsRef.current.delete(buildThreadIdentityKey(thread.backend, thread.threadId));
         }
         await refresh(reopenKey, undefined, reopenKey !== undefined);
       } catch (error) {
@@ -8975,9 +9137,9 @@ export function useThreadNavigation(
       thread: NavigationThreadSummary,
       parentThreadId?: string,
       parentThreadBackend?: AppServerBackendKind,
-    ): Promise<void> => {
+    ): Promise<boolean> => {
       if (!setThreadParentRequest) {
-        return;
+        return false;
       }
       const federationTarget = thread.federation?.ref.target
         ?? readRendererFederationTarget();
@@ -9012,6 +9174,7 @@ export function useThreadNavigation(
             parentThreadInstanceId: result.parentThreadInstanceId,
           }),
         }));
+        return true;
       } catch (error) {
         // Not cleared at the start: the sidebar's fallback unlinks a
         // selection one call per thread, like a bulk pin.
@@ -9020,6 +9183,7 @@ export function useThreadNavigation(
           error,
         );
         await refresh(threadSummaryIdentityKey(thread));
+        return false;
       }
     },
     [refresh, publishThreadActionError, setThreadParentRequest],

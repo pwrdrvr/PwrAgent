@@ -196,6 +196,11 @@ export function buildTaskMonitorDynamicToolErrorResponse(params: {
   });
 }
 
+/** A PwrAgent tool's name as Claude Code's ToolSearch knows it. */
+function claudeMcpToolName(tool: string): string {
+  return `mcp__${PWRAGENT_TOOL_NAMESPACE}__${tool}`;
+}
+
 export function buildMonitorDelegationPrompt(params: {
   finalHandoffPrompt?: string;
   monitorContext?: string;
@@ -205,6 +210,9 @@ export function buildMonitorDelegationPrompt(params: {
   preferredModel?: string;
   preferredReasoningEffort?: string;
   task: string;
+  mcpConnectionIds?: string[];
+  /** Claude Code defers MCP tools until ToolSearch loads them. */
+  deferredMcpTools?: boolean;
 }): string {
   const pollInterval =
     normalizePollIntervalSeconds(params.pollIntervalSeconds) ??
@@ -231,9 +239,15 @@ export function buildMonitorDelegationPrompt(params: {
     "",
     "<model_guidance>",
     "- PwrAgent should have started this monitor on a cost-efficient lightweight model.",
-    "- This monitor is already running on the parent provider with the returned preferredModel and preferredReasoningEffort values.",
+    "- This monitor is already running with the returned preferredModel and preferredReasoningEffort values.",
     "- Do not launch or hand off to a different provider runtime.",
     "</model_guidance>",
+    ...(params.deferredMcpTools
+      ? [
+          "",
+          `Before the first call, load the PwrAgent tools with ToolSearch: select:${claudeMcpToolName("inject_progress")},${claudeMcpToolName("complete_monitoring")},${claudeMcpToolName("search_mcp_tools")},${claudeMcpToolName("call_mcp_tool")}.`,
+        ]
+      : []),
     "",
     "<task>",
     params.task.trim(),
@@ -243,6 +257,8 @@ export function buildMonitorDelegationPrompt(params: {
       : "",
     "",
     "<delegated_monitoring_procedure>",
+    `- Parent-selected MCP connections available through the gateway: ${JSON.stringify(params.mcpConnectionIds ?? [])}.`,
+    "- For cloud or MCP status checks, first call pwragent.search_mcp_tools with the connectionId and needed tool names, then invoke the exact returned connectionId, toolName, schemaRevision and arguments through pwragent.call_mcp_tool. Upstream tool names need not be registered as native tools. Search before reporting that tools are absent. Only tools explicitly marked readOnlyHint true and not marked destructive are available to Job Monitors. Full Access, automation grants and parent approval cannot override this restriction. For Sandboxer use command_status or read_file; never exec, write_file or lifecycle tools. A required tool approval appears in the parent thread; wait for its decision and respect a denial. Selection, source authorization, tool approvals and schemas are rechecked for every call.",
     "- Use the task and monitor_context as the complete procedure for checking status.",
     "- Parent-local tool session ids are not portable. Do not use Codex/agent tool session handles such as exec_command or write_stdin session_id values; this monitor thread cannot access the parent turn's stdin, stdout, stderr, or exit status for those handles.",
     "- For a local build/test/script: if the delegated context gives cwd plus an exact command, run the command yourself in this monitor thread, capture stdout/stderr and exit status, and include the relevant output tail in progress/final reports.",

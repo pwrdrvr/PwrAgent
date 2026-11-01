@@ -1864,6 +1864,10 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   navigation_snapshot_deltas: "exchange compact navigation updates",
   navigation_group_invalidations: "receive thread group membership changes",
   thread_grouping: "reorder and collapse sub-threads",
+  // Owner-validated grouping negotiation; thread_grouping grants the action.
+  thread_parent_mutation_v1: "",
+  // Archive promotion negotiation; thread_grouping grants the action.
+  archive_subthread_promotion_v1: "",
   thread_detail: "read transcripts",
   turn_control: "prompt, steer, and interrupt",
   durable_turn_requests_v1: "reconcile durable prompt receipts",
@@ -1892,6 +1896,11 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   navigation_directory_set_events: "announce directory changes",
   thread_todos: "To-dos and tracked reviews",
   thread_todo_feed: "stream To-do changes",
+  // Handoff dispatch fields are negotiation, not a remote action.
+  thread_todo_dispatch_target: "",
+  thread_todo_message: "",
+  // Plan cards for handoffs ride on turn_control, which the operator grants.
+  thread_todo_plan: "",
   operator_requests: "operator request queue",
   operator_questions: "dismiss async questions",
   thread_mcp_connections: "Thread MCP connections",

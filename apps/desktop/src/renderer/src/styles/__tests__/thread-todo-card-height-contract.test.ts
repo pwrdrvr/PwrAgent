@@ -31,4 +31,10 @@ describe("to-do card height contract", () => {
     expect(body).toMatch(/padding-block:\s*4px;/);
     expect(body).toMatch(/margin-block:\s*-4px;/);
   });
+
+  it("leaves room for the toggle's focus ring when it scrolls into view", () => {
+    // A keyboard open scrolls the toggle to the edge of the body; the ring
+    // (2px outline, 2px offset) would be clipped without the margin.
+    expect(cssRuleBody(".thread-todo-card__more")).toMatch(/scroll-margin-block:\s*4px;/);
+  });
 });

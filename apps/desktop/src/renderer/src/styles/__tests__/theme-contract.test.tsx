@@ -1591,6 +1591,44 @@ describe("Tangerine Terminal theme contract", () => {
     expect(summaryMetaRule).toContain("flex: 0 0 auto;");
   });
 
+  // The hover "+" cluster overlays the summary's right edge and has no
+  // background. Only the faded count block holds the title back from it, so
+  // a directory with no counts let a long name run under the button. The
+  // faded block now keeps the cluster's width; this ties that width to the
+  // buttons' own, so resizing a button cannot reopen the overlap.
+  it("reserves the launchpad cluster's width beside a long directory name on hover", () => {
+    const pixelWidth = (selector: string) =>
+      Number(extractRuleBody(css, selector).match(/\n\s*width:\s*(\d+)px;/)?.[1]);
+    const buttonWidth = pixelWidth(".directory-row__launchpad-button");
+    const targetsWidth = pixelWidth(".directory-row__launchpad-targets-button");
+    expect(buttonWidth).toBeGreaterThan(0);
+    expect(targetsWidth).toBeGreaterThan(0);
+
+    const loneRule = extractRuleBody(
+      css,
+      ".directory-row__header--with-launchpad:has(.directory-row__launchpad-cluster :focus-visible) .directory-row__summary-meta",
+    );
+    expect(loneRule).toContain("opacity: 0;");
+    expect(loneRule).toContain(`min-width: ${buttonWidth}px;`);
+
+    const splitRule = extractRuleBody(
+      css,
+      ".directory-row__header--with-launchpad.directory-row__header--split:has(.directory-row__launchpad-cluster :focus-visible) .directory-row__summary-meta",
+    );
+    expect(splitRule).toContain(`min-width: ${buttonWidth + targetsWidth}px;`);
+
+    // extractRuleBody reads only the selector line before `{`, which is the
+    // keyboard half. Pin the mouse half to the same rules.
+    expect(css).toContain(
+      ".directory-row__header--with-launchpad:hover .directory-row__summary-meta,\n"
+        + ".directory-row__header--with-launchpad:has(.directory-row__launchpad-cluster :focus-visible) .directory-row__summary-meta {",
+    );
+    expect(css).toContain(
+      ".directory-row__header--with-launchpad.directory-row__header--split:hover .directory-row__summary-meta,\n"
+        + ".directory-row__header--with-launchpad.directory-row__header--split:has(.directory-row__launchpad-cluster :focus-visible) .directory-row__summary-meta {",
+    );
+  });
+
   it("marks a selected row with the inset accent edge, not an inner bar", () => {
     // The edge is PwrGit's `.ref-branch-row.is-current` marker: an inset
     // shadow, clipped to the padding box, so it follows the card's corners
@@ -2680,7 +2718,7 @@ describe("Tangerine Terminal theme contract", () => {
     expect(miniScanner).toMatch(/--thinking-scanner-travel:\s*10px;/);
     expect(miniScanner).toMatch(/width:\s*16px;/);
     expect(extractRuleBody(css, ".thinking-scanner__beam")).toMatch(
-      /animation:\s*pwragent-thinking-scanner-sweep 1800ms ease-in-out infinite;/
+      /animation:\s*pwragent-thinking-scanner-sweep 1800ms steps\(27, end\) infinite;/
     );
   });
 

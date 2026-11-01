@@ -6,6 +6,7 @@ import {
   reconcileCompletedTurnUsageEntries,
   tokenUsageActivityScope,
   turnUsageEntryTurnId,
+  finalTurnOutputText,
   isTerminalTurnMetadata,
   readUuidV7Timestamp,
 } from "@pwragent/shared";
@@ -3456,7 +3457,7 @@ function liveActivityNotificationSignature(params: {
   }
 
   const item = getNotificationItem(params.notification.params);
-  const details = item ? buildLiveToolDetails(item) : [];
+  const details = item ? buildLiveToolDetails(item, undefined, params.notification.method) : [];
   if (details.length === 0) {
     return undefined;
   }
@@ -4742,20 +4743,40 @@ function hasReviewEntryForTurn(
 function hasCompletedAssistantMessageForTurn(
   response: AppServerReadThreadResponse | undefined,
   turnId: string | undefined,
-  text: string | undefined
+  text: string | undefined,
+  pendingAssistantMessage?: AppServerThreadMessageEntry
 ): boolean {
   if (!response || !turnId || !text) {
     return false;
   }
 
   const normalizedText = normalizeTranscriptText(text);
-  return response.replay.entries.some(
-    (entry) =>
+  const turnMessages = response.replay.entries.filter(
+    (entry): entry is AppServerThreadMessageEntry =>
       entry.type === "message" &&
       entry.role === "assistant" &&
+      entry.turn?.id === turnId
+  );
+  if (turnMessages.some(
+    (entry) =>
       (!entry.phase || entry.phase === "final") &&
-      entry.turn?.id === turnId &&
       normalizeTranscriptText(entry.text) === normalizedText
+  )) {
+    return true;
+  }
+  // An ACP agent can report the whole turn's text as one output. It repeats
+  // the turn's replies in order, with or without separators between them.
+  // ACP sends no item/completed for a reply, so the last one is still
+  // pending here, and thoughts shown as commentary are not in the output.
+  const replies = [
+    ...turnMessages,
+    ...(pendingAssistantMessage?.turn?.id === turnId ? [pendingAssistantMessage] : []),
+  ].filter((entry) => entry.phase !== "commentary");
+  const withoutWhitespace = (value: string) => value.replace(/\s+/g, "");
+  return (
+    replies.length > 1
+    && withoutWhitespace(replies.map((entry) => entry.text).join(""))
+      === withoutWhitespace(text)
   );
 }
 
@@ -4940,15 +4961,7 @@ function readCompletedTurnText(
     return undefined;
   }
 
-  const turnRecord = (notification as { turn?: { output?: Array<{ type: string; text?: string }> } })
-    .turn;
-  const text = turnRecord?.output
-    ?.filter((part) => part.type === "text" && typeof part.text === "string")
-    .map((part) => part.text!.trim())
-    .filter(Boolean)
-    .join("\n\n");
-
-  return text || undefined;
+  return finalTurnOutputText((notification as { turn?: { output?: unknown } }).turn?.output);
 }
 
 function didHydrateCompletedTurn(
@@ -6111,7 +6124,7 @@ export function useThreadSessionState(params: {
         const method = event.notification.method;
         if (method === "item/started" || method === "item/completed") {
           const item = getNotificationItem(event.notification.params);
-          const detail = item ? buildLiveToolDetails(item)[0] : undefined;
+          const detail = item ? buildLiveToolDetails(item, undefined, method)[0] : undefined;
           if (detail) {
             const currentItems = liveToolItemsRef.current[targetThreadKey] ?? {};
             if (method === "item/started" && (
@@ -6381,7 +6394,7 @@ export function useThreadSessionState(params: {
 
         if (event.notification.method === "item/started") {
           const item = getNotificationItem(event.notification.params);
-          const details = item ? buildLiveToolDetails(item) : [];
+          const details = item ? buildLiveToolDetails(item, undefined, event.notification.method) : [];
           if (details.length === 0) {
             return current;
           }
@@ -6698,6 +6711,12 @@ export function useThreadSessionState(params: {
                 itemParams: event.notification.params,
                 turn: assistantTurn,
               });
+          if (assistantMessageEntry && event.rendererImageParts?.length) {
+            assistantMessageEntry.parts = [
+              { type: "text", text: assistantMessageEntry.text },
+              ...event.rendererImageParts,
+            ];
+          }
           const taskMonitorUsageEntry = item && !transientTaskMonitorItem
             ? buildTaskMonitorUsageActivityEntry({
                 id: `${item.id ?? event.notification.params.turnId ?? "monitor"}:usage`,
@@ -6821,7 +6840,7 @@ export function useThreadSessionState(params: {
             };
           }
 
-          const details = item ? buildLiveToolDetails(item) : [];
+          const details = item ? buildLiveToolDetails(item, event.rendererImageParts, event.notification.method) : [];
           if (details.length > 0) {
             const turn = buildTurnMetadata({
               fallbackId:
@@ -6928,7 +6947,8 @@ export function useThreadSessionState(params: {
               !hasCompletedAssistantMessageForTurn(
                 current.response,
                 completedTurn?.id,
-                completedText
+                completedText,
+                current.pendingAssistantMessage
               )
           );
           const unphasedAssistantCompletionPhase =

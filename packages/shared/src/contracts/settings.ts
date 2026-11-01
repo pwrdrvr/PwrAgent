@@ -2,7 +2,10 @@ import type { DesktopThreadArchivePolicy } from "../thread-archive-policy";
 import type { MessagingToolUpdateMode } from "./messaging";
 import type { AppServerBackendKind, ThreadExecutionMode } from "./normalized-app-server";
 import type { FederationTarget } from "./federation";
-import type { DesktopHelperModelSettings } from "../helper-models";
+import type {
+  DesktopHelperModelSettings,
+  DesktopTaskMonitorModelChoice,
+} from "../helper-models";
 import type { DesktopDecisionModelSettings } from "../decision-models";
 import type {
   CodexModelProviderSettings,
@@ -311,13 +314,20 @@ export type DesktopAppearanceTheme = (typeof DESKTOP_APPEARANCE_THEMES)[number];
  * way the preload already imports `DEFAULT_NAVIGATION_BROWSE_MODE`.
  *
  * The rail defaults to pinned-open so a fresh operator discovers it exists.
+ * The sidebar's project index defaults to shown, as PwrGit's repo index does.
+ * Its width is `null` until the operator drags it: the column then sizes to
+ * its longest project name.
  */
 export const DESKTOP_UI_LAYOUT_DEFAULTS: {
   readonly contextRailPinned: boolean;
   readonly sidebarHidden: boolean;
+  readonly projectIndexHidden: boolean;
+  readonly projectIndexWidth: number | null;
 } = {
   contextRailPinned: true,
   sidebarHidden: false,
+  projectIndexHidden: false,
+  projectIndexWidth: null,
 };
 
 /** Help → Logs: what a search does to the lines it does not match. */
@@ -847,6 +857,12 @@ export type DesktopGeneralSettingsSnapshot = {
    */
   interactiveSvgAutoOpen: DesktopSettingsValue<boolean>;
   /**
+   * Run a previewed HTML file's own scripts as soon as it opens. Off shows
+   * the page without scripts until the operator turns them on for that view.
+   * Either way the page has no network access.
+   */
+  htmlPreviewRunScripts: DesktopSettingsValue<boolean>;
+  /**
    * Whether the profile runs the PwrAgent-managed MCP connection gateway.
    *
    * Off stops the gateway, withholds every managed connection from new
@@ -1363,6 +1379,10 @@ export type DesktopSettingsSnapshot = {
   ui: {
     sidebarHidden: DesktopSettingsValue<boolean>;
     contextRailPinned: DesktopSettingsValue<boolean>;
+    /** The sidebar's project index column, beside the thread list. */
+    projectIndexHidden: DesktopSettingsValue<boolean>;
+    /** A dragged index width in px; `null` sizes it to the longest name. */
+    projectIndexWidth: DesktopSettingsValue<number | null>;
     activeContextTab: DesktopSettingsValue<string>;
     editedFilesDock: DesktopSettingsValue<string>;
     actionRunsDock: DesktopSettingsValue<string>;
@@ -1480,6 +1500,8 @@ export type DesktopSettingsSnapshot = {
     >;
     /** Models for work PwrAgent starts on its own. Absent on older builds. */
     helperModels?: DesktopHelperModelSettings;
+    /** Task monitor model per parent provider. Absent = Automatic for every provider. */
+    taskMonitorModels?: Record<string, DesktopTaskMonitorModelChoice>;
     /** The decision model and its providers. Absent on older builds. */
     decisionModels?: DesktopDecisionModelSettings;
     decisionSecrets?: {
@@ -1619,6 +1641,7 @@ export type DesktopSettingsConfigPatch = {
     passSetupVariablesToAgents?: boolean;
     interactiveSvgSkipNotice?: boolean;
     interactiveSvgAutoOpen?: boolean;
+    htmlPreviewRunScripts?: boolean;
     mcpGatewayEnabled?: boolean;
     pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
@@ -1692,6 +1715,9 @@ export type DesktopSettingsConfigPatch = {
   ui?: {
     sidebarHidden?: boolean;
     contextRailPinned?: boolean;
+    projectIndexHidden?: boolean;
+    /** `null` removes a dragged width, returning to the natural width. */
+    projectIndexWidth?: number | null;
     activeContextTab?: string;
     editedFilesDock?: string;
     actionRunsDock?: string;
@@ -1818,6 +1844,8 @@ export type DesktopSettingsConfigPatch = {
     >;
     /** Replaces every helper model choice; omit a helper to use Helper default. */
     helperModels?: DesktopHelperModelSettings;
+    /** Replaces every provider's task monitor choice; omit a provider for Automatic. */
+    taskMonitorModels?: Record<string, DesktopTaskMonitorModelChoice>;
     /** Replaces the whole decision model section. */
     decisionModels?: DesktopDecisionModelSettings;
     codex?: {
@@ -1947,6 +1975,8 @@ export type DesktopConfigBootstrapSnapshot = {
   };
   /** Help → Logs viewer preferences, defaults filled in. */
   logs: DesktopLogsViewerPreferences;
+  /** `general.html_preview_run_scripts`, for windows without the full snapshot. */
+  htmlPreviewRunScripts: boolean;
 };
 
 export type ReadDesktopConfigBootstrapResponse = {
@@ -2448,6 +2478,35 @@ export type ReadMarkdownFileRequest = {
 export type ReadMarkdownFileResponse = {
   path: string;
   content?: string;
+  error?: string;
+};
+
+/**
+ * Files an HTML preview references by relative path (images, stylesheets,
+ * fonts, scripts, media). Each ref resolves against the HTML file's own
+ * folder and must stay inside it.
+ */
+export type ReadHtmlPreviewAssetsRequest = {
+  path: string;
+  refs: string[];
+  federationTarget?: FederationTarget;
+};
+
+export type HtmlPreviewAsset = {
+  ref: string;
+  /** A `data:` URL: the frame has no other way to load a local file. */
+  dataUrl: string;
+};
+
+export type HtmlPreviewSkippedAsset = {
+  ref: string;
+  reason: "missing" | "outside-folder" | "unsupported-type" | "too-large";
+};
+
+export type ReadHtmlPreviewAssetsResponse = {
+  assets: HtmlPreviewAsset[];
+  skipped: HtmlPreviewSkippedAsset[];
+  /** Set when no asset could be read at all, such as a peer's file. */
   error?: string;
 };
 

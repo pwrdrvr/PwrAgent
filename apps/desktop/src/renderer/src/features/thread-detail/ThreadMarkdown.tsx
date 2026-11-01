@@ -29,9 +29,8 @@ import ReactMarkdown, { type Components, type Options, type UrlTransform } from 
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { AppIcon } from "../../components/AppIcon";
-import { CloseIcon, CopyIcon, FolderIcon, PopoutIcon } from "../../icons";
+import { CloseIcon, FileIcon, FolderIcon, PopoutIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { copyText } from "../../lib/copy-text";
 import { parseInstanceReferenceUrl } from "../../lib/instance-references";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { decodeMarkdownDestination } from "../../lib/directory-references";
@@ -68,6 +67,9 @@ import { buildSelectionClipboard } from "./selection-clipboard";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
+import { FileViewerHeader, splitFilePath } from "./FileViewerHeader";
+import { HtmlFilePreview } from "./HtmlFilePreview";
+import { isLoopbackHost } from "../../lib/loopback-host";
 import {
   TranscriptFileRegistrationContext,
   useTranscriptFileReference,
@@ -88,6 +90,9 @@ type ThreadMarkdownProps = {
     | "copyRichText"
     | "openApplication"
     | "openMarkdownFileViewer"
+    | "onHtmlPreviewNavigation"
+    | "readConfigBootstrap"
+    | "readHtmlPreviewAssets"
     | "readMarkdownFile"
     | "resolveTranscriptFiles"
   >;
@@ -324,16 +329,23 @@ function InlineTranscriptCode(props: { children: ReactNode; text: string }) {
     return (
       <span className="thread-markdown__file-link">
         {canPreview ? (
+          // A file chip, not inline code: the glyph and accent say a click
+          // opens the preview, where plain inline code copies.
           <a
-            className="transcript-message__link"
+            className="thread-markdown__file-chip tooltip-target"
             href={`file://${encodeURI(target.path)}`}
-            title={target.path}
+            data-tooltip={`Preview ${tildifyPath(target.path)}`}
             onClick={(event) => {
               event.preventDefault();
               viewLocalFile({ ...target, label: props.text });
             }}
           >
-            <code className="transcript-message__code">{props.children}</code>
+            {/* The word joiner keeps the glyph on the line with the name. */}
+            <span aria-hidden="true">
+              <FileIcon className="thread-markdown__file-chip-icon" size={12} />
+              {"\u2060"}
+            </span>
+            <code className="thread-markdown__file-chip-code">{props.children}</code>
           </a>
         ) : (
           <TranscriptCopyButton
@@ -432,8 +444,11 @@ const markdownComponents: Components = {
     );
     const skillPath = localTarget?.path;
     const label = extractTextContent(anchorProps.children).trim();
-    const linkedImage = findMarkdownLinkedImagePart(props.imageParts, localTarget);
     const source = sourceForNode(markdownText, anchorProps.node);
+    const linkedImage = findMarkdownLinkedImagePart(
+      props.imageParts,
+      windowsMarkdownDestinationFromSource(source) ?? href,
+    );
     const linkedChildren = (
       <MarkdownLinkContext.Provider value={true}>
         {anchorProps.children}
@@ -569,6 +584,9 @@ const markdownComponents: Components = {
           ? tildifyPath(localTarget.path)
           : href || undefined}
       >
+        {isLocalPreviewFile && localTarget ? (
+          <FileIcon className="thread-markdown__file-link-icon" size={12} aria-hidden="true" />
+        ) : null}
         {linkedChildren}
       </a>
     );
@@ -676,10 +694,19 @@ const markdownComponents: Components = {
   hr() {
     return <hr className="transcript-message__rule" />;
   },
-  img(imageProps) {
+  img: function MarkdownImage(imageProps) {
+    const { props, markdownText } = useContext(MarkdownRenderContext)!;
     const altText = typeof imageProps.alt === "string" ? imageProps.alt : "";
-    const src = typeof imageProps.src === "string" ? denormalizeMarkdownUrl(imageProps.src) : "";
+    const href = windowsMarkdownDestinationFromSource(sourceForNode(markdownText, imageProps.node))
+      ?? (typeof imageProps.src === "string" ? imageProps.src : "");
+    const src = denormalizeMarkdownUrl(href);
     const title = typeof imageProps.title === "string" ? ` "${imageProps.title}"` : "";
+
+    // The message's image strip owns previews and gallery navigation. Hide
+    // markup only for a reference that main successfully materialized.
+    if (findMarkdownLinkedImagePart(props.imageParts, href)) {
+      return null;
+    }
 
     return (
       <span className="thread-markdown__image-literal">
@@ -982,6 +1009,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
           fileViewerContext={props.fileViewerContext}
           onClose={() => setMarkdownViewerTarget(undefined)}
           onOpenInEditor={openLocalFileInEditor}
+          onOpenTarget={setMarkdownViewerTarget}
           skills={props.skills}
           target={markdownViewerTarget}
         />
@@ -1000,12 +1028,16 @@ function MarkdownDocumentModal(props: {
     | "copyRichText"
     | "openApplication"
     | "openMarkdownFileViewer"
+    | "onHtmlPreviewNavigation"
+    | "readConfigBootstrap"
+    | "readHtmlPreviewAssets"
     | "readMarkdownFile"
   >;
   editorApplication?: EditorApplication;
   fileViewerContext?: MarkdownFileViewerContext;
   onClose: () => void;
   onOpenInEditor: (target: LocalFileTarget) => boolean;
+  onOpenTarget: (target: MarkdownViewerTarget) => void;
   skills?: AppServerSkillSummary[];
   target: MarkdownViewerTarget;
 }) {
@@ -1013,6 +1045,8 @@ function MarkdownDocumentModal(props: {
   // reads the latest one on Escape. The effect it replaced depended on it, so
   // any re-render of the message sent focus back to the first control.
   const contentRef = useModalDialog({ onClose: props.onClose });
+  // The HTML preview renders its permissions into the header row.
+  const [headerControls, setHeaderControls] = useState<HTMLDivElement | null>(null);
   const previewKind = filePreviewKind(props.target.path) ?? "markdown";
   const [loadState, setLoadState] = useState<
     | { status: "loading" }
@@ -1021,6 +1055,10 @@ function MarkdownDocumentModal(props: {
   >({ status: "loading" });
   const readMarkdownFile = props.desktopApi?.readMarkdownFile;
   const { thread, federationTarget } = useMarkdownFileSource(props.fileViewerContext);
+  const onOpenTarget = props.onOpenTarget;
+  const openLinkedFile = useCallback((path: string) => {
+    onOpenTarget({ path, label: fileNameFromPath(path) });
+  }, [onOpenTarget]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1080,101 +1118,93 @@ function MarkdownDocumentModal(props: {
     >
       <div
         ref={contentRef}
-        className="markdown-document-modal__content"
+        className={[
+          "markdown-document-modal__content",
+          previewKind === "html" ? "markdown-document-modal__content--html" : undefined,
+        ].filter(Boolean).join(" ")}
         onClick={(event) => event.stopPropagation()}
       >
-        <header className="markdown-document-modal__head">
-          <div className="markdown-document-modal__title-wrap">
-            <h2 className="markdown-document-modal__title">{props.target.label}</h2>
-            <div className="markdown-document-modal__path-row">
-              <p className="markdown-document-modal__path">
-                {tildifyPath(props.target.path)}
-              </p>
-              <button
-                type="button"
-                className="markdown-document-modal__path-copy"
-                aria-label="Copy path"
-                title="Copy path to clipboard"
-                onClick={() => {
-                  void copyText(props.target.path, props.desktopApi);
-                }}
-              >
-                <CopyIcon size={13} aria-hidden="true" />
-              </button>
-            </div>
-          </div>
-          <div className="markdown-document-modal__actions">
-            {loadState.status === "loaded" ? (
-              <FilePreviewCopyButton
-                content={loadState.content}
-                desktopApi={props.desktopApi}
-                kind={previewKind}
-              />
-            ) : null}
-            {props.editorApplication ? (
-              <button
-                type="button"
-                className="markdown-document-modal__icon-button"
-                aria-label={openFileInEditorLabel(
-                  props.target.label,
-                  props.editorApplication.name,
-                )}
-                title={openFileInEditorTitle(props.editorApplication.name)}
-                onClick={() => {
-                  props.onOpenInEditor(props.target);
-                }}
-              >
-                <AppIcon
-                  application={props.editorApplication}
-                  className="markdown-document-modal__app-icon"
-                  size={16}
+        <FileViewerHeader
+          actions={(
+            <>
+              {loadState.status === "loaded" ? (
+                <FilePreviewCopyButton
+                  content={loadState.content}
+                  desktopApi={props.desktopApi}
+                  kind={previewKind}
                 />
-              </button>
-            ) : null}
-            {props.desktopApi?.openMarkdownFileViewer ? (
+              ) : null}
+              {props.editorApplication ? (
+                <button
+                  type="button"
+                  className="markdown-document-modal__icon-button"
+                  aria-label={openFileInEditorLabel(
+                    props.target.label,
+                    props.editorApplication.name,
+                  )}
+                  title={openFileInEditorTitle(props.editorApplication.name)}
+                  onClick={() => {
+                    props.onOpenInEditor(props.target);
+                  }}
+                >
+                  <AppIcon
+                    application={props.editorApplication}
+                    className="markdown-document-modal__app-icon"
+                    size={16}
+                  />
+                </button>
+              ) : null}
+              {props.desktopApi?.openMarkdownFileViewer ? (
+                <button
+                  type="button"
+                  className="markdown-document-modal__icon-button"
+                  aria-label="Open in detached files window"
+                  title="Open in detached files window"
+                  onClick={() => {
+                    const context = props.fileViewerContext ??
+                      fallbackFileViewerContext(props.target.path);
+                    void props.desktopApi
+                      ?.openMarkdownFileViewer?.({
+                        context,
+                        editorApplication: props.editorApplication,
+                        file: {
+                          path: props.target.path,
+                          label: props.target.label,
+                          line: props.target.line,
+                          column: props.target.column,
+                        },
+                      })
+                      .catch((error: unknown) => {
+                        console.error("Failed to open markdown file viewer", error);
+                      });
+                  }}
+                >
+                  <PopoutIcon size={16} aria-hidden="true" />
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="markdown-document-modal__icon-button"
-                aria-label="Open in detached files window"
-                title="Open in detached files window"
-                onClick={() => {
-                  const context = props.fileViewerContext ??
-                    fallbackFileViewerContext(props.target.path);
-                  void props.desktopApi
-                    ?.openMarkdownFileViewer?.({
-                      context,
-                      editorApplication: props.editorApplication,
-                      file: {
-                        path: props.target.path,
-                        label: props.target.label,
-                        line: props.target.line,
-                        column: props.target.column,
-                      },
-                    })
-                    .catch((error: unknown) => {
-                      console.error("Failed to open markdown file viewer", error);
-                    });
-                }}
+                aria-label="Close"
+                title="Close"
+                onClick={props.onClose}
               >
-                <PopoutIcon size={16} aria-hidden="true" />
+                <CloseIcon size={18} aria-hidden="true" />
               </button>
-            ) : null}
-            <button
-              type="button"
-              className="markdown-document-modal__icon-button"
-              aria-label="Close"
-              title="Close"
-              onClick={props.onClose}
-            >
-              <CloseIcon size={18} aria-hidden="true" />
-            </button>
-          </div>
-        </header>
+            </>
+          )}
+          controlsRef={setHeaderControls}
+          desktopApi={props.desktopApi}
+          headingLevel={2}
+          kind={previewKind}
+          path={props.target.path}
+        />
 
         <div
           className={[
             "markdown-document-modal__body",
             previewKind === "markdown" ? undefined : "markdown-document-modal__body--file",
+            previewKind === "html" ? "markdown-document-modal__body--html" : undefined,
           ].filter(Boolean).join(" ")}
         >
           {loadState.status === "loading" ? (
@@ -1185,7 +1215,19 @@ function MarkdownDocumentModal(props: {
               {loadState.error}
             </p>
           ) : null}
-          {loadState.status === "loaded" ? (previewKind !== "markdown" ? (
+          {loadState.status === "loaded" ? (previewKind === "html" ? (
+            <HtmlFilePreview
+              // A linked page starts over: its own scripts default and links.
+              key={props.target.path}
+              content={loadState.content}
+              desktopApi={props.desktopApi}
+              federationTarget={federationTarget}
+              label={props.target.label}
+              path={props.target.path}
+              controlsContainer={headerControls}
+              onOpenLocalFile={openLinkedFile}
+            />
+          ) : previewKind !== "markdown" ? (
             <FilePreviewBody
               content={loadState.content}
               kind={previewKind}
@@ -1252,16 +1294,6 @@ function isSafeMarkdownUrl(url: string): boolean {
   }
 
   return parsed.protocol === "http:" && isLoopbackHost(parsed.hostname);
-}
-
-function isLoopbackHost(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-  return (
-    normalized === "localhost" ||
-    normalized === "127.0.0.1" ||
-    normalized === "::1" ||
-    normalized.endsWith(".localhost")
-  );
 }
 
 function isImplicitBareAutolink(params: {
@@ -1340,11 +1372,50 @@ function localFileTargetFromHref(
   return undefined;
 }
 
+function windowsMarkdownDestinationFromSource(source: string | undefined): string | undefined {
+  // CommonMark treats '\\.' and '\\_' as escapes, even inside Windows paths.
+  // Match the original destination used by main's image materializer, before
+  // Markdown removes those filesystem separators.
+  const match = /^!?\[([^\]\r\n]*)\]\(\s*(?:<([^>\r\n]+)>|([^\s)]+))/.exec(source ?? "");
+  const destination = match?.[2] ?? match?.[3];
+  return destination && isWindowsFilesystemPath(decodeMarkdownDestination(destination))
+    ? `file://${destination}`
+    : undefined;
+}
+
+function markdownImagePathFromHref(href: string): string | undefined {
+  let imagePath = href;
+  if (href.startsWith("file://")) {
+    // Markdown encodes backslashes. The renderer's file:// wrapper can
+    // therefore contain a drive path rather than a standard file URL.
+    const localPath = decodeMarkdownDestination(href.slice("file://".length));
+    if (isWindowsFilesystemPath(localPath)) {
+      imagePath = localPath;
+    } else {
+      try {
+        const url = new URL(href);
+        const host = url.hostname && url.hostname !== "localhost" ? `//${url.hostname}` : "";
+        imagePath = decodeURIComponent(`${host}${url.pathname}`);
+      } catch {
+        return undefined;
+      }
+    }
+  }
+  // File URLs prefix drive paths with '/', and Windows uses either separator.
+  // Infer the owning platform from the path, including for federated images.
+  if (/^\/[a-z]:[\\/]/i.test(imagePath)) imagePath = imagePath.slice(1);
+  if (isWindowsFilesystemPath(imagePath)) {
+    return splitFileLineSuffix(imagePath.replace(/\\/g, "/")).path;
+  }
+  return imagePath.startsWith("/") ? splitFileLineSuffix(imagePath).path : undefined;
+}
+
 function findMarkdownLinkedImagePart(
   imageParts: AppServerThreadImagePart[] | undefined,
-  target: LocalFileTarget | undefined,
+  href: string,
 ): AppServerThreadImagePart | undefined {
-  if (!target) {
+  const targetPath = markdownImagePathFromHref(href);
+  if (!targetPath) {
     return undefined;
   }
 
@@ -1353,12 +1424,12 @@ function findMarkdownLinkedImagePart(
       return false;
     }
 
-    return localFileTargetFromHref(imagePart.sourceUrl)?.path === target.path;
+    return markdownImagePathFromHref(imagePart.sourceUrl) === targetPath;
   });
 }
 
 function fileNameFromPath(filePath: string): string {
-  return filePath.split("/").filter(Boolean).pop() ?? filePath;
+  return splitFilePath(filePath).name || filePath;
 }
 
 function openFileInEditorTitle(editorName: string): string {

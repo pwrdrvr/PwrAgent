@@ -17,6 +17,7 @@ import type {
   HandoffThreadWorkspaceResponse,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
+  NavigationResumeState,
   NavigationSnapshot,
   NavigationThreadSummary,
   PrSummary,
@@ -3873,6 +3874,67 @@ describe("useThreadNavigation", () => {
     expect(result.current.archiveThreadNotice).toBeUndefined();
   });
 
+  it("keeps a nested tray intact until the owner publishes promoted children", async () => {
+    let archived = false;
+    let releaseArchive!: () => void;
+    const archiveGate = new Promise<void>((resolve) => { releaseArchive = resolve; });
+    let releaseOwnerPage!: () => void;
+    const ownerPageGate = new Promise<void>((resolve) => { releaseOwnerPage = resolve; });
+    let ownerReadStarted = false;
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const rows: NavigationThreadSummary[] = ["root", "before", "parent", "survivor", "after"].map((id, index) => ({
+      id, source: "codex", title: id, titleSource: "explicit", linkedDirectories: [],
+      inbox: { inInbox: false }, createdAt: index, updatedAt: index,
+      ...(id === "root" ? { subthreadOrder: ["before", "parent", "after"] }
+        : { parentThreadId: id === "survivor" ? "parent" : "root", parentThreadBackend: "codex" }),
+    }));
+    const readPopulation = vi.fn(async (): Promise<NavigationSnapshot> => {
+      if (archived) {
+        ownerReadStarted = true;
+        await ownerPageGate;
+      }
+      return {
+        backend: "all", fetchedAt: Date.now(), unchanged: false, inboxThreadKeys: [], directories: [],
+        launchpadDefaults: { backend: "codex", executionMode: "default" },
+        threads: archived ? rows.filter((row) => row.id !== "parent").map((row) => row.id === "root"
+          ? { ...row, subthreadOrder: ["before", "survivor", "after"] }
+          : row.id === "survivor" ? { ...row, parentThreadId: "root" } : row) : rows,
+      };
+    });
+    const archiveThread = vi.fn(async () => {
+      await archiveGate;
+      archived = true;
+      return { backend: "codex" as const, threadId: "parent", archivedAt: 1000, cleanup: [] };
+    });
+    const api: DesktopApi = { readPopulation, archiveThread, onAgentEvent: (listener) => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    } };
+    const { result } = renderHook(() => useThreadNavigation(api));
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(5);
+      expect([...result.current.pagedNavigation.resources.values()].some(({ state }) =>
+        state.request.query.kind === "children" && state.request.query.parent.threadId === "root")).toBe(true);
+    });
+    let operation!: ReturnType<typeof result.current.archiveThread>;
+    act(() => { operation = result.current.archiveThread(result.current.threads.find((row) => row.id === "parent")!); });
+    expect(result.current.threads.map((row) => row.id)).toContain("parent");
+    expect(result.current.threads.find((row) => row.id === "survivor")?.parentThreadId).toBe("parent");
+    act(() => { releaseArchive(); });
+    await waitFor(() => expect(ownerReadStarted).toBe(true));
+    act(() => {
+      for (const listener of listeners) listener({ backend: "codex",
+        notification: { method: "thread/archived", params: { threadId: "parent" } } });
+    });
+    expect(result.current.threads.map((row) => row.id)).toContain("parent");
+    expect(result.current.threads.find((row) => row.id === "survivor")?.parentThreadId).toBe("parent");
+    await act(async () => { releaseOwnerPage(); await operation; });
+    await waitFor(() => {
+      expect(result.current.threads.map((row) => row.id)).not.toContain("parent");
+      expect(result.current.threads.find((row) => row.id === "survivor")?.parentThreadId).toBe("root");
+    });
+  });
+
   it("archives sub-threads before the parent when archiving a group", async () => {
     const archivedThreadIds = new Set<string>();
     const parentThread = {
@@ -5905,6 +5967,8 @@ describe("useThreadNavigation", () => {
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
       releaseLaunchpadOnSubmit: true,
       codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
+        operationId: expect.any(String),
+        submittedAt: expect.any(Number),
       directoryKey: "directory:/Users/fixture-user/github/PwrAgent",
       launchpad: expect.objectContaining({
         directoryKey: "directory:/Users/fixture-user/github/PwrAgent",
@@ -6100,6 +6164,8 @@ describe("useThreadNavigation", () => {
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
       releaseLaunchpadOnSubmit: true,
       codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
+        operationId: expect.any(String),
+        submittedAt: expect.any(Number),
       directoryKey,
       launchpad: expect.objectContaining({
         prompt: "/review main",
@@ -6991,6 +7057,8 @@ describe("useThreadNavigation", () => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
         releaseLaunchpadOnSubmit: true,
         codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
+        operationId: expect.any(String),
+        submittedAt: expect.any(Number),
         directoryKey,
         launchpad: expect.objectContaining({
           directoryKey,
@@ -7321,6 +7389,8 @@ describe("useThreadNavigation", () => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
         releaseLaunchpadOnSubmit: true,
         codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
+        operationId: expect.any(String),
+        submittedAt: expect.any(Number),
         directoryKey: firstDirectoryKey,
         launchpad: expect.objectContaining({
           directoryKey: firstDirectoryKey,
@@ -12201,7 +12271,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("applies pull request update notification payloads before unchanged refreshes", async () => {
+  it.each(["title", "explicit-attachment"])("applies pull request %s notification payloads before unchanged refreshes", async (change) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     onTestFinished(() => { vi.useRealTimers(); });
     const listeners = new Set<(event: AgentEvent) => void>();
@@ -12215,7 +12285,9 @@ describe("useThreadNavigation", () => {
     };
     const updatedPr: PrSummary = {
       ...initialPr,
-      title: "Preserve PR title updates",
+      ...(change === "explicit-attachment"
+        ? { explicitlyAttached: true as const }
+        : { title: "Preserve PR title updates" }),
     };
     const readPopulation = vi
       .fn()
@@ -12337,7 +12409,7 @@ describe("useThreadNavigation", () => {
             titleSource: "explicit" as const,
             source: "codex" as const,
             linkedDirectories: [],
-            prs: [initialPr],
+            prs: [{ ...initialPr, explicitlyAttached: true }],
             inbox: { inInbox: true, reason: "new-thread" as const },
             updatedAt: 1_000,
           },
@@ -12424,7 +12496,7 @@ describe("useThreadNavigation", () => {
       });
 
       expect(result.current.threads.find((thread) => thread.id === "thread-1")?.prs)
-        .toEqual([updatedPr]);
+        .toEqual([{ ...updatedPr, explicitlyAttached: true }]);
       expect(result.current.threads.find((thread) => thread.id === "thread-2")?.prs)
         .toEqual([updatedPr]);
       expect(result.current.threads.find((thread) => thread.id === "thread-3")?.prs?.[0])
@@ -13500,6 +13572,162 @@ describe("useThreadNavigation", () => {
     });
 
     expect(result.current.refresh).toBe(initialRefresh);
+  });
+
+  it.each(["inbox", "recents", "attention", "drafts", "directories"] as const)("restores %s and a saved chat before its first page loads", async (browseMode) => {
+    const selection = { backend: "codex" as const, threadId: "off-page" };
+    const resumeState: NavigationResumeState = { version: 1, selection,
+      expandedByKey: { open: true, closed: false }, unpinnedExpandedByKey: { open: false }, loadedRowsByQuery: {} };
+    Object.defineProperty(window, "__pwragentNavigationPreferences", { configurable: true, value: { browseMode, resumeState } });
+    const setNavigationResumeState = vi.fn(async () => undefined);
+    const api: DesktopApi = { setNavigationResumeState };
+    const { result } = renderHook(() => useThreadNavigation(api, { enabled: false }));
+    expect(result.current.browseMode).toBe(browseMode);
+    expect(result.current.selectedThreadKey).toBe("codex:off-page");
+    expect(result.current.directoryDisclosure.expandedByKey).toEqual(resumeState.expandedByKey);
+    expect(result.current.directoryDisclosure.unpinnedExpandedByKey).toEqual(resumeState.unpinnedExpandedByKey);
+    expect(result.current.directoryDisclosure.previousSelectedItemKeyRef.current).toBe("codex:off-page");
+    expect(setNavigationResumeState).not.toHaveBeenCalled();
+  });
+
+  it("does no resume serialization or persistence on unrelated renders", () => {
+    const resumeState: NavigationResumeState = { version: 1, selection: null,
+      expandedByKey: { project: true }, unpinnedExpandedByKey: {}, loadedRowsByQuery: { lens: 210 } };
+    Object.defineProperty(window, "__pwragentNavigationPreferences", { configurable: true, value: { resumeState } });
+    const setNavigationResumeState = vi.fn(async () => undefined);
+    const api: DesktopApi = { setNavigationResumeState };
+    const { rerender } = renderHook(() => useThreadNavigation(api, { enabled: false }));
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      for (let index = 0; index < 20; index += 1) rerender();
+      const snapshots = stringify.mock.calls.filter(([value]) => value && typeof value === "object"
+        && "version" in value && "loadedRowsByQuery" in value);
+      expect(snapshots).toHaveLength(0);
+      expect(setNavigationResumeState).not.toHaveBeenCalled();
+    } finally { stringify.mockRestore(); }
+  });
+
+  it("restores a deliberate empty selection and saves only changed navigation", async () => {
+    const resumeState: NavigationResumeState = { version: 1, selection: null,
+      expandedByKey: {}, unpinnedExpandedByKey: {}, loadedRowsByQuery: {} };
+    Object.defineProperty(window, "__pwragentNavigationPreferences", { configurable: true, value: { browseMode: "inbox", resumeState } });
+    const thread: NavigationThreadSummary = { id: "available", source: "codex", title: "Available", titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false } };
+    const setNavigationResumeState = vi.fn(async () => undefined);
+    const api: DesktopApi = { setNavigationResumeState,
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false, threads: [thread], directories: [], inboxThreadKeys: [],
+        launchpadDefaults: { backend: "codex", executionMode: "default" } }) };
+    const { result } = renderHook(() => useThreadNavigation(api));
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.selectedThreadKey).toBeUndefined();
+    expect(setNavigationResumeState).not.toHaveBeenCalled();
+    act(() => result.current.directoryDisclosure.setExpandedByKey({ project: true }));
+    await waitFor(() => expect(setNavigationResumeState).toHaveBeenCalledTimes(1));
+    await act(async () => { await result.current.refresh(); });
+    expect(setNavigationResumeState).toHaveBeenCalledTimes(1);
+    expect(setNavigationResumeState).toHaveBeenCalledWith({ ...resumeState, expandedByKey: { project: true } });
+  });
+
+  it("bounds resume saves before IPC and skips equivalent optional metadata", async () => {
+    const resumeState: NavigationResumeState = { version: 1, selection: null,
+      expandedByKey: {}, unpinnedExpandedByKey: {}, loadedRowsByQuery: {} };
+    Object.defineProperty(window, "__pwragentNavigationPreferences", { configurable: true, value: { resumeState } });
+    const setNavigationResumeState = vi.fn(async (_state: NavigationResumeState) => undefined);
+    const api: DesktopApi = { setNavigationResumeState,
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false, threads: [], directories: [], inboxThreadKeys: [],
+        launchpadDefaults: { backend: "codex", executionMode: "default" } }) };
+    const { result } = renderHook(() => useThreadNavigation(api));
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    const expanded = Object.fromEntries(Array.from({ length: 1000 }, (_, index) => [`project-${index}-${"x".repeat(60)}`, false]));
+    act(() => result.current.directoryDisclosure.setExpandedByKey(expanded));
+    await waitFor(() => expect(setNavigationResumeState).toHaveBeenCalledTimes(1));
+    expect(JSON.stringify(setNavigationResumeState.mock.lastCall?.[0]).length).toBeLessThanOrEqual(12 * 1024);
+    act(() => result.current.directoryDisclosure.setExpandedByKey(Object.fromEntries(Object.entries(expanded).reverse())));
+    expect(setNavigationResumeState).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps navigation usable after a resume save fails and retries on the next change", async () => {
+    const resumeState: NavigationResumeState = { version: 1, selection: null,
+      expandedByKey: {}, unpinnedExpandedByKey: {}, loadedRowsByQuery: {} };
+    Object.defineProperty(window, "__pwragentNavigationPreferences", { configurable: true, value: { resumeState } });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const setNavigationResumeState = vi.fn(async (_state: NavigationResumeState) => undefined)
+      .mockRejectedValueOnce(new Error("Storage unavailable"));
+    const api: DesktopApi = { setNavigationResumeState,
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false, threads: [], directories: [], inboxThreadKeys: [],
+        launchpadDefaults: { backend: "codex", executionMode: "default" } }) };
+    const { result, rerender } = renderHook(() => useThreadNavigation(api));
+    try {
+      await waitFor(() => expect(result.current.loaded).toBe(true));
+      act(() => result.current.directoryDisclosure.setExpandedByKey({ project: true }));
+      await waitFor(() => expect(warning).toHaveBeenCalledWith("Saving navigation state failed.", expect.any(Error)));
+      rerender();
+      expect(setNavigationResumeState).toHaveBeenCalledTimes(1);
+      expect(result.current.directoryDisclosure.expandedByKey.project).toBe(true);
+      act(() => result.current.directoryDisclosure.setExpandedByKey({ project: false }));
+      await waitFor(() => expect(setNavigationResumeState).toHaveBeenCalledTimes(2));
+      expect(setNavigationResumeState.mock.lastCall?.[0].expandedByKey.project).toBe(false);
+    } finally { warning.mockRestore(); }
+  });
+
+  it.each([
+    { identity: "unresolved", checking: true }, { identity: "unresolved", checking: false },
+    { identity: "archived", checking: false }, { identity: "deleted", checking: false },
+  ] as const)("handles an exact restored selection reported as $identity while checking=$checking", async ({ identity, checking }) => {
+    const selection = { backend: "codex" as const, threadId: "saved" };
+    const resumeState: NavigationResumeState = { version: 1, selection, expandedByKey: {}, unpinnedExpandedByKey: {}, loadedRowsByQuery: {} };
+    Object.defineProperty(window, "__pwragentNavigationPreferences", { configurable: true, value: { browseMode: "inbox", resumeState } });
+    const getNavigationSelectedDetail = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => ({
+      protocol: 2, ref: request.ref, revision: "current", readiness: "ready", identity,
+    }));
+    const api: DesktopApi = { getNavigationSelectedDetail,
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false, threads: [], directories: [], inboxThreadKeys: [],
+        ...(checking ? { providerRefresh: { state: "checking" as const } } : {}),
+        launchpadDefaults: { backend: "codex", executionMode: "default" } }) };
+    const { result } = renderHook(() => useThreadNavigation(api));
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    if (checking) expect(result.current.selectedThreadKey).toBe("codex:saved");
+    else await waitFor(() => expect(result.current.selectedThreadKey).toBeUndefined());
+  });
+
+  it("does not let a late saved-thread response undo a new selection", async () => {
+    const saved = { backend: "codex" as const, threadId: "saved" };
+    const resumeState: NavigationResumeState = { version: 1, selection: saved,
+      expandedByKey: {}, unpinnedExpandedByKey: {}, loadedRowsByQuery: {} };
+    Object.defineProperty(window, "__pwragentNavigationPreferences", { configurable: true, value: { resumeState } });
+    type Detail = Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>>;
+    let finish!: (detail: Detail) => void;
+    const pending = new Promise<Detail>((resolve) => { finish = resolve; });
+    const thread: NavigationThreadSummary = { id: "new", source: "codex", title: "New", titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false } };
+    const getNavigationSelectedDetail = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => request.ref.threadId === "saved" ? pending
+      : { protocol: 2, ref: request.ref, revision: "new", readiness: "ready", identity: "present", thread });
+    const setNavigationResumeState = vi.fn(async (_state: NavigationResumeState) => undefined);
+    const api: DesktopApi = { getNavigationSelectedDetail, setNavigationResumeState,
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false, threads: [thread], directories: [], inboxThreadKeys: [],
+        launchpadDefaults: { backend: "codex", executionMode: "default" } }) };
+    const { result } = renderHook(() => useThreadNavigation(api));
+    await waitFor(() => expect(getNavigationSelectedDetail).toHaveBeenCalled());
+    act(() => result.current.selectThread(thread));
+    await act(async () => { finish({ protocol: 2, ref: saved, revision: "late", readiness: "ready", identity: "deleted" }); });
+    expect(result.current.selectedThreadKey).toBe("codex:new");
+    await waitFor(() => expect(setNavigationResumeState.mock.lastCall?.[0].selection).toEqual({ backend: "codex", threadId: "new" }));
+  });
+
+  it("keeps dedicated peer windows from reading or overwriting the main session", async () => {
+    Object.defineProperty(window, "__pwragentFederationTarget", { configurable: true, value: { scope: "remote", instanceId: "peer" } });
+    Object.defineProperty(window, "__pwragentNavigationPreferences", { configurable: true, value: {
+      resumeState: { version: 1, selection: { backend: "codex", threadId: "local" },
+        expandedByKey: { local: true }, unpinnedExpandedByKey: {}, loadedRowsByQuery: {} },
+    } });
+    const setNavigationResumeState = vi.fn(async () => undefined);
+    const api: DesktopApi = { setNavigationResumeState,
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false, threads: [], directories: [], inboxThreadKeys: [],
+        launchpadDefaults: { backend: "codex", executionMode: "default" } }) };
+    const { result } = renderHook(() => useThreadNavigation(api));
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.selectedThreadKey).toBeUndefined();
+    expect(result.current.directoryDisclosure.expandedByKey).toEqual({});
+    act(() => result.current.directoryDisclosure.setExpandedByKey({ peer: true }));
+    expect(setNavigationResumeState).not.toHaveBeenCalled();
   });
 
   it("initializes browse mode from bridged navigation preferences", async () => {

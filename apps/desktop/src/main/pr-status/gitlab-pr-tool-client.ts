@@ -94,6 +94,17 @@ export class GitlabPrToolClient {
     tempRoots?: string[];
   }) {}
 
+  /** Whether `head` is a branch of the project. Undefined for a fork's head or when GitLab cannot say. */
+  async headBranchExists(r: ForgeRepository, head: string, signal?: AbortSignal): Promise<boolean | undefined> {
+    if (r.provider !== "gitlab" || head.includes(":")) return undefined;
+    try {
+      await this.options.gitlab.readApi<unknown>(r.host, `projects/${encodeURIComponent(`${r.owner}/${r.repo}`)}/repository/branches/${encodeURIComponent(head)}`, signal);
+      return true;
+    } catch (error) {
+      return error instanceof GitLabReadError && error.status === 404 ? false : undefined;
+    }
+  }
+
   async execute(operation: ForgePrToolOperation, args: ForgePrToolArgs, ctx: ForgePrToolContext): Promise<unknown> {
     try {
       return await this.run(operation, args, ctx);
@@ -121,6 +132,11 @@ export class GitlabPrToolClient {
     const paging = new URLSearchParams({ page: String(page), per_page: String(perPage) });
     const done = <T extends Record<string, unknown>>(result: T) => ({ repository: r, source: "provider", fetchedAt: Date.now(), providerRequests, ...result });
     const pageInfo = (rows: unknown[]) => ({ page, perPage, nextPage: rows.length >= perPage ? page + 1 : null });
+
+    if (operation === "rerun_failed_ci_jobs") {
+      await write("POST", `/pipelines/${args.runId}/retry`);
+      return done({ requested: true, runId: args.runId, scope: "failed_and_canceled_jobs", url: `${repositoryUrl(r)}/-/pipelines/${args.runId}` });
+    }
     const notes: string[] = [];
     const writeResult = <T extends Record<string, unknown>>(result: T) => done({ ...result, ...(notes.length ? { notes } : {}) });
 

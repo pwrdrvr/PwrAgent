@@ -54,6 +54,13 @@ function createHandler(): PwrAgentThreadTodoHandler {
 }
 
 describe("normalizePullRequestReference", () => {
+  it("accepts an existing thread request and rejects invalid destinations", () => {
+    const action = { type: "send_message", prompt: "Refresh #42", target: { backend: "codex", threadId: "owner", title: "PR owner" } };
+    expect(normalizeAddTodoArgs({ title: "Refresh the PR", action })).toMatchObject({ ok: true, value: { action } });
+    for (const target of [null, {}, { backend: "unknown", threadId: "owner" }, { backend: "codex", threadId: " " }]) {
+      expect(normalizeAddTodoArgs({ title: "Refresh", action: { ...action, target } }).ok).toBe(false);
+    }
+  });
   it.each([
     [42, "42"],
     ["42", "42"],
@@ -340,6 +347,25 @@ describe("thread to-do tool dispatch", () => {
     );
     expect(await tool("resolve_todo", handler).dispatch({ id: "todo-1", allowOpenItems: "yes" }, CONTEXT))
       .toMatchObject({ ok: false, code: "invalid_arguments" });
+  });
+
+  it("lets a thread claim a card it was asked to do here", async () => {
+    const handler = createHandler();
+    await tool("resolve_todo", handler).dispatch({ id: "todo-1", resolution: "sent_here" }, CONTEXT);
+    expect(handler.resolve).toHaveBeenLastCalledWith(
+      { backend: "codex", threadId: "thread-a" },
+      { id: "todo-1", status: "done", resolution: "sent_here" },
+    );
+    expect(await tool("resolve_todo", handler).dispatch({ id: "todo-1", resolution: "handled_elsewhere" }, CONTEXT))
+      .toMatchObject({ ok: false, code: "invalid_arguments" });
+    expect(await tool("resolve_todo", handler).dispatch(
+      { id: "todo-1", status: "dismissed", resolution: "sent_here" },
+      CONTEXT,
+    )).toMatchObject({ ok: false, code: "invalid_arguments" });
+    // Read before resolve_todo, on a backend that loads schemas on demand.
+    for (const operation of ["add_todo", "list_todos", "resolve_todo"] as const) {
+      expect(tool(operation, handler).description).toContain("resolution sent_here");
+    }
   });
 
   it("raises, ticks, re-raises and resolves a checklist card end to end", async () => {

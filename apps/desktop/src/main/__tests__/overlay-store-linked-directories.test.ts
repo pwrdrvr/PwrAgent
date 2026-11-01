@@ -18,6 +18,53 @@ afterEach(() => {
 });
 
 describe("SqliteOverlayStore — linked directories", () => {
+  it("repairs one worktree relationship without detaching sibling or retained worktrees", async () => {
+    const identity = { backend: "codex" as const, threadId: "thread-1" };
+    const primary = {
+      id: "/worktrees/primary", kind: "worktree" as const, label: "app",
+      path: "/repo/app", worktreePath: "/worktrees/primary",
+    };
+    const attached = {
+      id: "/repo/app", kind: "worktree" as const, label: "attached", path: "/repo/app",
+      worktreePath: "/worktrees/attached", gitBranch: "attached-branch",
+      worktreeOwnership: "external" as const,
+    };
+    const retained = { ...primary, id: "retained", worktreePath: "/worktrees/retained" };
+    await store.replaceWorkspaceLinkedDirectory({ ...identity, directory: primary, retainWorktree: retained });
+    await store.addLinkedDirectory({ ...identity, directory: attached });
+    // Enrichment may correct an ID and the spelling of a repository alias.
+    const repaired = { ...primary, id: "/worktrees/primary/subdir", path: "/physical/repo/app" };
+    const overlay = await store.replaceWorkspaceLinkedDirectory({
+      ...identity, directory: repaired, preserveOtherWorktrees: true,
+    });
+    expect(overlay.extraLinkedDirectories).toEqual([repaired, attached]);
+    expect(overlay.retainedWorktrees).toEqual([retained]);
+    expect((await store.getArchiveCleanupOverlayStates({
+      backend: "codex", threadIds: [identity.threadId],
+    }))[identity.threadId]).toMatchObject({
+      extraLinkedDirectories: [repaired, attached], retainedWorktrees: [retained],
+    });
+  });
+
+  it.each(["local", "worktree"] as const)(
+    "still replaces the primary workspace for an explicit move to %s", async (kind) => {
+      const identity = { backend: "codex" as const, threadId: "thread-1" };
+      const primary = {
+        id: "/worktrees/primary", kind: "worktree" as const, label: "app",
+        path: "/repo/app", worktreePath: "/worktrees/primary",
+      };
+      const unrelated = { id: "/repo/other", kind: "local" as const, label: "other", path: "/repo/other" };
+      await store.addLinkedDirectory({ ...identity, directory: primary });
+      await store.addLinkedDirectory({ ...identity, directory: unrelated });
+      const target = {
+        id: "pwragent-handoff:codex:thread-1", kind, label: "app", path: "/repo/app",
+        ...(kind === "worktree" ? { worktreePath: "/worktrees/target" } : {}),
+      };
+      const overlay = await store.replaceWorkspaceLinkedDirectory({ ...identity, directory: target });
+      expect(overlay.extraLinkedDirectories).toEqual([unrelated, target]);
+    },
+  );
+
   it.each([
     ["codex", undefined], ["codex", "remote-instance"],
     ["acp:grok", undefined], ["acp:grok", "remote-instance"],
@@ -69,6 +116,33 @@ describe("SqliteOverlayStore — linked directories", () => {
       directory: { id: "pwragent-handoff:codex:child", label: "source", path: "/repo/source", kind: "worktree", worktreePath: "/worktrees/source" },
     });
     expect(overlay.parentThreadId).toBe("parent");
+  });
+
+  it("keeps a retained worktree out of the workspace until the thread moves back into it", async () => {
+    const worktree = (name: string) => ({
+      id: "pwragent-handoff:codex:thread-1", label: "app", path: "/repo/app", kind: "worktree" as const,
+      worktreePath: `/worktrees/${name}`,
+    });
+    const retained = {
+      id: "pwragent-retained-worktree:codex:thread-1:/worktrees/old", label: "app", path: "/repo/app",
+      kind: "worktree" as const, worktreePath: "/worktrees/old",
+    };
+    await store.replaceWorkspaceLinkedDirectory({ backend: "codex", threadId: "thread-1", directory: worktree("old") });
+    const moved = await store.replaceWorkspaceLinkedDirectory({
+      backend: "codex", threadId: "thread-1", directory: worktree("new"), retainWorktree: retained,
+    });
+    expect(moved.extraLinkedDirectories).toEqual([worktree("new")]);
+    expect(moved.retainedWorktrees).toEqual([retained]);
+    // Thread archive reads it through its narrow projection.
+    const archiveView = await store.getArchiveCleanupOverlayStates({ backend: "codex", threadIds: ["thread-1"] });
+    expect(archiveView["thread-1"]?.retainedWorktrees).toEqual([retained]);
+    // A later move keeps it tracked.
+    const later = await store.replaceWorkspaceLinkedDirectory({ backend: "codex", threadId: "thread-1", directory: worktree("later") });
+    expect(later.retainedWorktrees).toEqual([retained]);
+    // Moving back into it makes it the workspace again.
+    const back = await store.replaceWorkspaceLinkedDirectory({ backend: "codex", threadId: "thread-1", directory: worktree("old") });
+    expect(back.retainedWorktrees).toBeUndefined();
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))?.retainedWorktrees).toBeUndefined();
   });
 
   it("replaces same-path local directories even when their IDs use different shapes", async () => {

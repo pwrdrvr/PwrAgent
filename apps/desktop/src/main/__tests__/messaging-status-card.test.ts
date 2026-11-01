@@ -983,6 +983,166 @@ describe("buildBindingStatusIntent", () => {
     );
   });
 
+  it("offers the Default and Full Access execution modes a Grok backend declares", () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      source: "acp:grok",
+      executionMode: "default",
+    };
+    const binding = {
+      ...buildBinding(),
+      backend: "acp:grok",
+    } satisfies MessagingBindingRecord;
+
+    const intent = buildBindingStatusIntent({
+      id: "status-grok-permissions",
+      createdAt: 1000,
+      backendSummary: buildGrokBackendSummary(),
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).toContain("Permissions: Default Access");
+    expect(intent.actions).toContainEqual(
+      expect.objectContaining({
+        id: "status:permissions",
+        label: "Permissions: Default",
+      }),
+    );
+
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      executionMode: "full-access",
+    };
+    const fullAccessIntent = buildBindingStatusIntent({
+      id: "status-grok-full-access",
+      createdAt: 1000,
+      backendSummary: buildGrokBackendSummary(),
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(fullAccessIntent.text).toContain("Permissions: Full Access");
+    expect(fullAccessIntent.text).not.toContain("Agent default");
+    expect(fullAccessIntent.actions).toContainEqual(
+      expect.objectContaining({
+        id: "status:permissions",
+        label: "Permissions: Full Access",
+      }),
+    );
+  });
+
+  it("labels Grok permissions from its execution mode, not its planning selector", () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      source: "acp:grok",
+      executionMode: "default",
+      acpRuntime: {
+        configValues: { planning_mode: "plan" },
+        updatedAt: 1000,
+      },
+    };
+    const binding = {
+      ...buildBinding(),
+      backend: "acp:grok",
+    } satisfies MessagingBindingRecord;
+    const backendSummary = buildGrokBackendSummary();
+    backendSummary.acp!.runtime = {
+      schemaVersion: 1,
+      status: "discovered",
+      configOptions: [
+        {
+          id: "planning_mode",
+          label: "Planning",
+          type: "select",
+          category: "mode",
+          currentValue: "default",
+          values: [
+            { value: "default", label: "Default" },
+            { value: "plan", label: "Plan" },
+          ],
+        },
+      ],
+    };
+
+    const intent = buildBindingStatusIntent({
+      id: "status-grok-planning",
+      createdAt: 1000,
+      backendSummary,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).toContain("Permissions: Default Access");
+    expect(intent.text).not.toContain("Permissions: Plan");
+    expect(intent.actions).toContainEqual(
+      expect.objectContaining({
+        id: "status:permissions",
+        label: "Permissions: Default",
+      }),
+    );
+  });
+
+  it("hides Grok's Full Access escalation when messaging escalation is disallowed", () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      source: "acp:grok",
+      executionMode: "default",
+    };
+    const binding = {
+      ...buildBinding(),
+      backend: "acp:grok",
+    } satisfies MessagingBindingRecord;
+
+    const intent = buildBindingStatusIntent({
+      id: "status-grok-no-escalation",
+      createdAt: 1000,
+      allowFullAccessEscalation: false,
+      backendSummary: buildGrokBackendSummary(),
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).toContain("Permissions: Default Access");
+    expect(intent.actions).not.toContainEqual(
+      expect.objectContaining({ id: "status:permissions" }),
+    );
+  });
+
+  it("does not offer execution modes a Grok backend reports as unavailable", () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      source: "acp:grok",
+      executionMode: "default",
+    };
+    const binding = {
+      ...buildBinding(),
+      backend: "acp:grok",
+    } satisfies MessagingBindingRecord;
+    const backendSummary = buildGrokBackendSummary();
+    backendSummary.executionModes = backendSummary.executionModes.map((mode) => ({
+      ...mode,
+      available: false,
+      unavailableReason: "Grok is not signed in.",
+    }));
+
+    const intent = buildBindingStatusIntent({
+      id: "status-grok-unavailable",
+      createdAt: 1000,
+      backendSummary,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.actions).not.toContainEqual(
+      expect.objectContaining({ id: "status:permissions" }),
+    );
+  });
+
   it("does not treat ACP model config values as permissions", () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {
@@ -1398,6 +1558,36 @@ describe("buildBindingStatusIntent", () => {
     expect(overview.fallbackText).toContain("Reply with 1 or 2, Back, Refresh, or Cancel.");
   });
 
+  it("offers a new worktree from a worktree and keeps that direction through confirmation", () => {
+    const binding = buildBinding();
+    const context = {
+      ...buildHandoffContext(),
+      workspaceKind: "worktree" as const,
+      workingDirectoryPath: "/repo/pwragent/.worktrees/feature",
+    };
+    const overview = buildHandoffOverviewIntent({ id: "overview", binding, context, createdAt: 1000 });
+    expect(overview.choices.map((choice) => [choice.id, choice.fallbackText])).toEqual([
+      ["handoff:worktree-to-local", "1"],
+      ["handoff:worktree-to-worktree", "2"],
+      ["handoff:projects", "3"],
+      ...overview.choices.slice(3).map((choice) => [choice.id, choice.fallbackText]),
+    ]);
+    const request = handoffRequestFromValue(
+      overview.choices.find((choice) => choice.id === "handoff:worktree-to-worktree")!.value,
+    )!;
+    expect(request).toMatchObject({ direction: "worktree-to-worktree", strategy: "detached-changes" });
+
+    const confirmation = buildHandoffConfirmationIntent({
+      id: "confirm", binding, context, createdAt: 1000,
+      direction: request.direction, strategy: request.strategy,
+    });
+    expect(confirmation.body).toContain("Confirm moving this thread to a new worktree.");
+    expect(handoffRequestFromValue(confirmation.actions![0]!.value)).toMatchObject({
+      direction: "worktree-to-worktree",
+      strategy: "detached-changes",
+    });
+  });
+
   it("paginates handoff branch picker choices", () => {
     const binding = buildBinding();
     const context = {
@@ -1610,6 +1800,25 @@ function buildAcpBackendSummary(): BackendSummary {
           ],
         },
       },
+    },
+  };
+}
+
+function buildGrokBackendSummary(): BackendSummary {
+  return {
+    ...buildAcpBackendSummary(),
+    kind: "acp:grok",
+    label: "Grok",
+    executionModes: [
+      { mode: "default", label: "Default Access", available: true, isDefault: true },
+      { mode: "full-access", label: "Full Access", available: true },
+    ],
+    acp: {
+      registryId: "grok",
+      distributionKinds: ["local"],
+      installStatus: "installed",
+      authStatus: "authenticated",
+      verificationStatus: "not-applicable",
     },
   };
 }

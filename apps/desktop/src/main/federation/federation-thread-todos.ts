@@ -1,5 +1,5 @@
 import type {
-  FederationCapability, FederationRemoteTarget, ThreadTodo, ListThreadTodosRequest, ThreadTodoMergeMethodPreferences,
+  FederationCapability, FederationRemoteTarget, FederationTarget, ThreadTodo, ListThreadTodosRequest, ThreadTodoMergeMethodPreferences,
   TodoBusyThread, TodoUnavailableInstance,
 } from "@pwragent/shared";
 import { normalizeThreadReview, resolveThreadTodoMergeMethod } from "@pwragent/shared";
@@ -19,20 +19,26 @@ export const FEDERATION_THREAD_TODO_METHODS = {
   listTodos: "threadTodos.list", listReviews: "threadReviews.list", updateReview: "threadReviews.update",
   resolveTodo: "threadTodos.resolve", runAction: "threadTodos.runAction", listProjects: "threadTodos.listProjects",
   setItemChecked: "threadTodos.setItemChecked", setProject: "threadTodos.setProject",
+  // Older owners do not answer it; the card then cannot list environments there.
+  listDispatchEnvironments: "threadTodos.listDispatchEnvironments",
   // Needs `thread_todo_feed` on the owner; viewers fall back to `threadTodos.list`.
   snapshotFeed: "threadTodos.snapshot",
+  // Needs `thread_todo_plan` on the owner; a start there sends the prompt alone.
+  raisePlan: "threadTodos.raisePlan",
 } as const;
 
 export const FEDERATION_THREAD_TODO_CAPABILITIES: Record<string, FederationCapability> = {
   [FEDERATION_THREAD_TODO_METHODS.listTodos]: "thread_detail",
   [FEDERATION_THREAD_TODO_METHODS.listReviews]: "thread_detail",
   [FEDERATION_THREAD_TODO_METHODS.listProjects]: "thread_detail",
+  [FEDERATION_THREAD_TODO_METHODS.listDispatchEnvironments]: "thread_detail",
   [FEDERATION_THREAD_TODO_METHODS.snapshotFeed]: "thread_detail",
   [FEDERATION_THREAD_TODO_METHODS.updateReview]: "turn_control",
   [FEDERATION_THREAD_TODO_METHODS.resolveTodo]: "turn_control",
   [FEDERATION_THREAD_TODO_METHODS.setItemChecked]: "turn_control",
   [FEDERATION_THREAD_TODO_METHODS.setProject]: "turn_control",
   [FEDERATION_THREAD_TODO_METHODS.runAction]: "turn_control",
+  [FEDERATION_THREAD_TODO_METHODS.raisePlan]: "turn_control",
 };
 
 export function registerFederationThreadTodoHandlers(router: FederationRouter, operations: Operations): void {
@@ -77,7 +83,9 @@ export class FederatedThreadTodoService {
     operation: K, input: ThreadTodoOperationRequest<K>, windowTarget?: FederationRemoteTarget,
   ): Promise<ThreadTodoOperationResponse<K>> {
     const request = { ...input } as Record<string, unknown>;
-    let target = request.federationTarget as FederationRemoteTarget | undefined;
+    const explicitTarget = request.federationTarget as FederationTarget | undefined;
+    const explicitlyLocal = operation === "listDispatchEnvironments" && explicitTarget?.scope === "local";
+    let target = explicitTarget?.scope === "remote" ? explicitTarget : undefined;
     delete request.federationTarget;
     if (typeof request.id === "string" && request.id.startsWith("remote-todo:")) {
       const match = /^remote-todo:([^:]+):(.+)$/.exec(request.id);
@@ -87,7 +95,7 @@ export class FederatedThreadTodoService {
       target = { scope: "remote", instanceId: owner };
       request.id = decodeURIComponent(match[2]!);
     }
-    target ??= windowTarget;
+    target ??= explicitlyLocal ? undefined : windowTarget;
     if (target) {
       // An owner that predates `declined` accepts only `dismissed` for a
       // finding, and every owner still takes that name, so it crosses as that.

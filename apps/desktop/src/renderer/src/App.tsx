@@ -53,6 +53,7 @@ import {
   type ThreadSpendAlert,
   type ThreadUsageLineRecord,
   type SetThreadToolIncidentNoticeRequest,
+  type SubmitServerRequestRequest,
   resolveToolIncidentVisibility,
   SUBTHREAD_LAUNCHPAD_KEY_PREFIX,
   toolOutputWarningChars,
@@ -62,6 +63,8 @@ import type { ProjectRevealRequest } from "./features/navigation/DirectoriesList
 import { isSubthreadLaunchpadDraft } from "./features/navigation/StartingThreadRow";
 import { SidebarResizeHandle } from "./features/navigation/SidebarResizeHandle";
 import { useThreadJump } from "./features/navigation/useThreadJump";
+import { useLensHotkeys } from "./features/navigation/useLensHotkeys";
+import { revealSelectedSidebarThreadRow } from "./features/navigation/reveal-selected-thread-row";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
 import { buildFederationThreadTargets } from "./features/chrome/federation-thread-targets";
 import { FederationDisplayLabelsProvider, federationLocalDisplayLabel } from "./lib/federation-display-label";
@@ -124,6 +127,7 @@ import { useRecoverableState, useRecoverableComposerDraftStore } from "./lib/Ren
 import { readBootstrapLayoutPreferences } from "./lib/layout-preferences";
 import { useAppearance, type AppearanceController } from "./lib/useAppearance";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
+import { useSidebarOwnerBackends } from "./lib/useSidebarOwnerBackends";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useDesktopApplications } from "./lib/useDesktopApplications";
 import { useEventCallback } from "./lib/useEventCallback";
@@ -154,6 +158,7 @@ import {
   type InteractiveSvgPreferences,
 } from "./lib/interactive-svg-preferences";
 import { TerminalPreferencesProvider } from "./lib/terminal-preferences";
+import { HtmlPreviewPreferencesProvider } from "./lib/html-preview-preferences";
 import {
   useThreadNavigation,
   type ArchivedThreadRef,
@@ -177,6 +182,10 @@ import {
   useThreadTodos,
 } from "./features/thread-todos/useThreadTodos";
 import { newestResolvedFirst } from "./features/thread-todos/busy-thread-todos";
+import {
+  ThreadTodoRevealContext,
+  type ThreadTodoRevealRequest,
+} from "./features/thread-todos/thread-todo-reveal";
 import type {
   ThreadTodoProjectMenu,
   ThreadTodosView,
@@ -467,6 +476,14 @@ function DesktopAppShell(props: {
     useState<ProjectRevealRequest>();
   const [contextRailPinned, setContextRailPinned] = useState(
     () => readBootstrapLayoutPreferences().contextRailPinned,
+  );
+  // The sidebar's project index splits the sidebar's width, so it moves the
+  // list's width and is seeded before first paint like the two above.
+  const [projectIndexHidden, setProjectIndexHidden] = useState(
+    () => readBootstrapLayoutPreferences().projectIndexHidden,
+  );
+  const [projectIndexWidth, setProjectIndexWidth] = useState(
+    () => readBootstrapLayoutPreferences().projectIndexWidth,
   );
   const [activeContextTab, setActiveContextTab] =
     useState<ContextTabId>(DEFAULT_CONTEXT_TAB);
@@ -1687,17 +1704,10 @@ function DesktopAppShell(props: {
       // Directory threads divider, overflow cap, or parent-thread group. The
       // request nonce lets the active sidebar lens open those containers
       // before ThreadRow's mount effect performs the final nearest-edge
-      // scroll. Keep the direct query for the common already-visible case so
-      // title clicks retain their centered smooth-scroll behavior.
+      // scroll. A mounted row that is off screen is centered right away; one
+      // already in full view does not move.
       setRevealSelectedThreadRequest((current) => current + 1);
-      const selectedRow = document.querySelector<HTMLElement>(
-        ".sidebar .thread-row.is-selected",
-      );
-      selectedRow?.scrollIntoView({
-        behavior: options?.instant === true ? "auto" : "smooth",
-        block: "center",
-        inline: "nearest",
-      });
+      revealSelectedSidebarThreadRow(options);
     },
     [],
   );
@@ -1760,13 +1770,32 @@ function DesktopAppShell(props: {
     [writeConfig],
   );
 
+  const setProjectIndexHiddenPersisted = useCallback(
+    (next: boolean) => {
+      layoutPrefsChosenRef.current.add("projectIndexHidden");
+      setProjectIndexHidden(next);
+      void writeConfig({ ui: { projectIndexHidden: next } });
+    },
+    [writeConfig],
+  );
   // Single owner of the window-layout keyboard chords (⌘B/⌃B sidebar,
-  // ⌘⌥B/⌃⌥B rail). Bound once here — never per PanelToggleButtons chip — so
-  // it fires exactly once regardless of how many chips are mounted.
+  // ⌘⌥B/⌃⌥B rail, ⇧⌘B/⇧⌃B project index). Bound once here — never per
+  // PanelToggleButtons chip — so it fires exactly once regardless of how many
+  // chips are mounted.
   useLayoutChordHotkeys({
     onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
     onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+    onToggleProjectIndex: () => setProjectIndexHiddenPersisted(!projectIndexHidden),
   });
+  // Called once per drag and once per arrow-key run, on release.
+  const setProjectIndexWidthPersisted = useCallback(
+    (next: number | null) => {
+      layoutPrefsChosenRef.current.add("projectIndexWidth");
+      setProjectIndexWidth(next);
+      void writeConfig({ ui: { projectIndexWidth: next } });
+    },
+    [writeConfig],
+  );
   const setActiveContextTabPersisted = useCallback(
     (tab: ContextTabId) => {
       layoutPrefsChosenRef.current.add("activeContextTab");
@@ -1825,6 +1854,12 @@ function DesktopAppShell(props: {
     }
     if (!chosen.has("contextRailPinned")) {
       setContextRailPinned(uiPrefs.contextRailPinned.value);
+    }
+    if (!chosen.has("projectIndexHidden") && uiPrefs.projectIndexHidden) {
+      setProjectIndexHidden(uiPrefs.projectIndexHidden.value);
+    }
+    if (!chosen.has("projectIndexWidth") && uiPrefs.projectIndexWidth) {
+      setProjectIndexWidth(uiPrefs.projectIndexWidth.value);
     }
     if (
       !chosen.has("activeContextTab")
@@ -1942,6 +1977,9 @@ function DesktopAppShell(props: {
   // thread menu reports the thread it was opened on, without selecting it.
   const copyThreadDiagnosticsInfo = useEventCallback(
     (thread: NavigationThreadSummary | undefined): void => {
+      const pending = thread ? undefined : navigation.pendingLaunchpadCreations.find(
+        (creation) => creation.selectionKey === navigation.selectedItemKey,
+      );
       const metadataPromise = desktopApi?.readAppMetadata?.();
       if (!metadataPromise) {
         return;
@@ -1971,6 +2009,17 @@ function DesktopAppShell(props: {
                   federationWindowTarget: readRendererFederationTarget(),
                 }
               : {
+                  backend: pending?.launchpad.backend,
+                  projectPath: pending?.startup?.cwd ?? pending?.setupProgress?.cwd ?? pending?.launchpad.directoryPath,
+                  title: pending?.title,
+                  startup: pending ? {
+                    ...pending.startup,
+                    operationId: pending.operationId,
+                    submittedAt: pending.submittedAt,
+                    directoryKey: pending.directoryKey,
+                    setupProgress: pending.startup?.setupProgress,
+                    targetInstanceId: pending.target?.scope === "remote" ? pending.target.instanceId : federationHealth?.instanceId,
+                  } : undefined,
                   federationHealth,
                   federationWindowLabel: readRendererFederationLabel(),
                   federationWindowTarget: readRendererFederationTarget(),
@@ -2116,11 +2165,29 @@ function DesktopAppShell(props: {
           .repeatedLargeOutputMinimumPercent,
     );
   }, [settings.snapshot?.general.toolOutputAlerts]);
-  const backendSummaries = useBackendSummaries(desktopApi, {
+  // The sidebar belongs to the window's navigation owner even when its
+  // selected transcript belongs to a peer. A peer's provider catalog must
+  // not remove management actions from this window's local thread rows.
+  const windowFederationTarget = useMemo(() => readRendererFederationTarget(), []);
+  const windowBackendSummaries = useBackendSummaries(desktopApi, {
     enabled: normalAppEnabled,
+    federationTarget: windowFederationTarget,
+    suspended: Boolean(windowFederationTarget && remoteReadsSuspended),
+    pollRateLimits: !sidebarHidden,
+  });
+  const selectedPeerCatalog = !federationTargetsEqual(activeFederationTarget, windowFederationTarget);
+  const selectedPeerBackendSummaries = useBackendSummaries(desktopApi, {
+    enabled: normalAppEnabled && selectedPeerCatalog,
     federationTarget: activeFederationTarget,
     suspended: remoteReadsSuspended,
     pollRateLimits: !sidebarHidden,
+  });
+  const backendSummaries = selectedPeerCatalog
+    ? selectedPeerBackendSummaries
+    : windowBackendSummaries;
+  const remoteSidebarBackends = useSidebarOwnerBackends(desktopApi, navigation.threads, {
+    enabled: normalAppEnabled,
+    windowInstanceId: windowFederationTarget?.instanceId,
   });
   const startupBackend = useMemo(
     () => resolveNewThreadBackend(backendSummaries.backends),
@@ -2371,6 +2438,11 @@ function DesktopAppShell(props: {
     restore: restoreHistoryLocation,
   });
   useHistoryNavHotkeys({ onBack: history.goBack, onForward: history.goForward });
+  useLensHotkeys({
+    browseMode: navigation.browseMode,
+    onBrowseModeChange: navigation.setBrowseMode,
+    threadLensesEmpty: navigation.threadLensesEmpty,
+  });
   // ⌘⇧F / ⌃⇧F opens the global thread search screen; ⌘F is the focus-sensitive
   // context find; ⌘K always lands on the thread-list quick search.
   useFindHotkeys({
@@ -2572,8 +2644,10 @@ function DesktopAppShell(props: {
   // it only closes the card; the request stays in its thread and To-dos.
   // One lookup for every surface that names a wait's thread.
   const waitThreadTitle = useCallback(
-    (threadKey: string) => localThreadTitles.get(threadKey) ?? "Untitled thread",
-    [localThreadTitles],
+    (threadKey: string) => localThreadTitles.get(threadKey)
+      ?? operatorRequests.waitsByThreadKey.get(threadKey)?.[0]?.threadTitle
+      ?? "Untitled thread",
+    [localThreadTitles, operatorRequests.waitsByThreadKey],
   );
   const reviewApprovalNotice = useCallback((wait: OperatorWait): void => {
     showThreadFromLink({
@@ -2582,11 +2656,35 @@ function DesktopAppShell(props: {
       ...(wait.federationTarget ? { instanceId: wait.federationTarget.instanceId } : {}),
     });
   }, [showThreadFromLink]);
+  const submitServerRequest = desktopApi?.submitServerRequest;
+  const refreshOperatorRequests = operatorRequests.refresh;
+  // One answer path for the To-dos rows and the approval notices. It reads
+  // the owner queue once the answer is taken: a peer's change event can be
+  // lost, and the read is what tells a surface the request is still open.
+  const respondToOperatorWait = useCallback(async (
+    wait: OperatorWait,
+    response: SubmitServerRequestRequest["response"],
+  ): Promise<void> => {
+    const request = wait.request;
+    if (!request || !submitServerRequest) {
+      throw new Error("This request can only be answered in its thread.");
+    }
+    await submitServerRequest({
+      backend: wait.backend,
+      threadId: wait.threadId,
+      federationTarget: wait.federationTarget,
+      turnId: typeof request.params.turnId === "string" ? request.params.turnId : undefined,
+      requestId: request.params.requestId,
+      response,
+    });
+    await refreshOperatorRequests();
+  }, [refreshOperatorRequests, submitServerRequest]);
   const approvalNotices = useApprovalNotices({
     waits: operatorRequests.waits,
     selectedThreadKey,
     threadTitleForKey: waitThreadTitle,
     onReview: reviewApprovalNotice,
+    ...(submitServerRequest ? { respond: respondToOperatorWait } : {}),
   });
   const durableNotices = useMemo(
     () => approvalNotices.length > 0
@@ -2609,15 +2707,30 @@ function DesktopAppShell(props: {
       : undefined,
     [listThreadTodoProjects, setThreadTodoProject],
   );
-  const submitServerRequest = desktopApi?.submitServerRequest;
   const configuredMergeMethod = props.settings.snapshot?.git?.defaultMergeMethod?.value;
-  // Peers that can host a handoff thread, the same list the new-thread
-  // machine chip offers.
+  // Every machine a handoff card can name: the new-thread machine chip's
+  // peers with their state, the window's owner included so a card it owns
+  // can name it. An offline peer is listed and cannot be picked.
   const todoHandoffInstances = useMemo(
-    () => newThreadFederationTargets
-      .filter((target) => target.availability === "available")
-      .map((target) => ({ instanceId: target.instanceId, label: target.label })),
-    [newThreadFederationTargets],
+    () => federationMachines.map((target) => ({
+      instanceId: target.instanceId,
+      label: target.shortLabel ?? target.label,
+      availability: target.availability,
+      dispatchTarget: liveFederationHealth?.peers.find((peer) => peer.id === target.instanceId)
+        ?.capabilities.includes("thread_todo_dispatch_target") === true,
+      messageTarget: liveFederationHealth?.peers.find((peer) => peer.id === target.instanceId)
+        ?.capabilities.includes("thread_todo_message") === true,
+    })),
+    [federationMachines, liveFederationHealth],
+  );
+  // The gateway stays a destination even when this window views a peer.
+  // The card's owner, carried by its id, remains the default start target.
+  const todoLocalMachine = useMemo(
+    () => ({
+      ...(liveFederationHealth?.instanceId ? { instanceId: liveFederationHealth.instanceId } : {}),
+      label: federationLocalDisplayLabel(liveFederationHealth),
+    }),
+    [liveFederationHealth],
   );
   // A handoff card asking for Full Access passes the same confirmation as
   // every other escalation: the agent proposed the mode, the operator has
@@ -2643,6 +2756,26 @@ function DesktopAppShell(props: {
   const selectedThreadKeyRef = useRef(navigation.selectedThreadKey);
   useEffect(() => {
     selectedThreadKeyRef.current = navigation.selectedThreadKey;
+  }, [navigation.selectedThreadKey]);
+  // A thread row's to-do chip: open the thread as its row would, then show
+  // its cards, in the rail's To-dos panel when that is open, else as the
+  // transcript's stack, expanded.
+  const [threadTodoRevealRequest, setThreadTodoRevealRequest] = useState<ThreadTodoRevealRequest>();
+  const selectThreadNavigation = navigation.selectThread;
+  const revealThreadTodos = useCallback((thread: NavigationThreadSummary) => {
+    const threadKey = threadSummaryIdentityKey(thread);
+    setThreadTodoRevealRequest({ threadKey });
+    setMainView("thread");
+    // Already selected: selecting it again would refresh its git status
+    // and clear its errors for nothing.
+    if (threadKey !== selectedThreadKeyRef.current) selectThreadNavigation(thread);
+  }, [selectThreadNavigation, setMainView]);
+  // A request whose thread never came on screen must not fire when the
+  // operator opens that thread some other way later.
+  useEffect(() => {
+    const selected = navigation.selectedThreadKey;
+    setThreadTodoRevealRequest((current) =>
+      current && selected && current.threadKey !== selected ? undefined : current);
   }, [navigation.selectedThreadKey]);
   // The To-dos panel's rows and the sidebar's Question chip both open here.
   const openOperatorWait = useCallback((wait: OperatorWait) => {
@@ -2703,6 +2836,7 @@ function DesktopAppShell(props: {
       runningIds: threadTodoController.runningIds,
       mergeMethods,
       instances: todoHandoffInstances,
+      localMachine: todoLocalMachine,
       ...(todoProjectMenu ? { projectMenu: todoProjectMenu } : {}),
       threadTitle: (todo) =>
         localThreadTitles.get(threadTodoThreadKey(todo))
@@ -2715,6 +2849,7 @@ function DesktopAppShell(props: {
       run: (todo, options) => {
         if (
           todo.action?.type !== "start_thread"
+          || options?.messageTarget !== undefined
           || todo.action.executionMode !== "full-access"
         ) {
           return threadTodoController.runAction(todo.id, options);
@@ -2756,20 +2891,7 @@ function DesktopAppShell(props: {
       waitsByThreadKey: operatorRequests.waitsByThreadKey,
       seenKeys: operatorRequests.seenKeys,
       markSeen: operatorRequests.markSeen,
-      respond: async (wait, response) => {
-        const request = wait.request;
-        if (!request || !submitServerRequest) {
-          throw new Error("This request can only be answered in its thread.");
-        }
-        await submitServerRequest({
-          backend: wait.backend,
-          threadId: wait.threadId,
-          federationTarget: wait.federationTarget,
-          turnId: typeof request.params.turnId === "string" ? request.params.turnId : undefined,
-          requestId: request.params.requestId,
-          response,
-        });
-      },
+      respond: respondToOperatorWait,
       dismissQuestion: operatorRequests.dismissQuestion,
       dismissedQuestionKeys: operatorRequests.dismissedQuestionKeys,
       openWait: openOperatorWait,
@@ -2785,12 +2907,13 @@ function DesktopAppShell(props: {
     offscreenQuestionAnswers,
     openOperatorWait,
     operatorRequests,
-    submitServerRequest,
+    respondToOperatorWait,
     requestTodoExecutionMode,
     showThreadFromLink,
     threadTodoController,
     todoProjectMenu,
     todoHandoffInstances,
+    todoLocalMachine,
     waitThreadTitle,
   ]);
   // Fetch the boot info once at mount. Stable for the renderer's
@@ -3902,6 +4025,7 @@ function DesktopAppShell(props: {
     historyNav,
     starMap: starMapControls,
     threadTodos: threadTodosView,
+    threadTodoRevealRequest,
     findOpen: threadFindOpen,
     findInitialQuery: threadFindInitialQuery,
     findTurnId: threadFindTurnId,
@@ -4069,7 +4193,14 @@ function DesktopAppShell(props: {
   return (
     <FederationDisplayLabelsProvider health={liveFederationHealth}>
     <ThreadTodoCountsContext.Provider value={threadTodoController.openByThreadKey}>
-    <TodoDispatchProvider api={desktopApi} backends={backendSummaries.backends} todos={threadTodoController.openTodos}>
+    <ThreadTodoRevealContext.Provider value={threadTodosView ? revealThreadTodos : undefined}>
+    <TodoDispatchProvider
+      api={desktopApi}
+      backends={backendSummaries.backends}
+      backendsTarget={activeFederationTarget}
+      todos={threadTodoController.openTodos}
+      localCodexFastAllowed={props.settings.snapshot?.models?.codex.allowFast?.value ?? true}
+    >
     <OperatorWaitsContext.Provider value={operatorWaitsContext}>
     <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
     <ThreadProvidersContext.Provider value={threadProviders}>
@@ -4145,8 +4276,9 @@ function DesktopAppShell(props: {
             navigation.detachSubthreadLaunchpad(draft.directoryKey);
           }}
           addingProjectDirectory={navigation.pickingDirectory}
-          backends={backendSummaries.backends}
-          onRefreshRateLimits={backendSummaries.refreshRateLimits}
+          backends={windowBackendSummaries.backends}
+          remoteBackends={remoteSidebarBackends}
+          onRefreshRateLimits={windowBackendSummaries.refreshRateLimits}
           browseMode={navigation.browseMode}
           pinnedThreadsOnTop={navigation.pinnedThreadsOnTop}
           pinnedGroupCollapsed={navigation.pinnedGroupCollapsed}
@@ -4179,6 +4311,10 @@ function DesktopAppShell(props: {
           revealSelectedThreadRequest={revealSelectedThreadRequest}
           onRevealSelectedThreadComplete={threadJump.completePeekRestore}
           projectRevealRequest={projectRevealRequest}
+          projectIndexHidden={projectIndexHidden}
+          onProjectIndexHiddenChange={setProjectIndexHiddenPersisted}
+          projectIndexWidth={projectIndexWidth}
+          onProjectIndexWidthChange={setProjectIndexWidthPersisted}
           selectedItemKey={navigation.selectedItemKey}
           thinkingThreadKeys={session.thinkingThreadKeys}
           agentCommandThreadKeys={session.agentCommandThreadKeys}
@@ -4475,14 +4611,20 @@ function DesktopAppShell(props: {
               }
             >
               <InteractiveSvgPreferencesProvider value={interactiveSvgPreferences}>
-                <TerminalPreferencesProvider
-                  minimumContrast={
-                    settings.snapshot?.general.appearance.terminalMinimumContrast
-                      ?.value ?? false
+                <HtmlPreviewPreferencesProvider
+                  runScripts={
+                    settings.snapshot?.general.htmlPreviewRunScripts?.value ?? false
                   }
                 >
-                  <ThreadViewComponent {...threadViewProps} />
-                </TerminalPreferencesProvider>
+                  <TerminalPreferencesProvider
+                    minimumContrast={
+                      settings.snapshot?.general.appearance.terminalMinimumContrast
+                        ?.value ?? false
+                    }
+                  >
+                    <ThreadViewComponent {...threadViewProps} />
+                  </TerminalPreferencesProvider>
+                </HtmlPreviewPreferencesProvider>
               </InteractiveSvgPreferencesProvider>
             </MarkdownRenderingOptionsProvider>
           ) : null}
@@ -4701,6 +4843,7 @@ function DesktopAppShell(props: {
     </ThreadDependencyIndicatorsContext.Provider>
     </OperatorWaitsContext.Provider>
     </TodoDispatchProvider>
+    </ThreadTodoRevealContext.Provider>
     </ThreadTodoCountsContext.Provider>
     </FederationDisplayLabelsProvider>
   );

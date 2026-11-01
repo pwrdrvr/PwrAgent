@@ -89,6 +89,7 @@ import {
 } from "./StartingThreadRow";
 import { PendingThreadRow } from "./SubthreadDraftRow";
 import type { SubthreadLaunchpadDraft } from "../../lib/useThreadNavigation";
+import { jumpScrollPlan, jumpTailIsOffscreen } from "./project-index";
 
 /**
  * Scroll a project's section to the top of the lens, expanding it first.
@@ -100,10 +101,14 @@ import type { SubthreadLaunchpadDraft } from "../../lib/useThreadNavigation";
  * it was clicked from instead: it keeps that row in view, and flashes the
  * project's summary, because that click can also switch the lens and the
  * eye needs somewhere to land.
+ *
+ * A jump from the project index waits for nothing: it moves the list and
+ * leaves the selection alone, and flashes the summary for the same reason.
  */
 export type ProjectRevealRequest = {
   key: string;
   selectedThreadKey?: string;
+  jump?: true;
 };
 
 /** How long a header reveal outlines the project's summary. */
@@ -206,6 +211,11 @@ type DirectoriesListProps = {
     parent: NavigationThreadSummary,
     move: NavigationRelativeChildMove,
   ) => Promise<void>;
+  /** A thread dropped on another row becomes its sub-thread. */
+  onNestThread?: (
+    thread: NavigationThreadSummary,
+    parent: NavigationThreadSummary,
+  ) => void;
   onSetSubthreadsCollapsed?: (
     parent: NavigationThreadSummary,
     collapsed: boolean,
@@ -257,7 +267,8 @@ type DirectoryDrop =
   | { kind: "move"; anchorKey: string; placement: "before" | "after" }
   | { kind: "unpin" };
 
-function buildLaunchpadSelectionKey(directoryKey: string): string {
+/** The selection key of a project's launchpad. */
+export function buildLaunchpadSelectionKey(directoryKey: string): string {
   return `launchpad:${directoryKey}`;
 }
 
@@ -422,8 +433,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const directoryDropIndicator = useDropIndicatorController();
   const directoryListRef = useRef<HTMLDivElement>(null);
   const directoryDividerRef = useRef<HTMLDivElement>(null);
-  const directoryDragCancelRef = useRef<(() => void) | undefined>(undefined);
-  useEffect(() => () => directoryDragCancelRef.current?.(), []);
+  const directoryDragDisposeRef = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => () => directoryDragDisposeRef.current?.(), []);
   // The Directory threads disclosure is also a thread-pin drop target.
   // Suppress the click browsers synthesize immediately after a drop so
   // pinning a thread never also minimizes the section.
@@ -436,6 +447,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     dropIndicator,
     onReorderThreadPins: props.onReorderThreadPins,
     onSetThreadPin: props.onSetThreadPin,
+    onNestThread: props.onNestThread,
     onDrop: () => {
       lastDirectoryThreadDropAtRef.current = Date.now();
     },
@@ -444,6 +456,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const pointerDownSubthread = useSubthreadReorderDrag({
     threadByKey: threadsByKey,
     onUpdateSubthreadOrder: props.onUpdateSubthreadOrder,
+    onNestThread: props.onNestThread,
   });
 
   // Directory pinning (plan 2026-05-09-002 Unit K). Same shape as
@@ -494,6 +507,19 @@ export function DirectoriesList(props: DirectoriesListProps) {
     );
     return () => window.clearTimeout(timeout);
   }, [flashedProjectKey]);
+  // The blank tail a jump grows so a project near the end can reach the top.
+  // Written to the DOM directly, not through state: the jump scrolls in the
+  // same frame it grows the tail, and a re-render must not reset it.
+  const jumpTailRef = useRef<HTMLDivElement>(null);
+  const dropJumpTailOffscreen = (): void => {
+    const list = directoryListRef.current;
+    const tail = jumpTailRef.current;
+    if (!list || !tail || tail.offsetHeight === 0) return;
+    const viewportBottom = list.getBoundingClientRect().bottom;
+    if (jumpTailIsOffscreen(tail.getBoundingClientRect().top, viewportBottom)) {
+      tail.style.height = "";
+    }
+  };
 
   const pinnedDirectories = useMemo(
     () =>
@@ -571,9 +597,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
   useEffect(() => {
     const request = props.projectReveal;
     if (!request || handledProjectReveal.current === request
-      || props.selectedItemKey !== (
+      || (!request.jump && props.selectedItemKey !== (
         request.selectedThreadKey ?? buildLaunchpadSelectionKey(request.key)
-      )) return;
+      ))) return;
     const header = projectHeaders.current.get(request.key);
     if (!header) return;
     if (expandedByKey[request.key] !== true) {
@@ -588,7 +614,23 @@ export function DirectoriesList(props: DirectoriesListProps) {
       // edge while the project's threads are scrolled out above it. Reveal the
       // section's normal-flow start.
       const section = header.closest(".directory-row");
-      section?.scrollIntoView?.({ block: "start" });
+      const list = directoryListRef.current;
+      const tail = jumpTailRef.current;
+      if (request.jump && section && list && tail) {
+        // A jump lands the section at the top even near the end of the list,
+        // growing the tail by what the list is short.
+        const plan = jumpScrollPlan({
+          scrollTop: list.scrollTop,
+          blockTop: section.getBoundingClientRect().top - list.getBoundingClientRect().top,
+          scrollHeight: list.scrollHeight,
+          clientHeight: list.clientHeight,
+          tailHeight: tail.offsetHeight,
+        });
+        if (plan.tailHeight !== tail.offsetHeight) tail.style.height = `${plan.tailHeight}px`;
+        list.scrollTop = plan.scrollTop;
+      } else {
+        section?.scrollIntoView?.({ block: "start" });
+      }
       if (request.selectedThreadKey) {
         // Then bring the thread the reveal came from to the nearest edge.
         // The header is sticky, so it stays on screen wherever the section
@@ -600,6 +642,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
           ?.scrollIntoView?.({ block: "nearest" });
         setFlashedProjectKey(request.key);
       }
+      if (request.jump) setFlashedProjectKey(request.key);
       handledProjectReveal.current = request;
       props.onProjectRevealComplete?.();
     });
@@ -666,7 +709,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const header = event.currentTarget;
     const section = header.closest<HTMLElement>(".directory-row");
     if (event.button !== 0 || !list || !section || !props.onReorderDirectoryPins) return;
-    directoryDragCancelRef.current?.();
+    directoryDragDisposeRef.current?.();
     const scrollElement = header.closest<HTMLElement>(".sidebar-list--dense") ?? undefined;
     const sourcePinned = pinnedDirectoryKeys.includes(directory.key);
     const orderBeforeDrag = pinnedDirectoryKeys;
@@ -710,7 +753,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
         value: { kind: "move", anchorKey: keys[index], placement } };
     };
 
-    directoryDragCancelRef.current = beginPointerReorderDrag({
+    directoryDragDisposeRef.current = beginPointerReorderDrag({
       event,
       sourceElement: section,
       previewSource: header,
@@ -728,7 +771,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
         if (scrollElement) scrollElement.scrollTop += header.getBoundingClientRect().top - before;
       },
       onSettle: (dropped) => {
-        directoryDragCancelRef.current = undefined;
         // A drop keeps the folder it landed beside where it was on screen; a
         // cancel goes back to where the drag began.
         const anchor = dropped?.element;
@@ -1102,10 +1144,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
       // direct children reorder with `useSubthreadReorderDrag`, the same
       // pointer drag RecentsList uses.
       const directChildKeySet = new Set(directChildKeys);
-      const reorderable =
-        threadSupportsFederationCapability(parent, "thread_grouping")
-        && directChildKeys.length > 1
-        && Boolean(props.onUpdateSubthreadOrder);
+      // Any row in the tray drags to nest it under another row, a sole
+      // child or a grandchild too; only direct children also reorder.
+      const groupable = threadSupportsFederationCapability(parent, "thread_grouping");
+      const draggable = (childKey: string) => groupable
+        && (Boolean(props.onNestThread)
+          || (directChildKeySet.has(childKey) && directChildKeys.length > 1 && Boolean(props.onUpdateSubthreadOrder)));
       return (
         // `listitem` box because this list is a SIBLING of its parent row
         // rather than a child of it: `renderStaticSubthreads` is called from a
@@ -1157,7 +1201,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 directoryKey={directory.key}
                 parentThreadKey={parentKey}
                 revealThreadRowKey={revealThreadRowKey}
-                pointerDraggable={reorderable && directChildKeySet.has(childKey)}
+                pointerDraggable={draggable(childKey)}
                 includeLinkedDirectories
                 linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(child)}
                 nested
@@ -1169,7 +1213,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 agentCommandThreadKeys={props.agentCommandThreadKeys}
                 thread={child}
                 onPointerDownThread={
-                  reorderable && directChildKeySet.has(childKey) ? pointerDownSubthread : undefined
+                  draggable(childKey) ? pointerDownSubthread : undefined
                 }
                 onOpenContextMenu={props.onOpenThreadContextMenu}
                 onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
@@ -1217,8 +1261,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
     } = expandedThreadModel;
     // Starting threads, placed where the owner will put each one. A sub-thread
     // lands under its parent wherever that row renders. A top-level thread
-    // lands in its project: newest first among the unpinned rows, or pinned
-    // last when the project's unpinned rows are collapsed under pins (main
+    // lands in its project: newest first among the unpinned rows, or before
+    // ordinary pins when the project's unpinned rows are collapsed (main
     // pins it then so it stays visible), or beside the open transcript when
     // they are collapsed with nothing pinned.
     const renderedThreadKeys = new Set<string>();
@@ -1283,9 +1327,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
     // kept yet. With no ordinary pin loaded it would share the append
     // target's boundary; dropping on the last kept row's lower half keeps
     // there.
-    const keepAtTopSeamIndex = props.onReorderThreadPins
-      ? directoryPinnedThreads.findIndex((thread) => !isKeptAtTopThread(thread))
-      : -1;
+    const firstOrdinaryPinIndex = directoryPinnedThreads.findIndex((thread) => !isKeptAtTopThread(thread));
+    const startingPinnedIndex = firstOrdinaryPinIndex < 0 ? directoryPinnedThreads.length : firstOrdinaryPinIndex;
+    const keepAtTopSeamIndex = props.onReorderThreadPins ? firstOrdinaryPinIndex : -1;
     const renderUnpinnedRow = (
       thread: NavigationThreadSummary,
     ): ReactElement => {
@@ -1611,6 +1655,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                                   label={`Keep thread at top of pinned threads for ${directory.label}`}
                                 />
                               ) : null}
+                              {pinnedIndex === startingPinnedIndex ? renderStartingRootThreads("pinned") : null}
 	                        <ThreadRow
 	                          key={`${directory.key}:${threadKey}`}
                           approvalRequestThreadKeys={props.approvalRequestThreadKeys}
@@ -1669,7 +1714,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                             </Fragment>
 	                      );
                     })}
-                    {renderStartingRootThreads("pinned")}
+                    {startingPinnedIndex === directoryPinnedThreads.length ? renderStartingRootThreads("pinned") : null}
 
                     {renderPinnedAppendTarget ? (
                       <div
@@ -1786,7 +1831,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
       };
 
   return (
-    <div ref={directoryListRef} className="directory-list sidebar-list sidebar-list--dense">
+    <div
+      ref={directoryListRef}
+      className="directory-list sidebar-list sidebar-list--dense"
+      onScroll={dropJumpTailOffscreen}
+    >
       {unplacedStartingThreads.length > 0 ? (
         // No project or parent row this lens has loaded will take these, so
         // they wait at the top, the one place every lens can show them.
@@ -1818,6 +1867,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       ) : null}
       {unpinnedDirectories.map(renderDirectoryRow)}
       {props.footer}
+      <div ref={jumpTailRef} className="directory-list__jump-tail" aria-hidden="true" />
       {unavailableDirectoryTooltip.tooltipNode}
     </div>
   );

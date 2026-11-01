@@ -28,21 +28,24 @@ function writeConfig(body: string): string {
 }
 
 describe("readBootstrapLayoutPreferences", () => {
-  it("reads both preferences from the profile config", () => {
+  it("reads every preference from the profile config", () => {
     const configPath = writeConfig(
-      "[ui]\ncontext_rail_pinned = false\nsidebar_hidden = true\n",
+      "[ui]\ncontext_rail_pinned = false\nsidebar_hidden = true\n"
+        + "project_index_hidden = true\nproject_index_width = 132\n",
     );
     expect(readBootstrapLayoutPreferences(configPath)).toEqual({
       contextRailPinned: false,
       sidebarHidden: true,
+      projectIndexHidden: true,
+      projectIndexWidth: 132,
     });
   });
 
   it("falls back per key, so a config that sets one keeps the other's default", () => {
     const configPath = writeConfig("[ui]\ncontext_rail_pinned = false\n");
     expect(readBootstrapLayoutPreferences(configPath)).toEqual({
+      ...BOOTSTRAP_LAYOUT_DEFAULTS,
       contextRailPinned: false,
-      sidebarHidden: BOOTSTRAP_LAYOUT_DEFAULTS.sidebarHidden,
     });
   });
 
@@ -62,8 +65,13 @@ describe("readBootstrapLayoutPreferences", () => {
 });
 
 describe("the bootstrap argument", () => {
-  it("round-trips both preferences", () => {
-    const preferences = { contextRailPinned: false, sidebarHidden: true };
+  it("round-trips every preference", () => {
+    const preferences = {
+      contextRailPinned: false,
+      sidebarHidden: true,
+      projectIndexHidden: true,
+      projectIndexWidth: 118,
+    };
     expect(
       parseBootstrapLayoutPreferencesArg([
         serializeBootstrapLayoutPreferences(preferences),
@@ -74,15 +82,14 @@ describe("the bootstrap argument", () => {
   it("is the single argument the window contributes, under the shared prefix", () => {
     // The preload decodes by this prefix and cannot import this module, so
     // the prefix and the payload shape are the contract between them.
-    const args = layoutPreferencesAdditionalArguments({
-      contextRailPinned: true,
-      sidebarHidden: false,
-    });
+    const args = layoutPreferencesAdditionalArguments(BOOTSTRAP_LAYOUT_DEFAULTS);
     expect(args).toHaveLength(1);
     expect(args[0].startsWith(BOOTSTRAP_LAYOUT_ARG_PREFIX)).toBe(true);
     expect(JSON.parse(args[0].slice(BOOTSTRAP_LAYOUT_ARG_PREFIX.length))).toEqual({
       contextRailPinned: true,
       sidebarHidden: false,
+      projectIndexHidden: false,
+      projectIndexWidth: null,
     });
   });
 
@@ -101,6 +108,16 @@ describe("the bootstrap argument", () => {
         `${BOOTSTRAP_LAYOUT_ARG_PREFIX}{"sidebarHidden":"yes"}`,
       ]),
     ).toEqual(BOOTSTRAP_LAYOUT_DEFAULTS);
+  });
+
+  it("substitutes the natural width for a width that is not a positive number", () => {
+    for (const width of ['"wide"', "0", "-40"]) {
+      expect(
+        parseBootstrapLayoutPreferencesArg([
+          `${BOOTSTRAP_LAYOUT_ARG_PREFIX}{"projectIndexWidth":${width}}`,
+        ])?.projectIndexWidth,
+      ).toBeNull();
+    }
   });
 
   it("reports unparseable JSON as absent, like an argv carrying no hint", () => {

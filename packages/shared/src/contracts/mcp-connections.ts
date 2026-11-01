@@ -244,6 +244,17 @@ export type McpConnectionRecord = {
    * absent reads as `true`.
    */
   sandboxerCleanupOnPrClose?: boolean;
+  /**
+   * Present only on a connection to Linear's hosted MCP server: whether
+   * images in text pasted from Linear are attached to the message, read
+   * through this connection once their links expire. One profile-wide
+   * setting, so every Linear connection reports the same value as
+   * `ListMcpConnectionsResponse.linearPasteImages`.
+   *
+   * Absent on any other connection, and on an older owner broker's answer,
+   * which reads as `true` for a Linear connection.
+   */
+  linearPasteImages?: boolean;
   createdAt: number;
   updatedAt: number;
 };
@@ -318,6 +329,15 @@ export type ListMcpConnectionsRequest = {
 
 export type ListMcpConnectionsResponse = {
   connections: McpConnectionStatus[];
+  /**
+   * Whether images in text pasted from Linear are attached to the message.
+   * One profile-wide setting that holds with or without a Linear
+   * connection: a fresh signed link needs none.
+   *
+   * Only the local profile reports it. A peer's answer and an older owner's
+   * omit it, and the setting is not offered for them.
+   */
+  linearPasteImages?: boolean;
 };
 
 /**
@@ -394,6 +414,40 @@ export type SetMcpConnectionSelectForNewThreadsRequest = {
 export type SetSandboxerCleanupOnPrCloseRequest = {
   enabled: boolean;
 };
+
+/** See `McpConnectionRecord.linearPasteImages`. */
+export type SetLinearPasteImagesRequest = {
+  enabled: boolean;
+};
+
+/** Fetch the images in text pasted from Linear. */
+export type FetchLinearPastedImagesRequest = {
+  /** The pasted text. Only its `uploads.linear.app` images are read. */
+  text: string;
+};
+
+export type LinearPastedImageData = {
+  name: string;
+  mimeType: string;
+  dataBase64: string;
+};
+
+export type FetchLinearPastedImagesResponse =
+  | {
+    status: "fetched";
+    images: LinearPastedImageData[];
+    failed: number;
+    /** Some links had expired, and no Linear connection could read them. */
+    needsConnection?: boolean;
+  }
+  /** The Linear paste setting is off. */
+  | { status: "disabled" }
+  /**
+   * Every link had expired, and no Linear connection is offered to threads
+   * to read them.
+   */
+  | { status: "unavailable" }
+  | { status: "failed"; message: string };
 
 /** See `McpConnectionRecord.toolApproval`. */
 export type SetMcpConnectionToolApprovalRequest = {

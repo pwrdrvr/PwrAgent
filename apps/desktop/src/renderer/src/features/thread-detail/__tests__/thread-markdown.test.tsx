@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { MarkdownRenderingOptionsProvider } from "../../../lib/markdown-rendering-options";
 import { scopeDesktopApiToFederationTarget } from "../../../lib/federation-desktop-api";
 import { ThreadMarkdown } from "../ThreadMarkdown";
+import { HtmlPreviewPreferencesProvider } from "../../../lib/html-preview-preferences";
 import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-references";
 import { pressEscape, pressTab, walkTab } from "../../../test/tab-walk";
 
@@ -188,7 +189,10 @@ describe("ThreadMarkdown", () => {
 
       fireEvent.click(screen.getByRole("link", { name: "AGENTS.md" }));
 
-      expect(await screen.findByText("~/PwrAgent/AGENTS.md")).toBeInTheDocument();
+      // The folder is shown home-relative, and copies the full path.
+      const folder = await screen.findByRole("button", { name: "Copy path" });
+      expect(folder).toHaveTextContent(/^~\/PwrAgent$/);
+      expect(folder).toHaveAttribute("data-tooltip", "~/PwrAgent/AGENTS.md");
     } finally {
       windowWithHomeDir.__pwragentHomeDir = previousHomeDir;
     }
@@ -474,6 +478,23 @@ describe("ThreadMarkdown", () => {
     expect(openApplication).not.toHaveBeenCalled();
   });
 
+  it("opens Windows image links without consuming separators before punctuation", () => {
+    const onOpenImage = vi.fn();
+    const imagePart = {
+      type: "image" as const, url: "pwragent-image://file/cached",
+      sourceUrl: "file:///D:/work/.local/mockup.png",
+    };
+    render(<ThreadMarkdown
+      text={String.raw`[Preview](D:\work\.local\mockup.png)`}
+      imageParts={[imagePart]}
+      onOpenImage={onOpenImage}
+    />);
+    const link = screen.getByRole("link", { name: "Preview" });
+    expect(link).toHaveAttribute("href", imagePart.url);
+    fireEvent.click(link);
+    expect(onOpenImage).toHaveBeenCalledWith(imagePart);
+  });
+
   it.each([undefined, "File pull is disabled on the owning machine.", "The owning machine does not support file pull.", "Remote machine disconnected."])("keeps remote Markdown reads in the local modal: %s", async (error) => {
     const federationTarget = { scope: "remote" as const, instanceId: "owner" };
     const thread = { backend: "codex" as const, threadId: "owner-thread" };
@@ -490,6 +511,53 @@ describe("ThreadMarkdown", () => {
     else expect(await screen.findByRole("heading", { name: "Remote report" })).toBeInTheDocument();
     expect(readMarkdownFile).toHaveBeenCalledWith({ path: "/remote/report.md", thread, federationTarget });
     expect(openApplication).not.toHaveBeenCalled();
+  });
+
+  it("opens HTML file links in a sandboxed preview, honoring the scripts setting", async () => {
+    let navigate: ((event: { url: string }) => void) | undefined;
+    const readMarkdownFile = vi.fn(async (request: { path: string }) => ({
+      path: request.path,
+      content: request.path.endsWith("appendix.html")
+        ? "<h1>Appendix</h1>"
+        : '<h1>Brief</h1><a href="appendix.html">Appendix</a>',
+    }));
+
+    render(
+      <HtmlPreviewPreferencesProvider runScripts>
+        <ThreadMarkdown
+          desktopApi={{
+            readMarkdownFile,
+            readHtmlPreviewAssets: vi.fn(async () => ({ assets: [], skipped: [] })),
+            onHtmlPreviewNavigation: (callback) => {
+              navigate = callback;
+              return () => undefined;
+            },
+          }}
+          text="The brief is at [brief.html](/work/brief/brief.html)."
+        />
+      </HtmlPreviewPreferencesProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "brief.html" }));
+
+    expect(await screen.findByRole("dialog", { name: "HTML document: brief.html" }))
+      .toBeInTheDocument();
+    const frame = await screen.findByTitle("HTML preview: brief.html");
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.getAttribute("srcdoc")).toContain("<h1>Brief</h1>");
+    expect(screen.getByRole("button", { name: "Copy HTML" })).toBeInTheDocument();
+
+    const link = new URL("https://local-file.pwragent.invalid");
+    link.searchParams.set("path", "/work/brief/appendix.html");
+    act(() => navigate?.({ url: link.href }));
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+
+    expect(await screen.findByRole("dialog", { name: "HTML document: appendix.html" }))
+      .toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTitle("HTML preview: appendix.html").getAttribute("srcdoc"))
+        .toContain("<h1>Appendix</h1>");
+    });
   });
 
   it.each(["Markdown", "JSON"])("opens %s file links in a document modal and keeps the editor icon separate", async (kind) => {
@@ -1442,7 +1510,7 @@ describe("ThreadMarkdown", () => {
     expect(screen.queryByRole("button", { name: /Collapse quote/ })).not.toBeInTheDocument();
   });
 
-  it("renders markdown image syntax as literal text instead of an image", () => {
+  it("keeps external Markdown images inert", () => {
     const { container } = render(
       <ThreadMarkdown
         text={"Keep ![Transcript preview](https://example.com/preview.png) inert for now."}
@@ -1453,6 +1521,40 @@ describe("ThreadMarkdown", () => {
     expect(container.textContent).toContain(
       "![Transcript preview](https://example.com/preview.png)"
     );
+  });
+
+  it("hides materialized image markup while keeping missing references and code examples readable", () => {
+    const { container } = render(<ThreadMarkdown
+      text={"Here: ![Preview](/tmp/mockup.png)\n\n![Missing](/tmp/missing.png)\n\n`![Example](/tmp/mockup.png)`"}
+      imageParts={[{ type: "image", url: "pwragent-image://file/cached", sourceUrl: "file:///tmp/mockup.png" }]}
+    />);
+    expect(container.textContent).toContain("Here:");
+    expect(container.textContent).not.toContain("![Preview]");
+    expect(container.textContent).toContain("![Missing](/tmp/missing.png)");
+    expect(container.textContent).toContain("![Example](/tmp/mockup.png)");
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it.each([
+    { destination: "D:/a/PwrAgent/PwrAgent/.local/image-preview-worktree-YER6mT/mockup.png", sourceUrl: "file:///D:/a/PwrAgent/PwrAgent/.local/image-preview-worktree-YER6mT/mockup.png" },
+    { destination: String.raw`D:\a\PwrAgent\PwrAgent\.local\image-preview-worktree-YER6mT\mockup.png`, sourceUrl: "file:///D:/a/PwrAgent/PwrAgent/.local/image-preview-worktree-YER6mT/mockup.png" },
+    { destination: String.raw`D:\work\_private\mockup.png`, sourceUrl: "file:///D:/work/_private/mockup.png" },
+    { destination: String.raw`\\server\share\mockup.png`, sourceUrl: "file://server/share/mockup.png" },
+    { destination: String.raw`D:\a\PwrAgent\mockup.png`, sourceUrl: "file:///D:/a/PwrAgent/mockup.png" },
+    { destination: "D:%5Ca%5CPwrAgent%5Cmockup.png", sourceUrl: "file:///D:/a/PwrAgent/mockup.png" },
+    { destination: "D:/a/PwrAgent/mockup.png", sourceUrl: "file:///D:/a/PwrAgent/mockup.png" },
+    { destination: "file:///D:/a/PwrAgent/mockup.png", sourceUrl: "file:///D:/a/PwrAgent/mockup.png" },
+    { destination: "file://server/share/mockup.png", sourceUrl: "file://server/share/mockup.png" },
+    { destination: "file:///D:/a/mockup%20%2350%25.png", sourceUrl: "file:///D:/a/mockup%20%2350%25.png" },
+  ])("hides materialized Windows image markup for $destination", ({ destination, sourceUrl }) => {
+    const { container } = render(<ThreadMarkdown
+      text={`![Preview](${destination})\n\n![Missing](D:/a/missing.png)\n\n\`![Example](${destination})\``}
+      imageParts={[{ type: "image", url: "pwragent-image://file/cached", sourceUrl }]}
+    />);
+    expect(container.querySelectorAll(".thread-markdown__image-literal")).toHaveLength(1);
+    expect(container.querySelector(".thread-markdown__image-literal")?.textContent).toContain("![Missing]");
+    expect(container.textContent).toContain("![Example]");
+    expect(container.textContent).not.toContain("![Preview]");
   });
 
   it("renders wide review-style markdown tables with transcript table chrome", () => {

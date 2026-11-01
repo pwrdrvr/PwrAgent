@@ -468,6 +468,59 @@ ${PR_STATUS_FRAGMENT}`;
   return { query, variables };
 }
 
+/** A commit to look up PRs for: "which PR has this commit?" */
+export type CommitRef = {
+  owner: string;
+  repo: string;
+  sha: string;
+};
+
+/** Stable key for correlating a commit lookup back to its result. */
+export function commitRefKey(ref: CommitRef): string {
+  return `${ref.owner.toLowerCase()}/${ref.repo.toLowerCase()}@${ref.sha.toLowerCase()}`;
+}
+
+/**
+ * Build one aliased document that looks up the PRs associated with a commit.
+ * A commit GitHub has never seen answers `object: null`, which is an
+ * authoritative "no PRs", not a failure.
+ */
+export function buildCommitPrQuery(refs: CommitRef[]): {
+  query: string;
+  variables: Record<string, string | number>;
+} {
+  const variableDecls: string[] = [];
+  const selections: string[] = [];
+  const variables: Record<string, string | number> = {};
+
+  refs.forEach((ref, index) => {
+    const owner = `o${index}`;
+    const name = `n${index}`;
+    const sha = `s${index}`;
+    variableDecls.push(
+      `$${owner}: String!`,
+      `$${name}: String!`,
+      `$${sha}: GitObjectID!`,
+    );
+    selections.push(
+      `  r${index}: repository(owner: $${owner}, name: $${name}) {`
+      + ` object(oid: $${sha}) { ... on Commit {`
+      + ` associatedPullRequests(first: ${PRS_PER_BRANCH},`
+      + ` orderBy: { field: CREATED_AT, direction: DESC }) { nodes { ...PrStatus } } } } }`,
+    );
+    variables[owner] = ref.owner;
+    variables[name] = ref.repo;
+    variables[sha] = ref.sha;
+  });
+
+  const query = `query DiscoverPullRequestsByCommit(${variableDecls.join(", ")}) {
+${selections.join("\n")}
+}
+${PR_STATUS_FRAGMENT}`;
+
+  return { query, variables };
+}
+
 /** Map one GraphQL PullRequest node onto our shared PrSummary. */
 export function mapGraphqlPrNode(
   node: GraphqlPrNode,
@@ -864,6 +917,44 @@ export class GithubGraphqlPrClient {
   async fetchPullRequestsForBranches(
     refs: BranchRef[],
   ): Promise<Map<string, PrSummary[]>> {
+    return this.fetchAliasedPullRequestLists({
+      refs,
+      label: "branch PR lookup",
+      buildQuery: buildBranchPrQuery,
+      keyFor: branchRefKey,
+      readNodes: (repository) =>
+        (repository as { pullRequests?: { nodes?: (GraphqlPrNode | null)[] | null } | null })
+          .pullRequests?.nodes,
+    });
+  }
+
+  /**
+   * Look up the PRs associated with each commit, batched across repos. Same
+   * keyed contract as `fetchPullRequestsForBranches`, keyed by `commitRefKey`.
+   */
+  async fetchPullRequestsForCommits(
+    refs: CommitRef[],
+  ): Promise<Map<string, PrSummary[]>> {
+    return this.fetchAliasedPullRequestLists({
+      refs,
+      label: "commit PR lookup",
+      buildQuery: buildCommitPrQuery,
+      keyFor: commitRefKey,
+      readNodes: (repository) =>
+        (repository as {
+          object?: { associatedPullRequests?: { nodes?: (GraphqlPrNode | null)[] | null } | null } | null;
+        }).object?.associatedPullRequests?.nodes,
+    });
+  }
+
+  private async fetchAliasedPullRequestLists<R extends Pick<BranchRef, "owner" | "repo">>(params: {
+    refs: R[];
+    label: string;
+    buildQuery: (refs: R[]) => { query: string; variables: Record<string, string | number> };
+    keyFor: (ref: R) => string;
+    readNodes: (repository: object) => (GraphqlPrNode | null)[] | null | undefined;
+  }): Promise<Map<string, PrSummary[]>> {
+    const { refs } = params;
     const results = new Map<string, PrSummary[]>();
     if (refs.length === 0) {
       return results;
@@ -871,21 +962,21 @@ export class GithubGraphqlPrClient {
     const bypassFailureBackoff = this.consumeReconnectBypass();
     if (
       !bypassFailureBackoff
-      && this.deferForFailureBackoff("branch PR lookup")
+      && this.deferForFailureBackoff(params.label)
     ) {
       return results;
     }
     const token = await this.resolveToken();
     if (!token) {
       this.reconnectBypassAvailable ||= bypassFailureBackoff;
-      graphqlLog.debug("skipping branch PR lookup: no GitHub token from gh");
+      graphqlLog.debug(`skipping ${params.label}: no GitHub token from gh`);
       return results;
     }
 
     let bypassNextBatchBackoff = bypassFailureBackoff;
     for (const batch of chunk(refs, this.batchSize)) {
       const data = await this.runBatchQuery(
-        buildBranchPrQuery(batch),
+        params.buildQuery(batch),
         token,
         batch.length,
         batch,
@@ -896,14 +987,11 @@ export class GithubGraphqlPrClient {
         continue;
       }
       const answers = batch.map((ref, index) => {
-        const repository = data[`r${index}`] as
-          | { pullRequests?: { nodes?: (GraphqlPrNode | null)[] | null } | null }
-          | null
-          | undefined;
+        const repository = data[`r${index}`] as object | null | undefined;
         return {
           ref,
           repository,
-          nodes: (repository?.pullRequests?.nodes ?? []).filter(
+          nodes: ((repository ? params.readNodes(repository) : undefined) ?? []).filter(
             (node): node is GraphqlPrNode => Boolean(node),
           ),
         };
@@ -924,7 +1012,7 @@ export class GithubGraphqlPrClient {
           return;
         }
         results.set(
-          branchRefKey(ref),
+          params.keyFor(ref),
           nodes.map((node) => mapGraphqlPrNode(node, checkResolutions.get(node)!)),
         );
       });

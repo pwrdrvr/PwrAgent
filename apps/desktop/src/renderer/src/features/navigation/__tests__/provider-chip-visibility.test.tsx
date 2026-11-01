@@ -146,6 +146,8 @@ const launchpad = {
 } as PendingLaunchpadCreation["launchpad"];
 
 const startingCreation: PendingLaunchpadCreation = {
+  operationId: "startup-1",
+  submittedAt: 1_000,
   selectionKey: "starting-launchpad:1",
   directoryKey: PROJECT_KEY,
   directoryLabel: "PwrSnap",

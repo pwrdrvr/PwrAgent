@@ -3054,7 +3054,7 @@ describe("ThreadView", () => {
     expect(screen.getByLabelText("Preparing transcript")).toHaveTextContent(
       "Running the PwrSnap setup first.",
     );
-    const setupRow = screen.getByLabelText("Env setup running");
+    const setupRow = screen.getByLabelText("Thread startup running");
     expect(setupRow.closest(".composer__band")).not.toBeNull();
     expect(screen.queryByLabelText("Env setup output")).not.toBeInTheDocument();
     fireEvent.click(within(setupRow).getByRole("button", { expanded: false }));
@@ -3882,6 +3882,7 @@ describe("ThreadView", () => {
       },
       selectedLaunchpad: launchpad,
       pendingLaunchpadCreation: {
+        operationId: "startup-1", submittedAt: 1_000,
         selectionKey: "starting-launchpad:1", directoryKey: launchpad.directoryKey,
         directoryLabel: launchpad.directoryLabel, launchpad, composerScopeKey,
         setupProgressKey: "starting-launchpad:1",
@@ -4099,6 +4100,7 @@ describe("ThreadView", () => {
           prompt: "Inspect this screenshot", workMode: "worktree", createdAt: 1, updatedAt: 1,
         }}
         pendingLaunchpadCreation={{
+          operationId: "startup-1", submittedAt: 1_000,
           selectionKey: "starting-launchpad:1", directoryKey: "directory:/repo",
           directoryLabel: "Example",
           launchpad: {
@@ -7906,19 +7908,26 @@ describe("ThreadView", () => {
     }
   });
 
-  it("persists the environment failure dismissal when continuing anyway", async () => {
+  it.each(["owner-turn", undefined])("continues a remote environment launch without a viewer-local prompt (turn: %s)", async (turnId) => {
     const acknowledgeThreadEnvironmentFailure = vi.fn(async () => ({
       acknowledged: true,
       backend: "codex" as const,
       threadId: "thread-env-failure",
     }));
 
+    const continueThreadEnvironmentStartup = vi.fn(async () => ({
+      backend: "codex" as const, threadId: "thread-env-failure", turnId,
+    }));
+    const onActiveTurnIdChange = vi.fn();
+    const onPendingStatusChange = vi.fn();
     render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
         backends={[]}
         composerDisabled={false}
-        desktopApi={{ acknowledgeThreadEnvironmentFailure }}
+        desktopApi={{ acknowledgeThreadEnvironmentFailure, continueThreadEnvironmentStartup }}
+        onActiveTurnIdChange={onActiveTurnIdChange}
+        onPendingStatusChange={onPendingStatusChange}
         loading={false}
         loadingMore={false}
         messageCount={0}
@@ -7935,6 +7944,7 @@ describe("ThreadView", () => {
             executionTarget: "local",
             setupStatus: "failed",
           },
+          federation: { ref: { backend: "codex", threadId: "thread-env-failure", target: { scope: "remote", instanceId: "windows-owner" } }, instanceLabel: "Windows" },
           linkedDirectories: [],
           inbox: { inInbox: true, reason: "new-thread" },
         }}
@@ -7946,18 +7956,77 @@ describe("ThreadView", () => {
       />
     );
 
-    // No optimistic prompt to send, so this is the pure-dismissal branch.
+    // Another viewer does not have the creating window's optimistic prompt.
     fireEvent.click(screen.getByRole("button", { name: "Continue anyway" }));
 
     await waitFor(() => {
-      expect(acknowledgeThreadEnvironmentFailure).toHaveBeenCalledWith({
+      expect(continueThreadEnvironmentStartup).toHaveBeenCalledWith({
         backend: "codex",
         threadId: "thread-env-failure",
+        federationTarget: { scope: "remote", instanceId: "windows-owner" },
       });
+      expect(onActiveTurnIdChange).toHaveBeenCalledWith(turnId);
+      if (!turnId) expect(onPendingStatusChange).toHaveBeenLastCalledWith(undefined);
     });
+    expect(acknowledgeThreadEnvironmentFailure).not.toHaveBeenCalled();
     expect(
       screen.queryByRole("button", { name: "Continue anyway" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("keeps the startup decision visible when the original request is unavailable", async () => {
+    const acknowledgeThreadEnvironmentFailure = vi.fn(async () => ({
+      acknowledged: true,
+      backend: "codex" as const,
+      threadId: "thread-env-failure",
+    }));
+
+    const continueThreadEnvironmentStartup = vi.fn(async () => {
+      throw new Error("The original request is unavailable. Send your prompt again to start this thread.");
+    });
+    const onActiveTurnIdChange = vi.fn();
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{ acknowledgeThreadEnvironmentFailure, continueThreadEnvironmentStartup }}
+        onActiveTurnIdChange={onActiveTurnIdChange}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedThread={{
+          id: "thread-env-failure",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          source: "codex",
+          executionMode: "full-access",
+          updatedAt: Date.now(),
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgent",
+            executionTarget: "local",
+            setupStatus: "failed",
+          },
+          federation: { ref: { backend: "codex", threadId: "thread-env-failure", target: { scope: "remote", instanceId: "windows-owner" } }, instanceLabel: "Windows" },
+          linkedDirectories: [],
+          inbox: { inInbox: true, reason: "new-thread" },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    // Another viewer does not have the creating window's optimistic prompt.
+    fireEvent.click(screen.getByRole("button", { name: "Continue anyway" }));
+
+    await screen.findByText("The original request is unavailable. Send your prompt again to start this thread.");
+    expect(acknowledgeThreadEnvironmentFailure).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Continue anyway" })).toBeInTheDocument();
+    expect(onActiveTurnIdChange).not.toHaveBeenCalledWith("owner-turn");
   });
 
   it("retires a stale environment failure once the thread's transcript has loaded", async () => {

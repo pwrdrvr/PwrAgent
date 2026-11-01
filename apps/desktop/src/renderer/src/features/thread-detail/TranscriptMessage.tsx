@@ -12,6 +12,7 @@ import {
   hasDurableSubAgentTranscript,
   isCodexNativeSubAgent,
   parseCodexAsyncQuestionReply,
+  parseLinearPaste,
   parseThreadCorrespondenceMessage,
   stripCodexGitActionDirectives,
   summarizeThreadDependencyPrompt,
@@ -25,6 +26,7 @@ import type {
   AppServerThreadMessageEntry,
   AppServerThreadMessageOrigin,
   AppServerThreadMessagePart,
+  LinearPasteLayout,
   MarkdownFileViewerContext,
   ThreadCorrespondenceState,
   ThreadSubAgentSummary,
@@ -45,6 +47,7 @@ import {
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { AsyncQuestionCard } from "./AsyncQuestionCard";
+import { LinearPasteMessage } from "./LinearPasteMessage";
 import { ThreadChip } from "./ThreadChip";
 import { TranscriptImage } from "./TranscriptImage";
 import { renderMarkdownToClipboardHtml } from "./markdown-clipboard-html";
@@ -182,9 +185,18 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
     );
     return parts.length > 0 ? parts : EMPTY_IMAGE_PARTS;
   }, [contentParts]);
+  // Text pasted from Linear is the operator's own, so only user messages
+  // are laid out as an issue.
+  const linearPaste = props.message.role === "user";
   const messageSegments = useMemo(
-    () => groupMessageParts(contentParts).flatMap(splitMarkdownTableSegment),
-    [contentParts],
+    () => groupMessageParts(contentParts).flatMap((segment): MessagePartSegment[] => {
+      // An issue renders as one piece; a table split would cut its wrapper.
+      const layout = linearPaste && segment.type === "text"
+        ? parseLinearPaste(segment.part.text)
+        : undefined;
+      return layout ? [{ type: "linear", layout }] : splitMarkdownTableSegment(segment);
+    }),
+    [contentParts, linearPaste],
   );
   const [monitorExpanded, setMonitorExpanded] = useState(false);
   const [voiceContextExpanded, setVoiceContextExpanded] = useState(false);
@@ -699,6 +711,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
 TranscriptMessage.displayName = "TranscriptMessage";
 
 type MessagePartSegment =
+  | { type: "linear"; layout: LinearPasteLayout }
   | { type: "text"; part: AppServerThreadTextPart }
   | { type: "table"; text: string; wide: boolean }
   | { type: "files"; parts: AppServerThreadFilePart[]; startIndex: number }
@@ -1026,9 +1039,9 @@ function renderMessageSegment(params: {
     );
   }
 
-  return (
+  const renderMarkdown = (text: string, key: string): ReactNode => (
     <ThreadMarkdown
-      key={`text:${params.index}`}
+      key={key}
       applications={params.applications}
       className="transcript-message__text-block"
       desktopApi={params.desktopApi}
@@ -1036,9 +1049,22 @@ function renderMessageSegment(params: {
       imageParts={params.imageParts}
       onOpenImage={params.onOpenImage}
       skills={params.skills}
-      text={params.segment.type === "table" ? params.segment.text : params.segment.part.text}
+      text={text}
       threadLinkSource={params.threadLinkSource}
     />
+  );
+  if (params.segment.type === "linear") {
+    return (
+      <LinearPasteMessage
+        key={`linear:${params.index}`}
+        layout={params.segment.layout}
+        renderMarkdown={renderMarkdown}
+      />
+    );
+  }
+  return renderMarkdown(
+    params.segment.type === "table" ? params.segment.text : params.segment.part.text,
+    `text:${params.index}`,
   );
 }
 
@@ -1264,7 +1290,7 @@ function renderMessageHeader(params: {
           />
         ) : null}
         {params.message.createdAt ? (
-          <time className="transcript-message__time">
+          <time className="transcript-message__time tooltip-target" dateTime={new Date(params.message.createdAt).toISOString()} data-tooltip={new Date(params.message.createdAt).toISOString()}>
             {new Intl.DateTimeFormat(undefined, {
               month: "short",
               day: "numeric",

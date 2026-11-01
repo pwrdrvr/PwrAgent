@@ -237,9 +237,24 @@ describe("public GitHub reads", () => {
   it("suppresses API debug and sanitizes bounded subprocess failures", () => {
     const io = runtime([{ status: 1, stdout: "", stderr: "private raw details", error: new Error("private raw details") }]);
     io.env.GH_DEBUG = "api";
-    expect(() => ghJson("repos/public/source?private-query", false, null, io)).toThrow("HTTP unavailable");
+    expect(() => ghJson("repos/public/source?private-query", false, null, io)).toThrow("gh subprocess failed");
     expect(io.calls[0][2]).toMatchObject({ timeout: 45_000, env: { GH_DEBUG: "" } });
     expect(() => ghJson("repos/public/source", false, null, runtime([{ status: 0, stdout: "HTTP/2.0 200\r\n\r\nnot-json" }]))).toThrow(/Malformed/);
+  });
+
+  it.each([
+    ["ENOENT", "gh executable not found on PATH"],
+    ["EACCES", "gh executable is not executable"],
+    ["ETIMEDOUT", "gh command timed out"],
+    ["ENOBUFS", "gh response exceeded the output buffer"],
+    ["UNKNOWN", "gh subprocess failed"],
+  ])("distinguishes %s from HTTP failures without exposing raw diagnostics or retrying", (code, reason) => {
+    const io = runtime([{ status: null, stdout: "", stderr: "private raw details HTTP 404",
+      error: Object.assign(new Error("private raw details"), { code }) }]);
+    expect(() => ghJson("repos/public/source?private-query", true, null, io))
+      .toThrow(`GitHub CLI at repos/public/source: ${reason}; read incomplete, do not infer absence`);
+    expect(io.calls).toHaveLength(1);
+    expect(io.waits).toEqual([]);
   });
 });
 

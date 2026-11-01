@@ -15,6 +15,8 @@ const sources = new Set([
   "scripts/release/install-trusted-signing.ps1",
   "scripts/release/archive-windows-signing-input.ps1",
   "apps/desktop/package.json",
+  "packages/pwragent/package.json",
+  "packages/pwragent/scripts/release.mjs",
   "apps/desktop/electron-builder.yml",
   ".github/workflows/ci.yml",
   ".github/workflows/release.yml",
@@ -60,6 +62,17 @@ test("accepts the current packaging contract with Linux naming delegated to its 
   expect(result.status, result.stderr).toBe(0);
 });
 
+test("rejects Outpost version or npm channel drift from the desktop authority", () => {
+  for (const change of [{ version: "0.1.0-alpha.1" }, { publishConfig: { access: "public", registry: "https://registry.npmjs.org", tag: "next" } }]) {
+    const root = fixture();
+    const file = join(root, "packages/pwragent/package.json");
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), ...change }));
+    const result = check(root);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Outpost release metadata");
+  }
+});
+
 test.each(
   ["sign", "linux-package", "windows-prepare"].flatMap((job) =>
     ["lint", "test"].map((dependency) => ({ job, dependency })),
@@ -76,6 +89,72 @@ test.each(
   expect(result.status).toBe(1);
   expect(result.stderr).toContain(`${job} must depend on ${dependency}`);
 });
+
+test.each([
+  ...["install-deps", "lint", "test"].map((job) => ({ file: "release.yml", job })),
+  { file: "ci.yml", job: "macos-install-deps" },
+  { file: "ci.yml", job: "test-macos" },
+  { file: "preview-build.yml", job: "preview" },
+])("rejects GitHub-hosted Mac compute in $file $job", ({ file, job }) => {
+  const root = fixture();
+  const path = `.github/workflows/${file}`;
+  const source = readFileSync(join(root, path), "utf8");
+  const body = source.split(`\n  ${job}:\n`)[1].split(/\n  [A-Za-z0-9_-]+:\n/)[0];
+  const hosted = body.replace("runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]", "runs-on: macos-26");
+  expect(hosted).not.toBe(body);
+  replace(root, path, body, hosted);
+  const result = check(root);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(`${job} must run on [self-hosted, macOS, ARM64, pwrdrvr-macos]`);
+});
+
+test("rejects a release dependency install that loses the persistent store", () => {
+  const root = fixture();
+  replace(root, ".github/workflows/release.yml", "          persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}\n", "");
+  const result = check(root);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("persistent-store-dir");
+});
+
+test.each(["prepare", "sign"])("rejects self-hosted macOS %s", (job) => {
+  const root = fixture();
+  const path = ".github/workflows/release.yml";
+  const workflow = readFileSync(join(root, path), "utf8");
+  const body = workflow.split(`\n  ${job}:\n`)[1].split(/\n  [A-Za-z0-9_-]+:\n/)[0];
+  replace(root, path, body, body.replace("runs-on: macos-26", "runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]"));
+  const result = check(root);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(`${job} must run on macos-26`);
+});
+
+test.each(["windows-sign", "publish-release-assets", "publish-release-notes"])(
+  "rejects %s without explicit runtime-only Node setup",
+  (job) => {
+    const root = fixture();
+    const path = ".github/workflows/release.yml";
+    const workflow = readFileSync(join(root, path), "utf8");
+    const body = workflow.split(`\n  ${job}:\n`)[1].split(/\n  [A-Za-z0-9_-]+:\n/)[0];
+    const runtime = body.match(/      - name: Set up Node\.js runtime only\n[\s\S]*?(?=      - )/)[0];
+    replace(root, path, body, body.replace(runtime, ""));
+    const result = check(root);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`${job} Set up Node.js runtime only must contain`);
+  },
+);
+
+test.each(["windows-sign", "publish-release-assets", "publish-release-notes"])(
+  "rejects %s enabling package-manager caching in runtime-only setup",
+  (job) => {
+    const root = fixture();
+    const path = ".github/workflows/release.yml";
+    const workflow = readFileSync(join(root, path), "utf8");
+    const body = workflow.split(`\n  ${job}:\n`)[1].split(/\n  [A-Za-z0-9_-]+:\n/)[0];
+    replace(root, path, body, body.replace("package-manager-cache: false", "package-manager-cache: true"));
+    const result = check(root);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`${job} Set up Node.js runtime only must contain "package-manager-cache: false"`);
+  },
+);
 
 test("rejects a release test matrix that omits half the suite", () => {
   const root = fixture();

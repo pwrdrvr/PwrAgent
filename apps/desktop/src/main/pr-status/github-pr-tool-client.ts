@@ -96,6 +96,18 @@ export class GithubPrToolClient {
     tempRoots?: string[];
   }) {}
 
+  /** Whether `head` is a branch of the repository. Undefined for a fork's head or when GitHub cannot say. */
+  async headBranchExists(r: ForgeRepository, head: string, signal?: AbortSignal): Promise<boolean | undefined> {
+    if (r.provider !== "github" || head.includes(":")) return undefined;
+    const ref = head.split("/").map(encodeURIComponent).join("/");
+    try {
+      await this.options.ci.requestGithub(r, { path: `repos/${encodeURIComponent(r.owner)}/${encodeURIComponent(r.repo)}/git/ref/heads/${ref}` }, signal);
+      return true;
+    } catch (error) {
+      return error instanceof ForgeReadError && error.code === "not_found" ? false : undefined;
+    }
+  }
+
   async execute(operation: ForgePrToolOperation, args: ForgePrToolArgs, ctx: ForgePrToolContext): Promise<unknown> {
     const r = ctx.repository;
     if (r.provider !== "github") throw new ForgeReadError("unsupported_provider", "This tool supports GitHub and GitHub Enterprise repositories. GitLab supports the CI read tools.");
@@ -115,6 +127,11 @@ export class GithubPrToolClient {
     const paging = new URLSearchParams({ page: String(page), per_page: String(perPage) });
     const done = <T extends Record<string, unknown>>(result: T) => ({ repository: r, source: "provider", fetchedAt: Date.now(), providerRequests, ...result });
     const pageInfo = (rows: unknown[]) => ({ page, perPage, nextPage: rows.length >= perPage ? page + 1 : null });
+
+    if (operation === "rerun_failed_ci_jobs") {
+      await call("POST", `/actions/runs/${args.runId}/rerun-failed-jobs`);
+      return done({ requested: true, runId: args.runId, scope: "failed_jobs_and_dependents", url: `${repositoryUrl(r)}/actions/runs/${args.runId}` });
+    }
 
     const resolvePullRequestNumber = async (): Promise<number> => {
       if (args.number) return args.number;

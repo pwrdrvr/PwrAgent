@@ -1,19 +1,23 @@
 import type {
   DirectorySummaryKind,
   LinkedDirectorySummary,
+  ProjectRepositoryIdentity,
   ThreadTodoProject,
 } from "@pwragent/shared";
 import {
   canonicalizeNavigationPath,
   classifyDirectory,
+  findPeerCounterpartDirectory,
 } from "@pwragent/shared";
 
 /** One row of the Directories lens, as the directory-index query lists it. */
-export type ThreadTodoProjectCandidate = {
+export type ThreadTodoProjectCandidate = ProjectRepositoryIdentity & {
   key: string;
   label: string;
   kind: DirectorySummaryKind;
   path?: string;
+  /** Listed only because a thread names it: no checkout to start in. */
+  localAvailability?: "unconfigured";
 };
 
 export type ThreadTodoProjectMatch =
@@ -167,20 +171,50 @@ export function threadTodoProjectForDirectory(
 }
 
 /**
- * A peer's copy of a project, matched by label and then by folder name: a
- * peer keys its projects by its own paths, so a key never matches across
- * machines.
+ * The repository a card's project clones, read from this machine's own row
+ * for it. The card stores only key, label and path, and a key is a path on
+ * this machine, so the row is found by key and then by path.
  */
-export function findPeerThreadTodoProject(
+export function threadTodoProjectIdentity(
   project: ThreadTodoProject,
   candidates: readonly ThreadTodoProjectCandidate[],
+): ThreadTodoProject & ProjectRepositoryIdentity {
+  const row = candidates.find((candidate) => candidate.key === project.key)
+    ?? candidates.find((candidate) =>
+      candidate.path !== undefined && samePath(candidate.path, project.path, false));
+  return {
+    ...project,
+    ...(row?.repositoryKey ? { repositoryKey: row.repositoryKey } : {}),
+    ...(row?.repositoryKeys?.length ? { repositoryKeys: row.repositoryKeys } : {}),
+  };
+}
+
+/**
+ * Another machine's copy of a project, by the rule every cross-machine
+ * project match uses (`findPeerCounterpartDirectory`): the same origin, then
+ * a shared fetch remote, then the name when either side has no remote. So
+ * `~/src/PwrAgnt` here finds `C:\src\PwrAgent` there when both clone
+ * `github.com/pwrdrvr/pwragent`. A peer keys its projects by its own paths,
+ * so a key never matches across machines.
+ */
+export function findPeerThreadTodoProject(
+  project: ThreadTodoProject & ProjectRepositoryIdentity,
+  candidates: readonly ThreadTodoProjectCandidate[],
 ): ThreadTodoProjectCandidate | undefined {
-  const label = project.label.toLowerCase();
-  const folder = basename(project.path).toLowerCase();
-  const directories = candidates.filter((candidate) => candidate.kind === "directory");
-  return directories.find((candidate) => candidate.label.toLowerCase() === label)
-    ?? directories.find((candidate) =>
-      candidate.path !== undefined && basename(candidate.path).toLowerCase() === folder);
+  // A peer's request names the project, so keep only well-formed keys.
+  const repositoryKey = typeof project.repositoryKey === "string" && project.repositoryKey
+    ? project.repositoryKey
+    : undefined;
+  const repositoryKeys = Array.isArray(project.repositoryKeys)
+    ? project.repositoryKeys.filter((key): key is string => typeof key === "string" && key.length > 0)
+    : [];
+  return findPeerCounterpartDirectory({
+    kind: "directory",
+    label: project.label,
+    path: project.path,
+    ...(repositoryKey ? { repositoryKey } : {}),
+    ...(repositoryKeys.length ? { repositoryKeys } : {}),
+  }, candidates);
 }
 
 function basename(path: string): string {

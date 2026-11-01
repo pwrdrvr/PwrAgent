@@ -88,7 +88,7 @@ describe("checklist progress", () => {
     expect(threadTodoItemProgress({ items: [
       { id: "a", text: "Tests", checked: true },
       { id: "b", text: "Docs", checked: false },
-    ] })).toEqual({ checked: 1, total: 2 });
+    ] })).toEqual({ checked: 1, total: 2, noun: "steps" });
     expect(threadTodoOpenItems({ items: [
       { id: "a", text: "Tests", checked: true },
       { id: "b", text: "Docs", checked: false },
@@ -118,13 +118,17 @@ describe("prerequisites", () => {
     expect(mergeThreadTodoItems(items, ["Test"], counter())).toEqual([items[0], items[2]]);
   });
 
-  it("block a handoff alone, and leave the progress count to the steps", () => {
+  it("block a handoff alone, and are what a handoff's progress counts", () => {
     const handoff = { items, action: { type: "start_thread" as const, prompt: "Go" } };
     expect(threadTodoBlockingItems(handoff)).toEqual([items[0]]);
     expect(threadTodoBlockingItems({ items })).toEqual([items[0], items[1]]);
     expect(threadTodoBlockingItems({ ...handoff, items: items.slice(1) })).toEqual([]);
-    expect(threadTodoItemProgress({ items })).toEqual({ checked: 1, total: 2 });
+    // Any other card counts its steps and leaves prerequisites out.
+    expect(threadTodoItemProgress({ items })).toEqual({ checked: 1, total: 2, noun: "steps" });
     expect(threadTodoItemProgress({ items: [items[0]!] })).toBeUndefined();
+    // A handoff's steps are the new thread's plan, which nothing ticks.
+    expect(threadTodoItemProgress(handoff)).toEqual({ checked: 0, total: 1, noun: "prerequisites" });
+    expect(threadTodoItemProgress({ ...handoff, items: items.slice(1) })).toBeUndefined();
     expect(threadTodoItemNoun([items[0]!])).toBe("prerequisite");
     expect(threadTodoItemNoun([items[0]!, items[0]!])).toBe("prerequisites");
     expect(threadTodoItemNoun([items[0]!, items[1]!])).toBe("steps");

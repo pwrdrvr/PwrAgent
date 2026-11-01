@@ -38,6 +38,28 @@ describe("operator queue owner identity", () => {
     await waitFor(() => expect(api.listOperatorRequests).toHaveBeenCalledTimes(3));
   });
 
+  it("updates owner-qualified titles without replacing unchanged waits", async () => {
+    const { api, changed } = fixture();
+    let localTitle = "Local build";
+    api.listOperatorRequests.mockImplementation(async () => ({
+      serverRequests: [], seenKeys: [], questions: [
+        { ...question, threadTitle: localTitle },
+        { ...question, federationTarget: target, threadTitle: "Remote build" },
+      ],
+    }));
+    const { result } = renderHook(() => useOperatorRequests(api));
+    await waitFor(() => expect(result.current.waits).toHaveLength(2));
+    const original = result.current.waits;
+    await act(async () => changed({ reason: "seen" }));
+    expect(result.current.waits).toBe(original);
+    localTitle = "Renamed local build";
+    await act(async () => changed({ reason: "requests", backend: "codex", threadId: "same" }));
+    expect(result.current.waits).not.toBe(original);
+    expect(result.current.waitsByThreadKey.get("codex:same")?.[0]?.threadTitle).toBe(localTitle);
+    expect(result.current.waitsByThreadKey.get(threadTodoThreadKey({ ...question, federationTarget: target }))?.[0]?.threadTitle)
+      .toBe("Remote build");
+  });
+
   it("does not resubmit a rejected seen batch from a focused panel, refetch, or focus event", async () => {
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     const { api, changed } = fixture();
@@ -105,5 +127,30 @@ describe("operator queue owner identity", () => {
     const { result } = renderHook(() => useOperatorRequests(api));
     await waitFor(() => expect(result.current.error).toBe("Update that PwrAgent instance."));
     expect(result.current.ready).toBe(false);
+  });
+});
+
+describe("operator queue refresh", () => {
+  it("resolves only after a read that started after the call", async () => {
+    const { api } = fixture();
+    const reads: Array<() => void> = [];
+    api.listOperatorRequests.mockImplementation(() => new Promise((resolve) => {
+      reads.push(() => resolve({ serverRequests: [], seenKeys: [], questions: [] }));
+    }));
+    const { result } = renderHook(() => useOperatorRequests(api));
+    // The mount's read is in flight; a refresh must not settle on it.
+    await waitFor(() => expect(reads).toHaveLength(1));
+    let settled = false;
+    let refreshed!: Promise<void>;
+    act(() => {
+      refreshed = result.current.refresh().then(() => { settled = true; });
+    });
+    await act(async () => reads[0]!());
+    await waitFor(() => expect(reads).toHaveLength(2));
+    expect(settled).toBe(false);
+    await act(async () => reads[1]!());
+    await refreshed;
+    expect(settled).toBe(true);
+    expect(api.listOperatorRequests).toHaveBeenCalledTimes(2);
   });
 });

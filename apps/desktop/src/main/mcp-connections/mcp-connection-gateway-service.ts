@@ -476,6 +476,7 @@ function callbackHtmlHeaders(): Record<string, string> {
 }
 
 export class McpConnectionGatewayService {
+  private readonly consentEpoch = randomBytes(32).toString("base64url");
   private readonly readGatewaySelection: NonNullable<McpConnectionGatewayServiceOptions["readGatewaySelection"]>;
   private readonly bridgeEntryPath: string;
   private readonly fetchFn: FetchLike;
@@ -1365,6 +1366,50 @@ export class McpConnectionGatewayService {
     }
     const connection = this.registry.setSandboxerCleanupOnPrClose(enabled);
     return this.announced(await this.connectionStatus(connection));
+  }
+
+  /**
+   * Choose whether images in text pasted from Linear are fetched through a
+   * Linear connection. Nothing live changes: the next paste reads it.
+   */
+  async setLinearPasteImages(enabled: boolean): Promise<void> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      await this.requestOwnerBroker<null>(
+        ownership.holder,
+        "broker/set-linear-paste-images",
+        { enabled },
+      );
+      return;
+    }
+    this.registry.setLinearPasteImages(enabled);
+    // Announced even with no Linear connection, so every Settings window
+    // re-reads the switch.
+    this.announceChanged(
+      this.registry.list()
+        .filter((connection) => connection.linearPasteImages !== undefined)
+        .map((connection) => connection.id),
+    );
+  }
+
+  /** Whether images in text pasted from Linear are attached. Profile-local. */
+  isLinearPasteImagesEnabled(): boolean {
+    return this.registry.isLinearPasteImagesEnabled();
+  }
+
+  /**
+   * The Linear connections a paste may fetch images through, or `undefined`
+   * when the setting is off. Reads the local registry, like
+   * `isSandboxerCleanupOnPrCloseEnabled`: config.toml is profile-local.
+   * Signed-in state is checked when the session opens.
+   */
+  linearPasteConnectionIds(): string[] | undefined {
+    // The setting also governs fetching a fresh signed link, which needs no
+    // connection, so it is read from config rather than from Linear rows.
+    if (!this.registry.isLinearPasteImagesEnabled()) return undefined;
+    return this.registry.list()
+      .filter((connection) => connection.linearPasteImages !== undefined && connection.enabled)
+      .map((connection) => connection.id);
   }
 
   async setSandboxerTransport(transport: SandboxerTransport): Promise<McpConnectionStatus> {
@@ -2940,6 +2985,13 @@ export class McpConnectionGatewayService {
       }
       return await this.setSandboxerCleanupOnPrClose(values.enabled);
     }
+    if (operation === "broker/set-linear-paste-images") {
+      if (typeof values.enabled !== "boolean") {
+        throw new Error("Invalid Linear paste images request.");
+      }
+      await this.setLinearPasteImages(values.enabled);
+      return null;
+    }
     if (operation === "broker/set-tool-approval") {
       if (
         typeof values.connectionId !== "string"
@@ -3083,16 +3135,40 @@ export class McpConnectionGatewayService {
     throw new Error("Unsupported MCP owner broker operation.");
   }
 
-  private async requireGatewaySelection(grant: BridgeGrant): Promise<void> {
+  private gatewaySelectionScope(grant: BridgeGrant): {
+    backend: AppServerBackendKind; threadId: string;
+    delegation?: { selectionOwner: { backend: AppServerBackendKind; threadId: string }; connectionIds: string[]; grantedConnectionIds?: string[]; readOnly: true };
+  } {
     let scope: unknown;
     try { scope = JSON.parse(grant.threadId ?? ""); } catch { /* fail closed below */ }
-    if (!Array.isArray(scope) || scope.length !== 3 || scope[0] !== "gateway"
-      || typeof scope[1] !== "string" || (scope[1] !== "codex" && !isAcpBackendId(scope[1]))
-      || typeof scope[2] !== "string" || !scope[2]) {
+    const backend = (value: unknown): value is AppServerBackendKind => value === "codex" || value === "claude" || (typeof value === "string" && isAcpBackendId(value));
+    const ids = (value: unknown): value is string[] => Array.isArray(value) && value.length <= 64 && value.every((id) => typeof id === "string" && id.length > 0);
+    if (!Array.isArray(scope) || (scope.length !== 3 && scope.length !== 4) || scope[0] !== "gateway"
+      || !backend(scope[1]) || typeof scope[2] !== "string" || !scope[2]) {
       throw new Error("This bridge is not bound to a gateway thread.");
     }
-    const selected = await this.readGatewaySelection({ backend: scope[1], threadId: scope[2] });
-    if (!selected.includes(grant.connectionId)) throw new Error("This connection is no longer selected for the calling thread.");
+    if (scope.length === 3) return { backend: scope[1], threadId: scope[2] };
+    // This scope is registered through the authenticated owner control plane.
+    // MCP tool arguments and bridge invocations cannot supply or replace it.
+    const delegated = scope[3];
+    if (!delegated || typeof delegated !== "object" || delegated.readOnly !== true
+      || !delegated.selectionOwner || !backend(delegated.selectionOwner.backend)
+      || typeof delegated.selectionOwner.threadId !== "string" || !delegated.selectionOwner.threadId
+      || !ids(delegated.connectionIds)
+      || (delegated.grantedConnectionIds !== undefined && !ids(delegated.grantedConnectionIds))) {
+      throw new Error("Invalid delegated MCP gateway selection.");
+    }
+    return { backend: scope[1], threadId: scope[2], delegation: delegated };
+  }
+
+  private async requireGatewaySelection(grant: BridgeGrant): Promise<void> {
+    const scope = this.gatewaySelectionScope(grant);
+    const delegation = scope.delegation;
+    const selected = await this.readGatewaySelection(delegation?.selectionOwner ?? scope);
+    if ((delegation && !delegation.connectionIds.includes(grant.connectionId))
+      || (!selected.includes(grant.connectionId) && !delegation?.grantedConnectionIds?.includes(grant.connectionId))) {
+      throw new Error("This connection is no longer selected for the calling thread.");
+    }
   }
 
   private async readGatewayCatalog(
@@ -3124,6 +3200,7 @@ export class McpConnectionGatewayService {
           serverName: connection.displayName,
           toolName: definition.name,
           schemaRevision: gatewayToolRevision(token, generation, definition),
+          consentRevision: gatewayToolRevision(JSON.stringify([this.consentEpoch, connection.id]), generation, definition),
           definition,
         });
       }
@@ -3176,6 +3253,10 @@ export class McpConnectionGatewayService {
           await this.requireGatewaySelection(grant);
           signal?.throwIfAborted();
         }
+        const delegated = grant.threadId?.startsWith("[\"gateway\"") && this.gatewaySelectionScope(grant).delegation;
+        if (delegated && operation !== "gateway/tools/list" && operation !== "gateway/tools/call") {
+          throw new Error("Delegated MCP access requires the read-only gateway.");
+        }
         const client = await this.ensureUpstreamClient(token, grant, discovery);
         const values = params && typeof params === "object"
           ? params as Record<string, unknown>
@@ -3194,6 +3275,9 @@ export class McpConnectionGatewayService {
             }
             if (!values.arguments || typeof values.arguments !== "object" || Array.isArray(values.arguments)) {
               throw new McpError(ErrorCode.InvalidParams, "Tool arguments must be an object.");
+            }
+            if (delegated && (tool.definition.annotations?.readOnlyHint !== true || tool.definition.annotations.destructiveHint === true)) {
+              throw new Error("Job Monitors may invoke only explicitly read-only MCP tools.");
             }
             validateGatewayArguments(tool.definition, values.arguments as Record<string, unknown>);
             signal?.throwIfAborted();
@@ -3403,7 +3487,7 @@ function readGrantThread(
     const parsed = JSON.parse(value) as unknown;
     if (
       Array.isArray(parsed)
-      && parsed.length === 3
+      && (parsed.length === 3 || parsed.length === 4)
       && parsed[0] === "gateway"
       && typeof parsed[1] === "string"
       && typeof parsed[2] === "string"

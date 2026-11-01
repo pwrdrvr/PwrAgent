@@ -88,4 +88,85 @@ describe("Windows Authenticode verification prelude", () => {
       expect((result.stdout ?? "").trim()).not.toBe("");
     },
   );
+
+  const publisher = "CN=PwrDrvr LLC, O=PwrDrvr LLC, L=Aberdeen, S=New Jersey, C=US";
+  const applicationCertificate = {
+    Subject: publisher,
+    Issuer: "CN=Microsoft ID Verified CS EOC CA 03, O=Microsoft Corporation, C=US",
+  };
+  const runtimeCertificate = {
+    Subject: publisher,
+    Issuer: "CN=Microsoft ID Verified CS AOC CA 03, O=Microsoft Corporation, C=US",
+  };
+  const application = { Status: "Valid", SignerCertificate: applicationCertificate };
+  const runtime = { Status: "Valid", SignerCertificate: runtimeCertificate };
+
+  it.runIf(process.platform === "win32").each([
+    { name: "accepts a trusted publisher across issuer rotation", application, runtime, status: 0, message: "" },
+    {
+      name: "rejects an unsigned application",
+      application: { ...application, Status: "NotSigned" },
+      runtime,
+      status: 1,
+      message: "The installed PwrAgent executable does not have a valid Windows signature (NotSigned).",
+    },
+    {
+      name: "rejects a modified runtime",
+      application,
+      runtime: { ...runtime, Status: "HashMismatch" },
+      status: 1,
+      message: "The managed runtime does not have a valid Windows signature (HashMismatch).",
+    },
+    {
+      name: "rejects an untrusted runtime",
+      application,
+      runtime: { ...runtime, Status: "NotTrusted" },
+      status: 1,
+      message: "The managed runtime does not have a valid Windows signature (NotTrusted).",
+    },
+    {
+      name: "rejects a missing application certificate",
+      application: { ...application, SignerCertificate: null },
+      runtime,
+      status: 1,
+      message: "Windows did not return a signing certificate for PwrAgent or the managed runtime.",
+    },
+    {
+      name: "rejects a missing runtime certificate",
+      application,
+      runtime: { ...runtime, SignerCertificate: null },
+      status: 1,
+      message: "Windows did not return a signing certificate for PwrAgent or the managed runtime.",
+    },
+    {
+      name: "rejects a different publisher under the same issuer",
+      application,
+      runtime: { ...runtime, SignerCertificate: { ...applicationCertificate, Subject: "CN=Another Publisher, O=Another Publisher, C=US" } },
+      status: 1,
+      message: "The managed runtime publisher does not match this PwrAgent build.",
+    },
+    {
+      name: "compares the full publisher identity",
+      application,
+      runtime: { ...runtime, SignerCertificate: { ...runtimeCertificate, Subject: "CN=PwrDrvr LLC, O=Another Publisher, C=US" } },
+      status: 1,
+      message: "The managed runtime publisher does not match this PwrAgent build.",
+    },
+  ])("$name", ({ application, runtime, status, message }) => {
+    const verification = windowsSignatureVerification("application.exe", "runtime.exe");
+    const fixture = JSON.stringify({ application, runtime }).replace(/'/gu, "''");
+    // Exercise the actual PowerShell comparison with controlled trust results;
+    // the separate native test above still calls Windows Authenticode itself.
+    const script = [
+      `$fixture = '${fixture}' | ConvertFrom-Json`,
+      "function Get-AuthenticodeSignature { param([string]$LiteralPath) if ($LiteralPath -eq $env:PWRAGENT_VERIFY_APPLICATION) { $fixture.application } else { $fixture.runtime } }",
+      verification.args[4],
+    ].join("; ");
+    const result = spawnSync("powershell.exe", [...verification.args.slice(0, 4), script], {
+      encoding: "utf8",
+      env: { ...process.env, ...verification.env },
+    });
+    expect(result.status, result.stderr).toBe(status);
+    expect(result.stdout.trim()).toBe(message);
+  });
 });

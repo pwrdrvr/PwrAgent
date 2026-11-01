@@ -12,6 +12,7 @@ import { PINNED_GROUP_RESOURCE_ID, lensHasPinnedGroup } from "../../lib/navigati
 import { useEventCallback } from "../../lib/useEventCallback";
 import { useMousePress } from "../../lib/useMousePress";
 import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
+import { LENS_KEYBINDING_ACTIONS } from "./useLensHotkeys";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import type {
@@ -19,7 +20,7 @@ import type {
   SubthreadLaunchpadDraft,
 } from "../../lib/useThreadNavigation";
 import type { PendingSidebarRow } from "./StartingThreadRow";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   ComponentType,
   KeyboardEvent as ReactKeyboardEvent,
@@ -48,6 +49,7 @@ import {
   isRemoteFederationTarget,
   moveDirectoryKey,
   moveThreadKey,
+  isSubthreadLaunchpadKey,
   resolveThreadParentKey,
 } from "@pwragent/shared";
 import {
@@ -118,7 +120,13 @@ import {
   formatRateLimitLine,
   selectVisibleRateLimits,
 } from "../../lib/backend-status-format";
-import { DirectoriesList, type ProjectRevealRequest } from "./DirectoriesList";
+import {
+  buildLaunchpadSelectionKey,
+  DirectoriesList,
+  type ProjectRevealRequest,
+} from "./DirectoriesList";
+import { ProjectIndex, type ProjectIndexEntry } from "./ProjectIndex";
+import { ProjectIndexToggle } from "./ProjectIndexToggle";
 import type { ThreadRowRef } from "./ThreadRow";
 import {
   findThreadRowElement,
@@ -218,7 +226,10 @@ type SidebarProps = {
   directoryDisclosure?: NavigationDirectoryDisclosure;
   /** True while a full-window layer (Settings, Automations) covers it. */
   inert?: boolean;
+  /** Provider catalog of this window's navigation owner. */
   backends: BackendSummary[];
+  /** Provider catalogs for rows mounted from other instances; absent means pending. */
+  remoteBackends?: ReadonlyMap<string, readonly BackendSummary[]>;
   browseMode: BrowseMode;
   /**
    * `general.pinned_threads_on_top`: Updated and Created gather every pin
@@ -290,6 +301,15 @@ type SidebarProps = {
    * Directories lens to show that project. The caller switches the lens.
    */
   projectRevealRequest?: ProjectRevealRequest;
+  /**
+   * The project index column beside the list (`[ui] project_index_hidden`).
+   * Absent handlers leave the column out, toggle and all.
+   */
+  projectIndexHidden?: boolean;
+  onProjectIndexHiddenChange?: (hidden: boolean) => void;
+  /** A dragged index width (`[ui] project_index_width`); `null` is natural. */
+  projectIndexWidth?: number | null;
+  onProjectIndexWidthChange?: (width: number | null) => void;
   selectedItemKey?: string;
   pendingLaunchpadCreations?: PendingLaunchpadCreation[];
   /** Sub-thread launchpads being written in this window. */
@@ -428,10 +448,12 @@ type SidebarProps = {
     pinned: boolean,
   ) => Promise<void>;
   onReorderThreadPins?: (orderedThreadKeys: string[], move?: NavigationRelativePinMove) => Promise<void>;
+  /** Resolves false when the owner refused the change. */
   onSetThreadParent?: (
     thread: NavigationThreadSummary,
     parentThreadId?: string,
-  ) => Promise<void>;
+    parentThreadBackend?: NavigationThreadSummary["source"],
+  ) => Promise<boolean | void>;
   onUnlinkThreads?: (
     threads: NavigationThreadSummary[],
   ) => Promise<void>;
@@ -921,6 +943,60 @@ export function Sidebar(props: SidebarProps) {
         && (props.browseMode !== "directories"
           || (state.page?.directories?.every((directory) => renderedDirectoryKeys.has(directory.key)) ?? true))))),
   );
+  // The project index: every project in the order Directories draws them,
+  // pinned first. It stays in every lens, so the list keeps one width when
+  // the lens changes; only Directories is in project order to follow.
+  const scrollRegionId = useId();
+  const projectIndexEnabled = Boolean(
+    props.onProjectIndexHiddenChange && props.onProjectIndexWidthChange,
+  );
+  const selectedThreadDirectoryKeys = props.selectedThreadDirectoryKeys;
+  const indexSelectedItemKey = props.selectedItemKey;
+  const projectIndexEntries = useMemo((): ProjectIndexEntry[] => {
+    if (!projectIndexEnabled) return [];
+    const projects = renderedDirectories.filter(
+      (directory) => !isSubthreadLaunchpadKey(directory.key),
+    );
+    const pinned = projects.filter(isPinnedDirectory).sort(comparePinnedDirectories);
+    const unpinned = projects.filter((directory) => !isPinnedDirectory(directory));
+    return [...pinned, ...unpinned].map((directory) => ({
+      key: directory.key,
+      label: directory.label,
+      containsSelection:
+        indexSelectedItemKey === buildLaunchpadSelectionKey(directory.key)
+        || (selectedThreadDirectoryKeys?.includes(directory.key) ?? false),
+      active: (directory.counts?.active ?? 0) > 0,
+      review: (directory.counts?.review ?? 0) > 0,
+    }));
+  }, [indexSelectedItemKey, projectIndexEnabled, renderedDirectories, selectedThreadDirectoryKeys]);
+  // One project needs no map.
+  const projectIndexShown = projectIndexEnabled
+    && !props.projectIndexHidden
+    && projectIndexEntries.length >= 2;
+  const onProjectIndexWidthChange = props.onProjectIndexWidthChange;
+  // Asked when the toggle's tooltip opens. The narrow-sidebar case is the
+  // container query's call (app.css, `sidebar-lanes`), so it is read off the
+  // column's computed display rather than re-derived from a width in JS.
+  const threadBrowserRef = useRef<HTMLElement | null>(null);
+  const projectIndexEntryCount = projectIndexEntries.length;
+  const projectIndexUnavailableReason = useCallback((): string | undefined => {
+    if (projectIndexEntryCount < 2) return "Shown with two or more projects";
+    const pane = threadBrowserRef.current?.querySelector(".project-index-pane");
+    if (pane && getComputedStyle(pane).display === "none") {
+      return "Widen the sidebar to show it";
+    }
+    return undefined;
+  }, [projectIndexEntryCount]);
+  const onBrowseModeChange = props.onBrowseModeChange;
+  // An index click moves the list; it does not change the selection. From a
+  // flat lens it opens Directories at that project, as ⌘K does without
+  // opening the project's launchpad.
+  const releaseHoverStableForJump = hoverStableSnapshot.release;
+  const jumpToProject = useCallback((key: string) => {
+    releaseHoverStableForJump();
+    if (props.browseMode !== "directories") onBrowseModeChange("directories");
+    setProjectReveal({ key, jump: true });
+  }, [onBrowseModeChange, props.browseMode, releaseHoverStableForJump]);
   /**
    * Hover stability protects a target from background list churn. A command
    * the operator chose must instead reveal its resulting snapshot immediately.
@@ -979,6 +1055,23 @@ export function Sidebar(props: SidebarProps) {
     revealHoverStableSnapshot,
     props.onUpdateSubthreadOrder,
   );
+  // A drop on a row. The tray the thread lands in opens, so the drop shows
+  // where the thread went rather than making it vanish. A refused drop
+  // closes it again.
+  const nestThread = useRevealListChange(
+    revealHoverStableSnapshot,
+    props.onSetThreadParent
+      ? (thread: NavigationThreadSummary, parent: NavigationThreadSummary): void => {
+          const setCollapsed = parent.subthreadsCollapsed === true
+            ? props.onSetSubthreadsCollapsed
+            : undefined;
+          void setCollapsed?.(parent, false);
+          void props.onSetThreadParent!(thread, parent.id, parent.source).then((saved) => {
+            if (saved === false) void setCollapsed?.(parent, true);
+          });
+        }
+      : undefined,
+  );
   // The row callbacks this component only forwards. (`onDetachPullRequest`
   // is absent: the rows get this component's own `detachPullRequest`, which
   // owns the confirmation dialog and is already stable.) They are stable in the
@@ -1012,6 +1105,7 @@ export function Sidebar(props: SidebarProps) {
     setDirectoryThreadsCollapsed: releasedSetDirectoryThreadsCollapsed,
     setSubthreadsCollapsed: releasedSetSubthreadsCollapsed,
     setThreadPin,
+    nestThread,
     updateSubthreadOrder: releasedUpdateSubthreadOrder,
   };
   // Counts cover the owner's full population, independently of the visible lens range.
@@ -1333,8 +1427,15 @@ export function Sidebar(props: SidebarProps) {
     return () => window.clearTimeout(timeoutId);
   }, [copiedRuntimeValue]);
 
+  const threadBackends = (thread: NavigationThreadSummary): readonly BackendSummary[] => {
+    const target = thread.federation?.ref.target;
+    return target?.scope === "remote" && target.instanceId !== federationTarget?.instanceId
+      ? props.remoteBackends?.get(target.instanceId) ?? []
+      : props.backends;
+  };
+
   const canRenameThread = (thread: NavigationThreadSummary): boolean =>
-    props.backends.some(
+    threadBackends(thread).some(
       (backend) =>
         backend.kind === thread.source &&
         backend.available &&
@@ -1342,7 +1443,7 @@ export function Sidebar(props: SidebarProps) {
     );
 
   const canArchiveThread = (thread: NavigationThreadSummary): boolean =>
-    props.backends.some(
+    threadBackends(thread).some(
       (backend) =>
         backend.kind === thread.source &&
         backend.available &&
@@ -1350,7 +1451,7 @@ export function Sidebar(props: SidebarProps) {
     );
 
   const canForkThread = (thread: NavigationThreadSummary): boolean =>
-    props.backends.some(
+    threadBackends(thread).some(
       (backend) =>
         backend.kind === thread.source &&
         backend.available &&
@@ -2094,7 +2195,7 @@ export function Sidebar(props: SidebarProps) {
     );
   const threadCanRename = (thread: NavigationThreadSummary): boolean =>
     Boolean(props.onRenameThread)
-    && threadSupportsRename(thread, props.backends, Boolean(federationTarget));
+    && threadSupportsRename(thread, threadBackends(thread), Boolean(federationTarget));
 
   /**
    * Rename in place: in the thread's sidebar row when the list shows one,
@@ -2244,21 +2345,24 @@ export function Sidebar(props: SidebarProps) {
   });
 
   useEffect(() => {
-    const captureComposerArchive = (event: KeyboardEvent): void => {
-      // ProseMirror consumes native Backspace at a block boundary before the
-      // window's bubble listener sees it. Claim only the permitted archive
-      // chord in the composer, through the same action/lifecycle owner.
+    const captureComposerThreadHotkey = (event: KeyboardEvent): void => {
+      // The editor's keymap sees a keydown before the window's bubble
+      // listener. ProseMirror consumes native Backspace at a block boundary,
+      // and the composer's no-op Mod-U also takes ⇧⌘U, because ProseMirror
+      // retries a shifted letter without Shift. Claim every thread chord
+      // permitted in the composer here, through the same action/lifecycle
+      // owner.
       if (threadHotkeyFocusContext(event) !== "field"
-        || matchThreadHotkey(event) !== "threads.archive") return;
+        || matchThreadHotkey(event) === null) return;
       runThreadHotkey(event);
-      // Keep the editor from deleting draft content and the bubble listener
-      // from dispatching a second archive. Unhandled chords stay with editing.
+      // Keep the editor from acting on the chord and the bubble listener
+      // from dispatching it again. Unhandled chords stay with editing.
       if (event.defaultPrevented) event.stopPropagation();
     };
-    window.addEventListener("keydown", captureComposerArchive, true);
+    window.addEventListener("keydown", captureComposerThreadHotkey, true);
     window.addEventListener("keydown", runThreadHotkey);
     return () => {
-      window.removeEventListener("keydown", captureComposerArchive, true);
+      window.removeEventListener("keydown", captureComposerThreadHotkey, true);
       window.removeEventListener("keydown", runThreadHotkey);
     };
   }, [runThreadHotkey]);
@@ -2748,7 +2852,8 @@ export function Sidebar(props: SidebarProps) {
   const bulkUnlinkableThreads = contextMenuThreads.filter(
     (thread) => Boolean(thread.parentThreadId),
   );
-  const bulkArchivableThreads = contextMenuThreads.filter(canArchiveThread);
+  const bulkArchivableThreads = contextMenuThreads.filter((thread) =>
+    canArchiveThread(thread) && threadCanRouteRemoteCapability(thread, "turn_control"));
   const bulkHasPinActions =
     bulkCanPin &&
     (bulkPinnedThreads.length > 0 || bulkUnpinnedThreads.length > 0);
@@ -3050,47 +3155,75 @@ export function Sidebar(props: SidebarProps) {
           directory-picker and launchpad failures render at their own
           controls in the composer, which stay on screen. */}
 
-      <section className="sidebar__section sidebar__section--fill" aria-label="Thread browser">
-        <div className="lens-switch" role="tablist" aria-label="Thread lenses">
-          {BROWSE_MODES.map((mode) =>
-            mode === "attention" ? (
-              <AttentionLensTab
-                key={mode}
-                active={props.browseMode === mode}
-                countsReady={Boolean(ownerCounts)}
-                activeThreadCount={attentionCounts.activeLocal}
-                remoteActiveThreadCount={
-                  remoteSignalVisible ? attentionCounts.activeRemote : undefined
-                }
-                reviewThreadCount={attentionCounts.review}
-                disabled={props.threadLensesEmpty}
-                onSelect={() => props.onBrowseModeChange(mode)}
-              />
-            ) : (
-              <LensTab
-                key={mode}
-                mode={mode}
-                active={props.browseMode === mode}
-                // Counted off the very list the lens renders, so the badge and
-                // the rows can't disagree. Only Drafts counts: Updated and
-                // Created hold every thread, and Directories is a different
-                // unit — numbers there would say nothing you'd act on.
-                count={mode === "drafts" ? Object.values(props.draftThreadKeys ?? {}).filter(Boolean).length : undefined}
-                countLabel={
-                  mode === "drafts"
-                    ? formatDraftThreadCount(Object.values(props.draftThreadKeys ?? {}).filter(Boolean).length)
-                    : undefined
-                }
-                tooltipText={browseModeTooltips[mode]}
-                disabled={props.threadLensesEmpty && mode !== "directories"}
-                onSelect={() => props.onBrowseModeChange(mode)}
-              />
-            ),
-          )}
+      <section
+        className={`sidebar__section sidebar__section--fill${
+          projectIndexShown ? " sidebar__section--with-project-index" : ""
+        }`}
+        aria-label="Thread browser"
+        ref={threadBrowserRef}
+      >
+        <div className="sidebar__lens-row">
+          <div className="lens-switch" role="tablist" aria-label="Thread lenses">
+            {BROWSE_MODES.map((mode) =>
+              mode === "attention" ? (
+                <AttentionLensTab
+                  key={mode}
+                  active={props.browseMode === mode}
+                  countsReady={Boolean(ownerCounts)}
+                  activeThreadCount={attentionCounts.activeLocal}
+                  remoteActiveThreadCount={
+                    remoteSignalVisible ? attentionCounts.activeRemote : undefined
+                  }
+                  reviewThreadCount={attentionCounts.review}
+                  disabled={props.threadLensesEmpty}
+                  onSelect={() => props.onBrowseModeChange(mode)}
+                />
+              ) : (
+                <LensTab
+                  key={mode}
+                  mode={mode}
+                  active={props.browseMode === mode}
+                  // Counted off the very list the lens renders, so the badge and
+                  // the rows can't disagree. Only Drafts counts: Updated and
+                  // Created hold every thread, and Directories is a different
+                  // unit — numbers there would say nothing you'd act on.
+                  count={mode === "drafts" ? Object.values(props.draftThreadKeys ?? {}).filter(Boolean).length : undefined}
+                  countLabel={
+                    mode === "drafts"
+                      ? formatDraftThreadCount(Object.values(props.draftThreadKeys ?? {}).filter(Boolean).length)
+                      : undefined
+                  }
+                  tooltipText={browseModeTooltips[mode]}
+                  disabled={props.threadLensesEmpty && mode !== "directories"}
+                  onSelect={() => props.onBrowseModeChange(mode)}
+                />
+              ),
+            )}
+          </div>
+          {projectIndexEnabled ? (
+            <ProjectIndexToggle
+              hidden={props.projectIndexHidden ?? false}
+              unavailableReason={projectIndexUnavailableReason}
+              onToggle={() =>
+                props.onProjectIndexHiddenChange?.(!props.projectIndexHidden)}
+            />
+          ) : null}
         </div>
 
+        {projectIndexShown && onProjectIndexWidthChange ? (
+          <ProjectIndex
+            projects={projectIndexEntries}
+            scrollRegionRef={lensScroll.ref}
+            scrollRegionId={scrollRegionId}
+            spy={props.browseMode === "directories" && !listStatus}
+            width={props.projectIndexWidth ?? null}
+            onWidthChange={onProjectIndexWidthChange}
+            onJump={jumpToProject}
+          />
+        ) : null}
         <div
           ref={lensScroll.ref}
+          id={scrollRegionId}
           className="sidebar__scroll-region"
           onScroll={lensScroll.onScroll}
           onClickCapture={hoverStableSnapshot.onClickCapture}
@@ -3165,6 +3298,7 @@ export function Sidebar(props: SidebarProps) {
               onUpdateSubthreadOrder={
                 hoverReleasedListHandlers.updateSubthreadOrder
               }
+              onNestThread={hoverReleasedListHandlers.nestThread}
               onSetSubthreadsCollapsed={
                 hoverReleasedListHandlers.setSubthreadsCollapsed
               }
@@ -3240,6 +3374,7 @@ export function Sidebar(props: SidebarProps) {
                 onUpdateSubthreadOrder={
                   hoverReleasedListHandlers.updateSubthreadOrder
                 }
+                onNestThread={hoverReleasedListHandlers.nestThread}
                 onSetSubthreadsCollapsed={
                   hoverReleasedListHandlers.setSubthreadsCollapsed
                 }
@@ -4278,6 +4413,8 @@ function AttentionLensTab(props: {
   disabled?: boolean;
   onSelect: () => void;
 }) {
+  const keybindings = useKeybindings();
+  const shortcut = chordLabelFor(keybindings, LENS_KEYBINDING_ACTIONS.attention);
   const counts = {
     activeLocal: props.activeThreadCount,
     activeRemote: props.remoteActiveThreadCount,
@@ -4288,7 +4425,8 @@ function AttentionLensTab(props: {
     title: browseModeLabels.attention,
     caption: "Threads in progress or waiting to be reviewed",
     reviewLabel: "To review",
-    ...(props.disabled ? { footer: NO_THREADS_TOOLTIP_LINE } : {}),
+    footer: props.disabled ? NO_THREADS_TOOLTIP_LINE
+      : shortcut ? withChordHint("Show Attention", shortcut) : undefined,
   });
   const accessibleName = `${browseModeLabels.attention}, ${describeAttentionCounts(
     counts,
@@ -4305,6 +4443,7 @@ function AttentionLensTab(props: {
         // absent element is a dangling reference.
         aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
         aria-selected={props.active}
+        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, LENS_KEYBINDING_ACTIONS.attention)}
         aria-disabled={props.disabled || undefined}
         className={`lens-switch__button lens-switch__button--attention${
           props.active ? " is-active" : ""
@@ -4368,13 +4507,15 @@ function LensTab(props: {
   disabled?: boolean;
   onSelect: () => void;
 }) {
+  const keybindings = useKeybindings();
+  const actionId = LENS_KEYBINDING_ACTIONS[props.mode];
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const Icon = browseModeIcons[props.mode];
   const label = props.countLabel
     ? `${browseModeLabels[props.mode]}, ${props.countLabel}`
     : browseModeLabels[props.mode];
   const tooltipText = [
-    props.tooltipText,
+    withChordHint(props.tooltipText, chordLabelFor(keybindings, actionId)),
     props.countLabel,
     props.disabled ? NO_THREADS_TOOLTIP_LINE : undefined,
   ].filter(Boolean).join("\n");
@@ -4391,6 +4532,7 @@ function LensTab(props: {
         // whole accessible name.
         aria-label={label}
         aria-selected={props.active}
+        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, actionId)}
         aria-disabled={props.disabled || undefined}
         className={`lens-switch__button${props.active ? " is-active" : ""}`}
         type="button"

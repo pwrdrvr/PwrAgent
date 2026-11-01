@@ -1675,6 +1675,184 @@ describe("ComposerTiptapInput", () => {
     expect(container.querySelector("code")).toHaveTextContent("inline code");
   });
 
+  describe("underline", () => {
+    // Markdown has no underline, so the composer must not show one: the
+    // reply would arrive without it. jsdom has no platform, so Mod is Ctrl.
+    const draft = "Make this stand out";
+    // The textbox's setSelectionRange places a caret only, so select "this"
+    // through the editor. Document positions start one past the paragraph.
+    const selectThis = (textbox: HTMLElement) => {
+      const editor = (textbox as HTMLElement & { editor: Editor }).editor;
+      act(() => {
+        editor.commands.setTextSelection({ from: 6, to: 10 });
+      });
+      expect(editor.state.doc.textBetween(6, 10)).toBe("this");
+      expect(editor.state.selection.empty).toBe(false);
+    };
+
+    it("ignores Mod-U instead of showing a mark the reply cannot send", async () => {
+      const { container, onChange } = renderTiptapInput({ value: draft });
+      const textbox = await screen.findByRole("textbox", { name: "Reply" });
+      const editor = (textbox as HTMLElement & { editor: Editor }).editor;
+      expect(editor.schema.marks.underline).toBeUndefined();
+      selectThis(textbox);
+      onChange.mockClear();
+
+      for (const key of ["u", "U"]) {
+        const event = new KeyboardEvent("keydown", {
+          bubbles: true, cancelable: true, ctrlKey: true, key, keyCode: 85,
+        });
+        act(() => { textbox.dispatchEvent(event); });
+        // Claimed, so Chromium's native ⌘U cannot wrap the text in <u>.
+        expect(event.defaultPrevented).toBe(true);
+      }
+
+      expect(container.querySelector("u")).toBeNull();
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["bold", { key: "b", keyCode: 66 }, "Make **this** stand out"],
+      ["italic", { key: "i", keyCode: 73 }, "Make *this* stand out"],
+      ["strike", { key: "S", keyCode: 83, shiftKey: true }, "Make ~~this~~ stand out"],
+      ["code", { key: "e", keyCode: 69 }, "Make `this` stand out"],
+    ])("still applies and sends %s from its shortcut", async (_mark, chord, expected) => {
+      const { onChange } = renderTiptapInput({ value: draft });
+      const textbox = await screen.findByRole("textbox", { name: "Reply" });
+      selectThis(textbox);
+
+      fireEvent.keyDown(textbox, { ctrlKey: true, ...chord });
+
+      await waitFor(() => {
+        expect(onChange).toHaveBeenLastCalledWith(expected, []);
+      });
+    });
+
+    it("loads a saved draft that carries underline as plain text", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const inputRef = createRef<ComposerInputHandle>();
+      try {
+        const { container } = render(
+          <ComposerTiptapInput
+            ref={inputRef}
+            id="reply"
+            label="Reply"
+            markdownConversion
+            editorDocument={{
+              type: "doc",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [
+                    { type: "text", text: "Make " },
+                    { type: "text", text: "this", marks: [{ type: "underline" }] },
+                    { type: "text", text: " stand " },
+                    {
+                      type: "text",
+                      text: "out",
+                      marks: [{ type: "bold" }, { type: "underline" }],
+                    },
+                  ],
+                },
+              ],
+            }}
+            onChange={() => undefined}
+            placeholder="Ask anything"
+            skillTokens={[]}
+            value="Make this stand **out**"
+          />,
+        );
+
+        const textbox = await screen.findByRole("textbox", { name: "Reply" });
+        // Tiptap swaps a document with an unknown mark for an empty one.
+        expect(textbox).toHaveTextContent("Make this stand out");
+        expect(inputRef.current?.value).toBe("Make this stand **out**");
+        expect(container.querySelector("u")).toBeNull();
+        expect(container.querySelector("strong")).toHaveTextContent("out");
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("restores a saved draft with underline into an open composer", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const onChange = vi.fn();
+      const props = {
+        id: "reply",
+        label: "Reply",
+        markdownConversion: true,
+        onChange,
+        placeholder: "Ask anything",
+        skillTokens: [],
+      };
+      try {
+        const result = render(<ComposerTiptapInput {...props} value="" />);
+        await screen.findByRole("textbox", { name: "Reply" });
+        onChange.mockClear();
+
+        result.rerender(
+          <ComposerTiptapInput
+            {...props}
+            editorDocument={{
+              type: "doc",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [
+                    { type: "text", text: "Make " },
+                    { type: "text", text: "this", marks: [{ type: "underline" }] },
+                    { type: "text", text: " stand out" },
+                  ],
+                },
+              ],
+            }}
+            value="Stale controlled draft"
+          />,
+        );
+
+        await waitFor(() => {
+          expect(onChange).toHaveBeenCalledWith(draft, [], {
+            editorDocument: {
+              type: "doc",
+              content: [
+                { type: "paragraph", content: [{ type: "text", text: draft }] },
+              ],
+            },
+          });
+        });
+        expect(result.container.querySelector("u")).toBeNull();
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("pastes <u> as plain text", async () => {
+      const { container, onChange } = renderTiptapInput();
+      const textbox = await screen.findByRole("textbox", { name: "Reply" });
+
+      fireEvent.paste(textbox, {
+        clipboardData: {
+          files: [],
+          getData: (type: string) => {
+            if (type === "text/html") {
+              return "<p>Make <u>this</u> stand <b><u>out</u></b></p>";
+            }
+            return type === "text/plain" ? draft : "";
+          },
+          items: [],
+          types: ["text/html", "text/plain"],
+        },
+      });
+
+      await waitFor(() => {
+        expect(onChange).toHaveBeenLastCalledWith("Make this stand **out**", []);
+      });
+      expect(container.querySelector("u")).toBeNull();
+    });
+  });
+
   it("round-trips thematic breaks as markdown horizontal rules", async () => {
     const original = [
       "- One",

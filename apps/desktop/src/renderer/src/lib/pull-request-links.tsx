@@ -1,5 +1,6 @@
 import {
   buildPullRequestStatusKey,
+  pullRequestMatchesRepositoryKey,
   resolvePullRequestIdentity,
   type NavigationThreadSummary,
   type PrSummary,
@@ -22,6 +23,23 @@ export type PullRequestLinkContextValue = {
   resolve: (href: string) => PrSummary | undefined;
   subscribe: (pr: PrSummary, listener: () => void) => () => void;
   subscribeNumber: (number: number, listener: () => void) => () => void;
+  getThreadNumberSnapshot: (
+    request: ThreadPullRequestNumberRequest,
+  ) => PrSummary | undefined;
+  subscribeThreadNumbers: (listener: () => void) => () => void;
+};
+
+/**
+ * A bare PR number named by one thread, such as a to-do's merge card. The
+ * number resolves against that thread's attached PRs, then against PRs
+ * attached to threads in `projectPath`. It resolves only when exactly one
+ * PR matches, so a chip never opens another repository's PR.
+ */
+export type ThreadPullRequestNumberRequest = {
+  backend: string;
+  threadId: string;
+  number: number;
+  projectPath?: string;
 };
 
 function samePullRequestChip(
@@ -67,11 +85,16 @@ class PullRequestLinkMetadataStore {
   private prs = new Map<string, PrSummary>();
   private peerOwnedKeys = new Set<string>();
   private shorthandPrs = new Map<number, PrSummary>();
+  private threads: NavigationThreadSummary[];
+  private threadNumberListeners = new Set<() => void>();
+  /** Resolutions for the current `threads`, keyed by request. */
+  private threadNumberSnapshots = new Map<string, PrSummary | undefined>();
 
   constructor(
     threads: NavigationThreadSummary[],
     activeThread: NavigationThreadSummary | undefined,
   ) {
+    this.threads = threads;
     const candidates = pullRequestsByKey(threads);
     this.prs = new Map([...candidates].map(([key, candidate]) => [key, candidate.pr]));
     this.peerOwnedKeys = new Set([...candidates].filter(([, candidate]) => candidate.peerOwned).map(([key]) => key));
@@ -143,6 +166,71 @@ class PullRequestLinkMetadataStore {
     };
   }
 
+  /**
+   * Returns the canonical object from `prs`, so repeated reads stay
+   * referentially equal until that PR's row changes.
+   */
+  getThreadNumberSnapshot(
+    request: ThreadPullRequestNumberRequest,
+  ): PrSummary | undefined {
+    // useSyncExternalStore reads on every render and every wake; scan the
+    // thread list once per navigation update instead.
+    const cacheKey = [request.backend, request.threadId, request.number, request.projectPath ?? ""]
+      .join("\u0000");
+    if (this.threadNumberSnapshots.has(cacheKey)) {
+      return this.threadNumberSnapshots.get(cacheKey);
+    }
+    const resolved = this.resolveThreadNumber(request);
+    this.threadNumberSnapshots.set(cacheKey, resolved);
+    return resolved;
+  }
+
+  private resolveThreadNumber(
+    request: ThreadPullRequestNumberRequest,
+  ): PrSummary | undefined {
+    const thread = this.threads.find((candidate) =>
+      candidate.source === request.backend && candidate.id === request.threadId);
+    const own = thread ? this.uniqueNumberMatch([thread], request.number) : undefined;
+    if (own !== undefined) {
+      return own ?? undefined;
+    }
+    const projectPath = normalizeProjectPath(request.projectPath);
+    if (!projectPath) {
+      return undefined;
+    }
+    const inProject = this.threads.filter((candidate) =>
+      normalizeProjectPath(candidate.projectKey) === projectPath
+      || threadRepositoryPaths(candidate).has(projectPath));
+    return this.uniqueNumberMatch(inProject, request.number) ?? undefined;
+  }
+
+  /**
+   * The one PR with this number among the threads' attachments. `undefined`
+   * when none has it, `null` when more than one repository does.
+   */
+  private uniqueNumberMatch(
+    threads: NavigationThreadSummary[],
+    number: number,
+  ): PrSummary | null | undefined {
+    let match: string | undefined;
+    for (const thread of threads) {
+      for (const pr of thread.prs ?? []) {
+        if (pr.number !== number) continue;
+        const key = buildPullRequestStatusKey(pr);
+        if (match !== undefined && match !== key) return null;
+        match = key;
+      }
+    }
+    return match === undefined ? undefined : this.prs.get(match);
+  }
+
+  subscribeThreadNumbers(listener: () => void): () => void {
+    this.threadNumberListeners.add(listener);
+    return () => {
+      this.threadNumberListeners.delete(listener);
+    };
+  }
+
   update(
     threads: NavigationThreadSummary[],
     activeThread: NavigationThreadSummary | undefined,
@@ -188,9 +276,14 @@ class PullRequestLinkMetadataStore {
       }
     }
 
+    const threadsChanged = threads !== this.threads;
     this.prs = nextPrs;
     this.peerOwnedKeys = nextPeerOwnedKeys;
     this.shorthandPrs = nextShorthandPrs;
+    this.threads = threads;
+    if (threadsChanged) {
+      this.threadNumberSnapshots.clear();
+    }
     for (const key of changedKeys) {
       for (const listener of this.listeners.get(key) ?? []) {
         listener();
@@ -198,6 +291,13 @@ class PullRequestLinkMetadataStore {
     }
     for (const number of changedNumbers) {
       for (const listener of this.numberListeners.get(number) ?? []) {
+        listener();
+      }
+    }
+    // Few cards subscribe, and each re-read returns the same object unless
+    // its PR changed, so a broad wake costs no render.
+    if (threadsChanged) {
+      for (const listener of this.threadNumberListeners) {
         listener();
       }
     }
@@ -215,13 +315,10 @@ function pullRequestsByKey(
     for (const rawPr of thread.prs ?? []) {
       const pr = { ...rawPr, ...resolvePullRequestIdentity(rawPr) };
       const key = buildPullRequestStatusKey(pr);
-      const repository = pr.sourceRepository ?? pr;
-      const repositoryKey = [repository.provider, repository.org, repository.repo]
-        .map((part) => part.trim().toLowerCase()).join("/");
       // Main resolves this field with the same primary-workspace probe used by
       // collectPrPollTargets. A local secondary attachment cannot claim status
       // authority merely because it appears before a pinned peer in the list.
-      const localPrimary = !peerOwned && thread.primaryGitRepository === repositoryKey;
+      const localPrimary = !peerOwned && pullRequestMatchesRepositoryKey(pr, thread.primaryGitRepository);
       const priority = localPrimary ? 2 : peerOwned ? 1 : 0;
       if (!prs.has(key) || priority > prs.get(key)!.priority) {
         prs.set(key, { pr, peerOwned, priority });
@@ -355,6 +452,12 @@ export function PullRequestLinkProvider(props: {
       subscribeNumber(number, listener) {
         return store.subscribeNumber(number, listener);
       },
+      getThreadNumberSnapshot(request) {
+        return store.getThreadNumberSnapshot(request);
+      },
+      subscribeThreadNumbers(listener) {
+        return store.subscribeThreadNumbers(listener);
+      },
     }),
     [store],
   );
@@ -405,6 +508,34 @@ export function useLivePullRequestNumber(number: number): PrSummary | undefined 
     getSnapshot,
     () => undefined,
   );
+}
+
+export function useThreadPullRequestNumber(
+  request: ThreadPullRequestNumberRequest | undefined,
+): PrSummary | undefined {
+  const links = usePullRequestLinks();
+  const backend = request?.backend;
+  const threadId = request?.threadId;
+  const number = request?.number;
+  const projectPath = request?.projectPath;
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      links?.subscribeThreadNumbers(listener) ?? (() => {}),
+    [links],
+  );
+  const getSnapshot = useCallback(
+    () => backend !== undefined && threadId !== undefined && number !== undefined
+      ? links?.getThreadNumberSnapshot({
+          backend,
+          threadId,
+          number,
+          ...(projectPath ? { projectPath } : {}),
+        })
+      : undefined,
+    [links, backend, threadId, number, projectPath],
+  );
+
+  return useSyncExternalStore(subscribe, getSnapshot, () => undefined);
 }
 
 /**

@@ -1811,7 +1811,8 @@ describe("auto updater", () => {
     );
   });
 
-  it("awaits shutdown preparation before handing quit ownership to the updater", async () => {
+  it.each(["darwin", "win32"] as const)("awaits %s shutdown preparation before handing quit ownership to the updater", async (platform) => {
+    setPlatform(platform);
     const preparation = createDeferred<void>();
     prepareForUpdateInstallMock.mockReturnValueOnce(preparation.promise);
     const updater = await importAutoUpdater();
@@ -1834,6 +1835,9 @@ describe("auto updater", () => {
     await vi.waitFor(() =>
       expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledOnce(),
     );
+    expect(autoUpdaterMock.quitAndInstall.mock.calls).toEqual([
+      platform === "win32" ? [true, true] : [],
+    ]);
     expect(markUpdateInstallInProgressMock).toHaveBeenCalledOnce();
     expect(markUpdateInstallUpdaterQuitReadyMock).toHaveBeenCalledOnce();
   });

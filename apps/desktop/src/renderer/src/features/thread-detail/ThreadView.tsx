@@ -1,4 +1,6 @@
 import { threadTodoThreadKey, parseRemoteOperatorItemKey } from "@pwragent/shared";
+import { StartupTiming } from "../composer/StartupTiming";
+import { LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
 import { ThreadServices } from "../federation/ThreadServices";
 import type { BackgroundTerminalsViewProps } from "./BackgroundTerminalsView";
 import type { AgentCommandsStatus } from "../../lib/useThreadSessionState";
@@ -87,6 +89,7 @@ import {
   threadSummaryIdentityKey,
 } from "../../lib/federated-thread-events";
 import { ThreadTodoStack } from "../thread-todos/ThreadTodoStack";
+import type { ThreadTodoRevealRequest } from "../thread-todos/thread-todo-reveal";
 import type {
   ThreadTodoDoHereOptions,
   ThreadTodoResolveOptions,
@@ -988,6 +991,8 @@ export type ThreadViewProps = {
   starMap?: StarMapToggleControls;
   /** Thread to-do cards, owned by App. Absent in a window fronting a peer. */
   threadTodos?: ThreadTodosView;
+  /** A thread row's to-do chip asked to show this thread's cards. */
+  threadTodoRevealRequest?: ThreadTodoRevealRequest;
   /** In-thread find bar (⌘F): open state + close callback, owned by App. */
   findOpen?: boolean;
   onFindOpenChange?: (open: boolean) => void;
@@ -1323,10 +1328,11 @@ export function ThreadView(props: ThreadViewProps) {
       id: "launchpad-submitted-message",
       type: "message",
       role: "user",
+      createdAt: props.pendingLaunchpadCreation?.submittedAt,
       text: parts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n\n"),
       parts,
     };
-  }, [launchpadSubmittedInput, props.pendingLaunchpadCreation?.input]);
+  }, [launchpadSubmittedInput, props.pendingLaunchpadCreation?.input, props.pendingLaunchpadCreation?.submittedAt]);
   // Terminal state is owned by `useIntegratedTerminals` up in App, mirroring
   // the main process's registry. It cannot live here: ThreadView unmounts on
   // search and on any refresh that flips `threadDetailPending`, which used to
@@ -2331,6 +2337,7 @@ export function ThreadView(props: ThreadViewProps) {
   // *descriptor* from props.backends, not the thread's own backend kind.
   const selectedThreadBackendKind = selectedThread?.source;
   const selectedThreadId = selectedThread?.id;
+  const selectedThreadFederationTarget = selectedThread?.federation?.ref.target ?? readRendererFederationTarget();
   useEffect(() => {
     if (
       !selectedThreadEnvironmentFailureStale
@@ -2346,11 +2353,13 @@ export function ThreadView(props: ThreadViewProps) {
     void acknowledgeThreadEnvironmentFailure({
       backend: selectedThreadBackendKind,
       threadId: selectedThreadId,
+      ...(selectedThreadFederationTarget ? { federationTarget: selectedThreadFederationTarget } : {}),
     }).catch(() => undefined);
   }, [
     acknowledgeThreadEnvironmentFailure,
     selectedThreadBackendKind,
     selectedThreadEnvironmentFailureStale,
+    selectedThreadFederationTarget,
     selectedThreadId,
     selectedThreadKey,
   ]);
@@ -2360,7 +2369,7 @@ export function ThreadView(props: ThreadViewProps) {
    * ThreadView unmount — so the prompt came back on a thread whose failure the
    * operator had already answered.
    */
-  const dismissEnvironmentFailureChoice = (threadKey: string): void => {
+  const dismissEnvironmentFailureChoice = (threadKey: string, acknowledgedOnOwner = false): void => {
     setSetupFailureDismissedThreadKeys((current) => {
       const next = new Set(current);
       next.add(threadKey);
@@ -2370,9 +2379,11 @@ export function ThreadView(props: ThreadViewProps) {
       return;
     }
     environmentFailureAcknowledgedRef.current.add(threadKey);
+    if (acknowledgedOnOwner) return;
     void props.desktopApi?.acknowledgeThreadEnvironmentFailure?.({
       backend: selectedThread.source,
       threadId: selectedThread.id,
+      ...(selectedThreadFederationTarget ? { federationTarget: selectedThreadFederationTarget } : {}),
     })
       // The prompt is already gone from this window; a failed write only means
       // it can appear once more on a later launch, which is not worth a notice.
@@ -2386,20 +2397,11 @@ export function ThreadView(props: ThreadViewProps) {
     const input = buildInputFromOptimisticUserMessage(
       selectedThread.optimisticUserMessage,
     );
-    if (input.length === 0 || !props.desktopApi?.startTurn) {
-      dismissEnvironmentFailureChoice(selectedThreadKey);
-      return;
-    }
-
     setSetupFailureContinueError(undefined);
     setSetupFailureContinuing(true);
     props.onPendingStatusChange?.("Thinking");
     try {
-      const response = await props.desktopApi.startTurn({
-        backend: selectedThread.source,
-        federationTarget: selectedThread.federation?.ref.target ??
-          readRendererFederationTarget(),
-        threadId: selectedThread.id,
+      const fallbackTurn = {
         input,
         executionMode: selectedThread.executionMode,
         model: selectedThread.model,
@@ -2408,9 +2410,29 @@ export function ThreadView(props: ThreadViewProps) {
         fastMode: selectedThread.source === "codex"
           ? selectedThread.fastMode
           : undefined,
-      });
+      };
+      const federationTarget = selectedThreadFederationTarget;
+      const response = props.desktopApi?.continueThreadEnvironmentStartup
+        ? await props.desktopApi.continueThreadEnvironmentStartup({
+            backend: selectedThread.source,
+            federationTarget,
+            threadId: selectedThread.id,
+            ...(input.length > 0 ? { fallbackTurn } : {}),
+          })
+        : input.length > 0 && props.desktopApi?.startTurn
+          ? await props.desktopApi.startTurn({
+              ...fallbackTurn,
+              backend: selectedThread.source,
+              federationTarget,
+              threadId: selectedThread.id,
+            })
+          : undefined;
+      if (!response) {
+        throw new Error("The original request is unavailable. Send your prompt again to start this thread.");
+      }
       props.onActiveTurnIdChange?.(response.turnId);
-      dismissEnvironmentFailureChoice(selectedThreadKey);
+      if (!response.turnId) props.onPendingStatusChange?.(undefined);
+      dismissEnvironmentFailureChoice(selectedThreadKey, Boolean(props.desktopApi?.continueThreadEnvironmentStartup));
       await props.onRefreshNavigation?.();
     } catch (error) {
       props.onPendingStatusChange?.(undefined);
@@ -2561,7 +2583,7 @@ export function ThreadView(props: ThreadViewProps) {
     const environment = selectedLaunchpad.codexEnvironmentOptions?.find(
       (option) => option.id === selectedLaunchpad.codexEnvironmentId,
     );
-    if (!environment?.setupScript) {
+    if (!environment?.setupScript && !launchpadSetupProgress) {
       return undefined;
     }
     const status = launchpadSetupProgress
@@ -2575,12 +2597,15 @@ export function ThreadView(props: ThreadViewProps) {
       : undefined;
     return {
       key: `launchpad:${selectedLaunchpad.directoryKey}`,
-      phase: "setup",
+      phase: launchpadSetupProgress ? "setup" : "startup",
       status,
+      startedAt: launchpadSetupProgress?.startedAt ?? props.pendingLaunchpadCreation?.submittedAt,
+      onCancel: props.pendingLaunchpadCreation?.startup?.cancellable === false ? undefined : props.pendingLaunchpadCreation?.onCancel,
+      cancelling: props.pendingLaunchpadCreation?.cancelling,
       ...fields,
-      environmentId: fields?.environmentId ?? environment.id,
-      environmentName: fields?.environmentName ?? environment.name,
-      command: fields?.command ?? environment.setupScript,
+      environmentId: fields?.environmentId ?? environment?.id,
+      environmentName: fields?.environmentName ?? environment?.name,
+      command: fields?.command ?? environment?.setupScript,
       cwd: fields?.cwd ?? selectedLaunchpad.directoryPath,
     };
   }, [
@@ -2588,6 +2613,7 @@ export function ThreadView(props: ThreadViewProps) {
     launchpadMaterializing,
     launchpadSetupProgress,
     selectedLaunchpad,
+    props.pendingLaunchpadCreation,
   ]);
 
   const branchDriftRetentionKey = (
@@ -2857,7 +2883,7 @@ export function ThreadView(props: ThreadViewProps) {
     options?: ThreadTodoDoHereOptions,
   ): Promise<boolean> => {
     const { prompt, ...resolveOptions } = options ?? {};
-    const handoff = todo.action?.type === "start_thread" ? todo.action.prompt : undefined;
+    const handoff = todo.action?.type === "start_thread" || todo.action?.type === "send_message" ? todo.action.prompt : undefined;
     const text = prompt ?? handoff;
     if (!text || !selectedThread || threadTodoThreadKey(todo) !== threadSummaryIdentityKey(selectedThread)) return false;
     try {
@@ -3973,6 +3999,12 @@ export function ThreadView(props: ThreadViewProps) {
         scheduledFor,
       );
     } catch (error) {
+      if (error instanceof LaunchpadStartupCancelledError) {
+        setLaunchpadMaterializing(false);
+        setLaunchpadSubmittedInput([]);
+        setLaunchpadMaterializeError(undefined);
+        throw error;
+      }
       setLaunchpadMaterializeError(
         error instanceof Error ? error.message : String(error)
       );
@@ -4063,6 +4095,9 @@ export function ThreadView(props: ThreadViewProps) {
           onReloadLaunchpadConfiguration: props.onReloadLaunchpadConfiguration,
           onMaterializeLaunchpad: handleMaterializeLaunchpad,
           onCancelLaunchpad: props.onCancelLaunchpad,
+          onCancelLaunchpadStartup: props.pendingLaunchpadCreation?.onCancel,
+          launchpadStartupCancelling: props.pendingLaunchpadCreation?.cancelling,
+          launchpadStartupCancellable: props.pendingLaunchpadCreation?.startup?.cancellable,
           launchpadCancelRequest: props.launchpadCancelRequest,
           onDetachLaunchpadParent: props.onDetachLaunchpadParent,
           onSelectLaunchpadParent: props.onSelectLaunchpadParent,
@@ -4226,6 +4261,9 @@ export function ThreadView(props: ThreadViewProps) {
               <div className="launchpad-pending">
                 <p className="eyebrow">Preparing transcript</p>
                 <h3>Starting {composerLaunchpad.directoryLabel}</h3>
+                {props.pendingLaunchpadCreation ? <p><StartupTiming submittedAt={props.pendingLaunchpadCreation.submittedAt} startedAt={props.pendingLaunchpadCreation.startup?.startedAt} /></p> : null}
+                {props.pendingLaunchpadCreation?.cancelError ? <p role="alert">{props.pendingLaunchpadCreation.cancelError}</p> : null}
+                {props.pendingLaunchpadCreation?.connectionLost ? <p role="status">Connection to owner interrupted. Startup status will resume when it reconnects. Cancellation must be confirmed by the owner.</p> : null}
                 <p>
                   {launchpadRunningCodexEnvironmentSetup
                     ? `Running the ${
@@ -4605,6 +4643,7 @@ export function ThreadView(props: ThreadViewProps) {
           onStartReview={startTodoReview}
           onDoHere={doTodoHere}
           findOpen={props.findOpen}
+          revealRequest={props.threadTodoRevealRequest}
         />
       ) : null}
       {props.findOpen ? (
@@ -4839,6 +4878,7 @@ export function ThreadView(props: ThreadViewProps) {
             // The card's own answer path: start, steer or queue.
             onAnswerQuestion: handleAnswerAsyncQuestions,
             sentQuestionAnswers: threadSentAsyncQuestionAnswers,
+            revealRequest: props.threadTodoRevealRequest,
           } : undefined,
         }
       : {};

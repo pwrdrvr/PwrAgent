@@ -16,6 +16,8 @@ export const FEDERATION_CAPABILITIES = [
   "navigation_snapshot_deltas",
   "navigation_group_invalidations",
   "thread_grouping",
+  "archive_subthread_promotion_v1",
+  "thread_parent_mutation_v1",
   "thread_detail",
   "turn_control",
   "durable_turn_requests_v1",
@@ -62,6 +64,21 @@ export const FEDERATION_CAPABILITIES = [
    * keeps `threadTodos.list` and the change markers without it.
    */
   "thread_todo_feed",
+  /**
+   * The owner applies a handoff card's Where, environment and speed from
+   * `threadTodos.runAction`, sends the model to a peer start, and answers
+   * `threadTodos.listDispatchEnvironments`. A viewer shows an older owner's
+   * card with its model chip only.
+   */
+  "thread_todo_dispatch_target",
+  /** The owner accepts messageTarget on a handoff instead of starting a thread. */
+  "thread_todo_message",
+  /**
+   * The owner answers `threadTodos.raisePlan`, raising a handoff card's
+   * steps as the started thread's own `plan` card. A viewer starting a
+   * thread there sends the prompt alone without it.
+   */
+  "thread_todo_plan",
   /** Owner-persisted async question dismissals and change notifications. */
   "operator_questions",
   "operator_requests",
@@ -1054,6 +1071,25 @@ export function formatFederationPeerDisplayLabel(
   return parts.profileName
     ? `${parts.label} / ${parts.profileName}`
     : parts.label;
+}
+
+/**
+ * The single-line name a compact face draws: the federation's short name
+ * for the machine when it has one, with the same profile suffix as
+ * `formatFederationPeerDisplayLabel`. Pair it with that full label as the
+ * tooltip, so the exact machine name is one hover away.
+ */
+export function formatFederationPeerShortDisplayLabel(
+  peer: { label: string; profileName?: string; shortLabel?: string },
+  visiblePeers: readonly {
+    label: string;
+    profileName?: string;
+    revokedAt?: number;
+  }[],
+): string {
+  const parts = formatFederationPeerDisplayLabelParts(peer, visiblePeers);
+  const machine = parts.shortLabel ?? parts.label;
+  return parts.profileName ? `${machine} / ${parts.profileName}` : machine;
 }
 
 export function federationTargetKey(target: FederationTarget): string {

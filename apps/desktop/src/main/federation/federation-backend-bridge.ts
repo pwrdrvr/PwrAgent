@@ -1,6 +1,8 @@
 import { authenticateMessageOrigin, type ResolvedSourceInstance } from "@pwragent/federation/federation-message-origin";
+import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
 export { authenticateMessageOrigin } from "@pwragent/federation/federation-message-origin";
 import { ForgeReadError, type ForgeReadRequest } from "../pr-status/forge-tool-contract";
+import { HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE } from "@pwragent/shared";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -18,6 +20,7 @@ import { conditionalThreadRead } from "../app-server/conditional-thread-read";
 import {
   validateArchivedThreadLookup,
   type FederationArchivedThreadLookupRequest,
+  type FederationArchivedThreadLookupResponse,
   type FederationProjectPage,
   type FederationProjectPageRequest,
 } from "./federation-collection-reads";
@@ -120,6 +123,10 @@ import type {
   MarkThreadSeenResponse,
   MessagingPlatformStatus,
   PwrSnapConnectionStatus,
+  ContinueThreadEnvironmentStartupRequest,
+  ContinueThreadEnvironmentStartupResponse,
+  AcknowledgeThreadEnvironmentFailureRequest,
+  AcknowledgeThreadEnvironmentFailureResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
   SetThreadLockRequest,
@@ -194,6 +201,8 @@ import type {
   SetThreadTokenMiserResponse,
   SetThreadModelSettingsRequest,
   SetThreadModelSettingsResponse,
+  MutateThreadParentV1Request,
+  PwrAgentThreadInspectionResponse,
   SetThreadParentRequest,
   SetThreadParentResponse,
   SetSubthreadsCollapsedRequest,
@@ -542,12 +551,15 @@ export const FEDERATION_BACKEND_METHODS = {
   supportsMessagingPdfTools: "backend.supportsMessagingPdfTools",
   listBackends: "backend.listBackends",
   markThreadSeen: "backend.markThreadSeen",
+  continueThreadEnvironmentStartup: "backend.continueThreadEnvironmentStartup",
+  acknowledgeThreadEnvironmentFailure: "backend.acknowledgeThreadEnvironmentFailure",
   setThreadReaction: "backend.setThreadReaction",
   setThreadLock: "backend.setThreadLock",
   setThreadPin: "backend.setThreadPin",
   reorderThreadPins: "backend.reorderThreadPins",
   mountRemoteChild: "backend.mountRemoteChild",
   setThreadParent: "backend.setThreadParent",
+  mutateThreadParentV1: "backend.mutateThreadParentV1",
   updateSubthreadOrder: "backend.updateSubthreadOrder",
   setSubthreadsCollapsed: "backend.setSubthreadsCollapsed",
   readForge: "backend.readForge",
@@ -623,7 +635,11 @@ export const FEDERATION_BACKEND_METHODS = {
   listWorktreeUnpublishedCommits: "backend.listWorktreeUnpublishedCommits",
   getWorktreeUnpublishedCommitDiff: "backend.getWorktreeUnpublishedCommitDiff",
   materializeDirectoryLaunchpad: "backend.materializeDirectoryLaunchpad",
+  manageLaunchpadCreation: "backend.manageLaunchpadCreation",
   handoffThreadWorkspace: "backend.handoffThreadWorkspace",
+  // Separate so an owner that predates these moves answers method_not_found.
+  // It would read an unknown direction as Handoff to Local and ignore baseRef.
+  handoffThreadWorkspaceToNewWorktree: "backend.handoffThreadWorkspaceToNewWorktree",
   recreateThreadWorktree: "backend.recreateThreadWorktree",
   moveThreadToMainCheckout: "backend.moveThreadToMainCheckout",
   renameThread: "backend.renameThread",
@@ -693,6 +709,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.supportsMessagingPdfTools]: "messaging_route",
   [FEDERATION_BACKEND_METHODS.listBackends]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.markThreadSeen]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.continueThreadEnvironmentStartup]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.acknowledgeThreadEnvironmentFailure]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.setThreadReaction]: "thread_navigation",
   // A lock refuses every turn on the owner's thread, so it takes the same
   // capability as starting one.
@@ -701,6 +719,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.reorderThreadPins]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.mountRemoteChild]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.setThreadParent]: "thread_grouping",
+  [FEDERATION_BACKEND_METHODS.mutateThreadParentV1]: "thread_grouping",
   [FEDERATION_BACKEND_METHODS.updateSubthreadOrder]: "thread_grouping",
   [FEDERATION_BACKEND_METHODS.setSubthreadsCollapsed]: "thread_grouping",
   // PR detach cancels pending auto-dispatch work and auto-dispatch arms
@@ -780,7 +799,9 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.listWorktreeUnpublishedCommits]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.getWorktreeUnpublishedCommitDiff]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad]: "environment_actions",
+  [FEDERATION_BACKEND_METHODS.manageLaunchpadCreation]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.handoffThreadWorkspace]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.handoffThreadWorkspaceToNewWorktree]: "turn_control",
   [FEDERATION_BACKEND_METHODS.recreateThreadWorktree]: "turn_control",
   [FEDERATION_BACKEND_METHODS.moveThreadToMainCheckout]: "turn_control",
   [FEDERATION_BACKEND_METHODS.renameThread]: "turn_control",
@@ -814,6 +835,10 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
 export function additionalFederationBackendCapabilities(
   envelope: FederationRequestEnvelope,
 ): readonly FederationCapability[] {
+  if (envelope.method === FEDERATION_BACKEND_METHODS.updateSubthreadOrder
+    && (envelope.params as UpdateSubthreadOrderRequest | undefined)?.archivePromotion) {
+    return ["archive_subthread_promotion_v1"];
+  }
   if (envelope.method === FEDERATION_BACKEND_METHODS.submitTurnRequest
     || envelope.method === FEDERATION_BACKEND_METHODS.getTurnRequest) return ["durable_turn_requests_v1"];
   if (envelope.method === FEDERATION_BACKEND_METHODS.submitSteerRequest
@@ -850,7 +875,7 @@ export type FederationBackendOperations = {
   lookupArchivedThreads?(
     request: FederationArchivedThreadLookupRequest,
     rpcOptions?: FederationRpcRequestOptions,
-  ): Promise<Pick<AppServerListThreadsResponse, "threads">>;
+  ): Promise<FederationArchivedThreadLookupResponse>;
   getNavigationSnapshot(
     request?: GetNavigationSnapshotRequest,
     rpcOptions?: FederationRpcRequestOptions,
@@ -903,7 +928,7 @@ export type FederationBackendOperations = {
     request: FederationReadTurnAssistantReplyRequest,
   ): Promise<FederationReadTurnAssistantReplyResponse>;
   readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse>;
-  readThreadFamilyPricing(request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse>;
+  readThreadFamilyPricing(request: ReadThreadFamilyPricingRequest, rpcOptions?: FederationRpcRequestOptions): Promise<ReadThreadFamilyPricingResponse>;
   analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse>;
   inspectTokenMiserOutput(request: InspectTokenMiserOutputRequest): Promise<InspectTokenMiserOutputResponse>;
   analyzeThreadToolHistory(
@@ -918,6 +943,8 @@ export type FederationBackendOperations = {
   ): Promise<AppServerListSkillsResponse>;
   listBackends(request?: ListBackendsRequest): Promise<ListBackendsResponse>;
   markThreadSeen(request: MarkThreadSeenRequest): Promise<MarkThreadSeenResponse>;
+  continueThreadEnvironmentStartup?(request: ContinueThreadEnvironmentStartupRequest): Promise<ContinueThreadEnvironmentStartupResponse>;
+  acknowledgeThreadEnvironmentFailure?(request: AcknowledgeThreadEnvironmentFailureRequest): Promise<AcknowledgeThreadEnvironmentFailureResponse>;
   setThreadReaction(
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse>;
@@ -932,6 +959,7 @@ export type FederationBackendOperations = {
   mountRemoteChild(
     request: FederationMountRemoteChildRequest,
   ): Promise<FederationMountRemoteChildResponse>;
+  mutateThreadParentV1(request: MutateThreadParentV1Request): Promise<PwrAgentThreadInspectionResponse>;
   setThreadParent(
     request: SetThreadParentRequest,
   ): Promise<SetThreadParentResponse>;
@@ -1117,6 +1145,10 @@ export type FederationBackendOperations = {
       sourceInstanceId?: FederationInstanceId;
     },
   ): Promise<MaterializeDirectoryLaunchpadResponse>;
+  manageLaunchpadCreation?(
+    request: LaunchpadCreationRequest,
+    sourceInstanceId?: FederationInstanceId,
+  ): Promise<LaunchpadCreationResponse>;
   handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse>;
@@ -1488,6 +1520,37 @@ export function registerFederationBackendHandlers(params: {
       ),
   );
   params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.continueThreadEnvironmentStartup,
+    async (envelope) => {
+      if (!params.backend.continueThreadEnvironmentStartup) throw new Error("Upgrade the thread owner to continue environment startup.");
+      const request = envelope.params as Omit<ContinueThreadEnvironmentStartupRequest, "fallbackTurn"> & {
+        fallbackTurn?: Omit<NonNullable<ContinueThreadEnvironmentStartupRequest["fallbackTurn"]>, "input"> & {
+          input: FederationWireTurnInputItem[];
+          messageOrigin?: AppServerThreadMessageOrigin;
+        };
+      };
+      const fallbackTurn = request.fallbackTurn
+        ? {
+            ...request.fallbackTurn,
+            input: await resolveFederationTurnInput(params.resolveTurnInput, request.fallbackTurn.input, envelope.sourceInstanceId),
+            messageOrigin: authenticateMessageOrigin({
+              messageOrigin: request.fallbackTurn.messageOrigin,
+              resolveSourceInstance: params.resolveSourceInstance,
+              sourceInstanceId: envelope.sourceInstanceId,
+            }),
+          }
+        : undefined;
+      return await params.backend.continueThreadEnvironmentStartup({ ...request, fallbackTurn });
+    },
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.acknowledgeThreadEnvironmentFailure,
+    async (envelope) => {
+      if (!params.backend.acknowledgeThreadEnvironmentFailure) throw new Error("Upgrade the thread owner to acknowledge environment failures.");
+      return await params.backend.acknowledgeThreadEnvironmentFailure(envelope.params as AcknowledgeThreadEnvironmentFailureRequest);
+    },
+  );
+  params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.setThreadReaction,
     async (envelope) =>
       await params.backend.setThreadReaction(
@@ -1522,6 +1585,10 @@ export function registerFederationBackendHandlers(params: {
       await params.backend.mountRemoteChild(
         envelope.params as FederationMountRemoteChildRequest,
       ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.mutateThreadParentV1,
+    async (envelope) => await params.backend.mutateThreadParentV1(envelope.params as MutateThreadParentV1Request),
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.setThreadParent,
@@ -2099,6 +2166,10 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as GetWorktreeUnpublishedCommitDiffRequest,
       ),
   );
+  if (params.backend.manageLaunchpadCreation) {
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.manageLaunchpadCreation, async (envelope) =>
+      await params.backend.manageLaunchpadCreation!(envelope.params as LaunchpadCreationRequest, envelope.sourceInstanceId));
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad,
     async (envelope) => {
@@ -2112,19 +2183,20 @@ export function registerFederationBackendHandlers(params: {
         resolveSourceInstance: params.resolveSourceInstance,
         sourceInstanceId: envelope.sourceInstanceId,
       });
-      const input = wireInput
-        ? await resolveFederationTurnInput(
-            params.resolveTurnInput,
-            wireInput,
-            envelope.sourceInstanceId,
-          )
-        : undefined;
+      // Only diagnostic text crosses this boundary before registration. Blob
+      // resolution can outlive the connection and must belong to the operation.
+      const input = wireInput?.filter((item) => item.type === "text");
       return await params.backend.materializeDirectoryLaunchpad(
         {
           ...request,
           ...(input ? { input } : {}),
         },
         {
+          ...(wireInput ? { resolveInput: () => resolveFederationTurnInput(
+            params.resolveTurnInput,
+            wireInput,
+            envelope.sourceInstanceId,
+          ) } : {}),
           ...(messageOrigin ? { messageOrigin } : {}),
           sourceInstanceId: envelope.sourceInstanceId,
           onCodexEnvironmentSetupProgress: (event) => {
@@ -2140,6 +2212,16 @@ export function registerFederationBackendHandlers(params: {
       await params.backend.handoffThreadWorkspace(
         envelope.params as HandoffThreadWorkspaceRequest,
       ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.handoffThreadWorkspaceToNewWorktree,
+    async (envelope) => {
+      const request = envelope.params as HandoffThreadWorkspaceRequest;
+      if (request.direction !== "local-to-worktree" && request.direction !== "worktree-to-worktree") {
+        throw new Error("This handoff only moves a thread into a new worktree.");
+      }
+      return await params.backend.handoffThreadWorkspace(request);
+    },
   );
   if (params.backend.recreateThreadWorktree) {
     params.router.registerHandler(
@@ -2361,7 +2443,7 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async lookupArchivedThreads(
     request: FederationArchivedThreadLookupRequest,
     rpcOptions?: FederationRpcRequestOptions,
-  ): Promise<Pick<AppServerListThreadsResponse, "threads">> {
+  ): Promise<FederationArchivedThreadLookupResponse> {
     return await this.rpc.request({
       method: FEDERATION_BACKEND_METHODS.lookupArchivedThreads,
       params: request,
@@ -2507,8 +2589,16 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     return await this.rpc.request<ReadUsageActivityResponse>({ method: FEDERATION_BACKEND_METHODS.readUsageActivity, params: request });
   }
 
-  async readThreadFamilyPricing(request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse> {
-    return await this.rpc.request<ReadThreadFamilyPricingResponse>({ method: FEDERATION_BACKEND_METHODS.readThreadFamilyPricing, params: request });
+  async readThreadFamilyPricing(
+    request: ReadThreadFamilyPricingRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<ReadThreadFamilyPricingResponse> {
+    return await this.rpc.request<ReadThreadFamilyPricingResponse>({
+      method: FEDERATION_BACKEND_METHODS.readThreadFamilyPricing,
+      params: request,
+      ...(rpcOptions?.deadlineAt !== undefined ? { deadlineAt: rpcOptions.deadlineAt } : {}),
+      ...(rpcOptions?.signal ? { signal: rpcOptions.signal } : {}),
+    });
   }
 
   async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {
@@ -2592,6 +2682,22 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     });
   }
 
+  async continueThreadEnvironmentStartup(request: ContinueThreadEnvironmentStartupRequest): Promise<ContinueThreadEnvironmentStartupResponse> {
+    const qualified = request.fallbackTurn ? this.qualifyThreadLinks(request.fallbackTurn.input) : undefined;
+    const input = qualified && this.prepareTurnInput ? await this.prepareTurnInput(qualified) : qualified;
+    return await this.rpc.request<ContinueThreadEnvironmentStartupResponse>({
+      method: FEDERATION_BACKEND_METHODS.continueThreadEnvironmentStartup,
+      params: { ...request, ...(request.fallbackTurn && input ? { fallbackTurn: { ...request.fallbackTurn, input } } : {}) },
+    });
+  }
+
+  async acknowledgeThreadEnvironmentFailure(request: AcknowledgeThreadEnvironmentFailureRequest): Promise<AcknowledgeThreadEnvironmentFailureResponse> {
+    return await this.rpc.request<AcknowledgeThreadEnvironmentFailureResponse>({
+      method: FEDERATION_BACKEND_METHODS.acknowledgeThreadEnvironmentFailure,
+      params: request,
+    });
+  }
+
   async setThreadReaction(
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse> {
@@ -2624,6 +2730,13 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<FederationMountRemoteChildResponse> {
     return await this.rpc.request<FederationMountRemoteChildResponse>({
       method: FEDERATION_BACKEND_METHODS.mountRemoteChild,
+      params: request,
+    });
+  }
+
+  async mutateThreadParentV1(request: MutateThreadParentV1Request): Promise<PwrAgentThreadInspectionResponse> {
+    return await this.rpc.request<PwrAgentThreadInspectionResponse>({
+      method: FEDERATION_BACKEND_METHODS.mutateThreadParentV1,
       params: request,
     });
   }
@@ -3357,13 +3470,31 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     });
   }
 
+  async manageLaunchpadCreation(request: LaunchpadCreationRequest): Promise<LaunchpadCreationResponse> {
+    return await this.rpc.request<LaunchpadCreationResponse>({
+      method: FEDERATION_BACKEND_METHODS.manageLaunchpadCreation,
+      params: request,
+    });
+  }
+
   async handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> {
-    return await this.rpc.request<HandoffThreadWorkspaceResponse>({
-      method: FEDERATION_BACKEND_METHODS.handoffThreadWorkspace,
-      params: request,
-    });
+    // Older owners know only the original method and must refuse these moves.
+    const toNewWorktree = request.direction === "worktree-to-worktree" || Boolean(request.baseRef);
+    try {
+      return await this.rpc.request<HandoffThreadWorkspaceResponse>({
+        method: toNewWorktree
+          ? FEDERATION_BACKEND_METHODS.handoffThreadWorkspaceToNewWorktree
+          : FEDERATION_BACKEND_METHODS.handoffThreadWorkspace,
+        params: request,
+      });
+    } catch (error) {
+      if (toNewWorktree && hasFederationErrorCode(error, "method_not_found")) {
+        throw new Error(HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE);
+      }
+      throw error;
+    }
   }
 
   // Both run Git on the owner, which can take a while on a large checkout.

@@ -150,6 +150,37 @@ describe("buildApprovalIntent", () => {
     );
   });
 
+  it("says how much of a long MCP parameter a chat approval leaves out", () => {
+    const body = "Moves every macOS job onto the hosted runner. ".repeat(20).trim();
+    const intent = buildApprovalIntent({
+      id: "mcp-tool-long",
+      createdAt: 1000,
+      request: {
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          requestId: "forge-tool:fixture",
+          serverName: "GitHub",
+          mode: "form",
+          message: "Allow the agent to open a pull request on GitHub?",
+          requestedSchema: { type: "object", properties: {} },
+          _meta: {
+            pwragent_approval_kind: "mcp_tool_call",
+            tool_params_display: [
+              { name: "body", value: body, format: "markdown" },
+              { name: "comment", location: "src/auth/password-reset.ts:42", value: "Check the expiry first.", format: "markdown" },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(intent.body).toContain(`body: ${body.slice(0, 300)}… (${body.length.toLocaleString("en-US")} characters; the desktop card shows all of it)`);
+    // A comment's location labels its line; a file name is not a credential.
+    expect(intent.body).toContain("src/auth/password-reset.ts:42: Check the expiry first.");
+  });
+
   it("lists MCP tool parameters with secrets withheld", () => {
     const intent = buildApprovalIntent({
       id: "mcp-tool-1",
@@ -358,12 +389,12 @@ describe("buildApprovalIntent", () => {
     expect(intent.decisions).toEqual([
       expect.objectContaining({
         decision: "accept",
-        label: "Approve Once",
+        label: "Approve once",
       }),
       expect.objectContaining({
         id: "approval:accept_with_execpolicy_amendment:1",
         decision: "accept_with_execpolicy_amendment",
-        label: "Always Allow Prefix",
+        label: "Always allow prefix",
         description: "pnpm test",
         style: "secondary",
         response: { decision: structuredDecision },
@@ -411,12 +442,12 @@ describe("buildApprovalIntent", () => {
     expect(intent.decisions).toEqual([
       expect.objectContaining({ decision: "accept" }),
       expect.objectContaining({
-        label: "Always Allow Prefix 1",
+        label: "Always allow prefix 1",
         description: "pnpm test",
         response: { decision: firstDecision },
       }),
       expect.objectContaining({
-        label: "Always Allow Prefix 2",
+        label: "Always allow prefix 2",
         description: "pnpm lint",
         response: { decision: secondDecision },
       }),
@@ -429,10 +460,10 @@ describe("buildApprovalIntent", () => {
     ]);
     expect(intent.body).toContain("Persistent prefixes:");
     expect(intent.body).toContain(
-      ["Always Allow Prefix 1:", "```shell", "pnpm test", "```"].join("\n"),
+      ["Always allow prefix 1:", "```shell", "pnpm test", "```"].join("\n"),
     );
     expect(intent.body).toContain(
-      ["Always Allow Prefix 2:", "```shell", "pnpm lint", "```"].join("\n"),
+      ["Always allow prefix 2:", "```shell", "pnpm lint", "```"].join("\n"),
     );
   });
 

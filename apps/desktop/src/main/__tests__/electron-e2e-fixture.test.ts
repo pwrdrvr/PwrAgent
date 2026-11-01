@@ -3,9 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCloseHarness } from "./fixtures/electron-close-harness";
 import {
   assertOnboardingSeedTook,
   closeElectronApplication,
+  closeElectronWithSessionDrain,
   configureElectronE2eSecretStorageEnv,
   configureElectronE2eReleaseEnv,
   nextRendererViewportRequest,
@@ -72,6 +74,78 @@ describe("Electron E2E fixture teardown", () => {
       classification: "healthy",
       forceExitOutcome: "not-needed",
     });
+  });
+
+  it("keeps Electron alive until each owned session has completed connections, cookies, and cache cleanup", async () => {
+    let connectionStarted!: () => void;
+    const connectionStart = new Promise<void>((resolve) => { connectionStarted = resolve; });
+    let releaseConnections!: () => void;
+    const connectionsClosed = new Promise<void>((resolve) => { releaseConnections = resolve; });
+    let flushStarted!: () => void;
+    const flushStart = new Promise<void>((resolve) => { flushStarted = resolve; });
+    let releaseFlush!: () => void;
+    const cookiesFlushed = new Promise<void>((resolve) => { releaseFlush = resolve; });
+    let cacheStarted!: () => void;
+    const cacheStart = new Promise<void>((resolve) => { cacheStarted = resolve; });
+    let releaseCache!: () => void;
+    const cacheCleared = new Promise<void>((resolve) => { releaseCache = resolve; });
+    const ownedSession = {
+      closeAllConnections: vi.fn(async () => {
+        connectionStarted();
+        await connectionsClosed;
+      }),
+      cookies: {
+        flushStore: vi.fn(async () => {
+          flushStarted();
+          await cookiesFlushed;
+        }),
+      },
+      clearData: vi.fn(async () => {
+        cacheStarted();
+        await cacheCleared;
+      }),
+    };
+    const otherSession = {
+      closeAllConnections: vi.fn(async () => undefined),
+      cookies: { flushStore: vi.fn(async () => undefined) },
+      clearData: vi.fn(async () => undefined),
+    };
+    const harness = createCloseHarness([ownedSession, otherSession, ownedSession]);
+    const close = harness.close;
+    const closing = closeElectronWithSessionDrain(harness.electronApp);
+
+    await connectionStart;
+    expect(ownedSession.cookies.flushStore).not.toHaveBeenCalled();
+    expect(ownedSession.clearData).not.toHaveBeenCalled();
+    expect(harness.child.exitCode).toBeNull();
+    releaseConnections();
+    await flushStart;
+    expect(ownedSession.clearData).not.toHaveBeenCalled();
+    expect(harness.child.exitCode).toBeNull();
+    releaseFlush();
+    await cacheStart;
+    expect(harness.child.exitCode).toBeNull();
+    releaseCache();
+    await closing;
+    expect(ownedSession.closeAllConnections).toHaveBeenCalledTimes(1);
+    expect(ownedSession.cookies.flushStore).toHaveBeenCalledTimes(1);
+    expect(ownedSession.clearData).toHaveBeenCalledExactlyOnceWith({ dataTypes: ["cache"] });
+    expect(otherSession.closeAllConnections).toHaveBeenCalledTimes(1);
+    expect(otherSession.cookies.flushStore).toHaveBeenCalledTimes(1);
+    expect(otherSession.clearData).toHaveBeenCalledExactlyOnceWith({ dataTypes: ["cache"] });
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds native quit when a cookie store fails after Playwright starts closing", async () => {
+    const harness = createCloseHarness([{
+      closeAllConnections: async () => undefined,
+      cookies: { flushStore: async () => { throw new Error("cookie store failed to flush"); } },
+      clearData: async () => undefined,
+    }]);
+    await expect(closeElectronWithSessionDrain(harness.electronApp)).rejects.toThrow("cookie store failed to flush");
+    expect(harness.close).toHaveBeenCalledOnce();
+    expect(harness.child.exitCode).toBeNull();
+    expect(harness.app.listenerCount("will-quit")).toBe(1);
   });
 
   it("keeps keychain access disabled while enabling writable screenshot storage", () => {

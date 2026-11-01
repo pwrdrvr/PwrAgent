@@ -17,6 +17,7 @@ import {
   THREAD_TODO_PROMPT_MAX_LENGTH,
   THREAD_TODO_TITLE_MAX_LENGTH,
   parseThreadTodoItemTexts,
+  parseThreadTodoMessageTarget,
   threadTodoPrerequisites,
   threadTodoSteps,
 } from "@pwragent/shared";
@@ -52,6 +53,12 @@ const TODO_WRITING_GUIDANCE = [
   "Use normal spacing and complete sentences, without compressed agent shorthand.",
   "Organize longer prompts with Markdown headings, lists, and tables where helpful.",
 ].join(" ");
+// Repeated on add_todo and list_todos: a backend that loads tool schemas on
+// demand may not read resolve_todo until the work is done.
+const CLAIM_GUIDANCE = [
+  "When the operator asks you to do a card's work in this thread, claim it first.",
+  "Call resolve_todo with resolution sent_here before you start, as the card's Do it here button does.",
+].join(" ");
 
 type ThreadTodoToolContext = {
   backend: AppServerBackendKind;
@@ -84,6 +91,8 @@ export type PwrAgentThreadTodoHandler = {
       id?: string;
       key?: string;
       status: Exclude<ThreadTodoStatus, "open">;
+      /** With done: the operator handed the card to this thread. */
+      resolution?: "sent_here";
       allowOpenItems?: boolean;
     },
   ) => ThreadTodo | Promise<ThreadTodo>;
@@ -203,10 +212,23 @@ async function dispatchOperation(
           message: "resolve_todo allowOpenItems must be true or false.",
         });
       }
+      if (args.resolution !== undefined && args.resolution !== "sent_here") {
+        return agentToolFailure({
+          code: "invalid_arguments",
+          message: "resolve_todo resolution must be sent_here.",
+        });
+      }
+      if (args.resolution !== undefined && status !== "done") {
+        return agentToolFailure({
+          code: "invalid_arguments",
+          message: "resolve_todo resolution applies only to done.",
+        });
+      }
       const todo = await handler.resolve(context, {
         ...(id ? { id } : {}),
         ...(key ? { key } : {}),
         status,
+        ...(args.resolution === "sent_here" ? { resolution: "sent_here" as const } : {}),
         ...(args.allowOpenItems === true ? { allowOpenItems: true } : {}),
       });
       return agentToolSuccess({ todo: summarizeTodo(todo) });
@@ -280,6 +302,14 @@ function normalizeAction(
   }
   const action = value as Record<string, unknown>;
   switch (action.type) {
+    case "send_message": {
+      const prompt = optionalString(action.prompt);
+      const target = parseThreadTodoMessageTarget(action.target);
+      if (!prompt || prompt.length > THREAD_TODO_PROMPT_MAX_LENGTH || !target) {
+        return { ok: false, message: "send_message requires a prompt of at most 20000 characters and target with backend and threadId." };
+      }
+      return { ok: true, value: { type: "send_message", prompt, target } };
+    }
     case "start_review":
       return { ok: true, value: { type: "start_review" } };
     case "merge_pull_request": {
@@ -340,7 +370,7 @@ function normalizeAction(
       return {
         ok: false,
         message:
-          "add_todo action.type must be start_review, merge_pull_request or start_thread.",
+          "add_todo action.type must be start_review, merge_pull_request, start_thread or send_message.",
       };
   }
 }
@@ -580,6 +610,8 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Use start_review when the work is ready for review.",
         "Use merge_pull_request when the PR is green and ready to land.",
         "Use start_thread to propose a follow-up thread with its full prompt.",
+        "Use send_message to preview a request for an existing thread. Name its target and prompt. The operator sends it.",
+        "Prefer this over start_thread when an existing thread owns the work.",
         TODO_WRITING_GUIDANCE,
         "Omit the action for a reminder that must not be lost.",
         "The operator clicks to run an action, and you never run it.",
@@ -587,14 +619,17 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Pass a stable key to update one card instead of adding another each turn.",
         "For a multi-step follow-up, raise one card with items, its checkable steps, rather than one card per step.",
         "On a start_thread card, items are the new thread's plan and never block starting it.",
-        "The new thread does not see the card, so its prompt must carry those steps too.",
+        "The new thread gets those steps as its own checklist card, keyed plan, to tick as it works.",
+        "It does not see this card, so its prompt must still carry the steps.",
         "Use prerequisites only for what the operator must do before the thread can start.",
         "Cloning a repository the thread will work in is one example.",
         "Leave prerequisites out when the thread can start right away.",
-        "On any other card, items are the operator's steps.",
+        "On a send_message card, items are the requested work and do not block sending. Include those steps in the prompt.",
+        "On reminder, review, and merge cards, items are the operator's steps.",
         "A card with unchecked blocking steps cannot be marked done until they are checked.",
         "Re-adding a key with items keeps the id and checked state of every step whose text is unchanged.",
         "Use update_todo to change some fields of a card you already raised.",
+        CLAIM_GUIDANCE,
         "Pass project when the work is for another project, and raise one card per project.",
         "For the exact project, pass a projectKey from list_instance_projects for this machine.",
       ].join(" ");
@@ -609,11 +644,13 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "A model may be named by id or by its display name, and the card stores the id.",
       ].join(" ");
     case "list_todos":
-      return "List this thread's to-do cards. Defaults to open cards.";
+      return ["List this thread's to-do cards. Defaults to open cards.", CLAIM_GUIDANCE].join(" ");
     case "resolve_todo":
       return [
         "Mark one of this thread's to-do cards done or dismissed, by id or key.",
         "Use it when a card no longer applies.",
+        CLAIM_GUIDANCE,
+        "Otherwise the card stays open while you work, and the operator can start or dismiss it again.",
         "Marking a card done fails while any of its steps is unchecked, and the error names them.",
         "On a start_thread card only its prerequisites count.",
         "Check finished steps with update_todo first.",
@@ -652,7 +689,7 @@ function inputSchemaForOperation(
               "A step whose text is unchanged keeps its id and checked state.",
               "A new text starts unchecked, and a step you leave out is removed.",
               "Omit items to keep the card's steps as they are.",
-              "On a start_thread card these are the new thread's steps, and they do not block the start.",
+              "On start_thread and send_message cards these are the destination thread's steps and do not block dispatch.",
             ].join(" "),
           },
           prerequisites: {
@@ -685,7 +722,7 @@ function inputSchemaForOperation(
             properties: {
               type: {
                 type: "string",
-                enum: ["start_review", "merge_pull_request", "start_thread"],
+                enum: ["start_review", "merge_pull_request", "start_thread", "send_message"],
               },
               pullRequest: {
                 type: "string",
@@ -695,7 +732,19 @@ function inputSchemaForOperation(
               prompt: {
                 type: "string",
                 description:
-                  "start_thread only: the complete first message for the new thread. It must stand alone, because the new thread does not see this one.",
+                  "start_thread or send_message: the complete proposed message. Include all context the destination needs.",
+              },
+              target: {
+                type: "object",
+                description: "send_message only: the existing destination thread. Find it with search_threads or read_thread first. The operator can change it before sending.",
+                required: ["backend", "threadId"],
+                properties: {
+                  backend: { type: "string" },
+                  threadId: { type: "string" },
+                  instanceId: { type: "string", description: "Remote owner, if on another machine." },
+                  title: { type: "string", description: "Destination title shown in the preview." },
+                  instanceLabel: { type: "string", description: "Remote machine label shown in the preview." },
+                },
               },
               title: {
                 type: "string",
@@ -767,7 +816,7 @@ function inputSchemaForOperation(
             type: "string",
             description: "The project the work is for: a projectKey from list_instance_projects, a name, or a path. Empty returns the card to this thread's project.",
           },
-          prompt: { type: "string", description: "Handoff cards: the new thread's complete first message." },
+          prompt: { type: "string", description: "Handoff or message cards: the complete proposed message." },
           threadTitle: { type: "string", description: "Handoff cards: the new thread's name. Empty clears it." },
           model: {
             type: "string",
@@ -816,10 +865,16 @@ function inputSchemaForOperation(
             enum: ["done", "dismissed"],
             description: "Defaults to done.",
           },
+          resolution: {
+            type: "string",
+            enum: ["sent_here"],
+            description:
+              "With done: the operator asked you to do the card's work in this thread. Resolve before you start, so the card cannot run twice.",
+          },
           allowOpenItems: {
             type: "boolean",
             description:
-              "With done: mark the card done although some steps are unchecked. Pass it only when the operator says the remaining steps no longer apply.",
+              "With done: mark the card done although some steps are unchecked. Pass it only when the operator says the remaining steps no longer apply. Also pass it with resolution sent_here when those steps are the work you take on.",
           },
         },
       };

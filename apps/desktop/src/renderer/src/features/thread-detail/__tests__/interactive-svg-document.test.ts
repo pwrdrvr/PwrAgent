@@ -11,6 +11,7 @@ describe("interactiveSvgDocument", () => {
     expect(document).toContain("script-src 'unsafe-inline'");
     expect(document).toContain("form-action 'none'");
     expect(document).toContain("frame-src 'none'");
+    expect(document).toContain("require-trusted-types-for 'script'");
     expect(document).toContain("onload=\"init(evt)\"");
     expect(document).toContain("function init() {}");
   });

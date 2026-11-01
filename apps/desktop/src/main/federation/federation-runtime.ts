@@ -67,6 +67,7 @@ import type {
   AnalyzeThreadToolHistoryRequest,
   AnalyzeThreadToolHistoryResponse,
   AgentEvent,
+  ArchiveSubthreadPromotion,
   AppServerListSkillsResponse,
   AppServerListThreadsResponse,
   AppServerReadThreadResponse,
@@ -166,6 +167,7 @@ import {
   MAX_CELESTIAL_ASSIGNMENTS,
   buildPrependPinRank,
   buildFederatedThreadRef,
+  sortSubthreadSummaries,
   buildThreadIdentityKey,
   encodeLegacyThreadIdentityKey,
   federatedThreadIdentityKey,
@@ -178,6 +180,7 @@ import {
   isFederationEventClass,
   isAppServerBackendKind,
   formatFederationPeerDisplayLabel,
+  formatFederationPeerShortDisplayLabel,
   isRemoteFederationTarget,
   mergeCelestialIconAssignments,
   pickCelestialIcon,
@@ -206,7 +209,6 @@ import {
   type ForkThreadRequest,
   type EnsureDirectoryLaunchpadRequest,
   type FederationRemoteTarget,
-  type FederatedThreadRef,
   type DesktopApplicationsSnapshot,
   type DesktopFederationMode,
   type HandoffThreadWorkspaceRequest,
@@ -229,6 +231,10 @@ import {
   type ReloadCodexMcpConfigRequest,
   type SetThreadPinRequest,
   type SetThreadPinResponse,
+  type ContinueThreadEnvironmentStartupRequest,
+  type ContinueThreadEnvironmentStartupResponse,
+  type AcknowledgeThreadEnvironmentFailureRequest,
+  type AcknowledgeThreadEnvironmentFailureResponse,
   type SetThreadReactionRequest,
   type SetThreadLockRequest,
   type SetThreadLockResponse,
@@ -294,13 +300,15 @@ import {
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
-import { readThreadFamilyPricing } from "../app-server/thread-family-pricing";
+import { threadFamilyPricingForPeer } from "../app-server/thread-family-pricing";
+import { createLocalThreadFamilyPricingReader } from "../app-server/thread-family-pricing-source";
 import { createScratchProjectDirectory, resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { dispatchStarMapIntake } from "../app-server/star-map-intake";
 import { spawnTerminalPty } from "../terminal/integrated-terminal-service";
 import { registerWorktreeTerminalOwner } from "../terminal/worktree-terminals";
 import {
   readTranscriptImageProtocolRequest,
+  rewriteFederatedTranscriptImageUrlForRenderer,
   rewriteFederatedTranscriptImageUrlsForRenderer,
   toFederatedTranscriptImageProtocolUrl,
 } from "../transcript-image-protocol";
@@ -540,6 +548,12 @@ function rewriteLiveTranscriptImagesForFederation(
   event: AgentEvent,
   ownerInstanceId: FederationInstanceId,
 ): AgentEvent {
+  if (event.rendererImageParts?.length) {
+    event = { ...event, rendererImageParts: event.rendererImageParts.map((image) => ({
+      ...image,
+      url: rewriteFederatedTranscriptImageUrlForRenderer(image.url, ownerInstanceId),
+    })) };
+  }
   if (
     event.notification.method !== "item/started"
     && event.notification.method !== "item/completed"
@@ -603,6 +617,8 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "remote_window",
   "thread_navigation",
   "thread_grouping",
+  "archive_subthread_promotion_v1",
+  "thread_parent_mutation_v1",
   "thread_detail",
   "turn_control",
   "durable_turn_requests_v1",
@@ -638,6 +654,9 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_mcp_connections",
   "thread_todos",
   "thread_todo_feed",
+  "thread_todo_dispatch_target",
+  "thread_todo_message",
+  "thread_todo_plan",
   "operator_questions",
   "operator_requests",
   "thread_display_bulk_reads",
@@ -814,6 +833,7 @@ export function unsequencedFederationEventPayload(event: AgentEvent): AgentEvent
   return {
     backend: event.backend,
     notification: event.notification,
+    ...(event.rendererImageParts ? { rendererImageParts: event.rendererImageParts } : {}),
     ...(event.errorNoticeContext
       ? { errorNoticeContext: event.errorNoticeContext }
       : {}),
@@ -1273,6 +1293,7 @@ export class DesktopFederationRuntime {
     (event: AgentEvent) => void | Promise<void>
   >();
   private readonly peerStatusListeners = new Set<() => void>();
+  private readonly shortNameListeners = new Set<() => void>();
   private readonly desiredEventSubscriptions = new Map<
     string,
     Map<FederationInstanceId, DesiredEventSubscription>
@@ -1577,9 +1598,26 @@ export class DesktopFederationRuntime {
     };
   }
 
+  /**
+   * Fires whenever the short-name map changes, so the application menu and
+   * remote window titles can redraw with the new names.
+   */
+  onShortNamesChanged(listener: () => void): () => void {
+    this.shortNameListeners.add(listener);
+    return () => {
+      this.shortNameListeners.delete(listener);
+    };
+  }
+
   connectedPeerTargets(): Array<{
     target: FederationRemoteTarget;
     label: string;
+    /**
+     * `label` with the federation's short name for the machine, for window
+     * titles and the Remote Instances menu. Absent when the machine has no
+     * short name. `label` stays the full name for tooltips and agents.
+     */
+    shortLabel?: string;
     capabilities: FederationCapability[];
     navigationQueryProtocol?: 2;
   }> {
@@ -1590,12 +1628,23 @@ export class DesktopFederationRuntime {
     const visible = this.visiblePeers();
     return visible
       .filter((peer) => peer.status === "connected")
-      .map((peer) => ({
-        target: { scope: "remote", instanceId: peer.id },
-        label: formatFederationPeerDisplayLabel(peer, visible),
-        capabilities: [...peer.capabilities],
-        navigationQueryProtocol: peer.navigationQueryProtocol,
-      }));
+      .map((peer) => {
+        const shortLabel = this.shortNames.shortLabelFor(peer.id, peer.label);
+        return {
+          target: { scope: "remote", instanceId: peer.id },
+          label: formatFederationPeerDisplayLabel(peer, visible),
+          ...(shortLabel
+            ? {
+                shortLabel: formatFederationPeerShortDisplayLabel(
+                  { ...peer, shortLabel },
+                  visible,
+                ),
+              }
+            : {}),
+          capabilities: [...peer.capabilities],
+          navigationQueryProtocol: peer.navigationQueryProtocol,
+        };
+      });
   }
 
   assertRemoteNavigationQueryProtocol(
@@ -2413,13 +2462,20 @@ export class DesktopFederationRuntime {
   async requestThreadTodoOperation<K extends ThreadTodoOperation>(
     target: FederationRemoteTarget, operation: K, request: ThreadTodoOperationRequest<K>,
   ): Promise<ThreadTodoOperationResponse<K>> {
-    const unavailable = this.todoQueueUnavailableInstance(target, "thread_todos");
+    if (operation === "runAction" && request && "messageTarget" in request && request.messageTarget !== undefined
+      && this.todoQueueUnavailableInstance(target, "thread_todo_message")) {
+      throw new Error("Update the card's PwrAgent owner to send requests to existing threads.");
+    }
+    const unavailable = this.todoQueueUnavailableInstance(target, "thread_todos")
+      ?? (operation === "raisePlan" ? this.todoQueueUnavailableInstance(target, "thread_todo_plan") : undefined);
     if (unavailable) {
       if (operation === "listTodos") {
         return { todos: [], unavailableInstances: [unavailable] } as ThreadTodoOperationResponse<K>;
       }
       if (unavailable.reason === "disconnected") throw new Error(`${unavailable.label} is disconnected.`);
-      throw new Error("This Federation owner does not support To-dos. Update that PwrAgent instance.");
+      throw new Error(operation === "raisePlan" && this.todoQueueUnavailableInstance(target, "thread_todos") === undefined
+        ? "This Federation owner does not support plan cards. Update that PwrAgent instance."
+        : "This Federation owner does not support To-dos. Update that PwrAgent instance.");
     }
     return await this.rpcFor(target).request({ method: FEDERATION_THREAD_TODO_METHODS[operation], params: request,
       ...(operation === "runAction" ? { timeoutMs: null } : {}),
@@ -2463,6 +2519,15 @@ export class DesktopFederationRuntime {
   publishThreadTodoDelta(delta: ThreadTodoFeedDelta): void {
     this.forwardLocalBackendEvent({ backend: delta.backend ?? "codex",
       notification: { method: "thread/todos/delta", params: delta } });
+  }
+
+  /**
+   * The owner answers `threadTodos.raisePlan`, so a thread started there
+   * from a card gets the card's steps as its own `plan` card.
+   */
+  remotePeerSupportsTodoPlan(target: FederationRemoteTarget): boolean {
+    return this.todoQueueUnavailableInstance(target, "thread_todos") === undefined
+      && this.todoQueueUnavailableInstance(target, "thread_todo_plan") === undefined;
   }
 
   /**
@@ -3456,72 +3521,161 @@ export class DesktopFederationRuntime {
     return this.remoteThreadSummaryCache;
   }
 
-  /**
-   * Archiving a local group root must clear parent overlays on children owned
-   * by other instances. Those relationships are visible here through the
-   * root viewer's remote child pins; mutate each child on its owner, then
-   * update the cached pin so restoring the root cannot reattach it.
-   */
+  /** Promote cross-instance children before the archive removes their row. */
   async ungroupRemoteChildrenOfArchivedThread(params: {
     backend: AppServerBackendKind;
     parentThreadId: string;
+    expectedParent?: SetThreadParentRequest["expectedParent"];
   }): Promise<void> {
     const localInstanceId = (await this.health()).instanceId;
-    if (!localInstanceId) {
-      return;
+    if (!localInstanceId) return;
+    const store = getDesktopOverlayStore();
+    const archived = await store.getThreadOverlayState({ backend: params.backend, threadId: params.parentThreadId });
+    const expected = params.expectedParent;
+    if (expected !== undefined && (expected === null ? Boolean(archived?.parentThreadId)
+      : archived?.parentThreadId !== expected.threadId
+        || (archived.parentThreadBackend ?? params.backend) !== expected.backend
+        || archived.parentThreadInstanceId !== expected.instanceId)) {
+      throw new Error("Thread grouping changed before archive. Refresh the group and try again.");
     }
-    const overlayStore = getDesktopOverlayStore();
-    const pins = await overlayStore.listRemoteThreadPins();
-    const children = pins.filter((pin) => {
-      const summary = pin.summary;
-      return summary?.parentThreadId === params.parentThreadId
-        && (summary.parentThreadBackend ?? summary.source) === params.backend
-        && summary.parentThreadInstanceId === localInstanceId
-        && isRemoteFederationTarget(pin.ref.target);
-    });
-    if (children.length === 0) {
-      return;
+    const pins = await store.listRemoteThreadPins();
+    const remoteChildren = pins.filter((pin) => pin.summary?.parentThreadId === params.parentThreadId
+      && (pin.summary.parentThreadBackend ?? pin.summary.source) === params.backend
+      && pin.summary.parentThreadInstanceId === localInstanceId
+      && isRemoteFederationTarget(pin.ref.target) && pin.summary.archivedAt === undefined);
+    // The local SQLite boundary already handles an entirely local branch.
+    const savedRemoteChildren = pins.filter((pin) => archived?.subthreadOrder?.includes(pin.ref.threadId));
+    if (!archived?.parentThreadInstanceId && remoteChildren.length === 0 && savedRemoteChildren.length === 0) return;
+    const localChildren = store.readArchiveSubthreadChildren({ backend: params.backend, threadId: params.parentThreadId });
+    const children = [
+      ...localChildren.map((summary) => ({ ref: buildFederatedThreadRef({ backend: summary.source,
+        threadId: summary.id, instanceId: localInstanceId }), summary, instanceLabel: localInstanceId })),
+      ...remoteChildren.map((pin) => ({ ref: pin.ref, summary: pin.summary!, instanceLabel: pin.instanceLabel })),
+    ];
+    // A leaf needs no promotion even if its remote parent is offline or has
+    // never been mounted on this owner. Retained slots still need recovery.
+    if (!children.length && !savedRemoteChildren.length) return;
+    let cursor = archived;
+    let cursorOwner = localInstanceId;
+    let anchor = { backend: params.backend, threadId: params.parentThreadId, instanceId: localInstanceId };
+    let parent: ArchiveSubthreadPromotion["parent"] = null;
+    let parentSummary: NavigationThreadSummary | undefined;
+    let parentInstanceLabel: string | undefined;
+    const ancestryDeadlineAt = Date.now() + 10_000;
+    const seen = new Set<string>();
+    while (cursor?.parentThreadId) {
+      const owner: string = cursor.parentThreadInstanceId ?? cursorOwner;
+      const backend = cursor.parentThreadBackend ?? cursor.backend;
+      const threadId = cursor.parentThreadId;
+      const key = `${owner}:${backend}:${threadId}`;
+      if (seen.has(key)) throw new Error("Cyclic archive ancestry. Refresh the group before archiving.");
+      seen.add(key);
+      const local = owner === localInstanceId ? await store.getThreadOverlayState({ backend, threadId }) : undefined;
+      const cachedPin = pins.find((pin) => isRemoteFederationTarget(pin.ref.target)
+        && pin.ref.target.instanceId === owner && pin.ref.backend === backend && pin.ref.threadId === threadId);
+      let remote: NavigationThreadSummary | undefined;
+      if (owner !== localInstanceId) {
+        const target = { scope: "remote" as const, instanceId: owner };
+        const page = await this.remoteNavigationQueryPage(target, {
+          protocol: 2, consumer: "exact-link", inventory: "owner", backend, pageSize: 1,
+          query: { kind: "exact", includeAncestry: false, identities: [{ backend, threadId, ownerInstanceId: owner }] },
+          deadlineAt: ancestryDeadlineAt,
+        }, { deadlineAt: ancestryDeadlineAt });
+        if (page.protocol !== 2 || !page.complete || page.unchanged || page.nextCursor) {
+          throw new Error("Wait for complete ancestor discovery before archiving.");
+        }
+        remote = page.entries.find(({ row }) => row.ref.backend === backend && row.ref.threadId === threadId
+          && row.ref.ownerInstanceId === owner && row.source === backend && row.id === threadId)?.row;
+        if (!remote) {
+          if (page.coverage.state !== "complete") throw new Error("Wait for complete ancestor discovery before archiving.");
+          const response = await this.remoteBackend(target).lookupArchivedThreads({ backend, threadIds: [threadId], includeParent: true },
+            { deadlineAt: ancestryDeadlineAt });
+          const thread = response.threads.find((row) => row.source === backend && row.id === threadId && row.archivedAt !== undefined);
+          if (thread) {
+            const link = response.parentLinks?.find((row) => row.backend === backend && row.threadId === threadId);
+            if (!link) throw new Error("Upgrade the ancestor owner before resolving archived parent links.");
+            remote = { inbox: { inInbox: false }, ...thread, parentThreadId: link.parentThreadId,
+              parentThreadBackend: link.parentThreadBackend, parentThreadInstanceId: link.parentThreadInstanceId };
+          }
+        }
+      }
+      if (!local && !remote) throw new Error("The surviving ancestor is unavailable. Refresh the group before archiving.");
+      if (local?.archiveRetentionStartedAt === undefined && local?.archiveTombstonedAt === undefined
+        && remote?.archivedAt === undefined) {
+        parent = { backend, threadId, instanceId: owner };
+        parentSummary = remote;
+        parentInstanceLabel = cachedPin?.instanceLabel ?? remote?.federation?.instanceLabel;
+        break;
+      }
+      anchor = { backend, threadId, instanceId: owner };
+      cursorOwner = owner;
+      cursor = local ?? { ...remote!, backend, threadId, executionMode: "default", extraLinkedDirectories: [] };
     }
-
-    const refreshed: Array<{
-      ref: FederatedThreadRef;
-      summary: NavigationThreadSummary;
-      instanceLabel: string;
-    }> = [];
-    await Promise.all(
-      children.map(async (pin) => {
-        if (!isRemoteFederationTarget(pin.ref.target) || !pin.summary) {
-          return;
-        }
-        try {
-          await this.remoteBackend(pin.ref.target).setThreadParent({
-            backend: pin.ref.backend,
-            threadId: pin.ref.threadId,
-            parentThreadId: null,
-          });
-          const summary = { ...pin.summary };
-          delete summary.parentThreadId;
-          delete summary.parentThreadBackend;
-          delete summary.parentThreadInstanceId;
-          refreshed.push({
-            ref: pin.ref,
-            summary,
-            instanceLabel: pin.instanceLabel,
-          });
-          this.remoteThreadSummaryCache?.invalidate(pin.ref.target.instanceId);
-        } catch (error) {
-          log.warn("failed to ungroup remote child after parent archive", {
-            backend: pin.ref.backend,
-            childInstanceId: pin.ref.target.instanceId,
-            childThreadId: pin.ref.threadId,
-            error: error instanceof Error ? error.message : String(error),
-            parentThreadId: params.parentThreadId,
-          });
-        }
-      }),
-    );
-    if (refreshed.length > 0) {
-      await overlayStore.updateRemoteThreadPinSnapshots(refreshed);
+    // A child owner can publish its new parent before a later participant
+    // disconnects. Saved direct-child slots retain that successful part of a
+    // prior attempt even after this viewer has refreshed its cached summary.
+    for (const pin of savedRemoteChildren) {
+      if (!parent || !pin.summary || !isRemoteFederationTarget(pin.ref.target)
+        || pin.summary.archivedAt !== undefined || pin.summary.parentThreadId !== parent.threadId
+        || (pin.summary.parentThreadBackend ?? pin.summary.source) !== parent.backend
+        || pin.summary.parentThreadInstanceId !== (pin.ref.target.instanceId === parent.instanceId ? undefined : parent.instanceId)
+        || children.some(({ ref }) => federatedThreadIdentityKey(ref) === federatedThreadIdentityKey(pin.ref))) continue;
+      children.push({ ref: pin.ref, summary: pin.summary, instanceLabel: pin.instanceLabel });
+    }
+    if (!children.length) return;
+    if (new Set(children.map(({ ref }) => ref.threadId)).size !== children.length) {
+      throw new Error("Ambiguous child identities. Refresh the group before archiving.");
+    }
+    const ordered = sortSubthreadSummaries(archived ?? {}, children.map((entry) => ({ ...entry,
+      id: entry.ref.threadId, createdAt: entry.summary.createdAt })));
+    const promotion: ArchiveSubthreadPromotion = {
+      archived: { backend: params.backend, threadId: params.parentThreadId, instanceId: localInstanceId },
+      anchor, expectedParent: archived?.parentThreadId ? { threadId: archived.parentThreadId,
+        backend: archived.parentThreadBackend ?? params.backend, instanceId: archived.parentThreadInstanceId } : null,
+      expectedChildOrder: archived?.subthreadOrder ?? [],
+      parent, parentSummary, parentInstanceLabel, children: ordered.map(({ ref, summary, instanceLabel }) => ({ ref, summary, instanceLabel })),
+    };
+    const participants = new Set(ordered.flatMap(({ ref }) =>
+      isRemoteFederationTarget(ref.target) ? [ref.target.instanceId] : []));
+    participants.add(localInstanceId);
+    if (parent) participants.add(parent.instanceId);
+    // Resolve all capabilities before the first mutation. Never detach as an
+    // offline or mixed-version fallback: leave the archive available to retry.
+    for (const instanceId of participants) {
+      if (instanceId === localInstanceId) continue;
+      const target = { scope: "remote" as const, instanceId };
+      this.assertRemoteNavigationQueryProtocol(target);
+      if (!this.remoteTargetSupportsCapability(target, "thread_grouping")
+        || !this.remoteTargetSupportsCapability(target, "archive_subthread_promotion_v1")) {
+        throw new Error(`Archive child promotion is unavailable or denied on ${instanceId}.`);
+      }
+    }
+    const apply = async (instanceId: string, dryRun: boolean) => {
+      if (instanceId === localInstanceId) return store.applyArchiveSubthreadPromotion({ ...promotion, dryRun }, instanceId);
+      const response = await this.remoteBackend({ scope: "remote", instanceId }).updateSubthreadOrder({
+        backend: parent?.backend ?? params.backend, parentThreadId: parent?.threadId ?? params.parentThreadId,
+        archivePromotion: { ...promotion, dryRun },
+      });
+      this.remoteThreadSummaryCache?.invalidate(instanceId);
+      return response.threadIds ?? [];
+    };
+    for (const instanceId of participants) await apply(instanceId, true);
+    store.prepareArchiveSubthreadPromotion(promotion, localInstanceId);
+    // Commit the ancestor's slot replacement after every child owner accepts
+    // the guarded relationship change; then refresh this viewer's cache.
+    const commitOrder = [...participants].filter((id) => id !== localInstanceId && id !== parent?.instanceId);
+    if (parent && parent.instanceId !== localInstanceId) commitOrder.push(parent.instanceId);
+    commitOrder.push(localInstanceId);
+    let parentOrder: string[] | undefined;
+    for (const instanceId of commitOrder) {
+      const order = await apply(instanceId, false);
+      if (instanceId === parent?.instanceId) parentOrder = order;
+    }
+    if (parentSummary && parent && parentOrder) {
+      await store.updateRemoteThreadPinSnapshots([{
+        ref: buildFederatedThreadRef({ backend: parent.backend, threadId: parent.threadId, instanceId: parent.instanceId }),
+        summary: { ...parentSummary, subthreadOrder: parentOrder }, instanceLabel: parentInstanceLabel ?? parent.instanceId,
+      }]);
     }
   }
 
@@ -5871,6 +6025,15 @@ export class DesktopFederationRuntime {
         params: {},
       },
     });
+    for (const listener of this.shortNameListeners) {
+      try {
+        listener();
+      } catch (error) {
+        log.warn("federation short name listener failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   /**
@@ -7010,7 +7173,14 @@ function localBackendOperations(): FederationBackendOperations {
         archived: true,
         deadlineAt: rpcOptions?.deadlineAt,
       });
-      return projectFederationArchivedThreads(threads, request);
+      const response = projectFederationArchivedThreads(threads, request);
+      if (!request.includeParent) return response;
+      const parentLinks = await Promise.all(response.threads.map(async (thread) => {
+        const overlay = await getDesktopOverlayStore().getThreadOverlayState({ backend: thread.source, threadId: thread.id });
+        return { backend: thread.source, threadId: thread.id, parentThreadId: overlay?.parentThreadId,
+          parentThreadBackend: overlay?.parentThreadBackend, parentThreadInstanceId: overlay?.parentThreadInstanceId };
+      }));
+      return { ...response, parentLinks };
     },
     async getNavigationSnapshot(request = {}): Promise<NavigationSnapshot> {
       return await messagingBridge.getNavigationSnapshot(request);
@@ -7050,11 +7220,17 @@ function localBackendOperations(): FederationBackendOperations {
       return await getDesktopBackendRegistry().readUsageActivity(request);
     },
     async readThreadFamilyPricing(request) {
-      return await readThreadFamilyPricing({
-        request: { backend: request.backend, threadId: request.threadId },
-        loadIndex: () => loadLocalNavigationQueryIndex({ callerReason: "thread-family-pricing" }),
-        readSummaries: (threads) => getDesktopOverlayStore().readThreadPricingSummaries(threads),
-      });
+      // An owner answers for its own threads only. Its pins of other
+      // instances' sub-threads go back as referrals; the reader asks those
+      // owners itself, so a read never fans out from here.
+      let localInstanceId: string | undefined;
+      try {
+        localInstanceId = getDesktopFederationRuntime().localFederationInstanceId();
+      } catch {
+        // Pins still resolve by their recorded owner without it.
+      }
+      return threadFamilyPricingForPeer(await createLocalThreadFamilyPricingReader(localInstanceId)(
+        { backend: request.backend, threadId: request.threadId }));
     },
     async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {
       return await getDesktopBackendRegistry().analyzeUsageActivity(request);
@@ -7168,6 +7344,12 @@ function localBackendOperations(): FederationBackendOperations {
         ...(options?.requesterInstanceId ? { sourceInstanceId: options.requesterInstanceId } : {}),
       });
     },
+    async continueThreadEnvironmentStartup(request: ContinueThreadEnvironmentStartupRequest): Promise<ContinueThreadEnvironmentStartupResponse> {
+      return await getDesktopBackendRegistry().continueThreadEnvironmentStartup(request);
+    },
+    async acknowledgeThreadEnvironmentFailure(request: AcknowledgeThreadEnvironmentFailureRequest): Promise<AcknowledgeThreadEnvironmentFailureResponse> {
+      return await getDesktopBackendRegistry().acknowledgeThreadEnvironmentFailure(request);
+    },
     async setThreadReaction(
       request: SetThreadReactionRequest,
     ): Promise<SetThreadReactionResponse> {
@@ -7279,6 +7461,9 @@ function localBackendOperations(): FederationBackendOperations {
       });
       return { mounted: true };
     },
+    async mutateThreadParentV1(request) {
+      return await getDesktopBackendRegistry().mutateThreadParentV1(request);
+    },
     async setThreadParent(
       request: SetThreadParentRequest,
     ) {
@@ -7289,6 +7474,7 @@ function localBackendOperations(): FederationBackendOperations {
         parentThreadId: request.parentThreadId,
         parentThreadBackend: request.parentThreadBackend,
         parentThreadInstanceId: request.parentThreadInstanceId,
+        expectedParent: request.expectedParent,
       });
       await getDesktopBackendRegistry().publishLocalEvent({
         backend,
@@ -7318,6 +7504,31 @@ function localBackendOperations(): FederationBackendOperations {
     async updateSubthreadOrder(
       request: UpdateSubthreadOrderRequest,
     ): Promise<UpdateSubthreadOrderResponse> {
+      if (request.archivePromotion) {
+        const instanceId = (await getDesktopFederationRuntime().health()).instanceId;
+        if (!instanceId) throw new Error("Federation identity is unavailable.");
+        const threadIds = getDesktopOverlayStore().applyArchiveSubthreadPromotion(request.archivePromotion, instanceId);
+        if (!request.archivePromotion.dryRun) {
+          const { parent, children } = request.archivePromotion;
+          for (const { ref } of children) {
+            if (!isRemoteFederationTarget(ref.target) || ref.target.instanceId !== instanceId) continue;
+            await getDesktopBackendRegistry().publishLocalEvent({ backend: ref.backend,
+              notification: parent ? { method: "thread/parent/set", params: {
+                threadId: ref.threadId, parentThreadId: parent.threadId, parentThreadBackend: parent.backend,
+                parentThreadInstanceId: parent.instanceId === instanceId ? undefined : parent.instanceId,
+              } } : { method: "thread/parent/cleared", params: { threadId: ref.threadId } },
+            });
+          }
+          if (parent?.instanceId === instanceId) await getDesktopBackendRegistry().publishLocalEvent({
+            backend: parent.backend, notification: { method: "thread/subthreadOrder/updated",
+              params: { parentThreadId: parent.threadId, threadIds } },
+          });
+          await getDesktopBackendRegistry().publishLocalEvent({ backend: request.backend ?? "codex",
+            notification: { method: "navigation/remoteThreadPins/changed", params: { instanceId } },
+          });
+        }
+        return { backend: request.backend ?? "codex", parentThreadId: request.parentThreadId, threadIds };
+      }
       // A viewer sends relative moves; the owner validates them against its
       // complete child order, the same as a local drag.
       return await updateLocalSubthreadOrder(request);
@@ -7349,12 +7560,10 @@ function localBackendOperations(): FederationBackendOperations {
       };
     },
     async archiveThread(request) {
-      const response = await getDesktopBackendRegistry().archiveThread(request);
       await getDesktopFederationRuntime().ungroupRemoteChildrenOfArchivedThread({
-        backend: response.backend,
-        parentThreadId: response.threadId,
+        backend: request.backend ?? "codex", parentThreadId: request.threadId, expectedParent: request.expectedParent,
       });
-      return response;
+      return await getDesktopBackendRegistry().archiveThread(request);
     },
     async restoreThread(request) {
       return await getDesktopBackendRegistry().restoreThread(request);
@@ -7798,6 +8007,9 @@ function localBackendOperations(): FederationBackendOperations {
           maxBytes: request.maxBytes,
         },
       );
+    },
+    async manageLaunchpadCreation(request, sourceInstanceId) {
+      return await getDesktopBackendRegistry().manageLaunchpadCreation(request, sourceInstanceId);
     },
     async materializeDirectoryLaunchpad(
       request: MaterializeDirectoryLaunchpadRequest,

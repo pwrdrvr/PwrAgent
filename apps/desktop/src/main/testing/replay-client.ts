@@ -256,6 +256,9 @@ export class ReplayClient {
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
     this.lastRenameThreadParams = params;
+    // Optional for older fixtures; a scripted response admits post-rename
+    // listings only after the provider has accepted the rename.
+    this.controller.tryConsumeResponse("thread/name/set");
     return { threadId: params.threadId };
   }
 

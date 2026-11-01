@@ -5398,6 +5398,250 @@ textarea,
   margin-inline: var(--sidebar-rail-inset);
 }
 
+/* The lens switch and the project index toggle share one row. The row takes
+   the pull to the lane inset that `.lens-switch` carries on its own, so the
+   switch gives up its explicit width and fills what the toggle leaves. At the
+   280px sidebar the switch is then 224px: the arithmetic on `.lens-switch`
+   leaves each icon tab ~35px, still above its 28px floor. */
+.sidebar__lens-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  margin-inline: var(--sidebar-masthead-pull);
+}
+
+.sidebar__lens-row > .lens-switch {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  margin-inline: 0;
+}
+
+.sidebar__project-index-toggle {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.sidebar__project-index-toggle.is-on {
+  color: var(--accent-bright);
+}
+
+.sidebar__project-index-toggle:hover {
+  background: var(--bg-panel-hover);
+}
+
+.sidebar__project-index-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* Project index (ProjectIndex.tsx): a column of project names beside the
+   list, ported from PwrGit's repo index. The section becomes a grid so the
+   index and the lane region sit side by side without another wrapper.
+
+   The fit is CSS. The column takes its longest name's width, never less
+   than 76px (`calc(7ch + 19px)` in its 12px font, the shortest cut that
+   still tells a family of names apart) and never more than the sidebar
+   past the list's 280px floor. The section is the sidebar minus its 2 × 16px
+   rail padding, so that budget is `100cqi + 32px − 280px`, and below a
+   324px section (a 356px sidebar) the column steps aside.
+
+   Each track is named explicitly: with the column hidden, auto-placement
+   would otherwise drop the lane region into the 0-width first track. */
+.sidebar__section--with-project-index {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  container: sidebar-lanes / inline-size;
+}
+
+.sidebar__section--with-project-index > .sidebar__lens-row {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+
+.sidebar__section--with-project-index > .project-index-pane {
+  grid-column: 1;
+  grid-row: 2;
+  margin-left: calc(-1 * var(--sidebar-rail-inset));
+}
+
+.sidebar__section--with-project-index > .sidebar__scroll-region {
+  grid-column: 2;
+  grid-row: 2;
+  margin-left: 0;
+}
+
+@container sidebar-lanes (max-width: 323.98px) {
+  .sidebar__section--with-project-index > .project-index-pane {
+    display: none;
+  }
+
+  .sidebar__section--with-project-index > .sidebar__scroll-region {
+    margin-left: calc(-1 * var(--sidebar-rail-inset));
+  }
+}
+
+.project-index-pane {
+  display: flex;
+  position: relative;
+  min-height: 0;
+}
+
+.project-index {
+  width: max-content;
+  min-width: 76px;
+  max-width: max(76px, calc(100cqi + 2 * var(--sidebar-rail-inset) - 280px));
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  padding: 2px 0 16px;
+  border-right: 1px solid var(--border-subtle);
+  font: 500 calc(var(--sidebar-title-size) - 1px) / 1.25 var(--font-sans);
+}
+
+.project-index__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.project-index__item {
+  display: flex;
+  position: relative;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px 4px 11px;
+  border: 0;
+  border-radius: 0 6px 6px 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  scroll-margin-block: 4px;
+}
+
+/* Scroll position is a 2px rail, never a tint: grey for a project on
+   screen, the accent for the project at the top of the list. Only the
+   selection tints, so the two never read as two selections. Each item's
+   rail runs its full height, so the on-screen run joins into one solid bar,
+   as in PwrGit's repo index. An inset rail broke it into dashes, one per
+   project, which read as unrelated marks. */
+.project-index__item::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+}
+
+.project-index__item.is-in-view::before {
+  background: var(--border-strong);
+}
+
+.project-index__item.is-current {
+  color: var(--text-primary);
+}
+
+.project-index__item.is-current::before {
+  background: var(--accent);
+}
+
+.project-index__item:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.project-index__item.is-selected {
+  background: var(--bg-row-active);
+  color: var(--accent-bright);
+}
+
+.project-index__item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.project-index__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-index__mark {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+/* The seam between the index and the list, drawn like the sidebar's own:
+   an 11px hit area centred on the border, lit 1px on hover or focus. */
+.project-index__grip {
+  position: absolute;
+  top: 0;
+  right: -6px;
+  bottom: 0;
+  z-index: 11;
+  width: 11px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.project-index__grip::after {
+  content: "";
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 5px;
+  width: 1px;
+  background: transparent;
+  transition:
+    background 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.project-index__grip:hover::after,
+.project-index__grip:focus-visible::after,
+.is-project-index-resizing .project-index__grip::after {
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-bg-medium);
+}
+
+.project-index__grip:hover:not(:focus-visible)::after {
+  transition-delay: 120ms;
+}
+
+.project-index__grip:focus-visible {
+  outline: none;
+}
+
+body.is-project-index-resizing {
+  cursor: col-resize;
+}
+
+/* Blank space a project index jump grows at the end of the Directories list,
+   so a project near the end can still land at the top. DirectoriesList sets
+   its height and clears it once it scrolls off screen. It must not shrink in
+   the list's flex column, or the jump falls short. */
+.directory-list__jump-tail {
+  flex: none;
+}
+
 .context-panel h3 {
   margin: 0;
   font-size: 14px;
@@ -6302,6 +6546,20 @@ a.button {
 
 .thread-row-shell.is-drop-target-after::after {
   bottom: -3px;
+}
+
+/* A drop that nests the held thread under this row: the row's own card
+   box, ringed in the insertion line's accent and glow. */
+.thread-row-shell.is-drop-target-inside::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  border: 2px solid var(--accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: 0 0 14px var(--accent-shadow);
+  pointer-events: none;
 }
 
 .recents-pinned-divider {
@@ -7580,14 +7838,17 @@ a.button {
   color: var(--danger-text);
 }
 
+.thread-row__chip--todos[role="button"],
 .thread-row__chip--dependency[role="button"] {
   cursor: pointer;
 }
 
+.thread-row__chip--todos[role="button"]:hover,
 .thread-row__chip--dependency[role="button"]:hover {
   border-color: var(--border-strong);
 }
 
+.thread-row__chip--todos[role="button"]:focus-visible,
 .thread-row__chip--dependency[role="button"]:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
@@ -7829,13 +8090,10 @@ a.button {
 }
 
 /* A failed check does not make its sibling jobs terminal. Keep the error hue,
-   but use the existing gentle status pulse to say that the rollup is still
-   moving. Only the dot animates — the PR chip stays still and legible. The
-   hover card has no counterpart: it says "checks still running" in words, and a
-   pulsing dot inside an already-transient card is noise. */
-.pr-chip--checks-running .pr-chip__dot {
-  animation: status-blink 1.6s ease-in-out infinite;
-}
+   but use the shared status pulse (`lib/status-pulse.ts`) to say that the
+   rollup is still moving. Only the dot dims — the PR chip stays still and
+   legible. The hover card has no counterpart: it says "checks still running"
+   in words, and a pulsing dot inside an already-transient card is noise. */
 
 .pr-chip--pending .pr-chip__dot,
 .pr-status-card .pr-status-card__dot--pending {
@@ -8322,8 +8580,9 @@ a.button {
   opacity: 0;
 }
 
-:root[data-native-drag-active] .directory-row__header--with-launchpad:hover .directory-row__summary-meta {
+:root[data-native-drag-active] .directory-row__header--with-launchpad:not(.directory-row__header--has-draft):hover .directory-row__summary-meta {
   opacity: 1;
+  min-width: 0;
 }
 
 .directory-row.is-drop-target-before::before,
@@ -8691,6 +8950,17 @@ a.button {
 .directory-row__header--with-launchpad:hover .directory-row__summary-meta,
 .directory-row__header--with-launchpad:has(.directory-row__launchpad-cluster :focus-visible) .directory-row__summary-meta {
   opacity: 0;
+  /* The faded block keeps at least the cluster's width, so a long name
+     ellipsizes beside the "+" instead of running under it. Without this
+     a directory with no counts has a zero-width block and its title
+     reaches the row's right edge. Both share the 6px right inset, so the
+     block's width equals the cluster's (24px button / 24+16px split). */
+  min-width: 24px;
+}
+
+.directory-row__header--with-launchpad.directory-row__header--split:hover .directory-row__summary-meta,
+.directory-row__header--with-launchpad.directory-row__header--split:has(.directory-row__launchpad-cluster :focus-visible) .directory-row__summary-meta {
+  min-width: 40px;
 }
 
 /* A directory holding an unsent launchpad draft shows the tinted "+"
@@ -10723,6 +10993,26 @@ a.button {
 .app-notice-toast__dismiss-all:hover {
   background: var(--bg-panel-hover);
   color: var(--text-primary);
+}
+
+/* A split action takes the card's own `.button` corners. The composer's
+   pill radius beside a card of 6px controls read as a different control,
+   and changed shape when an answer replaced it with the plain button. */
+.app-notice-toast .todo-split__pill {
+  border-radius: 6px;
+}
+
+/* A split action's menu leaves the card, which clips to its rounded edge
+   otherwise. The content keeps its own scroller. */
+.app-notice-toast:has(.todo-split--open) {
+  overflow: visible;
+}
+
+/* The stack sits on the window's bottom edge unless focus moved it to the
+   top, so its menus open upward there. */
+.app-toast-stack:not([data-placement="top"]) .todo-split__menu {
+  top: auto;
+  bottom: calc(100% + 6px);
 }
 
 /* Borderless. 24px keeps WCAG 2.5.8's target size, which the a11y gate
@@ -24663,6 +24953,45 @@ a.button {
   text-decoration: line-through;
 }
 
+/* A start-thread card's plan: numbered, with no boxes, because the start
+   sends only the prompt and nothing on the card ticks it. The checklist's
+   row geometry, with the number in the box's column. */
+.thread-todo-plan {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: thread-todo-plan;
+}
+
+.thread-todo-card__group-label + .thread-todo-plan {
+  margin-top: 2px;
+}
+
+.thread-todo-plan__step {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: 8px;
+  padding: 2px 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 17px;
+  overflow-wrap: anywhere;
+  counter-increment: thread-todo-plan;
+}
+
+.thread-todo-plan__step.is-checked {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.thread-todo-plan__step::before {
+  color: var(--text-muted);
+  content: counter(thread-todo-plan) ".";
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
+}
+
 .thread-todo-card__facts {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -24694,11 +25023,109 @@ a.button {
   row-gap: 3px;
 }
 
-.thread-todo-card__fact--model dt {
+.thread-todo-card__fact--model dt,
+.thread-todo-card__fact--pr:has(.pr-chip) dt {
   align-self: center;
 }
 
 /* The Markdown prompt rests at three lines; its own control opens it. */
+.todo-message-destination {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.todo-message-destination__heading,
+.todo-message-destination__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.todo-message-destination__target {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.todo-message-destination__heading > span:first-child {
+  align-self: flex-start;
+  color: var(--text-muted);
+}
+
+.todo-message-destination .thread-todo-card__button {
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.todo-message-destination .thread-todo-card__button:hover {
+  background: var(--bg-panel-hover);
+}
+
+.todo-message-destination .thread-todo-card__button:focus-visible {
+  outline: 1px solid var(--focus-ring);
+}
+
+.todo-message-destination .thread-todo-card__button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.todo-message-destination small {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.todo-message-destination input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.todo-message-destination input:focus-visible {
+  outline: 1px solid var(--focus-ring);
+}
+
+.todo-message-destination__results {
+  display: grid;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.todo-message-destination__results button {
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.todo-message-destination__results button:hover,
+.todo-message-destination__results button:focus-visible {
+  background: var(--bg-panel-hover);
+  outline: 1px solid var(--focus-ring);
+}
+
+.todo-split__primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .thread-todo-card__prompt {
   display: block;
   width: 100%;
@@ -24745,19 +25172,22 @@ a.button {
   margin-top: 6px;
 }
 
-/* Opens and closes a resting card: the review card's "Show N more" type,
-   under the text column. */
+/* Opens and closes a resting card, or its prompt: the review card's
+   "Show N more" type. Each sits under the text it opens. */
 .thread-todo-card__more {
-  display: inline-flex;
+  display: flex;
+  width: fit-content;
   min-height: 24px;
   align-items: center;
-  align-self: flex-start;
   gap: 4px;
-  margin: 2px 0 0 22px;
+  margin: 2px 0 0;
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--text-secondary);
+  /* Room for the focus ring (2px outline, 2px offset) when a keyboard
+     open scrolls the toggle into view. */
+  scroll-margin-block: 4px;
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
@@ -24767,14 +25197,16 @@ a.button {
   color: var(--accent-bright);
 }
 
+/* "· 3-step plan": what Show more opens on a start-thread card. */
+.thread-todo-card__more-detail {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
 .thread-todo-card__more:focus-visible {
   border-radius: 4px;
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
-}
-
-.thread-todo-card__prompt .thread-todo-card__more {
-  margin-left: 0;
 }
 
 .thread-todo-card__error {
@@ -26883,6 +27315,79 @@ a.transcript-message__messaging-origin:focus-visible {
   line-height: 1.25;
 }
 
+/* Text pasted from Linear (LinearPasteMessage): the issue's header over
+   its description. Each Linear image reuses .transcript-message__file-chip. */
+.linear-paste {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.linear-paste__issue {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+}
+
+.linear-paste__header {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.linear-paste__identifier {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.linear-paste__title {
+  min-width: 0;
+  color: var(--text-primary);
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.linear-paste__details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.linear-paste__detail {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 1px 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.linear-paste__description {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
 .transcript-message__text-block > * {
   margin: 0;
 }
@@ -27141,6 +27646,49 @@ a.transcript-message__messaging-origin:focus-visible {
   display: inline;
 }
 
+/* A previewable file named in inline code. The glyph and accent set it apart
+   from plain inline code, which copies on click. */
+/* Inline, not inline-block: a long path wraps with the sentence, and each
+   line fragment keeps the chip's border and padding. */
+.thread-markdown__file-chip {
+  padding: 1px 7px 1px 5px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  text-decoration: none;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.thread-markdown__file-chip:hover {
+  border-color: var(--accent-bright);
+}
+
+.thread-markdown__file-chip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.thread-markdown__file-chip-icon {
+  display: inline-block;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+
+.thread-markdown__file-chip-code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* A Markdown link to a previewable file carries the same glyph. */
+.thread-markdown__file-link-icon {
+  display: inline-block;
+  margin-right: 4px;
+  vertical-align: -1px;
+}
+
 .thread-markdown__editor-link {
   display: inline-flex;
   align-items: center;
@@ -27297,101 +27845,154 @@ a.transcript-message__messaging-origin:focus-visible {
   overflow: hidden;
 }
 
-.markdown-document-modal__head {
+/* One row names a previewed file in the dialog and the Files window: kind,
+   name, the folder (which copies the full path), the preview's own controls,
+   then the actions. */
+.file-viewer-header {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 16px;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 8px 0 14px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-panel-elevated);
 }
 
-.markdown-document-modal__title-wrap {
-  min-width: 0;
+.file-viewer-header__kind {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
-.markdown-document-modal__title {
+.file-viewer-header__name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
   margin: 0;
+  overflow: hidden;
   color: var(--text-primary);
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 650;
   line-height: 1.3;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.markdown-document-modal__path {
-  margin: 3px 0 0;
-  min-width: 0;
+.file-viewer-header__folder {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 26px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 11px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.markdown-document-modal__path-row,
-.markdown-files-window__path-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
-}
-
-.markdown-document-modal__path-copy,
-.markdown-files-window__path-copy {
-  display: inline-flex;
-  width: 24px;
-  height: 24px;
-  flex: 0 0 24px;
-  align-items: center;
-  justify-content: center;
-  margin-top: 2px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-muted);
+  line-height: 1.2;
   cursor: pointer;
 }
 
-.markdown-document-modal__path-copy:hover,
-.markdown-document-modal__path-copy:focus-visible,
-.markdown-files-window__path-copy:hover,
-.markdown-files-window__path-copy:focus-visible {
-  background: var(--bg-row-active);
-  color: var(--text-primary);
+/* Cut from the left so the end of the path stays visible. The left-to-right
+   mark keeps a leading "~" or "/" at the start of the right-to-left run. */
+.file-viewer-header__folder-text {
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.markdown-document-modal__path-copy:focus-visible,
-.markdown-files-window__path-copy:focus-visible {
+.file-viewer-header__folder-text::before {
+  content: "\200E";
+}
+
+.file-viewer-header__folder > svg {
+  flex: none;
+  opacity: 0;
+}
+
+/* With no folder to show, the glyph is the whole control. */
+.file-viewer-header__folder--bare > svg {
+  opacity: 1;
+}
+
+/* Keeps the controls and actions at the right edge, with or without a file. */
+.file-viewer-header__spring {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.file-viewer-header__folder:hover,
+.file-viewer-header__folder:focus-visible {
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+}
+
+.file-viewer-header__folder:hover > svg,
+.file-viewer-header__folder:focus-visible > svg,
+.file-viewer-header__folder[data-copied="true"] > svg {
+  opacity: 1;
+}
+
+.file-viewer-header__folder:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
-.markdown-document-modal__actions {
-  display: inline-flex;
+.file-viewer-header__controls {
+  display: flex;
+  flex: none;
   align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
 }
 
-.markdown-document-modal__icon-button {
+.file-viewer-header__controls:empty {
+  display: none;
+}
+
+.file-viewer-header__actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.file-viewer-header__controls:not(:empty) + .file-viewer-header__actions {
+  padding-left: 8px;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.markdown-document-modal__icon-button,
+.markdown-files-window__icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   padding: 0;
-  border: 1px solid var(--border-subtle);
+  border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
 }
 
-.markdown-document-modal__icon-button:hover {
-  border-color: var(--accent-border);
-  color: var(--accent-bright);
+.markdown-document-modal__icon-button:hover,
+.markdown-files-window__icon-button:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
 }
 
 .markdown-document-modal__icon-button:focus-visible {
@@ -27416,6 +28017,27 @@ a.transcript-message__messaging-origin:focus-visible {
 /* The code view runs its gutter to the edge, so status lines keep the inset. */
 .markdown-document-modal__body--file > .markdown-document-modal__status {
   padding: 0 20px;
+}
+
+/* An HTML page needs room and a fixed height: its frame has no intrinsic
+   size to grow the dialog to. */
+.markdown-document-modal__content--html {
+  width: min(100%, 1200px);
+  height: min(100vh - 72px, 900px);
+  max-height: none;
+}
+
+.markdown-document-modal__body--html {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.markdown-document-modal__body--html > .markdown-document-modal__status {
+  padding: 14px 20px;
 }
 
 .markdown-document-modal__markdown {
@@ -27583,11 +28205,12 @@ a.transcript-message__messaging-origin:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
-/* Copy sits beside the outline icon buttons in both preview headers, so it
-   drops the transcript chip's fill and takes their size and glyph. */
+/* Copy sits beside the borderless icon buttons in both preview headers, so it
+   drops the transcript chip's border and fill and takes their size and glyph. */
 .transcript-copy-button.file-preview__copy {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
+  border-color: transparent;
   background: transparent;
   opacity: 1;
 }
@@ -27597,9 +28220,14 @@ a.transcript-message__messaging-origin:focus-visible {
   height: 16px;
 }
 
-.transcript-copy-button.file-preview__copy:hover,
+.transcript-copy-button.file-preview__copy:hover {
+  border-color: transparent;
+  background: var(--bg-panel-hover);
+}
+
 .transcript-copy-button.file-preview__copy:focus-visible,
 .transcript-copy-button.file-preview__copy[data-copied="true"] {
+  border-color: transparent;
   background: transparent;
 }
 
@@ -27681,65 +28309,6 @@ a.transcript-message__messaging-origin:focus-visible {
   background: var(--bg-app);
 }
 
-.markdown-files-window__file-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg-panel-elevated);
-}
-
-.markdown-files-window__file-title-wrap {
-  min-width: 0;
-}
-
-.markdown-files-window__file-title {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 16px;
-  font-weight: 650;
-  line-height: 1.3;
-  overflow-wrap: anywhere;
-}
-
-.markdown-files-window__file-path,
-.markdown-files-window__project {
-  margin: 3px 0 0;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.markdown-files-window__file-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-}
-
-.markdown-files-window__icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.markdown-files-window__icon-button:hover {
-  border-color: var(--accent-border);
-  color: var(--accent-bright);
-}
-
 .markdown-files-window__icon-button:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
@@ -27761,6 +28330,160 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .markdown-files-window__markdown-scroll--file > .markdown-files-window__status {
   padding: 0 26px;
+}
+
+.markdown-files-window__markdown-scroll--html {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.markdown-files-window__markdown-scroll--html > .markdown-files-window__status {
+  padding: 16px 26px;
+}
+
+/* HTML file preview: the page in a sandboxed frame under a one-line bar that
+   says what the page may do. */
+.html-preview {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.html-preview__bar,
+.html-preview__link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel-elevated);
+}
+
+/* The page's permissions: one bordered group with a status and the Scripts
+   switch. It sits in the viewer's header row, or in a bar of its own. */
+.html-preview-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 26px;
+  padding: 0 2px 0 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.html-preview-controls__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-right: 6px;
+}
+
+/* Each notice, named for a screen reader; the label beside it is for sight. */
+.html-preview-controls__notice {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.html-preview-controls__divider {
+  width: 1px;
+  height: 14px;
+  background: var(--border-subtle);
+}
+
+.html-preview-controls__scripts {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.html-preview-controls__scripts:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.html-preview-controls__scripts[aria-checked="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.html-preview-controls__scripts:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.html-preview__button {
+  flex: none;
+  min-height: 28px;
+  font-size: 12px;
+}
+
+.html-preview__link-text {
+  min-width: 0;
+}
+
+.html-preview__link-question {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.html-preview__link-target {
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.html-preview__link-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
+/* A page that sets no background expects a browser's white canvas, in any
+   app theme. */
+.html-preview__frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  color-scheme: light;
+  background: Canvas;
+}
+
+.html-preview__loading {
+  margin: 0;
+  padding: 14px 20px;
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 
 .markdown-files-window__markdown {
@@ -32505,7 +33228,8 @@ div.composer-error-row__toggle {
   font-size: 13px;
 }
 
-.transcript-mcp__params div {
+/* Rows only: a value's own box or rendered Markdown keeps its divs. */
+.transcript-mcp__params > div {
   display: contents;
 }
 
@@ -32528,6 +33252,143 @@ div.composer-error-row__toggle {
   overflow-wrap: anywhere;
   color: var(--text-primary);
   line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+/* A box or rendered Markdown sets its own wrapping. The box starts at the
+   row's top, so its key reads beside the bar rather than the baseline. */
+.transcript-mcp__params dd.transcript-mcp__param-text,
+.transcript-mcp__params dd.transcript-mcp__param-markdown {
+  white-space: normal;
+}
+
+.transcript-mcp__params dd.transcript-mcp__param-text {
+  align-self: start;
+}
+
+.transcript-mcp__params dt:has(+ .transcript-mcp__param-text) {
+  align-self: start;
+  padding-top: 7px;
+}
+
+.transcript-mcp__param-markdown .thread-markdown,
+.transcript-mcp__text-body .thread-markdown {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.transcript-mcp__param-markdown .thread-markdown > :first-child,
+.transcript-mcp__text-body .thread-markdown > :first-child {
+  margin-top: 0;
+}
+
+.transcript-mcp__param-markdown .thread-markdown > :last-child,
+.transcript-mcp__text-body .thread-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+/* The whole of a long value: a bar naming its format and size, then a box
+   that scrolls inside the card so Allow stays in reach. Expand raises the
+   cap; it never removes it, because a body can run to 65,000 characters. */
+.transcript-mcp__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-overlay-subtle);
+}
+
+.transcript-mcp__text-bar {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px 3px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.transcript-mcp__text-meta {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.transcript-mcp__text-views {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+}
+
+.transcript-mcp__text-views button,
+.transcript-mcp__text-toggle {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.transcript-mcp__text-views button {
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 4px;
+}
+
+.transcript-mcp__text-views button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.transcript-mcp__text-toggle {
+  height: 24px;
+  gap: 4px;
+  padding: 0 7px;
+  border-radius: 4px;
+}
+
+.transcript-mcp__text-views button:hover,
+.transcript-mcp__text-toggle:hover {
+  color: var(--text-primary);
+}
+
+.transcript-mcp__text-views button:focus-visible,
+.transcript-mcp__text-toggle:focus-visible,
+.transcript-mcp__text-body:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.transcript-mcp__text-body {
+  max-height: 200px;
+  overflow: auto;
+  padding: 8px 10px 10px;
+  /* Inside the box's 1px border, so the focus ring follows its corners. */
+  border-radius: 0 0 7px 7px;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.transcript-mcp__text.is-expanded .transcript-mcp__text-body {
+  max-height: min(520px, 60vh);
+}
+
+.transcript-mcp__text-body:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.transcript-mcp__text-body--source {
+  font-family: var(--font-mono);
+  font-size: 12px;
   white-space: pre-wrap;
 }
 
@@ -32904,7 +33765,9 @@ div.composer-error-row__toggle {
   box-shadow:
     0 0 10px color-mix(in srgb, var(--thinking-scanner-tint) 42%, transparent),
     0 0 18px color-mix(in srgb, var(--thinking-scanner-tint) 22%, transparent);
-  animation: pwragent-thinking-scanner-sweep 1800ms ease-in-out infinite;
+  /* Each half-sweep is 900ms: 27 steps limit changing pixels to 30Hz instead
+     of redrawing this small indicator at the display's full refresh rate. */
+  animation: pwragent-thinking-scanner-sweep 1800ms steps(27, end) infinite;
   opacity: 0.76;
   transform: translateX(0);
   will-change: opacity, transform;
@@ -36495,6 +37358,45 @@ div.composer-error-row__toggle {
   text-overflow: ellipsis;
 }
 
+/* Title and machine share the row's flexible column. A long title gives way
+   before the machine name, which is what tells two same-named rows apart. */
+.thread-family-pricing__name {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.thread-family-pricing__machine {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* A sub-thread whose machine could not be reached: listed, not counted. */
+.thread-family-pricing__row--off {
+  color: var(--text-muted);
+}
+
+.thread-family-pricing__row--off .thread-family-pricing__swatch {
+  box-sizing: border-box;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+}
+
+.thread-family-pricing__row--off .thread-family-pricing__cost {
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+}
+
 .thread-family-pricing__fold-label {
   grid-column: 2 / 4;
   font-family: var(--font-mono);
@@ -36919,10 +37821,6 @@ div.composer-error-row__toggle {
 
 .rail-chip__dot--neutral {
   background: var(--status-suspended);
-}
-
-.rail-chip__dot--blink {
-  animation: status-blink 1.6s ease-in-out infinite;
 }
 
 /* Title sits on its own row, full width, and wraps (clamped) instead of
@@ -37834,7 +38732,9 @@ button.pricing-token-miser__folded:focus-visible {
 
 @media (prefers-reduced-motion: no-preference) {
   .usage-pace-card__hit::after {
-    animation: usage-pace-ping 1.8s ease-out infinite;
+    /* Announce the projection, then let its dot and label carry the warning
+       without keeping the compositor drawing at the display refresh rate. */
+    animation: usage-pace-ping 1.8s ease-out 2;
   }
 }
 
@@ -45459,19 +46359,11 @@ button.composer__subthread-source-parent:hover {
   background: var(--accent);
 }
 
-@keyframes status-blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.45;
-  }
-}
-
-.status-dot--blink {
-  animation: status-blink 1.6s ease-in-out infinite;
-}
+/* `.status-dot--blink`, `.rail-chip__dot--blink` and a checks-running PR
+   chip's dot pulse from one shared timer in `lib/status-pulse.ts`: one finite
+   dip every 4.5s on the dots that are on screen, and none under reduced
+   motion. A CSS loop here would keep the compositor waking on every display
+   refresh for as long as the dot is mounted, even offscreen. */
 
 /* Pending spinner — the renderer's one busy ring. Promoted out of
    `.composer__action-button-spinner` so the composer, Settings, and every
@@ -45716,14 +46608,6 @@ button.composer__subthread-source-parent:hover {
   gap: 10px;
   margin-top: 12px;
   padding: 12px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .status-dot--blink,
-  .pr-chip--checks-running .pr-chip__dot,
-  .rail-chip__dot--blink {
-    animation: none;
-  }
 }
 
 /* ==============================================}
@@ -50295,6 +51179,120 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   border-color: var(--accent-border);
 }
 
+/* A start-thread card's settings at rest: the composer's chips, with an
+   icon in place of each grid label. Each chip opens its own menu; the
+   chevron in the corner shows the labelled grid. */
+.todo-dispatch-chips {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin: 6px 0 0;
+}
+
+.todo-model-picker__chip:has(.todo-model-picker__lead) {
+  gap: 4px;
+  padding-left: 7px;
+}
+
+.todo-model-picker__lead {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-muted);
+}
+
+/* Standard speed: the composer's bare bolt in a 22px circle. */
+.todo-model-picker__chip.is-icon-only {
+  width: 22px;
+  justify-content: center;
+  padding: 0;
+}
+
+/* A faster tier is named and lit, as the composer's Fast toggle. */
+.todo-model-picker__chip.is-lit {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.todo-model-picker__chip.is-lit .todo-model-picker__lead,
+.todo-model-picker__chip.is-lit .composer-dropdown__icon {
+  color: var(--accent-bright);
+}
+
+/* Access cannot change on the card: the chip's shape, without its control. */
+.todo-dispatch-chips__static {
+  display: inline-flex;
+  min-height: 22px;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 4px;
+  padding: 0 9px 0 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.todo-dispatch-chips__static svg {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.todo-dispatch__toggle {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  box-sizing: border-box;
+  padding: 0;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.todo-dispatch__toggle:hover {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.todo-dispatch__toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* The toggle holds the top-right corner in both layouts, beside the first
+   chip, so it never wraps onto a line of its own and does not move when
+   pressed. Both layouts start their first chip 6px down. */
+.todo-dispatch-grid {
+  position: relative;
+}
+
+.todo-dispatch-chips:has(> .todo-dispatch__toggle),
+.todo-dispatch-grid:has(> .todo-dispatch__toggle) > .thread-todo-card__facts {
+  padding-right: 28px;
+}
+
+.todo-dispatch-chips > .todo-dispatch__toggle,
+.todo-dispatch-grid > .todo-dispatch__toggle {
+  position: absolute;
+  right: 0;
+}
+
+.todo-dispatch-chips > .todo-dispatch__toggle {
+  top: 0;
+}
+
+.todo-dispatch-grid > .todo-dispatch__toggle {
+  top: 6px;
+}
+
 .todo-model-picker__menu {
   position: fixed;
   right: auto;
@@ -50304,6 +51302,17 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   max-width: calc(100vw - 16px);
   overflow-y: auto;
   font-family: var(--font-sans);
+}
+
+/* Machine, Speed, Where and Env hold short single-choice lists. */
+.todo-fact-menu {
+  width: 260px;
+}
+
+.todo-dispatch__pending {
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
 }
 
 .todo-model-picker__detail {

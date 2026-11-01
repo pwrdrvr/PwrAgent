@@ -12,6 +12,8 @@ import {
   type PendingMcpField,
   type PendingMcpInteractionState,
 } from "./mcp-elicitation";
+import { isLongMcpText, markdownNeedsSource, PendingMcpLongText } from "./PendingMcpLongText";
+import { ThreadMarkdown } from "./ThreadMarkdown";
 
 type PendingMcpInteractionProps = {
   busy?: boolean;
@@ -72,15 +74,35 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
 
         {toolParams.length > 0 ? (
           <dl className="transcript-mcp__params">
-            {toolParams.map((param, index) => (
-              // Display names can repeat, so a label is not a stable key.
-              <div key={index}>
-                <dt className={param.named ? undefined : "transcript-mcp__param-key"}>
-                  {param.label}
-                </dt>
-                <dd>{redactDisplayValue(param.value, { key: param.key, label: param.label })}</dd>
-              </div>
-            ))}
+            {toolParams.map((param, index) => {
+              // A location labels the row; the field it names is the comment.
+              const value = redactDisplayValue(param.value, { key: param.key, label: param.location ? undefined : param.label });
+              const markdown = param.format === "markdown";
+              return (
+                // Display names can repeat, so a label is not a stable key.
+                // The request id remounts each row for the next approval, so
+                // a long value never opens scrolled or in the last one's view.
+                <div key={`${props.state.requestId}:${index}`}>
+                  <dt className={param.named ? undefined : "transcript-mcp__param-key"}>
+                    {param.label}
+                  </dt>
+                  {/* The operator approves exactly this value, so none of it
+                      is cut: a long one scrolls in its own box, and Markdown
+                      with links keeps its source one tab away. */}
+                  {isLongMcpText(value) || (markdown && markdownNeedsSource(value)) ? (
+                    <dd className="transcript-mcp__param-text">
+                      <PendingMcpLongText label={param.label} markdown={markdown} value={value} />
+                    </dd>
+                  ) : markdown ? (
+                    <dd className="transcript-mcp__param-markdown">
+                      <ThreadMarkdown text={value} variant="summary" />
+                    </dd>
+                  ) : (
+                    <dd>{value}</dd>
+                  )}
+                </div>
+              );
+            })}
           </dl>
         ) : null}
 
@@ -417,7 +439,7 @@ function readStringMeta(
 
 function readToolParamsDisplay(
   meta: Record<string, unknown> | null
-): Array<{ key: string; label: string; named: boolean; value: unknown }> {
+): Array<{ format?: "markdown"; key: string; label: string; location: boolean; named: boolean; value: unknown }> {
   const raw = meta?.tool_params_display;
   if (!Array.isArray(raw)) {
     return [];
@@ -432,10 +454,20 @@ function readToolParamsDisplay(
     // `{ name: "app", display_name: "App" }`); `name` and `key` are the raw
     // parameter key, drawn verbatim in mono.
     const named = readStringMeta(record, "label") ?? readStringMeta(record, "display_name");
-    const label = named ?? readStringMeta(record, "name") ?? readStringMeta(record, "key");
+    // PwrAgent's inline review comments are labelled `path:line`, verbatim.
+    const location = readStringMeta(record, "location");
+    const label = location ?? named ?? readStringMeta(record, "name") ?? readStringMeta(record, "key");
     if (!label) {
       return [];
     }
-    return [{ key: readStringMeta(record, "name") ?? readStringMeta(record, "key") ?? label, label, named: named !== undefined, value: record.value }];
+    return [{
+      // PwrAgent's own forge rows mark a body the forge renders as Markdown.
+      ...(record.format === "markdown" ? { format: "markdown" as const } : {}),
+      key: readStringMeta(record, "name") ?? readStringMeta(record, "key") ?? label,
+      label,
+      location: location !== undefined,
+      named: location === undefined && named !== undefined,
+      value: record.value,
+    }];
   });
 }

@@ -1,6 +1,6 @@
 {
   "name": "pwragent",
-  "version": "0.1.0-alpha.1",
+  "version": "1.3.8",
   "private": false,
   "type": "module",
   "description": "Experimental headless PwrAgent daemon and command-line client.",
@@ -37,7 +37,7 @@
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org",
-    "tag": "next"
+    "tag": "latest"
   },
   "bin": {
     "pwragent": "bin/pwragent.js"

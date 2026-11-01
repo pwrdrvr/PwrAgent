@@ -13,7 +13,9 @@ export function readRenderingSnapshot() {
     "app-update-banner-sweep", "settings-keyboard-example", "star-map-intake-pulse",
     "missing-worktree-card-scan", "usage-pace-ping",
   ]);
-  const sources = [".thinking-scanner", ".pending-spinner", ".status-dot", ".star-map-card"];
+  const sources = [
+    ".thinking-scanner", ".pending-spinner", ".status-dot", ".rail-chip", ".pr-chip", ".star-map-card",
+  ];
   const animations = document.getAnimations();
   const groups = new Map<string, number>();
   for (const animation of animations.slice(0, 128)) {
@@ -21,8 +23,10 @@ export function readRenderingSnapshot() {
     const rect = target instanceof Element ? target.getBoundingClientRect() : null;
     const inViewport = Boolean(rect && rect.width > 0 && rect.height > 0
       && rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth);
-    const name = animation instanceof CSSAnimation && names.has(animation.animationName)
-      ? animation.animationName : "other";
+    // CSS animations are named by their keyframes; script animations by `id`.
+    const name = animation instanceof CSSAnimation
+      ? (names.has(animation.animationName) ? animation.animationName : "other")
+      : (names.has(animation.id) ? animation.id : "other");
     const source = target instanceof Element
       ? sources.find((selector) => target.closest(selector)) ?? "other" : "other";
     const infinite = animation.effect?.getTiming().iterations === Infinity;

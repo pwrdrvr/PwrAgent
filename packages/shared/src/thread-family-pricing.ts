@@ -28,12 +28,36 @@ export type ThreadFamilyPricingMember = {
   totalCostMicros: number;
   usageLineCount: number;
   unpricedUsageLineCount: number;
+  /**
+   * The instance that owns the thread and keeps its total, when that is not
+   * the machine that answered the read. Absent: the answering machine.
+   */
+  ownerInstanceId?: string;
+  /** The owner's name as the answering machine knows it. */
+  instanceLabel?: string;
+  /** The owner could not be reached, so this thread is not in the total. */
+  unavailable?: true;
+};
+
+/**
+ * A sub-thread the owner knows of that another instance keeps. Only that
+ * instance holds its total, so the reader asks it directly.
+ */
+export type ThreadFamilyPricingReferral = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  ownerInstanceId: string;
+  /** Sent only to the local reader; an owner never forwards another instance's titles. */
+  title?: string;
+  instanceLabel?: string;
 };
 
 export type ReadThreadFamilyPricingResponse = {
   /** The requested thread first, then its sub-threads by spend, largest first. */
   members: ThreadFamilyPricingMember[];
   readAt: number;
+  /** Sub-threads on other instances. Owners that predate them omit this. */
+  referrals?: ThreadFamilyPricingReferral[];
 };
 
 export type ThreadFamilyPricingInputMember = {
@@ -48,7 +72,8 @@ export type ThreadFamilyPricingInputMember = {
  * provider; other currencies are left out rather than added to dollars.
  */
 export function summarizeThreadFamilyPricing(params: {
-  root: ReadThreadFamilyPricingRequest;
+  /** Absent when the family root lives on another instance. */
+  root?: Pick<ReadThreadFamilyPricingRequest, "backend" | "threadId">;
   members: readonly ThreadFamilyPricingInputMember[];
   summaries: readonly ThreadPricingSummary[];
   readAt: number;
@@ -64,7 +89,7 @@ export function summarizeThreadFamilyPricing(params: {
     total.unpricedUsageLineCount += summary.unpricedUsageLineCount;
     totals.set(memberKey, total);
   }
-  const rootKey = key(params.root.backend, params.root.threadId);
+  const rootKey = params.root ? key(params.root.backend, params.root.threadId) : undefined;
   const seen = new Set<string>();
   const members: ThreadFamilyPricingMember[] = [];
   for (const member of params.members) {
@@ -80,9 +105,17 @@ export function summarizeThreadFamilyPricing(params: {
       ...(totals.get(memberKey) ?? { totalCostMicros: 0, usageLineCount: 0, unpricedUsageLineCount: 0 }),
     });
   }
-  members.sort((left, right) =>
-    Number(right.self) - Number(left.self)
-    || right.totalCostMicros - left.totalCostMicros
-    || left.title.localeCompare(right.title));
+  members.sort(compareThreadFamilyPricingMembers);
   return { members, readAt: params.readAt };
+}
+
+/** The thread itself, then spend, largest first; unreachable threads last. */
+export function compareThreadFamilyPricingMembers(
+  left: ThreadFamilyPricingMember,
+  right: ThreadFamilyPricingMember,
+): number {
+  return Number(right.self) - Number(left.self)
+    || Number(Boolean(left.unavailable)) - Number(Boolean(right.unavailable))
+    || right.totalCostMicros - left.totalCostMicros
+    || left.title.localeCompare(right.title);
 }

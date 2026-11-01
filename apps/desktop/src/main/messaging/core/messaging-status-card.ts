@@ -36,6 +36,7 @@ import {
 } from "@pwragent/messaging-interface";
 import type { MessagingResolvedThreadState } from "./messaging-thread-state.js";
 import {
+  acpBackendUsesExecutionModePermissions,
   buildMessagingAcpRuntimeModeSummary,
   type MessagingAcpRuntimeModeChoice,
 } from "./messaging-acp-runtime.js";
@@ -216,7 +217,10 @@ export function buildBindingStatusIntent(params: {
     params.binding.channel.conversation.kind !== "dm" &&
     params.binding.channel.conversation.isDirectMessage !== true &&
     params.capabilityProfile?.conversationInput?.reportsBotMention === true;
+  const acpExecutionModePermissions = isAcpBackendId(params.binding.backend)
+    && acpBackendUsesExecutionModePermissions(params.backendSummary);
   const acpRuntimeMode = isAcpBackendId(params.binding.backend)
+    && !acpExecutionModePermissions
     ? buildMessagingAcpRuntimeModeSummary({
         backend: params.backendSummary,
         runtime: params.threadState.acpRuntime,
@@ -304,6 +308,7 @@ export function buildBindingStatusIntent(params: {
       permissionsChoices: acpRuntimeChoices,
       supportsLegacyPermissionsAction:
         !isAcpBackendId(params.binding.backend) ||
+        acpExecutionModePermissions ||
         permissionsMode === "full-access",
       queuedExecutionMode,
       reasoning,
@@ -984,6 +989,17 @@ export function buildHandoffOverviewIntent(params: {
       style: "primary",
       value: handoffValue(params.context),
     });
+    actions.push({
+      id: "handoff:worktree-to-worktree",
+      label: "Handoff to New Worktree",
+      fallbackText: "2",
+      style: "secondary",
+      value: {
+        ...handoffValue(params.context),
+        direction: "worktree-to-worktree",
+        strategy: "detached-changes",
+      },
+    });
   }
 
   actions.push({
@@ -1287,13 +1303,19 @@ export function buildHandoffConfirmationIntent(params: {
   targetPath?: string;
   projectPageIndex?: number;
   strategy?: HandoffThreadWorkspaceRequest["strategy"];
+  /** Only worktree-to-worktree differs from the workspace's own default. */
+  direction?: HandoffThreadWorkspaceRequest["direction"];
 }): MessagingConfirmationIntent {
   const direction =
     params.targetPath ? "to-project"
-      : params.context.workspaceKind === "local" ? "local-to-worktree" : "worktree-to-local";
+      : params.direction === "worktree-to-worktree" && params.context.workspaceKind === "worktree"
+        ? "worktree-to-worktree"
+        : params.context.workspaceKind === "local" ? "local-to-worktree" : "worktree-to-local";
   const body = [
     params.targetPath
       ? "Confirm moving this conversation to another project. Files and branches stay in place."
+      : direction === "worktree-to-worktree"
+        ? "Confirm moving this thread to a new worktree. Its changes move too. The old worktree is archived unless it was created outside PwrAgent."
       : params.strategy === "detached-changes"
       ? "Confirm new detached-head worktree."
       : direction === "local-to-worktree"
@@ -1337,6 +1359,7 @@ export function buildHandoffConfirmationIntent(params: {
           value: {
             ...handoffValue(params.context),
             ...(params.targetPath ? { direction, targetPath: params.targetPath } : {}),
+            ...(direction === "worktree-to-worktree" ? { direction } : {}),
             ...(params.strategy ? { strategy: params.strategy } : {}),
             ...(params.leaveLocalBranch
               ? { leaveLocalBranch: params.leaveLocalBranch }
@@ -1378,6 +1401,7 @@ export function handoffRequestFromValue(
   if (
     value.direction !== "local-to-worktree" &&
     value.direction !== "worktree-to-local" &&
+    value.direction !== "worktree-to-worktree" &&
     value.direction !== "to-project"
   ) {
     return undefined;

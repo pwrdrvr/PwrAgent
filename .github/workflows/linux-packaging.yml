@@ -57,6 +57,7 @@ jobs:
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        timeout-minutes: 10
         with:
           node-version: "^24.22.1"
           cache-electron: "true"

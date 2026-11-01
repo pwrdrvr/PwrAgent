@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
@@ -103,7 +103,8 @@ describe("wrapCommandInWindowsJob", () => {
     const wrapperScript = readFileSync(wrapped.args.at(-1)!, "utf8");
     expect(wrapperScript).toContain("JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE");
     expect(wrapperScript).toContain("CREATE_SUSPENDED | CREATE_NO_WINDOW");
-    expect(wrapperScript).toContain("AssignProcessToJobObject");
+    expect(wrapperScript).toContain("PROC_THREAD_ATTRIBUTE_JOB_LIST");
+    expect(wrapperScript).toContain("EXTENDED_STARTUPINFO_PRESENT");
     expect(wrapped.env.PWRAGENT_JOB_WRAPPER_EXECUTABLE).toBe(
       "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
     );
@@ -348,6 +349,79 @@ describe("wrapCommandInWindowsJob", () => {
       vi.useRealTimers();
     }
   });
+
+  it.skipIf(process.platform !== "win32")(
+    "reaps a suspended target when its launcher dies immediately after creation",
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-windows-job-create-kill-"));
+      const wrapped = wrapCommandInWindowsJob({
+        command: process.execPath,
+        args: ["-e", "process.exit(0)"],
+        cwd: root,
+        env: process.env,
+      });
+      let child: ChildProcess | undefined;
+      let targetPid: number | undefined;
+      let targetStarted = "";
+      let targetGone = false;
+      try {
+        const scriptPath = wrapped.args.at(-1)!;
+        const script = readFileSync(scriptPath, "utf8");
+        const barrier = "processCreated = true;";
+        expect(script.split(barrier)).toHaveLength(2);
+        // Interrupt at the first user-space instruction after CreateProcess.
+        // The old create-then-assign path strands this target suspended and
+        // keeps the launcher's pipes open. No target code needs to execute.
+        writeFileSync(scriptPath, script.replace(barrier, `${barrier}
+            var target = System.Diagnostics.Process.GetProcessById((int)processInformation.dwProcessId);
+            File.WriteAllText(Path.Combine(workingDirectory, "target"),
+                processInformation.dwProcessId.ToString() + "\\t" + target.StartTime.ToUniversalTime().Ticks.ToString());
+            TerminateProcess(new IntPtr(-1), 97);
+        `));
+        child = spawn(wrapped.command, wrapped.args, {
+          cwd: root, env: wrapped.env, windowsHide: true,
+        });
+        child.stdout?.resume();
+        let stderr = "";
+        child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
+        const closed = new Promise<number | null>((resolve, reject) => {
+          child!.once("error", reject);
+          child!.once("close", resolve);
+        });
+        void closed.catch(() => {});
+        await vi.waitFor(() => {
+          const [pid, started] = readFileSync(path.join(root, "target"), "utf8").split("\t");
+          targetPid = Number(pid);
+          targetStarted = started;
+          expect(Number.isSafeInteger(targetPid) && targetPid > 0, stderr).toBe(true);
+          expect(targetStarted).toMatch(/^\d+$/);
+        }, { timeout: 20_000 });
+        await vi.waitFor(() => {
+          let alive = true;
+          try { process.kill(targetPid!, 0); } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ESRCH") alive = false;
+          }
+          expect(alive).toBe(false);
+          targetGone = true;
+        }, { timeout: 5_000 });
+        await expect(closed).resolves.toBe(97);
+      } finally {
+        if (child && child.exitCode === null) child.kill();
+        if (!targetGone && targetPid && /^\d+$/.test(targetStarted)) {
+          // Keep the failing before-fix regression safe, including PID reuse.
+          await new Promise<void>((resolve) => {
+            execFile(wrapped.command, ["-NoProfile", "-NonInteractive", "-Command",
+              `$p=Get-Process -Id ${targetPid} -ErrorAction SilentlyContinue; `
+                + `if ($p -and $p.StartTime.ToUniversalTime().Ticks -eq ${targetStarted}) { $p.Kill() }`,
+            ], { timeout: 3_000, windowsHide: true }, () => resolve());
+          });
+        }
+        wrapped.cleanup();
+        await rm(root, { force: true, recursive: true });
+      }
+    },
+    30_000,
+  );
 
   it.skipIf(process.platform !== "win32")(
     "executes a native command inside the Job",

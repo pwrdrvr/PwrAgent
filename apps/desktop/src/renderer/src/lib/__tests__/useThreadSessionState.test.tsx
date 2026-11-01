@@ -206,6 +206,65 @@ async function flushReactUpdates(): Promise<void> {
 }
 
 describe("useThreadSessionState", () => {
+  it("keeps a completed native image view completed when its turn settles", async () => {
+    let emit: (event: AgentEvent) => void = () => undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+      readThread: vi.fn().mockResolvedValue(readThreadResponse({ entries: [], hasPreviousPage: false })),
+    };
+    const { result } = renderHook(() => useThreadSessionState({
+      desktopApi, thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+    }));
+    await waitForThreadHydration(result);
+    act(() => emit({ backend: "codex", notification: { method: "turn/started", params: {
+      threadId: "thread-1", turn: { id: "turn-1", status: "in_progress" },
+    } } }));
+    const item = { type: "imageView", id: "native-view", path: "/tmp/screenshot.png" };
+    act(() => emit({ backend: "codex", notification: { method: "item/started", params: {
+      threadId: "thread-1", turnId: "turn-1", item,
+    } } }));
+    const image = { type: "image" as const, url: "pwragent-image://file/retained", sourceUrl: "file:///tmp/screenshot.png" };
+    const completed: AgentEvent = { backend: "codex", rendererImageParts: [image], notification: { method: "item/completed", params: {
+      threadId: "thread-1", turnId: "turn-1", item,
+    } } };
+    act(() => emit(completed));
+    act(() => emit(completed));
+    act(() => emit({ backend: "codex", notification: { method: "turn/completed", params: {
+      threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] },
+    } } }));
+    await flushReactUpdates();
+    const details = result.current.entries.flatMap((entry) => entry.type === "activity" ? entry.details : []);
+    expect(details.filter((detail) => detail.id === item.id)).toEqual([
+      expect.objectContaining({ status: "completed", images: [image] }),
+    ]);
+    expect(result.current.activeTurnId).toBeUndefined();
+  });
+
+  it.each(["codex", "claude"] as const)("keeps safe live %s image parts when a completed reply replaces streamed text", async (backend) => {
+    let emit: (event: AgentEvent) => void = () => undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+      readThread: vi.fn().mockResolvedValue({ ...readThreadResponse({ entries: [], hasPreviousPage: false }), backend }),
+    };
+    const { result } = renderHook(() => useThreadSessionState({
+      desktopApi, thread: { ...buildThread({ id: "thread-1", updatedAt: 1_000 }), source: backend },
+    }));
+    await waitForThreadHydration(result);
+    act(() => emit({ backend, notification: { method: "turn/started", params: {
+      threadId: "thread-1", turn: { id: "turn-1", status: "in_progress" },
+    } } }));
+    const image = { type: "image" as const, url: "pwragent-image://file/retained", sourceUrl: "file:///tmp/mockup.png" };
+    const event: AgentEvent = { backend, rendererImageParts: [image], notification: { method: "item/completed", params: {
+      threadId: "thread-1", turnId: "turn-1", item: { id: "reply", type: "agentMessage", text: "![Mockup](/tmp/mockup.png)" },
+    } } };
+    act(() => emit(event));
+    act(() => emit(event));
+    expect(result.current.entries.filter((entry) => entry.id === "reply")).toEqual([
+      expect.objectContaining({ parts: [{ type: "text", text: "![Mockup](/tmp/mockup.png)" }, image] }),
+    ]);
+    expect(result.current.activeTurnId).toBe("turn-1");
+  });
+
   it.each(["partial_answer", "partial", undefined] as const)(
     "retains live %s output through continued tool work until the turn completes",
     async (phase) => {
@@ -5637,6 +5696,152 @@ describe("useThreadSessionState", () => {
       { id: "turn-1", status: "completed", durationMs: 524_447 },
     ]);
     expect(result.current.pendingAssistantMessage).toBeUndefined();
+  });
+
+  // Claude reports every assistant message of the turn as its own output
+  // part. ACP agents can report the whole turn's text as one part.
+  it.each([
+    { shape: "one part per message", output: (texts: string[]) => texts },
+    { shape: "the messages joined", output: (texts: string[]) => [texts.join("\n\n")] },
+    { shape: "the messages run together", output: (texts: string[]) => [texts.join("")] },
+  ])("does not repeat completed messages as a final answer when the turn output is $shape", async ({ output }) => {
+    let agentEventHandler: ((event: AgentEvent) => void) | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: vi.fn(async () => readThreadResponse({
+        entries: [],
+        hasPreviousPage: false,
+      })),
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries).toEqual([]);
+    });
+
+    const texts = [
+      "Putting the duration beside the headline.",
+      "Now re-rendering the screenshot.",
+      "The duration now sits beside the headline.",
+    ];
+    act(() => {
+      texts.forEach((text, index) => {
+        const itemId = `message-${index + 1}`;
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "item/agentMessage/delta",
+            params: { threadId: "thread-1", turnId: "turn-1", itemId, delta: text },
+          },
+        });
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "item/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              item: { id: itemId, type: "agentMessage", text },
+            },
+          },
+        });
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: output(texts).map((text) => ({ type: "text", text })),
+            },
+          },
+        },
+      });
+    });
+
+    expect(
+      result.current.entries.map((entry) =>
+        entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+      )
+    ).toEqual(texts.map((text) => `assistant:${text}`));
+  });
+
+  // ACP streams replies as deltas only, so the turn's last reply is still
+  // pending when the turn completes, and a thought is a commentary message
+  // that the turn's output text leaves out.
+  it("does not repeat streamed ACP replies as a final answer", async () => {
+    let agentEventHandler: ((event: AgentEvent) => void) | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: vi.fn(async () => readThreadResponse({
+        entries: [],
+        hasPreviousPage: false,
+      })),
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries).toEqual([]);
+    });
+
+    const messages = [
+      { itemId: "thought-1", phase: "commentary", text: "Checking the layout." },
+      { itemId: "reply-1", phase: "final", text: "Putting the duration beside the headline." },
+      { itemId: "reply-2", phase: "final", text: "The duration now sits beside the headline." },
+    ] as const;
+    act(() => {
+      for (const { itemId, phase, text } of messages) {
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "item/agentMessage/delta",
+            params: { threadId: "thread-1", turnId: "turn-1", itemId, delta: text, phase },
+          },
+        });
+      }
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [{
+                type: "text",
+                text: `${messages[1]!.text}\n\n${messages[2]!.text}`,
+              }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(
+      result.current.entries.map((entry) =>
+        entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+      )
+    ).toEqual(messages.map(({ text }) => `assistant:${text}`));
   });
 
   it("replaces a transient message without persisting it in the transcript", async () => {

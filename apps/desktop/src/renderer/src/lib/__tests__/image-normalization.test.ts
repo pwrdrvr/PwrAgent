@@ -205,9 +205,16 @@ describe("image normalization", () => {
     await expect(
       normalizeImageFile(
         new File([new Uint8Array([1])], "photo.webp", { type: "image/webp" }),
-        { dependencies },
+        { dependencies, maxPatchCount: 1536 },
       ),
     ).resolves.toEqual({
+      timing: {
+        decodeMs: expect.any(Number),
+        encodeCount: 1,
+        encodeMs: expect.any(Number),
+        readMs: expect.any(Number),
+        totalMs: expect.any(Number),
+      },
       conversionPath: "renderer",
       dataUrl: "data:image/jpeg;base64,AQID",
       height: 1024,
@@ -244,59 +251,48 @@ describe("image normalization", () => {
     expect(normalized.height).toBe(1024);
   });
 
-  it("does not let resized PNG encoding grow beyond the source size", async () => {
-    const encodeCanvas = vi.fn(async (canvas, mimeType) => {
-      const size = canvas.width < 1024 ? 90 : 140;
-      return new Blob([new Uint8Array(size)], { type: mimeType });
-    });
-    const dependencies = makeDependencies({
-      decode: vi.fn(async () => ({
-        width: 2048,
+  it.each(["image/png", "image/jpeg"])(
+    "encodes %s once at the patch limit even when the result has more bytes",
+    async (mimeType) => {
+      const dependencies = makeDependencies({
+        decode: async () => ({ width: 4096, height: 4096, draw: vi.fn() }),
+        encode: vi.fn(async () => new Blob([new Uint8Array(140)], { type: mimeType })),
+      });
+      const normalized = await normalizeImageFile(
+        new File([new Uint8Array(100)], "image", { type: mimeType }),
+        { dependencies },
+      );
+
+      expect(normalized).toMatchObject({
         height: 2048,
-        draw: vi.fn(),
-      })),
-      encode: encodeCanvas,
-    });
+        width: 2048,
+        mimeType,
+        size: 140,
+      });
+      expect(dependencies.encodeCanvas).toHaveBeenCalledExactlyOnceWith(
+        expect.anything(), mimeType, 0.85,
+      );
+    },
+  );
 
+  it("preserves ordinary screenshot bytes under the default safety limit", async () => {
+    const dependencies = makeDependencies({
+      decode: async () => ({ width: 1820, height: 1153, draw: vi.fn() }),
+    });
     const normalized = await normalizeImageFile(
-      new File([new Uint8Array(100)], "screenshot.png", { type: "image/png" }),
-      { dependencies, maxPatchCount: 1024 },
+      new File([new Uint8Array(112022)], "screenshot.png", { type: "image/png" }),
+      { dependencies },
     );
-
-    expect(normalized).toMatchObject({
-      height: 972,
-      mimeType: "image/png",
-      size: 90,
-      width: 972,
-    });
-    expect(encodeCanvas).toHaveBeenCalledTimes(2);
+    expect(normalized).toMatchObject({ width: 1820, height: 1153, size: 112022 });
+    expect(dependencies.encodeCanvas).not.toHaveBeenCalled();
+    expect(dependencies.hasAlpha).not.toHaveBeenCalled();
   });
 
-  it("preserves the patch cap when every resized PNG encoding is larger", async () => {
-    const encodeCanvas = vi.fn(async (_canvas, mimeType) =>
-      new Blob([new Uint8Array(140)], { type: mimeType }),
-    );
-    const dependencies = makeDependencies({
-      decode: vi.fn(async () => ({
-        width: 2048,
-        height: 2048,
-        draw: vi.fn(),
-      })),
-      encode: encodeCanvas,
+  it("bounds extreme still-image dimensions without upscaling or exceeding the budget", () => {
+    const dimensions = calculatePatchBoundedImageDimensions({
+      width: 20_000_000, height: 20_000_000, maxPatchCount: 4096,
     });
-
-    const normalized = await normalizeImageFile(
-      new File([new Uint8Array(100)], "screenshot.png", { type: "image/png" }),
-      { dependencies, maxPatchCount: 1024 },
-    );
-
-    expect(normalized).toMatchObject({
-      dataUrl: "data:image/png;base64,AQID",
-      height: 1024,
-      mimeType: "image/png",
-      size: 140,
-      width: 1024,
-    });
+    expect(dimensions).toEqual({ width: 2048, height: 2048 });
   });
 
   it("preserves PNG bytes when actual size is selected", async () => {
@@ -355,38 +351,6 @@ describe("image normalization", () => {
       size: 3,
       width: 640,
     });
-  });
-
-  it("retries JPEG encoding when a resized output is larger than the source", async () => {
-    const encodeCanvas = vi.fn(async (_canvas, mimeType, quality) => {
-      const size = quality >= 0.85 ? 140 : 90;
-      return new Blob([new Uint8Array(size)], { type: mimeType });
-    });
-    const dependencies = makeDependencies({
-      decode: vi.fn(async () => ({
-        width: 2048,
-        height: 2048,
-        draw: vi.fn(),
-      })),
-      encode: encodeCanvas,
-    });
-
-    const normalized = await normalizeImageFile(
-      new File([new Uint8Array(100)], "photo.jpeg", { type: "image/jpeg" }),
-      { dependencies, maxPatchCount: 1024 },
-    );
-
-    expect(normalized.size).toBe(90);
-    expect(encodeCanvas).toHaveBeenCalledWith(
-      expect.anything(),
-      "image/jpeg",
-      expect.closeTo(0.85),
-    );
-    expect(encodeCanvas).toHaveBeenCalledWith(
-      expect.anything(),
-      "image/jpeg",
-      0.84,
-    );
   });
 
   it("preserves JPEG bytes when dimensions already fit", async () => {

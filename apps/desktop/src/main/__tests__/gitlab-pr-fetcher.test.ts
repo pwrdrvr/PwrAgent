@@ -160,6 +160,35 @@ describe("GitLab MR routing and status", () => {
     ]);
   });
 
+  it("finds the MR whose head is a commit, and treats an unknown commit as no MR", async () => {
+    const tip = "a".repeat(40);
+    const { fetcher, run } = fixture((endpoint) => endpoint.includes("/repository/commits/")
+      ? [{ ...mr, sha: tip }, { ...mr, iid: 18, sha: "b".repeat(40) }]
+      : { ...mr, sha: tip, head_pipeline: { status: "success", sha: tip } });
+    expect(await fetcher.fetchForCommit("/fixture", tip.toUpperCase())).toEqual([
+      expect.objectContaining({ number: 17, headSha: tip }),
+    ]);
+    expect(run.mock.calls.map((call) => call[1])).toEqual([
+      ["api", "--hostname", "gitlab.com", "--method", "GET", "--include", `projects/team%2Fsub%2Fgroup%2Fproject/repository/commits/${tip}/merge_requests?per_page=20`],
+      ["api", "--hostname", "gitlab.com", "--method", "GET", "projects/team%2Fsub%2Fgroup%2Fproject/merge_requests/17"],
+    ]);
+
+    const missing = vi.fn(async () => {
+      throw Object.assign(new Error("exit 1"), { stdout: "HTTP/2 404 Not Found\r\n\r\n{\"message\":\"404 Commit Not Found\"}" });
+    });
+    const unknown = new GitLabPrFetcher({ run: missing, discover: async () => discovery, resolveRepos: async () => [ref] });
+    expect(await unknown.fetchForCommit("/fixture", tip)).toEqual([]);
+    expect(unknown.getLastError("gitlab.com")).toBeUndefined();
+
+    // A project 404 looks the same, so it must not clear an error the branch
+    // lookup just recorded for the host.
+    await expect(unknown.fetchForBranch("/fixture", "feature/a+b")).rejects.toThrow();
+    const recorded = unknown.getLastError("gitlab.com");
+    expect(recorded).toBeDefined();
+    expect(await unknown.fetchForCommit("/fixture", tip)).toEqual([]);
+    expect(unknown.getLastError("gitlab.com")).toBe(recorded);
+  });
+
   it.each(["opened", "locked", "merged", "closed"])("maps %s lifecycle without treating locked as terminal", (state) => {
     expect(parseGitLabMr({ ...mr, state }).lifecycleState).toBe(state === "locked" || state === "opened" ? "open" : state);
   });

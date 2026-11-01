@@ -8,6 +8,14 @@ Store via signed/notarized DMG with auto-update through `electron-updater`
 against GitHub Releases on `pwrdrvr/PwrAgent`. Linux releases ship DEB, RPM, pacman, and tar.gz artifacts for x64 and arm64.
 Native packages use `electron-updater`; portable tar.gz builds are updated manually.
 
+The desktop and npm `pwragent` Outpost CLI are one release train: the exact
+`apps/desktop/package.json` version and protected `v<VERSION>` source commit
+identify both. Before the next release, complete the operator-only
+[npm migration checklist](headless-npm-release.md#operator-migration-checklist--before-the-first-paired-tag).
+Missing prerequisites block desktop builds rather than silently skipping npm.
+GitHub and npm are separate publication services; shared-release completion
+requires both, and desktop assets can be visible during an npm failure.
+
 ---
 
 ## macOS architecture contract
@@ -213,7 +221,7 @@ release until an operator promotes the new one. See
 Use `-prerelease.N` for Stable RCs. Use `-alpha.N` / `-beta.N` on `main`.
 Every `main` tag with a prerelease suffix must stay a GitHub Pre-release so
 it cannot steal `/releases/latest` from the Stable train. Promote a smoked
-alpha by bumping `apps/desktop/package.json` and the CHANGELOG heading to
+alpha by running `pnpm release:prepare <beta-version>` and updating the CHANGELOG heading to
 the beta version, then tagging that commit. Do not retag the alpha SHA.
 
 **The suffix is load-bearing, not just the GitHub flag.** Stable · Latest
@@ -245,16 +253,17 @@ neither condition proves absence. This secret is separate from submission write
 credentials and must never be printed or copied.
 
 ```bash
-# 1. Bump the desktop version and add a matching top CHANGELOG.md entry.
+# 1. Prepare desktop and Outpost together, then add a matching CHANGELOG.md entry.
 # Treat apps/desktop/package.json as the release version source.
 RELEASE_BRANCH=main
+pnpm release:prepare 1.0.0-alpha.7
 RELEASE_TAG=v1.0.0-alpha.7 pnpm release:check
 pnpm licenses:generate
 pnpm licenses:check
 
 # 2. Commit the release metadata and land it on the release branch.
 # Preferred: direct signed push by a maintainer with branch-protection bypass.
-git add apps/desktop/package.json CHANGELOG.md THIRD_PARTY_LICENSES
+git add apps/desktop/package.json packages/pwragent/package.json CHANGELOG.md THIRD_PARTY_LICENSES
 git commit -S -m "chore(release): prepare v1.0.0-alpha.7"
 git push origin HEAD:$RELEASE_BRANCH
 
@@ -267,19 +276,37 @@ git push origin v1.0.0-alpha.7
 ```
 
 The `Release Desktop (macOS universal + arm64 + Windows + Linux DEB)` workflow contains
-ten job definitions (unit tests fan out across two lanes and Linux packaging
-across two architectures). All macOS jobs use standard `macos-26` runners:
+the desktop jobs below, plus shared-source/npm preflight, Outpost validation,
+npm publication and a final completion gate (unit tests fan out across two lanes and Linux packaging
+across two architectures). macOS dependency setup, lint/typecheck, and unit
+tests use the restricted `[self-hosted, macOS, ARM64, pwrdrvr-macos]` runner
+pool. Preparation and signing use GitHub-hosted `macos-26`, restoring the
+working release environment from before the signing migration:
 
-1. `Install macOS dependencies` populates the dependency and Electron caches
-   on a miss, using the same lookup-only setup as CI.
+Before desktop dependency setup, `Check shared release source and npm
+prerequisites` verifies the protected tag/event/source SHA and operator migration.
+`Outpost release package` then runs mocked tests and the existing tarball,
+license and offline/native installation checks on Node 22 and 24. These jobs
+have no npm publish credentials/OIDC permission. Node 24's tested package is
+retained for the protected npm job; failure prevents desktop packaging.
+
+1. `Install macOS dependencies` seeds or reuses the guest's persistent pnpm,
+   Corepack, and Electron caches under `~/Library/Caches/pwragent-ci`. Every
+   self-hosted source job installs its own workspace links against that store. A warm
+   store skips the GitHub dependency-cache download; cold guests seed it
+   through the pinned `configure-nodejs` action. This mode replaces lookup-only
+   setup, which cannot be combined with a persistent store.
 2. `Lint and typecheck` restores dependencies, checks release metadata and
    authoritative Homebrew/Winget channels, and runs `pnpm lint`, including
-   typecheck, licensing, ESLint, and the repository's correctness gates.
+   native typecheck, licensing, syntax and typed Oxlint, and the repository's
+   correctness gates. There is no formatting pass.
 3. `macOS unit tests (lane N of 2)` runs the complete workspace suite split
    with `pnpm test --shard=<lane>/2`. Both lanes select Xcode with actool 26 and
    set `PWRAGENT_REQUIRE_ACTOOL=1`, so the icon compile test cannot silently skip.
 4. `Prepare macOS signing input` runs
-   `apps/desktop/scripts/release.mjs --prepare-only` for both architectures.
+   `apps/desktop/scripts/release.mjs --prepare-only` for both architectures
+   on GitHub-hosted `macos-26`, with the standard dependency cache rather than
+   a persistent guest store.
    It runs alongside lint/typecheck and the unit test lanes after cache setup.
    These jobs have `contents: read`, explicit `id-token: none`, no Apple secrets,
    and checkout credentials disabled. macOS signing, Linux packaging, and
@@ -288,10 +315,12 @@ across two architectures). All macOS jobs use standard `macos-26` runners:
 5. `Sign, notarize, package macOS`, gated by the protected `apple-signing`
    environment, with `contents: read` and explicit `id-token: none`. It does
    not check out the repository or run dependency installation/postinstall
-   scripts. It downloads the prepared artifact, verifies its SHA-256 digest,
-   expands it, and runs `apps/desktop/scripts/release.mjs --sign-stage-only
-   --no-publish`
-   with the environment-scoped Apple secrets.
+   scripts. It uses a fresh GitHub-hosted `macos-26` runner, downloads the
+   prepared artifact into `.release-input`, verifies its SHA-256 digest,
+   expands it into the workspace, and runs
+   `apps/desktop/scripts/release.mjs --sign-stage-only --no-publish` with the
+   environment-scoped Apple secrets. Node and the Apple certificate/toolchain
+   baseline come from the hosted image, as in the earlier working releases.
 6. `Package Linux`, running on native Ubuntu x64 and arm64 GitHub-hosted
    runners. Each job runs `apps/desktop/scripts/release.mjs --linux
    --no-publish`, verifies the packaged ASAR, writes a stable download alias,
@@ -329,11 +358,28 @@ across two architectures). All macOS jobs use standard `macos-26` runners:
    GitHub Release body, and fails the workflow if the body still reads back as
    empty.
 
-The macOS no-secret prepare job runs on GitHub's Apple Silicon `macos-26`
-host. Icon Composer's Xcode 26 `AssetCatalogAgent` loads macOS 26 frameworks,
+11. `Publish matching Outpost to npm`, requiring successful Outpost validation
+    and desktop assets/notes, waits for the existing `npm-pwragent` environment
+    review. It publishes the retained tarball using npm OIDC/provenance, or
+    verifies identical already-published bytes/source on a retry. Only this job
+    has `id-token: write`; Apple/Windows signing boundaries are unchanged.
+12. `Verify desktop and Outpost release completion` runs even when a dependency
+    fails or skips, and requires successful desktop publication and npm
+    publication/verification. Missing trust, denied approval, or publish failure
+    is an incomplete release. Follow the [partial-failure recovery](headless-npm-release.md#partial-failures-and-retries),
+    preferring failed-job reruns of the original release run and its tested bytes.
+
+Windows signing and both publication jobs explicitly select the same Node.js
+runtime with `actions/setup-node`, with package-manager caching disabled. They
+do not depend on a prior job's PATH or the hosted image's preinstalled Node.
+Signing dependencies arrive in the verified archive; publication scripts use
+Node's standard library and do not install project dependencies.
+
+The macOS no-secret prepare job runs on GitHub-hosted `macos-26`.
+Icon Composer's Xcode 26 `AssetCatalogAgent` loads macOS 26 frameworks,
 so selecting Xcode 26 on `macos-15` crashes during the icon compile even when
-`actool --version` passes. The protected macOS signing job uses the same host
-for its electron-builder packaging step.
+`actool --version` passes. The protected macOS signing job uses the same
+GitHub-hosted image for its electron-builder packaging step.
 
 The macOS no-secret prepare job:
 
@@ -349,7 +395,8 @@ The macOS no-secret prepare job:
 The macOS environment-gated signing job:
 
 1. Verifies the prepared artifact SHA-256 from the build job output.
-2. Decodes `APPLE_API_KEY_BASE64` from the env to a temp `.p8` file.
+2. Decodes `APPLE_API_KEY_BASE64` from the env to a temp `.p8` file on the
+   disposable GitHub-hosted runner.
 3. Imports `CSC_LINK` into a generated temporary keychain, verifies its
    Developer ID identity, and makes that keychain first in the user search
    list. It then clears `CSC_KEYCHAIN`, `CSC_LINK`, and `CSC_KEY_PASSWORD`
@@ -398,8 +445,9 @@ before all required platform builds have completed. The workflow creates the
 release only after it has received the signed macOS and Windows payloads plus
 both Linux packages, then the release-notes job verifies and writes the
 matching `CHANGELOG.md` content. The release is not complete at either signing
-approval gate: after approval, continue watching the run through `Publish
-release notes`, then verify the final GitHub Release body is non-empty. If a
+approval gate: after approval, continue watching through npm publication and
+`Verify desktop and Outpost release completion`, then verify the GitHub Release
+body and retained npm receipt. If a
 monitor or handoff stops at an approval gate, resume after approval rather than
 treating the release as done.
 Every CI-published release is born as a GitHub `Pre-release`, including a
@@ -408,6 +456,10 @@ operator action taken after the assets, updater metadata, and smoke checks are
 validated. GitHub excludes pre-release entries from `/releases/latest`,
 `PwrAgent.dmg`, and the default Electron updater feed, so a freshly published
 release reaches no Stable operator until that promotion.
+The suffix-free npm version reaches `latest` during the shared workflow,
+before GitHub promotion. Suffixed versions use `next`; older maintenance trains
+use guarded per-train channels when necessary. See the
+[npm channel contract](headless-npm-release.md#version-preparation-and-npm-channels).
 
 If the automated release-notes job fails or GitHub temporarily rejects the
 release edit, use this manual fallback after confirming the notes file contains

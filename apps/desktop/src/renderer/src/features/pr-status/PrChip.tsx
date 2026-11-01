@@ -10,6 +10,7 @@ import type { PrSummary } from "@pwragent/shared";
 import { CloseIcon } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { observeElementVisibility } from "../../lib/observe-element-visibility";
+import { statusPulseRef } from "../../lib/status-pulse";
 import { PrChipContextMenu } from "./PrChipContextMenu";
 import type { PrBranchDrift } from "./pr-branch-drift";
 import {
@@ -212,7 +213,11 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
         }
         onMouseLeave={tooltipController.hide}
       >
-        <span className="pr-chip__dot" aria-hidden="true" />
+        <span
+          className="pr-chip__dot"
+          aria-hidden="true"
+          ref={presentation.hasFailingChecksStillRunning ? statusPulseRef : undefined}
+        />
         <span className="pr-chip__label">{label}</span>
         {props.onDetach ? (
           <span

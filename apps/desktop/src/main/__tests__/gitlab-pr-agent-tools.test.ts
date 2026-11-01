@@ -32,6 +32,26 @@ function harness(reads: (endpoint: string, raw: boolean) => unknown, writes: (ca
 }
 
 describe("GitLab merge request tools", () => {
+  it("reads whether a merge request source branch is pushed, encoding the whole branch name", async () => {
+    const { client, readCalls } = harness((endpoint) => {
+      if (endpoint.endsWith("/repository/branches/fix%2Fpushed")) return { name: "fix/pushed" };
+      throw new GitLabReadError(404);
+    });
+    await expect(client.headBranchExists(repo, "fix/pushed")).resolves.toBe(true);
+    expect(readCalls[0]).toBe(`${projectPath}/repository/branches/fix%2Fpushed`);
+    await expect(client.headBranchExists(repo, "fix/local-only")).resolves.toBe(false);
+    await expect(client.headBranchExists(repo, "fork:topic")).resolves.toBeUndefined();
+    expect(readCalls).toHaveLength(2);
+  });
+
+  it("requests failed and canceled pipeline jobs through the nested project's write transport", async () => {
+    const { client, readCalls, writeCalls } = harness(() => { throw new Error("Unexpected read"); });
+    const result = await client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx());
+    expect(writeCalls).toEqual([{ method: "POST", endpoint: `${projectPath}/pipelines/42/retry`, body: {} }]);
+    expect(readCalls).toEqual([]);
+    expect(result).toMatchObject({ requested: true, runId: 42, providerRequests: 1, scope: "failed_and_canceled_jobs", url: "https://gitlab.example.test/group/sub/project/-/pipelines/42" });
+  });
+
   it("finds the thread's merge request by source branch and reads it back", async () => {
     const { client, readCalls } = harness((endpoint) => endpoint.includes("/merge_requests?") ? [mr(7)] : mr(7));
     const result = await client.execute("get_pull_request", {}, ctx()) as { pullRequest: Record<string, unknown> };

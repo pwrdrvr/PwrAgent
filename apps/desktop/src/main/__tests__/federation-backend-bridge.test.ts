@@ -10,6 +10,7 @@ import type {
   TrustCodexProjectRequest,
 } from "@pwragent/shared";
 import {
+  HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
   buildFederatedThreadRef,
   rankThreadJumpMatches,
 } from "@pwragent/shared";
@@ -22,6 +23,7 @@ import {
   QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE,
   QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE,
   registerFederationBackendHandlers,
+  additionalFederationBackendCapabilities,
   type FederationBackendOperations,
 } from "../federation/federation-backend-bridge";
 import { FederationRouter } from "../federation/federation-router";
@@ -30,6 +32,160 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("requires grouping and versioned promotion capabilities on the receiving owner", async () => {
+    const request = { backend: "codex" as const, parentThreadId: "root", archivePromotion: {
+      archived: { backend: "codex" as const, threadId: "middle", instanceId: "viewer" },
+      anchor: { backend: "codex" as const, threadId: "middle", instanceId: "viewer" },
+      expectedParent: { backend: "codex" as const, threadId: "root", instanceId: "owner" },
+      expectedChildOrder: [],
+      parent: { backend: "codex" as const, threadId: "root", instanceId: "owner" }, children: [], dryRun: true,
+    } };
+    const updateSubthreadOrder = vi.fn(async () => ({ backend: "codex", parentThreadId: "root", threadIds: [] }));
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+      additionalRequiredCapabilities: additionalFederationBackendCapabilities });
+    let rpc: FederationRpcEndpoint;
+    const connect = (capabilities: FederationCapability[]) => router.registerConnection({ peerId: "viewer", capabilities,
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    registerFederationBackendHandlers({ router, backend: { updateSubthreadOrder } as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    for (const capabilities of [["thread_grouping"], ["archive_subthread_promotion_v1"]] as FederationCapability[][]) {
+      connect(capabilities);
+      await expect(client.updateSubthreadOrder(request)).rejects.toThrow();
+    }
+    expect(updateSubthreadOrder).not.toHaveBeenCalled();
+    connect(["thread_grouping", "archive_subthread_promotion_v1"]);
+    await client.updateSubthreadOrder(request);
+    expect(updateSubthreadOrder).toHaveBeenCalledExactlyOnceWith(request);
+  });
+
+  it("continues environment startup on its owner and enforces turn control", async () => {
+    const request = { backend: "codex" as const, threadId: "failed-setup" };
+    const response = { ...request, turnId: "continued-turn" };
+    const backend = {
+      continueThreadEnvironmentStartup: vi.fn(async () => response),
+      acknowledgeThreadEnvironmentFailure: vi.fn(async () => ({ ...request, acknowledged: true })),
+    };
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    let rpc: FederationRpcEndpoint;
+    const connect = (capabilities: FederationCapability[]): void => {
+      router.registerConnection({ peerId: "viewer", capabilities,
+        sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    };
+    registerFederationBackendHandlers({ router, backend: backend as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    connect(["turn_control"]);
+    expect(await client.continueThreadEnvironmentStartup(request)).toEqual(response);
+    expect(backend.continueThreadEnvironmentStartup).toHaveBeenCalledExactlyOnceWith({ ...request, fallbackTurn: undefined });
+    connect(["thread_navigation"]);
+    await expect(client.continueThreadEnvironmentStartup(request)).rejects.toThrow();
+    expect(backend.continueThreadEnvironmentStartup).toHaveBeenCalledOnce();
+    expect(await client.acknowledgeThreadEnvironmentFailure(request)).toEqual({ ...request, acknowledged: true });
+    expect(backend.acknowledgeThreadEnvironmentFailure).toHaveBeenCalledExactlyOnceWith(request);
+  });
+
+  it.each([true, false])("authenticates continuation fallback provenance (known sender: %s)", async (knownSender) => {
+    const continueThreadEnvironmentStartup = vi.fn(async () => ({ backend: "codex", threadId: "failed-setup", turnId: "turn-1" }));
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    router.registerConnection({ peerId: "viewer", capabilities: ["turn_control"], sendEnvelope: () => undefined });
+    registerFederationBackendHandlers({
+      router,
+      backend: { continueThreadEnvironmentStartup } as unknown as FederationBackendOperations,
+      resolveSourceInstance: () => knownSender ? { label: "Viewer Mac", celestialIcon: "moon" } : undefined,
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "viewer",
+      envelope: {
+        id: "continue-1", kind: "request", protocolVersion: 1,
+        method: FEDERATION_BACKEND_METHODS.continueThreadEnvironmentStartup,
+        sourceInstanceId: "viewer", targetInstanceId: "owner", createdAt: 1_000,
+        params: {
+          backend: "codex", threadId: "failed-setup",
+          fallbackTurn: {
+            input: [{ type: "text", text: "Resume this work" }],
+            messageOrigin: { kind: "agent", sourceThread: {
+              backend: "codex", threadId: "source-thread", turnId: "source-turn", rootTurnId: "root-turn",
+              instanceId: "spoofed-instance", instanceLabel: "Spoofed Mac", celestialIcon: "black-hole",
+            } },
+          },
+        },
+      },
+    });
+    expect(continueThreadEnvironmentStartup).toHaveBeenCalledExactlyOnceWith({
+      backend: "codex", threadId: "failed-setup",
+      fallbackTurn: {
+        input: [{ type: "text", text: "Resume this work" }],
+        messageOrigin: { kind: "agent", sourceThread: {
+          backend: "codex", threadId: "source-thread", turnId: "source-turn", rootTurnId: "root-turn",
+          instanceId: "viewer",
+          ...(knownSender ? { instanceLabel: "Viewer Mac", celestialIcon: "moon" } : {}),
+        } },
+      },
+    });
+  });
+
+  it("round-trips versioned owner parent validation and requires thread_grouping", async () => {
+    const request = { backend: "codex" as const, threadId: "child", parentThreadId: "parent", parentBackend: "claude" as const, dryRun: true };
+    const response = { ok: false as const, error: { code: "invalid_arguments" as const, message: "Parent is archived." } };
+    const backend = { mutateThreadParentV1: vi.fn(async () => response), setThreadParent: vi.fn() };
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    let rpc: FederationRpcEndpoint;
+    const connect = (capabilities: FederationCapability[]): void => {
+      router.registerConnection({ peerId: "viewer", capabilities,
+        sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    };
+    registerFederationBackendHandlers({ router, backend: backend as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    connect(["thread_grouping"]);
+    expect(await client.mutateThreadParentV1(request)).toEqual(response);
+    expect(backend.mutateThreadParentV1).toHaveBeenCalledExactlyOnceWith(request);
+    connect(["thread_navigation", "turn_control", "thread_parent_mutation_v1"]);
+    await expect(client.mutateThreadParentV1(request)).rejects.toThrow();
+    expect(backend.mutateThreadParentV1).toHaveBeenCalledOnce();
+    expect(backend.setThreadParent).not.toHaveBeenCalled();
+  });
+
+  it("routes startup status and cancellation to the authenticated owner without a thread ID", async () => {
+    const manageLaunchpadCreation = vi.fn(async () => ({ cancellationAccepted: true }));
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    let rpc: FederationRpcEndpoint;
+    router.registerConnection({ peerId: "viewer", capabilities: ["environment_actions"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    registerFederationBackendHandlers({ router, backend: { manageLaunchpadCreation } as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    await expect(client.manageLaunchpadCreation({ operationId: "op-1", action: "cancel" })).resolves.toEqual({ cancellationAccepted: true });
+    expect(manageLaunchpadCreation).toHaveBeenCalledWith({ operationId: "op-1", action: "cancel" }, "viewer");
+    router.registerConnection({ peerId: "viewer", capabilities: ["thread_detail"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    await expect(client.manageLaunchpadCreation({ operationId: "op-1", action: "cancel" })).rejects.toThrow();
+    expect(manageLaunchpadCreation).toHaveBeenCalledOnce();
+  });
+
+  it("delivers launchpad setup progress with owner timing and operation identity", async () => {
+    const progress = { directoryKey: "starting:op-1", operationId: "op-1", startedAt: 100, at: 200,
+      environmentId: "env", environmentName: "Env", command: "install", phase: "started" as const };
+    const onEnvironmentSetupProgress = vi.fn();
+    const materializeDirectoryLaunchpad = vi.fn<FederationBackendOperations["materializeDirectoryLaunchpad"]>(async (_request, options) => {
+      options?.onCodexEnvironmentSetupProgress?.(progress);
+      return { backend: "codex", threadId: "new-thread", executionMode: "default", workMode: "local" };
+    });
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    let rpc: FederationRpcEndpoint;
+    router.registerConnection({ peerId: "viewer", capabilities: ["environment_actions"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    registerFederationBackendHandlers({ router, backend: { materializeDirectoryLaunchpad } as unknown as FederationBackendOperations, onEnvironmentSetupProgress });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    await new FederationRemoteBackendClient(rpc).materializeDirectoryLaunchpad({ directoryKey: "repo", operationId: "op-1" });
+    expect(onEnvironmentSetupProgress).toHaveBeenCalledWith(progress, "viewer");
+  });
   it("round-trips owner-collated family pricing and requires thread_detail", async () => {
     const request = { backend: "codex" as const, threadId: "parent" };
     const family = { readAt: 42, members: [
@@ -3982,6 +4138,7 @@ describe("federation backend bridge", () => {
       reorderThreadPins: vi.fn(),
       mountRemoteChild: vi.fn(),
       setThreadParent: vi.fn(),
+      mutateThreadParentV1: vi.fn(),
       updateSubthreadOrder: vi.fn(),
       setSubthreadsCollapsed: vi.fn(),
       readForge: vi.fn(),
@@ -4507,6 +4664,7 @@ describe("federation backend bridge", () => {
       reorderThreadPins: vi.fn(),
         mountRemoteChild: vi.fn(),
         setThreadParent: vi.fn(),
+        mutateThreadParentV1: vi.fn(),
         updateSubthreadOrder: vi.fn(),
         setSubthreadsCollapsed: vi.fn(),
         readForge: vi.fn(),
@@ -5024,6 +5182,55 @@ describe("federation workspace recovery methods", () => {
 
     expect(moveThreadToMainCheckout).not.toHaveBeenCalled();
     expect(reply).toMatchObject({ kind: "error" });
+  });
+
+  it("runs a new-worktree handoff on its own method and refuses other directions there", async () => {
+    const handoffThreadWorkspace = vi.fn(async () => ({ targetPath: "/wt-2" }));
+    const { request } = route({ handoffThreadWorkspace } as never, ["turn_control"]);
+
+    const moved = await request("fresh", FEDERATION_BACKEND_METHODS.handoffThreadWorkspaceToNewWorktree, {
+      backend: "claude", threadId: "t1", direction: "worktree-to-worktree", baseRef: "origin/main",
+    });
+    const refused = await request("local", FEDERATION_BACKEND_METHODS.handoffThreadWorkspaceToNewWorktree, {
+      backend: "claude", threadId: "t1", direction: "worktree-to-local",
+    });
+
+    expect(moved).toMatchObject({ kind: "response" });
+    expect(handoffThreadWorkspace).toHaveBeenCalledTimes(1);
+    expect(handoffThreadWorkspace).toHaveBeenCalledWith({
+      backend: "claude", threadId: "t1", direction: "worktree-to-worktree", baseRef: "origin/main",
+    });
+    expect(refused).toMatchObject({ kind: "error" });
+  });
+
+  it("sends only the moves an older owner would misread on the new method", async () => {
+    const rpcRequest = vi.fn(async (_call: { method: string }) => ({}));
+    const client = new FederationRemoteBackendClient({ request: rpcRequest } as unknown as FederationRpcEndpoint);
+
+    await client.handoffThreadWorkspace({ backend: "codex", threadId: "t1", direction: "worktree-to-worktree" });
+    await client.handoffThreadWorkspace({ backend: "codex", threadId: "t1", direction: "local-to-worktree", baseRef: "main" });
+    await client.handoffThreadWorkspace({ backend: "codex", threadId: "t1", direction: "local-to-worktree" });
+    await client.handoffThreadWorkspace({ backend: "codex", threadId: "t1", direction: "worktree-to-local" });
+
+    expect(rpcRequest.mock.calls.map(([call]) => call.method)).toEqual([
+      FEDERATION_BACKEND_METHODS.handoffThreadWorkspaceToNewWorktree,
+      FEDERATION_BACKEND_METHODS.handoffThreadWorkspaceToNewWorktree,
+      FEDERATION_BACKEND_METHODS.handoffThreadWorkspace,
+      FEDERATION_BACKEND_METHODS.handoffThreadWorkspace,
+    ]);
+  });
+
+  it("names an older owner that cannot move a thread into a new worktree", async () => {
+    const olderOwner = vi.fn(async () => {
+      throw Object.assign(new Error("No handler"), { code: "method_not_found" });
+    });
+    const client = new FederationRemoteBackendClient({ request: olderOwner } as unknown as FederationRpcEndpoint);
+
+    await expect(client.handoffThreadWorkspace({ backend: "codex", threadId: "t1", direction: "worktree-to-worktree" }))
+      .rejects.toThrow(HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE);
+    // The original method keeps the owner's own error.
+    await expect(client.handoffThreadWorkspace({ backend: "codex", threadId: "t1", direction: "worktree-to-local" }))
+      .rejects.toThrow("No handler");
   });
 
   it("answers method_not_found where the owner has no implementation", async () => {

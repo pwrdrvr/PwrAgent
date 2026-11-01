@@ -3,8 +3,9 @@ import { matchLayoutChord } from "../../lib/keyboard-accel";
 
 /**
  * Binds the single window-level listener for the layout chords
- * (⌘B / ⌃B → sidebar, ⌘⌥B / ⌃⌥B → rail). Call this exactly ONCE, from the
- * always-mounted shell owner — NOT from each `PanelToggleButtons` chip.
+ * (⌘B / ⌃B → sidebar, ⌘⌥B / ⌃⌥B → rail, ⇧⌘B / ⇧⌃B → project index). Call
+ * this exactly ONCE, from the always-mounted shell owner — NOT from each
+ * `PanelToggleButtons` chip.
  *
  * Multiple chips can be mounted at the same time (on Windows the custom title
  * bar AND the thread header both render them), and binding one listener per
@@ -18,6 +19,7 @@ import { matchLayoutChord } from "../../lib/keyboard-accel";
 export function useLayoutChordHotkeys(handlers: {
   onToggleSidebar: () => void;
   onToggleRail: () => void;
+  onToggleProjectIndex?: () => void;
 }): void {
   const handlersRef = useRef(handlers);
   useEffect(() => {
@@ -28,6 +30,13 @@ export function useLayoutChordHotkeys(handlers: {
     const handler = (event: KeyboardEvent): void => {
       const chord = matchLayoutChord(event);
       if (chord === null) {
+        return;
+      }
+      if (chord === "project-index") {
+        const toggle = handlersRef.current.onToggleProjectIndex;
+        if (!toggle) return;
+        event.preventDefault();
+        toggle();
         return;
       }
       event.preventDefault();

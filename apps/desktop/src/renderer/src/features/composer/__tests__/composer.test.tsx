@@ -1,7 +1,9 @@
+import { ANIMATED_GIF_BASE64, ANIMATED_WEBP_BASE64 } from "../../../test/fixtures/animated-images";
 import * as composerMentionSources from "../useComposerMentionSources";
 import { buildThreadComposerScopeKey } from "../useComposerDraftStore";
 import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
 import { hydrateComposerDraft } from "../composer-draft-hydration";
+import * as rateLimitSchedule from "../rate-limit-schedule";
 import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-references";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, createEvent, fireEvent, render, renderHook, screen, waitFor, within } from "../../../test/phase-probes";
@@ -21,6 +23,7 @@ import {
   type StartReviewRequest,
   type ModelSettingsRecent,
   type FederationCapability,
+  HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
   type MoveQueuedTurnResponse,
   type SetQueuedTurnPausedRequest,
   type SetQueuedTurnPausedResponse,
@@ -47,6 +50,7 @@ import { Composer as ProductionComposer } from "../Composer";
 import { ImageGalleryLayer } from "../../thread-detail/ImageGalleryLayer";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
+import { settleFakeTimers } from "../../../test/settle-fake-timers";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
 import { useComposerDraftStore } from "../useComposerDraftStore";
 import { useNavigationLaunchpadConfiguration } from "../../../lib/useNavigationLaunchpadConfiguration";
@@ -116,9 +120,7 @@ beforeAll(() => {
  * makes the same proof instant and exact.
  */
 async function settleFederatedSearch(): Promise<void> {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(FEDERATED_THREAD_SEARCH_DEBOUNCE_MS * 2);
-  });
+  await settleFakeTimers(FEDERATED_THREAD_SEARCH_DEBOUNCE_MS * 2);
 }
 
 async function flushReactUpdates(): Promise<void> {
@@ -835,6 +837,7 @@ describe("Composer", () => {
       clipboardData: { files: [file], items: [{ kind: "file", type: "image/png", getAsFile: () => file }] },
     });
     await waitFor(() => expect(normalizeImageFile).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("Preparing image attachments…")).toBeInTheDocument();
     const thread: NavigationThreadSummary = {
       id: "materialized", source: "codex", title: "First message", titleSource: "explicit",
       linkedDirectories: [], inbox: { inInbox: false }, optimisticActiveTurn: { id: "first-turn" },
@@ -842,6 +845,7 @@ describe("Composer", () => {
     act(() => handoffLaunchpadComposer(store, `launchpad:${launchpad.directoryKey}`, thread));
     view.rerender(<Composer backends={[backendSummary("codex")]} thread={thread}
       activeTurnId="first-turn" draftStore={store} skills={[]} />);
+    expect(screen.getByText("Preparing image attachments…")).toBeInTheDocument();
     await act(async () => {
       normalization.resolve({
         dataUrl: "data:image/png;base64,AQID", height: 24, width: 24, size: 3,
@@ -851,9 +855,135 @@ describe("Composer", () => {
       await normalization.promise;
     });
     expect(await screen.findByAltText("follow-up.png")).toBeInTheDocument();
+    expect(screen.queryByText("Preparing image attachments…")).not.toBeInTheDocument();
     expect(store.get(buildThreadComposerScopeKey("codex", "materialized"))?.imageAttachments).toHaveLength(1);
     expect(store.get(buildThreadComposerScopeKey("codex", "materialized"))?.draft).toBe("Follow-up image");
     expect(store.get(`launchpad:${launchpad.directoryKey}`)).toBeUndefined();
+  });
+
+  it("attaches the images in text pasted from Linear", async () => {
+    const pasted = `<issue identifier="PWR-5"><linear-image>${JSON.stringify({
+      type: "image",
+      attrs: { src: "https://uploads.linear.app/org/issue/file?signature=old", alt: "shot.png" },
+    })}</linear-image></issue>`;
+    const fetchLinearPastedImages = vi.fn(async () => ({
+      status: "fetched" as const,
+      failed: 0,
+      images: [{ name: "shot.png", mimeType: "image/png", dataBase64: "AQID" }],
+    }));
+    render(<Composer desktopApi={{ fetchLinearPastedImages }} skills={[]} thread={{
+      id: "thread-1", title: "Linear paste", titleSource: "explicit", source: "codex",
+      linkedDirectories: [], inbox: { inInbox: false },
+    }} />);
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [],
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+      },
+    });
+
+    expect(await screen.findByAltText("shot.png")).toBeInTheDocument();
+    expect(fetchLinearPastedImages).toHaveBeenCalledWith({ text: pasted });
+  });
+
+  it("says how to attach expired Linear images when there is no connection", async () => {
+    const pasted = `<linear-image>${JSON.stringify({
+      type: "image",
+      attrs: { src: "https://uploads.linear.app/org/issue/file", alt: "old.png" },
+    })}</linear-image>`;
+    const onShowNotice = vi.fn();
+    const fetchLinearPastedImages = vi.fn(async () => ({ status: "unavailable" as const }));
+    render(<Composer desktopApi={{ fetchLinearPastedImages }} onShowNotice={onShowNotice} skills={[]} thread={{
+      id: "thread-1", title: "Linear paste", titleSource: "explicit", source: "codex",
+      linkedDirectories: [], inbox: { inInbox: false },
+    }} />);
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [],
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+      },
+    });
+
+    await waitFor(() => expect(onShowNotice).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Linear images not attached",
+      message: expect.stringContaining("Connect Linear in Settings → Plugins"),
+    })));
+  });
+
+  it("holds Send while Linear images download", async () => {
+    const pasted = `<linear-image>${JSON.stringify({
+      type: "image",
+      attrs: { src: "https://uploads.linear.app/org/issue/file", alt: "held.png" },
+    })}</linear-image>`;
+    const response = createDeferred<{
+      status: "fetched"; failed: number;
+      images: Array<{ name: string; mimeType: string; dataBase64: string }>;
+    }>();
+    render(<Composer desktopApi={{ fetchLinearPastedImages: () => response.promise }} skills={[]} thread={{
+      id: "thread-1", title: "Linear paste", titleSource: "explicit", source: "codex",
+      linkedDirectories: [], inbox: { inInbox: false },
+    }} />);
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [],
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+      },
+    });
+
+    expect(await screen.findByText("Preparing image attachments…")).toBeInTheDocument();
+    await act(async () => {
+      response.resolve({
+        status: "fetched",
+        failed: 0,
+        images: [{ name: "held.png", mimeType: "image/png", dataBase64: "AQID" }],
+      });
+      await response.promise;
+    });
+    expect(await screen.findByAltText("held.png")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Preparing image attachments…")).toBeNull());
+  });
+
+  it("drops Linear images that arrive after the thread changes", async () => {
+    const pasted = `<linear-image>${JSON.stringify({
+      type: "image",
+      attrs: { src: "https://uploads.linear.app/org/issue/file", alt: "late.png" },
+    })}</linear-image>`;
+    const response = createDeferred<{
+      status: "fetched"; failed: number;
+      images: Array<{ name: string; mimeType: string; dataBase64: string }>;
+    }>();
+    const desktopApi = { fetchLinearPastedImages: vi.fn(() => response.promise) };
+    const thread = (id: string): NavigationThreadSummary => ({
+      id, title: id, titleSource: "explicit", source: "codex",
+      linkedDirectories: [], inbox: { inInbox: false },
+    });
+    const view = render(<Composer desktopApi={desktopApi} skills={[]} thread={thread("first")} />);
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [],
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+      },
+    });
+    await waitFor(() => expect(desktopApi.fetchLinearPastedImages).toHaveBeenCalledTimes(1));
+
+    view.rerender(<Composer desktopApi={desktopApi} skills={[]} thread={thread("second")} />);
+    await act(async () => {
+      response.resolve({
+        status: "fetched",
+        failed: 0,
+        images: [{ name: "late.png", mimeType: "image/png", dataBase64: "AQID" }],
+      });
+      await response.promise;
+    });
+
+    expect(screen.queryByAltText("late.png")).not.toBeInTheDocument();
+    expect(normalizeImageFile).not.toHaveBeenCalled();
   });
 
   it("keeps follow-ups and steering intent when a starting launchpad is remounted", async () => {
@@ -896,6 +1026,93 @@ describe("Composer", () => {
     })).toBeEnabled();
     expect(screen.getByLabelText("Queued message")).toHaveTextContent("Next");
     expect(onMaterializeLaunchpad).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["slash", false],
+    ["slash", true],
+    ["panel", false],
+    ["panel", true],
+  ] as const)("keeps a %s review behind the first launchpad message (starting scope: %s)", async (entry, startingScope) => {
+    const draftStore = createComposerDraftStore();
+    const launchpad = createRetargetingLaunchpad(retargetingPwrSnap, "Check out PR #42 and attach it");
+    const materialization = createDeferred<void>();
+    const onMaterializeLaunchpad = vi.fn<NonNullable<ComponentProps<typeof Composer>["onMaterializeLaunchpad"]>>(() => materialization.promise);
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend, threadId: request.threadId,
+      reviewThreadId: request.threadId, turnId: "review-turn",
+    }));
+    const startTurn = vi.fn();
+    const createScheduledThreadAction = vi.fn();
+    const steerTurn = vi.fn();
+    const backend = backendSummary("codex");
+    backend.capabilities.steerTurn = true;
+    const baseProps = {
+      backends: [backend], directory: retargetingPwrSnap, draftStore, skills: [],
+      desktopApi: { startReview, startTurn, createScheduledThreadAction, steerTurn },
+      onMaterializeLaunchpad,
+    };
+    const view = render(<Composer {...baseProps} launchpad={launchpad} />);
+    await clickButton("Start thread");
+    await waitFor(() => expect(onMaterializeLaunchpad).toHaveBeenCalledTimes(1));
+    expect(onMaterializeLaunchpad.mock.calls[0]?.[1]).toEqual([
+      { type: "text", text: "Check out PR #42 and attach it" },
+    ]);
+    const scopeKey = startingScope
+      ? `launchpad:starting:creation:${launchpad.directoryKey}`
+      : `launchpad:${launchpad.directoryKey}`;
+    const pendingComposer = <Composer {...baseProps} launchpad={launchpad}
+      launchpadMaterializing launchpadComposerScopeKey={scopeKey} />;
+    if (startingScope) view.rerender(pendingComposer);
+
+    const input = screen.getByLabelText("New thread");
+    fireEvent.change(input, { target: { value: entry === "panel" ? "/review" : "/review main" } });
+    await act(async () => { fireEvent.keyDown(input, { key: "Enter" }); });
+    if (entry === "panel") {
+      expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+      expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+      await clickButton("Start review");
+    }
+    await waitFor(() => expect(screen.getByLabelText("Queued message")).toHaveTextContent("Review changes against main"));
+    expect(within(screen.getByLabelText("Queued message")).queryByRole("button", {
+      name: "Steer when ready",
+    })).not.toBeInTheDocument();
+    expect(draftStore.getQueuedTurns(scopeKey)[0].reviewCommand).toMatchObject({
+      target: { type: "baseBranch", branch: "main" },
+    });
+    expect(onMaterializeLaunchpad).toHaveBeenCalledTimes(1);
+    expect(startReview).not.toHaveBeenCalled();
+    expect(createScheduledThreadAction).not.toHaveBeenCalled();
+    view.unmount();
+    const remounted = render(pendingComposer);
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent("Review changes against main");
+    expect(within(screen.getByLabelText("Queued message")).queryByRole("button", {
+      name: "Steer when ready",
+    })).not.toBeInTheDocument();
+
+    const thread: NavigationThreadSummary = {
+      id: "checkout-thread", source: "codex", title: "Check out PR #42", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false }, optimisticActiveTurn: { id: "checkout-turn" },
+    };
+    await act(async () => {
+      handoffLaunchpadComposer(draftStore, scopeKey, thread);
+      materialization.resolve();
+      await materialization.promise;
+    });
+    remounted.rerender(<Composer {...baseProps} thread={thread} activeTurnId="checkout-turn" />);
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent("Review changes against main");
+    expect(startReview).not.toHaveBeenCalled();
+    expect(draftStore.getQueuedTurns(scopeKey)).toEqual([]);
+    expect(steerTurn).not.toHaveBeenCalled();
+    expect(draftStore.getQueuedTurns(buildThreadComposerScopeKey("codex", thread.id))[0].manualReleaseRequired).not.toBe(true);
+
+    remounted.rerender(<Composer {...baseProps} thread={{ ...thread, optimisticActiveTurn: undefined }} />);
+    await waitFor(() => expect(startReview).toHaveBeenCalledTimes(1));
+    expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: "checkout-thread", target: { type: "baseBranch", branch: "main" },
+    }));
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(onMaterializeLaunchpad).toHaveBeenCalledTimes(1);
   });
 
   it("shows handoff progress until the provider publishes the steered message", async () => {
@@ -7899,7 +8116,7 @@ describe("Composer", () => {
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
-  it("shows a 5h context reset schedule option when the backend exposes a reset", async () => {
+  it("schedules after the actual rate limit reset with a buffer and one jitter sample", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({
@@ -7908,6 +8125,9 @@ describe("Composer", () => {
       turnId: "turn-scheduled",
     }));
 
+    const scheduledApi = createScheduledActionApi();
+    const resetAt = Date.now() + 180 * 60_000;
+
     render(
       <Composer
         backends={[
@@ -7915,15 +8135,17 @@ describe("Composer", () => {
             ...backendSummary("codex"),
             rateLimits: [
               {
-                name: "5h limit",
-                resetAt: Date.now() + 154 * 60_000,
+                name: "5-hour limit",
+                limitId: "five_hour",
+                windowMinutes: 300,
+                resetAt,
                 usedPercent: 80,
               },
             ],
           },
         ]}
         desktopApi={{
-          ...createScheduledActionApi(),
+          ...scheduledApi,
           onAgentEvent: () => () => undefined,
           startTurn,
         }}
@@ -7944,22 +8166,68 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "After the reset" } });
     fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
-    await act(async () => {
-      fireEvent.click(
-        screen.getByRole("menuitem", {
-          name: "Send in 2h 34m (5h context reset)",
-        })
-      );
-    });
+    const sample = vi.spyOn(Math, "random").mockReturnValue(0.4);
+    const resetSendAt = vi.spyOn(rateLimitSchedule, "getRateLimitResetSendAt");
+    try {
+      const option = screen.getByRole("menuitem", { name: /Send after rate limit reset/ });
+      expect(option).toHaveTextContent("In 3h 5m–3h 10m · 5–10m buffer");
+      expect(resetSendAt).not.toHaveBeenCalled();
+      await act(async () => { fireEvent.click(option); });
+      expect(resetSendAt).toHaveBeenCalledExactlyOnceWith(resetAt);
+    } finally {
+      resetSendAt.mockRestore();
+      sample.mockRestore();
+    }
+    expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledWith(
+      expect.objectContaining({ scheduledFor: resetAt + 7 * 60_000 }),
+    );
 
     expect(startTurn).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Scheduled message")).toHaveTextContent(
-      "Scheduled · sends in 2h 34m"
+      "Scheduled · sends in 3h 7m"
     );
     expect(screen.getByLabelText("Scheduled message")).toHaveTextContent(
       "After the reset"
     );
   });
+
+  it.each(["no reset", "weekly limit", "remote owner"])(
+    "hides the computed schedule for %s while retaining fixed delays", (scenario) => {
+      render(
+        <Composer
+          backends={[{
+            ...backendSummary("codex"),
+            rateLimits: scenario === "no reset" ? [] : [{
+              name: "Plan limit",
+              resetAt: Date.now() + 3 * 60 * 60_000,
+              windowMinutes: scenario === "weekly limit" ? 10_080 : 300,
+            }],
+          }]}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Schedule availability",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+            ...(scenario === "remote owner" ? {
+              federation: {
+                instanceLabel: "Owner",
+                ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "owner" } },
+                capabilities: [],
+              },
+            } : {}),
+          }}
+        />,
+      );
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "For later" } });
+      fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
+      expect(screen.queryByRole("menuitem", { name: /Send after rate limit reset/ })).not.toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: "Send in 5h" })).toBeInTheDocument();
+    },
+  );
 
   it("hides the schedule caret on a launchpad where scheduling does not apply", () => {
     render(
@@ -19158,6 +19426,160 @@ describe("Composer", () => {
     });
   });
 
+  it("hands a Claude worktree thread to a new worktree", async () => {
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backends={[backendSummary("claude")]}
+        directory={{ key: "directory:/repo", kind: "directory", label: "PwrAgent", path: "/repo", gitStatus: { currentBranch: "main", branches: ["main", "feature/handoff"] } }}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Worktree thread", titleSource: "explicit", source: "claude",
+          executionMode: "default", gitBranch: "feature/handoff",
+          linkedDirectories: [{ id: "dir-1", label: "PwrAgent", path: "/repo", worktreePath: "/repo/.worktrees/pwragent-feature", kind: "worktree" }],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
+    expect(screen.getByRole("menuitem", { name: "Handoff to Local" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
+    expect(within(dialog).getByRole("radio", { name: /^Handoff to Detached HEAD/ })).toHaveAttribute("aria-checked", "true");
+    expect(within(dialog).getByText(/current worktree is archived with a checkpoint/)).toBeInTheDocument();
+    // Leaving a worktree needs no branch for Local.
+    fireEvent.click(within(dialog).getByRole("radio", { name: /^Handoff Current Branch/ }));
+    expect(within(dialog).queryByLabelText("Leave current checkout on")).toBeNull();
+    fireEvent.click(within(dialog).getByRole("radio", { name: /^Handoff to New Branch/ }));
+    fireEvent.change(within(dialog).getByLabelText("New branch name"), { target: { value: "feature/next" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Handoff" }));
+
+    await waitFor(() => {
+      expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+        direction: "worktree-to-worktree",
+        strategy: "new-branch",
+        repositoryPath: "/repo",
+        sourcePath: "/repo/.worktrees/pwragent-feature",
+        sourceBranch: "feature/handoff",
+        newBranchName: "feature/next",
+      });
+    });
+  });
+
+  it("starts a fresh worktree from a base branch and moves nothing", async () => {
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backends={[backendSummary("claude")]}
+        directory={{
+          key: "directory:/repo", kind: "directory", label: "PwrAgent", path: "/repo",
+          gitStatus: { currentBranch: "main", defaultBranch: "main", branches: ["main", "feature/handoff"], baseBranches: ["feature/handoff", "main", "origin/main"] },
+        }}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Worktree thread", titleSource: "explicit", source: "claude",
+          executionMode: "default", gitBranch: "feature/handoff",
+          linkedDirectories: [{ id: "dir-1", label: "PwrAgent", path: "/repo", worktreePath: "/repo/.worktrees/pwragent-feature", kind: "worktree" }],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
+    fireEvent.click(within(dialog).getByRole("radio", { name: /^Start Fresh from a Branch/ }));
+    // The remote copy of the default branch is picked first.
+    expect(within(dialog).getByLabelText(/^Base branch:/)).toHaveAttribute("data-value", "origin/main");
+    // Claude thread archive keeps its worktrees, so the note promises no cleanup.
+    expect(within(dialog).getByText(/current worktree stays on disk/)).not.toHaveTextContent(/Archiving/);
+    expect(within(dialog).queryByText(/archived with a checkpoint/)).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Handoff" }));
+
+    await waitFor(() => {
+      expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+        direction: "worktree-to-worktree",
+        strategy: "detached-changes",
+        repositoryPath: "/repo",
+        sourcePath: "/repo/.worktrees/pwragent-feature",
+        sourceBranch: "feature/handoff",
+        baseRef: "origin/main",
+      });
+    });
+  });
+
+  it("names a branch for a fresh worktree from Local", async () => {
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo", kind: "directory", label: "PwrAgent", path: "/repo",
+          gitStatus: { currentBranch: "feature/handoff", defaultBranch: "main", branches: ["main", "feature/handoff"], baseBranches: ["main", "feature/handoff"] },
+        }}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Local thread", titleSource: "explicit", source: "codex",
+          executionMode: "default", gitBranch: "feature/handoff",
+          linkedDirectories: [{ id: "dir-1", label: "PwrAgent", path: "/repo", kind: "local" }],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
+    fireEvent.click(within(dialog).getByRole("radio", { name: /^Start Fresh from a Branch/ }));
+    expect(within(dialog).getByLabelText(/^Base branch:/)).toHaveAttribute("data-value", "main");
+    fireEvent.change(within(dialog).getByLabelText("New branch name"), { target: { value: " fix/clean " } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Handoff" }));
+
+    await waitFor(() => {
+      expect(onHandoffThreadWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+        direction: "local-to-worktree",
+        strategy: "new-branch",
+        newBranchName: "fix/clean",
+        baseRef: "main",
+      }));
+    });
+  });
+
+  it("offers a new worktree on a peer's thread and names an owner too old for it", async () => {
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{ key: "directory:/repo", kind: "directory", label: "PwrAgent", path: "/repo", gitStatus: { currentBranch: "main", branches: ["main"] } }}
+        onHandoffThreadWorkspace={async () => {
+          throw new Error(`Error invoking remote method: Error: ${HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE}`);
+        }}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Worktree thread", titleSource: "explicit", source: "codex",
+          executionMode: "default", gitBranch: "feature/handoff",
+          linkedDirectories: [{ id: "dir-1", label: "PwrAgent", path: "/repo", worktreePath: "/repo/.worktrees/pwragent-feature", kind: "worktree" }],
+          inbox: { inInbox: false },
+          federation: {
+            ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "studio" } },
+            instanceLabel: "studio-mac",
+            peerStatus: "connected",
+          },
+        } as ComponentProps<typeof Composer>["thread"]}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
+
+    expect(await screen.findByText("studio-mac runs an older PwrAgent that cannot make this move. Update PwrAgent on studio-mac. Nothing moved."))
+      .toBeInTheDocument();
+  });
+
   it("names the machine to update when its owner cannot keep Local's branch", async () => {
     render(
       <Composer
@@ -19688,6 +20110,8 @@ describe("Composer", () => {
         ],
       },
     });
+
+    await waitFor(() => expect(normalizeImageFile).toHaveBeenCalledTimes(1));
 
     rerender(
       <Composer
@@ -23954,14 +24378,51 @@ describe("Composer", () => {
     expect(await within(dialog).findByAltText("first.gif")).toBeInTheDocument();
   });
 
-  it("keeps dropped GIF images animated by preserving the original data URL", async () => {
+  it("shows pending image preparation and blocks both button and keyboard submission", async () => {
+    const normalization = createDeferred<Awaited<ReturnType<typeof normalizeImageFile>>>();
+    vi.mocked(normalizeImageFile).mockImplementationOnce(() => normalization.promise);
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const, threadId: "thread-1", turnId: "turn-1",
+    }));
+    render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+      disabled={false} skills={[]}
+      thread={{ id: "thread-1", title: "Test", titleSource: "explicit", source: "codex", linkedDirectories: [], inbox: { inInbox: false } }}
+    />);
+    const reply = screen.getByLabelText("Reply");
+    fireEvent.change(reply, { target: { value: "Inspect this image" } });
+    const image = new File(["png"], "pending.png", { type: "image/png" });
+    fireEvent.paste(reply, {
+      clipboardData: { files: [image], items: [{ kind: "file", type: image.type, getAsFile: () => image }] },
+    });
+    await waitFor(() => expect(normalizeImageFile).toHaveBeenCalledOnce());
+    expect(screen.getByText("Preparing image attachments…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    fireEvent.keyDown(reply, { key: "Enter", metaKey: true });
+    expect(startTurn).not.toHaveBeenCalled();
+    await act(async () => normalization.resolve({
+      dataUrl: "data:image/png;base64,AQID", height: 24, width: 24, size: 3,
+      mimeType: "image/png", conversionPath: "renderer",
+      original: { height: 24, width: 24, size: 3, mimeType: image.type, name: image.name },
+    }));
+    await screen.findByAltText("pending.png");
+    expect(screen.queryByText("Preparing image attachments…")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  });
+
+  it.each([
+    ["gif", ANIMATED_GIF_BASE64],
+    ["webp", ANIMATED_WEBP_BASE64],
+  ])("preserves dropped animated %s bytes through sending", async (extension, base64) => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-1",
       turnId: "turn-1",
     }));
-    const gifFile = new File([new Uint8Array([71, 73, 70, 56])], "demo.gif", {
-      type: "image/gif",
+    const mimeType = `image/${extension}`;
+    const url = `data:${mimeType};base64,${base64}`;
+    const image = new File([Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))], `demo.${extension}`, {
+      type: mimeType,
     });
 
     render(
@@ -23990,15 +24451,15 @@ describe("Composer", () => {
         items: [
           {
             kind: "file",
-            type: "image/gif",
-            getAsFile: () => gifFile,
+            type: mimeType,
+            getAsFile: () => image,
           },
         ],
       },
     });
 
-    const preview = await screen.findByAltText("demo.gif");
-    expect(preview).toHaveAttribute("src", expect.stringMatching(/^data:image\/gif;base64,/));
+    const preview = await screen.findByAltText(`demo.${extension}`);
+    expect(preview).toHaveAttribute("src", url);
     expect(normalizeImageFile).not.toHaveBeenCalled();
 
     await clickButton("Send");
@@ -24010,8 +24471,8 @@ describe("Composer", () => {
         input: [
           {
             type: "image",
-            name: "demo.gif",
-            url: expect.stringMatching(/^data:image\/gif;base64,/),
+            name: `demo.${extension}`,
+            url: url,
           },
         ],
       });

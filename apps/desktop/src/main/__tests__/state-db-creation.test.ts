@@ -1,9 +1,17 @@
 import Database from "better-sqlite3";
-import { rmSync } from "node:fs";
+import { rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
-import { createTempStateDb, openInMemoryStateDb } from "./sqlite-test-utils";
+import {
+  CURRENT_STATE_DB_USER_VERSION,
+  SQLITE_AUTO_VACUUM_INCREMENTAL,
+  StateDb,
+} from "../state/state-db";
+import {
+  createTempStateDb,
+  openFreshStateDb,
+  openInMemoryStateDb,
+} from "./sqlite-test-utils";
 
 let tempDir: string;
 
@@ -102,7 +110,7 @@ describe("StateDb.open — database creation", () => {
     let stateDb: StateDb | undefined;
 
     const commits = countCommitsDuring(() => {
-      stateDb = StateDb.open(dbPath);
+      stateDb = openFreshStateDb(dbPath);
     });
 
     try {
@@ -169,6 +177,27 @@ describe("StateDb.open — database creation", () => {
       );
     } finally {
       reopened?.close();
+    }
+  });
+
+  it("writes nothing when opening a database that is already current", () => {
+    const dbPath = path.join(tempDir, "state.db");
+    const created = StateDb.open(dbPath);
+    created.raw.pragma("wal_checkpoint(TRUNCATE)");
+    created.close();
+
+    const reopened = StateDb.open(dbPath);
+    try {
+      // Assigning `auto_vacuum` the mode a file already has rewrites page 1,
+      // so an unconditional assignment committed one page on every launch and
+      // checkpointed it again on close. A pragma is invisible to
+      // `countCommitsDuring`, so this reads the WAL instead.
+      expect(statSync(`${dbPath}-wal`).size).toBe(0);
+      expect(reopened.raw.pragma("auto_vacuum", { simple: true })).toBe(
+        SQLITE_AUTO_VACUUM_INCREMENTAL,
+      );
+    } finally {
+      reopened.close();
     }
   });
 });

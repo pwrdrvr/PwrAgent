@@ -66,6 +66,8 @@ const withThreadLifecycleMutation = vi.hoisted(() => vi.fn(
 const overlayStoreFixture = vi.hoisted(() => ({ stable: undefined as unknown }));
 const federationMock = vi.hoisted(() => {
   const remoteBackend = {
+    continueThreadEnvironmentStartup: vi.fn(async (request: { backend: string; threadId: string }) => ({ ...request, turnId: "owner-turn" })),
+    acknowledgeThreadEnvironmentFailure: vi.fn(async (request: { backend: string; threadId: string }) => ({ ...request, acknowledged: true })),
     setThreadAgent: vi.fn(),
     setThreadTokenMiser: vi.fn(),
     inspectTokenMiserOutput: vi.fn(async () => ({ available: false })),
@@ -2901,6 +2903,7 @@ describe("app server ipc", () => {
   async function requestWatchForAttachedPr(
     attached: PrSummary,
     notifyOn: ThreadPullRequestWatchEvent[],
+    options: { autoFixEnabled?: boolean; url?: string } = {},
   ) {
     readPrStatusCache.mockResolvedValueOnce({
       [buildPullRequestStatusKey(attached)]: {
@@ -2935,6 +2938,7 @@ describe("app server ipc", () => {
       executionMode: "default",
       extraLinkedDirectories: [],
       prs: [attached],
+      prAutoDispatchEnabled: options.autoFixEnabled,
     });
 
     registerAppServerIpcHandlers();
@@ -2952,8 +2956,81 @@ describe("app server ipc", () => {
       backend: "codex",
       threadId: "thread-1",
       notifyOn,
+      url: options.url,
     });
   }
+
+  it("watches an explicitly attached upstream fork PR and reports active primary monitoring", async () => {
+    const attached = githubPr({
+      number: 3129, org: "pwrdrvr", repo: "PwrAgent", state: "pending",
+      headRefName: "feat/fork-contribution", headSha: "f".repeat(40),
+      sourceRepository: { provider: "github.com", org: "contributor", repo: "PwrAgent" },
+      explicitlyAttached: true,
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3129",
+    });
+    getPrAutoDispatchCandidateWinner.mockResolvedValue({ backend: "codex", threadId: "thread-1" } as never);
+    registerThreadPrStatusWatch.mockClear();
+
+    const response = await requestWatchForAttachedPr(attached, ["merged", "closed"], {
+      autoFixEnabled: true, url: attached.url,
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: { pullRequestWatch: {
+        terminalWatch: { kind: "terminal", notifyOn: ["merged", "closed"], prUrl: attached.url },
+        prAutomation: { autoFixActive: true, guidance: expect.stringContaining("monitoring is active") },
+      } },
+    });
+    expect(getPrAutoDispatchCandidateWinner).toHaveBeenCalledWith({ prKey: buildPullRequestStatusKey(attached) });
+    expect(registerThreadPrStatusWatch).toHaveBeenCalledOnce();
+    const owner = setLocalPullRequestAuthorityResolver.mock.calls.at(-1)?.[0];
+    expect(owner(buildPullRequestStatusKey(attached))).toBe(true);
+
+    const { appServerService } = await import("../ipc/app-server");
+    const service = appServerService as unknown as {
+      setThreadPrAttachment: (key: string, attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] }) => void;
+      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+      collectPrPollTargets: () => { prKey: string; threadKeys: string[] }[];
+    };
+    const automatic = { ...attached, explicitlyAttached: undefined };
+    service.setThreadPrAttachment("codex:automatic-sibling", {
+      backend: "codex", primaryRepoKey: "github.com/pwrdrvr/pwragent", prs: [automatic],
+    });
+    // Forge status is shared, but explicit attachment permission is thread-owned.
+    // Refreshing must neither drop it nor give it to an automatic sibling.
+    service.rememberPrStatuses([automatic], Date.now(), "test-forge-refresh");
+    expect(await appServerService.canonicalizeStoredPullRequests([attached])).toEqual([
+      expect.objectContaining({ explicitlyAttached: true }),
+    ]);
+    expect(await appServerService.canonicalizeStoredPullRequests([automatic])).toEqual([
+      expect.not.objectContaining({ explicitlyAttached: true }),
+    ]);
+    expect(service.collectPrPollTargets()).toEqual([
+      expect.objectContaining({ prKey: buildPullRequestStatusKey(attached), threadKeys: ["codex:thread-1"] }),
+    ]);
+    const watchHandler = setThreadPullRequestWatchToolHandler.mock.calls.at(-1)?.[0];
+    await expect(watchHandler?.({ backend: "codex", threadId: "thread-1", url: attached.url, notifyOn: ["merged", "closed"] }))
+      .resolves.toMatchObject({ ok: true });
+  });
+
+  it.each([
+    { explicitlyAttached: undefined, org: "pwrdrvr", repo: "PwrAgent" },
+    { explicitlyAttached: true, org: "pwrdrvr", repo: "docs.pwragent.ai" },
+    { explicitlyAttached: true, org: "other", repo: "PwrAgent" },
+  ] as const)("rejects a non-primary fork PR watch (%j)", async (identity) => {
+    const attached = githubPr({
+      ...identity, number: 3130, state: "pending", headSha: "e".repeat(40),
+      sourceRepository: { provider: "github.com", org: "contributor", repo: identity.repo },
+      url: `https://github.com/${identity.org}/${identity.repo}/pull/3130`,
+    });
+    registerThreadPrStatusWatch.mockClear();
+    const response = await requestWatchForAttachedPr(attached, ["merged", "closed"], { url: attached.url });
+    expect(response).toMatchObject({ ok: false, error: { code: "not_found" } });
+    expect(registerThreadPrStatusWatch).not.toHaveBeenCalled();
+    const owner = setLocalPullRequestAuthorityResolver.mock.calls.at(-1)?.[0];
+    expect(owner(buildPullRequestStatusKey(attached))).toBe(false);
+  });
 
   it("returns merge details at once when the PR merged before the watch was requested", async () => {
     const merged = githubPr({
@@ -5251,7 +5328,7 @@ describe("app server ipc", () => {
     expect(backendRegistryLifecycle.get).not.toHaveBeenCalled();
   });
 
-  it("routes family pricing IPC to the owner and propagates failure without a local fallback", async () => {
+  it("reads a remote thread's family from its owner and propagates the owner's failure", async () => {
     const { THREAD_FAMILY_PRICING_READ_CHANNEL } = await import("../../shared/ipc");
     const target = { scope: "remote" as const, instanceId: "owner-one" };
     const request = { backend: "codex" as const, threadId: "parent" };
@@ -5261,18 +5338,29 @@ describe("app server ipc", () => {
       { backend: "codex", threadId: "child", title: "Child", self: false, active: true,
         totalCostMicros: 2_000_000, usageLineCount: 2, unpricedUsageLineCount: 1 },
     ] };
-    const readLocalIndex = vi.fn();
-    const readLocalSummaries = vi.fn();
-    overlayStoreFixture.stable = { readNavigationQueryIndex: readLocalIndex, readThreadPricingSummaries: readLocalSummaries };
+    const readLocalSummaries = vi.fn(async () => []);
+    overlayStoreFixture.stable = {
+      readNavigationQueryIndex: vi.fn(),
+      readRemoteThreadPinNavigationRows: vi.fn(async () => []),
+      readThreadPricingSummaries: readLocalSummaries,
+    };
     federationMock.remoteBackend.readThreadFamilyPricing.mockReset().mockResolvedValueOnce(family)
       .mockRejectedValueOnce(new Error("Owner disconnected"));
     registerAppServerIpcHandlers();
     const read = () => handlers.get(THREAD_FAMILY_PRICING_READ_CHANNEL)!({}, { ...request, federationTarget: target });
-    expect(await read()).toEqual(family);
+    const result = await read() as { members: Array<Record<string, unknown>> };
     expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(target);
-    expect(federationMock.remoteBackend.readThreadFamilyPricing).toHaveBeenCalledExactlyOnceWith(request);
+    // One bounded budget covers the owner read; a hung owner cannot hold the card.
+    expect(federationMock.remoteBackend.readThreadFamilyPricing)
+      .toHaveBeenCalledExactlyOnceWith(request, { deadlineAt: expect.any(Number) });
+    // Every member is stamped with the owner that keeps its total.
+    expect(result.members.map(({ threadId, self, ownerInstanceId, totalCostMicros }) =>
+      ({ threadId, self, ownerInstanceId, totalCostMicros }))).toEqual([
+      { threadId: "parent", self: true, ownerInstanceId: "owner-one", totalCostMicros: 1_000_000 },
+      { threadId: "child", self: false, ownerInstanceId: "owner-one", totalCostMicros: 2_000_000 },
+    ]);
     await expect(read()).rejects.toThrow("Owner disconnected");
-    expect(readLocalIndex).not.toHaveBeenCalled();
+    // This machine keeps no threads in that family, so nothing local is priced.
     expect(readLocalSummaries).not.toHaveBeenCalled();
   });
 
@@ -5359,6 +5447,7 @@ describe("app server ipc", () => {
     ).toHaveBeenCalledWith({
       backend: "codex",
       parentThreadId: "thread-1",
+      expectedParent: undefined,
     });
     expect(response).toEqual({
       backend: "codex",
@@ -5698,6 +5787,19 @@ describe("app server ipc", () => {
       seenAt: 6_000,
       seenUpdatedAt: 3_000,
     });
+  });
+
+  it("routes environment continuation and acknowledgement to the remote owner", async () => {
+    const { NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL, NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "windows-owner" };
+    const identity = { backend: "codex", threadId: "failed-setup" };
+    registerAppServerIpcHandlers();
+    const continued = await handlers.get(NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL)?.({}, { ...identity, federationTarget });
+    expect(continued).toEqual({ ...identity, turnId: "owner-turn" });
+    expect(federationMock.remoteBackend.continueThreadEnvironmentStartup).toHaveBeenCalledExactlyOnceWith(identity);
+    const acknowledged = await handlers.get(NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL)?.({}, { ...identity, federationTarget });
+    expect(acknowledged).toEqual({ ...identity, acknowledged: true });
+    expect(federationMock.remoteBackend.acknowledgeThreadEnvironmentFailure).toHaveBeenCalledExactlyOnceWith(identity);
   });
 
   it("adds remote thread reactions on the owner without replacing its ordered reactions", async () => {
@@ -9592,8 +9694,8 @@ describe("app server ipc", () => {
       .rejects.toMatchObject({ code: "not_found" });
     await expect(github("get_issue", { number: 1 }, { backend: "codex", threadId: "missing-thread", transport: "mcp" }))
       .rejects.toMatchObject({ code: "thread_not_found" });
-    const resolveRepository = setForgePrToolHandler.mock.calls.at(-1)?.[1];
-    await expect(resolveRepository({}, { backend: "codex", threadId: "thread-1", transport: "mcp" }))
+    const preflight = setForgePrToolHandler.mock.calls.at(-1)?.[1];
+    await expect(preflight("create_issue", {}, { backend: "codex", threadId: "thread-1", transport: "mcp" }))
       .rejects.toMatchObject({ code: "not_found" });
   });
 

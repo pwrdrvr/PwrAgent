@@ -119,7 +119,7 @@ function buildDecisions(
       },
       {
         id: "approval:mcp:cancel",
-        label: "Cancel Turn",
+        label: "Cancel turn",
         decision: "cancel" as const,
         style: "secondary" as const,
         fallbackText: "cancel",
@@ -152,7 +152,7 @@ function buildDecisions(
     return {
       id: action.id,
       label: isPersistent && description
-        ? `Always Allow Prefix${describedPersistentCount > 1 ? ` ${persistentIndex}` : ""}`
+        ? `Always allow prefix${describedPersistentCount > 1 ? ` ${persistentIndex}` : ""}`
         : action.label,
       ...(description ? { description } : {}),
       decision: messagingDecisionFromPendingAction(action),
@@ -260,15 +260,23 @@ function mcpToolParamLines(request: AppServerMcpElicitationRequestNotification):
   return rows.flatMap((row) => {
     const record = objectField(row);
     const name = stringField(record?.name) ?? stringField(record?.key);
-    const label = stringField(record?.label) ?? stringField(record?.display_name) ?? name;
+    const fieldLabel = stringField(record?.label) ?? stringField(record?.display_name) ?? name;
+    // An inline review comment is labelled by its file and line, which the
+    // secret checks below never read.
+    const location = stringField(record?.location);
+    const label = location ?? fieldLabel;
     if (!record || !label) {
       return [];
     }
     const raw = typeof record.value === "string" ? record.value : JSON.stringify(record.value) ?? "";
-    const value = isSecretFieldName(name ?? label) || isSecretFieldLabel(label) || /^bearer\s+/i.test(raw.trim())
+    const value = isSecretFieldName(name ?? fieldLabel ?? "") || isSecretFieldLabel(fieldLabel ?? "") || /^bearer\s+/i.test(raw.trim())
       ? "[redacted]"
       : redactCommandText(raw.replace(JSON_SECRET_MEMBER, "$1\"[redacted]\""));
-    return [`${label}: ${value.length > MCP_PARAM_VALUE_LIMIT ? `${value.slice(0, MCP_PARAM_VALUE_LIMIT)}…` : value}`];
+    // A chat message cannot hold a whole pull request body, so it says how
+    // much it left out rather than passing a fragment off as the value.
+    return [`${label}: ${value.length > MCP_PARAM_VALUE_LIMIT
+      ? `${value.slice(0, MCP_PARAM_VALUE_LIMIT)}… (${value.length.toLocaleString("en-US")} characters; the desktop card shows all of it)`
+      : value}`];
   });
 }
 

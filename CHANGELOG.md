@@ -1,5 +1,61 @@
 # Changelog
 
+## v1.3.8 - 2026-11-01
+
+- Scheduled Sends - Schedule a message for after the selected model's short-term rate limit resets, with a buffer before sending.
+- To-do Delivery - Send a To-do request to an existing thread instead of starting a new one, including across connected machines. Review the destination before sending.
+- Image Previews - Automatically display supported local images referenced in Codex and Claude replies, including Windows paths and images on connected machines.
+- Remote Startup - Show submission time, owner-side startup progress, and elapsed time when starting a remote thread. Cancel startup while it is still cancellable, with clear status when the owner disconnects.
+- Worktree Safety - Preserve attached worktrees during directory reconciliation and inherit repository trust for verified registered worktrees when moving threads.
+- Thread Families - Preserve children on connected machines when archiving nested threads.
+- Review Queue - Keep review requests queued while a new thread or Environment is starting, preserving the selected reviewer and scheduled send time.
+- Diagnostics and UI - Keep rendering captures from taking over existing Chromium traces or debugger sessions. Share status-dot timing and stop usage-warning pulses after two cycles to reduce unnecessary animation work.
+- Outpost Publishing - Separate accepted npm submissions from delayed, read-only registry verification so processing lag is not mistaken for a failed publish. Preserve receipts for recovery without republishing or rebuilding desktop assets.
+
+## v1.3.7 - 2026-10-31
+
+- Navigation - Add configurable shortcuts for sidebar lenses, including a quick Attention toggle. Restore the selected thread and expanded projects after restart, keep new threads at the top of project pins, and prevent long directory names from overlapping the new-thread button.
+- To-do Plans - Give a thread started from a To-do card its own plan checklist, including on compatible connected machines. Fold long plans and collapse dispatch settings to keep cards compact.
+- CI Tools - Let agents download GitHub Actions artifacts and request failed CI job reruns through PwrAgent's forge tools, with operator-controlled rerun permissions.
+- Job Monitors - Give lightweight monitors read-only access to selected MCP connections for cloud status checks. Improve monitor handoff reminders and drain Claude monitor work during shutdown.
+- Claude Feedback - Show recovery notices, output-limit stops, and refusals instead of leaving unexplained stalled turns.
+- Claude Images - Store transcript images separately from conversation history to avoid repeatedly loading large inline payloads, with safer concurrent image writes on Windows.
+- Thread Families - Preserve child groups and ordering when archiving a nested thread.
+- Pull Requests and Remote Work - Track explicitly attached fork PRs and their CI, and retry failed Environment launches on the machine that owns the thread.
+- Usage and Responsiveness - Bound Usage Activity history reads, reduce thinking-indicator redraws and Git branch-probe overhead, and merge duplicate Fable usage limits.
+- Rendering Diagnostics - Capture rendering activity from Troubleshooting settings without enabling Developer Mode or restarting, and save a sanitized local summary.
+- MCP Workflow Guides - Make built-in tool-selection and waiting-on-work guides discoverable to compatible MCP clients.
+
+## v1.3.6 - 2026-10-30
+
+- Thread Families - Drag an existing thread onto another sidebar thread to make it a sub-thread. Reorganize parent-child relationships locally and on connected machines, with protection against circular links.
+- Claude Task Monitors - Hand CI and long-running job waits to lightweight PwrAgent monitors. Choose each provider's monitor model in Settings, or use the Codex helper model.
+- Claude Tool Results - Display images returned by Claude tools and show MCP calls as clearly named transcript rows.
+- Approval Details - Make long tool-approval values fully readable, including in messaging, so you can inspect the requested action before approving it.
+- Merge To-dos - Show a live pull-request chip on merge cards, with status, a hover preview, and a direct link to the PR.
+
+## v1.3.5 - 2026-10-29
+
+- Offline HTML and File Previews - Open HTML files with local images and styles in an offline sandbox. Scripts are off by default; external links require confirmation. Add compact file-viewer headers and file chips in transcripts.
+- Project Navigation - Add a project index beside the sidebar's thread list for quick project jumps. Move launchpad connection cards into an optional sidebar tab, show result ages in the jump palette, and improve keyboard navigation.
+- Claude and Worktree Handoffs - Continue Claude conversations in another checkout and move existing worktree threads into a fresh worktree. Keep the original worktree tracked after a fresh-start handoff.
+- Windows Updates - Install downloaded updates silently and automatically relaunch PwrAgent when installation finishes.
+- Federation Labels - Use instance short names consistently in menus, remote windows, search, and usage displays so connected machines are easier to identify.
+- Image Paste - Preserve image quality and animated GIF/WebP attachments while avoiding repeated resize and recompression passes. Show preparation progress before sending.
+- Linear Paste - Attach images included in pasted Linear issues and display the issue's details as a compact transcript header.
+- Approval Shortcuts - Answer approvals from a notice's Review menu without switching threads. Show correct thread titles outside the loaded sidebar page, with clearer delivery and retry status.
+- Messaging and Final Answers - Preserve the originating Slack or Telegram destination through handoffs, completions, monitors, and continuations. Keep progress in Working Updates and use only the turn's last assistant message as final text across transcripts, automations, and messaging.
+- Live To-dos - Stream card changes instead of repeatedly listing everything, including through compatible gateways. Keep cards visible while owners are busy. New To-do worktrees start from the repository's default branch rather than inheriting unrelated feature commits.
+- To-do Dispatch - Choose the machine, model, speed, workspace mode, and environment before starting a handoff. Match projects across machines by repository, claim work handled in the current thread up front, and open cards directly from a thread's To-do count.
+- Provider Reliability - Run supported Bonsai models in isolated Codex runtimes, preserve Codex availability after provider imports, and choose a provider the remote owner can actually run when starting drafts or sub-threads.
+- MCP Visibility and Compatibility - Clearly separate PwrAgent-managed connections from Codex and Claude's own MCP servers. Fix Grok's rejection of Sandboxer MCP tools, and make the bundled Claude CLI available in integrated terminals when no existing installation is on PATH.
+- Agent Controls and Attribution - Preserve delegation ancestry and show resolved worker model settings. Honor forge-tool Auto policies in Codex Auto turns, and report excessive approval-denial stops as failures rather than unexplained interruptions.
+- Cross-Machine Usage - Include sub-threads on other machines in thread-family pricing totals, with visibility into unavailable remote usage.
+- Pull Requests and Workspaces - Find PRs pushed under a different remote branch name and keep nested worktree changes out of the parent checkout's working-state reports.
+- Transcript Performance - Read deferred tool details directly with bounded command-output reads. Keep transcript rows associated with their original turns during refreshes.
+- Security Hardening - Deny renderer permissions by default, block permission access from embedded previews, and restrict application-window navigation to the intended renderer. HTML previews also block WebRTC when scripts are enabled. Voice retains explicit microphone and camera opt-in.
+- Navigation Polish - Keep the sidebar steady when opening threads, preserve MCP counts during remote refreshes, prevent stale reads from undoing newer Attention state, and let the mark-read shortcut work from the composer.
+
 ## v1.3.4 - 2026-10-26
 
 - Sandboxer Sign-In - Connect Sandboxer through browser OAuth without installing its CLI. Existing CLI configurations remain supported, with connection method, thread selections, and cleanup ownership preserved.

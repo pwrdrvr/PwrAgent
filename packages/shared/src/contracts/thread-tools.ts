@@ -86,6 +86,8 @@ export type PwrAgentThreadInspectionContext = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   now?: number;
+  /** Trusted invoking turn, used when owner resolution reaches a peer. */
+  turnId?: string;
 };
 
 export type SearchThreadsToolArgs = {
@@ -243,9 +245,33 @@ export type MutateThreadToolArgs = {
    */
   lockNote?: string;
   /**
+   * Makes the thread a sub-thread of this thread, which must be another
+   * thread on the same instance. The link only groups the two in the
+   * sidebar: the child does not see the parent's transcript. A pinned
+   * thread loses its pin, and its own sub-threads move with it.
+   */
+  parentThreadId?: ThreadIdentifier;
+  /** Provider of `parentThreadId`. Defaults to this thread's `backend`. */
+  parentBackend?: AppServerBackendKind;
+  /**
+   * `true` makes a sub-thread top-level again. Cannot be combined with
+   * `parentThreadId`.
+   */
+  detachFromParent?: boolean;
+  /**
    * Validate and report the requested mutations without applying them.
    */
   dryRun?: boolean;
+};
+
+/** Versioned owner-side parent mutation. Existing signed requests stay frozen. */
+export type MutateThreadParentV1Request = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  parentThreadId?: ThreadIdentifier;
+  parentBackend?: AppServerBackendKind;
+  detachFromParent?: boolean;
+  dryRun: boolean;
 };
 
 export type RenameCurrentThreadToolArgs = {
@@ -423,7 +449,8 @@ export type ThreadMutationField =
   | "pinned"
   | "unread"
   | "locked"
-  | "lock_note";
+  | "lock_note"
+  | "parent";
 
 export type ThreadMutationChangeStatus =
   | "would_apply"
@@ -549,6 +576,7 @@ export type PendingThreadWorkspaceMoveSummary = {
   sourceBranch?: string;
   leaveLocalBranch?: string;
   newBranchName?: string;
+  baseRef?: string;
   targetPath?: string;
   branch?: string;
   linkedDirectory?: LinkedDirectorySummary;

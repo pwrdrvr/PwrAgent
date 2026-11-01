@@ -13,6 +13,7 @@ import { ThreadUsageActivityTable } from "./thread-usage-activities";
 import { CodexEnvironmentLiveOutput } from "./codex-environment-live-output";
 import type {
   AppServerBackendKind,
+  ArchiveSubthreadPromotion,
   AppServerBackendScope,
   AppServerThreadActivityEntry,
   AppServerThreadMessageOrigin,
@@ -26,6 +27,7 @@ import type {
   MarkThreadSeenResponse,
   MessagingThreadBindingSummary,
   NavigationBrowseMode,
+  NavigationResumeState,
   NavigationRelativePinMove,
   NavigationRelativeChildMove,
   ThreadQueuedTurnSummary,
@@ -108,6 +110,7 @@ import {
   isAcpBackendId,
   isRemoteFederationTarget,
   normalizeNavigationBrowseMode,
+  normalizeNavigationResumeState,
   normalizeThreadIdentityKey,
   forgetRecentThreadLockNote,
   parseRecentThreadLockNotes,
@@ -136,6 +139,9 @@ type ThreadPricingLedgerRead = {
 // running at that moment. On a real 22,000-line profile no flush stamp was
 // shared by more than 2 lines; one migration stamp was shared by 7,251.
 const THREAD_USAGE_BULK_REWRITE_MIN_LINES = 64;
+
+// How far the loop check follows parent links. Lenses stop at 32 levels.
+const MAX_THREAD_PARENT_WALK = 64;
 
 // PwrAgent recorded no turn usage before 2026.
 const EARLIEST_USAGE_TURN_START = Date.UTC(2026, 0, 1);
@@ -771,6 +777,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     ledgerVersion: number;
     pricing: ThreadPricingLedgerRead;
   }>();
+
+  private usageActivityCache?: {
+    from: number; to: number; dataVersion: number; changes: number;
+    activity: { rows: UsageActivityRow[]; truncated: boolean; limitHistory: UsageLimitObservation[] };
+  };
 
   private navigationUnreadBaseline?: NavigationUnreadBaseline;
   private readonly directoryLaunchpadListeners = new Set<() => void>();
@@ -1597,27 +1608,48 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     directory: LinkedDirectorySummary;
     gitBranch?: string;
     threadId: string;
+    /** A worktree the thread is leaving on disk but still owns. */
+    retainWorktree?: LinkedDirectorySummary;
+    /** Directory enrichment repairs one checkout; it must not detach siblings. */
+    preserveOtherWorktrees?: boolean;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    const current = this.getThread(threadKey) ?? {
+    const { retainedWorktrees: previousRetained, ...current } = this.getThread(threadKey) ?? {
       backend: params.backend,
       threadId: params.threadId,
       executionMode: "default" as const,
       extraLinkedDirectories: [],
     };
-    const nextDirectories = [
-      ...current.extraLinkedDirectories.filter((directory) => {
-        if (directory.id === params.directory.id) return false;
-        if (isHandoffDirectory(directory)) return false;
-        return directory.path !== params.directory.path;
-      }),
-      params.directory,
+    // A thread that moves back into a retained worktree uses it again.
+    const retainedWorktrees = [
+      ...(previousRetained ?? []).filter((directory) =>
+        !sameWorktreeCheckout(directory, params.directory)
+        && !(params.retainWorktree && sameWorktreeCheckout(directory, params.retainWorktree))),
+      ...(params.retainWorktree && !sameWorktreeCheckout(params.retainWorktree, params.directory)
+        ? [params.retainWorktree]
+        : []),
     ];
+    const otherDirectories = current.extraLinkedDirectories.filter((directory) => {
+      if (directory.id === params.directory.id) return false;
+      if (isHandoffDirectory(directory)) return false;
+      if (params.preserveOtherWorktrees
+        && directory.worktreePath?.trim()
+        && params.directory.worktreePath?.trim()) {
+        return !sameWorktreeCheckout(directory, params.directory);
+      }
+      return directory.path !== params.directory.path;
+    });
+    // Implicit workspace moves select the first worktree. The relationship
+    // being repaired belongs to the primary cwd, ahead of preserved siblings.
+    const nextDirectories = params.preserveOtherWorktrees
+      ? [params.directory, ...otherDirectories]
+      : [...otherDirectories, params.directory];
     const nextState: ThreadOverlayState = {
       ...current,
       gitBranch: params.gitBranch ?? current.gitBranch,
       observedGitBranch: params.gitBranch ?? current.observedGitBranch,
       extraLinkedDirectories: nextDirectories,
+      ...(retainedWorktrees.length > 0 ? { retainedWorktrees } : {}),
       ...(params.resetProjectState ? {
         // The handoff origin remains historical provenance; these fields own
         // the current group, which ends when the conversation moves projects.
@@ -2462,17 +2494,24 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     /** The owner's account limits at completion; rides the same UPDATE. */
     limitObservation?: UsageLimitObservation;
   }): Promise<boolean> {
+    // Most lines share their turn's identity, so existing thread indexes can
+    // answer this without a new write-maintained index. The fallback preserves
+    // the original usage_turn_id-only relationship for every other ledger row.
     const turn = this.stateDb.raw.prepare(
       `SELECT turn.completed_at, turn.completed_at_inferred FROM thread_usage_turns AS turn
         WHERE turn.backend = ? AND turn.thread_id = ? AND turn.turn_id = ?
-          AND EXISTS (
+          AND CASE WHEN EXISTS (
+            SELECT 1 FROM thread_usage_lines AS line
+             WHERE line.backend = turn.backend AND line.thread_id = turn.thread_id
+               AND line.usage_turn_id = turn.usage_turn_id
+               AND line.source = 'live' AND line.scope = 'turn'
+               AND line.parent_thread_id IS NULL AND line.status != 'superseded'
+          ) THEN 1 ELSE EXISTS (
             SELECT 1 FROM thread_usage_lines AS line
              WHERE line.usage_turn_id = turn.usage_turn_id
-               AND line.source = 'live'
-               AND line.scope = 'turn'
-               AND line.parent_thread_id IS NULL
-               AND line.status != 'superseded'
-          )`,
+               AND line.source = 'live' AND line.scope = 'turn'
+               AND line.parent_thread_id IS NULL AND line.status != 'superseded'
+          ) END`,
     ).get(params.backend, params.threadId, params.turnId) as {
       completed_at: number | null;
       completed_at_inferred: number | null;
@@ -2747,6 +2786,28 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     rows: UsageActivityRow[]; truncated: boolean; limitHistory: UsageLimitObservation[];
   }> {
     validateUsageActivityWindow(request);
+    const db = this.stateDb.raw;
+    // total_changes catches local SQL, including title and automation writes;
+    // data_version catches every other connection, including older builds.
+    // Never cache a transaction's snapshot or expose a cached object to callers.
+    const dataVersion = db.pragma("data_version", { simple: true }) as number;
+    const { changes } = db.prepare("SELECT total_changes() AS changes").get() as { changes: number };
+    const cached = this.usageActivityCache;
+    if (!db.inTransaction && cached && cached.from === request.from && cached.to === request.to
+      && cached.dataVersion === dataVersion && cached.changes === changes) {
+      return structuredClone(cached.activity);
+    }
+    // The version checks and all dependent reads share one read snapshot.
+    // A writer committing between the checks and BEGIN only invalidates the
+    // cache early on the next read; it cannot leave stale data cached as current.
+    const activity = db.transaction(() => this.materializeUsageActivity(request))();
+    if (!db.inTransaction) this.usageActivityCache = { ...request, dataVersion, changes, activity };
+    return structuredClone(activity);
+  }
+
+  private materializeUsageActivity(request: ReadUsageActivityRequest): {
+    rows: UsageActivityRow[]; truncated: boolean; limitHistory: UsageLimitObservation[];
+  } {
     type ActivityRow = ThreadUsageLineRow & {
       activity_started_at: number | null; activity_completed_at: number | null;
       activity_rate_limit_snapshot: string | null;
@@ -2763,32 +2824,62 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     // line per run, hundreds a day, each worth a fraction of a cent. The
     // contained ones are read separately and rolled up per parent thread, so
     // they cannot spend the row bound meant for turns.
-    const bounds = `
-        FROM thread_usage_lines l
-        LEFT JOIN thread_usage_turns t ON t.usage_turn_id = l.usage_turn_id`;
-    const started = "COALESCE(t.started_at, l.created_at)";
-    const completed = `COALESCE(t.completed_at, l.completed_at,
-      CASE WHEN l.scope = 'monitor' AND l.status = 'finalized' THEN l.created_at END)`;
-    const backgroundHelper = `(l.scope = 'monitor' AND l.status = 'finalized'
-      AND COALESCE(l.source_item_id, '') LIKE 'system:%'
-      AND ${started} >= @from AND ${completed} < @to)`;
-    const columns = `SELECT l.*, ${started} AS activity_started_at,
-             ${completed} AS activity_completed_at,
-             t.rate_limit_snapshot AS activity_rate_limit_snapshot`;
     const rows = this.stateDb.raw.prepare(`
-      ${columns}${bounds}
+      SELECT l.*, COALESCE(t.started_at, l.created_at) AS activity_started_at,
+        COALESCE(t.completed_at, l.completed_at,
+          CASE WHEN l.scope = 'monitor' AND l.status = 'finalized' THEN l.created_at END) AS activity_completed_at,
+        t.rate_limit_snapshot AS activity_rate_limit_snapshot
+      FROM thread_usage_lines l
+        LEFT JOIN thread_usage_turns t ON t.usage_turn_id = l.usage_turn_id
        WHERE l.status != 'superseded'
-         AND ${started} < @to
-         AND CASE WHEN ${completed} IS NULL THEN l.updated_at >= @from
-                  ELSE ${completed} >= @from END
-         AND NOT ${backgroundHelper}
+         AND activity_started_at < @to
+         AND CASE WHEN activity_completed_at IS NULL THEN l.updated_at >= @from
+                  ELSE activity_completed_at >= @from END
+         AND NOT (l.scope = 'monitor' AND l.status = 'finalized'
+           AND COALESCE(l.source_item_id, '') LIKE 'system:%'
+           AND activity_started_at >= @from AND activity_completed_at < @to)
        ORDER BY l.updated_at DESC, l.usage_line_id
        LIMIT 5001
     `).all({ from: request.from, to: request.to }) as ActivityRow[];
+    // Aggregate in SQLite. Only one representative ledger row per group
+    // crosses into JS, including in a window containing thousands of helpers.
     const helperRows = this.stateDb.raw.prepare(`
-      ${columns}${bounds}
-       WHERE ${backgroundHelper}
-    `).all({ from: request.from, to: request.to }) as ActivityRow[];
+      WITH candidates AS (
+        SELECT l.*,
+          COALESCE(t.started_at, l.created_at) AS activity_started_at,
+          COALESCE(t.completed_at, l.completed_at, l.created_at) AS activity_completed_at
+        FROM thread_usage_lines l
+          LEFT JOIN thread_usage_turns t ON t.usage_turn_id = l.usage_turn_id
+        WHERE l.scope = 'monitor' AND l.status = 'finalized'
+          AND COALESCE(l.source_item_id, '') LIKE 'system:%'
+          AND activity_started_at >= @from AND activity_completed_at < @to
+      ), groups AS (
+        SELECT MIN(l.usage_line_id) AS representative,
+          MIN(l.activity_started_at) AS activity_started_at, MAX(l.activity_completed_at) AS activity_completed_at,
+          MAX(l.updated_at) AS updated_at, COUNT(*) AS rollup_count,
+          SUM(l.input_tokens) AS input_tokens, SUM(l.cached_input_tokens) AS cached_input_tokens,
+          SUM(l.uncached_input_tokens) AS uncached_input_tokens,
+          SUM(l.cache_write_input_tokens) AS cache_write_input_tokens,
+          SUM(l.output_tokens) AS output_tokens, SUM(l.reasoning_output_tokens) AS reasoning_output_tokens,
+          SUM(l.total_tokens) AS total_tokens,
+          SUM(l.cached_input_cost_micros) AS cached_input_cost_micros,
+          SUM(l.uncached_input_cost_micros) AS uncached_input_cost_micros,
+          SUM(l.cache_write_input_cost_micros) AS cache_write_input_cost_micros,
+          SUM(l.output_cost_micros) AS output_cost_micros, SUM(l.total_cost_micros) AS total_cost_micros
+        FROM candidates l
+        GROUP BY l.backend, l.provider,
+          COALESCE(NULLIF(CASE WHEN instr(substr(l.source_item_id, 8), ':') > 0
+            THEN substr(l.source_item_id, 8, instr(substr(l.source_item_id, 8), ':') - 1)
+            ELSE substr(l.source_item_id, 8) END, ''), 'helper'),
+          COALESCE(l.parent_thread_id, l.thread_id), COALESCE(l.model, ''), l.price_status, l.currency,
+          COALESCE(l.account_key, ''),
+          CAST(l.activity_completed_at / @step AS INTEGER)
+            - (l.activity_completed_at < 0 AND l.activity_completed_at % @step != 0)
+      )
+      SELECT l.*, g.* FROM groups g
+        JOIN thread_usage_lines l ON l.usage_line_id = g.representative
+      ORDER BY g.representative
+    `).all({ from: request.from, to: request.to, step: usageRollupStep(request.from, request.to) }) as ActivityRow[];
     const visibleRows = rows.slice(0, 5000);
     const identityFor = (row: { backend: string; thread_id: string }) => buildLegacyEncodedThreadIdentityKey(
       row.backend as AppServerBackendKind, row.thread_id,
@@ -5318,6 +5409,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     parentThreadInstanceId?: string | null;
     expectedParent?: { threadId: string; backend: ThreadOverlayState["backend"]; instanceId?: string } | null;
   }): Promise<ThreadOverlayState> {
+    return this.setThreadParentState(params);
+  }
+
+  private setThreadParentState(params: Parameters<SqliteOverlayStore["setThreadParent"]>[0]): ThreadOverlayState {
     if (
       params.parentThreadId === params.threadId
       && (!params.parentThreadBackend || params.parentThreadBackend === params.backend)
@@ -5348,6 +5443,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       const parentThreadInstanceId = parentThreadId
         ? params.parentThreadInstanceId?.trim() || undefined
         : undefined;
+      if (parentThreadId && !parentThreadInstanceId) {
+        this.assertParentIsNotDescendant(params.threadId, threadKey, buildThreadIdentityKey(parentThreadBackend!, parentThreadId));
+      }
       const nextState: ThreadOverlayState = {
         ...current,
         parentThreadId: parentThreadId || undefined,
@@ -5356,6 +5454,21 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         pinnedRank: parentThreadId ? undefined : current.pinnedRank,
       };
       this.putThread(threadKey, nextState);
+      // A move leaves no stale rank behind in the group the thread left.
+      const previousParentId = current.parentThreadId?.trim();
+      if (previousParentId && !current.parentThreadInstanceId) {
+        const previousKey = buildThreadIdentityKey(current.parentThreadBackend ?? params.backend, previousParentId);
+        const nextKey = parentThreadId && !parentThreadInstanceId
+          ? buildThreadIdentityKey(parentThreadBackend!, parentThreadId)
+          : undefined;
+        const previous = previousKey === nextKey ? undefined : this.getThread(previousKey);
+        if (previous?.subthreadOrder?.includes(params.threadId)) {
+          this.putThread(previousKey, {
+            ...previous,
+            subthreadOrder: previous.subthreadOrder.filter((id) => id !== params.threadId),
+          });
+        }
+      }
       if (parentThreadId && !parentThreadInstanceId) {
         const parentKey = buildThreadIdentityKey(parentThreadBackend!, parentThreadId);
         const parent = this.getThread(parentKey) ?? {
@@ -5364,13 +5477,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           executionMode: "default" as const,
           extraLinkedDirectories: [],
         };
-        this.putThread(parentKey, {
-          ...parent,
-          subthreadOrder: [
-            ...(parent.subthreadOrder ?? []).filter((id) => id !== params.threadId),
-            params.threadId,
-          ],
-        });
+        // Linking a child again keeps the place it already has.
+        if (!parent.subthreadOrder?.includes(params.threadId)) {
+          this.putThread(parentKey, {
+            ...parent,
+            subthreadOrder: [...(parent.subthreadOrder ?? []), params.threadId],
+          });
+        }
       }
       return nextState;
     })();
@@ -5527,6 +5640,31 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   ): boolean {
     if (child.parentThreadBackend) return child.parentThreadBackend === parentBackend;
     return ownerResolvedMembership || child.backend === parentBackend;
+  }
+
+  /**
+   * Refuse a link that would close a loop. Each lens walks a row up to its
+   * oldest ancestor, and in a loop every member names another as its root,
+   * so the whole group drops out of every list. The walk follows this
+   * owner's own links only; a parent on another instance ends it.
+   *
+   * A legacy link names no provider, and the lenses resolve it by id on
+   * any provider when its own has no such thread. The store cannot list
+   * providers, so a legacy link to this thread's id counts as a loop.
+   */
+  private assertParentIsNotDescendant(threadId: string, threadKey: string, parentKey: string): void {
+    const loop = new Error("A thread cannot become a sub-thread of its own sub-thread.");
+    const seen = new Set<string>();
+    let key: string | undefined = parentKey;
+    while (key && !seen.has(key) && seen.size < MAX_THREAD_PARENT_WALK) {
+      if (key === threadKey) throw loop;
+      seen.add(key);
+      const overlay = this.readStoredThread(key);
+      const parentId = overlay?.parentThreadId?.trim();
+      if (!parentId || overlay!.parentThreadInstanceId) return;
+      if (!overlay!.parentThreadBackend && parentId === threadId) throw loop;
+      key = buildThreadIdentityKey(overlay!.parentThreadBackend ?? overlay!.backend, parentId);
+    }
   }
 
   async setSubthreadsCollapsed(params: {
@@ -6167,6 +6305,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           'backend', json_extract(threads.payload, '$.backend'),
           'threadId', json_extract(threads.payload, '$.threadId'),
           'extraLinkedDirectories', json_extract(threads.payload, '$.extraLinkedDirectories'),
+          'retainedWorktrees', json_extract(threads.payload, '$.retainedWorktrees'),
           'parentThreadId', json_extract(threads.payload, '$.parentThreadId'),
           'parentThreadBackend', json_extract(threads.payload, '$.parentThreadBackend'),
           'parentThreadInstanceId', json_extract(threads.payload, '$.parentThreadInstanceId'),
@@ -8655,6 +8794,21 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     );
   }
 
+  getNavigationResumeStateSync(): NavigationResumeState | undefined {
+    const raw = this.stateDb.getMeta("navigation_resume_state");
+    try { return raw ? normalizeNavigationResumeState(JSON.parse(raw)) : undefined; }
+    catch { return undefined; }
+  }
+
+  setNavigationResumeState(state: NavigationResumeState): void {
+    const normalized = normalizeNavigationResumeState(state);
+    if (!normalized) throw new Error("Invalid navigation resume state.");
+    const payload = JSON.stringify(normalized);
+    if (payload !== this.stateDb.getMeta("navigation_resume_state")) {
+      this.stateDb.setMeta("navigation_resume_state", payload);
+    }
+  }
+
   async getNavigationBrowseMode(): Promise<NavigationBrowseMode> {
     return this.getNavigationBrowseModeSync();
   }
@@ -9300,17 +9454,312 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return rows.map((row) => JSON.parse(row.payload) as ThreadOverlayState);
   }
 
-  async observeArchivedThreads(records: Array<{ backend: ThreadOverlayState["backend"]; threadId: string }>, now: number): Promise<void> {
-    const updates = records.flatMap(({ backend, threadId }) => {
+  async observeArchivedThreads(
+    records: Array<{ backend: ThreadOverlayState["backend"]; threadId: string }>,
+    now: number,
+    options?: { promoteSubthreads: boolean },
+  ): Promise<void> {
+    this.stateDb.raw.transaction(() => {
+      for (const { backend, threadId } of records) {
+        if (options?.promoteSubthreads) this.promoteArchivedSubthreads({ backend, threadId });
+        const key = buildThreadIdentityKey(backend, threadId);
+        const current = this.getThread(key) ?? { backend, threadId, executionMode: "default" as const, extraLinkedDirectories: [] };
+        if (current.archiveRetentionStartedAt === undefined) {
+          this.putThread(key, { ...current, archiveRetentionStartedAt: now });
+        }
+      }
+    })();
+  }
+
+  /** Replace an archived tray row with its children before publishing its
+   * removal. The nearest surviving ancestor keeps the depth-first tray order
+   * intact, including when that ancestor is itself below the displayed root.
+   * All relationship and order writes share one transaction. */
+  private promoteArchivedSubthreads(identity: { backend: ThreadOverlayState["backend"]; threadId: string }): void {
+    const key = buildThreadIdentityKey(identity.backend, identity.threadId);
+    const archived = this.getThread(key);
+    if (!archived?.parentThreadId || archived.parentThreadInstanceId) return;
+    let parentBackend = archived.parentThreadBackend ?? identity.backend;
+    let parentKey = buildThreadIdentityKey(parentBackend, archived.parentThreadId);
+    let parent = this.getThread(parentKey);
+    if (!parent && !archived.parentThreadBackend) {
+      const candidates = this.readSubthreadParentCandidates(archived.parentThreadId);
+      if (candidates.length !== 1) return;
+      parent = candidates[0]!;
+      parentBackend = parent.backend;
+      parentKey = buildThreadIdentityKey(parent.backend, parent.threadId);
+    }
+    if (!parent || parentKey === key) return;
+    let insertionId = identity.threadId;
+    const seen = new Set([key]);
+    while (parent.archiveRetentionStartedAt !== undefined || parent.archiveTombstonedAt !== undefined) {
+      if (seen.has(parentKey) || !parent.parentThreadId || parent.parentThreadInstanceId) return;
+      seen.add(parentKey);
+      insertionId = parent.threadId;
+      parentBackend = parent.parentThreadBackend ?? parent.backend;
+      parentKey = buildThreadIdentityKey(parentBackend, parent.parentThreadId);
+      parent = this.getThread(parentKey);
+      if (!parent) return;
+    }
+    const children = this.readLocalSubthreadChildren(identity);
+    const ordered = this.orderStoredSubthreads(archived, children);
+    const promotedIds = new Set(ordered.map((child) => child.id));
+    // Materialize the complete prior order, including legacy unranked
+    // siblings. Appending promoted rows would move them behind those siblings.
+    const siblings = this.readLocalSubthreadChildren({ backend: parentBackend, threadId: parent.threadId }, insertionId);
+    // Saved ranks can also name remotely owned siblings, whose overlays are
+    // absent here. Keep those slots while filling in legacy local ranks.
+    const saved = new Set(parent.subthreadOrder ?? []);
+    const order = [...saved, ...this.orderStoredSubthreads(parent, siblings)
+      .map((child) => child.id).filter((id) => !saved.has(id))]
+      .filter((id) => !promotedIds.has(id));
+    const index = order.indexOf(insertionId);
+    order.splice(index < 0 ? order.length : index, index < 0 ? 0 : 1, ...promotedIds);
+    for (const { state: child } of ordered) {
+      this.putThread(buildThreadIdentityKey(child.backend, child.threadId), {
+        ...child, parentThreadId: parent.threadId, parentThreadBackend: parentBackend,
+      });
+    }
+    if (JSON.stringify(order) !== JSON.stringify(parent.subthreadOrder ?? [])) {
+      this.putThread(parentKey, { ...parent, subthreadOrder: order });
+    }
+    if (promotedIds.size) {
+      this.putThread(key, { ...archived, subthreadOrder: archived.subthreadOrder?.filter((id) => !promotedIds.has(id)) });
+    }
+  }
+
+  readArchiveSubthreadChildren(identity: { backend: AppServerBackendKind; threadId: string }): NavigationThreadSummary[] {
+    const parent = this.getThread(buildThreadIdentityKey(identity.backend, identity.threadId));
+    const children = this.readLocalSubthreadChildren(identity);
+    const summaries = new Map<string, NavigationThreadSummary>();
+    for (const backend of new Set(children.map((child) => child.backend))) {
+      const row = this.stateDb.raw.prepare(`SELECT payload FROM provider_thread_snapshots
+        WHERE backend = ? AND schema_version = 1`).get(backend) as { payload: string } | undefined;
+      if (!row) continue;
+      for (const summary of JSON.parse(row.payload) as NavigationThreadSummary[]) {
+        summaries.set(buildThreadIdentityKey(backend, summary.id), summary);
+      }
+    }
+    return this.orderStoredSubthreads(parent ?? { ...identity, executionMode: "default", extraLinkedDirectories: [] }, children)
+      .map(({ state, createdAt }) => ({
+        title: state.threadId, titleSource: "derived" as const, linkedDirectories: [], inbox: { inInbox: false },
+        ...summaries.get(buildThreadIdentityKey(state.backend, state.threadId)),
+        ...state, id: state.threadId, source: state.backend, createdAt,
+      }));
+  }
+
+  /** Preserve direct-child slots before any peer can publish new membership. */
+  prepareArchiveSubthreadPromotion(promotion: ArchiveSubthreadPromotion, instanceId: string): void {
+    this.stateDb.raw.transaction(() => {
+      this.applyArchiveSubthreadPromotion({ ...promotion, dryRun: true }, instanceId);
+      const { backend, threadId } = promotion.archived;
       const key = buildThreadIdentityKey(backend, threadId);
       const current = this.getThread(key) ?? { backend, threadId, executionMode: "default" as const, extraLinkedDirectories: [] };
-      if (current.archiveRetentionStartedAt !== undefined) return [];
-      return [{ key, state: { ...current, archiveRetentionStartedAt: now } }];
-    });
-    if (!updates.length) return;
-    this.stateDb.raw.transaction(() => {
-      for (const { key, state } of updates) this.putThread(key, state);
+      const order = promotion.children.map(({ ref }) => ref.threadId);
+      // Materialize legacy ranks once before the first peer commit. They are
+      // also the recovery slots when an owner event races a transport failure.
+      if (JSON.stringify(current.subthreadOrder ?? []) !== JSON.stringify(order)) {
+        this.putThread(key, { ...current, subthreadOrder: order });
+      }
+      promotion.expectedChildOrder = order;
     })();
+  }
+
+  /** One commit per participating owner, including cached membership and ranks.
+   * Never create a threads overlay for a row owned by another instance. */
+  applyArchiveSubthreadPromotion(promotion: ArchiveSubthreadPromotion, instanceId: string): string[] {
+    const { archived, anchor, parent, children } = promotion;
+    const parentKey = parent && buildThreadIdentityKey(parent.backend, parent.threadId);
+    const selectPin = this.stateDb.raw.prepare(`SELECT payload FROM remote_thread_pins
+      WHERE instance_id = ? AND backend = ? AND thread_id = ? AND revoked_at IS NULL`);
+    const pinPayload = (owner: string, backend: AppServerBackendKind, id: string) => {
+      const row = selectPin.get(owner, backend, id) as { payload: string } | undefined;
+      return row ? JSON.parse(row.payload) as { summary?: NavigationThreadSummary; instanceLabel: string; pinnedVia?: RemoteThreadPin["pinnedVia"] } : undefined;
+    };
+    const matches = (state: { parentThreadId?: string; parentThreadBackend?: AppServerBackendKind; parentThreadInstanceId?: string },
+      owner: string, destination: typeof parent): boolean => destination === null ? !state.parentThreadId
+      : state.parentThreadId === destination.threadId
+        && (state.parentThreadBackend ?? archived.backend) === destination.backend
+        && state.parentThreadInstanceId === (destination.instanceId === owner ? undefined : destination.instanceId);
+    const patch = (summary: NavigationThreadSummary, owner: string): NavigationThreadSummary => ({
+      ...summary, parentThreadId: parent?.threadId, parentThreadBackend: parent?.backend,
+      parentThreadInstanceId: parent && parent.instanceId !== owner ? parent.instanceId : undefined,
+    });
+    return this.stateDb.raw.transaction(() => {
+      if (archived.instanceId === instanceId) {
+        const current = this.getThread(buildThreadIdentityKey(archived.backend, archived.threadId));
+        const expected = promotion.expectedParent;
+        if (expected === null ? Boolean(current?.parentThreadId)
+          : current?.parentThreadId !== expected.threadId
+            || (current.parentThreadBackend ?? archived.backend) !== expected.backend
+            || current.parentThreadInstanceId !== expected.instanceId) {
+          throw new Error("Thread grouping changed before archive. Refresh the group and try again.");
+        }
+        const local = this.readLocalSubthreadChildren(archived).map((child) => `${instanceId}:${child.backend}:${child.threadId}`);
+        const remoteRows = this.stateDb.raw.prepare(`SELECT instance_id, backend, thread_id, payload FROM remote_thread_pins
+          WHERE revoked_at IS NULL AND CASE WHEN json_valid(payload)
+            THEN json_extract(payload, '$.summary.parentThreadId') = ?
+              AND json_extract(payload, '$.summary.parentThreadInstanceId') = ? END`)
+          .all(archived.threadId, instanceId) as { instance_id: string; backend: AppServerBackendKind; thread_id: string; payload: string }[];
+        const remote = remoteRows.filter(({ payload }) => {
+          const summary = (JSON.parse(payload) as { summary: NavigationThreadSummary }).summary;
+          return (summary.parentThreadBackend ?? summary.source) === archived.backend && summary.archivedAt === undefined;
+        }).map((row) => `${row.instance_id}:${row.backend}:${row.thread_id}`);
+        const actual = new Set([...local, ...remote]);
+        const planned = new Set(children.map(({ ref }) => `${remotePinInstanceId(ref)}:${ref.backend}:${ref.threadId}`));
+        // Owner events may already have refreshed a planned child's cached
+        // parent to the destination. Its guarded owner mutation is replayable;
+        // only an unexpected new source member invalidates this boundary.
+        if ([...actual].some((identity) => !planned.has(identity))
+          || JSON.stringify(current?.subthreadOrder ?? []) !== JSON.stringify(promotion.expectedChildOrder)) {
+          throw new Error("Thread children changed before archive. Refresh the group and try again.");
+        }
+      }
+      const localChildren = children.filter(({ ref }) => remotePinInstanceId(ref) === instanceId);
+      for (const { ref } of localChildren) {
+        const current = this.getThread(buildThreadIdentityKey(ref.backend, ref.threadId));
+        if (!current || current.archiveRetentionStartedAt !== undefined || current.archiveTombstonedAt !== undefined
+          || (!matches(current, instanceId, archived) && !matches(current, instanceId, parent))) {
+          throw new Error("Thread parent changed. Refresh the group before archiving.");
+        }
+      }
+      const ownParent = parent?.instanceId === instanceId ? this.getThread(parentKey!) : undefined;
+      for (const { ref } of children) {
+        const owner = remotePinInstanceId(ref);
+        if (owner === instanceId) continue;
+        const cached = pinPayload(owner, ref.backend, ref.threadId)?.summary;
+        if (cached && !matches(cached, owner, archived) && !matches(cached, owner, parent)) {
+          throw new Error("Cached thread parent changed. Refresh the group before archiving.");
+        }
+      }
+      if (parent?.instanceId === instanceId) {
+        const archivedState = anchor.instanceId === instanceId
+          ? this.getThread(buildThreadIdentityKey(anchor.backend, anchor.threadId))
+          : pinPayload(anchor.instanceId, anchor.backend, anchor.threadId)?.summary;
+        if (!ownParent || ownParent.archiveRetentionStartedAt !== undefined || ownParent.archiveTombstonedAt !== undefined
+          || !archivedState || !matches(archivedState, anchor.instanceId, parent)) {
+          throw new Error("The surviving ancestor or archived row changed. Refresh the group before archiving.");
+        }
+      }
+      // The ancestor may have committed even when its acknowledgment or the
+      // source's final commit was lost. Its existing ranks, including newer
+      // manual moves, then supersede this request's original anchor slot.
+      const preserveParentOrder = ownParent?.subthreadOrder
+        && !ownParent.subthreadOrder.includes(anchor.threadId)
+        && children.every(({ ref }) => {
+          const owner = remotePinInstanceId(ref);
+          const state = owner === instanceId ? this.getThread(buildThreadIdentityKey(ref.backend, ref.threadId))
+            : pinPayload(owner, ref.backend, ref.threadId)?.summary;
+          return ownParent.subthreadOrder!.includes(ref.threadId) && state && matches(state, owner, parent);
+        });
+      if (promotion.dryRun) return ownParent?.subthreadOrder ?? [];
+      for (const { ref } of localChildren) {
+        const current = this.getThread(buildThreadIdentityKey(ref.backend, ref.threadId))!;
+        if (matches(current, instanceId, parent)) continue;
+        this.setThreadParentState({ backend: ref.backend, threadId: ref.threadId,
+          parentThreadId: parent?.threadId ?? null, parentThreadBackend: parent?.backend,
+          parentThreadInstanceId: parent?.instanceId === instanceId ? undefined : parent?.instanceId,
+          expectedParent: { threadId: archived.threadId, backend: archived.backend,
+            instanceId: archived.instanceId === instanceId ? undefined : archived.instanceId } });
+      }
+      const writePin = this.stateDb.raw.prepare(`INSERT INTO remote_thread_pins(instance_id, backend, thread_id, added_at, payload)
+        VALUES (?, ?, ?, ?, ?) ON CONFLICT(instance_id, backend, thread_id) DO UPDATE SET payload = excluded.payload`);
+      for (const entry of children) {
+        const owner = remotePinInstanceId(entry.ref);
+        if (owner === instanceId) continue;
+        const existing = pinPayload(owner, entry.ref.backend, entry.ref.threadId);
+        if (!existing && !ownParent) continue;
+        // Cached summaries retain the relationship as expressed on the child
+        // owner, even when the viewer owns the destination parent.
+        const next = { ...existing, instanceLabel: existing?.instanceLabel ?? entry.instanceLabel,
+          pinnedVia: existing?.pinnedVia ?? "child", summary: patch(entry.summary, owner) };
+        if (JSON.stringify(existing) !== JSON.stringify(next)) {
+          writePin.run(owner, entry.ref.backend, entry.ref.threadId, Date.now(), JSON.stringify(next));
+        }
+      }
+      if (parent && parent.instanceId !== instanceId && promotion.parentSummary && localChildren.length) {
+        const existing = pinPayload(parent.instanceId, parent.backend, parent.threadId);
+        if (!existing) writePin.run(parent.instanceId, parent.backend, parent.threadId, Date.now(), JSON.stringify({
+          instanceLabel: promotion.parentInstanceLabel ?? parent.instanceId, pinnedVia: "companion", summary: promotion.parentSummary,
+        }));
+      }
+      if (archived.instanceId === instanceId) {
+        const key = buildThreadIdentityKey(archived.backend, archived.threadId);
+        const current = this.getThread(key);
+        const ids = new Set(children.map(({ ref }) => ref.threadId));
+        const order = current?.subthreadOrder?.filter((id) => !ids.has(id));
+        if (current && JSON.stringify(order) !== JSON.stringify(current.subthreadOrder)) {
+          this.putThread(key, { ...current, subthreadOrder: order });
+        }
+      }
+      if (!ownParent) return [];
+      if (preserveParentOrder) return ownParent.subthreadOrder!;
+      // Materialize the owner's current order, preserving unloaded remote slots.
+      const saved = new Set(ownParent.subthreadOrder ?? []);
+      const remoteRows = this.stateDb.raw.prepare(`SELECT payload FROM remote_thread_pins
+        WHERE revoked_at IS NULL AND CASE WHEN json_valid(payload)
+          THEN json_extract(payload, '$.summary.parentThreadId') = ?
+            AND json_extract(payload, '$.summary.parentThreadInstanceId') = ? END`)
+        .all(parent!.threadId, instanceId) as { payload: string }[];
+      const remoteSiblings = remoteRows.map(({ payload }) => (JSON.parse(payload) as { summary: NavigationThreadSummary }).summary)
+        .filter((summary) => (summary.parentThreadBackend ?? summary.source) === parent!.backend
+          && (summary.archivedAt === undefined || summary.id === anchor.threadId));
+      const siblings = [...this.readArchiveSubthreadChildren(parent!), ...remoteSiblings];
+      const prior = [...saved, ...sortSubthreadSummaries(ownParent, siblings).map(({ id }) => id).filter((id) => !saved.has(id))];
+      const promotedIds = children.map(({ ref }) => ref.threadId);
+      const promoted = new Set(promotedIds);
+      const order = prior.filter((id) => !promoted.has(id));
+      const index = order.indexOf(anchor.threadId);
+      order.splice(index < 0 ? order.length : index, index < 0 ? 0 : 1, ...promotedIds);
+      if (JSON.stringify(order) !== JSON.stringify(ownParent.subthreadOrder)) {
+        this.putThread(parentKey!, { ...ownParent, subthreadOrder: order });
+      }
+      return order;
+    })();
+  }
+
+  private readSubthreadParentCandidates(threadId: string): ThreadOverlayState[] {
+    const rows = this.stateDb.raw.prepare(`
+      SELECT payload FROM threads
+      WHERE CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') = ? END
+    `).all(threadId) as { payload: string }[];
+    return rows.map(({ payload }) => normalizeThreadOverlayState(JSON.parse(payload) as ThreadOverlayState));
+  }
+
+  private readLocalSubthreadChildren(
+    identity: { backend: ThreadOverlayState["backend"]; threadId: string },
+    includeArchivedId?: string,
+  ): ThreadOverlayState[] {
+    const rows = this.stateDb.raw.prepare(`
+      SELECT payload FROM threads
+      WHERE CASE WHEN json_valid(payload) THEN json_extract(payload, '$.parentThreadId') = ?
+        AND json_extract(payload, '$.parentThreadInstanceId') IS NULL END
+    `).all(identity.threadId) as { payload: string }[];
+    const candidates = this.readSubthreadParentCandidates(identity.threadId);
+    const unambiguousParent = candidates.length === 1 && candidates[0]!.backend === identity.backend;
+    return rows.map(({ payload }) => normalizeThreadOverlayState(JSON.parse(payload) as ThreadOverlayState))
+      .filter((child) => this.namesSubthreadParentBackend(child, identity.backend, unambiguousParent)
+        && (child.threadId === includeArchivedId
+          || (child.archiveTombstonedAt === undefined && child.archiveRetentionStartedAt === undefined)));
+  }
+
+  private orderStoredSubthreads(parent: ThreadOverlayState, children: ThreadOverlayState[]) {
+    const ranked = new Set(parent.subthreadOrder ?? []);
+    const createdAt = new Map<string, number>();
+    // Saved order is authoritative. Only old, unranked links need the
+    // provider snapshot's creation times to reproduce the tray fallback.
+    for (const backend of new Set(children.filter((child) => !ranked.has(child.threadId)).map((child) => child.backend))) {
+      const rows = this.stateDb.raw.prepare(`
+        SELECT json_extract(value, '$.id') AS id, json_extract(value, '$.createdAt') AS created_at
+        FROM provider_thread_snapshots, json_each(payload)
+        WHERE backend = ? AND schema_version = 1
+      `).all(backend) as { id: string; created_at: number | null }[];
+      for (const row of rows) if (row.created_at !== null) createdAt.set(buildThreadIdentityKey(backend, row.id), row.created_at);
+    }
+    return sortSubthreadSummaries(parent, children.map((child) => ({
+      state: child, id: child.threadId,
+      createdAt: createdAt.get(buildThreadIdentityKey(child.backend, child.threadId)) ?? child.handoffOrigin?.createdAt,
+    })));
   }
 
   async forgetThreadArchiveStates(records: Array<{ backend: ThreadOverlayState["backend"]; threadId: string }>): Promise<void> {
@@ -9788,6 +10237,14 @@ function linkedDirectoriesEquivalent(
     normalizeLinkedDirectoryPath(left.worktreePath) ===
     normalizeLinkedDirectoryPath(right.worktreePath)
   );
+}
+
+function sameWorktreeCheckout(
+  left: LinkedDirectorySummary,
+  right: LinkedDirectorySummary,
+): boolean {
+  return normalizeLinkedDirectoryPath(left.worktreePath ?? left.path)
+    === normalizeLinkedDirectoryPath(right.worktreePath ?? right.path);
 }
 
 function normalizeLinkedDirectoryPath(value: string | undefined): string | undefined {
@@ -10664,7 +11121,9 @@ function toThreadToolInvocationAlertRowParams(
  * produce the same rollup and the viewer counts it once.
  */
 function rollUpBackgroundHelperRows(
-  rows: Array<ThreadUsageLineRow & { activity_started_at: number | null; activity_completed_at: number | null }>,
+  rows: Array<ThreadUsageLineRow & {
+    activity_started_at: number | null; activity_completed_at: number | null; rollup_count?: number;
+  }>,
   window: { from: number; to: number },
 ): Array<{ line: ThreadUsageLineRecord; rollup: UsageActivityRollup; updatedAt: number }> {
   const step = usageRollupStep(window.from, window.to);
@@ -10675,13 +11134,17 @@ function rollUpBackgroundHelperRows(
     const kind = (row.source_item_id ?? "").split(":")[1] || "helper";
     const threadId = row.parent_thread_id ?? row.thread_id;
     const bucket = Math.floor(completed / step) * step;
+    // Keep the wire ids compatible with older owners sharing this ledger.
+    // Backend belongs in the local grouping key too; viewers already include
+    // it when deduplicating the wire id across owners.
     const groupKey = ["monitor-rollup", row.provider, kind, threadId, row.model ?? "",
       row.price_status, row.currency, window.from, window.to, bucket].join(":");
     const usageLineId = row.account_key ? `${groupKey}:${row.account_key}` : groupKey;
+    const identity = JSON.stringify([row.backend, usageLineId]);
     const line = threadUsageLineFromRow(row);
-    const existing = groups.get(usageLineId);
+    const existing = groups.get(identity);
     if (!existing) {
-      groups.set(usageLineId, {
+      groups.set(identity, {
         line: {
           backend: line.backend, provider: line.provider, threadId, usageLineId,
           ...(line.accountKey ? { accountKey: line.accountKey } : {}),
@@ -10698,7 +11161,7 @@ function rollUpBackgroundHelperRows(
           cacheWriteInputCostMicros: line.cacheWriteInputCostMicros, outputCostMicros: line.outputCostMicros,
           totalCostMicros: line.totalCostMicros,
         } as ThreadUsageLineRecord,
-        rollup: { kind, count: 1, groupKey },
+        rollup: { kind, count: row.rollup_count ?? 1, groupKey },
         updatedAt: row.updated_at,
       });
       continue;
@@ -10719,7 +11182,7 @@ function rollUpBackgroundHelperRows(
     sum.cacheWriteInputCostMicros = (sum.cacheWriteInputCostMicros ?? 0) + (line.cacheWriteInputCostMicros ?? 0);
     sum.outputCostMicros += line.outputCostMicros;
     sum.totalCostMicros += line.totalCostMicros;
-    existing.rollup.count += 1;
+    existing.rollup.count += row.rollup_count ?? 1;
     existing.updatedAt = Math.max(existing.updatedAt, row.updated_at);
   }
   return [...groups.values()];
@@ -11125,6 +11588,7 @@ export type OverlayStoreLike = Pick<
   upsertThreadMessageOrigin?: SqliteOverlayStore["upsertThreadMessageOrigin"];
   readThreadMessageOrigins?: SqliteOverlayStore["readThreadMessageOrigins"];
   setPinnedGroupCollapsed?: SqliteOverlayStore["setPinnedGroupCollapsed"];
+  setNavigationResumeState?: SqliteOverlayStore["setNavigationResumeState"];
   listRecentThreadLockNotes?: SqliteOverlayStore["listRecentThreadLockNotes"];
   rememberRecentThreadLockNote?: SqliteOverlayStore["rememberRecentThreadLockNote"];
   forgetRecentThreadLockNote?: SqliteOverlayStore["forgetRecentThreadLockNote"];

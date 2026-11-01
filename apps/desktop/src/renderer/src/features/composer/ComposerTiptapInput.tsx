@@ -17,7 +17,7 @@ import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-up
 import Mention from "@tiptap/extension-mention";
 import StarterKit from "@tiptap/starter-kit";
 import { closeHistory } from "prosemirror-history";
-import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
+import { EditorContent, Extension, useEditor, type JSONContent } from "@tiptap/react";
 import {
   parseThreadUrl,
   readSkillOrigin,
@@ -40,6 +40,7 @@ import { findHashReferenceTrigger } from "../../lib/hash-references";
 import { parsePullRequestUrl } from "../../lib/pull-request-links";
 import { useComposerPullRequestHover } from "./useComposerPullRequestHover";
 import { tildifyPath } from "../../lib/tildify-path";
+import { ensureStatusPulse } from "../../lib/status-pulse";
 import {
   ChipContextMenu,
   type ChipContextMenuPosition,
@@ -257,6 +258,10 @@ const SkillMention = Mention.extend({
       const modifiers = readMentionPrChipModifiers(node.attrs) ?? [
         "pr-chip--unknown",
       ];
+      if (modifiers.includes("pr-chip--checks-running")) {
+        // Tiptap builds this DOM itself, so no React ref can start the pulse.
+        ensureStatusPulse();
+      }
       return [
         "span",
         {
@@ -400,8 +405,11 @@ const SkillMention = Mention.extend({
   },
 });
 
+// The composer offers only the marks it can send. Markdown has no underline,
+// so an Underline mark would show formatting the reply silently drops.
 const MarkdownStarterKit = StarterKit.configure({
   link: false,
+  underline: false,
   undoRedo: {
     depth: 500,
     newGroupDelay: 750,
@@ -417,11 +425,75 @@ const PlainTextStarterKit = StarterKit.configure({
   link: false,
   listItem: false,
   orderedList: false,
+  underline: false,
   undoRedo: {
     depth: 500,
     newGroupDelay: 750,
   },
 });
+
+// Without Underline's keymap, Chromium applies its own ⌘U to the
+// contenteditable. ProseMirror parses that <u> as plain text but leaves it on
+// screen. Claim the chord with no effect, under the same keys Underline used,
+// so ⇧⌘U still reaches this keymap when no thread hotkey takes it.
+const IgnoreUnderlineShortcut = Extension.create({
+  name: "ignoreUnderlineShortcut",
+  addKeyboardShortcuts() {
+    return {
+      "Mod-u": () => true,
+      "Mod-U": () => true,
+    };
+  },
+});
+
+// Drafts saved before underline was removed can carry the mark. Tiptap
+// replaces a document with an unknown mark by an empty one, so drop it first.
+const REMOVED_MARK_TYPES = new Set(["underline"]);
+
+function withoutRemovedMarks(content: JSONContent): JSONContent {
+  const marks = content.marks?.filter((mark) => !REMOVED_MARK_TYPES.has(mark.type));
+  const children = content.content?.map(withoutRemovedMarks);
+  const marksChanged = marks !== undefined && marks.length !== content.marks?.length;
+  const childrenChanged = children?.some((child, index) => child !== content.content?.[index]);
+  if (!marksChanged && !childrenChanged) {
+    return content;
+  }
+
+  const next: JSONContent = { ...content };
+  if (marksChanged) {
+    if (marks.length > 0) {
+      next.marks = marks;
+    } else {
+      delete next.marks;
+    }
+  }
+  if (childrenChanged) {
+    next.content = joinAdjacentTextWithSameMarks(children!);
+  }
+  return next;
+}
+
+// ProseMirror joins neighboring text with equal marks. Match it, so the
+// cleaned document compares equal to the one the editor reports back.
+function joinAdjacentTextWithSameMarks(content: JSONContent[]): JSONContent[] {
+  const joined: JSONContent[] = [];
+  for (const node of content) {
+    const previous = joined[joined.length - 1];
+    if (
+      previous?.type === "text"
+      && node.type === "text"
+      && JSON.stringify(previous.marks ?? []) === JSON.stringify(node.marks ?? [])
+    ) {
+      joined[joined.length - 1] = {
+        ...previous,
+        text: `${previous.text ?? ""}${node.text ?? ""}`,
+      };
+    } else {
+      joined.push(node);
+    }
+  }
+  return joined;
+}
 
 function splitTextContent(text: string): JSONContent[] {
   const nodes: JSONContent[] = [];
@@ -2683,9 +2755,14 @@ export const ComposerTiptapInput = forwardRef<
   const extensions = useMemo(
     () => [
       props.markdownConversion ? MarkdownStarterKit : PlainTextStarterKit,
+      IgnoreUnderlineShortcut,
       SkillMention,
     ],
     [props.markdownConversion],
+  );
+  const editorDocument = useMemo(
+    () => props.editorDocument && withoutRemovedMarks(props.editorDocument),
+    [props.editorDocument],
   );
 
   propsRef.current = props;
@@ -2794,7 +2871,7 @@ export const ComposerTiptapInput = forwardRef<
   };
   const initialContent = useMemo(
     () =>
-      props.editorDocument ??
+      editorDocument ??
       buildTiptapContent(props.value, props.skillTokens, {
         markdownConversion: props.markdownConversion,
       }),
@@ -3262,8 +3339,8 @@ export const ComposerTiptapInput = forwardRef<
     let current = readTiptapContent(editor, readMode);
     let currentSignature = getContentSignature(current);
     const currentEditorDocumentSignature = JSON.stringify(editor.getJSON());
-    const nextEditorDocumentSignature = props.editorDocument
-      ? JSON.stringify(props.editorDocument)
+    const nextEditorDocumentSignature = editorDocument
+      ? JSON.stringify(editorDocument)
       : undefined;
     if (currentSignature === propsSignature) {
       if (
@@ -3285,7 +3362,7 @@ export const ComposerTiptapInput = forwardRef<
       pushControlledUndoEntry(editor);
       controlledRedoStackRef.current = [];
       closeEditorHistory(editor);
-      editor.commands.setContent(props.editorDocument!, { emitUpdate: false });
+      editor.commands.setContent(editorDocument!, { emitUpdate: false });
       closeEditorHistory(editor);
       applySelectionRequest(editor, props.selectionRequest);
       current = readTiptapContent(editor, readMode);
@@ -3329,7 +3406,7 @@ export const ComposerTiptapInput = forwardRef<
     if (nextEditorDocumentSignature && loadedEditorDocument) {
       if (JSON.stringify(editor.getJSON()) !== nextEditorDocumentSignature) {
         closeEditorHistory(editor);
-        editor.commands.setContent(props.editorDocument!, { emitUpdate: false });
+        editor.commands.setContent(editorDocument!, { emitUpdate: false });
         closeEditorHistory(editor);
       }
       const restored = readTiptapContent(editor, readMode);
@@ -3365,7 +3442,7 @@ export const ComposerTiptapInput = forwardRef<
     }
   }, [
     editor,
-    props.editorDocument,
+    editorDocument,
     props.selectionRequest,
     props.skillTokens,
     props.value,

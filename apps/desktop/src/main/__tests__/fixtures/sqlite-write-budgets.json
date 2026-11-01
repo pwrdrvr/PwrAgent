@@ -42,6 +42,7 @@
     "statements": 140
   },
   "agent-thread-named-environment-start": {"commits": 5, "note": "One agent-created thread with a named environment: thread start bookkeeping, setup hydration and runtime persistence; no per-event writes. ~74 KB per thread: ~7.4 MB/day at 100 agent-created threads/day, 0 MB/day idle.", "observedWalBytes": 74160, "rowsChanged": 5, "statements": 5},
+  "all-pinned-project-thread-creation": {"commits": 4, "note": "One new thread including its automatic pin: 4 commits, ~0.054 MB/thread and ~5.4 MB/day at 100 starts/day; 0 MB/day idle.", "observedWalBytes": 53560, "rowsChanged": 4, "statements": 4},
   "archive-cleanup-130-checkpoint-recover-drain": {"commits": 3, "note": "130 jobs: one quit checkpoint, one recovery claim, one drained checkpoint deletion; 3 commits per quit/restart cycle, no per-item or timer writes. At 10 cycles/day and 32 KiB/commit, about 0.94 MB/day; idle is 0 MB/day.", "observedWalBytes": 90640, "rowsChanged": 4, "statements": 4},
   "archive-cleanup-read-only-inventory": {
     "commits": 0,
@@ -78,6 +79,9 @@
     "rowsChanged": 100,
     "statements": 100
   },
+  "archive-retention-restore": {"commits": 1, "note": "One restore boundary clears archive markers and records the restore watermark in one commit (~0.012 MB); 10 restores/day cost ~0.12 MB/day. No recurring writes.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "archive-subthread-promotion": {"commits": 1, "note": "One archive boundary promotes 100 children in one commit (~0.033 MB); 10 such archives/day cost ~0.33 MB/day. No per-child commits or idle writes (0 MB/day).", "observedWalBytes": 32960, "rowsChanged": 103, "statements": 103},
+  "archive-subthread-promotion-repeat": {"commits": 0, "note": "Repeated archive notification or resumed cleanup after promotion: zero commits, 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "archived-worktree-repair-once-marker": {
     "commits": 2,
     "note": "One claim and one completion for a 501-thread pass plus a completed-startup no-op: 2 commits total, no per-item or timer writes; about 0.02 MB once and 0 MB/day afterward.",
@@ -323,6 +327,10 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "federation-archive-ancestor-promotion-repeat": {"commits": 0, "note": "Replay after a committed ancestor promotion preserves placement and newer manual ranks with zero SQLite writes; 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "federation-archive-leaf-preparation": {"commits": 0, "note": "A leaf with an uncached remote parent needs no promotion, peer access, or SQLite writes; 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "federation-archive-subthread-promotion": {"commits": 6, "note": "100 direct children (98 unranked) across four owners: 6 boundary commits including recovery slots and viewer cache (~0.255 MB WAL); 10 such archives/day cost ~2.55 MB/day. No per-child commits; idle cost 0 MB/day.", "observedWalBytes": 255440, "rowsChanged": 306, "statements": 306},
+  "federation-archive-subthread-promotion-repeat": {"commits": 0, "note": "Repeated completed archive promotion: zero commits, 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "federation-owner-project-pages": {
     "commits": 0,
     "note": "cold and warm project-only reads from read-only provider inventory; no navigation maintenance",
@@ -359,8 +367,8 @@
     "statements": 1001
   },
   "federation-star-map-unchanged-reconnect": {
-    "commits": 11,
-    "note": "11 identical arrangement pages on reconnect; no changed rows or WAL",
+    "commits": 0,
+    "note": "11 identical arrangement pages on reconnect; read-only transactions flush no pages and count as zero write commits",
     "observedWalBytes": 0,
     "rowsChanged": 0,
     "statements": 0
@@ -597,8 +605,8 @@
     "statements": 10
   },
   "messaging-project-move-picker": {
-    "commits": 6,
-    "note": "one bounded project-picker page through the shared messaging controller, excluding binding setup",
+    "commits": 5,
+    "note": "one bounded project-picker page through the shared messaging controller, excluding binding setup; five write commits, read-only transactions excluded",
     "observedWalBytes": 78280,
     "rowsChanged": 5,
     "statements": 5
@@ -757,6 +765,20 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "navigation-resume-state": {
+    "commits": 1,
+    "note": "one changed session, duplicate/reordered snapshots and ten reads: one commit; at 1000 navigation actions/day the measured WAL cost is about 8 MB/day",
+    "observedWalBytes": 8272,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "navigation-resume-state-full": {
+    "commits": 1,
+    "note": "one selection change in a near-12K snapshot; duplicate saves and ten reads add no commits; 1000 navigation changes/day cost about 33.0 MB/day; no idle writes",
+    "observedWalBytes": 32960,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "navigation-summaryless-pin-hydration": {
     "commits": 1,
     "note": "One atomic fill per summaryless mount; 20 later exact reads add no commits. At 200 new mounts/day and 4 KiB/page: ~0.8 MB/day per dirty page. Existing mounts add 0 MB/day.",
@@ -766,10 +788,10 @@
   },
   "navigation-unlink-relative-pin": {
     "commits": 3,
-    "note": "One explicit unlink plus owner pin and relative placement: three commits; 100 children/day at ~4 KiB/commit is ~1.2 MB/day; no idle writes",
+    "note": "One explicit unlink (child row plus the old parent's order) plus owner pin and relative placement: three commits; 100 children/day at ~4 KiB/commit is ~1.2 MB/day; no idle writes",
     "observedWalBytes": 0,
-    "rowsChanged": 3,
-    "statements": 3
+    "rowsChanged": 4,
+    "statements": 4
   },
   "navigation-unread-initial-baseline": {
     "commits": 1,
@@ -858,8 +880,8 @@
     "statements": 0
   },
   "pr-activity-unchanged-observations": {
-    "commits": 200,
-    "note": "100 unchanged conflict observations after dispatch plus activity reads: 200 read-only transaction commits, zero write statements/rows/WAL bytes; 0 MB/day additional WAL",
+    "commits": 0,
+    "note": "100 unchanged conflict observations after dispatch plus activity reads: read-only transactions, zero write commits/statements/rows/WAL bytes; 0 MB/day additional WAL",
     "observedWalBytes": 0,
     "rowsChanged": 0,
     "statements": 0
@@ -1229,6 +1251,20 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "thread-todo-send-message": {
+    "commits": 1,
+    "note": "One operator Send click: one card-completion commit, no idle or per-event writes; ~8 KB/send, ~0.4 MB/day at 50 sends. Existing correspondence and queue budgets cover delivery.",
+    "observedWalBytes": 8240,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "thread-todo-start-with-plan": {
+    "commits": 2,
+    "note": "one Start thread from a card with a 3-step plan: one commit for the new thread's plan card and one for marking the start card done; only on an operator's Start click, never per turn or event; ~24 KB WAL per start, ~1.2 MB/day at 50 starts, half of it the plan card",
+    "observedWalBytes": 24720,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "thread-usage-activities-move": {
     "commits": 5,
     "note": "one-time move of 12 legacy payloads holding 40 usage activities each, in 72 KB slices: one commit per slice, the last one setting the marker. Runs once per profile; a production copy holds 10.6 MB of activities across 2,482 rows",
@@ -1356,6 +1392,55 @@
     "rowsChanged": 26,
     "statements": 27
   },
+  "usage-activity-helper-write": {
+    "commits": 1,
+    "note": "One real finalized helper line with parent summaries: one existing commit, 65,920 bytes (~33.0 MB/day at 500/day), no persistent interval maintenance",
+    "observedWalBytes": 65920,
+    "rowsChanged": 3,
+    "statements": 3
+  },
+  "usage-activity-minute-boundaries": {
+    "commits": 100,
+    "note": "100 existing live-row commits, one minute apart: 412,000 bytes WAL (~5.9 MB/day at 1/minute), no additional activity-index writes",
+    "observedWalBytes": 412000,
+    "rowsChanged": 100,
+    "statements": 100
+  },
+  "usage-activity-turn-lifecycle": {
+    "commits": 2,
+    "note": "One real pending turn insert and authoritative completion: two existing commits, existing thread-index lookup, no persistent interval maintenance; measured 70,040 bytes (~7.0 MB/day at 100 turns/day)",
+    "observedWalBytes": 70040,
+    "rowsChanged": 4,
+    "statements": 4
+  },
+  "usage-activity-within-minute": {
+    "commits": 100,
+    "note": "100 existing live-row commits within ten seconds: 412,000 bytes WAL, no additional activity-index writes",
+    "observedWalBytes": 412000,
+    "rowsChanged": 100,
+    "statements": 100
+  },
+  "usage-cadence-burst-active": {"commits":1,"note":"Contrived burst protocol replay: 500 observations, 1 existing bulk flushes, active phase; idle is 30 minutes with zero writes; no persistence cadence change; 6.6 MB/day at 100 such bursts/day","observedWalBytes":65952,"rowsChanged":3,"statements":3},
+  "usage-cadence-burst-idle": {"commits":0,"note":"Contrived burst protocol replay: 500 observations, 1 existing bulk flushes, idle phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.0 MB/day at idle","observedWalBytes":0,"rowsChanged":0,"statements":0},
+  "usage-cadence-burst-terminal": {"commits":1,"note":"Contrived burst protocol replay: 500 observations, 1 existing bulk flushes, terminal phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.4 MB/day at 100 turn completions/day","observedWalBytes":4120,"rowsChanged":1,"statements":1},
+  "usage-cadence-duplicate-10hz-active": {"commits":60,"note":"Contrived duplicate-10hz protocol replay: 600 observations, 60 existing bulk flushes, active phase; idle is 30 minutes with zero writes; no persistence cadence change; 4645.4 MB/day at continuous 60-second replay windows for 24 hours","observedWalBytes":3225992,"rowsChanged":180,"statements":180},
+  "usage-cadence-duplicate-10hz-idle": {"commits":0,"note":"Contrived duplicate-10hz protocol replay: 600 observations, 60 existing bulk flushes, idle phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.0 MB/day at idle","observedWalBytes":0,"rowsChanged":0,"statements":0},
+  "usage-cadence-duplicate-10hz-terminal": {"commits":1,"note":"Contrived duplicate-10hz protocol replay: 600 observations, 60 existing bulk flushes, terminal phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.4 MB/day at 100 turn completions/day","observedWalBytes":4120,"rowsChanged":1,"statements":1},
+  "usage-cadence-request-boundaries-active": {"commits":12,"note":"Contrived request-boundaries protocol replay: 12 observations, 12 existing bulk flushes, active phase; idle is 30 minutes with zero writes; no persistence cadence change; 943.4 MB/day at continuous 60-second replay windows for 24 hours","observedWalBytes":655112,"rowsChanged":36,"statements":36},
+  "usage-cadence-request-boundaries-idle": {"commits":0,"note":"Contrived request-boundaries protocol replay: 12 observations, 12 existing bulk flushes, idle phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.0 MB/day at idle","observedWalBytes":0,"rowsChanged":0,"statements":0},
+  "usage-cadence-request-boundaries-terminal": {"commits":1,"note":"Contrived request-boundaries protocol replay: 12 observations, 12 existing bulk flushes, terminal phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.4 MB/day at 100 turn completions/day","observedWalBytes":4120,"rowsChanged":1,"statements":1},
+  "usage-cadence-steady-10hz-active": {"commits":60,"note":"Contrived steady-10hz protocol replay: 600 observations, 60 existing bulk flushes, active phase; idle is 30 minutes with zero writes; no persistence cadence change; 4645.4 MB/day at continuous 60-second replay windows for 24 hours","observedWalBytes":3225992,"rowsChanged":180,"statements":180},
+  "usage-cadence-steady-10hz-idle": {"commits":0,"note":"Contrived steady-10hz protocol replay: 600 observations, 60 existing bulk flushes, idle phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.0 MB/day at idle","observedWalBytes":0,"rowsChanged":0,"statements":0},
+  "usage-cadence-steady-10hz-terminal": {"commits":1,"note":"Contrived steady-10hz protocol replay: 600 observations, 60 existing bulk flushes, terminal phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.4 MB/day at 100 turn completions/day","observedWalBytes":4120,"rowsChanged":1,"statements":1},
+  "usage-cadence-steady-with-focus-active": {"commits":60,"note":"Contrived steady-with-focus protocol replay: 600 observations, 60 existing bulk flushes, active phase; idle is 30 minutes with zero writes; no persistence cadence change; 4645.4 MB/day at continuous 60-second replay windows for 24 hours","observedWalBytes":3225992,"rowsChanged":180,"statements":180},
+  "usage-cadence-steady-with-focus-idle": {"commits":0,"note":"Contrived steady-with-focus protocol replay: 600 observations, 60 existing bulk flushes, idle phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.0 MB/day at idle","observedWalBytes":0,"rowsChanged":0,"statements":0},
+  "usage-cadence-steady-with-focus-terminal": {"commits":1,"note":"Contrived steady-with-focus protocol replay: 600 observations, 60 existing bulk flushes, terminal phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.4 MB/day at 100 turn completions/day","observedWalBytes":4120,"rowsChanged":1,"statements":1},
+  "usage-cadence-ten-turns-10hz-active": {"commits":6,"note":"Contrived ten-turns-10hz protocol replay: 600 observations, 6 existing bulk flushes, active phase; idle is 30 minutes with zero writes; no persistence cadence change","observedWalBytes":333752,"rowsChanged":180,"statements":180},
+  "usage-cadence-ten-turns-10hz-idle": {"commits":0,"note":"Contrived ten-turns-10hz protocol replay: 600 observations, 6 existing bulk flushes, idle phase; idle is 30 minutes with zero writes; no persistence cadence change","observedWalBytes":0,"rowsChanged":0,"statements":0},
+  "usage-cadence-ten-turns-10hz-terminal": {"commits":10,"note":"Contrived ten-turns-10hz protocol replay: 600 observations, 6 existing bulk flushes, terminal phase; idle is 30 minutes with zero writes; no persistence cadence change","observedWalBytes":41200,"rowsChanged":10,"statements":10},
+  "usage-cadence-terminal-burst-active": {"commits":20,"note":"Contrived terminal-burst protocol replay: 20 observations, 20 existing bulk flushes, active phase; idle is 30 minutes with zero writes; no persistence cadence change; 6.7 MB/day at 100 short turns/day","observedWalBytes":1334912,"rowsChanged":60,"statements":60},
+  "usage-cadence-terminal-burst-idle": {"commits":0,"note":"Contrived terminal-burst protocol replay: 20 observations, 20 existing bulk flushes, idle phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.0 MB/day at idle","observedWalBytes":0,"rowsChanged":0,"statements":0},
+  "usage-cadence-terminal-burst-terminal": {"commits":0,"note":"Contrived terminal-burst protocol replay: 20 observations, 20 existing bulk flushes, terminal phase; idle is 30 minutes with zero writes; no persistence cadence change; 0.0 MB/day at 100 turn completions/day","observedWalBytes":0,"rowsChanged":0,"statements":0},
   "usage-line-account-attribution": {
     "commits": 1,
     "note": "Identity rides the existing line transaction: zero additional commits and observed WAL bytes versus the baseline; ~6.6 MB/day existing ledger cost at 100 new lines/day, 0 MB/day measured attribution overhead",

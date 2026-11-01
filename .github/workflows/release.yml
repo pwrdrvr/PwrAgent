@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to build (e.g. v1.0.0-alpha.1). Must already exist on the repo."
+        description: "Existing desktop tag. Select this same tag as the workflow ref; branch dispatches are rejected."
         required: true
         type: string
 
@@ -16,16 +16,114 @@ permissions:
   contents: read
   id-token: none
 
+concurrency:
+  group: desktop-outpost-release-${{ github.ref }}
+  queue: max
+  cancel-in-progress: false
+
 jobs:
+  release-preflight:
+    name: Check shared release source and npm prerequisites
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      id-token: none
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Verify source before inspecting operator prerequisites
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: node packages/pwragent/scripts/release-context.mjs
+      - name: Check operator migration and existing environment protections
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          OUTPOST_NPM_RELEASE_READY: ${{ vars.OUTPOST_NPM_RELEASE_READY }}
+        run: |
+          set -euo pipefail
+          if [ "$OUTPOST_NPM_RELEASE_READY" != release.yml/npm-pwragent ]; then
+            echo "::error::Operator must complete docs/headless-npm-release.md migration and set OUTPOST_NPM_RELEASE_READY=release.yml/npm-pwragent before tagging."
+            exit 1
+          fi
+          gh api repos/pwrdrvr/PwrAgent/environments/npm-pwragent > "$RUNNER_TEMP/npm-environment.json"
+          gh api 'repos/pwrdrvr/PwrAgent/environments/npm-pwragent/deployment-branch-policies?per_page=100' > "$RUNNER_TEMP/npm-branches.json"
+          node packages/pwragent/scripts/release-context.mjs --preflight
+
+  outpost-validate:
+    name: Outpost release package (Node ${{ matrix.node }})
+    runs-on: ubuntu-24.04
+    needs:
+      - release-preflight
+    timeout-minutes: 15
+    outputs:
+      integrity: ${{ steps.package.outputs.integrity }}
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+      - name: Install pinned build dependencies without lifecycle scripts
+        run: |
+          corepack enable
+          pnpm --filter pwragent... install --frozen-lockfile --ignore-scripts
+      - name: Mocked CLI and release tests
+        run: pnpm --filter pwragent test
+      - name: Pack, validate and smoke-test an offline installation
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          TMPDIR: ${{ runner.temp }}/headless-package-long-temp-path-for-socket-regression
+        run: |
+          mkdir -p "$TMPDIR"
+          node packages/pwragent/scripts/pack-check.mjs .local/headless-package
+      - name: Record tested tarball integrity
+        id: package
+        if: matrix.node == '24'
+        run: |
+          node --input-type=module <<'JS'
+          import fs from "node:fs";
+          const p = JSON.parse(fs.readFileSync(".local/headless-package/pack.json"));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `integrity=${p.integrity}\n`);
+          JS
+      - name: Retain tested tarball and notices
+        if: matrix.node == '24'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: headless-npm-package
+          path: .local/headless-package/
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
+
   install-deps:
     name: Install macOS dependencies
-    runs-on: macos-26
+    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
+    needs:
+      - outpost-validate
     timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.sha }}
           persist-credentials: false
           sparse-checkout: |
             **/package.json
@@ -37,18 +135,23 @@ jobs:
             apps/desktop/scripts/ensure-electron-runtime.mjs
           sparse-checkout-cone-mode: false
 
-      # As in CI, only populate the dependency cache on a miss. The parallel
-      # consumers restore it after this job (including cache saves) succeeds.
+      # Keep pnpm, Corepack and Electron downloads on the persistent guest.
+      # Unlike lookup-only mode, this also reuses a warm store without restore.
+      - name: Locate the guest cache root
+        shell: bash
+        run: echo "PWRAGENT_CI_CACHE_ROOT=$HOME/Library/Caches/pwragent-ci" >> "$GITHUB_ENV"
+
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        timeout-minutes: 10
         with:
           node-version: "^24.22.1"
           cache-electron: "true"
-          lookup-only: "true"
+          persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}
 
   lint:
     name: Lint and typecheck
-    runs-on: macos-26
+    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
     needs:
       - install-deps
     timeout-minutes: 30
@@ -56,14 +159,29 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.sha }}
           persist-credentials: false
+
+      # Clear the local flag before disabling worktree sparse state; otherwise
+      # checkout exposes a previous non-cone bootstrap's local true value.
+      - name: Restore complete checkout
+        shell: bash
+        run: |
+          git config --local core.sparseCheckout false
+          git sparse-checkout disable
+          git config --local --unset-all extensions.worktreeConfig
+
+      - name: Locate the guest cache root
+        shell: bash
+        run: echo "PWRAGENT_CI_CACHE_ROOT=$HOME/Library/Caches/pwragent-ci" >> "$GITHUB_ENV"
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        timeout-minutes: 10
         with:
           node-version: "^24.22.1"
           cache-electron: "true"
+          persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}
 
       - name: Check release metadata
         env:
@@ -75,8 +193,12 @@ jobs:
           GH_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
         run: |
           set -euo pipefail
-          pnpm --silent release:channels --audit > "$RUNNER_TEMP/package-manager-preflight.json"
-          cat "$RUNNER_TEMP/package-manager-preflight.json" >> "$GITHUB_STEP_SUMMARY"
+          audit_status=0
+          pnpm --silent release:channels --audit > "$RUNNER_TEMP/package-manager-preflight.json" || audit_status=$?
+          report_status=0
+          node scripts/release/report-channel-audit.mjs "$RUNNER_TEMP/package-manager-preflight.json" "$audit_status" || report_status=$?
+          if [ "$audit_status" -ne 0 ]; then exit "$audit_status"; fi
+          exit "$report_status"
 
       - name: Lint and typecheck
         env:
@@ -85,7 +207,7 @@ jobs:
 
   test:
     name: macOS unit tests (lane ${{ matrix.lane }} of 2)
-    runs-on: macos-26
+    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
     needs:
       - install-deps
     timeout-minutes: 30
@@ -97,17 +219,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.sha }}
           persist-credentials: false
+
+      # Clear the local flag before disabling worktree sparse state; otherwise
+      # checkout exposes a previous non-cone bootstrap's local true value.
+      - name: Restore complete checkout
+        shell: bash
+        run: |
+          git config --local core.sparseCheckout false
+          git sparse-checkout disable
+          git config --local --unset-all extensions.worktreeConfig
+
+      - name: Locate the guest cache root
+        shell: bash
+        run: echo "PWRAGENT_CI_CACHE_ROOT=$HOME/Library/Caches/pwragent-ci" >> "$GITHUB_ENV"
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        timeout-minutes: 10
         with:
           node-version: "^24.22.1"
           cache-electron: "true"
+          persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}
 
-      # electron-builder compiles build/icon.icon with actool 26. The macos-26
-      # host supplies the matching AssetCatalogAgent runtime; this action
+      # electron-builder compiles build/icon.icon with actool 26. The macOS 26
+      # guest supplies the matching AssetCatalogAgent runtime; this action
       # verifies the selected Xcode still has actool 26+. Only the test step
       # sets DEVELOPER_DIR, so native setup keeps the image toolchain and SDK.
       - name: Select an Xcode with actool 26
@@ -138,11 +275,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        timeout-minutes: 10
         with:
           node-version: "^24.22.1"
           cache-electron: "true"
@@ -219,8 +357,8 @@ jobs:
 
   sign:
     name: Sign, notarize, package macOS
-    # Keep packaging on the same macOS 26 host used by the unit test lanes
-    # to validate Icon Composer; Xcode 26's AssetCatalogAgent needs it.
+    # Restore the known-working hosted macOS 26 signing environment.
+    # Xcode 26's AssetCatalogAgent needs matching macOS 26 frameworks.
     runs-on: macos-26
     # The unsigned stage is prepared in parallel, but signing still requires
     # every validation lane to pass, including both jobs in the test matrix.
@@ -330,11 +468,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        timeout-minutes: 10
         with:
           node-version: "^24.22.1"
           cache-electron: "true"
@@ -404,11 +543,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        timeout-minutes: 10
         with:
           node-version: "^24.22.1"
           working-directory: .
@@ -469,6 +609,12 @@ jobs:
       contents: read
       id-token: none
     steps:
+      - name: Set up Node.js runtime only
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "^24.22.1"
+          package-manager-cache: false
+
       - name: Download Windows signing input
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -570,10 +716,16 @@ jobs:
       contents: write
       id-token: none
     steps:
+      - name: Set up Node.js runtime only
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "^24.22.1"
+          package-manager-cache: false
+
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Download macOS release artifacts
@@ -730,10 +882,16 @@ jobs:
       contents: write
       id-token: none
     steps:
+      - name: Set up Node.js runtime only
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "^24.22.1"
+          package-manager-cache: false
+
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Publish changelog notes to GitHub Release
@@ -764,3 +922,151 @@ jobs:
             echo "::error::Release $RELEASE_TAG still has an empty body" >&2
             exit 1
           fi
+
+  outpost-publish:
+    name: Submit matching Outpost to npm
+    needs:
+      - outpost-validate
+      - publish-release-notes
+    if: github.repository == 'pwrdrvr/PwrAgent' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: npm-pwragent
+    concurrency:
+      group: pwragent-npm-publication
+      queue: max
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: headless-npm-package
+          path: .local/headless-package
+      - name: Restore any prior npm publication attempt before retrying
+        if: github.run_attempt > 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node packages/pwragent/scripts/restore-publication-receipt.mjs outpost-publication-attempt
+      - name: Submit exact tested bytes with npm OIDC and provenance, or resume verification
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          EXPECTED_INTEGRITY: ${{ needs.outpost-validate.outputs.integrity }}
+          NODE_AUTH_TOKEN: ""
+          NPM_TOKEN: ""
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$GITHUB_SHA"
+          node packages/pwragent/scripts/publish.mjs
+      - name: Retain npm acceptance or uncertain attempt for read-only recovery
+        if: ${{ !cancelled() && hashFiles('.local/outpost-publication-attempt.json') != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: outpost-publication-attempt
+          path: .local/outpost-publication-attempt.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
+      - name: Report npm acceptance separately from verification
+        run: |
+          echo '### Outpost npm submission (verification still required)' >> "$GITHUB_STEP_SUMMARY"
+          cat .local/outpost-publication-attempt.json >> "$GITHUB_STEP_SUMMARY"
+
+  outpost-verify:
+    name: Verify Outpost npm publication after processing
+    needs:
+      - outpost-validate
+      - outpost-publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      id-token: none
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: headless-npm-package
+          path: .local/headless-package
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: outpost-publication-attempt
+          path: .local
+      - name: Restore pending verification cache deadline before retrying
+        if: github.run_attempt > 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node packages/pwragent/scripts/restore-publication-receipt.mjs outpost-release-receipt
+      - name: Verify immutable npm bytes, source, owner, provenance and channel without publishing
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          EXPECTED_INTEGRITY: ${{ needs.outpost-validate.outputs.integrity }}
+          NODE_AUTH_TOKEN: ""
+          NPM_TOKEN: ""
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$GITHUB_SHA"
+          node packages/pwragent/scripts/publish.mjs --verify
+      - name: Retain verified or pending npm verification receipt
+        if: ${{ !cancelled() && hashFiles('.local/outpost-release-receipt.json') != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: outpost-release-receipt
+          path: .local/outpost-release-receipt.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
+      - name: Report verified npm postconditions
+        run: |
+          echo '### Outpost npm publication verified' >> "$GITHUB_STEP_SUMMARY"
+          cat .local/outpost-release-receipt.json >> "$GITHUB_STEP_SUMMARY"
+
+  release-complete:
+    name: Verify desktop and Outpost release completion
+    needs:
+      - release-preflight
+      - outpost-validate
+      - publish-release-notes
+      - outpost-publish
+      - outpost-verify
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require both services to have succeeded
+        env:
+          PREFLIGHT: ${{ needs.release-preflight.result }}
+          PACKAGE: ${{ needs.outpost-validate.result }}
+          DESKTOP: ${{ needs.publish-release-notes.result }}
+          SUBMISSION: ${{ needs.outpost-publish.result }}
+          OUTPOST: ${{ needs.outpost-verify.result }}
+        run: |
+          if [ "$PREFLIGHT" != success ] || [ "$PACKAGE" != success ] || [ "$DESKTOP" != success ] || [ "$SUBMISSION" != success ] || [ "$OUTPOST" != success ]; then
+            echo "::error::Shared release incomplete: preflight=$PREFLIGHT package=$PACKAGE desktop=$DESKTOP npm-submission=$SUBMISSION npm-verification=$OUTPOST. See docs/headless-npm-release.md for migration and retry recovery."
+            exit 1
+          fi
+          echo 'Desktop assets/notes and matching Outpost npm bytes are verified.' >> "$GITHUB_STEP_SUMMARY"

@@ -47,16 +47,13 @@ import { StateDb } from "../state/state-db";
 import { createTempStateDb } from "./sqlite-test-utils";
 import { partitionFederationCollection } from "../federation/federation-collection-reads";
 
-// Keep real subprocesses by default. Only the repeated idle observations below
-// replay an already verified Git result; callback callers still use real execFile.
-const execFileAsync = vi.hoisted(() => vi.fn<typeof import("node:child_process").execFile.__promisify__>());
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  const { promisify } = await import("node:util");
-  execFileAsync.mockImplementation(promisify(actual.execFile));
-  return { ...actual, execFile: Object.assign(actual.execFile.bind(null), {
-    [promisify.custom]: execFileAsync,
-  }) };
+// Keep the real Git runner by default. Replay verified observations at its
+// boundary so fixture budgets do not depend on platform-specific launchers.
+const gitCommand = vi.hoisted(() => vi.fn<typeof import("../app-server/git-executable").runGitCommand>());
+vi.mock("../app-server/git-executable", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../app-server/git-executable")>();
+  gitCommand.mockImplementation(actual.runGitCommand);
+  return { ...actual, runGitCommand: gitCommand };
 });
 
 // Record a missing fixture seam without launching the SDK's real Git probes.
@@ -69,6 +66,8 @@ vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => ({
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
 let tempDir: string;
+const isolatedGitKeys = /^(?:PWRAGENT_GIT_PATH|GIT_(?:DIR|WORK_TREE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|INDEX_FILE|NAMESPACE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM|CONFIG.*))$/i;
+let savedGitEnv: Map<string, string>;
 
 const ALERTING_TOOL_OUTPUT_POLICY = {
   outputCapHitsEnabled: true,
@@ -79,6 +78,13 @@ const ALERTING_TOOL_OUTPUT_POLICY = {
 };
 
 beforeEach(() => {
+  savedGitEnv = new Map();
+  for (const [key, value] of Object.entries(process.env)) {
+    if (isolatedGitKeys.test(key) && value !== undefined) {
+      savedGitEnv.set(key, value);
+      delete process.env[key];
+    }
+  }
   process.env[SQLITE_WRITE_METRICS_ENV] = "1";
   const fixture = createTempStateDb("pwragent-write-metrics-");
   tempDir = fixture.tempDir;
@@ -92,12 +98,19 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  execFileAsync.mockClear();
-  delete process.env[SQLITE_WRITE_METRICS_ENV];
-  stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
-  try { expect(sdkGetSessionInfo).not.toHaveBeenCalled(); }
-  finally { sdkGetSessionInfo.mockClear(); }
+  try {
+    gitCommand.mockClear();
+    delete process.env[SQLITE_WRITE_METRICS_ENV];
+    stateDb.close();
+    rmSync(tempDir, { recursive: true, force: true });
+    try { expect(sdkGetSessionInfo).not.toHaveBeenCalled(); }
+    finally { sdkGetSessionInfo.mockClear(); }
+  } finally {
+    for (const key of Object.keys(process.env)) {
+      if (isolatedGitKeys.test(key)) delete process.env[key];
+    }
+    for (const [key, value] of savedGitEnv) process.env[key] = value;
+  }
 });
 
 describe("sqlite write metrics", () => {
@@ -153,28 +166,13 @@ describe("sqlite write metrics", () => {
 
       const idleEvents: AgentEvent[] = [];
       registry.onEvent((event) => { idleEvents.push(event); });
-      const probeStart = execFileAsync.mock.calls.length;
+      const probeStart = gitCommand.mock.calls.length;
       const idle = await measureSqliteWrites(async () => {
-        // One real unchanged observation covers the Git integration. Repeating
-        // the same subprocess 100 times tests process startup cost, while this
-        // budget needs 100 passes through the registry and the real SQLite store.
-        await registry.refreshThreadDirectoryRelationship(identity);
-        expect(execFileAsync.mock.calls.slice(probeStart)).toEqual([
-          ["git", ["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"], { env: expect.any(Object) }],
-        ]);
-        const observation = await execFileAsync.mock.results.at(-1)!.value;
-        expect(observation.stdout.trim()).toBe("fix/external-branch");
-        const run = execFileAsync.getMockImplementation()!;
-        try {
-          execFileAsync.mockResolvedValue(observation);
-          for (let index = 1; index < 100; index++) await registry.refreshThreadDirectoryRelationship(identity);
-        } finally {
-          execFileAsync.mockImplementation(run);
-        }
+        // Ordinary branch refs now use filesystem observations. Exercise all
+        // 100 real refreshes without paying platform-specific launcher costs.
+        for (let index = 0; index < 100; index++) await registry.refreshThreadDirectoryRelationship(identity);
       });
-      expect(execFileAsync.mock.calls.slice(probeStart)).toEqual(Array.from({ length: 100 }, () => [
-        "git", ["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"], { env: expect.any(Object) },
-      ]));
+      expect(gitCommand.mock.calls.slice(probeStart)).toEqual([]);
       expect(await store.getThreadOverlayState(identity)).toMatchObject({
         gitBranch: "fix/agent-branch", observedGitBranch: "fix/external-branch",
       });
@@ -183,7 +181,7 @@ describe("sqlite write metrics", () => {
         note: "100 unchanged hover/timer observations; zero commits, 0 MB/day while idle", writes: idle.writes });
       await git(["switch", "fix/agent-branch"]);
       await registry.refreshThreadDirectoryRelationship(identity);
-      // This probe is real again: the fixture must observe the switch back.
+      // The fixture must observe the switch back after the unchanged refreshes.
       expect(await store.getThreadOverlayState(identity)).toMatchObject({
         gitBranch: "fix/agent-branch", observedGitBranch: "fix/agent-branch",
       });
@@ -195,6 +193,15 @@ describe("sqlite write metrics", () => {
   });
 
   it.each([false, true])("steers Claude once per request and dispatches queued input only after completion (causal messaging=%s)", async (causal) => {
+    const run = gitCommand.getMockImplementation()!;
+    // This fixture is not a Git repository. Queue completion must wait on the
+    // fake Claude result, not on an unrelated native Windows Git startup.
+    gitCommand.mockImplementation(async (cwd, args, options) => {
+      if (cwd === tempDir && args.join(" ") === "rev-parse --abbrev-ref HEAD") {
+        return { stdout: "", stderr: "" };
+      }
+      return await run(cwd, args, options);
+    });
     const finish = Promise.withResolvers<void>();
     const prompts: SDKUserMessage[] = [];
     const queries: Array<{ resume?: string }> = [];
@@ -267,7 +274,11 @@ describe("sqlite write metrics", () => {
       const replay = await registry.readThread(identity);
       expect(replay.replay.messages.find((message) => message.text === "Focus on the PR")?.origin).toEqual(origin);
       expect(registry.getActiveTurnForThread(identity)).toBeUndefined();
-    } finally { finish.resolve(); await registry.close(); }
+    } finally {
+      finish.resolve();
+      try { await registry.close(); }
+      finally { gitCommand.mockImplementation(run); }
+    }
   });
 
   it("budgets Claude result accounting independently of context updates and preserves provider pricing", async () => {
@@ -406,8 +417,8 @@ describe("sqlite write metrics", () => {
     expect(unchanged.commits).toBe(0);
   });
 
-  it("claims a monitor suggestion once per turn, durably, with no per-poll writes", async () => {
-    const target = { backend: "codex" as const, threadId: "monitor-parent", turnId: "turn-1" };
+  it.each(["codex", "acp:kimi"] as const)("claims a %s monitor suggestion once per turn, durably, with no per-poll writes", async (backend) => {
+    const target = { backend, threadId: "monitor-parent", turnId: "turn-1" };
     await store.setThreadMonitorJobSuggestions({ ...target, enabled: false });
     expect((await store.getThreadOverlayState(target))?.monitorJobSuggestionsEnabled).toBe(false);
     await store.setThreadMonitorJobSuggestions({ ...target, enabled: null });

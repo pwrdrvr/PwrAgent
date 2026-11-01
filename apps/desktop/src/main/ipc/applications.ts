@@ -1,6 +1,7 @@
 import { access, readFile, realpath, stat } from "node:fs/promises";
 import { BrowserWindow, ipcMain, shell } from "electron";
 import {
+  filePreviewKind,
   isFilePreviewPath,
   isRemoteFederationTarget,
   type OpenDesktopApplicationRequest,
@@ -17,6 +18,8 @@ import {
   type OpenPathResponse,
   type ReadMarkdownFileRequest,
   type ReadMarkdownFileResponse,
+  type ReadHtmlPreviewAssetsRequest,
+  type ReadHtmlPreviewAssetsResponse,
   type ResolveTranscriptFilesRequest,
   type ResolveTranscriptFilesResponse,
   type ReadMarkdownFileViewerSnapshotRequest,
@@ -26,6 +29,7 @@ import {
   APPLICATIONS_READ_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
   MARKDOWN_FILE_READ_CHANNEL,
+  HTML_PREVIEW_ASSETS_READ_CHANNEL,
   TRANSCRIPT_FILES_RESOLVE_CHANNEL,
   MARKDOWN_FILE_VIEWER_OPEN_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL,
@@ -44,6 +48,10 @@ import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { resolveFilePullThread } from "../federation/federation-file-pull";
 import { resolveTranscriptFiles, transcriptThreadDirectories } from "../transcript-files";
+import {
+  MAX_HTML_PREVIEW_FILE_BYTES,
+  readHtmlPreviewAssets,
+} from "../html-preview-assets";
 import { showSubAgentTranscriptWindow } from "../subagent-transcript-window";
 import {
   showThreadFromToolOutputIncidentExplorer,
@@ -131,7 +139,10 @@ async function readMarkdownFile(
     if (!fileStat.isFile()) {
       return { path: target, error: `Path is not a file: ${target}` };
     }
-    if (fileStat.size > MAX_PREVIEW_FILE_BYTES) {
+    const maxBytes = filePreviewKind(resolved) === "html"
+      ? MAX_HTML_PREVIEW_FILE_BYTES
+      : MAX_PREVIEW_FILE_BYTES;
+    if (fileStat.size > maxBytes) {
       return { path: target, error: "File is too large to preview." };
     }
 
@@ -230,6 +241,15 @@ export function registerApplicationIpcHandlers(): void {
       _event,
       request: ReadMarkdownFileRequest,
     ): Promise<ReadMarkdownFileResponse> => readMarkdownFile(request),
+  );
+
+  ipcMain.removeHandler(HTML_PREVIEW_ASSETS_READ_CHANNEL);
+  ipcMain.handle(
+    HTML_PREVIEW_ASSETS_READ_CHANNEL,
+    async (
+      _event,
+      request: ReadHtmlPreviewAssetsRequest,
+    ): Promise<ReadHtmlPreviewAssetsResponse> => readHtmlPreviewAssets(request),
   );
 
   ipcMain.removeHandler(MARKDOWN_FILE_VIEWER_OPEN_CHANNEL);

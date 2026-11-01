@@ -33,8 +33,15 @@ export type KeybindingActionId =
   | "navigation.find"
   | "navigation.back"
   | "navigation.forward"
+  | "navigation.toggle_attention"
+  | "navigation.lens_attention"
+  | "navigation.lens_drafts"
+  | "navigation.lens_updated"
+  | "navigation.lens_created"
+  | "navigation.lens_directories"
   | "layout.toggle_sidebar"
-  | "layout.toggle_context_rail";
+  | "layout.toggle_context_rail"
+  | "layout.toggle_project_index";
 
 /**
  * Where an action's chord is listened for.
@@ -206,6 +213,55 @@ export const KEYBINDING_ACTIONS: readonly KeybindingActionDefinition[] = [
     defaults: { mac: ["CmdOrCtrl+]", "Alt+Right"], other: ["CmdOrCtrl+]", "Alt+Right"] },
   },
   {
+    id: "navigation.toggle_attention",
+    group: "navigation",
+    label: "Toggle Attention Lens",
+    scopeLabel: "Visit Attention and return to the previous lens",
+    scope: "global",
+    firesInTextFields: true,
+    defaults: { mac: ["CmdOrCtrl+Alt+0"], other: ["CmdOrCtrl+Alt+0"] },
+  },
+  {
+    id: "navigation.lens_attention",
+    group: "navigation",
+    label: "Show Attention Lens",
+    scope: "global",
+    firesInTextFields: true,
+    defaults: { mac: ["CmdOrCtrl+Alt+1"], other: ["CmdOrCtrl+Alt+1"] },
+  },
+  {
+    id: "navigation.lens_drafts",
+    group: "navigation",
+    label: "Show Drafts Lens",
+    scope: "global",
+    firesInTextFields: true,
+    defaults: { mac: ["CmdOrCtrl+Alt+2"], other: ["CmdOrCtrl+Alt+2"] },
+  },
+  {
+    id: "navigation.lens_updated",
+    group: "navigation",
+    label: "Show Updated Lens",
+    scope: "global",
+    firesInTextFields: true,
+    defaults: { mac: ["CmdOrCtrl+Alt+3"], other: ["CmdOrCtrl+Alt+3"] },
+  },
+  {
+    id: "navigation.lens_created",
+    group: "navigation",
+    label: "Show Created Lens",
+    scope: "global",
+    firesInTextFields: true,
+    defaults: { mac: ["CmdOrCtrl+Alt+4"], other: ["CmdOrCtrl+Alt+4"] },
+  },
+  {
+    id: "navigation.lens_directories",
+    group: "navigation",
+    label: "Show Directories Lens",
+    scope: "global",
+    firesInTextFields: true,
+    defaults: { mac: ["CmdOrCtrl+Alt+5"], other: ["CmdOrCtrl+Alt+5"] },
+  },
+  {
     id: "layout.toggle_sidebar",
     group: "layout",
     label: "Toggle Sidebar",
@@ -220,6 +276,14 @@ export const KEYBINDING_ACTIONS: readonly KeybindingActionDefinition[] = [
     scope: "global",
     firesInTextFields: false,
     defaults: { mac: ["CmdOrCtrl+Alt+B"], other: ["CmdOrCtrl+Alt+B"] },
+  },
+  {
+    id: "layout.toggle_project_index",
+    group: "layout",
+    label: "Toggle Project Index",
+    scope: "global",
+    firesInTextFields: false,
+    defaults: { mac: ["CmdOrCtrl+Shift+B"], other: ["CmdOrCtrl+Shift+B"] },
   },
 ];
 

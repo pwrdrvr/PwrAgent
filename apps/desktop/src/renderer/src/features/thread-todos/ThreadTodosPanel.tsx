@@ -25,6 +25,7 @@ import { isBlockingWait, type OperatorWait } from "../operator-requests/operator
 import { ThreadTodoCard, formatTodoAge } from "./ThreadTodoCard";
 import type { ThreadTodoDoHereOptions, ThreadTodoResolveOptions, ThreadTodosView } from "./thread-todos-view";
 import { keepBusyThreadTodos } from "./busy-thread-todos";
+import { consumeThreadTodoReveal, type ThreadTodoRevealRequest } from "./thread-todo-reveal";
 import { operatorWaitMatchesFilter, threadTodoMatchesFilter, type ThreadTodoFilter } from "./thread-todo-filters";
 import { tooltipHandlers, useViewportTooltip } from "../../lib/useViewportTooltip";
 import { isNavigationBusy } from "../../../../shared/navigation-ipc-result";
@@ -93,6 +94,8 @@ export type ThreadTodosPanelProps = {
   onAnswerQuestion?: (text: string) => Promise<boolean>;
   /** Answers the composer took in that thread, by question item id. */
   sentQuestionAnswers?: ReadonlyMap<string, string>;
+  /** A thread row's to-do chip asked to show this thread's cards. */
+  revealRequest?: ThreadTodoRevealRequest;
 };
 
 /**
@@ -127,6 +130,13 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
     rememberedScope = next;
     setScopeState(next);
   };
+  // The chip names one thread, so its cards show under the Thread lens.
+  const revealRequest = props.revealRequest;
+  useEffect(() => {
+    if (!consumeThreadTodoReveal(revealRequest, threadKey)) return;
+    rememberedScope = "thread";
+    setScopeState("thread");
+  }, [revealRequest, threadKey]);
 
   useEffect(() => {
     if (!showResolved || !listResolved) {
@@ -402,6 +412,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                           threadRunning={props.threadRunning}
                           mergeMethods={view.mergeMethods}
                           instances={view.instances}
+                          localMachine={view.localMachine}
                           projectMenu={view.projectMenu}
                           onResolve={(target, status, resolution, options) => {
                             setActionError(undefined);
@@ -479,9 +490,9 @@ function TodoRow(props: {
     ? undefined
     : todo.result ?? (todo.status === "done" ? "Done" : "Dismissed");
   const route = describeRoute(todo, props.scope, props.projectKey);
-  // A handoff's steps went to the new thread, so a resolved one has no
-  // progress of its own to report.
-  const progress = todo.status !== "open" && todo.action?.type === "start_thread"
+  // A handoff counts only its prerequisites, and once it has started there
+  // is nothing left to tick.
+  const progress = todo.status !== "open" && (todo.action?.type === "start_thread" || todo.action?.type === "send_message")
     ? undefined
     : threadTodoItemProgress(todo);
   // Grouped by project, the thread is not in the heading: say it here.
@@ -517,7 +528,7 @@ function TodoRow(props: {
           type="button"
           className="thread-todos-panel__row-main"
           aria-label={`Open thread: ${todo.title}, in ${view.threadTitle(todo)}${
-            progress ? `, ${progress.checked} of ${progress.total} steps checked` : ""
+            progress ? `, ${progress.checked} of ${progress.total} ${progress.noun} checked` : ""
           }${props.unread ? ", unread" : ""}`}
           onClick={() => view.openThread(todo)}
         >

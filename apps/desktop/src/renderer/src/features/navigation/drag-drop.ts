@@ -4,7 +4,8 @@ import {
   type DragEvent,
 } from "react";
 
-export type DropIndicatorPosition = "before" | "after";
+/** `inside` rings the target row itself: the drop nests under it. */
+export type DropIndicatorPosition = "before" | "after" | "inside";
 
 export type DropIndicatorState = {
   position: DropIndicatorPosition;
@@ -24,6 +25,7 @@ export type DropIndicatorController = {
 const DROP_INDICATOR_CLASSES = [
   "is-drop-target-before",
   "is-drop-target-after",
+  "is-drop-target-inside",
 ] as const;
 
 export function createDropIndicatorController(): DropIndicatorController {
@@ -65,7 +67,7 @@ export function useDropIndicatorController(): DropIndicatorController {
 
 export function getDropIndicatorPosition(
   event: DragEvent<HTMLElement>,
-): DropIndicatorPosition {
+): "before" | "after" {
   const rect = event.currentTarget.getBoundingClientRect();
   return event.clientY > rect.top + rect.height / 2 ? "after" : "before";
 }

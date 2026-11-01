@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { releaseMetadata } from "../packages/pwragent/scripts/release.mjs";
 import {
   LINUX_ARCHITECTURES,
   LINUX_PACKAGE_EXTENSIONS,
@@ -35,6 +36,7 @@ const windowsArchiveScriptPath = resolve(
 );
 const desktopReleaseRunbookPath = resolve(repoRoot, "docs/desktop-release-runbook.md");
 const changelogPath = resolve(repoRoot, "CHANGELOG.md");
+const macosRunner = "[self-hosted, macOS, ARM64, pwrdrvr-macos]";
 
 function usage() {
   console.error("Usage: RELEASE_TAG=v1.0.0-alpha.4 pnpm release:check");
@@ -186,6 +188,13 @@ if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(tag)) {
 
 const expectedVersion = tag.slice(1);
 const desktopPackage = JSON.parse(readFileSync(desktopPackagePath, "utf8"));
+try {
+  releaseMetadata(JSON.parse(readFileSync(resolve(repoRoot, "packages/pwragent/package.json"), "utf8")), {
+    tag, desktopVersion: desktopPackage.version,
+  });
+} catch (error) {
+  fail(`Outpost release metadata: ${error.message}`);
+}
 if (desktopPackage.version !== expectedVersion) {
   fail(
     `apps/desktop/package.json version is ${desktopPackage.version}, but release tag ${tag} requires ${expectedVersion}`,
@@ -376,7 +385,7 @@ assertWorkflowJobRunner(
   ciWorkflow,
   ".github/workflows/ci.yml",
   "macos-install-deps",
-  "macos-26",
+  macosRunner,
 );
 for (const unexpected of [
   "ci:windows-signing",
@@ -430,12 +439,87 @@ assertWorkflowJobOrdersText(
   "node apps/desktop/scripts/release.mjs --linux --no-publish",
   "Upload Linux package artifact",
 );
-for (const jobName of ["install-deps", "lint", "test", "prepare", "sign"]) {
+for (const jobName of ["install-deps", "lint", "test"]) {
+  assertWorkflowJobRunner(releaseWorkflow, ".github/workflows/release.yml", jobName, macosRunner);
+}
+for (const jobName of ["prepare", "sign"]) {
   assertWorkflowJobRunner(releaseWorkflow, ".github/workflows/release.yml", jobName, "macos-26");
+  assertWorkflowJobExcludesText(releaseWorkflow, ".github/workflows/release.yml", jobName, "persistent-store-dir:");
+}
+for (const jobName of ["install-deps", "lint", "test"]) {
+  assertWorkflowStepContainsText(
+    releaseWorkflow, ".github/workflows/release.yml", jobName,
+    "Install Node.js and dependencies", "persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}",
+  );
+  assertWorkflowJobExcludesText(releaseWorkflow, ".github/workflows/release.yml", jobName, "lookup-only:");
+}
+assertWorkflowJobRunner(ciWorkflow, ".github/workflows/ci.yml", "test-macos", macosRunner);
+for (const expected of ["lane: [1, 2]", "run: pnpm test --shard=${{ matrix.lane }}/2", 'PWRAGENT_REQUIRE_ACTOOL: "1"']) {
+  assertWorkflowJobContainsText(ciWorkflow, ".github/workflows/ci.yml", "test-macos", expected);
+}
+for (const expected of [
+  "environment: apple-signing",
+  "path: .release-input",
+  "uses: ./.github/actions/select-xcode-for-actool",
+]) {
+  assertWorkflowJobContainsText(releaseWorkflow, ".github/workflows/release.yml", "sign", expected);
+}
+for (const unexpected of [
+  "actions/checkout@", "configure-nodejs@", "pnpm install",
+  "working-directory: release-signing", "PWRAGENT_SIGNING_TEMP_DIR",
+]) {
+  assertWorkflowJobExcludesText(releaseWorkflow, ".github/workflows/release.yml", "sign", unexpected);
+}
+for (const [jobName, firstNodeStep] of [
+  ["windows-sign", "      - name: Sign and package Windows installer"],
+  ["publish-release-assets", "Verify debug artifact targets, identities, and checksums"],
+  ["publish-release-notes", "Publish changelog notes to GitHub Release"],
+]) {
+  for (const expected of [
+    "uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
+    'node-version: "^24.22.1"',
+    "package-manager-cache: false",
+  ]) {
+    assertWorkflowStepContainsText(
+      releaseWorkflow, ".github/workflows/release.yml", jobName,
+      "Set up Node.js runtime only", expected,
+    );
+  }
+  assertWorkflowJobOrdersText(
+    releaseWorkflow, ".github/workflows/release.yml", jobName,
+    "Set up Node.js runtime only", firstNodeStep,
+  );
 }
 for (const jobName of ["lint", "test", "prepare"]) {
   assertWorkflowJobNeeds(releaseWorkflow, ".github/workflows/release.yml", jobName, "install-deps");
 }
+for (const [jobName, dependency] of [
+  ["install-deps", "outpost-validate"],
+  ["outpost-validate", "release-preflight"],
+  ["outpost-publish", "outpost-validate"],
+  ["outpost-publish", "publish-release-notes"],
+  ["release-complete", "outpost-publish"],
+  ["release-complete", "outpost-verify"],
+  ["outpost-verify", "outpost-publish"],
+  ["outpost-verify", "outpost-validate"],
+  ["release-complete", "publish-release-notes"],
+]) {
+  assertWorkflowJobNeeds(releaseWorkflow, ".github/workflows/release.yml", jobName, dependency);
+}
+for (const expected of ["environment: npm-pwragent", "id-token: write", "packages/pwragent/scripts/publish.mjs"]) {
+  assertWorkflowJobContainsText(releaseWorkflow, ".github/workflows/release.yml", "outpost-publish", expected);
+}
+assertWorkflowTextOnlyInJob(releaseWorkflow, ".github/workflows/release.yml", "outpost-publish", "id-token: write");
+assertWorkflowJobExcludesText(releaseWorkflow, ".github/workflows/release.yml", "outpost-publish", "continue-on-error");
+assertWorkflowJobExcludesText(releaseWorkflow, ".github/workflows/release.yml", "outpost-verify", "continue-on-error");
+assertWorkflowJobExcludesText(releaseWorkflow, ".github/workflows/release.yml", "outpost-verify", "id-token: write");
+for (const expected of ["publish.mjs --verify", "name: outpost-publication-attempt", "name: outpost-release-receipt"]) {
+  assertWorkflowJobContainsText(releaseWorkflow, ".github/workflows/release.yml", "outpost-verify", expected);
+}
+for (const expected of ["github.run_attempt > 1", "name: outpost-publication-attempt", "actions: read"]) {
+  assertWorkflowJobContainsText(releaseWorkflow, ".github/workflows/release.yml", "outpost-publish", expected);
+}
+
 // Preparing the unsigned macOS stage may overlap validation, but no platform
 // may proceed past the old prepare gate without every validation lane passing.
 for (const jobName of ["sign", "linux-package", "windows-prepare"]) {
@@ -457,7 +541,7 @@ assertWorkflowJobRunner(
   previewBuildWorkflow,
   ".github/workflows/preview-build.yml",
   "preview",
-  "macos-26",
+  macosRunner,
 );
 for (const expected of [
   "Select an Xcode with actool 26",
@@ -473,7 +557,7 @@ for (const expected of [
 }
 for (const expected of [
   "host_version=\"$(sw_vers -productVersion)\"",
-  "Use runs-on: macos-26 for Icon Composer packaging.",
+  "Use a macOS 26+ runner for Icon Composer packaging.",
 ]) {
   if (!selectXcodeForActool.includes(expected)) {
     fail(`${selectXcodeForActoolPath} must contain ${JSON.stringify(expected)}`);

@@ -356,6 +356,9 @@ export async function launchElectronApp(
   }
   configureElectronE2eReleaseEnv(env);
   anchorWindowsPwragentRoot(env);
+  // Native Chromium storage must be owned by this fixture, including any
+  // detached profile helpers that inherit its environment.
+  env.PWRAGENT_E2E_CHROMIUM_ROOT = path.join(homeRoot, "chromium");
   env[E2E_SHUTDOWN_LAUNCH_ID_ENV] = launchId;
   if (diagnosticsFile) {
     env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV] = diagnosticsFile;
@@ -1239,7 +1242,9 @@ export async function closeElectronApplication(
       );
     },
     startClose: () => {
-      const closePromise = electronApp.close();
+      const closePromise = process.platform === "win32" && !hasExited(child)
+        ? closeElectronWithSessionDrain(electronApp)
+        : electronApp.close();
       closePromise.catch(() => undefined);
       return closePromise;
     },
@@ -1258,6 +1263,74 @@ export async function closeElectronApplication(
   return recordElectronCloseSummary(execution, options);
 }
 
+export async function closeElectronWithSessionDrain(
+  electronApp: ElectronApplication,
+): Promise<void> {
+  const child = electronApp.process();
+  const errorPrefix = `[pwragent-e2e-session-drain:${randomUUID()}]`;
+  let buffered = "";
+  let rejectDrain: (error: Error) => void = () => undefined;
+  const drainFailed = new Promise<never>((_resolve, reject) => { rejectDrain = reject; });
+  drainFailed.catch(() => undefined);
+  const onStderr = (chunk: Buffer | string) => {
+    buffered += chunk.toString();
+    const start = buffered.indexOf(errorPrefix);
+    const end = start < 0 ? -1 : buffered.indexOf("\n", start);
+    if (end >= 0) {
+      try {
+        const message: unknown = JSON.parse(buffered.slice(start + errorPrefix.length, end));
+        if (typeof message === "string") {
+          rejectDrain(new Error(`Electron session drain failed: ${message}`));
+        }
+      } catch {
+        // Other app stderr cannot change the owned close result.
+      }
+    }
+    buffered = buffered.slice(-16_384);
+  };
+  child.stderr?.on("data", onStderr);
+  try {
+    await electronApp.evaluate(({ app, session, webContents }, errorPrefix) => {
+      const sessions = new Set([
+        session.defaultSession,
+        ...webContents.getAllWebContents().map((contents) => contents.session),
+      ]);
+      let quitHeld = false;
+      const holdNativeQuit = (event: Electron.Event) => {
+        event.preventDefault();
+        quitHeld = true;
+      };
+      // Keep Chromium's contexts alive until their completion callbacks run.
+      // Playwright may detach its inspector after app.quit() returns, so this
+      // barrier must finish in main without another renderer or inspector RPC.
+      app.on("will-quit", holdNativeQuit);
+      void Promise.all([...sessions].map(async (ownedSession) => {
+        await ownedSession.closeAllConnections();
+        await ownedSession.cookies.flushStore();
+        await ownedSession.clearData({ dataTypes: ["cache"] });
+      })).then(() => {
+        app.removeListener("will-quit", holdNativeQuit);
+        // A native will-quit dispatch can still be unwinding its microtask
+        // checkpoint. Retry from a fresh task, as product quit-retry.ts does.
+        if (quitHeld) setImmediate(() => app.quit());
+      }, (error: unknown) => {
+        // The parent owns this stderr pipe even after inspector detachment.
+        // Leave native quit held on failure; strict teardown owns force cleanup.
+        const message = error instanceof Error ? error.message : String(error);
+        try {
+          process.stderr.write(`${errorPrefix}${JSON.stringify(message.slice(0, 2_000))}\n`);
+        } catch {
+          // The unchanged graceful-close deadline still rejects the stall.
+        }
+      });
+    }, errorPrefix);
+    // The session callbacks and before-quit disposal share the same deadline,
+    // rather than consuming it serially before native shutdown can start.
+    await Promise.race([electronApp.close(), drainFailed]);
+  } finally {
+    child.stderr?.removeListener("data", onStderr);
+  }
+}
 export async function captureElectronMainProcess(electronApp: ElectronApplication): Promise<void> {
   if (process.platform !== "win32" || electronMainProcesses.has(electronApp)) {
     return;
@@ -1376,7 +1449,7 @@ async function killProcessTree(
       await taskkillTree(pid);
     }
     if (mainProcess && quitStartedAt !== undefined) {
-      // The Playwright child is cmd.exe. Its exit does not prove that Electron
+      // A custom Windows batch launcher can exit before its Electron
       // descendants have released the launcher's inherited pipes.
       const rows = await listWindowsMainAndChildren(mainProcess.pid);
       const pids = selectWindowsElectronCleanupPids(

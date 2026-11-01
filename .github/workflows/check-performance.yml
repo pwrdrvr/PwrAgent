@@ -37,22 +37,52 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || inputs.baseline }}
           path: baseline
+
+      # Clear the local flag before disabling worktree sparse state; otherwise
+      # checkout exposes a previous non-cone bootstrap's local true value.
+      - name: Restore complete checkout
+        working-directory: baseline
+        shell: bash
+        run: |
+          git config --local core.sparseCheckout false
+          git sparse-checkout disable
+          git config --local --unset-all extensions.worktreeConfig
+
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || inputs.candidate }}
           path: candidate
+
+      # Clear the local flag before disabling worktree sparse state; otherwise
+      # checkout exposes a previous non-cone bootstrap's local true value.
+      - name: Restore complete checkout
+        working-directory: candidate
+        shell: bash
+        run: |
+          git config --local core.sparseCheckout false
+          git sparse-checkout disable
+          git config --local --unset-all extensions.worktreeConfig
+
+      - name: Locate the guest cache root
+        shell: bash
+        run: echo "PWRAGENT_CI_CACHE_ROOT=$HOME/Library/Caches/pwragent-ci" >> "$GITHUB_ENV"
+
       - name: Install baseline dependencies
         uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        timeout-minutes: 10
         with:
           node-version: "24.22.1"
           working-directory: baseline
           cache-electron: "true"
+          persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}
       - name: Install candidate dependencies
         uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        timeout-minutes: 10
         with:
           node-version: "24.22.1"
           working-directory: candidate
           cache-electron: "true"
+          persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}
       - name: Measure identical check slices on this runner
         run: node candidate/scripts/ci/benchmark-dev-checks.mjs baseline candidate .local/check-performance
       - name: Upload timings, load samples and logs
