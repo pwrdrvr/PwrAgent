@@ -4254,6 +4254,94 @@ describe("App", () => {
     ).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("keeps local thread management actions when a remote thread selects a different provider catalog", async () => {
+    const remoteTarget = { scope: "remote" as const, instanceId: "studio-menu" };
+    const claude: BackendSummary = {
+      kind: "claude", source: "builtin", label: "Claude", available: true, methods: [],
+      capabilities: {
+        listThreads: true, createThread: false, resumeThread: true, renameThread: true,
+        archiveThread: true, readThread: true, startTurn: true, interruptTurn: true,
+        steerTurn: false, transcriptPagination: false, toolUse: true,
+        approvalRequests: true, multiDirectoryThreads: true,
+      },
+      executionModes: [],
+    };
+    const localThread = {
+      id: "local-claude", title: "Local Claude maintenance", titleSource: "explicit" as const,
+      source: "claude" as const, linkedDirectories: [], updatedAt: 2_000,
+      inbox: { inInbox: true, reason: "new-thread" as const },
+    };
+    const remoteThread = {
+      id: "remote-codex", title: "Remote Codex maintenance", titleSource: "explicit" as const,
+      source: "codex" as const, linkedDirectories: [], updatedAt: 1_000,
+      inbox: { inInbox: true, reason: "new-thread" as const },
+      federation: {
+        ref: { backend: "codex" as const, threadId: "remote-codex", target: remoteTarget },
+        instanceLabel: "Studio", peerStatus: "connected" as const,
+        capabilities: ["thread_navigation", "turn_control"] as const,
+      },
+    };
+    const listBackends = vi.fn(async (request?: { federationTarget?: FederationTarget }) => ({
+      fetchedAt: Date.now(),
+      backends: request?.federationTarget
+        ? [{ ...claude, kind: "codex" as const, label: "Codex" }]
+        : [claude],
+    }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        listBackends,
+        getNavigationSnapshot: async () => ({
+          backend: "all", fetchedAt: Date.now(), unchanged: false,
+          inboxThreadKeys: ["claude:local-claude", "codex:remote-codex"],
+          threads: [localThread, remoteThread], directories: [],
+          launchpadDefaults: { backend: "claude", executionMode: "default" },
+        }),
+        readFederationHealth: async () => ({ health: {
+          enabled: true, role: "client", status: "connected", instanceId: "local-menu",
+          peers: [{ id: "studio-menu", label: "Studio", role: "client", status: "connected",
+            capabilities: ["thread_navigation", "turn_control"] }],
+        } }),
+        readThread: async (request: { backend: AppServerBackendKind; threadId: string }) => ({
+          ...request, fetchedAt: Date.now(), replay: { entries: [], messages: [] },
+        }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: () => () => undefined,
+      }),
+    });
+
+    await renderApp();
+    const localRow = (await screen.findByRole("button", { name: localThread.title }))
+      .closest<HTMLElement>(".thread-row")!;
+    const checkLocalMenu = async () => {
+      await act(async () => { fireEvent.contextMenu(localRow); });
+      expect(screen.getByRole("menuitem", { name: "Archive Thread" })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: "Rename Thread" })).toBeInTheDocument();
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    };
+    const checkRemoteMenu = async () => {
+      await act(async () => {
+        fireEvent.contextMenu(screen.getByRole("button", { name: remoteThread.title }));
+      });
+      await waitFor(() => expect(screen.getByRole("menuitem", { name: "Rename Thread" })).toBeInTheDocument());
+      expect(screen.getByRole("menuitem", { name: "Archive Thread" })).toBeInTheDocument();
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    };
+    await checkLocalMenu();
+    await checkRemoteMenu();
+    await clickButton(remoteThread.title);
+    await waitFor(() => expect(listBackends).toHaveBeenCalledWith(expect.objectContaining({
+      federationTarget: remoteTarget,
+    })));
+    await flushReactUpdates();
+    expect(screen.getByRole("button", { name: remoteThread.title })).toHaveAttribute("aria-pressed", "true");
+    await checkLocalMenu();
+    await checkRemoteMenu();
+    await clickButton(localThread.title);
+    await checkLocalMenu();
+    await checkRemoteMenu();
+  });
+
   it("waits for peer health before reading a restored remote thread", async () => {
     const peerHealth = createDeferred<{
       health: {

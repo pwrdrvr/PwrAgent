@@ -2392,6 +2392,7 @@ describe("Sidebar", () => {
     render(
       <Sidebar
         backends={remoteBackends}
+        remoteBackends={new Map([["peer-mini", remoteBackends]])}
         browseMode="inbox"
         directories={directories}
         inboxThreads={[remoteChild]}
@@ -11214,5 +11215,140 @@ describe("⌘K jump keeps the lens", () => {
     );
     expect(document.querySelector(".sidebar-visiting")).toBeNull();
     expect(lensRowTitles()).toEqual(["Running thread"]);
+  });
+});
+
+
+describe("Sidebar row owner provider capabilities", () => {
+  const capable = (kind: BackendSummary["kind"]): BackendSummary => ({
+    ...backends[0]!, kind,
+    capabilities: { ...backends[0]!.capabilities, forkThread: true },
+  });
+  const local = { ...sharedThread, title: "Viewer thread" };
+  const remote: NavigationThreadSummary = {
+    ...sharedThread, id: "owner-thread", title: "Owner thread", source: "acp:grok", pinnedRank: "1024",
+    federation: {
+      ref: { backend: "acp:grok", threadId: "owner-thread", target: { scope: "remote", instanceId: "owner" } },
+      instanceLabel: "Owner", peerStatus: "connected", capabilities: ["thread_navigation", "turn_control"],
+    },
+  };
+  function view(overrides: Partial<ComponentProps<typeof Sidebar>> = {}) {
+    return <Sidebar backends={[capable("codex")]}
+      remoteBackends={new Map([["owner", [capable("acp:grok")]]])}
+      browseMode="recents" directories={directories} threads={[local, remote]} loading={false}
+      selectedItemKey={threadSummaryIdentityKey(local)}
+      onBrowseModeChange={() => undefined} onCreateThread={async () => undefined}
+      onOpenLaunchpad={async () => undefined} onSelectThread={() => undefined}
+      onRenameThread={async () => undefined} onArchiveThread={async () => undefined}
+      onForkThread={async () => undefined} {...overrides} />;
+  }
+  const mutationItems = ["Rename Thread", "Archive Thread", "Fork into Same Worktree"];
+
+  it.each(["acp:grok", "codex"] as const)("offers management actions for %s installed only on the row owner", (kind) => {
+    const row = { ...remote, source: kind,
+      federation: { ...remote.federation!, ref: { ...remote.federation!.ref, backend: kind } } };
+    render(view({ backends: [], threads: [row], remoteBackends: new Map([["owner", [capable(kind)]]]) }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Owner thread(?:,|$)/ }));
+    for (const name of mutationItems.slice(0, kind === "codex" ? 3 : 2)) {
+      expect(screen.getByRole("menuitem", { name })).toBeInTheDocument();
+    }
+  });
+
+  it.each(["missing", "unavailable", "unsupported", "pending", "disconnected", "no turn control"]
+    .flatMap((reason) => (["acp:grok", "codex"] as const).map((kind) => ({ reason, kind }))))(
+    "does not borrow viewer $kind capabilities when the owner is $reason", ({ reason, kind }) => {
+      const ownerBackend = capable(kind);
+      if (reason === "unavailable") ownerBackend.available = false;
+      if (reason === "unsupported") ownerBackend.capabilities = {
+        ...ownerBackend.capabilities, renameThread: false, archiveThread: false, forkThread: false,
+      };
+      const row: NavigationThreadSummary = { ...remote, source: kind, federation: { ...remote.federation!,
+        ref: { ...remote.federation!.ref, backend: kind },
+        ...(reason === "disconnected" ? { peerStatus: "disconnected" as const } : {}),
+        ...(reason === "no turn control" ? { capabilities: ["thread_navigation"] } : {}),
+      } };
+      render(view({ backends: [capable(kind)], threads: [row],
+        remoteBackends: reason === "pending" ? undefined : new Map([["owner", reason === "missing" ? [] : [ownerBackend]]]),
+      }));
+      fireEvent.contextMenu(screen.getByRole("button", { name: new RegExp(`^${row.title}(?:,|$)`) }));
+      for (const name of mutationItems) expect(screen.queryByRole("menuitem", { name })).not.toBeInTheDocument();
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+      const button = screen.getByRole("button", { name: new RegExp(`^${row.title}(?:,|$)`) });
+      button.focus();
+      fireEvent.keyDown(button, { key: "F2", code: "F2" });
+      expect(screen.queryByRole("textbox", { name: "Thread name" })).not.toBeInTheDocument();
+      fireEvent.doubleClick(button);
+      expect(screen.queryByRole("textbox", { name: "Thread name" })).not.toBeInTheDocument();
+    },
+  );
+
+  it("uses the window owner's catalog for rows in a federation window", () => {
+    Object.defineProperty(window, "__pwragentFederationTarget", {
+      configurable: true, value: remote.federation!.ref.target,
+    });
+    render(view({ backends: [capable("acp:grok")], remoteBackends: undefined, threads: [remote] }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Owner thread(?:,|$)/ }));
+    expect(screen.getByRole("menuitem", { name: "Rename Thread" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Archive Thread" })).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    fireEvent.doubleClick(screen.getByRole("button", { name: /^Owner thread(?:,|$)/ }));
+    expect(screen.getByRole("textbox", { name: "Thread name" })).toHaveValue(remote.title);
+  });
+
+  it.each(["menu", "keyboard", "double-click"])("renames inline through the owner from %s", (path) => {
+    const onRenameThread = vi.fn(async () => undefined);
+    render(view({ onRenameThread }));
+    const button = screen.getByRole("button", { name: /^Owner thread(?:,|$)/ });
+    if (path === "menu") {
+      fireEvent.contextMenu(button);
+      fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
+    } else if (path === "keyboard") {
+      button.focus();
+      fireEvent.keyDown(button, { key: "F2", code: "F2" });
+    } else fireEvent.doubleClick(button);
+    const input = screen.getByRole("textbox", { name: "Thread name" });
+    expect(input.closest("[data-thread-key]")).toHaveAttribute("data-thread-key", threadSummaryIdentityKey(remote));
+    fireEvent.change(input, { target: { value: "Owner renamed" } });
+    if (path === "double-click") fireEvent.blur(input);
+    else fireEvent.keyDown(input, { key: "Enter" });
+    expect(onRenameThread).toHaveBeenCalledWith(remote, "Owner renamed");
+  });
+
+  it("keeps local row actions when the selected remote owner lacks the local provider", () => {
+    render(view({ selectedItemKey: threadSummaryIdentityKey(remote) }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: local.title }));
+    for (const name of mutationItems) expect(screen.getByRole("menuitem", { name })).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    fireEvent.doubleClick(screen.getByRole("button", { name: local.title }));
+    expect(screen.getByRole("textbox", { name: "Thread name" })).toHaveValue(local.title);
+  });
+
+  it.each(["menu", "keyboard"])("filters mixed-owner bulk archives through each provider and turn control from %s", async (path) => {
+    const onArchiveThread = vi.fn(async (_thread: NavigationThreadSummary) => undefined);
+    const blocked: NavigationThreadSummary = { ...remote, id: "blocked", title: "Blocked owner", pinnedRank: "2048",
+      federation: { ...remote.federation!, ref: { ...remote.federation!.ref, threadId: "blocked",
+        target: { scope: "remote", instanceId: "blocked-owner" } }, capabilities: ["thread_navigation"] } };
+    const offline: NavigationThreadSummary = { ...blocked, id: "offline", title: "Offline owner", pinnedRank: "3072",
+      federation: { ...blocked.federation!, ref: { ...blocked.federation!.ref, threadId: "offline" },
+        peerStatus: "disconnected", capabilities: ["turn_control"] } };
+    render(view({ threads: [local, remote, blocked, offline], onArchiveThread,
+      remoteBackends: new Map([["owner", [capable("acp:grok")]], ["blocked-owner", [capable("acp:grok")]]]),
+    }));
+    const localButton = screen.getByRole("button", { name: local.title });
+    fireEvent.click(localButton);
+    for (const row of [remote, blocked, offline]) {
+      fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${row.title}(?:,|$)`) }), { ctrlKey: true, metaKey: true });
+    }
+    if (path === "menu") {
+      fireEvent.contextMenu(localButton);
+      await act(async () => { fireEvent.click(screen.getByRole("menuitem", { name: "Archive 2 Threads" })); });
+    } else {
+      localButton.focus();
+      await act(async () => { fireEvent.keyDown(localButton, {
+        key: "Backspace", code: "Backspace", ctrlKey: true, shiftKey: true,
+      }); });
+    }
+    expect(onArchiveThread.mock.calls).toHaveLength(2);
+    expect(onArchiveThread.mock.calls.map((call) => call[0])).toEqual(expect.arrayContaining([local, remote]));
   });
 });
