@@ -4778,10 +4778,10 @@ class DesktopAppServerService {
     await this.loadPrStatusRegistry();
     await this.loadPrLookupRegistry();
     const storedPrs = existing?.prs ?? [];
-    const retainedStoredPrs = await filterStoredDiscoveredPullRequests(storedPrs);
+    const retainedStoredPrs = await this.filterStoredDiscoveredPrs(storedPrs);
     const persistedPrs = this.mergePrHistory(
       retainedStoredPrs,
-      await filterStoredDiscoveredPullRequests(existing?.detachedPrs ?? []),
+      await this.filterStoredDiscoveredPrs(existing?.detachedPrs ?? []),
     );
     this.rememberPrStatuses(
       persistedPrs,
@@ -4812,7 +4812,7 @@ class DesktopAppServerService {
       : existingLookupMatches
         ? existingPrs
         : [];
-    const currentLookupPrs = await filterStoredDiscoveredPullRequests(
+    const currentLookupPrs = await this.filterStoredDiscoveredPrs(
       associatePrsWithLinkedDirectories(lookupPrs, lookupDirectoryPaths),
     );
     // Legacy automatic matches may already be in an overlay even though the
@@ -4825,7 +4825,7 @@ class DesktopAppServerService {
         write: async () => {
           const latest = await overlay.getThreadOverlayState({ backend, threadId: request.threadId });
           if (!latest) return;
-          const prs = await filterStoredDiscoveredPullRequests(latest.prs ?? []);
+          const prs = await this.filterStoredDiscoveredPrs(latest.prs ?? []);
           if (prSummariesEqual(latest.prs ?? [], prs)) return;
           const updated = await overlay.setThreadPullRequests({
             backend,
@@ -5445,7 +5445,7 @@ class DesktopAppServerService {
               latest?.prs ?? [],
               latest?.detachedPrs ?? [],
             );
-            const previousPrs = await filterStoredDiscoveredPullRequests(this.mergePrHistory(
+            const previousPrs = await this.filterStoredDiscoveredPrs(this.mergePrHistory(
               subscriber.previousPrs,
               latestPrs,
             ));
@@ -5950,7 +5950,7 @@ class DesktopAppServerService {
     prs: PrSummary[],
   ): Promise<PrSummary[]> {
     await this.loadPrStatusRegistry();
-    return await filterStoredDiscoveredPullRequests(this.canonicalizePrs(prs));
+    return await this.filterStoredDiscoveredPrs(this.canonicalizePrs(prs));
   }
 
   private mergePrHistory(
@@ -6149,6 +6149,20 @@ class DesktopAppServerService {
 
   acknowledgeBundledGitLfsAdvisory(): void {
     this.bundledGitLfsNotice.acknowledge();
+  }
+
+  /**
+   * Repair stored automatic attachments. A renamed repository's remote can
+   * still carry the old name, so a stored PR no remote names asks GitHub what
+   * that remote is called now before it is dropped.
+   */
+  private async filterStoredDiscoveredPrs(prs: PrSummary[]): Promise<PrSummary[]> {
+    return await filterStoredDiscoveredPullRequests(prs, {
+      resolveRepositoryNames: async (repos) => {
+        if (!getDesktopSettingsService().isForgeEnabled("github")) return;
+        await this.getPrGraphqlClient().resolveRepositoryNames(repos);
+      },
+    });
   }
 
   private getPrGraphqlClient(): GithubGraphqlPrClient {

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GithubGraphqlPrClient,
   branchRefKey,
@@ -11,6 +11,11 @@ import {
   readGithubDotComAuthToken,
   retryDelayMs,
 } from "../pr-status/github-graphql-client";
+import {
+  clearForgeRepositoryNames,
+  forgeRepositoryName,
+  hasForgeRepositoryName,
+} from "../pr-status/forge-repository-names";
 import type {
   GithubRepositoryAccessEvent,
   GraphqlPrNode,
@@ -809,6 +814,63 @@ describe("GithubGraphqlPrClient", () => {
     expect(request).toHaveBeenCalledTimes(1);
     expect(result.get("pwrdrvr/pwragent#feat/a")?.map((pr) => pr.number)).toEqual([12]);
     expect(result.get("other/infra#fix/b")?.map((pr) => pr.number)).toEqual([7]);
+  });
+
+  describe("repository names", () => {
+    const oldName = { host: "github.com", owner: "pwrdrvr", repo: "PwrAgnt" };
+
+    afterEach(() => {
+      clearForgeRepositoryNames();
+    });
+
+    it("learns a renamed repository's name from the branch lookup it already makes", async () => {
+      const request = vi.fn(async () => ({
+        r0: { nameWithOwner: "pwrdrvr/PwrAgent", pullRequests: { nodes: [] } },
+      }));
+      await client(request).fetchPullRequestsForBranches([
+        { owner: "pwrdrvr", repo: "PwrAgnt", branch: "feat/a" },
+      ]);
+
+      expect(request).toHaveBeenCalledOnce();
+      expect(forgeRepositoryName(oldName)).toEqual({ host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" });
+    });
+
+    it("learns it from a commit lookup too", async () => {
+      const request = vi.fn(async () => ({ r0: { nameWithOwner: "pwrdrvr/PwrAgent", object: null } }));
+      await client(request).fetchPullRequestsForCommits([
+        { owner: "pwrdrvr", repo: "PwrAgnt", sha: "a".repeat(40) },
+      ]);
+
+      expect(String((request.mock.calls[0] as unknown[])[0])).toContain("nameWithOwner object(oid:");
+      expect(forgeRepositoryName(oldName).repo).toBe("PwrAgent");
+    });
+
+    it("asks only for repositories GitHub has not named since launch", async () => {
+      const request = vi.fn(async (_query: string, variables: Record<string, string | number>) => ({
+        r0: { nameWithOwner: variables.n0 === "PwrAgnt" ? "pwrdrvr/PwrAgent" : "other/infra" },
+      }));
+      const graphqlClient = client(request);
+
+      await graphqlClient.resolveRepositoryNames([
+        { owner: "pwrdrvr", repo: "PwrAgnt" },
+        { owner: "PWRDRVR", repo: "pwragnt" },
+      ]);
+      await graphqlClient.resolveRepositoryNames([{ owner: "pwrdrvr", repo: "PwrAgnt" }]);
+
+      expect(request).toHaveBeenCalledOnce();
+      expect(request.mock.calls[0]![0]).toContain("r0: repository(owner: $o0, name: $n0) { nameWithOwner }");
+      expect(request.mock.calls[0]![0]).not.toContain("r1:");
+      expect(forgeRepositoryName(oldName).repo).toBe("PwrAgent");
+    });
+
+    it("records nothing when GitHub cannot answer, so callers stay inconclusive", async () => {
+      const request = vi.fn(async () => {
+        throw Object.assign(new Error("unauthorized"), { status: 401 });
+      });
+      await client(request).resolveRepositoryNames([{ owner: "pwrdrvr", repo: "PwrAgnt" }]);
+
+      expect(hasForgeRepositoryName(oldName)).toBe(false);
+    });
   });
 
   it("records an authoritative empty answer for a branch with no PRs", async () => {

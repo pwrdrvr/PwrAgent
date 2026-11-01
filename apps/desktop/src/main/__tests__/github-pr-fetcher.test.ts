@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
 import {
   GithubPrFetcher,
@@ -15,6 +15,7 @@ import {
   GithubGraphqlPrClient,
   type GraphqlPrNode,
 } from "../pr-status/github-graphql-client";
+import { clearForgeRepositoryNames } from "../pr-status/forge-repository-names";
 
 // JSON shape pinned from `gh pr list --json …` against pwrdrvr/PwrAgent
 // running gh 2.88.1 on 2026-05-04. If gh changes the shape, update these
@@ -671,6 +672,10 @@ describe("GithubPrFetcher", () => {
       headRepository: { name: "PwrAgent" },
       headRepositoryOwner: { login: "pwrdrvr" },
     };
+
+    afterEach(() => {
+      clearForgeRepositoryNames();
+    });
 
     function buildRenamedFetcher(remote = { host: "github.com", owner: "pwrdrvr", repo: "PwrAgnt" }) {
       const request = vi.fn(async (query: string) => query.includes("associatedPullRequests")
