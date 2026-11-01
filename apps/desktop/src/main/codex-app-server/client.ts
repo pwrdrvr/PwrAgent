@@ -18,6 +18,7 @@ import { CODEX_SIGN_IN_REQUIRED, codexAuthState } from "../codex-auth-state";
 import { mkdir } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
   buildSubAgentActivityDetail,
@@ -3307,10 +3308,11 @@ function reviewDisplayText(item: Record<string, unknown>): string | undefined {
 
 function pushActivityDetail(
   details: AppServerThreadActivityDetail[],
-  detailsByLabel: Map<string, AppServerThreadActivityDetail>,
+  detailsByKey: Map<string, AppServerThreadActivityDetail>,
   detail: AppServerThreadActivityDetail
 ): void {
-  const existing = detailsByLabel.get(detail.label);
+  const key = JSON.stringify(detail.images?.length ? ["image", detail.id] : ["label", detail.label]);
+  const existing = detailsByKey.get(key);
   if (existing) {
     if (!existing.status || existing.status === "completed") {
       existing.status = detail.status ?? existing.status;
@@ -3318,7 +3320,7 @@ function pushActivityDetail(
     return;
   }
   details.push(detail);
-  detailsByLabel.set(detail.label, detail);
+  detailsByKey.set(key, detail);
 }
 
 function normalizeFileChangeKind(
@@ -4668,7 +4670,7 @@ function summarizeActivityItems(
   }
 
   const details: AppServerThreadActivityDetail[] = [];
-  const detailsByLabel = new Map<string, AppServerThreadActivityDetail>();
+  const detailsByKey = new Map<string, AppServerThreadActivityDetail>();
   let inspectedFiles = 0;
   let commandsRun = 0;
   let changedFiles = 0;
@@ -4688,7 +4690,7 @@ function summarizeActivityItems(
       status ??= "completed";
       pushActivityDetail(
         details,
-        detailsByLabel,
+        detailsByKey,
         buildSubAgentActivityDetail(subAgentActivity),
       );
       continue;
@@ -4716,7 +4718,7 @@ function summarizeActivityItems(
 
       if (actions.length === 0) {
         commandsRun += 1;
-        pushActivityDetail(details, detailsByLabel, {
+        pushActivityDetail(details, detailsByKey, {
           id: itemId,
           kind: "command",
           label: appendElapsedLabel(formatCommandLabel(command), elapsedMs),
@@ -4735,7 +4737,7 @@ function summarizeActivityItems(
 
         if (actionType === "read" && actionPath) {
           inspectedFiles += 1;
-          pushActivityDetail(details, detailsByLabel, {
+          pushActivityDetail(details, detailsByKey, {
             id: detailId,
             kind: "read",
             label: appendElapsedLabel(
@@ -4750,7 +4752,7 @@ function summarizeActivityItems(
 
         if (actionType === "search") {
           inspectedFiles += 1;
-          pushActivityDetail(details, detailsByLabel, {
+          pushActivityDetail(details, detailsByKey, {
             id: detailId,
             kind: "read",
             label: appendElapsedLabel(
@@ -4771,7 +4773,7 @@ function summarizeActivityItems(
           const label = actionPath
             ? `Listed ${path.basename(actionPath) || actionPath}`
             : "Listed files";
-          pushActivityDetail(details, detailsByLabel, {
+          pushActivityDetail(details, detailsByKey, {
             id: detailId,
             kind: "read",
             label: appendElapsedLabel(label, elapsedMs),
@@ -4783,7 +4785,7 @@ function summarizeActivityItems(
 
         commandsRun += 1;
         const label = fallbackName?.trim() || formatCommandLabel(command);
-        pushActivityDetail(details, detailsByLabel, {
+        pushActivityDetail(details, detailsByKey, {
           id: detailId,
           kind: "command",
           label: appendElapsedLabel(label, elapsedMs),
@@ -4824,7 +4826,7 @@ function summarizeActivityItems(
         changedFiles += 1;
         changedFileAdditions += diffSummary?.additions ?? 0;
         changedFileRemovals += diffSummary?.removals ?? 0;
-        pushActivityDetail(details, detailsByLabel, {
+        pushActivityDetail(details, detailsByKey, {
           id: `${itemId}-${index + 1}`,
           kind: "write",
           label: `${changeType[0]?.toUpperCase() ?? "U"}${changeType.slice(1)} ${
@@ -4862,7 +4864,7 @@ function summarizeActivityItems(
       const commandDetail = functionName === "exec_command"
         ? buildCommandDetail({ item, command, elapsedMs })
         : undefined;
-      pushActivityDetail(details, detailsByLabel, {
+      pushActivityDetail(details, detailsByKey, {
         id: itemId,
         kind: "command",
         label: appendElapsedLabel(
@@ -4896,7 +4898,7 @@ function summarizeActivityItems(
         receiverThreadIds,
         tool,
       });
-      pushActivityDetail(details, detailsByLabel, {
+      pushActivityDetail(details, detailsByKey, {
         id: itemId,
         kind: "command",
         label: appendElapsedLabel(label, elapsedMs),
@@ -4916,7 +4918,8 @@ function summarizeActivityItems(
       toolCalls += 1;
       const toolName =
         pickString(item, ["tool", "toolName", "tool_name", "name"]) ??
-        (normalizedItemType === "websearch" ? "web search" : undefined);
+        (normalizedItemType === "websearch" ? "web search"
+          : normalizedItemType === "imageview" ? `View image: ${pickString(item, ["path"]) ?? "unknown image"}` : undefined);
       const args = parseToolArguments(item);
       const query =
         pickString(item, ["query"]) ??
@@ -4935,6 +4938,8 @@ function summarizeActivityItems(
           ? extractDynamicToolCallImageParts(item, toolName ?? "Tool")
           : normalizedItemType === "mcptoolcall"
             ? extractMcpToolResultContentImageParts(item, toolName ?? "Tool")
+          : normalizedItemType === "imageview" && typeof item.path === "string" && path.isAbsolute(item.path)
+            ? [{ type: "image" as const, url: pathToFileURL(item.path).toString(), sourceUrl: pathToFileURL(item.path).toString(), alt: path.basename(item.path) }]
           : [];
       const label =
         (normalizedItemType === "mcptoolcall" || normalizedItemType === "dynamictoolcall")
@@ -4946,7 +4951,7 @@ function summarizeActivityItems(
               toolName,
             )}`
           : toolName ?? "Used tool";
-      pushActivityDetail(details, detailsByLabel, {
+      pushActivityDetail(details, detailsByKey, {
         id: itemId,
         kind: normalizedItemType === "websearch" ? "read" : "command",
         label: [

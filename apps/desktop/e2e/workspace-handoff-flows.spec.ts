@@ -205,7 +205,7 @@ async function createHandoffFixture(testId: string): Promise<HandoffFixture> {
 }
 
 async function openLocalHandoffDialog(page: Page, title: string) {
-  await page.getByRole("button", { name: title }).click();
+  await page.getByRole("button", { name: title, exact: true }).click();
   await page.getByLabel(/^Workspace mode(?::|$)/).click();
   await page.getByRole("menuitem", { name: "Handoff to New Worktree" }).click();
   const dialog = page.getByRole("dialog", { name: "Handoff to New Worktree" });

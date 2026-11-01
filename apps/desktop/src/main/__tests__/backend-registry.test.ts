@@ -11,6 +11,7 @@ import { launchpadStorageKey } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
 import { stageTurnInputAttachment } from "../app-server/turn-input-attachment-files";
 import * as turnInputAttachmentFiles from "../app-server/turn-input-attachment-files";
+import * as transcriptImageProtocol from "../transcript-image-protocol";
 import * as gitExecutable from "../app-server/git-executable";
 import { resolveActiveProfilePath } from "../profile";
 import { execFile as execFileCallback } from "node:child_process";
@@ -3281,6 +3282,78 @@ afterEach(() => {
 });
 
 describe("DesktopBackendRegistry", () => {
+  it.each(["turn/completed", "turn/failed", "turn/cancelled"] as const)(
+    "orders %s, idle queue release, and the next turn behind pending images",
+    async (terminalMethod) => {
+      const registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({ threads: [] }),
+        overlayStore: createOverlayStoreMock({ executionMode: "default" }),
+      });
+      const internal = registry as unknown as {
+        emit(event: AgentEvent): Promise<void>;
+        threadTurnQueue: { releaseThread(params: { status?: string }): Promise<void> };
+      };
+      const releaseThread = vi.spyOn(internal.threadTurnQueue, "releaseThread").mockResolvedValue();
+      let finishImages!: (event: AgentEvent) => void;
+      let finishTerminal!: () => void;
+      const imageWork = new Promise<AgentEvent>((resolve) => { finishImages = resolve; });
+      const terminalDelivery = new Promise<void>((resolve) => { finishTerminal = resolve; });
+      const materialize = vi.spyOn(transcriptImageProtocol, "materializeTranscriptImageEventForRenderer")
+        .mockReturnValueOnce(imageWork);
+      const events: AgentEvent[] = [];
+      registry.onEvent(async (event) => {
+        events.push(event);
+        if (event.notification.method === terminalMethod) await terminalDelivery;
+      });
+      await emitStartedTurn(registry, "codex", "thread-1", "turn-1");
+      events.length = 0;
+      const imageEvent: AgentEvent = { backend: "codex", notification: {
+        method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1",
+          item: { type: "imageView", id: "image-1", path: "/tmp/screenshot.png" } },
+      } };
+      const imageEmit = internal.emit(imageEvent);
+      const terminalParams = { threadId: "thread-1", turnId: "turn-1" };
+      const terminalNotification: AppServerNotification = terminalMethod === "turn/completed"
+        ? { method: terminalMethod, params: { ...terminalParams, turn: { id: "turn-1", status: "completed", output: [] } } }
+        : terminalMethod === "turn/failed"
+          ? { method: terminalMethod, params: { ...terminalParams, turn: { id: "turn-1", status: "failed", error: { message: "Fixture failure" } } } }
+          : { method: terminalMethod, params: { ...terminalParams, turn: { id: "turn-1", status: "cancelled" } } };
+      const terminalEmit = internal.emit({ backend: "codex", notification: terminalNotification });
+      const idleEmit = internal.emit({ backend: "codex", notification: {
+        method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } },
+      } });
+      const nextTurnEmit = emitStartedTurn(registry, "codex", "thread-1", "turn-2");
+      try {
+        await emitStartedTurn(registry, "codex", "other-thread", "other-turn");
+        expect(events).toMatchObject([{ notification: { method: "turn/started", params: { threadId: "other-thread" } } }]);
+        expect(releaseThread).not.toHaveBeenCalled();
+        finishImages(imageEvent);
+        await imageEmit;
+        await vi.waitFor(() => expect(events.some((event) => event.notification.method === terminalMethod)).toBe(true));
+        expect(releaseThread.mock.calls.map(([params]) => params.status)).toEqual([terminalMethod]);
+        expect(events.filter((event) => "threadId" in event.notification.params && event.notification.params.threadId === "thread-1")
+          .map((event) => event.notification.method)).toEqual(["item/completed", terminalMethod]);
+        finishTerminal();
+        await Promise.all([terminalEmit, idleEmit, nextTurnEmit]);
+        expect(events.filter((event) => "threadId" in event.notification.params && event.notification.params.threadId === "thread-1")
+          .map((event) => event.notification.method)).toEqual([
+          "item/completed", terminalMethod, "thread/status/changed", "turn/started",
+        ]);
+        expect(registry.getActiveTurnForThread({ backend: "codex", threadId: "thread-1" }))
+          .toMatchObject({ turnId: "turn-2" });
+        expect(releaseThread.mock.calls.map(([params]) => params.status)).toEqual([terminalMethod, "idle"]);
+      } finally {
+        finishImages(imageEvent);
+        finishTerminal();
+        await Promise.all([imageEmit, terminalEmit, idleEmit, nextTurnEmit]);
+        materialize.mockRestore();
+        await emitCompletedTurn(registry, "codex", "thread-1", "turn-2");
+        await emitCompletedTurn(registry, "codex", "other-thread", "other-turn");
+        await registry.close();
+      }
+    },
+  );
+
   it("leaves ACP Claude naming to the provider without launching a redundant title helper", async () => {
     const backend = "acp:claude" as const;
     const titleService = { generateTitle: vi.fn(async () => ({ status: "generated" as const, title: "Redundant helper title" })) };
