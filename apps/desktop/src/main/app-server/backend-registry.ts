@@ -41166,16 +41166,43 @@ export class DesktopBackendRegistry {
    * only, because they cannot be taken back. A headless automation also
    * needs Full Access: nobody is watching it, and in an Auto automation no
    * reviewer would see these calls at all.
+   *
+   * A Claude thread follows the same rules. Bypass permissions is its Full
+   * Access, and its Auto mode lets Claude's classifier clear `gh` the way
+   * Codex's reviewer does.
    */
   private async forgeAutoRunsWithoutApproval(
     group: ForgeAgentToolGroup,
     context: AgentToolCallContext,
     automation?: { executionMode?: ThreadExecutionMode },
   ): Promise<boolean> {
-    if (context.backend !== "codex") return await this.isMcpGatewayFullAccess(context, automation?.executionMode);
-    const executionMode = await this.resolveCodexToolCallExecutionMode(context, automation?.executionMode);
+    if (context.backend !== "codex" && context.backend !== "claude") {
+      return await this.isMcpGatewayFullAccess(context, automation?.executionMode);
+    }
+    const executionMode = context.backend === "codex"
+      ? await this.resolveCodexToolCallExecutionMode(context, automation?.executionMode)
+      : await this.resolveClaudeToolCallExecutionMode(context.threadId, automation?.executionMode);
     if (executionMode === "full-access") return true;
     return executionMode === "auto" && group !== "approve_merge" && !automation;
+  }
+
+  /**
+   * The open Claude process's mode wins, because a permission change during
+   * the turn and a plan turn reach it before the saved thread. A thread with
+   * no open process and no readable record asks.
+   */
+  private async resolveClaudeToolCallExecutionMode(
+    threadId: string,
+    automationMode?: ThreadExecutionMode,
+  ): Promise<ThreadExecutionMode | undefined> {
+    const liveMode = this.claudeBackend.liveExecutionMode(threadId);
+    if (liveMode) return liveMode;
+    if (automationMode) return automationMode;
+    try {
+      return await this.claudeBackend.executionMode(threadId);
+    } catch {
+      return undefined;
+    }
   }
 
   private async resolveCodexToolCallExecutionMode(

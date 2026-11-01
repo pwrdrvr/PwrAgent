@@ -20,7 +20,9 @@ import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, type ClaudeInstallation } from "./claude-executable";
-import { CLAUDE_EXIT_PLAN_TOOL, createClaudePermissionHandler, claudePermissionMode } from "./claude-permissions";
+import {
+  CLAUDE_EXIT_PLAN_TOOL, createClaudePermissionHandler, claudePermissionMode, threadExecutionModeForClaudePermission,
+} from "./claude-permissions";
 import { createClaudeElicitationHandler } from "./claude-elicitation";
 import { claudeHarnessOptions, discoverClaudeModels, readClaudeMcpServerStatus, readClaudeMetadata } from "./claude-models";
 import { CLAUDE_TERMINAL_COMMANDS_SEED, claudeCommandSummaries } from "./claude-commands";
@@ -600,6 +602,16 @@ export class ClaudeBackend {
 
   async executionMode(threadId: string): Promise<ThreadExecutionMode> {
     return (await this.store.read(threadId)).thread.executionMode ?? "default";
+  }
+
+  /**
+   * The approval mode the thread's open Claude process runs tools under now.
+   * It follows a permission change made during the turn and a plan turn, which
+   * the saved mode does not. Undefined when no process is open.
+   */
+  liveExecutionMode(threadId: string): ThreadExecutionMode | undefined {
+    const live = this.sessions.get(threadId);
+    return live ? threadExecutionModeForClaudePermission(live.config.permissionMode) : undefined;
   }
 
   async listThreads(params: { archived?: boolean; filter?: string } = {}): Promise<AppServerThreadSummary[]> {

@@ -10,6 +10,19 @@ export function claudePermissionMode(mode: ThreadExecutionMode): PermissionMode 
   }
 }
 
+/**
+ * The PwrAgent approval mode a Claude permission mode runs under. Plan,
+ * accept-edits and don't-ask still stop for anything not already allowed, so
+ * they count as Default Access.
+ */
+export function threadExecutionModeForClaudePermission(mode: PermissionMode): ThreadExecutionMode {
+  switch (mode) {
+    case "bypassPermissions": return "full-access";
+    case "auto": return "auto";
+    default: return "default";
+  }
+}
+
 /** Claude's request to leave plan mode, whose input carries the plan. */
 export const CLAUDE_EXIT_PLAN_TOOL = "ExitPlanMode";
 
