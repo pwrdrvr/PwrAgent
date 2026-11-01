@@ -453,6 +453,52 @@ describe.skipIf(process.platform === "win32")("local command MCP connections", (
 
 
 describe.skipIf(process.platform === "win32")("desktop-owned MCP lifecycle through an unchanged relay", () => {
+  it("keeps a healthy thread's revisions and pending approval when another session exits", async () => {
+    const fixture = makeFixture();
+    let id = "";
+    const { service } = createService(fixture, { readGatewaySelection: async () => [id] });
+    const connection = await service.createConnection({ displayName: "Independent sessions", stdio: launch(fixture) });
+    id = connection.id;
+    const signal = new AbortController().signal;
+    const scope = (thread: string) => JSON.stringify(["gateway", "codex", thread]);
+    const list = async (thread: string) => await service.requestGatewayToolOperation({
+      connectionId: id, scopeKey: scope(thread), operation: "gateway/tools/list", signal,
+    }) as McpGatewayTool[];
+    await list("exiting-thread");
+    const exiting = await bridgeFor(service, id, scope("exiting-thread"));
+    let ended = false;
+    await exiting.rpc.attach(5_000, (event) => { if (event.method === "connection/closed") ended = true; });
+    const identity = await whoami(exiting.rpc);
+    const healthy = await list("healthy-thread");
+    const echo = healthy.find((entry) => entry.toolName === "echo")!;
+    const cached = await service.listConnectionTools({ connectionId: id });
+    const starts = pidsOf(fixture, "server").length;
+    let release!: (approved: boolean) => void;
+    const approval = new Promise<boolean>((resolve) => { release = resolve; });
+    const approve = vi.fn(async () => await approval);
+    const gateway = new McpGatewayToolService({ connections: service, selectedConnections: async () => [id], approve });
+    const outcome = gateway.call({ ...echo, arguments: { text: "still approved" } }, {
+      backend: "codex", threadId: "healthy-thread", turnId: "turn", callId: "call", transport: "codex_dynamic_tool",
+    }).then((result) => ({ result }), (error: unknown) => ({ error }));
+    try {
+      await vi.waitFor(() => expect(approve).toHaveBeenCalledOnce());
+      expect(pidsOf(fixture, "server")).toContain(identity.pid);
+      process.kill(identity.pid, "SIGTERM");
+      await vi.waitFor(() => expect(ended).toBe(true));
+      await expect(list("exiting-thread")).rejects.toThrow("turn this connection off and on");
+      const freshInventory = await service.listConnectionTools({ connectionId: id });
+      expect(freshInventory.fetchedAt).toBeGreaterThan(cached.fetchedAt);
+      expect(pidsOf(fixture, "server")).toHaveLength(starts + 1);
+      expect(await list("healthy-thread")).toEqual(healthy);
+      release(true);
+      await expect(outcome).resolves.toMatchObject({ result: { result: { content: [{ text: "still approved" }] } } });
+      expect(approve).toHaveBeenCalledOnce();
+    } finally {
+      release(false);
+      await outcome;
+    }
+  });
+
   it("forwards supported discovery notifications and resource subscriptions over the live attach socket", async () => {
     const fixture = makeFixture();
     const { service } = createService(fixture);
