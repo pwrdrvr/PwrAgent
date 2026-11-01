@@ -9,13 +9,23 @@ import {
   ListResourcesRequestSchema,
   ListToolsRequestSchema,
   ReadResourceRequestSchema,
+  SubscribeRequestSchema,
+  UnsubscribeRequestSchema,
+  type Implementation,
+  type InitializeResult,
+  type Notification,
   type ServerCapabilities,
 } from "@modelcontextprotocol/sdk/types.js";
 import { MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS } from "./mcp-connection-timeouts.js";
-import { ConnectionRpcClient } from "./mcp-connection-rpc-client.js";
+import { McpInitializationTransport } from "./mcp-initialization-transport.js";
+import { ConnectionRpcClient, type McpBridgeEvent } from "./mcp-connection-rpc-client.js";
 
 type BridgeDescription = {
   name?: string;
+  serverInfo?: Implementation;
+  capabilities?: ServerCapabilities;
+  instructions?: string;
+  metadata?: InitializeResult["_meta"];
   tools?: boolean;
   resources?: boolean;
   prompts?: boolean;
@@ -38,18 +48,36 @@ async function main(): Promise<void> {
   const rpc = new ConnectionRpcClient(socketPath, token);
   // Before anything can start a server for this grant, so no window exists
   // in which a local command runs with no live bridge to own it.
-  await rpc.attach();
+  let server: Server | undefined;
+  let closed = false;
+  let initialized = false;
+  const pending: McpBridgeEvent[] = [];
+  const forward = (event: McpBridgeEvent): void => {
+    if (event.method === "connection/closed") {
+      closed = true;
+      logStderr("upstream ended; start the desktop yourself and reconnect MCP. Rediscover tools and reread skills/resources. Never replay writes or approvals.");
+      void server?.close();
+    } else if (server && initialized) {
+      void server.notification(event as Notification).catch((error: unknown) => logStderr("notification failed", String(error)));
+    } else if (pending.length < 128) pending.push(event);
+  };
+  await rpc.attach(5_000, forward);
   const startupDeadlineAt = Date.now() + MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS;
   const description = await rpc.request("describe", undefined, undefined, startupDeadlineAt) as BridgeDescription;
   const capabilities: ServerCapabilities = {
-    ...(description.tools ? { tools: {} } : {}),
-    ...(description.resources ? { resources: {} } : {}),
-    ...(description.prompts ? { prompts: {} } : {}),
+    ...(description.tools ? { tools: description.capabilities?.tools ?? {} } : {}),
+    ...(description.resources ? { resources: description.capabilities?.resources ?? {} } : {}),
+    ...(description.prompts ? { prompts: description.capabilities?.prompts ?? {} } : {}),
   };
-  const server = new Server(
-    { name: connectionName ?? description.name ?? "pwrsnap", version: "1.0.0" },
-    { capabilities },
+  if (closed) throw new Error("The upstream MCP session ended during startup. Reconnect explicitly.");
+  server = new Server(
+    description.serverInfo ?? { name: connectionName ?? description.name ?? "pwrsnap", version: "1.0.0" },
+    { capabilities, instructions: description.instructions },
   );
+  server.oninitialized = () => {
+    initialized = true;
+    for (const event of pending.splice(0)) forward(event);
+  };
 
   if (description.tools) {
     let firstCatalogDeadlineAt: number | undefined = startupDeadlineAt;
@@ -96,6 +124,14 @@ async function main(): Promise<void> {
       await rpc.request("resources/read", request.params, extra.signal) as never,
     );
   }
+  if (description.capabilities?.resources?.subscribe) {
+    server.setRequestHandler(SubscribeRequestSchema, async (request, extra) =>
+      await rpc.request("resources/subscribe", request.params, extra.signal) as never,
+    );
+    server.setRequestHandler(UnsubscribeRequestSchema, async (request, extra) =>
+      await rpc.request("resources/unsubscribe", request.params, extra.signal) as never,
+    );
+  }
   if (description.prompts) {
     server.setRequestHandler(ListPromptsRequestSchema, async (request, extra) =>
       await rpc.request("prompts/list", request.params, extra.signal) as never,
@@ -105,7 +141,8 @@ async function main(): Promise<void> {
     );
   }
 
-  await server.connect(new StdioServerTransport());
+  await server.connect(new McpInitializationTransport(new StdioServerTransport(), description.metadata));
+  if (closed) await server.close();
   logStderr("ready");
 }
 
