@@ -1302,7 +1302,10 @@ describe("Claude SDK backend", () => {
     await backend.startThread({ cwd: f.root, executionMode: "default" });
     expect(discoverModels).not.toHaveBeenCalled();
     await backend.discover();
-    expect(discoverModels).toHaveBeenCalledWith({ executable: "/fixture/claude", env: { PATH: "/fixture", CLAUDE_CODE_REPORT_FINDINGS: "1", CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1" } });
+    expect(discoverModels).toHaveBeenCalledWith({ executable: "/fixture/claude", env: {
+      PATH: "/fixture", CLAUDE_CODE_REPORT_FINDINGS: "1", CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
+      CLAUDE_CODE_ARTIFACT: "1", CLAUDE_CODE_ARTIFACT_AUTO_OPEN: "0",
+    } });
     expect(backend.summary().launchpadOptions?.models).toEqual(models);
     expect(f.events).toEqual([{ backend: "claude", notification: {
       method: "backend/providerStatus/updated", params: { backend: "claude" },
@@ -1565,6 +1568,7 @@ describe("Claude SDK backend", () => {
     expect(f.backendOptions.inspectInstallation).toHaveBeenCalledWith({ env: f.queries[0].env });
     expect(f.queries[0].env?.PATH).toBe("/fixture");
     expect(f.queries[0].env?.CLAUDE_CODE_REPORT_FINDINGS).toBe("1");
+    expect(f.queries[0].env?.CLAUDE_CODE_ARTIFACT).toBe("1");
     expect(f.queries[0]).not.toHaveProperty("bare");
     expect(f.events.some((event) => event.notification.method === "item/agentMessage/delta")).toBe(true);
     const replay = await f.backend.readThread(threadId);
@@ -2572,6 +2576,41 @@ describe("Claude permission bridge", () => {
     expect(result).not.toHaveProperty("updatedPermissions");
   });
 
+  it("asks Claude Code's own artifact question and keeps its fields out of the card", async () => {
+    const request = vi.fn().mockResolvedValue({ decision: "accept" });
+    const handler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", request, cancelRequest: async () => {} });
+    // Captured from Claude Code 2.1.303's publish permission request.
+    const input = {
+      file_path: "/repo/settings.html", title: "Settings screen",
+      __artifactPlanConsentAsk: false, __artifactPublishSourcePin: { path: "/repo/settings.html", sha256: "511a" },
+    };
+    const question = "Claude wants to publish \"/repo/settings.html\", uploading it to claude.ai (Anthropic's servers) "
+      + "to host as the page \"Settings screen\". It stays private to you until you share it.";
+    const result = await handler("Artifact", input, {
+      signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request",
+      decisionReason: question, description: "publish \"Settings screen\" as an artifact",
+    } as Parameters<typeof handler>[2]);
+    const params = request.mock.calls[0]?.[0].params as Record<string, unknown>;
+    expect(params).toMatchObject({
+      toolName: "Artifact", prompt: question, reason: question,
+      arguments: { file_path: "/repo/settings.html", title: "Settings screen" },
+    });
+    expect(params).not.toHaveProperty("command");
+    expect(JSON.stringify(params.arguments)).not.toContain("__artifact");
+    // The CLI gets its own fields back.
+    expect(result).toEqual({ behavior: "allow", updatedInput: input });
+  });
+
+  it("falls back to the CLI's short description of an artifact request", async () => {
+    const request = vi.fn().mockResolvedValue({ decision: "decline" });
+    const handler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", request, cancelRequest: async () => {} });
+    await handler("Artifact", { action: "delete", url: "https://claude.ai/artifact/x" }, {
+      signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request",
+      description: "Permanently delete \"Settings screen\"?",
+    } as Parameters<typeof handler>[2]);
+    expect(request.mock.calls[0]?.[0].params).toMatchObject({ prompt: "Permanently delete \"Settings screen\"?" });
+  });
+
   it("answers a request to leave plan mode without an approval card", async () => {
     const request = vi.fn();
     const handler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", planTurn: () => true, request, cancelRequest: async () => {} });
@@ -2983,6 +3022,40 @@ describe("Claude transcript fidelity", () => {
       "Read index.ts", "Searched for TODO in src", "Fetched https://example.com/docs",
     ]);
     expect(group.details.find((detail) => detail.id === "fetch-1")).toMatchObject({ url: "https://example.com/docs" });
+  });
+
+  it("links a published artifact instead of showing the result's instructions", async () => {
+    const page = "https://claude.ai/artifact/DEUQW4g8qq7csZHvDLZKyt";
+    const f = await fixture(async function* () {
+      yield init;
+      yield call("publish-1", "Artifact", { file_path: "/repo/settings.html", title: "Settings screen" });
+      // Captured from Claude Code 2.1.303; the text addresses the model.
+      yield answer("publish-1", `Published /repo/settings.html at ${page} (Version 1)\n\nLive subscription: arming…`, {
+        url: page, path: "/repo/settings.html", artifact_id: "630f38d3-9e88-4301-bf28-0d6e5f81bd5b",
+        title: "Settings screen", owned: true, audience: "owner", seq: 1,
+      });
+      yield call("read-1", "Artifact", { action: "read", url: page });
+      yield answer("read-1", "<h1>Settings</h1>", { read: { url: page, title: "Settings screen", code: 200, result: "<h1>Settings</h1>" } });
+      yield call("publish-2", "Artifact", { file_path: "/repo/broken.html" });
+      yield { type: "user", parent_tool_use_id: null, message: { content: [
+        { type: "tool_result", tool_use_id: "publish-2", content: "Not signed in to claude.ai", is_error: true },
+      ] } } as SDKMessage;
+      yield result;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Design it" }] });
+    await f.waitForTurn();
+    const [group] = (await f.backend.readThread(threadId)).entries.filter((entry) => entry.type === "activity");
+    if (group?.type !== "activity") throw new Error("Expected the tools' row");
+    expect(group.details.find((detail) => detail.id === "publish-1")).toEqual({
+      id: "publish-1", kind: "write", label: "Published Settings screen", url: page, status: "completed",
+    });
+    expect(group.details.some((detail) => detail.id === "publish-1:output")).toBe(false);
+    expect(group.details.find((detail) => detail.id === "read-1")).toMatchObject({ label: "Read Settings screen", url: page });
+    expect(group.details.find((detail) => detail.id === "read-1:output")).toMatchObject({ markdown: "<h1>Settings</h1>" });
+    // A failed publish keeps the reason it failed.
+    expect(group.details.find((detail) => detail.id === "publish-2")).toMatchObject({ label: "Published broken.html", status: "failed" });
+    expect(group.details.find((detail) => detail.id === "publish-2:output")).toMatchObject({ markdown: "Not signed in to claude.ai" });
   });
 
   it("keeps refusals as warning rows and reports denials and notifications without a toast", async () => {

@@ -32,8 +32,8 @@ import { backUpRewindFiles, recordRewoundFiles, restoreRewindFiles } from "./cla
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 import { ClaudeTaskTracker, claudeTaskRow, type ClaudeTaskSettlement } from "./claude-tasks";
 import {
-  CLAUDE_TODO_TOOL, claudeFileDiff, claudeShellCommand, claudeTodoSteps, claudeToolCallArguments, claudeToolCallDetail,
-  claudeToolDetail, claudeToolResultContent, claudeTurnDiff,
+  CLAUDE_ARTIFACT_TOOLS, CLAUDE_TODO_TOOL, claudeArtifactResult, claudeFileDiff, claudeShellCommand, claudeTodoSteps,
+  claudeToolCallArguments, claudeToolCallDetail, claudeToolDetail, claudeToolResultContent, claudeTurnDiff,
 } from "./claude-tool-activity";
 import { normalizeClaudeTitle, requestClaudeTitle, type ClaudeTitleQuery } from "./claude-titles";
 import {
@@ -216,6 +216,8 @@ type RunningTurn = {
   hasCompletedToolActivity: boolean;
   /** Each successful file edit's diff, in order: the turn's live diff. */
   fileDiffs: string[];
+  /** Artifact tool calls, by tool-use id: their results carry the page's link. */
+  artifactCalls: Set<string>;
   ending?: boolean;
   titlePrompt?: string;
   /** Owned by the turn, but never awaited by the streaming message pump. */
@@ -369,7 +371,8 @@ function claudeTurn(session?: ClaudeSession, followUp = false): RunningTurn {
   return {
     ended: claudeDeferred(),
     turnId: randomUUID(), startedAt: Date.now(), entries: new Map(), pendingSteers: new Set(),
-    completedMessageText: new Map(), pendingReports: new Map(), hasCompletedToolActivity: false, fileDiffs: [], lastResultSeq: 0,
+    completedMessageText: new Map(), pendingReports: new Map(), hasCompletedToolActivity: false, fileDiffs: [],
+    artifactCalls: new Set(), lastResultSeq: 0,
     usageBaseline: session?.modelUsage, needsUsageBaseline: Boolean(session?.sdkSessionId) && !session?.modelUsage,
     ...(followUp ? { followUp, started: true } : {}),
   };
@@ -2020,6 +2023,7 @@ export class ClaudeBackend {
           createdAt: Date.now(), turn: { id: turnId },
         };
         turn.entries.set(block.id, activity);
+        if (CLAUDE_ARTIFACT_TOOLS.has(block.name)) turn.artifactCalls.add(block.id);
         // A task this call starts can outlive the turn.
         live.toolRows.set(block.id, { entry: activity, turnId });
         await this.store.append(threadId, [activity]);
@@ -2069,9 +2073,16 @@ export class ClaudeBackend {
         const { text: output, images } = claudeToolResultContent(block.content, entry.summary);
         const command = claudeShellCommand(entry.details[0]);
         const toolCall = entry.details[0].command?.source === "tool" ? entry.details[0] : undefined;
-        // A successful edit shows its diff instead of the tool's acknowledgement.
-        const edit = entry.details[0].kind === "write" && !block.is_error
+        // A successful publish links to its page, and a successful edit shows
+        // its diff, instead of the tool's acknowledgement.
+        const artifact = turn.artifactCalls.has(block.tool_use_id) && !block.is_error
+          ? claudeArtifactResult(entry.details[0], message.tool_use_result) : undefined;
+        const edit = entry.details[0].kind === "write" && !block.is_error && !artifact
           ? claudeFileDiff(message.tool_use_result, live.session.cwd) : undefined;
+        if (artifact) {
+          entry.summary = artifact.detail.label;
+          entry.details = [{ ...artifact.detail, status: entry.status }, ...entry.details.slice(1)];
+        }
         if (command !== undefined) {
           const details = claudeCommandActivity({ id: entry.id, command, status: entry.status, output }).details;
           entry.details = images.length ? [{ ...details[0], images }, ...details.slice(1)] : details;
@@ -2087,7 +2098,7 @@ export class ClaudeBackend {
             turn.fileDiffs.push(edit.diff);
             await this.emit({ method: "turn/diff/updated", params: { threadId, turnId, diff: claudeTurnDiff(turn.fileDiffs) } });
           }
-        } else {
+        } else if (!artifact || artifact.keepOutput) {
           // Keep the invocation when updating generic tools, too.
           const outputId = `${entry.id}:output`;
           entry.details = [...entry.details.filter((detail) => detail.id !== outputId), {

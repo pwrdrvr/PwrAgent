@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { CanUseTool, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import type { AppServerPendingRequestNotification, ThreadExecutionMode } from "@pwragent/shared";
+import { CLAUDE_ARTIFACT_TOOLS } from "./claude-tool-activity";
 
 export function claudePermissionMode(mode: ThreadExecutionMode): PermissionMode {
   switch (mode) {
@@ -20,6 +21,35 @@ export const CLAUDE_EXIT_PLAN_TOOL = "ExitPlanMode";
  */
 const CLAUDE_PLAN_HANDOFF = "The operator has your plan and will reply when it should be implemented. "
   + "Stay in plan mode and end your turn now.";
+
+/**
+ * The input a card shows. Claude Code adds its own `__`-prefixed fields to
+ * some calls, such as an artifact publish's consent and source pin. They are
+ * returned to the CLI unchanged, never shown.
+ */
+function displayInput(input: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(input).filter(([key]) => !key.startsWith("__")));
+}
+
+/**
+ * What an approval card says. Claude Code writes its own question for an
+ * artifact request (a publish to claude.ai, a public share, a delete), so
+ * the card asks that instead of showing the call's input as a command.
+ */
+function claudeApprovalText(
+  toolName: string, input: Record<string, unknown>, context: Parameters<CanUseTool>[2],
+): { command?: string; prompt?: string; reason: string } {
+  const reason = context.decisionReason ?? `Claude requests permission to use ${toolName}.`;
+  if (CLAUDE_ARTIFACT_TOOLS.has(toolName)) {
+    const question = context.decisionReason ?? context.description ?? context.title
+      ?? `Claude requests permission to use ${toolName}.`;
+    return { prompt: question, reason: question };
+  }
+  return {
+    command: toolName === "Bash" ? String(input.command ?? "") : `${toolName}: ${JSON.stringify(displayInput(input))}`,
+    reason,
+  };
+}
 
 export function createClaudePermissionHandler(options: {
   threadId: string;
@@ -69,9 +99,8 @@ export function createClaudePermissionHandler(options: {
             requestId,
             itemId: context.toolUseID,
             toolName,
-            arguments: input,
-            command: toolName === "Bash" ? String(input.command ?? "") : `${toolName}: ${JSON.stringify(input)}`,
-            reason: context.decisionReason ?? `Claude requests permission to use ${toolName}.`,
+            arguments: displayInput(input),
+            ...claudeApprovalText(toolName, input, context),
             availableDecisions: ["accept", "decline", "cancel"],
           },
         };
