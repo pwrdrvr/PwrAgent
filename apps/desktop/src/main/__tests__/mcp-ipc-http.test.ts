@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { chmod, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -14,6 +15,7 @@ import { probeMcpConnectionUrl } from "../mcp-connections/mcp-connection-probe";
 
 const desktop = resolve("apps/desktop");
 const executable = join(desktop, "build/mcp-ipc-relay", `${process.platform}-${process.arch}`, `mcp-ipc-relay${process.platform === "win32" ? ".exe" : ""}`);
+const identityExecutable = join(executable, "..", process.platform === "win32" ? "mcp-ipc-identity-test.exe" : "mcp-ipc-identity-test");
 const cleanups: (() => Promise<unknown> | void)[] = [];
 beforeAll(() => {
   execFileSync(process.execPath, [join(desktop, "scripts/build-mcp-ipc-relay.mjs")], { stdio: "pipe" });
@@ -76,14 +78,25 @@ async function fixture() {
     for (let i = 0; i < response.length; i += 7) res.write(response.slice(i, i + 7));
     res.end();
   });
-  server.on("connection", () => { connections += 1; });
+  const sockets = new Set<Socket>();
+  server.on("connection", (socket) => {
+    connections += 1;
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
   await new Promise<void>((done, reject) => { server.once("error", reject); server.listen(path, done); });
-  if (process.platform !== "win32") await chmod(path, 0o600);
   cleanups.push(async () => {
-    server.closeAllConnections();
-    await new Promise<void>((done) => server.close(() => done()));
+    const closed = new Promise<void>((done) => server.close(() => done()));
+    // Include connections rejected by native verification before HTTP starts.
+    for (const socket of sockets) socket.destroy();
+    await closed;
     await rm(directory, { recursive: true, force: true });
   });
+  if (process.platform === "win32") {
+    execFileSync(identityExecutable, ["secure-fixture", path, String(process.pid)], { stdio: "pipe" });
+  } else {
+    await chmod(path, 0o600);
+  }
   const ipc = createMcpIpcHttp(url, { executable });
   cleanups.push(ipc.close);
   return { ipc, path, directory, url, requests, server, holdCalls: () => { holdCalls = true; }, setSse: () => { sse = true; }, connections: () => connections, setHandler: (next: typeof handler) => { handler = next; }, notice: () => notice };
@@ -158,7 +171,8 @@ describe("verified HTTP MCP over local IPC", () => {
     const f = await fixture();
     f.setHandler((res) => res.writeHead(401, { "www-authenticate": 'Bearer resource_metadata="https://attacker.invalid/oauth"' }).end("native approval required"));
     const network = vi.fn(async () => new Response("unexpected network"));
-    await expect(probeMcpConnectionUrl(f.url, network, { ipcExecutable: executable })).resolves.toMatchObject({ ok: true, needsIpcBearer: true, authMode: "none" });
+    const probe = await probeMcpConnectionUrl(f.url, network, { ipcExecutable: executable });
+    expect(probe, JSON.stringify(probe)).toMatchObject({ ok: true, needsIpcBearer: true, authMode: "none" });
     expect(network).not.toHaveBeenCalled();
   });
 
@@ -197,10 +211,12 @@ describe("verified HTTP MCP over local IPC", () => {
   it("cancels an HTTP request and closes the connected relay", async () => {
     const f = await fixture();
     let closed = false;
-    f.setHandler((res) => { res.on("close", () => { closed = true; }); });
+    const received = new Promise<void>((done) => {
+      f.setHandler((res) => { res.on("close", () => { closed = true; }); done(); });
+    });
     const controller = new AbortController();
     const response = f.ipc.fetch(f.ipc.url, { signal: controller.signal });
-    await new Promise((done) => setTimeout(done, 50));
+    await received;
     controller.abort();
     await expect(response).rejects.toThrow();
     await expect.poll(() => closed).toBe(true);
