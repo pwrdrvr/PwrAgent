@@ -67253,7 +67253,7 @@ script = "printf setup"
     // through the registry's memory.
     let releaseOriginWrite!: () => void;
     const originWriteGate = new Promise<void>((resolve) => { releaseOriginWrite = resolve; });
-    const writeOrigin = overlayStore.upsertThreadMessageOrigin!;
+    const writeOrigin = vi.mocked(overlayStore.upsertThreadMessageOrigin!);
     const persistOrigin = writeOrigin.getMockImplementation()!;
     writeOrigin.mockImplementation(async (params) => {
       await originWriteGate;
