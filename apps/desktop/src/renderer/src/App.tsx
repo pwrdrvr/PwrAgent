@@ -2685,6 +2685,8 @@ function DesktopAppShell(props: {
       availability: target.availability,
       dispatchTarget: liveFederationHealth?.peers.find((peer) => peer.id === target.instanceId)
         ?.capabilities.includes("thread_todo_dispatch_target") === true,
+      messageTarget: liveFederationHealth?.peers.find((peer) => peer.id === target.instanceId)
+        ?.capabilities.includes("thread_todo_message") === true,
     })),
     [federationMachines, liveFederationHealth],
   );
@@ -2814,6 +2816,7 @@ function DesktopAppShell(props: {
       run: (todo, options) => {
         if (
           todo.action?.type !== "start_thread"
+          || options?.messageTarget !== undefined
           || todo.action.executionMode !== "full-access"
         ) {
           return threadTodoController.runAction(todo.id, options);

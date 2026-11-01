@@ -1898,6 +1898,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   thread_todo_feed: "stream To-do changes",
   // Handoff dispatch fields are negotiation, not a remote action.
   thread_todo_dispatch_target: "",
+  thread_todo_message: "",
   // Plan cards for handoffs ride on turn_control, which the operator grants.
   thread_todo_plan: "",
   operator_requests: "operator request queue",

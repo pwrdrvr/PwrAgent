@@ -2,7 +2,7 @@ import type { CodexSpeed } from "../codex-speed";
 import type { ProjectRepositoryIdentity } from "../federation-project-match";
 import type { FederationRemoteTarget, FederationTarget } from "./federation";
 import { federatedThreadIdentityKey } from "./federation";
-import { buildThreadIdentityKey } from "./navigation";
+import { buildThreadIdentityKey, isAppServerBackendKind } from "./navigation";
 
 import type {
   AppServerBackendKind,
@@ -102,6 +102,11 @@ export function resolveThreadTodoModelSettings(params: {
 export type ThreadTodoAction =
   | { type: "start_review" }
   | {
+      type: "send_message";
+      prompt: string;
+      target: ThreadTodoMessageTarget;
+    }
+  | {
       type: "merge_pull_request";
       /** A PR number or URL, as `gh pr merge` accepts it. */
       pullRequest: string;
@@ -118,6 +123,32 @@ export type ThreadTodoAction =
     };
 
 export type ThreadTodoActionType = ThreadTodoAction["type"];
+
+/** A destination captured in a proposal; the operator can replace it before sending. */
+export type ThreadTodoMessageTarget = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  instanceId?: string;
+  title?: string;
+  instanceLabel?: string;
+};
+
+export function parseThreadTodoMessageTarget(value: unknown): ThreadTodoMessageTarget | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const target = value as Record<string, unknown>;
+  if (typeof target.backend !== "string" || !isAppServerBackendKind(target.backend)
+    || typeof target.threadId !== "string" || !target.threadId.trim()) return undefined;
+  for (const field of ["instanceId", "title", "instanceLabel"] as const) {
+    if (target[field] !== undefined && (typeof target[field] !== "string" || !target[field].trim())) return undefined;
+  }
+  return {
+    backend: target.backend,
+    threadId: target.threadId.trim(),
+    ...(typeof target.instanceId === "string" ? { instanceId: target.instanceId.trim() } : {}),
+    ...(typeof target.title === "string" ? { title: target.title.trim() } : {}),
+    ...(typeof target.instanceLabel === "string" ? { instanceLabel: target.instanceLabel.trim() } : {}),
+  };
+}
 
 /**
  * A project as the Directories lens files it: `key` is the directory key
@@ -143,6 +174,7 @@ export const THREAD_TODO_ACTION_TYPES = [
   "start_review",
   "merge_pull_request",
   "start_thread",
+  "send_message",
 ] as const satisfies readonly ThreadTodoActionType[];
 
 /**
@@ -337,16 +369,15 @@ export function threadTodoPrerequisites(
  * Unchecked steps that hold the card back: its action does not run, and it
  * is not done, while any is open, unless the operator overrides.
  *
- * On a start_thread card only prerequisites block. Its plain steps are the
- * plan the new thread carries out, so asking the operator to tick them
- * before the thread exists would read them as chores. Every other card is
- * the operator's own work, so every open step blocks.
+ * On start_thread and send_message cards only prerequisites block. Plain
+ * steps describe the destination thread's work. On reminder, review and
+ * merge cards, every open step is the operator's work and blocks.
  */
 export function threadTodoBlockingItems(
   todo: Pick<ThreadTodo, "items" | "action">,
 ): ThreadTodoItem[] {
   const open = threadTodoOpenItems(todo);
-  return todo.action?.type === "start_thread"
+  return todo.action?.type === "start_thread" || todo.action?.type === "send_message"
     ? open.filter((item) => item.prerequisite === true)
     : open;
 }
@@ -372,7 +403,7 @@ export function threadTodoItemNoun(items: readonly ThreadTodoItem[]): string {
 export function threadTodoItemProgress(
   todo: Pick<ThreadTodo, "items" | "action">,
 ): { checked: number; total: number; noun: "steps" | "prerequisites" } | undefined {
-  const prerequisitesOnly = todo.action?.type === "start_thread";
+  const prerequisitesOnly = todo.action?.type === "start_thread" || todo.action?.type === "send_message";
   const counted = prerequisitesOnly ? threadTodoPrerequisites(todo) : threadTodoSteps(todo);
   const total = counted.length;
   if (total === 0) return undefined;
@@ -501,6 +532,8 @@ export function isThreadTodoResolution(value: unknown): value is ThreadTodoResol
 export type RunThreadTodoActionRequest = {
   federationTarget?: FederationRemoteTarget;
   id: string;
+  /** Send a handoff's prompt to this existing thread instead of creating one. */
+  messageTarget?: ThreadTodoMessageTarget;
   /**
    * Merge cards only. Absent: the project's remembered pick, else the
    * configured default.
@@ -660,6 +693,7 @@ export function threadTodoKindForAction(
     case "merge_pull_request":
       return "merge";
     case "start_thread":
+    case "send_message":
       return "handoff";
     default:
       return "reminder";

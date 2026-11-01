@@ -183,6 +183,37 @@ describe("opt-in rendering capture", () => {
     expect(electron.BrowserWindow).not.toHaveBeenCalled();
   });
 
+  it.each(["partial read", "expansion limit", "failed end"])("cleans up a %s without repeating the end command", async (failure) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let reads = 0;
+    electron.debuggerApi.sendCommand.mockImplementation(async (method: string) => {
+      if (method === "Tracing.end" && failure === "failed end") throw new Error("private-end-error");
+      if (method === "IO.read" && failure === "partial read") {
+        if (reads++) throw new Error("private-read-error");
+        return { data: "private-partial-data", eof: false };
+      }
+      if (method === "IO.read" && failure === "expansion limit") {
+        reads++;
+        return { data: "x".repeat(1024 * 1024), eof: false };
+      }
+      return commands(method);
+    });
+    const pending = captureRenderingDiagnostics(root, 1);
+    const rejected = expect(pending).rejects.toThrow("Rendering capture failed; no summary is available");
+    await started();
+    await vi.advanceTimersByTimeAsync(12_000);
+    await rejected;
+    expect(electron.debuggerApi.sendCommand.mock.calls.filter(([method]) => method === "Tracing.end")).toHaveLength(1);
+    if (failure !== "failed end") {
+      expect(electron.debuggerApi.sendCommand).toHaveBeenCalledWith("IO.close", { handle: "owned-stream" });
+    }
+    if (failure === "expansion limit") expect(reads).toBe(65);
+    expect(electron.session.destroy).toHaveBeenCalledOnce();
+    expect(electron.listeners.size).toBe(0);
+    expect(await readdir(root)).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("separates activity by process and second, without counting span ends twice", () => {
     expect(summarizeRenderingTrace({ traceEvents: [
       { name: "process_name", ph: "M", pid: 1, ts: 0, args: { name: "private" } },

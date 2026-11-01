@@ -107,7 +107,7 @@ The native buffer is 8 MiB and stops accepting events when full. Inspect
 missing. `dataLossOccurred` comes from the completion event (`null` if unavailable).
 Near 1 or when data loss is reported, treat trace event counts as lower bounds:
 native `activeSeconds` buckets can stop before the capture ends, even while
-snapshots continue. A live v1.3.5 ten-second capture returned
+snapshots continue. The earlier contentTracing-based v1.3.5 ten-second capture returned
 `{percentage: 0.9853219985961914, value: 0}`; its native event buckets stopped
 before the capture ended. Missing later buckets do not establish idle rendering.
 Use a shorter capture to avoid saturation. A JSON expansion above 64 MiB is
@@ -123,7 +123,11 @@ comparison (use Sandboxer when connected, per repository guidance). It creates a
 contrived window with no React, polling or rAF. It captures the same spinner
 first paused, then running, and compares native `DrawFrame` counts for that
 renderer PID. The animation snapshot identifies the spinner in the running
-capture. This tests the capture in the built, minified app too.
+capture. This tests the capture in the built, minified app too. The same spec starts an
+external `contentTracing` recording, verifies the rendering request fails, and
+then successfully stops the original recording through its owner. It also checks
+that a real HotCpuProfiler recording survives rendering collection on its
+independent connection.
 
 Observed on Ubuntu x64 in Sandboxer with Electron 44.9.3 (2026-10-28):
 
