@@ -13928,6 +13928,79 @@ describe("MessagingController", () => {
     expect(harness.startTurn).not.toHaveBeenCalled();
   });
 
+  it("offers Grok's declared permissions when starting a new thread", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      backend: "acp:grok",
+      executionMode: "default",
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [buildGrokBackendSummary()],
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Permissions: Default Access"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:permissions",
+          label: "Permissions: Default",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:permissions" }),
+    );
+    const picker = harness.delivered.at(-1) as {
+      title?: string;
+      actions?: MessagingSurfaceAction[];
+    };
+    expect(picker.title).toBe("Select permissions");
+    expect(
+      picker.actions
+        ?.filter((action) => action.id === "browse:new:set-permissions")
+        .map((action) => action.value),
+    ).toEqual([
+      { executionMode: "default" },
+      { executionMode: "full-access" },
+    ]);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-permissions",
+        value: { executionMode: "full-access" },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Permissions: Full Access"),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      body: expect.not.stringContaining("Agent default"),
+    });
+  });
+
   it("treats selecting the current new-thread Full Access permission as a no-op", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.launchpadDefaults = {
@@ -24984,6 +25057,136 @@ describe("MessagingController", () => {
     });
   });
 
+  it("lets messaging switch a Grok thread between its declared Default and Full Access modes", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      source: "acp:grok",
+      executionMode: "default",
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [buildGrokBackendSummary()],
+      }),
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:acp:grok:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "acp:grok",
+      channel: buildCommandEvent("/status").channel,
+      createdAt: 900,
+      threadId: "thread-1",
+      updatedAt: 900,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Permissions: Default Access"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:permissions",
+          label: "Permissions: Default",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:permissions" }),
+    );
+
+    const picker = harness.delivered.at(-1) as {
+      kind?: string;
+      choices?: MessagingSurfaceAction[];
+    };
+    expect(picker.kind).toBe("single_select");
+    expect(
+      picker.choices
+        ?.filter((choice) => choice.id === "status:set-permissions")
+        .map((choice) => [choice.label, choice.value]),
+    ).toEqual([
+      ["Default (current)", { executionMode: "default" }],
+      ["Full Access", { executionMode: "full-access" }],
+    ]);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-permissions",
+        value: { executionMode: "full-access" },
+      }),
+    );
+
+    expect(harness.setThreadExecutionMode).toHaveBeenCalledWith({
+      backend: "acp:grok",
+      threadId: "thread-1",
+      executionMode: "full-access",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Permissions: Full Access"),
+    });
+  });
+
+  it("refuses a Full Access callback for an ACP provider that declares no execution modes", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      source: "acp:gemini",
+      executionMode: "default",
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildAcpRuntimeBackendSummary({
+            acp: {
+              registryId: "gemini",
+              distributionKinds: ["local"],
+              installStatus: "installed",
+              authStatus: "authenticated",
+              verificationStatus: "not-applicable",
+            },
+          }),
+        ],
+      }),
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:acp:gemini:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "acp:gemini",
+      channel: buildCommandEvent("/status").channel,
+      createdAt: 900,
+      threadId: "thread-1",
+      updatedAt: 900,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "status:permissions" }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-permissions",
+        value: { executionMode: "full-access" },
+      }),
+    );
+
+    expect(harness.setThreadExecutionMode).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Invalid status selection",
+    });
+  });
+
   it("rejects an unresolved bind target without falling back to a population read", async () => {
     const harness = await createHarness();
     harness.getNavigationSnapshot.mockImplementation(() => { throw new Error("Legacy navigation is forbidden"); });
@@ -28223,6 +28426,31 @@ function buildAcpRuntimeBackendSummary(
       supportsFastMode: false,
     },
     ...overrides,
+  });
+}
+
+/** Grok as discovered without its own permission selector. */
+function buildGrokBackendSummary(): BackendSummary {
+  return buildBackendSummary({
+    kind: "acp:grok",
+    label: "Grok",
+    source: "acp",
+    executionModes: [
+      { mode: "default", label: "Default Access", available: true, isDefault: true },
+      { mode: "full-access", label: "Full Access", available: true },
+    ],
+    acp: {
+      registryId: "grok",
+      distributionKinds: ["local"],
+      installStatus: "installed",
+      authStatus: "authenticated",
+      verificationStatus: "not-applicable",
+    },
+    launchpadOptions: {
+      models: [{ id: "grok-4.7", label: "Grok 4.7" }],
+      reasoningEfforts: ["low", "medium", "high"],
+      supportsFastMode: false,
+    },
   });
 }
 
