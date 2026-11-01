@@ -8526,6 +8526,45 @@ function buildWorkspaceMoveSuccessPrompt(params: {
   ].join("\n");
 }
 
+function reviewStartFailureNoticeKey(
+  backend: AppServerBackendKind,
+  threadId: string,
+): string {
+  return `${backend}:${threadId}`;
+}
+
+function describeReviewTarget(target: AppServerReviewTarget): string {
+  switch (target.type) {
+    case "pullRequest":
+      return `pull request ${target.url}`;
+    case "uncommittedChanges":
+      return "uncommitted changes";
+    case "baseBranch":
+      return `changes against ${target.branch}`;
+    case "commit":
+      return `commit ${target.sha}`;
+    case "custom":
+      return "custom review instructions";
+  }
+}
+
+function buildReviewStartFailurePrompt(
+  failures: Array<{ error: string; target: AppServerReviewTarget }>,
+): string {
+  return [
+    failures.length === 1
+      ? "PwrAgent could not start the review scheduled for the end of the last turn."
+      : "PwrAgent could not start the reviews scheduled for the end of the last turn.",
+    "",
+    ...failures.flatMap((failure) => [
+      `- Target: ${describeReviewTarget(failure.target)}`,
+      `  Error: ${failure.error}`,
+    ]),
+    "",
+    "No review is running. Tell the operator that the review did not start and why. Call start_review again only if you can change what caused the error.",
+  ].join("\n");
+}
+
 function buildWorkspaceMoveFailurePrompt(params: {
   error: unknown;
   move: PendingThreadWorkspaceMoveSummary;
@@ -9142,6 +9181,8 @@ export class DesktopBackendRegistry {
     PendingThreadWorkspaceMoveSummary
   >();
   private readonly pendingReviewStarts = new Map<string, PendingReviewStartRecord>();
+  /** Last failure notice per thread, so a retry that fails the same way stays quiet. */
+  private readonly reviewStartFailureNotices = new Map<string, string>();
   private readonly codexProtocolCaptureSession?: CodexProtocolCaptureSession;
   private readonly captureStores: ProtocolCaptureStore[] = [];
   private readonly eventListeners = new Set<
@@ -23153,6 +23194,7 @@ export class DesktopBackendRegistry {
         candidate.invokingTurnId === params.turnId &&
         candidate.status === "scheduled",
     );
+    const failures: Array<{ error: string; target: AppServerReviewTarget }> = [];
     for (const candidate of pending) {
       if (params.method !== "turn/completed") {
         const error =
@@ -23194,6 +23236,9 @@ export class DesktopBackendRegistry {
           reviewTurnId: response.turnId,
           updatedAt: Date.now(),
         });
+        this.reviewStartFailureNotices.delete(
+          reviewStartFailureNoticeKey(candidate.backend, candidate.threadId),
+        );
         await this.emit({
           backend: candidate.backend,
           notification: {
@@ -23250,7 +23295,57 @@ export class DesktopBackendRegistry {
             },
           },
         });
+        failures.push({ error: message, target: candidate.request.target });
       }
+    }
+    if (failures.length > 0) {
+      await this.sendReviewStartFailureNotice({
+        backend: params.backend,
+        threadId: params.threadId,
+        failures,
+      });
+    }
+  }
+
+  /**
+   * The agent was told its review was scheduled and then ended its turn, so
+   * nothing else tells it, or the operator, that the start failed. The notice
+   * queues behind any turn the thread is running, like other PwrAgent turns.
+   */
+  private async sendReviewStartFailureNotice(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    failures: Array<{ error: string; target: AppServerReviewTarget }>;
+  }): Promise<void> {
+    const noticeKey = reviewStartFailureNoticeKey(params.backend, params.threadId);
+    const fingerprint = JSON.stringify(params.failures);
+    // A retry that fails the same way would otherwise start a turn that
+    // retries again, without end.
+    if (this.reviewStartFailureNotices.get(noticeKey) === fingerprint) {
+      backendRegistryLog.warn("repeated scheduled review start failure not re-sent", {
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      return;
+    }
+    this.reviewStartFailureNotices.set(noticeKey, fingerprint);
+    try {
+      await this.submitTurn({
+        backend: params.backend,
+        threadId: params.threadId,
+        input: [{
+          type: "text",
+          text: buildReviewStartFailurePrompt(params.failures),
+        }],
+        origin: "automation",
+        messageOrigin: { kind: "pwragent" },
+      });
+    } catch (error) {
+      backendRegistryLog.warn("failed to send scheduled review start failure notice", {
+        backend: params.backend,
+        threadId: params.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
