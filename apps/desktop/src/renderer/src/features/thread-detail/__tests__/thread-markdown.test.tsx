@@ -1536,6 +1536,7 @@ describe("ThreadMarkdown", () => {
   });
 
   it.each([
+    { destination: "D:/a/PwrAgent/PwrAgent/.local/image-preview-worktree-YER6mT/mockup.png", sourceUrl: "file:///D:/a/PwrAgent/PwrAgent/.local/image-preview-worktree-YER6mT/mockup.png" },
     { destination: String.raw`D:\a\PwrAgent\PwrAgent\.local\image-preview-worktree-YER6mT\mockup.png`, sourceUrl: "file:///D:/a/PwrAgent/PwrAgent/.local/image-preview-worktree-YER6mT/mockup.png" },
     { destination: String.raw`D:\work\_private\mockup.png`, sourceUrl: "file:///D:/work/_private/mockup.png" },
     { destination: String.raw`\\server\share\mockup.png`, sourceUrl: "file://server/share/mockup.png" },

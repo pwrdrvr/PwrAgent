@@ -7,6 +7,10 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
+function markdownImagePath(filePath: string): string {
+  return filePath.split(path.sep).join("/");
+}
+
 async function expectLoaded(image: Locator): Promise<void> {
   await expect(image).toBeVisible();
   await expect.poll(() => image.evaluate((element) => {
@@ -27,7 +31,7 @@ test("previews replies and native image views live, then reopens retained images
   await Promise.all([copyFile(imageFixture, mockup), copyFile(imageFixture, screenshot), copyFile(imageFixture, native)]);
   const threadId = "assistant-previews";
   const turnId = "preview-turn";
-  const text = `Here is the mockup.\n\n![Mockup](${mockup})\n\n![Repeated mockup](${mockup})\n\n![Screenshot](${screenshot})\n\n![Missing](${path.join(root, "missing.png")})`;
+  const text = `Here is the mockup.\n\n![Mockup](${markdownImagePath(mockup)})\n\n![Repeated mockup](${markdownImagePath(mockup)})\n\n![Screenshot](${markdownImagePath(screenshot)})\n\n![Missing](${markdownImagePath(path.join(root, "missing.png"))})`;
   const message = { type: "message", id: "reply", role: "assistant", text };
   const nativeParams = { threadId, turnId, completedAtMs: 1, item: { type: "imageView", id: "native-view", path: native } };
   const replay = {
@@ -63,7 +67,7 @@ test("previews replies and native image views live, then reopens retained images
     await app.advance({ stepId: "reply" });
     await expectLoaded(app.window.getByAltText("Mockup", { exact: true }));
     await expect(app.window.locator(".transcript-message__image-preview")).toHaveCount(2);
-    await expect(app.window.locator(".thread-markdown__image-literal")).toHaveText([`![Missing](${path.join(root, "missing.png")})`]);
+    await expect(app.window.locator(".thread-markdown__image-literal")).toHaveText([`![Missing](${markdownImagePath(path.join(root, "missing.png"))})`]);
     await expectLoaded(app.window.getByAltText("Screenshot", { exact: true }));
     await app.advance({ stepId: "native-view" });
     await app.advance({ stepId: "native-again" });
