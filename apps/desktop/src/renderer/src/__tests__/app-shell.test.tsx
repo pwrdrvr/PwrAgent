@@ -4376,6 +4376,30 @@ describe("App", () => {
         ? [{ ...claude, kind: "codex" as const, label: "Codex" }]
         : [claude],
     }));
+    // Selecting a thread starts its hydration after the selection's own act
+    // has ended. Hold each read until the test delivers it inside act, so its
+    // session update cannot land between steps or after the test returns.
+    const pendingThreadReads = new Map<string, () => void>();
+    const readThread = vi.fn((request: { backend: AppServerBackendKind; threadId: string }) =>
+      new Promise((resolve) => {
+        pendingThreadReads.set(request.threadId, () => resolve({
+          ...request, fetchedAt: Date.now(),
+          replay: { entries: [], messages: [],
+            pagination: { supportsPagination: false, hasPreviousPage: false } },
+        }));
+      }));
+    const deliverThreadRead = async (threadId: string) => {
+      const deliver = await waitFor(() => {
+        const pending = pendingThreadReads.get(threadId);
+        expect(pending).toBeDefined();
+        return pending!;
+      });
+      pendingThreadReads.delete(threadId);
+      await act(async () => {
+        deliver();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    };
     Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: ownerApi({
@@ -4391,15 +4415,14 @@ describe("App", () => {
           peers: [{ id: "studio-menu", label: "Studio", role: "client", status: "connected",
             capabilities: ["thread_navigation", "turn_control"] }],
         } }),
-        readThread: async (request: { backend: AppServerBackendKind; threadId: string }) => ({
-          ...request, fetchedAt: Date.now(), replay: { entries: [], messages: [] },
-        }),
+        readThread,
         onAgentEvent: () => () => undefined,
         onWindowFocus: () => () => undefined,
       }),
     });
 
     await renderApp();
+    await deliverThreadRead(localThread.id);
     const localRow = (await screen.findByRole("button", { name: localThread.title }))
       .closest<HTMLElement>(".thread-row")!;
     const checkLocalMenu = async () => {
@@ -4419,6 +4442,7 @@ describe("App", () => {
     await checkLocalMenu();
     await checkRemoteMenu();
     await clickButton(remoteThread.title);
+    await deliverThreadRead(remoteThread.id);
     await waitFor(() => expect(listBackends).toHaveBeenCalledWith(expect.objectContaining({
       federationTarget: remoteTarget,
     })));
@@ -4429,6 +4453,7 @@ describe("App", () => {
     await clickButton(localThread.title);
     await checkLocalMenu();
     await checkRemoteMenu();
+    expect(pendingThreadReads.size).toBe(0);
   });
 
   it("waits for peer health before reading a restored remote thread", async () => {
