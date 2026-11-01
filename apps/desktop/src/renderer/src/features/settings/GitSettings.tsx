@@ -4,12 +4,16 @@ import {
   FORGE_AGENT_TOOL_GROUP_LABELS,
   FORGE_KINDS,
   forgeAgentToolAccessLevels,
+  type AcpAgentSettingsEntry,
+  type BackendSummary,
   type ForgeAgentToolAccess,
   type ForgeAgentToolGroup,
+  type ForgeAgentToolPolicy,
+  type ForgeAgentToolRule,
   type ForgeKind,
 } from "@pwragent/shared";
 import type { ComponentProps } from "react";
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
@@ -39,6 +43,13 @@ import {
 } from "./SettingsLayout";
 import { GhToolSection, GitToolSection } from "./CommandToolsSettings";
 import { sourceBadge } from "./settings-fields";
+import {
+  FORGE_TOOL_ACCESS_LABELS,
+  ForgeProjectRules,
+  forgeToolAccessDescription,
+} from "./ForgeProjectRules";
+import { decodeForgeRulesRoute, FORGE_AGENT_TOOLS_SECTION_ID } from "./forge-rules-route";
+import { acpAgentEnabledInSnapshot } from "./useAcpAgentCatalog";
 
 const DEFAULT_BACKGROUND_PR_POLLING_VALUE = {
   value: DEFAULT_BACKGROUND_PR_POLLING,
@@ -82,29 +93,6 @@ const DEFAULT_MERGE_METHOD_VALUE = {
   source: "default" as const,
 };
 
-const FORGE_TOOL_ACCESS_LABELS: Record<ForgeAgentToolAccess, string> = {
-  allow: "Allow",
-  auto: "Auto",
-  ask: "Ask",
-  off: "Off",
-};
-
-const FORGE_TOOL_ACCESS_DESCRIPTIONS: Record<ForgeAgentToolAccess, string> = {
-  allow: "Runs without asking.",
-  auto: "Runs in Codex Auto and Full Access threads. Asks otherwise.",
-  ask: "Always asks.",
-  off: "Removes these tools from threads.",
-};
-
-// Approving and merging cannot be taken back, so Auto waits for Full Access.
-const FORGE_TOOL_APPROVE_MERGE_AUTO_DESCRIPTION = "Asks unless the thread has Full Access.";
-
-function forgeToolAccessDescription(group: ForgeAgentToolGroup, level: ForgeAgentToolAccess): string {
-  return group === "approve_merge" && level === "auto"
-    ? FORGE_TOOL_APPROVE_MERGE_AUTO_DESCRIPTION
-    : FORGE_TOOL_ACCESS_DESCRIPTIONS[level];
-}
-
 const FORGE_TOOL_GROUP_SUBS: Record<ForgeAgentToolGroup, string> = {
   read: "Pull requests, diffs, files, reviews, review threads, issues, CI runs and logs.",
   pull_requests: "Open, edit, close and reopen pull and merge requests, mark ready or draft, labels, attachments.",
@@ -121,6 +109,10 @@ const MERGE_METHOD_OPTIONS: Array<{ label: string; value: ThreadTodoMergeMethod 
 ];
 
 export function GitSettings(props: {
+  /** The ACP agent catalog Settings already read, for project rule agents. */
+  acpAgents?: readonly AcpAgentSettingsEntry[];
+  /** Cached provider summaries, for the model ids a project rule can name. */
+  backends?: readonly BackendSummary[];
   desktopApi?: DesktopApi;
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
@@ -137,6 +129,8 @@ export function GitSettings(props: {
   onDefaultMergeMethodChange: (method: ThreadTodoMergeMethod) => Promise<void>;
   onAgentToolsEnabledChange: (enabled: boolean) => Promise<void>;
   onAgentToolAccessChange: (group: ForgeAgentToolGroup, access: ForgeAgentToolAccess) => Promise<void>;
+  /** Replaces the whole project rules list. */
+  onAgentToolRulesChange: (rules: ForgeAgentToolRule[]) => Promise<boolean | void>;
   onRefresh: () => Promise<void>;
   /** Nav sub-route: the section slug to scroll to on arrival. */
   focusSectionId?: string;
@@ -174,6 +168,22 @@ export function GitSettings(props: {
     props.snapshot.git?.defaultPrAutoDispatchEnabled ??
     DEFAULT_PR_AUTO_DISPATCH_ENABLED_VALUE;
   const agentTools = props.snapshot.git?.agentTools ?? DEFAULT_AGENT_TOOLS_VALUE;
+  const agentToolRules = props.snapshot.git?.agentTools?.rules;
+  const agentToolPolicy = useMemo<ForgeAgentToolPolicy>(() => ({
+    enabled: agentTools.enabled.value,
+    access: Object.fromEntries(
+      FORGE_AGENT_TOOL_GROUPS.map((group) => [group, agentTools.access[group].value]),
+    ) as Record<ForgeAgentToolGroup, ForgeAgentToolAccess>,
+    rules: agentToolRules ?? [],
+  }), [agentTools, agentToolRules]);
+  const ruleAcpAgents = useMemo(
+    () => (props.acpAgents ?? [])
+      .filter((entry) => entry.installed && acpAgentEnabledInSnapshot(props.snapshot, entry.registryId))
+      .map((entry) => ({ registryId: entry.registryId, name: entry.name })),
+    [props.acpAgents, props.snapshot],
+  );
+  // A sidebar project link names the section and the repository to open.
+  const forgeRulesRoute = decodeForgeRulesRoute(props.focusSectionId);
   const defaultMergeMethod =
     props.snapshot.git?.defaultMergeMethod ??
     DEFAULT_MERGE_METHOD_VALUE;
@@ -314,7 +324,7 @@ export function GitSettings(props: {
     <SettingsSectionStack
       paneId="git"
       aria-label="Git settings"
-      focusSectionId={props.focusSectionId}
+      focusSectionId={forgeRulesRoute.sectionId}
     >
       <SettingsPanelHead
         eyebrow="Git"
@@ -540,6 +550,7 @@ export function GitSettings(props: {
       <SettingsSection
         eyebrow="Git"
         title="Agent forge tools"
+        sectionId={FORGE_AGENT_TOOLS_SECTION_ID}
         description="PwrAgent's own tools let agents read and change GitHub pull requests, GitLab merge requests and issues in their thread's repository. They use your gh or glab sign-in, and no GitHub App or connector is involved."
         chip={agentTools.enabled.value ? "On" : "Off"}
         chipKind={agentTools.enabled.value ? "ok" : "default"}
@@ -581,6 +592,16 @@ export function GitSettings(props: {
             );
           })}
         </div>
+        <ForgeProjectRules
+          acpAgents={ruleAcpAgents}
+          backends={props.backends}
+          codexProviders={props.snapshot.models?.codex?.providers ?? []}
+          desktopApi={props.desktopApi}
+          focusRepository={forgeRulesRoute.repository}
+          policy={agentToolPolicy}
+          saving={props.saving}
+          onRulesChange={props.onAgentToolRulesChange}
+        />
       </SettingsSection>
     </SettingsSectionStack>
   );

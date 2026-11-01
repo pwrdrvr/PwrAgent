@@ -39,6 +39,27 @@ import {
   type ForgeAgentToolPolicy,
   type McpConnectionToolApproval,
 } from "@pwragent/shared";
+import {
+  buildForgeApprovalRememberOptions,
+  FORGE_AGENT_RULE_APPROVAL_SOURCE,
+  FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY,
+  forgeAgentRuleAgentKey,
+  forgeAgentToolRuleDescription,
+  forgeAgentToolRuleOffMessage,
+  forgeAgentToolRuleSentence,
+  forgeApprovalRememberRuleAgent,
+  forgeRuleRepositoryLabel,
+  isForgeApprovalRememberGroup,
+  normalizeForgeRuleRepository,
+  readForgeApprovalRememberChoice,
+  resolveForgeAgentToolAccess,
+  type ForgeAgentIdentity,
+  type ForgeAgentRuleAgent,
+  type ForgeAgentRuleNames,
+  type ForgeAgentToolRuleApprovalNote,
+  type ForgeAgentToolRuleGroup,
+  type ForgeApprovalRememberOptionId,
+} from "@pwragent/shared";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -873,6 +894,36 @@ const THREAD_SEARCH_REUSE_WINDOW_MS = 2_000;
 /** Marks the approval cards PwrAgent's own forge tools raise. */
 const FORGE_TOOL_REQUEST_ID_PREFIX = "forge-tool:";
 const FORGE_APPROVAL_WITHDRAWN_TODO_KEY = "forge-approval-withdrawn";
+
+/** Saves one group of one (repository, agent) forge project rule. */
+export type ForgeToolRuleWriter = (update: {
+  repository: string;
+  agent: ForgeAgentRuleAgent;
+  group: ForgeAgentToolRuleGroup;
+  level: ForgeAgentToolAccess | undefined;
+}) => Promise<unknown>;
+
+/** What the agent is told about how a forge write was approved. */
+type ForgeWriteApprovalNotes = {
+  /** A project rule set to Allow ran the call without a card. */
+  approval?: ForgeAgentToolRuleApprovalNote;
+  /** The card's "Always allow" choice, and whether its rule was saved. */
+  rememberedRule?:
+    | { rule: string; saved: true }
+    | { rule: string; saved: false; error: string };
+};
+
+function withForgeApprovalNotes(result: unknown, notes: ForgeWriteApprovalNotes | undefined): unknown {
+  if (!notes || (!notes.approval && !notes.rememberedRule)) return result;
+  const record = readRecord(result);
+  if (!record) return result;
+  return {
+    ...record,
+    ...(notes.approval ? { approval: notes.approval } : {}),
+    ...(notes.rememberedRule ? { rememberedRule: notes.rememberedRule } : {}),
+  };
+}
+
 const PENDING_APPROVAL_GUIDANCE =
   "The operator has not answered these yet. A call waiting on one stays pending until they do. "
   + "If this turn ends first, the request is withdrawn and the waiting call is cancelled. "
@@ -9674,6 +9725,7 @@ export class DesktopBackendRegistry {
   private forgePrToolHandler?: ForgePrToolHandler;
   private forgePrToolPreflight?: ForgePrToolPreflight;
   private forgeToolPolicyResolver?: () => ForgeAgentToolPolicy;
+  private forgeToolRuleWriter?: ForgeToolRuleWriter;
   /** Conversation grants for forge writes, keyed by thread, then tool and repository. Memory only. */
   private readonly forgeToolSessionApprovals = new Map<string, Map<string, string>>();
 
@@ -9689,6 +9741,11 @@ export class DesktopBackendRegistry {
 
   setForgeToolPolicyResolver(resolve: () => ForgeAgentToolPolicy): void {
     this.forgeToolPolicyResolver = resolve;
+  }
+
+  /** Saves the project rule an approval card's "Always allow" option chose. */
+  setForgeToolRuleWriter(write: ForgeToolRuleWriter): void {
+    this.forgeToolRuleWriter = write;
   }
 
   private resolveForgeToolPolicy(): ForgeAgentToolPolicy {
@@ -9722,20 +9779,21 @@ export class DesktopBackendRegistry {
 
   private readonly gatedForgePrToolHandler: ForgePrToolHandler = async (operation, args, context) => {
     const group = forgePrToolGroup(operation, args);
-    const access = this.assertForgeToolAllowed(group, operation);
+    this.assertForgeToolAllowed(group, operation);
     let target = args;
+    let notes: ForgeWriteApprovalNotes | undefined;
     if (group !== "read") {
       // Settle the call before asking: an approved call that then fails on its
       // arguments makes the agent retry and the operator approve it twice.
       const prepared = this.forgePrToolPreflight ? await this.forgePrToolPreflight(operation, args, context) : undefined;
       const repository = prepared?.repository ?? args.repository;
       const settled = prepared?.args ?? args;
-      await this.approveForgeToolWrite(operation, settled, context, group, access, repository);
+      notes = await this.approveForgeToolWrite(operation, settled, context, group, repository);
       // Act exactly where the card said, even if the thread's remotes or branch change while it waits.
       target = repository ? { ...settled, repository } : settled;
     }
     if (!this.forgePrToolHandler) throw new ForgeReadError("unavailable", "Forge tools are unavailable on this instance.");
-    const result = await this.forgePrToolHandler(operation, target, context);
+    const result = withForgeApprovalNotes(await this.forgePrToolHandler(operation, target, context), notes);
     if (operation === "create_pull_request") return await this.attachCreatedPullRequest(result, context);
     return result;
   };
@@ -9754,28 +9812,126 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * The operator's consent for one GitHub write. `allow` runs; `auto` follows
-   * the turn's approval mode (see `forgeAutoRunsWithoutApproval`); otherwise
-   * the shipped MCP approval card asks. Automations cannot answer, so they are
-   * refused with the setting to change.
+   * Which agent is making a forge call, from PwrAgent's own records and never
+   * from the call's arguments. A Codex thread with no model provider runs on
+   * the default OpenAI provider. A model that cannot be read is unknown, so
+   * rules naming a model do not apply, while agent and provider rules still do.
+   */
+  private async resolveForgeAgentIdentity(context: AgentToolCallContext): Promise<ForgeAgentIdentity> {
+    const { backend, threadId } = context;
+    let codexModelProvider: string | undefined;
+    if (backend === "codex") {
+      try {
+        codexModelProvider = this.codexClient.modelProviderForThread?.(threadId);
+      } catch (error) {
+        backendRegistryLog.warn("could not read the thread's Codex model provider for forge rules", { threadId, error: String(error) });
+      }
+    }
+    let model: string | undefined;
+    try {
+      if (isAcpBackendId(backend)) {
+        model = this.acpBackend.getSession(backend, threadId)?.acpRuntime?.currentModelId?.trim() || undefined;
+      }
+      model ??= (await this.overlayStore.getThreadOverlayState({ backend, threadId }))?.model?.trim() || undefined;
+    } catch (error) {
+      model = undefined;
+      backendRegistryLog.warn("could not read the thread's model for forge rules", { backend, threadId, error: String(error) });
+    }
+    if (backend === "codex" && model) {
+      // A qualified id names the provider; rules compare the bare model id.
+      const parsed = parseCodexProviderModelId(model);
+      codexModelProvider ??= parsed.providerId;
+      model = parsed.model || undefined;
+    }
+    return {
+      backend,
+      ...(codexModelProvider ? { codexModelProvider } : {}),
+      ...(model ? { model } : {}),
+    };
+  }
+
+  /** Display names for rule wording: installed ACP agents and Codex model providers. */
+  private forgeAgentRuleNames(): ForgeAgentRuleNames {
+    return {
+      acpAgent: (registryId) => {
+        const backendId = `acp:${registryId}`;
+        return isAcpBackendId(backendId) ? this.acpBackend.getInstalledAgent(backendId)?.name : undefined;
+      },
+      codexModelProvider: (providerId) => {
+        try {
+          return this.resolveCodexModelProvidersFn().find((provider) => provider.id === providerId)?.name;
+        } catch {
+          return undefined;
+        }
+      },
+    };
+  }
+
+  /**
+   * The operator's consent for one GitHub write. The level comes from the
+   * most specific project rule for this repository and agent, else the
+   * group's setting. `allow` runs; `auto` follows the turn's approval mode
+   * (see `forgeAutoRunsWithoutApproval`); otherwise the shipped MCP approval
+   * card asks. Automations cannot answer, so they are refused with the
+   * setting to change.
    */
   private async approveForgeToolWrite(
     operation: ForgePrToolOperation,
     args: ForgePrToolArgs,
     context: AgentToolCallContext,
     group: ForgeAgentToolGroup,
-    access: ForgeAgentToolAccess,
     repository?: ForgeRepository,
-  ): Promise<void> {
-    if (access === "allow") return;
+  ): Promise<ForgeWriteApprovalNotes | undefined> {
+    const identity = await this.resolveForgeAgentIdentity(context);
+    const resolution = resolveForgeAgentToolAccess(this.resolveForgeToolPolicy(), group, repository, identity);
+    const access = resolution.level;
+    const rule = resolution.source === "project_rule" ? resolution.rule : undefined;
+    const wording = {
+      ...(repository ? { projectLabel: `${repository.owner}/${repository.repo}` } : {}),
+      names: this.forgeAgentRuleNames(),
+    };
+    if (access === "off") {
+      if (rule) {
+        throw new ForgeReadError("tools_disabled", `${forgeAgentToolRuleOffMessage(rule, group, wording)} Do not work around it with the gh or glab CLI.`);
+      }
+      // The setting changed while the call was prepared.
+      this.assertForgeToolAllowed(group, operation);
+      throw new ForgeReadError("tools_disabled", `${FORGE_AGENT_TOOL_GROUP_LABELS[group]} is Off in Settings → Git → Agent forge tools, so ${operation} is unavailable.`);
+    }
+    if (access === "allow") {
+      if (!rule) return undefined;
+      const description = forgeAgentToolRuleDescription(rule, wording);
+      backendRegistryLog.info("running forge write allowed by a project rule", {
+        backend: context.backend,
+        threadId: context.threadId,
+        turnId: context.turnId,
+        operation,
+        rule: description,
+      });
+      return { approval: { source: FORGE_AGENT_RULE_APPROVAL_SOURCE, rule: description } };
+    }
     const signal = context.signal ?? new AbortController().signal;
     signal.throwIfAborted();
     const label = FORGE_AGENT_TOOL_GROUP_LABELS[group];
+    const levelName = access === "auto" ? "Auto" : "Ask";
     const requestId = `${FORGE_TOOL_REQUEST_ID_PREFIX}${randomUUID()}`;
     const forge = repository?.provider === "gitlab" ? "GitLab" : "GitHub";
     // Comment-sized changes may be granted for the conversation; opening,
     // editing, approving and merging are always one call at a time.
     const sessionGrant = group === "comments" || group === "issues";
+    const grantNote = sessionGrant
+      ? " A conversation grant lasts until PwrAgent restarts or the setting changes."
+      : " This allows this call only.";
+    const meta: Record<string, unknown> = {
+      pwragent_approval_kind: "mcp_tool_call",
+      ...(sessionGrant ? { persist: ["session"] } : {}),
+      ...(repository ? { connector_name: `${repository.owner}/${repository.repo}` } : {}),
+      ...(group === "approve_merge" ? { riskLevel: "high" } : {}),
+      subtitle: rule
+        ? `${forgeAgentToolRuleSentence(rule, group, access, wording)}${grantNote}`
+        : `${label} is set to ${levelName} in Settings → Git → Agent forge tools.${grantNote}`,
+      tool_params_display: forgeToolParamsDisplay(args),
+    };
     const notification: AppServerPendingRequestNotification = {
       method: "mcpServer/elicitation/request",
       params: {
@@ -9786,14 +9942,7 @@ export class DesktopBackendRegistry {
         mode: "form",
         message: forgeToolApprovalMessage(operation, args, repository?.provider ?? "github"),
         requestedSchema: { type: "object", properties: {} },
-        _meta: {
-          pwragent_approval_kind: "mcp_tool_call",
-          ...(sessionGrant ? { persist: ["session"] } : {}),
-          ...(repository ? { connector_name: `${repository.owner}/${repository.repo}` } : {}),
-          ...(group === "approve_merge" ? { riskLevel: "high" } : {}),
-          subtitle: `${label} is set to ${access === "auto" ? "Auto" : "Ask"} in Settings → Git → Agent forge tools.${sessionGrant ? " A conversation grant lasts until PwrAgent restarts or the setting changes." : " This allows this call only."}`,
-          tool_params_display: forgeToolParamsDisplay(args),
-        },
+        _meta: meta,
       },
     };
     const automation = this.findHeadlessAutomationTurnForRequest(context.backend, notification);
@@ -9804,24 +9953,44 @@ export class DesktopBackendRegistry {
         threadId: context.threadId,
         turnId: context.turnId,
         operation,
+        ...(rule ? { rule: forgeAgentToolRuleDescription(rule, wording) } : {}),
       });
-      return;
+      return undefined;
     }
     if (automation) {
-      throw new ForgeReadError("approval_required", `${label} is set to ${access === "auto" ? "Auto" : "Ask"} in Settings → Git → Agent forge tools, and an automation cannot answer an approval. The operator can set it to Allow.`);
+      throw new ForgeReadError("approval_required", rule
+        ? `${forgeAgentToolRuleSentence(rule, group, access, wording)} An automation cannot answer an approval. The operator can set the rule to Allow in Settings → Git → Agent forge tools.`
+        : `${label} is set to ${levelName} in Settings → Git → Agent forge tools, and an automation cannot answer an approval. The operator can set it to Allow.`);
     }
     if (!context.turnId) {
       throw new ForgeReadError("approval_required", `${label} needs the operator's approval, which requires an active turn.`);
     }
     const sessionKey = JSON.stringify([context.backend, context.threadId]);
     // A grant covers one tool in one repository, never every repository the
-    // thread links, and ends when that group's access level changes.
+    // thread links, and ends when the level that asked, or the rule that set
+    // it, changes.
     const grantTarget = `${operation}\u0000${repository ? repositoryKey(repository) : ""}`;
-    const grantKey = `${group}:${access}`;
-    if (sessionGrant && this.forgeToolSessionApprovals.get(sessionKey)?.get(grantTarget) === grantKey) return;
+    const grantKey = `${group}:${access}${rule ? `:${rule.repository}:${forgeAgentRuleAgentKey(rule.agent)}` : ""}`;
+    if (sessionGrant && this.forgeToolSessionApprovals.get(sessionKey)?.get(grantTarget) === grantKey) return undefined;
+    // "Always allow" choices for this card. Only offered options can be
+    // chosen, and only for this request.
+    const ruleRepository = repository ? normalizeForgeRuleRepository(repository) : undefined;
+    const rememberOptions = ruleRepository
+      ? buildForgeApprovalRememberOptions({
+        group,
+        repository: ruleRepository,
+        identity,
+        resolution,
+        automation: false,
+        projectLabel: wording.projectLabel,
+        names: wording.names,
+      })
+      : [];
+    if (rememberOptions.length > 0) meta[FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY] = rememberOptions;
     const key = buildPendingRequestKey({ backend: context.backend, threadId: context.threadId, requestId });
-    const approved = await new Promise<"once" | "session" | false>((resolve, reject) => {
-      const finish = (value: "once" | "session" | false, error?: unknown): void => {
+    type Approval = { grant: "once" | "session"; remember?: ForgeApprovalRememberOptionId } | false;
+    const approved = await new Promise<Approval>((resolve, reject) => {
+      const finish = (value: Approval, error?: unknown): void => {
         signal.removeEventListener("abort", aborted);
         this.pendingServerRequests.delete(key);
         if (error) reject(error);
@@ -9838,8 +10007,17 @@ export class DesktopBackendRegistry {
         resolve: (response) => {
           if (signal.aborted) { aborted(); return; }
           const accepted = Boolean(response && "action" in response && response.action === "accept");
-          const persist = response && "_meta" in response ? readRecord(response._meta)?.persist : undefined;
-          finish(accepted ? (sessionGrant && persist === "session" ? "session" : "once") : false);
+          if (!accepted) { finish(false); return; }
+          const responseMeta = response && "_meta" in response ? readRecord(response._meta) : undefined;
+          const choice = readForgeApprovalRememberChoice(responseMeta);
+          const remember = choice && rememberOptions.some((option) => option.id === choice) ? choice : undefined;
+          if (choice && !remember) {
+            backendRegistryLog.warn("ignoring a forge remember choice this card did not offer", { threadId: context.threadId, requestId, choice });
+          }
+          finish({
+            grant: sessionGrant && responseMeta?.persist === "session" ? "session" : "once",
+            ...(remember ? { remember } : {}),
+          });
         },
         reject: (error) => finish(false, error),
       });
@@ -9848,10 +10026,60 @@ export class DesktopBackendRegistry {
       void this.emit({ backend: context.backend, notification }).catch((error) => finish(false, error));
     });
     if (!approved) throw new ForgeReadError("declined", `The operator declined ${operation}. Do not retry it or use the gh or glab CLI instead; ask what they want changed.`);
-    if (approved === "session") {
+    if (approved.grant === "session") {
       const grants = this.forgeToolSessionApprovals.get(sessionKey) ?? new Map<string, string>();
       grants.set(grantTarget, grantKey);
       this.forgeToolSessionApprovals.set(sessionKey, grants);
+    }
+    if (!approved.remember || !ruleRepository || !isForgeApprovalRememberGroup(group)) return undefined;
+    return {
+      rememberedRule: await this.rememberForgeApprovalRule(approved.remember, {
+        group, repository: ruleRepository, identity, context, wording,
+      }),
+    };
+  }
+
+  /**
+   * Save the project rule an approval card's "Always allow" option chose,
+   * before the approved call runs. The operator approved the call either
+   * way, so a failed save is reported and the call still runs once.
+   */
+  private async rememberForgeApprovalRule(
+    optionId: ForgeApprovalRememberOptionId,
+    request: {
+      group: ForgeAgentToolRuleGroup;
+      repository: string;
+      identity: ForgeAgentIdentity;
+      context: AgentToolCallContext;
+      wording: { projectLabel?: string; names: ForgeAgentRuleNames };
+    },
+  ): Promise<NonNullable<ForgeWriteApprovalNotes["rememberedRule"]>> {
+    const { group, repository, identity, context, wording } = request;
+    const agent = forgeApprovalRememberRuleAgent(optionId, identity);
+    const rule = agent
+      ? forgeAgentToolRuleDescription({ repository, agent }, wording)
+      : `${wording.projectLabel ?? forgeRuleRepositoryLabel(repository)} rule`;
+    try {
+      if (!agent) throw new Error("This agent cannot be named in a project rule.");
+      if (!this.forgeToolRuleWriter) throw new Error("Project rules cannot be saved on this instance.");
+      await this.forgeToolRuleWriter({ repository, agent, group, level: "allow" });
+      backendRegistryLog.info("saved a forge project rule from an approval card", {
+        backend: context.backend,
+        threadId: context.threadId,
+        group,
+        rule,
+      });
+      return { rule, saved: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      backendRegistryLog.warn("could not save a forge project rule from an approval card", {
+        backend: context.backend,
+        threadId: context.threadId,
+        group,
+        rule,
+        error: message,
+      });
+      return { rule, saved: false, error: `The operator approved this call, but the rule could not be saved, so later calls still ask: ${message}` };
     }
   }
 

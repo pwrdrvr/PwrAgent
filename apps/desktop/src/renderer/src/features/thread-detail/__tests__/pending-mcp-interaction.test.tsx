@@ -2,8 +2,16 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PendingMcpInteraction } from "../PendingMcpInteraction";
-import { createMcpElicitationState, type PendingMcpInteractionState } from "../mcp-elicitation";
-import type { AppServerMcpElicitationRequestNotification } from "@pwragent/shared";
+import {
+  buildMcpElicitationResponse,
+  createMcpElicitationState,
+  type PendingMcpInteractionState,
+} from "../mcp-elicitation";
+import {
+  FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY,
+  FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY,
+  type AppServerMcpElicitationRequestNotification,
+} from "@pwragent/shared";
 
 const openExternalUrl = vi.hoisted(() => vi.fn());
 vi.mock("../../../lib/open-external-url", () => ({ openExternalUrl }));
@@ -375,5 +383,151 @@ describe("PendingMcpInteraction", () => {
 
     expect(screen.getByRole("textbox", { name: /Email/ })).not.toHaveAttribute("aria-invalid");
     expect(screen.getByRole("button", { name: "Submit" })).toBeEnabled();
+  });
+});
+
+describe("PendingMcpInteraction forge remember menu", () => {
+  const rememberOptions = [
+    {
+      id: "agent",
+      label: "Always allow Claude in pwrdrvr/PwrAgent",
+      description: "Claude can open or update pull requests in pwrdrvr/PwrAgent without asking, with any model.",
+    },
+    {
+      id: "agent_model",
+      label: "Always allow claude-opus in pwrdrvr/PwrAgent",
+      description: "Claude · claude-opus can open or update pull requests in pwrdrvr/PwrAgent without asking.",
+    },
+  ];
+
+  function forgeState(meta: Record<string, unknown> = {}): PendingMcpInteractionState {
+    return createMcpElicitationState({
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1", turnId: "turn-1", requestId: "forge-tool:fixture",
+        serverName: "GitHub", mode: "form", message: "Open a pull request in pwrdrvr/PwrAgent?",
+        requestedSchema: { type: "object", properties: {} },
+        _meta: { pwragent_approval_kind: "mcp_tool_call", ...meta },
+      },
+    })!;
+  }
+
+  it("keeps a single Allow button when the request offers no rule", () => {
+    const onSubmit = vi.fn();
+    const state = forgeState();
+    render(<PendingMcpInteraction state={state} onChange={vi.fn()} onSubmit={onSubmit} />);
+
+    expect(screen.queryByRole("button", { name: "More approval choices" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    expect(onSubmit).toHaveBeenLastCalledWith(state, "accept");
+  });
+
+  it("splits Allow and sends the chosen rule with the accept", () => {
+    const onSubmit = vi.fn();
+    const state = forgeState({ [FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY]: rememberOptions });
+    render(<PendingMcpInteraction state={state} onChange={vi.fn()} onSubmit={onSubmit} />);
+
+    const toggle = screen.getByRole("button", { name: "More approval choices" });
+    expect(toggle).toHaveAttribute("aria-haspopup", "menu");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+
+    const menu = screen.getByRole("menu", { name: "Approval choices" });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveAttribute("aria-controls", menu.id);
+    const items = screen.getAllByRole("menuitem");
+    expect(items.map((item) => item.textContent)).toEqual([
+      expect.stringContaining("Allow once"),
+      expect.stringContaining(rememberOptions[0]!.label),
+      expect.stringContaining(rememberOptions[1]!.label),
+    ]);
+    expect(items[0]).toHaveFocus();
+    const agentItem = screen.getByRole("menuitem", { name: rememberOptions[0]!.label });
+    expect(agentItem).toHaveAccessibleDescription(rememberOptions[0]!.description);
+
+    fireEvent.click(agentItem);
+    expect(onSubmit).toHaveBeenLastCalledWith(state, "accept", undefined, "agent");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(buildMcpElicitationResponse(state, "accept", undefined, "agent")._meta).toEqual({
+      [FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY]: "agent",
+    });
+  });
+
+  it("allows once from the menu and plainly from the split's main part", () => {
+    const onSubmit = vi.fn();
+    const state = forgeState({ [FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY]: rememberOptions });
+    render(<PendingMcpInteraction state={state} onChange={vi.fn()} onSubmit={onSubmit} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    expect(onSubmit).toHaveBeenLastCalledWith(state, "accept");
+
+    fireEvent.click(screen.getByRole("button", { name: "More approval choices" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Allow once" }));
+    expect(onSubmit).toHaveBeenLastCalledWith(state, "accept");
+    expect(onSubmit).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the conversation grant on the main part and moves Allow once into the menu", () => {
+    const onSubmit = vi.fn();
+    const state = forgeState({
+      persist: ["session"],
+      [FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY]: rememberOptions.slice(0, 1),
+    });
+    render(<PendingMcpInteraction state={state} onChange={vi.fn()} onSubmit={onSubmit} />);
+
+    expect(screen.queryByRole("button", { name: "Allow once" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Allow this tool for this conversation" }));
+    expect(onSubmit).toHaveBeenLastCalledWith(state, "accept", "session");
+
+    fireEvent.click(screen.getByRole("button", { name: "More approval choices" }));
+    expect(screen.getAllByRole("menuitem")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Allow once" }));
+    expect(onSubmit).toHaveBeenLastCalledWith(state, "accept");
+  });
+
+  it("closes on Escape and returns focus to the chevron without answering", () => {
+    const onSubmit = vi.fn();
+    const state = forgeState({ [FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY]: rememberOptions });
+    render(<PendingMcpInteraction state={state} onChange={vi.fn()} onSubmit={onSubmit} />);
+
+    const toggle = screen.getByRole("button", { name: "More approval choices" });
+    toggle.focus();
+    fireEvent.click(toggle);
+    const firstItem = screen.getAllByRole("menuitem")[0]!;
+    expect(firstItem).toHaveFocus();
+    fireEvent.keyDown(firstItem, { key: "Escape" });
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(toggle).toHaveFocus();
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("disables both halves while an answer is in flight", () => {
+    const state = forgeState({ [FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY]: rememberOptions });
+    render(<PendingMcpInteraction busy state={state} onChange={vi.fn()} onSubmit={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: "Allow" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "More approval choices" })).toBeDisabled();
+  });
+
+  it("ignores remember options on a request PwrAgent did not raise", () => {
+    const state = createMcpElicitationState({
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1", turnId: "turn-1", requestId: "native-remember",
+        serverName: "Sandboxer", mode: "form", message: "Create a sandbox?",
+        requestedSchema: { type: "object", properties: {} },
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          [FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY]: rememberOptions,
+        },
+      },
+    })!;
+    render(<PendingMcpInteraction state={state} onChange={vi.fn()} onSubmit={vi.fn()} />);
+
+    expect(screen.queryByRole("button", { name: "More approval choices" })).not.toBeInTheDocument();
+    expect(() => buildMcpElicitationResponse(state, "accept", undefined, "agent")).toThrow(/rule/);
   });
 });

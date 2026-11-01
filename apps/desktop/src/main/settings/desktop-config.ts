@@ -1,9 +1,12 @@
 import type { DesktopThreadArchivePolicy, ThreadExecutionMode, ThreadTodoMergeMethod } from "@pwragent/shared";
 import {
   FORGE_AGENT_TOOL_GROUPS,
+  FORGE_AGENT_TOOL_RULE_GROUPS,
   isAcpBackendId,
   isForgeAgentToolAccess,
+  isForgeAgentToolRuleGroup,
   isThreadTodoMergeMethod,
+  normalizeForgeAgentToolRules,
   normalizeTaskMonitorModelChoice,
   validateCodexModelProviders,
   validateLocalModelIds,
@@ -11,6 +14,7 @@ import {
   type DesktopTaskMonitorModelChoice,
   type ForgeAgentToolAccess,
   type ForgeAgentToolGroup,
+  type ForgeAgentToolRule,
 } from "@pwragent/shared";
 import fs from "node:fs";
 import { validateCodexConfigOverrides } from "./codex-config-overrides";
@@ -372,6 +376,7 @@ export type DesktopSettingsConfig = {
     agentTools?: {
       enabled?: boolean;
       access?: Partial<Record<ForgeAgentToolGroup, ForgeAgentToolAccess>>;
+      rules?: ForgeAgentToolRule[];
     };
   };
   applications?: {
@@ -2070,6 +2075,14 @@ export function desktopSettingsPatchToEdits(
       set(["git", "agent_tools", group], access);
     }
   }
+  if (patch.git?.agentTools?.rules !== undefined) {
+    // `[[git.agent_tools.rules]]` is additive: older clients ignore it, so
+    // there is no legacy shape to preserve.
+    const entries = forgeAgentToolRuleTomlEntries(patch.git.agentTools.rules);
+    edits.push(entries.length
+      ? { op: "setTableArray", path: ["git", "agent_tools", "rules"], value: entries }
+      : { op: "deleteTableArray", path: ["git", "agent_tools", "rules"] });
+  }
 
   if (patch.applications?.editor?.preferredId !== undefined) {
     set(["applications", "editor", "preferred_id"], patch.applications.editor.preferredId);
@@ -2602,6 +2615,7 @@ function normalizeDesktopConfig(
       agentTools: {
         enabled: readBoolean(gitAgentTools?.enabled),
         access: readForgeAgentToolAccess(gitAgentTools),
+        rules: readForgeAgentToolRules(gitAgentTools?.rules),
       },
     },
     applications: {
@@ -3138,6 +3152,79 @@ function readForgeAgentToolAccess(
     }
   }
   return access;
+}
+
+/**
+ * `[[git.agent_tools.rules]]`. An entry that cannot be applied (no
+ * repository, an unknown agent, a provider or model where none is allowed) is
+ * skipped with a warning; a group with an unknown level is kept as Ask. Only
+ * a well-formed rule can loosen access, so a mistake never widens it.
+ */
+function readForgeAgentToolRules(
+  value: TomlScalar | undefined,
+): ForgeAgentToolRule[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    console.warn("Ignoring git.agent_tools.rules: expected [[git.agent_tools.rules]] tables.");
+    return [];
+  }
+  const candidates = (value as readonly unknown[]).map((item, index) => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) return item;
+    const entry = item as Record<string, unknown>;
+    const access: Record<string, unknown> = {};
+    for (const [key, level] of Object.entries(entry)) {
+      if (FORGE_AGENT_TOOL_RULE_TOML_KEYS.has(key)) continue;
+      if (isForgeAgentToolRuleGroup(key)) {
+        access[key] = level;
+      } else {
+        console.warn(
+          `git.agent_tools.rules entry ${index + 1}: ignoring ${key}; `
+            + "rules set only pull_requests, comments, issues, ci and approve_merge.",
+        );
+      }
+    }
+    return {
+      repository: entry.repository,
+      agent: {
+        backend: entry.agent,
+        codexModelProvider: entry.codex_model_provider,
+        model: entry.model,
+      },
+      access,
+    };
+  });
+  return normalizeForgeAgentToolRules(candidates, (problem, index) => {
+    console.warn(`git.agent_tools.rules entry ${index + 1}: ${problem}.`);
+  });
+}
+
+const FORGE_AGENT_TOOL_RULE_TOML_KEYS = new Set([
+  "repository",
+  "agent",
+  "codex_model_provider",
+  "model",
+]);
+
+function forgeAgentToolRuleTomlEntries(
+  rules: readonly ForgeAgentToolRule[],
+): Record<string, string>[] {
+  return normalizeForgeAgentToolRules(rules, (problem, index) => {
+    throw new Error(`Invalid forge tool rule ${index + 1}: ${problem}.`);
+  }).map((rule) => {
+    const entry: Record<string, string> = {
+      repository: rule.repository,
+      agent: rule.agent.backend,
+    };
+    if (rule.agent.codexModelProvider) {
+      entry.codex_model_provider = rule.agent.codexModelProvider;
+    }
+    if (rule.agent.model) entry.model = rule.agent.model;
+    for (const group of FORGE_AGENT_TOOL_RULE_GROUPS) {
+      const level = rule.access[group];
+      if (level !== undefined) entry[group] = level;
+    }
+    return entry;
+  });
 }
 
 function readMergeMethod(

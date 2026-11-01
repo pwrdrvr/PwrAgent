@@ -1,9 +1,13 @@
 import {
+  FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY,
   isSecretFieldLabel,
   isSecretFieldName,
   mcpElicitationPurpose,
+  readForgeApprovalRememberOptions,
   type AppServerMcpElicitationRequestNotification,
   type AppServerMcpElicitationResponse,
+  type ForgeApprovalRememberOption,
+  type ForgeApprovalRememberOptionId,
   type McpElicitationPurpose,
 } from "@pwragent/shared";
 
@@ -138,6 +142,17 @@ export function readMcpApprovalPersistence(state: PendingMcpInteractionState): M
   return [...new Set(modes)] as McpApprovalPersistence[];
 }
 
+/**
+ * The project rules a forge approval offers to remember from Allow. Only
+ * PwrAgent's own tool approvals carry them; any other request shows none.
+ */
+export function readMcpRememberOptions(state: PendingMcpInteractionState): ForgeApprovalRememberOption[] {
+  if (!isMcpToolApproval(state) || state._meta?.pwragent_approval_kind !== "mcp_tool_call") {
+    return [];
+  }
+  return readForgeApprovalRememberOptions(state._meta);
+}
+
 /** Permission to run a tool, not a request for data. */
 export function isMcpToolApproval(state: PendingMcpInteractionState): boolean {
   return state.purpose === "tool-approval";
@@ -239,6 +254,7 @@ export function buildMcpElicitationResponse(
   state: PendingMcpInteractionState,
   action: "accept" | "decline" | "cancel",
   persist?: McpApprovalPersistence,
+  remember?: ForgeApprovalRememberOptionId,
 ): AppServerMcpElicitationResponse {
   if (action !== "accept") {
     return {
@@ -249,7 +265,7 @@ export function buildMcpElicitationResponse(
   }
 
   if (state.mode === "url") {
-    if (persist) {
+    if (persist || remember) {
       throw new Error("This MCP request does not support approval persistence.");
     }
     return {
@@ -262,6 +278,11 @@ export function buildMcpElicitationResponse(
   if (persist && !readMcpApprovalPersistence(state).includes(persist)) {
     throw new Error("This MCP request does not support the selected approval persistence.");
   }
+  // A remembered allow writes a project rule, so it goes back only when the
+  // request offered that exact option. Main checks the offer again.
+  if (remember && !readMcpRememberOptions(state).some((option) => option.id === remember)) {
+    throw new Error("This request does not offer the selected rule.");
+  }
 
   return {
     action,
@@ -271,7 +292,12 @@ export function buildMcpElicitationResponse(
           ? []
           : [[field.key, fieldContentValue(field)] as const]) ?? []
     ),
-    _meta: persist ? { persist } : null,
+    _meta: persist || remember
+      ? {
+          ...(persist ? { persist } : {}),
+          ...(remember ? { [FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY]: remember } : {}),
+        }
+      : null,
   };
 }
 
