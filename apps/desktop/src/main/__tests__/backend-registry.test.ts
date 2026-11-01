@@ -126,6 +126,7 @@ import {
   CODEX_MISSING_THREAD_EVALUATION_DELAY_MS,
   DesktopBackendRegistry,
   getCodexFastModeMismatchWarning,
+  reviewStartFailureFingerprint,
   withTokenMiserBridgeDescriptorEnv,
 } from "../app-server/backend-registry";
 import {
@@ -32359,6 +32360,8 @@ command = "pnpm dev"
       expect(response).toMatchObject({
         structuredContent: { backend: "claude", threadId: claudeId, status: "scheduled" },
       });
+      // The agent can tell the operator who will review.
+      expect(JSON.stringify(response)).toContain("Review scheduled to run on OpenAI");
       expect(codexClient.lastStartThreadParams).toBeUndefined();
 
       await registry.publishLocalEvent({
@@ -45601,9 +45604,81 @@ script = "printf setup"
       });
       await flushAsync();
       expect(codexClient.startTurnCallCount).toBe(1);
+
+      // A turn that ends without a failed start means the thread moved on, so
+      // the same failure later is news again.
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: { threadId: "parent-thread", turnId: "turn-3", turn: { id: "turn-3" } },
+        },
+      });
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: "parent-thread",
+          turnId: "turn-3",
+          turn: { id: "turn-3", status: "completed", output: [] },
+        },
+      });
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: { threadId: "parent-thread", turnId: "turn-4", turn: { id: "turn-4" } },
+        },
+      });
+      await expect(registry.submitReview({
+        backend: "codex",
+        threadId: "parent-thread",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      })).resolves.toMatchObject({ status: "scheduled", invokingTurnId: "turn-4" });
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: "parent-thread",
+          turnId: "turn-4",
+          turn: { id: "turn-4", status: "completed", output: [] },
+        },
+      });
+      await vi.waitFor(() => {
+        expect(codexClient.startTurnCallCount).toBe(2);
+      });
     } finally {
       await registry.close();
     }
+  });
+
+  it("fingerprints failed review starts by target and error, not snapshot time", () => {
+    // Each scheduled pull request review captures a new snapshot. Comparing
+    // whole targets let every retry of a failing PR review send a new notice.
+    const pullRequest = (capturedAt: number) => ({
+      type: "pullRequest" as const,
+      url: "https://github.com/acme/widgets/pull/42",
+      snapshot: {
+        pullRequest: {
+          provider: "github.com",
+          org: "acme",
+          repo: "widgets",
+          number: 42,
+          url: "https://github.com/acme/widgets/pull/42",
+          title: "Fix widgets",
+          baseRefName: "main",
+          headRefName: "fix/widgets",
+        },
+        baseCommit: "a".repeat(40),
+        headCommit: "b".repeat(40),
+        mergeBaseCommit: "a".repeat(40),
+        capturedAt,
+      },
+    });
+    const error = "Selected review provider cannot run reviews: claude";
+    expect(reviewStartFailureFingerprint([{ error, target: pullRequest(1) }]))
+      .toBe(reviewStartFailureFingerprint([{ error, target: pullRequest(2) }]));
+    expect(reviewStartFailureFingerprint([{ error, target: pullRequest(1) }]))
+      .not.toBe(reviewStartFailureFingerprint([{ error: "Other", target: pullRequest(1) }]));
   });
 
   it("queues review submission while the invoking turn start is pending", async () => {

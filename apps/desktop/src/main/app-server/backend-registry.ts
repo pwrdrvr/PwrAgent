@@ -8526,13 +8526,6 @@ function buildWorkspaceMoveSuccessPrompt(params: {
   ].join("\n");
 }
 
-function reviewStartFailureNoticeKey(
-  backend: AppServerBackendKind,
-  threadId: string,
-): string {
-  return `${backend}:${threadId}`;
-}
-
 function describeReviewTarget(target: AppServerReviewTarget): string {
   switch (target.type) {
     case "pullRequest":
@@ -8546,6 +8539,19 @@ function describeReviewTarget(target: AppServerReviewTarget): string {
     case "custom":
       return "custom review instructions";
   }
+}
+
+/**
+ * Identifies a set of failed starts by what a person would read: the target
+ * and the error. A pull request target also carries a snapshot stamped with
+ * the time it was taken, which differs on every attempt.
+ */
+export function reviewStartFailureFingerprint(
+  failures: Array<{ error: string; target: AppServerReviewTarget }>,
+): string {
+  return JSON.stringify(
+    failures.map((failure) => [describeReviewTarget(failure.target), failure.error]),
+  );
 }
 
 function buildReviewStartFailurePrompt(
@@ -9181,7 +9187,11 @@ export class DesktopBackendRegistry {
     PendingThreadWorkspaceMoveSummary
   >();
   private readonly pendingReviewStarts = new Map<string, PendingReviewStartRecord>();
-  /** Last failure notice per thread, so a retry that fails the same way stays quiet. */
+  /**
+   * Fingerprint of the failure notice each thread was last sent, kept until a
+   * turn ends without a failed start, so only an immediate retry that fails
+   * the same way stays quiet.
+   */
   private readonly reviewStartFailureNotices = new Map<string, string>();
   private readonly codexProtocolCaptureSession?: CodexProtocolCaptureSession;
   private readonly captureStores: ProtocolCaptureStore[] = [];
@@ -23237,7 +23247,7 @@ export class DesktopBackendRegistry {
           updatedAt: Date.now(),
         });
         this.reviewStartFailureNotices.delete(
-          reviewStartFailureNoticeKey(candidate.backend, candidate.threadId),
+          buildThreadIdentityKey(candidate.backend, candidate.threadId),
         );
         await this.emit({
           backend: candidate.backend,
@@ -23304,6 +23314,11 @@ export class DesktopBackendRegistry {
         threadId: params.threadId,
         failures,
       });
+    } else {
+      // The thread moved on without retrying, so a later failure is news.
+      this.reviewStartFailureNotices.delete(
+        buildThreadIdentityKey(params.backend, params.threadId),
+      );
     }
   }
 
@@ -23317,8 +23332,8 @@ export class DesktopBackendRegistry {
     threadId: string;
     failures: Array<{ error: string; target: AppServerReviewTarget }>;
   }): Promise<void> {
-    const noticeKey = reviewStartFailureNoticeKey(params.backend, params.threadId);
-    const fingerprint = JSON.stringify(params.failures);
+    const noticeKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const fingerprint = reviewStartFailureFingerprint(params.failures);
     // A retry that fails the same way would otherwise start a turn that
     // retries again, without end.
     if (this.reviewStartFailureNotices.get(noticeKey) === fingerprint) {
@@ -23328,7 +23343,6 @@ export class DesktopBackendRegistry {
       });
       return;
     }
-    this.reviewStartFailureNotices.set(noticeKey, fingerprint);
     try {
       await this.submitTurn({
         backend: params.backend,
@@ -23340,6 +23354,8 @@ export class DesktopBackendRegistry {
         origin: "automation",
         messageOrigin: { kind: "pwragent" },
       });
+      // Only a delivered notice suppresses the next one.
+      this.reviewStartFailureNotices.set(noticeKey, fingerprint);
     } catch (error) {
       backendRegistryLog.warn("failed to send scheduled review start failure notice", {
         backend: params.backend,
@@ -41282,8 +41298,9 @@ export class DesktopBackendRegistry {
           ...(pending.request.cwd ? { cwd: pending.request.cwd } : {}),
           invokingTurnId: pending.invokingTurnId,
           createdAt: pending.createdAt,
-          message:
-            "Review scheduled. Stop work and let this turn complete; PwrAgent will start the review automatically.",
+          message: reviewBackendDiffers
+            ? `Review scheduled to run on ${isAcpBackendId(reviewBackend) ? reviewBackend : BACKEND_LABELS[reviewBackend]}, because ${request.context.backend} cannot run reviews. Stop work and let this turn complete; PwrAgent will start the review automatically.`
+            : "Review scheduled. Stop work and let this turn complete; PwrAgent will start the review automatically.",
         } satisfies StartReviewToolResult,
       };
     } catch (error) {
