@@ -1,8 +1,7 @@
+import { acquireDebuggerLease, type DebuggerLease } from "./debugger-lease";
 import fs from "node:fs/promises";
 import type { StartupCpuProfileSession } from "./startup-cpu-profile-session";
 import { getMainLogger } from "../log";
-
-const CHROME_DEBUGGER_PROTOCOL_VERSION = "1.3";
 
 type Logger = Pick<Console, "info" | "warn" | "error">;
 
@@ -50,7 +49,7 @@ export class RendererStartupCpuProfiler {
   private readonly session: StartupCpuProfileSession;
   private readonly target: RendererStartupCpuTarget;
 
-  private attachedByProfiler = false;
+  private debuggerLease: DebuggerLease | undefined;
   private detachedReason?: string;
   private profiling = false;
   private stopCompleted = false;
@@ -87,8 +86,7 @@ export class RendererStartupCpuProfiler {
     }
 
     try {
-      this.target.debugger.attach(CHROME_DEBUGGER_PROTOCOL_VERSION);
-      this.attachedByProfiler = true;
+      this.debuggerLease = acquireDebuggerLease(this.target.debugger, "Profiler");
       this.target.debugger.on("detach", this.detachListener);
       await this.target.debugger.sendCommand("Profiler.enable");
       if (this.stopCompleted) return false;
@@ -178,12 +176,8 @@ export class RendererStartupCpuProfiler {
       this.target.debugger.off("detach", this.detachListener);
     }
 
-    if (!this.attachedByProfiler || !this.target.debugger.isAttached() || this.isTargetDestroyed()) {
-      return;
-    }
-
-    this.target.debugger.detach();
-    this.attachedByProfiler = false;
+    this.debuggerLease?.release(this.isTargetDestroyed());
+    this.debuggerLease = undefined;
   }
 
   private isTargetDestroyed(): boolean {

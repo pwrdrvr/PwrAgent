@@ -1,3 +1,4 @@
+import { DIAGNOSTICS_CAPTURE_NATIVE_CPU_CHANNEL, DIAGNOSTICS_STOP_NATIVE_CPU_CHANNEL, type NativeCpuCaptureResult } from "../shared/native-cpu-diagnostics";
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import { FEDERATION_SERVICES_CHANNEL } from "../shared/ipc";
 import {
@@ -2161,6 +2162,10 @@ const desktopApi = Object.freeze({
       ipcRenderer.off(INTEGRATED_TERMINAL_ERROR_CHANNEL, listener);
     };
   },
+  captureNativeCpuDiagnostics: (): Promise<NativeCpuCaptureResult> =>
+    ipcRenderer.invoke(DIAGNOSTICS_CAPTURE_NATIVE_CPU_CHANNEL),
+  stopNativeCpuDiagnostics: (): Promise<NativeCpuCaptureResult | undefined> =>
+    ipcRenderer.invoke(DIAGNOSTICS_STOP_NATIVE_CPU_CHANNEL),
   captureRenderingDiagnostics: (seconds = 10): Promise<RenderingCaptureResult> =>
     ipcRenderer.invoke(DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL, seconds),
   stopRenderingDiagnostics: (): Promise<RenderingCaptureResult | undefined> =>

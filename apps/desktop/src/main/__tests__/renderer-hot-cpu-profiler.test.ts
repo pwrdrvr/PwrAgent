@@ -231,6 +231,48 @@ describe("HotCpuProfiler", () => {
     }
   });
 
+  it("saves and resumes V8 profiling while a native trace holds its connection", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+    const config = createEnabledConfig(workspace.path, {
+      PWRAGENT_HOT_CPU_PROFILING_START_DELAY_MS: "0",
+      PWRAGENT_HOT_CPU_PROFILING_TRIGGER_MODE: "spike",
+    });
+    const sessionResult = await createHotCpuProfileSession({
+      config,
+      versions: { appVersion: "test", electronVersion: "test", chromeVersion: "test", nodeVersion: "test" },
+    });
+    if (!sessionResult.ok) throw new Error(sessionResult.message);
+    const { target, debuggerApi } = createTarget();
+    let hot = false;
+    const profiler = createProfiler({
+      config, session: sessionResult.session, target,
+      getAppMetrics: () => [{ ...createMetric(0),
+        cpu: { percentCPUUsage: hot ? 90 : 0, idleWakeupsPerSecond: 0 },
+      } as ProcessMetric],
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      onProfileWritten: () => { hot = false; },
+    });
+    await profiler.start();
+    const traceLease = acquireDebuggerLease(debuggerApi, "Tracing");
+    try {
+      hot = true;
+      await samplesOf(profiler).waitUntil(
+        () => debuggerApi.sendCommand.mock.calls.filter(([m]) => m === "Profiler.start").length >= 2,
+        "V8 recording resumed under native trace lease",
+      );
+      expect(debuggerApi.attach).toHaveBeenCalledOnce();
+      expect(debuggerApi.detach).not.toHaveBeenCalled();
+      expect(await fs.stat(sessionResult.session.createProfilePath(1))).toMatchObject({ size: expect.any(Number) });
+      traceLease.release();
+      expect(debuggerApi.detach).not.toHaveBeenCalled();
+      await profiler.stop();
+      expect(debuggerApi.detach).toHaveBeenCalledOnce();
+    } finally {
+      traceLease.release();
+    }
+  });
+
   it("captures a real main-thread burst that finishes before the trigger is evaluated", async () => {
     const workspace = await createTemporaryTestDirectory();
     cleanups.push(workspace.cleanup);

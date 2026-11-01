@@ -1473,6 +1473,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   onIntegratedTerminalError?: (
     callback: (event: IntegratedTerminalErrorEvent) => void,
   ) => () => void;
+  captureNativeCpuDiagnostics?: () => Promise<import("../../../shared/native-cpu-diagnostics").NativeCpuCaptureResult>;
+  stopNativeCpuDiagnostics?: () => Promise<import("../../../shared/native-cpu-diagnostics").NativeCpuCaptureResult | undefined>;
   captureRenderingDiagnostics?: (seconds?: number) => Promise<import("../../../shared/rendering-diagnostics").RenderingCaptureResult>;
   stopRenderingDiagnostics?: () => Promise<import("../../../shared/rendering-diagnostics").RenderingCaptureResult | undefined>;
   captureHeapSnapshot?: (
