@@ -117,6 +117,10 @@ function isOnScreen(element: HTMLElement): boolean {
 
 function runPulse(): void {
   pulseTimer = undefined;
+  // A torn-down window (a test environment that ended) has no document.
+  if (typeof document === "undefined") {
+    return;
+  }
   const dots = document.querySelectorAll<HTMLElement>(STATUS_PULSE_SELECTOR);
   if (dots.length === 0) {
     return;

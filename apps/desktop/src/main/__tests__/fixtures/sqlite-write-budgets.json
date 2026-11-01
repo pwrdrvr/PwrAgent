@@ -1,10 +1,10 @@
 {
   "acp-task-monitor-lifecycle": {
-    "commits": 4,
-    "note": "one ACP monitor start, 120 transient heartbeats, completion, and final usage attribution",
-    "observedWalBytes": 115360,
-    "rowsChanged": 6,
-    "statements": 6
+    "commits": 5,
+    "note": "one ACP monitor start with its brief's origin, 120 transient heartbeats, completion, and final usage attribution",
+    "observedWalBytes": 160712,
+    "rowsChanged": 7,
+    "statements": 7
   },
   "agent-created-codex-thread-token-miser-override": {
     "commits": 4,

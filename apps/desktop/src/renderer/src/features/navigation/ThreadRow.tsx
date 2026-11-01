@@ -1260,7 +1260,7 @@ function needsRepoPrefix(
     return false;
   }
 
-  const primaryRepository = parseRepositoryIdentity(thread.gitOriginUrl);
+  const primaryRepository = threadPrimaryRepository(thread);
   if (primaryRepository) {
     return repositoryIdentityKey(primaryRepository) !== repositoryIdentityKey(pr);
   }
@@ -1273,8 +1273,23 @@ function needsRepoPrefix(
 }
 
 function primaryRepositoryKey(thread: NavigationThreadSummary): string | undefined {
-  const primaryRepository = parseRepositoryIdentity(thread.gitOriginUrl);
+  const primaryRepository = threadPrimaryRepository(thread);
   return primaryRepository ? repositoryIdentityKey(primaryRepository) : undefined;
+}
+
+/**
+ * The owner resolves `primaryGitRepository` from the thread's primary
+ * workspace. Prefer it to the provider's origin, which still names the
+ * project the session started in after a move to another project.
+ */
+function threadPrimaryRepository(
+  thread: NavigationThreadSummary,
+): RepositoryIdentity | undefined {
+  const primaryGitRepository = thread.primaryGitRepository?.trim();
+  return (primaryGitRepository
+    ? parseRepositoryIdentity(`https://${primaryGitRepository}`)
+    : undefined)
+    ?? parseRepositoryIdentity(thread.gitOriginUrl);
 }
 
 /**

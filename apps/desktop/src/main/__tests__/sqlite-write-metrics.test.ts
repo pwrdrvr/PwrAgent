@@ -2466,7 +2466,8 @@ describe("sqlite write metrics", () => {
 
     try {
       const { writes } = await measureSqliteWrites(async () => {
-        if (causal) await internal.persistThreadMessageOrigin({ backend: "acp:kimi", threadId: monitorRecord.monitorThreadId,
+        // Every ACP monitor brief persists its origin, causal or not.
+        await internal.persistThreadMessageOrigin({ backend: "acp:kimi", threadId: monitorRecord.monitorThreadId,
           messageId: `user:${monitorRecord.monitorTurnId}`, origin: { kind: "sub-agent", ...monitorRecord.causalContext } });
         await internal.persistTaskMonitorSubAgent(monitorRecord, {
           status: "running",
@@ -2536,11 +2537,11 @@ describe("sqlite write metrics", () => {
       });
 
       expectSqliteWriteBudget({
-        // Measured at four commits per completed monitor, independent of the
-        // 120 heartbeats. At 100 monitors/day that is 400 commits/day; this
-        // calibration observed about 115 KB per lifecycle, or about 11 MB/day.
+        // Measured at five commits per completed monitor, independent of the
+        // 120 heartbeats. At 100 monitors/day that is 500 commits/day; this
+        // calibration observed about 160 KB per lifecycle, or about 16 MB/day.
         note: causal ? "One attributed ACP monitor origin plus lifecycle and final usage; 120 heartbeats add no commits. Provenance is one fixed reference captured at delegation."
-          : "one ACP monitor start, 120 transient heartbeats, completion, and final usage attribution",
+          : "one ACP monitor start with its brief's origin, 120 transient heartbeats, completion, and final usage attribution",
         scenario: causal ? "messaging-causal-monitor-lifecycle" : "acp-task-monitor-lifecycle",
         writes,
       });

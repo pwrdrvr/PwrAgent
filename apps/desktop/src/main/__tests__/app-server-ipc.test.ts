@@ -728,6 +728,8 @@ const publishLocalEvent = vi.fn(async (_event?: unknown) => undefined);
 const setForgeReadHandlers = vi.fn();
 const setForgePrToolHandler = vi.fn();
 const setForgeToolPolicyResolver = vi.fn();
+const setForgeToolRuleWriter = vi.fn();
+const setForgeProjectLabelResolver = vi.fn();
 const setThreadPullRequestStatusToolHandler = vi.fn();
 const setThreadPullRequestCanonicalizer = vi.fn();
 const setLocalPullRequestAuthorityResolver = vi.fn();
@@ -1195,6 +1197,8 @@ vi.mock("../app-server/backend-registry", () => {
     setForgeReadHandlers,
     setForgePrToolHandler,
     setForgeToolPolicyResolver,
+    setForgeToolRuleWriter,
+    setForgeProjectLabelResolver,
     getLocalFilePrivateStorageRoots: () => [],
     setThreadPullRequestStatusToolHandler,
     setThreadPullRequestCanonicalizer,
@@ -3092,6 +3096,131 @@ describe("app server ipc", () => {
     expect(registerThreadPrStatusWatch).not.toHaveBeenCalled();
     const owner = setLocalPullRequestAuthorityResolver.mock.calls.at(-1)?.[0];
     expect(owner(buildPullRequestStatusKey(attached))).toBe(false);
+  });
+
+  describe("after a cross-project workspace move", () => {
+    const oldWorktree = "/worktrees/old/disktree";
+    const newWorktree = "/worktrees/new/PwrAgent";
+    const oldProjectPr = githubPr({
+      number: 39, org: "pwrdrvr", repo: "PwrDisk", state: "pending", headSha: "d".repeat(40),
+      explicitlyAttached: true, linkedDirectoryPaths: [oldWorktree],
+      url: "https://github.com/pwrdrvr/PwrDisk/pull/39",
+    });
+    // attach_thread_pull_request records a bare reference: no directory yet.
+    const newProjectPr = githubPr({
+      number: 3160, org: "pwrdrvr", repo: "PwrAgent", state: "pending", headSha: "5".repeat(40),
+      explicitlyAttached: true,
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3160",
+    });
+
+    async function startMovedThread(options: { newWorkspaceRepo?: string } = {}) {
+      const { appServerService } = await import("../ipc/app-server");
+      readPrStatusCache.mockResolvedValueOnce(Object.fromEntries([oldProjectPr, newProjectPr].map((pr) => [
+        buildPullRequestStatusKey(pr),
+        { provider: "github.com", prKey: buildPullRequestStatusKey(pr), fetchedAt: Date.now() - 60_000, pr },
+      ])));
+      resolveGitHubRepoForDirectory.mockImplementation(async (cwd?: string) => {
+        if (cwd === newWorktree) {
+          return options.newWorkspaceRepo === undefined
+            ? { host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" }
+            : options.newWorkspaceRepo
+              ? { host: "github.com", owner: "pwrdrvr", repo: options.newWorkspaceRepo }
+              : undefined;
+        }
+        return cwd === oldWorktree ? { host: "github.com", owner: "pwrdrvr", repo: "PwrDisk" } : undefined;
+      });
+      listThreads.mockResolvedValueOnce([{
+        id: "thread-1", title: "Moved thread", titleSource: "explicit", source: "codex",
+        projectKey: newWorktree,
+        // Codex keeps the git info captured where the session started.
+        gitOriginUrl: "git@github.com:pwrdrvr/PwrDisk.git",
+        linkedDirectories: [
+          { id: oldWorktree, kind: "worktree", label: "disktree", path: "/repo/disktree", worktreePath: oldWorktree },
+          { id: "pwragent-handoff:codex:thread-1", kind: "worktree", label: "PwrAgent", path: "/repo/PwrAgent", worktreePath: newWorktree },
+        ],
+        prs: [oldProjectPr, newProjectPr],
+        updatedAt: 2000,
+      }] as never);
+      getThreadOverlayState.mockResolvedValue({
+        backend: "codex", threadId: "thread-1", executionMode: "default",
+        extraLinkedDirectories: [], prs: [oldProjectPr, newProjectPr],
+      });
+      registerAppServerIpcHandlers();
+      await refreshOwnerMetadata();
+      const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
+      await vi.waitFor(async () => {
+        const status = await autoDispatchHandlers?.inspect({ backend: "codex", threadId: "thread-1" });
+        expect(status?.backgroundPollingEnabled).toBe(true);
+      });
+      return {
+        service: appServerService,
+        watch: setThreadPullRequestWatchToolHandler.mock.calls.at(-1)?.[0],
+        owner: setLocalPullRequestAuthorityResolver.mock.calls.at(-1)?.[0],
+      };
+    }
+
+    it("makes the moved-to project's PR primary and keeps the old project's PR unwatchable", async () => {
+      registerThreadPrStatusWatch.mockClear();
+      const { service, watch, owner } = await startMovedThread();
+
+      expect(resolveGitHubRepoForDirectory).toHaveBeenCalledWith(newWorktree);
+      expect(service.readPrimaryGitRepository("codex", "thread-1")).toBe("github.com/pwrdrvr/pwragent");
+      await expect(watch?.({
+        backend: "codex", threadId: "thread-1", url: newProjectPr.url, notifyOn: ["merged", "closed"],
+      })).resolves.toMatchObject({
+        ok: true,
+        data: { pullRequestWatch: { terminalWatch: { kind: "terminal", prUrl: newProjectPr.url } } },
+      });
+      expect(registerThreadPrStatusWatch).toHaveBeenCalledOnce();
+      // Primary-only watching: the PR left behind in the old project stays attached but is not ours to watch.
+      await expect(watch?.({
+        backend: "codex", threadId: "thread-1", url: oldProjectPr.url, notifyOn: ["merged", "closed"],
+      })).resolves.toMatchObject({ ok: false, error: { code: "not_found" } });
+      expect(registerThreadPrStatusWatch).toHaveBeenCalledOnce();
+      expect(owner(buildPullRequestStatusKey(newProjectPr))).toBe(true);
+      expect(owner(buildPullRequestStatusKey(oldProjectPr))).toBe(false);
+      const internals = service as unknown as {
+        collectPrPollTargets: () => { prKey: string; threadKeys: string[] }[];
+      };
+      expect(internals.collectPrPollTargets().map((target) => target.prKey)).toEqual([
+        buildPullRequestStatusKey(newProjectPr),
+      ]);
+    });
+
+    it("keeps Sandboxer cleanup waiting for the old project's open PR", async () => {
+      const { service } = await startMovedThread();
+      const cleanupThread = vi.fn(async () => ({}));
+      const internals = service as unknown as {
+        getSandboxerPrCleanup: () => unknown;
+        rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+        cleanupThreadSandboxesIfDone: (backend: "codex", threadId: string) => Promise<unknown>;
+      };
+      vi.spyOn(internals, "getSandboxerPrCleanup").mockReturnValue({ cleanupThread });
+      internals.rememberPrStatuses([{
+        ...newProjectPr, lifecycleState: "merged", mergedAt: Date.parse("2026-10-31T12:00:00.000Z"),
+      }], Date.now(), "test-merge");
+
+      await expect(internals.cleanupThreadSandboxesIfDone("codex", "thread-1")).resolves.toBeUndefined();
+      expect(cleanupThread).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["has no GitHub remote", ""],
+      ["belongs to a third repository", "PwrSnap"],
+    ])("does not fall back to the session's original origin when the moved workspace %s", async (_case, repo) => {
+      registerThreadPrStatusWatch.mockClear();
+      const { service, watch, owner } = await startMovedThread({ newWorkspaceRepo: repo });
+
+      expect(service.readPrimaryGitRepository("codex", "thread-1"))
+        .toBe(repo ? `github.com/pwrdrvr/${repo.toLowerCase()}` : undefined);
+      for (const pr of [oldProjectPr, newProjectPr]) {
+        await expect(watch?.({
+          backend: "codex", threadId: "thread-1", url: pr.url, notifyOn: ["merged", "closed"],
+        })).resolves.toMatchObject({ ok: false, error: { code: "not_found" } });
+        expect(owner(buildPullRequestStatusKey(pr))).toBe(false);
+      }
+      expect(registerThreadPrStatusWatch).not.toHaveBeenCalled();
+    });
   });
 
   it("returns merge details at once when the PR merged before the watch was requested", async () => {
@@ -5788,6 +5917,50 @@ describe("app server ipc", () => {
       parentThreadBackend: undefined,
       parentThreadInstanceId: undefined,
     });
+  });
+
+  it("nests a pinned peer thread under a local thread and drops this viewer's pin", async () => {
+    const { NAVIGATION_SET_THREAD_PARENT_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    const federationTarget = { scope: "remote" as const, instanceId: "windows-peer" };
+    const ref = { backend: "codex" as const, target: federationTarget, threadId: "thread-peer" };
+    listRemoteThreadPins.mockResolvedValueOnce([{
+      ref,
+      instanceLabel: "Win PC / dev",
+      pinnedVia: "explicit",
+      addedAt: 1_000,
+      localPinnedRank: "1024",
+      summary: {
+        source: "codex",
+        id: "thread-peer",
+        title: "Windows E2E",
+        titleSource: "explicit",
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      },
+    }]);
+    setRemoteThreadLocalPin.mockClear();
+
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_SET_THREAD_PARENT_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-peer",
+      parentThreadId: "thread-root",
+      parentThreadBackend: "codex",
+      parentThreadInstanceId: "viewer",
+    } satisfies SetThreadParentRequest);
+
+    expect(federationMock.remoteBackend.setThreadParent).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-peer",
+      parentThreadId: "thread-root",
+      parentThreadBackend: "codex",
+      parentThreadInstanceId: "viewer",
+    });
+    expect(setRemoteThreadLocalPin.mock.calls.map(([params]) => params)).toEqual([{ ref, pinned: false }]);
   });
 
   it("marks Grok threads seen without rejecting the backend", async () => {
@@ -9750,6 +9923,8 @@ describe("app server ipc", () => {
     getThreadOverlayState.mockResolvedValue({ backend: "codex", threadId: "thread-1", executionMode: "default", prs: [] });
     registerAppServerIpcHandlers();
     expect(setForgeToolPolicyResolver).toHaveBeenCalledWith(expect.any(Function));
+    expect(setForgeToolRuleWriter).toHaveBeenCalledWith(expect.any(Function));
+    expect(setForgeProjectLabelResolver).toHaveBeenCalledWith(expect.any(Function));
     const github = setForgePrToolHandler.mock.calls.at(-1)?.[0];
     expect(github).toBeTypeOf("function");
     await expect(github("get_issue", { number: 1 }, { backend: "codex", threadId: "thread-1", transport: "mcp" }))
@@ -10015,6 +10190,46 @@ describe("app server ipc", () => {
       expect.objectContaining({ worktreePath: "/repo/wt" }),
     );
     expect(scheduleWorktreeGitWorkingStateRefresh.mock.calls.at(-1)![0]).not.toHaveProperty("userAction", true);
+  });
+
+  it("learns a new Claude thread's primary repository when the thread starts", async () => {
+    const newThread = {
+      id: "claude-new",
+      title: "Handed-off fix",
+      titleSource: "explicit",
+      source: "claude",
+      gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+      linkedDirectories: [{
+        id: "/repo/PwrAgent",
+        kind: "local",
+        label: "PwrAgent",
+        path: "/repo/PwrAgent",
+      }],
+      updatedAt: 2000,
+    };
+    listThreads.mockResolvedValueOnce([] as never);
+
+    registerAppServerIpcHandlers();
+    await refreshOwnerMetadata();
+    const { appServerService } = await import("../ipc/app-server");
+    expect(appServerService.readPrimaryGitRepository("claude", "claude-new")).toBeUndefined();
+
+    listThreads.mockResolvedValue([newThread] as never);
+    try {
+      emitRegistryEvent({
+        backend: "claude",
+        notification: { method: "thread/started", params: { threadId: "claude-new" } },
+      });
+
+      await vi.waitFor(() => {
+        expect(appServerService.readPrimaryGitRepository("claude", "claude-new"))
+          .toBe("github.com/pwrdrvr/pwragent");
+      });
+      // Let the event's refresh finish before later tests count reads.
+      await refreshOwnerMetadata();
+    } finally {
+      listThreads.mockReset();
+    }
   });
 
   it("refreshes a thread's working state after its expected branch changes", async () => {

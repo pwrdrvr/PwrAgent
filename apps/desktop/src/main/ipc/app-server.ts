@@ -111,6 +111,7 @@ import {
   type GlabStatus,
   type GhStatus,
   type LinkedDirectorySummary,
+  isWorkspaceHandoffDirectory,
   type ListModelSettingsRecentsRequest,
   type ListModelSettingsRecentsResponse,
   type ListRecentFileReferencesRequest,
@@ -266,6 +267,7 @@ import {
   resolvePullRequestIdentity,
   buildThreadIdentityKey,
   federatedThreadIdentityKey,
+  forgeRuleProjectLabel,
   isAppServerBackendKind,
   isFederationInstanceId,
   isRemoteFederationTarget,
@@ -437,6 +439,7 @@ import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-po
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
 import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, findRemoteHomeDirectoryIndex, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { readLocalNavigationDirectoryIndex } from "../app-server/navigation-directory-index";
 import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
@@ -7782,6 +7785,11 @@ class DesktopAppServerService {
             instanceLabel: pin.instanceLabel,
           }]);
         }
+        // Nesting unpins, as a local thread's link does. This viewer's own
+        // rank would otherwise bring the row back to its pins on refresh.
+        if (pin?.localPinnedRank && response.parentThreadId) {
+          await this.getOverlayStore().setRemoteThreadLocalPin({ ref: pin.ref, pinned: false });
+        }
       } catch (error) {
         // The relationship mutation already committed on the owner. Keep that
         // success authoritative even if this viewer's cached pin cannot patch.
@@ -7855,7 +7863,9 @@ class DesktopAppServerService {
         .remoteBackend(federationTarget)
         .updateSubthreadOrder(ownerRequest);
     }
-    const response = await updateLocalSubthreadOrder(request);
+    const response = await updateLocalSubthreadOrder(request, {
+      resolveLocalInstanceId: async () => (await getDesktopFederationRuntime().health()).instanceId,
+    });
     logDebug("updateSubthreadOrder", {
       backend: response.backend,
       parentThreadId: request.parentThreadId,
@@ -8903,12 +8913,18 @@ async function resolvePrimaryThreadRepoKey(
   >,
   resolutionByPath = new Map<string, Promise<string | undefined>>(),
 ): Promise<string | undefined> {
-  const origin = thread.gitOriginUrl
+  // A workspace move (move_thread_workspace) is the thread's primary
+  // workspace. The provider's origin describes the checkout the session
+  // started in, which can be another project after a to-project move.
+  const movedWorkspace = thread.linkedDirectories.findLast(
+    isWorkspaceHandoffDirectory,
+  );
+  const origin = !movedWorkspace && thread.gitOriginUrl
     ? parseForgeRemote(thread.gitOriginUrl)
     : undefined;
   if (origin) return buildPrRepositoryKey(origin.host, origin.owner, origin.repo);
 
-  const primaryDirectory = thread.linkedDirectories[0];
+  const primaryDirectory = movedWorkspace ?? thread.linkedDirectories[0];
   const primaryPath = primaryDirectory
     ? resolvePullRequestDirectoryPath(primaryDirectory)
     : undefined;
@@ -9144,6 +9160,12 @@ export function registerAppServerIpcHandlers(): void {
   );
   getDesktopBackendRegistry().setForgeToolPolicyResolver(
     () => getDesktopSettingsService().resolveForgeAgentToolPolicy(),
+  );
+  getDesktopBackendRegistry().setForgeToolRuleWriter(
+    async (update) => await getDesktopSettingsService().upsertForgeAgentToolRule(update),
+  );
+  getDesktopBackendRegistry().setForgeProjectLabelResolver(
+    async (repository) => forgeRuleProjectLabel(await readLocalNavigationDirectoryIndex(), repository),
   );
   getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(
     async (args, context) =>

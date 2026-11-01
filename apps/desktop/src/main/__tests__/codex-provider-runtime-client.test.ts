@@ -15,6 +15,7 @@ function fixture() {
   const realtimeEvents = new Set<(event: NativeVoiceNotification) => void>();
   const realtimeDisconnects = new Set<() => void>();
   const providers = new Map<string, string>();
+  const reported = new Map<string, string>();
   const raw = {
     startThread: vi.fn(async () => ({ threadId: "new-thread" })),
     forkThread: vi.fn(async () => ({ threadId: "forked-thread" })),
@@ -31,6 +32,7 @@ function fixture() {
     listMcpServers: vi.fn(async () => []),
     recoverInvalidPersistedResponseMessageIds: vi.fn(async () => ({})),
     modelProviderForThread: (id: string) => providers.get(id),
+    reportedModelProviderForThread: (id: string) => reported.get(id),
     close: vi.fn(async () => undefined),
     resetAppServerRestarts: vi.fn(),
     getAppServerRestartStatus: vi.fn(() => ({ stopped: false })),
@@ -50,7 +52,7 @@ function fixture() {
       realtimeDisconnects.add(listener); return () => realtimeDisconnects.delete(listener);
     },
   };
-  return { raw, client: raw as unknown as CodexAppServerClient, providers, notifications, requests, exits, realtimeEvents, realtimeDisconnects };
+  return { raw, client: raw as unknown as CodexAppServerClient, providers, reported, notifications, requests, exits, realtimeEvents, realtimeDisconnects };
 }
 
 describe("provider-specific Codex runtimes", () => {
@@ -85,6 +87,15 @@ describe("provider-specific Codex runtimes", () => {
     expect(primary.raw.readThreadSummary).toHaveBeenCalledWith("persisted");
     expect(local.raw.startTurn).toHaveBeenCalledOnce();
     await expect(client.startTurn({ threadId: "persisted", model: "@another/model", input: [] })).rejects.toThrow("Hand it off");
+  });
+
+  it("reports a runtime thread's provider, and any other thread's as Codex named it", async () => {
+    const { primary, client } = setup();
+    await client.startThread({ model: "@bonsai/Bonsai.gguf" });
+    primary.reported.set("ollama-thread", "ollama");
+    expect(client.reportedModelProviderForThread("new-thread")).toBe("bonsai");
+    expect(client.reportedModelProviderForThread("ollama-thread")).toBe("ollama");
+    expect(client.reportedModelProviderForThread("unread-thread")).toBeUndefined();
   });
 
   it("keeps live operations on their owner after provider removal until the pool closes", async () => {
