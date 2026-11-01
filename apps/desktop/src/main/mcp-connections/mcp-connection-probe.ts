@@ -1,16 +1,16 @@
 import { discoverOAuthServerInfo } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { ProbeMcpConnectionResponse } from "@pwragent/shared";
 import { MCP_CONNECTION_PROBE_TIMEOUT_MS } from "./mcp-connection-timeouts";
 import { isMcpIpcUrl } from "@pwragent/shared";
 import { createMcpIpcHttp, MCP_IPC_NO_RECONNECT } from "./mcp-ipc-http";
 
-async function probeIpc(serverUrl: string): Promise<ProbeMcpConnectionResponse> {
+async function probeIpc(serverUrl: string, executable?: string): Promise<ProbeMcpConnectionResponse> {
   let ipc: ReturnType<typeof createMcpIpcHttp>;
   try {
-    ipc = createMcpIpcHttp(serverUrl);
+    ipc = createMcpIpcHttp(serverUrl, { executable });
   } catch (error) {
     return { ok: false, problem: "not_a_url", message: error instanceof Error ? error.message : String(error) };
   }
@@ -27,6 +27,9 @@ async function probeIpc(serverUrl: string): Promise<ProbeMcpConnectionResponse> 
       ok: true, serverUrl, authMode: "none", serverName: client.getServerVersion()?.name,
     };
   } catch (error) {
+    if (error instanceof StreamableHTTPError && error.code === 401) {
+      return { ok: true, serverUrl, authMode: "none", needsIpcBearer: true };
+    }
     return {
       ok: false, problem: "unreachable",
       message: `Local HTTP MCP connection failed. Approve access in the server app if required; browser OAuth is unavailable for IPC. ${error instanceof Error ? error.message : String(error)}`,
@@ -202,8 +205,9 @@ async function probeInitialize(
 export async function probeMcpConnectionUrl(
   serverUrl: string,
   fetchFn: FetchLike,
+  options: { ipcExecutable?: string } = {},
 ): Promise<ProbeMcpConnectionResponse> {
-  if (isMcpIpcUrl(serverUrl)) return await probeIpc(serverUrl.trim());
+  if (isMcpIpcUrl(serverUrl)) return await probeIpc(serverUrl.trim(), options.ipcExecutable);
   if (looksLikeStdioCommand(serverUrl)) {
     return {
       ok: false,

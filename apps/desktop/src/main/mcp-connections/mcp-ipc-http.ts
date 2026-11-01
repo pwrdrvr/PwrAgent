@@ -12,6 +12,13 @@ export const MCP_IPC_NO_RECONNECT = {
   maxRetries: 0, maxReconnectionDelay: 0, initialReconnectionDelay: 0, reconnectionDelayGrowFactor: 1,
 };
 
+export function normalizeMcpIpcBearerToken(value: unknown): string {
+  if (typeof value !== "string" || value.length > 8192) throw new Error("Enter a valid IPC session bearer token.");
+  const token = value.trim();
+  if (token && !/^[A-Za-z0-9._~+/-]+=*$/.test(token)) throw new Error("The IPC session bearer token contains invalid characters.");
+  return token;
+}
+
 export function validateMcpIpcPlatform(endpoint: McpIpcEndpoint, platform = process.platform): void {
   if ((endpoint.scheme === "pipe" && platform !== "win32")
     || (endpoint.scheme === "unix" && platform !== "darwin" && platform !== "linux")) {
@@ -112,12 +119,13 @@ async function openRelay(path: string, executable: string, signal: AbortSignal):
 /** Bind all requests to one IPC endpoint. Synthetic HTTP URLs are never sent
  * to fetch/DNS, and neither redirects nor OAuth discovery can escape it.
  */
-export function createMcpIpcHttp(serverUrl: string, options: { executable?: string } = {}): {
+export function createMcpIpcHttp(serverUrl: string, options: { executable?: string; bearerToken?: string } = {}): {
   url: URL;
   fetch: FetchLike;
   close: () => void;
 } {
   const endpoint = parseMcpIpcUrl(serverUrl);
+  const bearerToken = options.bearerToken === undefined ? undefined : normalizeMcpIpcBearerToken(options.bearerToken);
   validateMcpIpcPlatform(endpoint);
   const url = new URL(endpoint.requestTarget, IPC_ORIGIN);
   const lifetime = new AbortController();
@@ -153,6 +161,7 @@ export function createMcpIpcHttp(serverUrl: string, options: { executable?: stri
     };
     return await new Promise<Response>((resolveResponse, reject) => {
       const headers = new Headers(init?.headers);
+      if (bearerToken) headers.set("authorization", `Bearer ${bearerToken}`);
       // Host/connection framing belongs to this transport, never credentials
       // supplied by a server, renderer or OAuth discovery response.
       for (const name of ["host", "connection", "transfer-encoding", "content-length"]) headers.delete(name);
@@ -172,6 +181,15 @@ export function createMcpIpcHttp(serverUrl: string, options: { executable?: stri
           res.once("end", () => close());
         }
         if (empty) res.resume();
+        if ((res.statusCode ?? 0) >= 400) {
+          // An HTTP auth failure must not echo a pasted ticket into status,
+          // logs or an SDK exception. JSON-RPC errors still travel as 200s.
+          res.resume();
+          resolveResponse(new Response("Local MCP HTTP request rejected. Approve a session in the server app and update its bearer token if required.", {
+            status: res.statusCode, headers: { "content-type": "text/plain" },
+          }));
+          return;
+        }
         resolveResponse(new Response(empty ? null : Readable.toWeb(res) as ReadableStream<Uint8Array>, {
           status: res.statusCode, statusText: res.statusMessage, headers: responseHeaders,
         }));

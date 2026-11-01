@@ -22,6 +22,7 @@ import {
   describeMcpAuthStatus,
   describeMcpConnectionAuth,
   formatMcpCommandLine,
+  isMcpIpcUrl,
   mcpConnectionIdsForNewThread,
   resolveMcpConnectionSetup,
   summarizeMcpConnectionReadiness,
@@ -124,6 +125,7 @@ type ConnectionEditDraft = {
   connectionId: string;
   displayName: string;
   serverUrl: string;
+  ipcBearerToken?: string;
   /**
    * What the row held when the dialog opened.
    *
@@ -296,6 +298,7 @@ export function PluginsSettings(props: {
   const [connectionNotice, setConnectionNotice] = useState<ActionNotice>();
   const [connectionName, setConnectionName] = useState("");
   const [connectionUrl, setConnectionUrl] = useState("");
+  const [ipcBearerToken, setIpcBearerToken] = useState("");
   const [probe, setProbe] = useState<ProbeMcpConnectionResponse>();
   const [connectionAddKind, setConnectionAddKind] =
     useState<ConnectionAddKind>("remote");
@@ -1009,9 +1012,11 @@ export function PluginsSettings(props: {
         // The probe resolves discovery redirects, so store what it reached
         // rather than what was typed.
         serverUrl: probe.serverUrl,
+        ...(isMcpIpcUrl(probe.serverUrl) && ipcBearerToken ? { ipcBearerToken } : {}),
       });
       setConnectionName("");
       setConnectionUrl("");
+      setIpcBearerToken("");
       setProbe(undefined);
       await loadConnections();
       setConnectionPending(undefined);
@@ -1131,6 +1136,7 @@ export function PluginsSettings(props: {
             connectionId: draft.connectionId,
             displayName: draft.displayName,
             serverUrl: draft.serverUrl,
+            ...(draft.ipcBearerToken === undefined ? {} : { ipcBearerToken: draft.ipcBearerToken }),
           });
       closeConnectionEdit();
       // A failed sign-in describes the server it was attempted against.
@@ -1588,8 +1594,8 @@ export function PluginsSettings(props: {
                   * so first is cheaper than a discovery failure afterwards.
                   */}
                 <p className="settings-mcp-create__constraint">
-                  Network servers sign in with OAuth. Local unix:// and pipe://
-                  HTTP servers use approval in the server app.
+                  Network servers sign in with OAuth. For local unix:// and pipe://
+                  HTTP servers, approve access in the server app and paste its session token if required.
                 </p>
                 <div className="settings-mcp-create__fields">
                   <label>
@@ -1612,6 +1618,7 @@ export function PluginsSettings(props: {
                       value={connectionUrl}
                       onChange={(event) => {
                         setConnectionUrl(event.target.value);
+                        setIpcBearerToken("");
                         // A probe describes one URL. Keeping a stale verdict
                         // beside an edited field would offer to save
                         // something that was never checked.
@@ -1625,6 +1632,7 @@ export function PluginsSettings(props: {
                       Boolean(connectionPending)
                       || !connectionUrl.trim()
                       || (probe?.ok === true && !connectionName.trim())
+                      || (probe?.ok === true && probe.needsIpcBearer === true && !ipcBearerToken.trim())
                     }
                     type="submit"
                   >
@@ -1637,6 +1645,14 @@ export function PluginsSettings(props: {
                           : "Check"}
                   </button>
                 </div>
+                {isMcpIpcUrl(connectionUrl) ? (
+                  <label>
+                    <span>Session bearer token (optional)</span>
+                    <input className="settings-input" type="password" autoComplete="off"
+                      disabled={Boolean(connectionPending)} value={ipcBearerToken}
+                      onChange={(event) => setIpcBearerToken(event.target.value)} />
+                  </label>
+                ) : null}
                 {probe ? (
                   <p
                     className={`settings-mcp-probe settings-mcp-probe--${
@@ -1645,7 +1661,9 @@ export function PluginsSettings(props: {
                     role={probe.ok ? "status" : "alert"}
                   >
                     {probe.ok
-                      ? `Found ${probe.serverName ?? "an MCP server"} at ${probe.serverUrl}. ${probe.authMode === "none" ? "Access is approved in the local server app" : "It signs in with OAuth"}${
+                      ? probe.needsIpcBearer
+                        ? "The same-user HTTP endpoint requires a bearer token. Approve a session in the server app and paste its token above. No authenticated session has been opened."
+                        : `Found ${probe.serverName ?? "an MCP server"} at ${probe.serverUrl}. ${probe.authMode === "none" ? "Access is approved in the local server app" : "It signs in with OAuth"}${
                           probe.toolCount === undefined
                             ? ""
                             : ` and offers ${probe.toolCount} tools`
@@ -1948,7 +1966,7 @@ export function PluginsSettings(props: {
               </label>
               {connectionEdit.local ? null : (
                 <label>
-                  <span>Remote MCP URL</span>
+                  <span>MCP server URL</span>
                   <input
                     className="settings-input"
                     disabled={Boolean(connectionPending)}
@@ -1958,11 +1976,22 @@ export function PluginsSettings(props: {
                       setConnectionEdit({
                         ...connectionEdit,
                         serverUrl: event.target.value,
+                        ipcBearerToken: undefined,
                       })
                     }
                   />
                 </label>
               )}
+              {!connectionEdit.local && isMcpIpcUrl(connectionEdit.serverUrl) ? (
+                <label>
+                  <span>New session bearer token (leave blank to keep)</span>
+                  <input className="settings-input" type="password" autoComplete="off"
+                    disabled={Boolean(connectionPending)} value={connectionEdit.ipcBearerToken ?? ""}
+                    onChange={(event) => setConnectionEdit({ ...connectionEdit, ipcBearerToken: event.target.value || undefined })} />
+                  <button type="button" className="button button--secondary" disabled={Boolean(connectionPending)}
+                    onClick={() => setConnectionEdit({ ...connectionEdit, ipcBearerToken: "" })}>Clear saved token</button>
+                </label>
+              ) : null}
             </div>
             {connectionEdit.local ? (
               <>
@@ -2186,6 +2215,7 @@ function useManagedConnectionTools(params: {
   desktopApi?: DesktopApi;
   identity: string;
   listable: boolean;
+  autoRead?: boolean;
   /** Completed sign-ins; a change forces a fresh read past any cache. */
   signIns: number;
 }): {
@@ -2193,7 +2223,7 @@ function useManagedConnectionTools(params: {
   test: () => void;
   testResult?: ManagedConnectionTestResult;
 } {
-  const { connectionId, identity, listable, signIns } = params;
+  const { connectionId, identity, listable, signIns, autoRead = true } = params;
   const list = params.desktopApi?.listMcpConnectionTools;
   const [inventory, setInventory] = useState<ManagedMcpToolInventory>();
   const [testResult, setTestResult] = useState<ManagedConnectionTestResult>();
@@ -2236,7 +2266,7 @@ function useManagedConnectionTools(params: {
   }, [connectionId, list]);
 
   useEffect(() => {
-    if (!listable || !list) {
+    if (!listable || !list || !autoRead) {
       latestRead.current += 1;
       setInventory(listable ? { status: "unavailable" } : undefined);
       setTestResult(undefined);
@@ -2248,7 +2278,7 @@ function useManagedConnectionTools(params: {
     return () => {
       latestRead.current += 1;
     };
-  }, [identity, list, listable, read, signIns]);
+  }, [autoRead, identity, list, listable, read, signIns]);
 
   return {
     inventory,
@@ -2321,6 +2351,9 @@ function ManagedMcpConnectionRow(props: {
     desktopApi: props.desktopApi,
     identity: `${connection.serverUrl}\n${connection.configured}`,
     listable,
+    // Opening a session can consume a ticket approved in the native app.
+    // Only an explicit test or a selected thread may do that for IPC.
+    autoRead: !isMcpIpcUrl(connection.serverUrl),
     signIns: props.signIns,
   });
   const inventory = reconcileManagedMcpInventory(fetchedInventory, connection.discovery);

@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { chmod, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -10,6 +10,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpIpcHttp, MCP_IPC_NO_RECONNECT, validateMcpIpcPlatform } from "../mcp-connections/mcp-ipc-http";
 import { parseMcpIpcUrl } from "@pwragent/shared";
+import { probeMcpConnectionUrl } from "../mcp-connections/mcp-connection-probe";
 
 const desktop = resolve("apps/desktop");
 const executable = join(desktop, "build/mcp-ipc-relay", `${process.platform}-${process.arch}`, `mcp-ipc-relay${process.platform === "win32" ? ".exe" : ""}`);
@@ -140,6 +141,28 @@ describe("verified HTTP MCP over local IPC", () => {
     await expect(f.ipc.fetch("https://attacker.invalid/token", { headers: { authorization: "Bearer fixture" } })).rejects.toThrow("cannot change endpoint");
     await expect(f.ipc.fetch(f.ipc.url, { method: "POST", headers: { authorization: "Bearer fixture" }, body: "{}" })).rejects.toThrow("redirects");
     await expect(f.ipc.fetch(f.ipc.url)).rejects.toThrow();
+  });
+
+  it("offers native bearer bootstrap without consuming a ticket or invoking OAuth discovery", async () => {
+    const f = await fixture();
+    f.setHandler((res) => res.writeHead(401, { "www-authenticate": 'Bearer resource_metadata="https://attacker.invalid/oauth"' }).end("native approval required"));
+    const network = vi.fn(async () => new Response("unexpected network"));
+    await expect(probeMcpConnectionUrl(f.url, network, { ipcExecutable: executable })).resolves.toMatchObject({ ok: true, needsIpcBearer: true, authMode: "none" });
+    expect(network).not.toHaveBeenCalled();
+  });
+
+  it("sends a manually approved token only over verified IPC and redacts HTTP auth error bodies", async () => {
+    const f = await fixture();
+    const ipc = createMcpIpcHttp(f.url, { executable, bearerToken: "native-session-ticket" });
+    cleanups.push(ipc.close);
+    const response = await ipc.fetch(ipc.url, { method: "POST", body: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' });
+    await response.json();
+    expect(f.requests[0]?.authorization).toBe("Bearer native-session-ticket");
+    await expect(ipc.fetch("https://attacker.invalid/")).rejects.toThrow("cannot change endpoint");
+    f.setHandler((res) => res.writeHead(401).end("echoed private token: native-session-ticket"));
+    const rejected = await ipc.fetch(ipc.url, { method: "POST", body: "{}" });
+    expect(rejected.status).toBe(401);
+    expect(await rejected.text()).not.toContain("native-session-ticket");
   });
 
   it("accepts fragmented SSE POST responses and stops when the notification stream ends", async () => {

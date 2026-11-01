@@ -31,19 +31,39 @@ explicitly on the executing instance.
 ## Authentication and authorization
 
 IPC connections use approval in the independently running server app, or a
-server that requires no HTTP authentication. Grant access in that app before
-checking the URL. PwrAgent's custom network HTTP connections currently hold
-OAuth credentials; they have no static-header credential configuration.
-This change adds neither a bearer-token editor nor browser OAuth for IPC.
-An IPC endpoint requiring an HTTP credential cannot be used through this
-managed connection until it offers a compatible native-app approval flow.
-PwrAgent does not discover an authorization server, open a browser, use stored
-network OAuth tokens, or follow HTTP redirects for an IPC connection.
+server that requires no HTTP authentication. If native approval produces a
+bearer ticket (as PwrSnap's direct IPC HTTP session approval does), check the
+URL and paste the ticket into **Session bearer token** before adding it. A
+same-user HTTP 401 asks for that token without opening an authenticated MCP
+session or starting OAuth discovery. It does not yet prove the server's MCP
+capabilities; those are negotiated when the selected thread connects.
+
+The token is saved in PwrAgent's encrypted credential vault, bound to the
+exact IPC URL. It is never returned in connection records or written to TOML
+connection rows. Edit the connection to replace or clear it. Set tokens on
+the instance owning the profile's gateway; the local broker deliberately
+refuses forwarding a pasted secret to a different owner instance. No token
+is sent before native peer verification, even for initialize or SSE GET.
+HTTP error bodies are replaced with a fixed message so an echoed bearer
+cannot enter SDK exceptions or connection status.
+
+Settings does not automatically discover IPC tools: that could consume a
+one-use native ticket before a thread uses it. An explicit **Test connection**
+does open and close an MCP session and can consume that ticket. PwrSnap's
+ticket permits one initialized session, so approve and paste a new ticket
+for another thread/session or after a test. PwrAgent never requests a fresh
+ticket, restarts the session or replays an operation automatically. Server
+approval remains responsible for scopes, expiry and revocation.
+
+Network HTTP retains its existing OAuth credential flow. PwrAgent does not
+discover an authorization server, open a browser, use network OAuth tokens,
+or follow HTTP redirects for IPC. No extra MCP permission is inferred from a
+native ticket or from the verified OS identity.
 
 Same-user identity is only the transport boundary. It grants no MCP scopes,
 tool permissions or access to other threads. The existing connection enable
 switch, per-thread selection, approval rules and capability negotiation still
-apply. Disconnect disables the IPC connection and closes active sessions;
+apply. Disconnect clears its saved token, disables the connection and closes active sessions;
 the server app owns revocation of any grant it issued. Changing the URL
 closes sessions and discards any old OAuth credentials. No active operation
 is replayed after a disconnect, and a failed transport cannot reconnect.
