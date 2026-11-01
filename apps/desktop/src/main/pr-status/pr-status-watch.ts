@@ -74,6 +74,12 @@ export class PrStatusWatchCoordinator {
         watch: ThreadPullRequestWatchSummary;
         pr: PrSummary;
       }) => Promise<string[]>;
+      /**
+       * Brings stored watch keys up to the names status snapshots use, such
+       * as a renamed repository's new name. Runs before every claim, so it
+       * must return at once when nothing changed.
+       */
+      prepareClaims?: () => Promise<void>;
       now?: () => number;
     },
   ) {}
@@ -84,6 +90,7 @@ export class PrStatusWatchCoordinator {
     failureCoveredThreadKeys: ReadonlySet<string> = new Set(),
   ): Promise<number> {
     if (this.options.isBackgroundPollingEnabled?.() === false) return 0;
+    await this.options.prepareClaims?.();
     const terminal = terminalOutcomeOf(pr) !== undefined;
     const dispatched = terminal
       ? await this.handleTerminalSnapshot(pr, observedAt)
@@ -137,6 +144,7 @@ export class PrStatusWatchCoordinator {
     if (this.options.isBackgroundPollingEnabled?.() === false) return 0;
     const outcome = terminalOutcomeOf(pr);
     if (!outcome) return 0;
+    await this.options.prepareClaims?.();
     const now = this.now();
     const claimed = await this.options.store.claimThreadPrTerminalWatches({
       prKey: buildPullRequestStatusKey(pr),
