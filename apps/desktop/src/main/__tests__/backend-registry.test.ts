@@ -47112,6 +47112,7 @@ script = "printf setup"
         backend: "codex", threadId: "sender", title: "sender",
         messageId: expect.stringMatching(/^correspondence:/),
       },
+      operatorApproved: true,
       threadTodo: todo,
     });
     expect(codexClient.startTurnCalls).toHaveLength(0);
@@ -47143,6 +47144,7 @@ script = "printf setup"
         backend: "codex", threadId: "sender", title: "Sender",
         messageId: expect.stringMatching(/^correspondence:/),
       },
+      operatorApproved: true,
       threadTodo: { id: "todo-8", title: "Hand it over" },
     });
   });
@@ -47179,6 +47181,7 @@ script = "printf setup"
     expect(federatedSend).toHaveBeenCalled();
     for (const [request] of federatedSend.mock.calls) {
       expect(request.messageOrigin).not.toHaveProperty("threadTodo");
+      expect(request.messageOrigin).not.toHaveProperty("operatorApproved");
     }
     expect(federatedSend.mock.lastCall?.[0].messageOrigin?.sourceThread).toMatchObject({ threadId: "sender", turnId: "turn-1" });
   });
@@ -47199,6 +47202,7 @@ script = "printf setup"
     })).resolves.toEqual({
       kind: "agent",
       sourceThread: { backend: "codex", threadId: "named", title: "Named" },
+      operatorApproved: true,
       threadTodo: { id: "todo-9", title: "Ship it" },
     });
     await expect(registry.buildThreadTodoMessageOrigin({
@@ -47206,6 +47210,7 @@ script = "printf setup"
     })).resolves.toEqual({
       kind: "agent",
       sourceThread: { backend: "codex", threadId: "unnamed" },
+      operatorApproved: true,
       threadTodo: { id: "todo-10" },
     });
   });
