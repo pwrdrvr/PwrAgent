@@ -78,6 +78,24 @@ describe("PullRequestRepositoryAliases", () => {
       .toBe("https://gitlab.com/group/sub/new-repo/-/merge_requests/9");
   });
 
+  it("rewrites a GitLab project transferred to a namespace of another depth", () => {
+    const aliases = new PullRequestRepositoryAliases();
+
+    expect(aliases.learn(
+      "https://gitlab.com/team/legacy/tools/api/-/merge_requests/7",
+      pr("https://gitlab.com/platform/api/-/merge_requests/7"),
+    )).toBe(true);
+
+    expect(aliases.canonicalizeKey("gitlab.com/team/legacy/tools/api#7")).toBe("gitlab.com/platform/api#7");
+    expect(aliases.canonicalizeKey("gitlab.com/team/legacy/api#7")).toBe("gitlab.com/team/legacy/api#7");
+    expect(aliases.canonicalizeRepositoryKey("gitlab.com/team/legacy/tools/api")).toBe("gitlab.com/platform/api");
+    expect(aliases.canonicalize(pr("https://gitlab.com/team/legacy/tools/api/-/merge_requests/9"))).toMatchObject({
+      org: "platform",
+      repo: "api",
+      url: "https://gitlab.com/platform/api/-/merge_requests/9",
+    });
+  });
+
   it("leaves unknown repositories untouched", () => {
     const aliases = new PullRequestRepositoryAliases();
     aliases.learn(OLD_URL, pr(NEW_URL));

@@ -8655,6 +8655,58 @@ describe("app server ipc", () => {
     });
   });
 
+  it("collapses a transferred GitLab project's duplicate MR once the forge names it", async () => {
+    // GitLab redirects an old project path to the project's ID, so the
+    // by-URL fetch answers under the current path, here a subgroup of
+    // another depth.
+    await withRenamedRepositoryStore("transferred-gitlab-mrs-", async ({ store, refresh }) => {
+      const request = {
+        backend: "codex",
+        threadId: "transferred-gitlab",
+        provider: "gitlab.com",
+        branch: "fix/transferred-project",
+        directoryPaths: ["/repo/api"],
+        trigger: "user",
+      } satisfies RefreshThreadPullRequestsRequest;
+      const oldUrl = "https://gitlab.com/team/legacy/tools/api/-/merge_requests/41";
+      const newUrl = "https://gitlab.com/platform/api/-/merge_requests/41";
+      const lookupMr = githubPr({
+        provider: "gitlab.com", number: 41, org: "platform", repo: "api", state: "pending",
+        headRefName: "fix/transferred-project", url: newUrl, linkedDirectoryPaths: ["/repo/api"],
+      });
+      const typedMr = githubPr({
+        provider: "gitlab.com", number: 41, org: "team/legacy/tools", repo: "api", state: "pending", url: oldUrl,
+      });
+      const forgeMr = githubPr({
+        provider: "gitlab.com", number: 41, org: "platform", repo: "api", state: "passing",
+        headRefName: "fix/transferred-project", url: newUrl,
+      });
+      await store.setThreadPullRequests({
+        backend: "codex", threadId: request.threadId, prs: [lookupMr],
+        fetchedAt: Date.now() - 120_000, refreshKey: buildThreadPrRequestKey(request),
+      });
+      await store.addThreadPullRequestReference({ backend: "codex", threadId: request.threadId, pr: typedMr });
+      expect((await store.getThreadOverlayState(request))?.prs?.map((pr) => pr.url)).toEqual([newUrl, oldUrl]);
+      detectPullRequestsForThread.mockResolvedValue([forgeMr]);
+      fetchPullRequestByUrl.mockImplementation(async ({ url }) => url === oldUrl ? forgeMr : undefined);
+
+      await refresh(request);
+
+      expect(fetchPullRequestByUrl).toHaveBeenCalledWith(expect.objectContaining({ url: oldUrl }));
+      const stored = (await store.getThreadOverlayState(request))?.prs ?? [];
+      expect(stored.map((pr) => pr.url)).toEqual([newUrl]);
+      expect(stored[0]).toMatchObject({
+        provider: "gitlab.com",
+        org: "platform",
+        repo: "api",
+        number: 41,
+        checkState: "passing",
+        explicitlyAttached: true,
+      });
+      expect((await refresh(request)).map((pr) => pr.url)).toEqual([newUrl]);
+    });
+  });
+
   it("keeps a detached pre-rename PR detached after the forge renames it", async () => {
     await withRenamedRepositoryStore("renamed-repo-detached-", async ({ store, refresh }) => {
       const request = {
