@@ -19031,6 +19031,130 @@ script = "echo setup"
     await registry.close();
   });
 
+  it.each(["source", "backfill", "selected-thread"] as const)(
+    "preserves an attached sibling worktree during %s directory repair with SQLite",
+    async (repair) => {
+      const repositoryPath = expectedDir("/Users/fixture-user/projects/ProjectA");
+      const primaryPath = expectedDir("/Users/fixture-user/.codex/worktrees/primary/ProjectA");
+      const secondaryPath = expectedDir("/Users/fixture-user/.codex/worktrees/attached/ProjectA");
+      const primary: LinkedDirectorySummary = {
+        id: primaryPath, kind: "worktree", label: "ProjectA", path: repositoryPath, worktreePath: primaryPath,
+      };
+      // attach_thread_directory uses the repository ID, not the primary cwd ID.
+      const attached: LinkedDirectorySummary = {
+        id: repositoryPath, kind: "worktree", label: "ProjectA", path: repositoryPath,
+        worktreePath: secondaryPath, gitBranch: "attached-branch",
+      };
+      const thread: AppServerThreadSummary = {
+        id: "thread-1", title: "Attached worktree", titleSource: "explicit", source: "codex",
+        projectKey: primaryPath, updatedAt: 1000,
+        linkedDirectories: repair === "source" ? [primary] : [{
+          id: primaryPath, kind: "local", label: "ProjectA", path: primaryPath,
+        }],
+      };
+      const temp = createTempStateDb("pwragent-attached-worktree-reconcile-");
+      const db = StateDb.open(temp.dbPath);
+      const overlayStore = new SqliteOverlayStore(db);
+      const identity = { backend: "codex" as const, threadId: thread.id };
+      await overlayStore.addLinkedDirectory({ ...identity, directory: attached });
+      const codexClient = new MockBackendClient({ threads: [thread] });
+      const enrichThreadDirectories = vi.fn(async (threads: AppServerThreadSummary[]) =>
+        threads.map((row) => ({ ...row, linkedDirectories: [primary] })));
+      Object.assign(codexClient, { enrichThreadDirectories });
+      const archiveWorktree = vi.fn(async (params: { worktreePath: string; repositoryPath: string }) => ({
+        id: `snapshot:${params.worktreePath}`, backend: "codex", threadId: thread.id,
+        worktreePath: params.worktreePath, repositoryPath: params.repositoryPath,
+        snapshotRef: "refs/pwragent/snapshot", snapshotCommit: "abc123",
+        createdAt: 1, archivedAt: 1, state: "archived", ignoredFilesExcluded: true,
+      }));
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore,
+        worktreeArchiveService: { archive: archiveWorktree } as unknown as WorktreeArchiveService,
+      });
+      try {
+        await registry.listThreads({
+          backend: "codex", enrichDirectories: false,
+          callerReason: repair === "backfill" ? "directory-relationship-reconcile" : "thread-list",
+        });
+        if (repair === "selected-thread") {
+          await registry.refreshThreadDirectoryRelationship(identity);
+        }
+        const overlay = await overlayStore.getThreadOverlayState(identity);
+        expect(overlay?.extraLinkedDirectories).toEqual([primary, attached]);
+        expect(overlay?.retainedWorktrees).toBeUndefined();
+        expect(codexClient.lastUpdateThreadWorkspaceParams).toBeUndefined();
+
+        // The archive projection and a reopened store must still own both
+        // checkouts; an in-memory registry summary cannot establish this.
+        expect((await overlayStore.getArchiveCleanupOverlayStates({
+          backend: "codex", threadIds: [thread.id],
+        }))[thread.id]?.extraLinkedDirectories).toEqual([primary, attached]);
+        const replaceWorkspace = vi.spyOn(overlayStore, "replaceWorkspaceLinkedDirectory");
+        await registry.listThreads({
+          backend: "codex", enrichDirectories: false, forceRefresh: true,
+          callerReason: "directory-relationship-reconcile",
+        });
+        await registry.refreshThreadDirectoryRelationship(identity);
+        expect(replaceWorkspace).not.toHaveBeenCalled();
+        await registry.publishLocalEvent({ backend: "codex", notification: {
+          method: "turn/started",
+          params: { threadId: thread.id, turnId: "move-turn", turn: { id: "move-turn" } },
+        } });
+        const moveResponse = await codexClient.emitRequest({
+          method: "item/tool/call", params: {
+            threadId: thread.id, turnId: "move-turn", callId: "implicit-move", requestId: "implicit-move",
+            namespace: "pwragent", tool: "move_thread_workspace", arguments: {},
+          },
+        } as AppServerPendingRequestNotification);
+        expect(moveResponse).toMatchObject({ success: true });
+        const move = JSON.parse((moveResponse as { contentItems: Array<{ text: string }> }).contentItems[0]!.text);
+        expect(move).toMatchObject({
+          status: "queued", direction: "worktree-to-worktree", repositoryPath, sourcePath: primaryPath,
+        });
+        await registry.close();
+        db.close();
+        const reopenedDb = StateDb.open(temp.dbPath);
+        try {
+          const reopenedStore = new SqliteOverlayStore(reopenedDb);
+          expect((await reopenedStore.getThreadOverlayState(identity))?.extraLinkedDirectories)
+            .toEqual([primary, attached]);
+          // The provider does not report the attachment. Archive must find it
+          // solely through the persisted overlay, including after restart.
+          const archiveClient = Object.assign(new MockBackendClient({
+            threads: [{ ...thread, linkedDirectories: [primary] }],
+          }), {
+            listArchiveCleanupThreadsPage: vi.fn(async ({ archived }: { archived: boolean }) => ({
+              threads: archived ? [{ ...thread, archived: true, linkedDirectories: [primary] }] : [],
+            })),
+          });
+          const archiveRegistry = new DesktopBackendRegistry({
+            codexClient: archiveClient,
+            overlayStore: reopenedStore,
+            worktreeArchiveService: { archive: archiveWorktree } as unknown as WorktreeArchiveService,
+          });
+          try {
+            const archived = await archiveRegistry.archiveThread(identity);
+            expect(archiveClient.listArchiveCleanupThreadsPage).toHaveBeenCalled();
+            expect(archived.cleanup).toEqual(expect.arrayContaining([
+              expect.objectContaining({ worktreePath: primaryPath, removedWorktree: true }),
+              expect.objectContaining({ worktreePath: secondaryPath, removedWorktree: true }),
+            ]));
+            expect(archiveWorktree.mock.calls.map(([params]) => params.worktreePath).sort())
+              .toEqual([primaryPath, secondaryPath].sort());
+          } finally {
+            await archiveRegistry.close();
+          }
+        } finally {
+          reopenedDb.close();
+        }
+      } finally {
+        await registry.close();
+        db.close();
+        removeTempStateDbDir(temp.tempDir);
+      }
+    },
+  );
+
   it("does not enrich inactive directory history for startup or navigation listings", async () => {
     const threads = Array.from({ length: 500 }, (_, index): AppServerThreadSummary => ({
       id: `cold-${index}`, source: "codex", title: `Cold ${index}`, titleSource: "explicit",
@@ -42248,13 +42372,110 @@ script = "printf setup"
     }
   });
 
-  it("requires trust before adopting an untrusted existing workspace in Default Access", async () => {
+  describe.each(["default", "auto"] as const)("existing-worktree trust in %s mode", (executionMode) => {
+    it.each([
+      "repository", "ancestor", "symlink", "worktree-only", "remote-only", "other-clone",
+      "unregistered-primary-gitdir", "unregistered-linked-gitdir",
+    ] as const)(
+      "checks the destination's Git repository against %s trust",
+      async (trustSource) => {
+        const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-trust-")));
+        onTestFinished(() => rm(root, { recursive: true, force: true }));
+        const repositoryPath = path.join(root, "projects", "demo");
+        const sourcePath = path.join(root, "worktrees", "source", "demo");
+        const targetPath = path.join(root, "worktrees", "target", "demo");
+        await mkdir(repositoryPath, { recursive: true });
+        await git(repositoryPath, ["init", "-b", "main"]);
+        await writeFile(path.join(repositoryPath, "README.md"), "fixture\n");
+        await git(repositoryPath, ["add", "README.md"]);
+        await git(repositoryPath, ["commit", "-m", "initial"]);
+        await git(repositoryPath, ["worktree", "add", "--detach", sourcePath, "main"]);
+        if (trustSource === "unregistered-primary-gitdir" || trustSource === "unregistered-linked-gitdir") {
+          await mkdir(targetPath, { recursive: true });
+          const gitDir = trustSource === "unregistered-primary-gitdir"
+            ? path.join(repositoryPath, ".git")
+            : await git(sourcePath, ["rev-parse", "--absolute-git-dir"]);
+          await writeFile(path.join(targetPath, ".git"), `gitdir: ${expectedDir(gitDir)}\n`);
+          expect(await git(targetPath, ["rev-parse", "--show-toplevel"])).toBe(expectedDir(targetPath));
+          const worktreeList = await git(targetPath, ["worktree", "list", "--porcelain"]);
+          expect(worktreeList).not.toContain(`worktree ${expectedDir(targetPath)}\n`);
+        } else if (trustSource === "other-clone") {
+          const clonePath = path.join(root, "clone");
+          await git(root, ["clone", repositoryPath, clonePath]);
+          await git(clonePath, ["worktree", "add", "--detach", targetPath, "HEAD"]);
+        } else {
+          await git(repositoryPath, ["worktree", "add", "--detach", targetPath, "main"]);
+        }
+        let trustedPath = repositoryPath;
+        if (trustSource === "ancestor") trustedPath = path.dirname(repositoryPath);
+        if (trustSource === "worktree-only") trustedPath = sourcePath;
+        if (trustSource === "symlink") {
+          trustedPath = path.join(root, "trusted-alias");
+          await symlink(repositoryPath, trustedPath, "junction");
+        }
+        const thread: AppServerThreadSummary = {
+          id: "ordinary-thread", title: "Move worktree", titleSource: "explicit", source: "codex",
+          projectKey: expectedDir(sourcePath), updatedAt: 1000,
+          linkedDirectories: [{
+            id: expectedDir(sourcePath), kind: "worktree", label: "demo",
+            path: expectedDir(repositoryPath), worktreePath: expectedDir(sourcePath),
+          }],
+        };
+        const overlayStore = createOverlayStoreMock({ overlays: {
+          "codex:ordinary-thread": {
+            backend: "codex", threadId: thread.id, executionMode, extraLinkedDirectories: [],
+          },
+        } });
+        await overlayStore.upsertDirectoryLaunchpad({
+          directoryKey: trustSource === "remote-only"
+            ? launchpadStorageKey(`directory:${expectedDir(trustedPath)}`, { scope: "remote", instanceId: "peer-instance" })
+            : `directory:${expectedDir(trustedPath)}`,
+          directoryKind: "directory", directoryLabel: "demo", directoryPath: expectedDir(trustedPath),
+          backend: "codex", executionMode, workMode: "worktree", prompt: "", createdAt: 1000, updatedAt: 1000,
+        });
+        const codexClient = new MockBackendClient({ threads: [thread] });
+        const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+        onTestFinished(() => registry.close());
+        await registry.publishLocalEvent({ backend: "codex", notification: {
+          method: "turn/started", params: { threadId: thread.id, turnId: "turn-1", turn: { id: "turn-1" } },
+        } });
+        let settled = false;
+        const pending = codexClient.emitRequest({ method: "item/tool/call", params: {
+          threadId: thread.id, turnId: "turn-1", callId: "move", requestId: "move", namespace: "pwragent",
+          tool: "move_thread_workspace", arguments: { direction: "to-project", targetPath },
+        } } as AppServerPendingRequestNotification).then((response) => {
+          settled = true;
+          return response;
+        });
+        await vi.waitFor(() => expect(settled || registry.getPendingRequestForThread({
+          backend: "codex", threadId: thread.id,
+        })).toBeTruthy());
+        const inputRequest = registry.getPendingRequestForThread({ backend: "codex", threadId: thread.id });
+        if (inputRequest?.method === "item/tool/requestUserInput") {
+          await registry.submitServerRequest({
+            backend: "codex", threadId: thread.id, turnId: "turn-1", requestId: inputRequest.params.requestId,
+            response: { answers: { trust_directory: { answers: ["Cancel move"] } } },
+          });
+        }
+        const response = await pending;
+        const trusted = ["repository", "ancestor", "symlink"].includes(trustSource);
+        expect(response).toMatchObject({ success: trusted });
+        const payload = JSON.parse((response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text);
+        expect(payload).toMatchObject(trusted
+          ? { status: "queued", targetPath }
+          : { code: "forbidden" });
+        expect(Boolean(inputRequest)).toBe(!trusted);
+      },
+    );
+  });
+
+  it.each(["default", "auto"] as const)("requires trust before adopting an untrusted existing workspace in %s mode", async (executionMode) => {
     const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-adopt-trust-")));
     onTestFinished(() => rm(root, { recursive: true, force: true }));
     const handoff = vi.fn();
     const codexClient = new MockBackendClient({});
     const registry = new DesktopBackendRegistry({
-      codexClient, overlayStore: createOverlayStoreMock({ overlays: { "codex:agent-thread": createAgentOverlay() } }),
+      codexClient, overlayStore: createOverlayStoreMock({ overlays: { "codex:agent-thread": { ...createAgentOverlay(), executionMode } } }),
       gitWorkspaceHandoffService: { handoff } as never,
     });
     onTestFinished(() => registry.close());
@@ -42272,7 +42493,13 @@ script = "printf setup"
     const request = events.find((event) => event.notification.method === "item/tool/requestUserInput")!.notification;
     if (request.method !== "item/tool/requestUserInput") throw new Error("Expected trust confirmation");
     expect(handoff).not.toHaveBeenCalled();
-    expect(request.params.questions).toEqual([expect.objectContaining({ question: expect.stringContaining(expectedDir(root)) })]);
+    const modeLabel = executionMode === "auto" ? "Auto" : "Default Access";
+    expect(request.params.questions).toEqual([expect.objectContaining({
+      question: `Trust ${expectedDir(root)} and allow ${modeLabel} agent threads to read, write, and delete files in it?`,
+      options: expect.arrayContaining([expect.objectContaining({
+        description: `Trust this directory for future ${modeLabel} agent work.`,
+      })]),
+    })]);
     await registry.submitServerRequest({ backend: "codex", threadId: "agent-thread", turnId: "turn-1",
       requestId: request.params.requestId, response: { answers: { trust_directory: { answers: ["Cancel move"] } } },
     });

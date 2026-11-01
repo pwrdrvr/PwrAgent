@@ -8,6 +8,7 @@ import {
 import { copyTextAsCodeBlock } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
+import { statusPulseRef } from "../../lib/status-pulse";
 import { ThreadChip } from "../thread-detail/ThreadChip";
 import { TodoSplitButton, type TodoSplitMenuEntry } from "../thread-todos/TodoSplitButton";
 
@@ -183,7 +184,8 @@ export function AppNoticeToast(props: {
     || props.navigation?.dismissAll !== undefined;
   // One dot carries the state: a status when the notice reports one, the
   // tone otherwise. The card itself stays neutral.
-  const dotState = props.notice.status?.state === "progress"
+  const pulsing = props.notice.status?.state === "progress";
+  const dotState = pulsing
     ? "warning status-dot--blink"
     : props.notice.status?.state === "success"
       ? "ok"
@@ -251,6 +253,7 @@ export function AppNoticeToast(props: {
         <span
           className={`status-dot status-dot--${dotState} app-notice-toast__dot`}
           aria-hidden="true"
+          ref={pulsing ? statusPulseRef : undefined}
         />
         <p className="app-notice-toast__title">{props.notice.title}</p>
         <div className="app-notice-toast__actions">

@@ -6670,8 +6670,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       setSendError("Choose a project to review.");
       return;
     }
-    if (!options?.queued && shouldQueueThreadSubmit()) {
-      queueReviewCommand(reviewCommand);
+    if (!options?.queued && (
+      (props.launchpad && (props.launchpadMaterializing || sendingRef.current))
+      || shouldQueueThreadSubmit()
+    )) {
+      await queueReviewCommand(reviewCommand);
       return;
     }
 
@@ -7171,7 +7174,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         ? runModeDecision.runMode : undefined,
     };
     if (futureScheduledDraftSendAt) {
-      if (props.launchpad) {
+      if (props.launchpad && !props.launchpadMaterializing && !sendingRef.current) {
         await scheduleLaunchpadMaterialization(
           futureScheduledDraftSendAt,
           routedReviewCommand.target,
@@ -7843,6 +7846,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       globalQueuedTurnReleaseScopeKeys.has(composerScopeKey) ||
       props.threadBusy ||
       activeTurnId ||
+      activeTurnIdRef.current ||
       sending ||
       props.launchpad ||
       props.disabled
@@ -8013,9 +8017,42 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       displayText: string;
       runMode?: ReviewRunMode;
       target: AppServerReviewTarget;
+      reviewer?: ModelSettingsRecent;
     },
     options?: { scheduledSendAt?: number },
   ): Promise<void> | undefined => {
+    // Setup has no thread id yet. Keep the review in the starting composer's
+    // FIFO; handoffLaunchpadComposer moves it to the thread before selection.
+    if (props.launchpad && (props.launchpadMaterializing || sendingRef.current)) {
+      const reviewer = reviewCommand.reviewer
+        ?? ((reviewConfig?.reviewer || reviewerSelection.fallback)
+          && reviewerSelection.backend
+          ? {
+              backend: reviewerSelection.backend,
+              model: reviewerSelection.model?.id,
+              reasoningEffort: reviewerSelection.reasoningEffort,
+            }
+          : undefined);
+      enqueueQueuedTurnInScope(composerScopeKey, {
+        id: createQueuedTurnId(),
+        text: formatReviewCommand(reviewCommand.target),
+        imageAttachments: [],
+        fileAttachments: [],
+        reviewCommand: { ...reviewCommand, ...(reviewer ? { reviewer } : {}) },
+        ...(options?.scheduledSendAt ? { scheduledSendAt: options.scheduledSendAt } : {}),
+      });
+      recordComposerDraftHistory(
+        composerScopeKey,
+        latestDraftSnapshotRef.current.snapshot,
+        "unsent",
+      );
+      resetComposerDraftAndState(composerScopeKey);
+      setScheduledDraftSendAt(undefined);
+      setScheduleArmed(true);
+      setReviewConfig(undefined);
+      setSendError(undefined);
+      return;
+    }
     const enqueue = async (): Promise<void> => {
       const text = formatReviewCommand(reviewCommand.target);
       if (!props.thread || !props.desktopApi?.createScheduledThreadAction) {
@@ -8857,6 +8894,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
     if (props.launchpad && (props.launchpadMaterializing || sendingRef.current)) {
       if (props.disabled || !hasLiveComposerContent()) return;
+      if (reviewCommand) {
+        if (isBareReviewCommand) {
+          setReviewConfig(reviewConfig ?? createReviewConfig({
+            directory: props.directory,
+            thread: props.thread,
+          }));
+          setSendError(undefined);
+        } else {
+          await submitReviewCommand(reviewCommand);
+        }
+        return;
+      }
       const scopeKey = composerScopeKey;
       const destination = getLaunchpadComposerDestination(draftStore, scopeKey);
       const snapshot = latestDraftSnapshotRef.current.snapshot;
@@ -12782,7 +12831,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   Resume
                 </button>
               ) : isLaunchpad ? (
-                supportsSteering ? (
+                supportsSteering && !queued.reviewCommand ? (
                   <button
                     className="composer__secondary-action"
                     disabled={queued.backendQueuePending}

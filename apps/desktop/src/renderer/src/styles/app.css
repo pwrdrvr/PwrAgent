@@ -8090,13 +8090,10 @@ a.button {
 }
 
 /* A failed check does not make its sibling jobs terminal. Keep the error hue,
-   but use the existing gentle status pulse to say that the rollup is still
-   moving. Only the dot animates — the PR chip stays still and legible. The
-   hover card has no counterpart: it says "checks still running" in words, and a
-   pulsing dot inside an already-transient card is noise. */
-.pr-chip--checks-running .pr-chip__dot {
-  animation: status-blink 1.6s ease-in-out infinite;
-}
+   but use the shared status pulse (`lib/status-pulse.ts`) to say that the
+   rollup is still moving. Only the dot dims — the PR chip stays still and
+   legible. The hover card has no counterpart: it says "checks still running"
+   in words, and a pulsing dot inside an already-transient card is noise. */
 
 .pr-chip--pending .pr-chip__dot,
 .pr-status-card .pr-status-card__dot--pending {
@@ -37826,10 +37823,6 @@ div.composer-error-row__toggle {
   background: var(--status-suspended);
 }
 
-.rail-chip__dot--blink {
-  animation: status-blink 1.6s ease-in-out infinite;
-}
-
 /* Title sits on its own row, full width, and wraps (clamped) instead of
    truncating mid-word in a shared flex row. */
 .rail-card__title {
@@ -46366,19 +46359,11 @@ button.composer__subthread-source-parent:hover {
   background: var(--accent);
 }
 
-@keyframes status-blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.45;
-  }
-}
-
-.status-dot--blink {
-  animation: status-blink 1.6s ease-in-out infinite;
-}
+/* `.status-dot--blink`, `.rail-chip__dot--blink` and a checks-running PR
+   chip's dot pulse from one shared timer in `lib/status-pulse.ts`: one finite
+   dip every 4.5s on the dots that are on screen, and none under reduced
+   motion. A CSS loop here would keep the compositor waking on every display
+   refresh for as long as the dot is mounted, even offscreen. */
 
 /* Pending spinner — the renderer's one busy ring. Promoted out of
    `.composer__action-button-spinner` so the composer, Settings, and every
@@ -46623,14 +46608,6 @@ button.composer__subthread-source-parent:hover {
   gap: 10px;
   margin-top: 12px;
   padding: 12px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .status-dot--blink,
-  .pr-chip--checks-running .pr-chip__dot,
-  .rail-chip__dot--blink {
-    animation: none;
-  }
 }
 
 /* ==============================================}

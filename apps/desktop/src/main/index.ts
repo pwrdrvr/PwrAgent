@@ -178,7 +178,7 @@ import {
 } from "./log";
 import { StartupCpuProfiler } from "./diagnostics/startup-cpu-profiler";
 import { stopNativeCpuDiagnostics } from "./diagnostics/native-cpu-capture";
-import { stopRenderingDiagnostics } from "./diagnostics/rendering-capture";
+import { isRenderingDiagnosticsWindow, stopRenderingDiagnostics } from "./diagnostics/rendering-capture";
 import { recordStartupProfileEvent } from "./diagnostics/startup-profile-events";
 import {
   disposeDesktopMessagingRuntime,
@@ -1197,7 +1197,7 @@ function installApplicationMenu(): void {
     && isFederationWindowWebContents(focusedWindow.webContents),
   );
   const windows = BrowserWindow.getAllWindows()
-    .filter((window) => !window.isDestroyed())
+    .filter((window) => !window.isDestroyed() && !isRenderingDiagnosticsWindow(window))
     .map((window) => ({
       focused: window.isFocused(),
       id: window.id,
@@ -1234,7 +1234,7 @@ function installApplicationMenu(): void {
       copyLocalDiagnosticsInfo: requestCopyLocalDiagnosticsInfo,
       focusWindow: (windowId) => {
         const window = BrowserWindow.fromId(windowId);
-        if (!window || window.isDestroyed()) {
+        if (!window || window.isDestroyed() || isRenderingDiagnosticsWindow(window)) {
           installApplicationMenu();
           return;
         }

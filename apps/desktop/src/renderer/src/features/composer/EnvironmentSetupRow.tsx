@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatDurationMs, formatRunningDurationMs } from "../../lib/format-duration";
+import { statusPulseRef } from "../../lib/status-pulse";
 import { TranscriptCopyButton } from "../thread-detail/TranscriptCopyButton";
 
 /**
@@ -140,6 +141,7 @@ export function EnvironmentSetupRow(props: {
             <span
               className="status-dot status-dot--active status-dot--blink"
               aria-hidden="true"
+              ref={statusPulseRef}
             />
           ) : null}
           <span className="composer__queued-env-action-summary-text">

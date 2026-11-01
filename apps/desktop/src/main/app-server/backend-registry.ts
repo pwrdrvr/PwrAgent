@@ -1646,6 +1646,8 @@ function shouldRepairCachedDirectoryRelationship(params: {
   }
 
   if (params.directory.kind === "worktree") {
+    // An attached sibling from the same repository does not cache the primary
+    // cwd's relationship. Repair the primary without replacing that sibling.
     return true;
   }
 
@@ -26754,6 +26756,7 @@ export class DesktopBackendRegistry {
   private async requestHandoffCwdTrustConfirmation(params: {
     backend: AppServerBackendKind;
     cwd: string;
+    executionMode: ThreadExecutionMode;
     handoffId: string;
     threadId: string;
     turnId?: string;
@@ -26762,6 +26765,7 @@ export class DesktopBackendRegistry {
     cancelDescription?: string;
   }): Promise<boolean> {
     const normalizedCwd = toDirectoryId(path.resolve(params.cwd));
+    const modeLabel = EXECUTION_MODE_SUMMARIES[params.executionMode].label;
     const requestId = `${params.handoffId}:cwd-trust`;
     const key = buildPendingRequestKey({
       backend: params.backend,
@@ -26779,14 +26783,14 @@ export class DesktopBackendRegistry {
           {
             id: HANDOFF_CWD_TRUST_QUESTION_ID,
             header: "Trust directory",
-            question: `Trust ${normalizedCwd} and allow Default Access agent threads to read, write, and delete files in it?`,
+            question: `Trust ${normalizedCwd} and allow ${modeLabel} agent threads to read, write, and delete files in it?`,
             isOther: false,
             isSecret: false,
             options: [
               {
                 label: HANDOFF_CWD_TRUST_APPROVE_LABEL,
                 description:
-                  "Trust this directory for future Default Access agent work.",
+                  `Trust this directory for future ${modeLabel} agent work.`,
               },
               {
                 label: params.cancelLabel ?? "Cancel handoff",
@@ -26839,6 +26843,7 @@ export class DesktopBackendRegistry {
   private async directoryLaunchpadCoversCwd(cwd: string): Promise<boolean> {
     const resolvedCwd = await realpath(cwd).catch(() => path.resolve(cwd));
     const launchpads = await this.overlayStore.listDirectoryLaunchpads();
+    const trustedPaths: string[] = [];
     for (const launchpad of launchpads) {
       if (
         launchpad.directoryKind !== "directory"
@@ -26854,8 +26859,18 @@ export class DesktopBackendRegistry {
       if (directoryContainsPath(launchpadPath, resolvedCwd)) {
         return true;
       }
+      trustedPaths.push(launchpadPath);
     }
-    return false;
+    if (trustedPaths.length === 0) return false;
+
+    // A .git reference alone does not establish a worktree relationship. Only
+    // registered worktrees outside the trusted directory inherit repository trust.
+    const primaryPath = await this.gitDirectoryService
+      .resolvePrimaryWorkspacePath(resolvedCwd, { requireRegisteredWorktree: true })
+      .catch(() => undefined);
+    if (!primaryPath) return false;
+    const resolvedPrimaryPath = await realpath(primaryPath).catch(() => path.resolve(primaryPath));
+    return trustedPaths.some((trustedPath) => directoryContainsPath(trustedPath, resolvedPrimaryPath));
   }
 
   private async ensureHandoffTrustedDirectoryLaunchpad(params: {
@@ -26909,6 +26924,7 @@ export class DesktopBackendRegistry {
     const confirmed = await this.requestHandoffCwdTrustConfirmation({
       backend: params.backend,
       cwd: params.cwd,
+      executionMode: params.executionMode,
       handoffId: [
         params.operation === "move" ? "move-workspace" : "attach-directory",
         params.backend,
@@ -26927,7 +26943,7 @@ export class DesktopBackendRegistry {
     if (!confirmed) {
       return threadOrchestrationFailure(
         "forbidden",
-        `The operator did not approve adding ${normalizedCwd} to the Default Access write scope.`,
+        `The operator did not approve adding ${normalizedCwd} to the ${EXECUTION_MODE_SUMMARIES[params.executionMode].label} write scope.`,
         { cwd: normalizedCwd },
       );
     }
@@ -30803,6 +30819,7 @@ export class DesktopBackendRegistry {
     gitBranch?: string;
     threadId: string;
     retainWorktree?: LinkedDirectorySummary;
+    preserveOtherWorktrees?: boolean;
   }): Promise<ThreadOverlayState> {
     const overlay =
       await this.overlayStore.replaceWorkspaceLinkedDirectory(params);
@@ -30953,6 +30970,7 @@ export class DesktopBackendRegistry {
         backend: "codex",
         threadId: params.threadId,
         directory,
+        preserveOtherWorktrees: true,
       });
       this.invalidateThreadListCache("codex");
       await this.emitCodexDirectoryRelationshipsUpdated({
@@ -32094,6 +32112,7 @@ export class DesktopBackendRegistry {
           backend: "codex",
           threadId: thread.id,
           directory,
+          preserveOtherWorktrees: true,
         });
     }
 
@@ -32195,6 +32214,7 @@ export class DesktopBackendRegistry {
             backend: "codex",
             threadId: thread.id,
             directory,
+            preserveOtherWorktrees: true,
           });
       }
 
@@ -43002,18 +43022,19 @@ export class DesktopBackendRegistry {
       this.updatePendingThreadHandoff(handoffId, {
         phase: "awaiting_input",
         message:
-          "Waiting for the operator to confirm the requested directory may be used for Default Access handoffs.",
+          `Waiting for the operator to confirm the requested directory may be used for ${modeSettings.label} handoffs.`,
       });
       const confirmed = await this.requestHandoffCwdTrustConfirmation({
         backend: sourceBackend,
         cwd: requestedCwd,
+        executionMode,
         handoffId,
         threadId: sourceThreadId,
         turnId: sourceTurnId,
         itemId: request.context.callId,
       });
       if (!confirmed) {
-        const message = `The operator did not approve adding ${normalizedCwd} to the Default Access write scope.`;
+        const message = `The operator did not approve adding ${normalizedCwd} to the ${modeSettings.label} write scope.`;
         this.failPendingThreadHandoff(handoffId, new Error(message));
         return threadOrchestrationFailure("forbidden", message, {
           cwd: normalizedCwd,
