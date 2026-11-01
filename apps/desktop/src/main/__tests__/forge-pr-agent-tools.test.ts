@@ -311,4 +311,23 @@ describe("forge tool service", () => {
     const service = new ForgePrToolService({ enabled: (provider) => provider === "github", clients: { github: { execute: vi.fn() }, gitlab: { execute: vi.fn() } }, defaultMergeMethod: () => "merge" });
     await expect(service.execute("get_issue", { number: 1 }, scope([remotes.gitlab]))).rejects.toMatchObject({ code: "provider_disabled" });
   });
+  it("settles a pull request's head before approval, preferring the live branch to stale thread metadata", async () => {
+    const service = new ForgePrToolService({ enabled: () => true, clients: { github: { execute: vi.fn() }, gitlab: { execute: vi.fn() } }, defaultMergeMethod: () => "merge" });
+    const live = vi.fn(async () => "fix/made-this-turn");
+    // A Claude thread that made its branch mid-turn has no recorded branch.
+    await expect(service.prepare("create_pull_request", { title: "Fix" }, { ...scope([remotes.github]), readCheckedOutBranch: live }))
+      .resolves.toEqual({ repository: repo, args: { title: "Fix", head: "fix/made-this-turn" } });
+    expect(live).toHaveBeenCalledWith(repo);
+    await expect(service.prepare("create_pull_request", { title: "Fix" }, { ...scope([remotes.github]), branch: "old", readCheckedOutBranch: live }))
+      .resolves.toMatchObject({ args: { head: "fix/made-this-turn" } });
+    await expect(service.prepare("create_pull_request", { title: "Fix" }, { ...scope([remotes.github]), branch: "recorded", readCheckedOutBranch: async () => undefined }))
+      .resolves.toMatchObject({ args: { head: "recorded" } });
+    await expect(service.prepare("create_pull_request", { title: "Fix", head: "explicit" }, { ...scope([remotes.github]), readCheckedOutBranch: live }))
+      .resolves.toMatchObject({ args: { head: "explicit" } });
+    expect(live).toHaveBeenCalledTimes(2);
+    await expect(service.prepare("create_pull_request", { title: "Fix" }, { ...scope([remotes.github]), branch: "HEAD" }))
+      .rejects.toMatchObject({ code: "invalid_arguments" });
+    await expect(service.prepare("add_issue_comment", { number: 1, body: "Hi" }, scope([remotes.github])))
+      .resolves.toEqual({ repository: repo, args: { number: 1, body: "Hi" } });
+  });
 });

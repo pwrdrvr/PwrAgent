@@ -17,7 +17,7 @@ export function repositoryFromPr(url: string): ForgeRepository | undefined {
   } catch { /* No supported identity. */ }
   return undefined;
 }
-function sameRepository(a: Omit<ForgeRepository, "provider"> & { provider?: ForgeRepository["provider"] }, b: Omit<ForgeRepository, "provider"> & { provider?: ForgeRepository["provider"] }): boolean {
+export function sameRepository(a: Omit<ForgeRepository, "provider"> & { provider?: ForgeRepository["provider"] }, b: Omit<ForgeRepository, "provider"> & { provider?: ForgeRepository["provider"] }): boolean {
   const fold = a.provider === "github" || b.provider === "github";
   return a.host.toLowerCase() === b.host.toLowerCase()
     && (fold ? a.owner.toLowerCase() === b.owner.toLowerCase() && a.repo.toLowerCase() === b.repo.toLowerCase() : a.owner === b.owner && a.repo === b.repo);

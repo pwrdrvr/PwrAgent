@@ -15,8 +15,15 @@ import { agentToolFailure, agentToolSuccess, type AgentToolCallContext, type Age
 import { buildForgeReadToolDefinitions, type ForgeReadHandler } from "./pwragent-forge-agent-tools";
 
 export type ForgePrToolHandler = (operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext) => Promise<unknown>;
-/** The repository a call would act in, resolved before any approval prompt. */
-export type ForgePrRepositoryResolver = (args: ForgePrToolArgs, context: AgentToolCallContext) => Promise<ForgeRepository>;
+/**
+ * The repository a call would act in and its settled arguments, such as a
+ * pull request's head, resolved before any approval prompt.
+ */
+export type ForgePrToolPreflight = (
+  operation: ForgePrToolOperation,
+  args: ForgePrToolArgs,
+  context: AgentToolCallContext,
+) => Promise<{ repository: ForgeRepository; args: ForgePrToolArgs }>;
 
 const SCOPE = "Works on GitHub and GitLab, in this thread's repository, with the operator's gh or glab sign-in.";
 const ASKS = "The operator's Settings → Git policy may ask them first, or refuse.";

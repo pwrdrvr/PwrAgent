@@ -9694,8 +9694,8 @@ describe("app server ipc", () => {
       .rejects.toMatchObject({ code: "not_found" });
     await expect(github("get_issue", { number: 1 }, { backend: "codex", threadId: "missing-thread", transport: "mcp" }))
       .rejects.toMatchObject({ code: "thread_not_found" });
-    const resolveRepository = setForgePrToolHandler.mock.calls.at(-1)?.[1];
-    await expect(resolveRepository({}, { backend: "codex", threadId: "thread-1", transport: "mcp" }))
+    const preflight = setForgePrToolHandler.mock.calls.at(-1)?.[1];
+    await expect(preflight("create_issue", {}, { backend: "codex", threadId: "thread-1", transport: "mcp" }))
       .rejects.toMatchObject({ code: "not_found" });
   });
 

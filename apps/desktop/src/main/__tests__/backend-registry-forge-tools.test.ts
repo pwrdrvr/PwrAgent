@@ -100,7 +100,7 @@ describe("backend forge tool dispatch", () => {
 
   it.each(["github", "gitlab"] as const)("asks once per CI rerun with the %s scope and repository on the card", async (provider) => {
     const repository = { provider, host: provider === "github" ? "github.com" : "gitlab.example.test", owner: "fixture", repo: "project" };
-    registry.setForgePrToolHandler(github, async () => repository);
+    registry.setForgePrToolHandler(github, async (_operation, args) => ({ repository, args }));
     const prompt = nextApproval();
     const pending = internals.handleServerRequest("codex", request("rerun_failed_ci_jobs", { runId: 42 }, "call-rerun"));
     const notification = await prompt;
@@ -237,7 +237,7 @@ describe("backend forge tool dispatch", () => {
   });
 
   it("names the GitLab repository and merge request on the card", async () => {
-    registry.setForgePrToolHandler(github, async () => ({ provider: "gitlab", host: "gitlab.example.test", owner: "group/sub", repo: "project" }));
+    registry.setForgePrToolHandler(github, async (_operation, args) => ({ repository: { provider: "gitlab", host: "gitlab.example.test", owner: "group/sub", repo: "project" }, args }));
     const prompt = nextApproval();
     const pending = internals.handleServerRequest("codex", request("merge_pull_request", { number: 4, expectedHeadSha: "b".repeat(40) }, "call-gitlab"));
     const notification = await prompt;
@@ -251,7 +251,7 @@ describe("backend forge tool dispatch", () => {
     const repoA = { provider: "github" as const, host: "github.com", owner: "acme", repo: "app" };
     const repoB = { provider: "github" as const, host: "github.com", owner: "acme", repo: "site" };
     let next = repoA;
-    registry.setForgePrToolHandler(github, async () => next);
+    registry.setForgePrToolHandler(github, async (_operation, args) => ({ repository: next, args }));
     const first = nextApproval();
     const pendingA = internals.handleServerRequest("codex", request("add_issue_comment", { number: 1, body: "Fixed." }, "call-grant-a"));
     await answer(await first, "accept", "session");
@@ -276,6 +276,28 @@ describe("backend forge tool dispatch", () => {
     expect(text(result)).toContain("ambiguous_repository");
     expect(prompts).not.toHaveBeenCalled();
     expect(github).not.toHaveBeenCalled();
+  });
+
+  it("fails a pull request with no head before asking, so the operator never approves a call that cannot run", async () => {
+    const prompts = vi.fn();
+    registry.onEvent((event) => { if (event.notification.method === "mcpServer/elicitation/request") prompts(); });
+    registry.setForgePrToolHandler(github, async () => { throw new ForgeReadError("invalid_arguments", "Pass head: this thread has no checked-out branch. Push the branch first."); });
+    const result = await internals.handleServerRequest("codex", request("create_pull_request", { title: "Fix" }, "call-no-head"));
+    expect(text(result)).toContain("Pass head");
+    expect(prompts).not.toHaveBeenCalled();
+    expect(github).not.toHaveBeenCalled();
+  });
+
+  it("shows and opens from the head the preflight settled", async () => {
+    const repository = { provider: "github" as const, host: "github.com", owner: "fixture", repo: "project" };
+    registry.setForgePrToolHandler(github, async (_operation, args) => ({ repository, args: { ...args, head: "fix/live-branch" } }));
+    const prompt = nextApproval();
+    const pending = internals.handleServerRequest("codex", request("create_pull_request", { title: "Fix" }, "call-settled-head"));
+    const notification = await prompt;
+    expect(notification.params._meta?.tool_params_display).toEqual(expect.arrayContaining([{ name: "head", value: "fix/live-branch" }]));
+    await answer(notification, "accept");
+    expect((await pending).success).toBe(true);
+    expect(github).toHaveBeenCalledWith("create_pull_request", { title: "Fix", head: "fix/live-branch", repository }, expect.anything());
   });
 
   it("does not run a declined write", async () => {

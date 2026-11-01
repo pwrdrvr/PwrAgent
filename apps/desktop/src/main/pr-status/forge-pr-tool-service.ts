@@ -1,12 +1,36 @@
 import { ForgeReadError, repositoryKey, type ForgeRepository } from "./forge-tool-contract";
-import { repositoryFromPr, resolveForgeRepositories, type ForgeReadScope } from "./forge-read-service";
+import { repositoryFromPr, resolveForgeRepositories, sameRepository, type ForgeReadScope } from "./forge-read-service";
+import { readCheckedOutBranch, readForgeRepositoryRemotes } from "./git-remote";
 import type { ForgePrToolContext } from "./forge-pr-tool-shared";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "./forge-pr-tool-contract";
 
 export type ForgePrToolScope = Pick<ForgeReadScope, "remotes" | "attached" | "branch"> & {
   directories: string[];
   privateRoots: readonly string[];
+  /**
+   * The branch checked out now in the thread's directories for one repository.
+   * Thread metadata can lag a branch the agent made during the turn.
+   */
+  readCheckedOutBranch?: (repository: ForgeRepository) => Promise<string | undefined>;
 };
+
+/** What a call acts on, settled before the operator is asked. */
+export type ForgePrToolPreparedCall = { repository: ForgeRepository; args: ForgePrToolArgs };
+
+/**
+ * The branch checked out in the directories whose remotes name `repository`.
+ * Undefined when HEAD is detached, git fails, or the directories disagree.
+ */
+export async function readCheckedOutBranchForRepository(directories: readonly string[], repository: ForgeRepository): Promise<string | undefined> {
+  const branches = new Set<string>();
+  await Promise.all(directories.map(async (cwd) => {
+    const remotes = await readForgeRepositoryRemotes(cwd);
+    if (!remotes.some((remote) => sameRepository(remote, repository))) return;
+    const branch = await readCheckedOutBranch(cwd);
+    if (branch) branches.add(branch);
+  }));
+  return branches.size === 1 ? [...branches][0] : undefined;
+}
 
 type ProviderClient = { execute(operation: ForgePrToolOperation, args: ForgePrToolArgs, ctx: ForgePrToolContext): Promise<unknown> };
 
@@ -25,6 +49,19 @@ export class ForgePrToolService {
     const repository = candidates[0]!;
     if (!this.options.enabled(repository.provider)) throw new ForgeReadError("provider_disabled", `${repository.provider === "github" ? "GitHub" : "GitLab"} is disabled in Settings → Git.`);
     return repository;
+  }
+
+  /**
+   * Settles the repository and the pull request head before any approval
+   * card, so a call that would fail is refused without asking and the card
+   * names the branch it opens from.
+   */
+  async prepare(operation: ForgePrToolOperation, args: ForgePrToolArgs, scope: ForgePrToolScope): Promise<ForgePrToolPreparedCall> {
+    const repository = this.resolveRepository(args, scope);
+    if (operation !== "create_pull_request" || args.head) return { repository, args };
+    const head = await scope.readCheckedOutBranch?.(repository) ?? scope.branch;
+    if (!head || head === "HEAD") throw new ForgeReadError("invalid_arguments", "Pass head: this thread has no checked-out branch. Push the branch first.");
+    return { repository, args: { ...args, head } };
   }
 
   async execute(operation: ForgePrToolOperation, args: ForgePrToolArgs, scope: ForgePrToolScope, signal?: AbortSignal): Promise<unknown> {
