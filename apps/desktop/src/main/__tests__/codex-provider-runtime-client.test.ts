@@ -25,6 +25,7 @@ function fixture() {
     startRealtime: vi.fn(async () => undefined),
     readThreadSummary: vi.fn(async () => ({ id: "persisted" })),
     readThread: vi.fn(async () => ({ entries: [] })),
+    readMcpApprovalUserMessages: vi.fn(async () => []),
     readThreadToolInvocation: vi.fn(async () => []),
     readTurnRoot: vi.fn(async () => "root-turn"),
     listThreads: vi.fn(async () => []),
@@ -147,6 +148,21 @@ describe("provider-specific Codex runtimes", () => {
     await client.startTurn({ threadId: "persisted", input: [] });
     await client.readThread({ threadId: "persisted" });
     expect(local.raw.readThread).toHaveBeenCalledOnce();
+  });
+
+  it("reads MCP approval evidence from persisted history or its live provider owner", async () => {
+    const { primary, local, create, client } = setup();
+    primary.providers.set("persisted", "bonsai");
+    const params = { threadId: "persisted", turnId: "turn", signal: new AbortController().signal };
+    await client.readMcpApprovalUserMessages(params);
+    expect(primary.raw.readMcpApprovalUserMessages).toHaveBeenCalledExactlyOnceWith(params);
+    expect(create).not.toHaveBeenCalled();
+    await client.startTurn({ threadId: "persisted", input: [] });
+    await client.readMcpApprovalUserMessages(params);
+    expect(local.raw.readMcpApprovalUserMessages).toHaveBeenCalledExactlyOnceWith(params);
+    await client.readMcpApprovalUserMessages({ ...params, threadId: "openai-thread" });
+    expect(primary.raw.readMcpApprovalUserMessages).toHaveBeenLastCalledWith({ ...params, threadId: "openai-thread" });
+    expect(local.raw.readMcpApprovalUserMessages).toHaveBeenCalledOnce();
   });
 
   it("routes tool details and turn ancestry through history fallback, then their live owner", async () => {
