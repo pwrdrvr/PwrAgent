@@ -8035,7 +8035,7 @@ class DesktopAppServerService {
         .updateSubthreadOrder(ownerRequest);
     }
     const response = await updateLocalSubthreadOrder(request, {
-      resolveLocalInstanceId: async () => (await getDesktopFederationRuntime().health()).instanceId,
+      peers: getDesktopFederationRuntime().peerChildSource(),
     });
     logDebug("updateSubthreadOrder", {
       backend: response.backend,

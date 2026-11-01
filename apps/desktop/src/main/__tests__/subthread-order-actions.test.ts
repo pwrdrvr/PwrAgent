@@ -13,7 +13,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({ getDesktopOverlayStore: 
 vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: () => ({ publishLocalEvent: mocks.publish }),
 }));
-import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
+import { type PeerChildSource, updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 
 let db: ReturnType<typeof openInMemoryStateDb>;
 
@@ -137,6 +137,31 @@ async function pinPeerChild(threadId: string, extra: Partial<NavigationThreadSum
   });
 }
 
+/**
+ * The live peer summaries, as the sidebar reads pins through them. `live`
+ * stands in for what a reachable peer serves now; any other pin falls back to
+ * its saved snapshot, as it does while the peer is offline.
+ */
+function peers(live: NavigationThreadSummary[] = []): PeerChildSource {
+  const liveById = new Map(live.map((thread) => [thread.id, thread]));
+  return {
+    localInstanceId: async () => LOCAL,
+    summaries: {
+      resolvePinnedThreads: async (pins) => {
+        const served = pins.flatMap((pin) => {
+          const thread = liveById.get(pin.ref.threadId);
+          return thread ? [{ pin, thread: { ...thread, federation: pin.summary!.federation } }] : [];
+        });
+        return {
+          threads: pins.map((pin) => served.find((entry) => entry.pin === pin)?.thread ?? pin.summary!),
+          refreshed: served.map(({ pin, thread }) => ({ ref: pin.ref, summary: thread, instanceLabel: pin.instanceLabel })),
+          archived: [],
+        };
+      },
+    },
+  };
+}
+
 it("moves a peer's sub-thread among this machine's children of a local parent", async () => {
   await mocks.store!.setThreadParent({ backend: "codex", threadId: "gondola", parentThreadId: "root" });
   await mocks.store!.setThreadParent({ backend: "codex", threadId: "steam", parentThreadId: "root" });
@@ -151,14 +176,14 @@ it("moves a peer's sub-thread among this machine's children of a local parent", 
   ] });
 
   await updateLocalSubthreadOrder({ backend: "codex", parentThreadId: "root",
-    move: { threadId: "windows-e2e", anchorThreadId: "steam", placement: "before" } }, { resolveLocalInstanceId: async () => LOCAL });
+    move: { threadId: "windows-e2e", anchorThreadId: "steam", placement: "before" } }, { peers: peers() });
 
   expect((await mocks.store!.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
     .toEqual(["gondola", "windows-e2e", "steam"]);
 
   // A local move keeps the peer's child in the saved order.
   await updateLocalSubthreadOrder({ backend: "codex", parentThreadId: "root",
-    move: { threadId: "steam", anchorThreadId: "gondola", placement: "before" } }, { resolveLocalInstanceId: async () => LOCAL });
+    move: { threadId: "steam", anchorThreadId: "gondola", placement: "before" } }, { peers: peers() });
 
   expect((await mocks.store!.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
     .toEqual(["steam", "gondola", "windows-e2e"]);
@@ -174,6 +199,46 @@ it("refuses a peer's sub-thread when this machine has no federation identity", a
 
   await expect(updateLocalSubthreadOrder({ backend: "codex", parentThreadId: "root",
     move: { threadId: "windows-e2e", anchorThreadId: "gondola", placement: "before" } })).rejects.toThrow("no longer places");
+});
+
+it("trusts the peer over a stale pin snapshot that still names this parent", async () => {
+  await mocks.store!.setThreadParent({ backend: "codex", threadId: "gondola", parentThreadId: "root" });
+  await mocks.store!.setThreadParent({ backend: "codex", threadId: "steam", parentThreadId: "root" });
+  await pinPeerChild("windows-e2e");
+  mocks.loadIndex.mockResolvedValue({ coverage: { state: "complete" }, threads: [
+    summary("codex", "root"),
+    summary("codex", "gondola", { parentThreadId: "root", createdAt: 2 }),
+    summary("codex", "steam", { parentThreadId: "root", createdAt: 1 }),
+  ] });
+  // The peer moved its thread under another of this machine's threads.
+  const moved = summary("codex", "windows-e2e", { parentThreadId: "other", parentThreadBackend: "codex",
+    parentThreadInstanceId: LOCAL, createdAt: 5 });
+
+  await expect(updateLocalSubthreadOrder({ backend: "codex", parentThreadId: "root",
+    move: { threadId: "windows-e2e", anchorThreadId: "steam", placement: "before" } },
+  { peers: peers([moved]) })).rejects.toThrow("no longer places");
+  expect((await mocks.store!.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder ?? [])
+    .not.toContain("windows-e2e");
+  // The pin snapshot caught up with the peer, as a sidebar read would.
+  const [pin] = await mocks.store!.listRemoteThreadPins();
+  expect(pin?.summary?.parentThreadId).toBe("other");
+});
+
+it("places a peer's fresh sub-thread below its source once its pin is written", async () => {
+  await mocks.store!.setThreadParent({ backend: "codex", threadId: "gondola", parentThreadId: "root" });
+  await mocks.store!.setThreadParent({ backend: "codex", threadId: "steam", parentThreadId: "root" });
+  mocks.loadIndex.mockResolvedValue({ coverage: { state: "complete" }, threads: [
+    summary("codex", "root"),
+    summary("codex", "gondola", { parentThreadId: "root", createdAt: 2 }),
+    summary("codex", "steam", { parentThreadId: "root", createdAt: 1 }),
+  ] });
+  await pinPeerChild("fresh", { createdAt: 9 });
+
+  await updateLocalSubthreadOrder({ backend: "codex", parentThreadId: "root",
+    insertAfter: { threadId: "fresh", sourceThreadId: "gondola" } }, { peers: peers() });
+
+  expect((await mocks.store!.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
+    .toEqual(["gondola", "fresh", "steam"]);
 });
 
 /** Rows written before links recorded the parent's provider name only its id. */
