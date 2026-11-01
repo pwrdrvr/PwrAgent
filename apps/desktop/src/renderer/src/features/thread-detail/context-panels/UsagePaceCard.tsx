@@ -23,6 +23,11 @@ type UsagePaceCardProps = {
   ownerLabel?: string;
   /** That instance's id, so the chip can draw its short name. */
   ownerInstanceId?: string;
+  /**
+   * False for a thread whose provider is not the local Codex account. The
+   * card then opens Usage Activity without charting that account's limit.
+   */
+  codexLimit?: boolean;
 };
 
 /** Chart box, in viewBox units; 100% sits `CAP` below the top edge. */
@@ -37,12 +42,14 @@ const CAP = 6;
  * which is exact for the limit (account-wide) and labeled for the spend: this
  * machine's, or the named owner's for a remote thread.
  */
-export const UsagePaceCard = memo(function UsagePaceCard({ desktopApi, backends, ownerLabel, ownerInstanceId }: UsagePaceCardProps) {
+export const UsagePaceCard = memo(function UsagePaceCard({ desktopApi, backends, ownerLabel, ownerInstanceId, codexLimit = true }: UsagePaceCardProps) {
   const owner = useFederationInstanceNames(ownerInstanceId ?? "", ownerLabel ?? "");
   const verdictId = useId();
   const open = desktopApi?.openUsageActivity;
   // Nothing renders without a way to open the window, so nothing is read.
-  const pace = useLocalUsagePace(open ? desktopApi?.readUsageActivity : undefined, usagePaceRefreshKey(backends), usagePaceAccountKey(backends));
+  // Another provider's thread never reads the Codex account at all.
+  const pace = useLocalUsagePace(open && codexLimit ? desktopApi?.readUsageActivity : undefined,
+    usagePaceRefreshKey(backends), usagePaceAccountKey(backends));
   if (!open) return null;
   const series = sinceResetSeries(pace?.account);
   if (!pace || !series) {

@@ -325,13 +325,14 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
       {/* This thread's bill; the account's limit and its pace are the card,
           and every thread's spend across instances is the window it opens.
           Only Codex has that pace history. A provider that reports its own
-          limits shows them as meters instead of the Codex account's. */}
+          limits shows them as meters instead. Any other ACP thread keeps the
+          way into the window but never shows the Codex account's limit. */}
       {source === "claude"
         ? <ClaudeUsageLimits backend={threadBackend} />
         : source?.startsWith("acp:") && (source === "acp:grok" || threadBackend?.rateLimits?.length)
           ? <AcpUsageLimits backend={threadBackend} provider={formatBackendLabel(source, props.backends)} />
           : <UsagePaceCard desktopApi={props.desktopApi} backends={props.backends} ownerLabel={ownerLabel}
-            ownerInstanceId={familyOwner?.instanceId} />}
+            ownerInstanceId={familyOwner?.instanceId} codexLimit={!source?.startsWith("acp:")} />}
 
       {/* Under the spend breakdown, above the turn rows: the gate's result is
           part of reading the bill, not a footnote to one turn of it. */}

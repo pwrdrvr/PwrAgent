@@ -665,10 +665,18 @@ it("names a remote thread's owner on the Usage Activity card's spend", async () 
     .toHaveTextContent("Studio / default $0.00 API-eq."));
 });
 
-it("keeps the Usage Activity card on ACP threads", () => {
+it("keeps the Usage Activity card on ACP threads without the Codex account's limit", () => {
+  const readUsageActivity = vi.fn();
   const { pricing } = buildTokenMiserPricingFixture();
-  const thread = { id: "acp-thread", source: "acp:gemini" as const, updatedAt: 1 };
-  const view = render(<PricingPanel pricing={pricing} thread={thread}
-    desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity: vi.fn() }} />);
-  expect(view.container.querySelector(".usage-pace-card")).not.toBeNull();
+  const thread = { id: "acp-thread", source: "acp:kimi" as const, updatedAt: 1 };
+  const backends = [
+    { kind: "codex", label: "OpenAI", rateLimits: [{ name: "Weekly limit", usedPercent: 68 }] },
+    { kind: "acp:kimi", label: "Kimi", available: true },
+  ] as unknown as import("@pwragent/shared").BackendSummary[];
+  const view = render(<PricingPanel pricing={pricing} thread={thread} backends={backends}
+    desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} />);
+  const card = view.container.querySelector(".usage-pace-card");
+  expect(card).toHaveTextContent("Usage Activity");
+  expect(card).not.toHaveTextContent(/Weekly limit|OpenAI|68/);
+  expect(readUsageActivity).not.toHaveBeenCalled();
 });
