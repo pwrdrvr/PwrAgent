@@ -358,6 +358,7 @@ register a project. Enrollment and Git intake do not import the sender's Git or 
 
 | Service | Required grants | Supported behavior |
 | --- | --- | --- |
+| `backend.*` | Per method, from desktop's owner table in `@pwragent/federation` | Navigation reads need `thread_navigation`; thread detail, queue projection, launchpad config and `listBackends` need `thread_detail`; turns need `turn_control`; launchpads need `environment_actions` |
 | `outpost.projects.list` | `thread_navigation` | Owner project inventory |
 | `outpost.projects.create/add/remove` | `environment_actions` | Create/clone, register and unregister projects |
 | `pty.*` | `remote_pty` | Input, resize, ack flow control, snapshots, history and close |

@@ -22,3 +22,4 @@ export { authenticateMessageOrigin } from "@pwragent/federation/federation-messa
 export { resolveMessagingOutboundFile, validateMessagingFileMetadata } from "@pwragent/agent-tools/messaging-outbound-file";
 
 export * from "@pwragent/federation/federation-replacement-receiver";
+export { FEDERATION_BACKEND_METHOD_CAPABILITIES } from "@pwragent/federation/federation-backend-methods";
