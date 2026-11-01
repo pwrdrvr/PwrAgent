@@ -32307,6 +32307,122 @@ command = "pnpm dev"
     }
   });
 
+  it("runs a Claude thread's start_review tool call on a provider that can review", async () => {
+    // Claude cannot run reviews. The tool used to answer "scheduled" with
+    // Claude as the reviewer, and the start then failed in a log line when
+    // the turn ended, so the review the agent promised never ran.
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-tool-review-"));
+    const worktreePath = "/repo/.worktrees/claude-tool-review";
+    const claudeId = "4c1f2e3d-6a70-4b8c-9dae-2f3a4b5c6d7e";
+    const store = new ClaudeSessionStore(path.join(root, "sessions"));
+    await store.save({ cwd: worktreePath, thread: {
+      id: claudeId, title: "Claude parent", titleSource: "explicit", source: "claude", updatedAt: 1,
+      linkedDirectories: [{ id: worktreePath, kind: "local", label: "claude-tool-review", path: worktreePath }],
+    } });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      models: [{ id: "gpt-5.5", label: "GPT-5.5", current: true, supportsReasoning: true }],
+      startThreadResult: { threadId: "codex-review-child" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      pdfToolMcpServer: null,
+      threadTitleGenerationService: null,
+      claudeBackendOptions: {
+        store,
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+      },
+    });
+    try {
+      await registry.publishLocalEvent({
+        backend: "claude",
+        notification: {
+          method: "turn/started",
+          params: { threadId: claudeId, turnId: "claude-turn-1", turn: { id: "claude-turn-1" } },
+        },
+      });
+
+      const response = await callRegistryMcpTool({
+        registry,
+        backend: "claude",
+        threadId: claudeId,
+        turnId: "claude-turn-1",
+        tool: "start_review",
+        args: {
+          runMode: "pwragent-sub-agent",
+          target: { type: "baseBranch", branch: "main" },
+        },
+      });
+      expect(response).toMatchObject({
+        structuredContent: { backend: "claude", threadId: claudeId, status: "scheduled" },
+      });
+      expect(codexClient.lastStartThreadParams).toBeUndefined();
+
+      await registry.publishLocalEvent({
+        backend: "claude",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: claudeId,
+            turnId: "claude-turn-1",
+            turn: { id: "claude-turn-1", status: "completed", output: [] },
+          },
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(codexClient.lastStartThreadParams).toMatchObject({
+          cwd: worktreePath,
+          ephemeral: true,
+        });
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails a Claude thread's start_review tool call when no provider can review", async () => {
+    // Codex here supports neither review/start nor a managed review child.
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/resume"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      pdfToolMcpServer: null,
+      threadTitleGenerationService: null,
+      claudeBackendOptions: {
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+      },
+    });
+    try {
+      await registry.publishLocalEvent({
+        backend: "claude",
+        notification: {
+          method: "turn/started",
+          params: { threadId: "claude-thread", turnId: "claude-turn-1", turn: { id: "claude-turn-1" } },
+        },
+      });
+
+      const response = await callRegistryMcpTool({
+        registry,
+        backend: "claude",
+        threadId: "claude-thread",
+        turnId: "claude-turn-1",
+        tool: "start_review",
+        args: { target: { type: "uncommittedChanges" } },
+      });
+      expect(response).toMatchObject({ isError: true });
+      expect(JSON.stringify(response)).toContain("unsupported_backend");
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("advertises Claude review modes without claiming Claude runs reviews", async () => {
     // The owner accepts a run mode for a Claude thread, because the review
     // itself runs on another provider. Claude is never a reviewer.
