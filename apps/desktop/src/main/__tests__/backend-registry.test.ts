@@ -45533,6 +45533,79 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("tells the thread when a scheduled review fails to start, once per failure", async () => {
+    // A scheduled start that failed reached only the log. The agent had been
+    // told the review was scheduled and kept reporting it as pending.
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/interrupt", "thread/resume"] },
+      startTurnResults: [
+        { threadId: "parent-thread", turnId: "notice-turn-1" },
+        { threadId: "parent-thread", turnId: "notice-turn-2" },
+      ],
+      interruptEndsTurn: true,
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    try {
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: { threadId: "parent-thread", turnId: "turn-1", turn: { id: "turn-1" } },
+        },
+      });
+      await expect(registry.submitReview({
+        backend: "codex",
+        threadId: "parent-thread",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      })).resolves.toMatchObject({ status: "scheduled" });
+
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: "parent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] },
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(codexClient.startTurnCallCount).toBe(1);
+      });
+      const notice = (codexClient.lastStartTurnParams?.input[0] as { text?: string } | undefined)
+        ?.text ?? "";
+      expect(codexClient.lastStartTurnParams?.threadId).toBe("parent-thread");
+      expect(notice).toContain("could not start the review");
+      expect(notice).toContain("- Target: changes against main");
+      expect(notice).toContain("Error: Selected backend does not support review/start");
+
+      // The agent retries from the notice turn and fails the same way. A
+      // second notice would start a turn that retries again, without end.
+      await expect(registry.submitReview({
+        backend: "codex",
+        threadId: "parent-thread",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      })).resolves.toMatchObject({ status: "scheduled", invokingTurnId: "notice-turn-1" });
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: "parent-thread",
+          turnId: "notice-turn-1",
+          turn: { id: "notice-turn-1", status: "completed", output: [] },
+        },
+      });
+      await flushAsync();
+      expect(codexClient.startTurnCallCount).toBe(1);
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("queues review submission while the invoking turn start is pending", async () => {
     const startTurnDelay = createDeferred<void>();
     const codexClient = new MockBackendClient({
