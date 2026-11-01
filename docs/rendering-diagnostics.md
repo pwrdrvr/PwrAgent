@@ -3,7 +3,7 @@
 Use this capture when a PwrAgent Chromium GPU helper stays busy. CPU profiles
 alone can miss compositor animations: CSS transforms and opacity can keep
 submitting frames without React commits or JavaScript animation callbacks.
-The capture uses Chromium CDP tracing through a managed Electron debugger connection.
+The capture uses a dedicated Chromium CDP tracing session.
 It works in release builds and requires no restart or graphics setting changes.
 
 ## Collect
@@ -53,24 +53,14 @@ does not run a countdown or poll while capturing.
    ```
 
 Only one capture can run per instance. Duration must be 1–30 seconds (default
-10). The main-process deadline survives a hidden or stalled requesting renderer.
-App shutdown also stops an active capture. The first live window hosts the CDP
-connection; destroying that host or replacing its debugger aborts the capture
-with a sanitized failure. No replacement connection is detached or stopped.
-
-Acquisition uses CDP `Tracing.start`, which rejects an existing Chromium trace,
-including a session started through Electron `contentTracing`. The capture sends
-`Tracing.end` only after its own start succeeds, and never retries an end command.
-Electron 44.9.3's [`contentTracing.startRecording` documentation](https://github.com/electron/electron/blob/v44.9.3/docs/api/content-tracing.md#contenttracingstartrecordingoptions)
-explicitly says it resolves when a recording already exists; that API cannot
-establish ownership and is no longer used by this capture.
-
-Rendering and HotCpuProfiler acquire separate exclusive CDP domain leases on
-one managed debugger attachment. Either can stop first; only the last lease
-releases the connection. A rejected trace start releases only its own lease.
-An unknown debugger attachment or open DevTools on the host causes capture to
-fail without attaching, detaching, or sending trace commands. Close DevTools
-before starting a capture. This does not interrupt an existing CPU recorder.
+10). The main-process deadline survives a hidden, closed, or stalled requesting
+renderer. App shutdown also stops an active capture. A conflicting Chromium
+CDP tracing session fails the request; it is not taken over. Rendering and native
+CPU captures use the same internal Chromium trace lease contract. A hidden, blank
+window owns rendering's debugger connection, independently of DevTools and the
+requesting window; it is excluded from window samples and destroyed on cleanup.
+The standalone fixture also verifies existing Electron `contentTracing` ownership.
+Rendering never calls its global start or stop methods.
 
 ## Read the evidence
 
@@ -105,17 +95,26 @@ edges, not every React component. `processes[].cpuPercent` is Electron CPU usage
 not GPU usage. Trace counts cannot be converted to machine GPU percentages.
 GPU-process events can serve several windows; only renderer-process events join
 directly to a window. Correlation is a lead, not proof of causality.
+Chromium 152 scopes page tracing to its debugger session tree. Rendering attaches
+application pages as child sessions of its blank target and discovers new pages
+during the capture. Chromium admits those renderers, their process replacements,
+the browser and GPU. Cleanup removes only these child sessions; existing
+DevTools or V8 profiler connections remain owned by their callers.
 
 The native buffer is 8 MiB and stops accepting events when full. Inspect
-`bufferUsage.percentage`, the largest CDP `Tracing.bufferUsage.percentFull`
-report received during capture (reported every 250 ms). `value` is the largest
-reported event count. These are periodic observations, not a final buffer query. Near 1, treat trace event counts as lower bounds:
+`bufferUsage.percentage`, the peak of CDP's buffer reports at 250 ms intervals;
+`bufferUsage.value` is the peak reported event count. The final interval may be
+missing. `dataLossOccurred` comes from the completion event (`null` if unavailable).
+Near 1 or when data loss is reported, treat trace event counts as lower bounds:
 native `activeSeconds` buckets can stop before the capture ends, even while
 snapshots continue. The earlier contentTracing-based v1.3.5 ten-second capture returned
 `{percentage: 0.9853219985961914, value: 0}`; its native event buckets stopped
 before the capture ended. Missing later buckets do not establish idle rendering.
 Use a shorter capture to avoid saturation. A JSON expansion above 64 MiB is
-rejected.
+rejected. Start acknowledgement, stop completion, and stream transfer each have
+a five-second budget. Shutdown sends `Tracing.end` before awaiting renderer
+samples or transfer. A failed or stalled capture destroys its own CDP target;
+an unclosed stream gets at most one additional second for cleanup.
 
 ## Controlled comparison
 
@@ -127,8 +126,8 @@ renderer PID. The animation snapshot identifies the spinner in the running
 capture. This tests the capture in the built, minified app too. The same spec starts an
 external `contentTracing` recording, verifies the rendering request fails, and
 then successfully stops the original recording through its owner. It also checks
-that a real HotCpuProfiler recording survives rendering collection on the shared
-connection.
+that a real HotCpuProfiler recording survives rendering collection on its
+independent connection.
 
 Observed on Ubuntu x64 in Sandboxer with Electron 44.9.3 (2026-10-28):
 
@@ -140,6 +139,27 @@ Observed on Ubuntu x64 in Sandboxer with Electron 44.9.3 (2026-10-28):
 This validates the collection and source attribution on a controlled scene. It
 does not identify the component behind an operator's live GPU activity or measure
 hardware GPU utilization.
+
+### Trace ownership fixture
+
+`node apps/desktop/scripts/probe-rendering-trace-ownership.mjs` runs standalone
+Electron processes with temporary user data and invented page content. It does
+not boot PwrAgent. On Linux, run it under `xvfb-run -a`. It starts an external
+CDP trace, requires rendering to reject without a global stop or output, verifies
+the external owner still holds its recording, then checks a fresh rendering
+capture. A second process verifies that an external `contentTracing` recording
+can still be stopped by its original owner. Temporary data and traces are
+deleted by the runner. Only sanitized booleans, counts, versions and timings
+are printed.
+
+For a before/after comparison, point `PWRAGENT_RENDERING_CAPTURE_SOURCE` to the
+capture module in a separate committed baseline worktree and set
+`PWRAGENT_RENDERING_EXPECT_BASELINE=1` to report the old behavior without requiring
+the new assertions. Electron 44.9.3's
+[documentation](https://github.com/electron/electron/blob/v44.9.3/docs/api/content-tracing.md#contenttracingstartrecordingoptions)
+and [implementation](https://github.com/electron/electron/blob/v44.9.3/shell/browser/api/electron_api_content_tracing.cc#L214-L235)
+show why a resolved `contentTracing.startRecording()` promise does not establish
+ownership: the binding resolves even when Chromium refuses to start recording.
 
 For an investigation, compare idle, active, and paused captures in an isolated
 instance before changing live state. Pause only the animation under investigation
@@ -183,8 +203,10 @@ tracing overhead, so compare against the same collection conditions.
 The exported summary contains fixed event/animation/view labels, numeric IDs,
 counts and window state. It excludes window titles, URLs, paths inside pages,
 DOM text, animation keyframes, custom class names, React props, JS stacks, trace
-arguments, and screenshots. Chromium's argument filter remains enabled. The returned CDP stream is read in
-64 KiB chunks into a mode-0600 raw file inside a private capture directory. The
-stream is closed and the raw file removed before the result resolves or rejects. A process crash or cleanup failure can leave that temporary file: treat it as
-private and delete it locally. Raw traces and logs must stay out of Git and PR
+arguments, and screenshots. Chromium's argument filter is enabled. PwrAgent reads
+raw chunks into bounded main-process memory through a CDP stream; Chromium backs
+that stream with a temporary file (unlinked immediately on macOS/Linux and
+deleted on close on Windows). PwrAgent closes the stream and destroys its owned
+target on cleanup. Only the sanitized summary is written inside a private capture directory;
+failed capture directories are removed. Raw traces and logs must stay out of Git and PR
 attachments. Share only the relevant sanitized counts and conditions.

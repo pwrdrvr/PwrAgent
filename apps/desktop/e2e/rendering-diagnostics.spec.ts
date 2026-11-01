@@ -143,7 +143,43 @@ test("rendering acquisition preserves an external Electron contentTracing owner"
   }
 });
 
-test("HotCpuProfiler co-records through rendering capture on one debugger attachment", async () => {
+test("rendering trace host stays out of the Window menu during capture", async () => {
+  test.skip(process.platform === "darwin", "macOS owns its native shown-window menu");
+  const app = await launchElectronApp({
+    fixturePath: path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/smoke/replay.fixture.json"),
+  });
+  try {
+    const mainId = await app.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].id);
+    const capture = app.window.evaluate(() => (window as unknown as { pwragent: {
+      captureRenderingDiagnostics: (seconds: number) => Promise<RenderingCaptureResult>;
+    } }).pwragent.captureRenderingDiagnostics(30));
+    void capture.catch(() => {});
+    const hosts = tolerateTransientRpcFailure(() => app.electronApp.evaluate(({ BrowserWindow }, mainId) =>
+      BrowserWindow.getAllWindows().filter((window) => window.id !== mainId).length, mainId));
+    await expect.poll(hosts.read).toBe(1).catch(hosts.rethrowWithLastFailure);
+    const menu = await app.electronApp.evaluate(({ BrowserWindow, Menu }, mainId) => {
+      const main = BrowserWindow.fromId(mainId)!;
+      const host = BrowserWindow.getAllWindows().find((window) => window.id !== mainId)!;
+      host.setTitle("Diagnostic fixture host");
+      // Exercise the production focus handler that rebuilds the menu.
+      main.emit("focus");
+      const rows = Menu.getApplicationMenu()!.items.find((item) => item.label === "Window")!
+        .submenu!.items.filter((item) => !item.role && item.type !== "separator");
+      rows.forEach((item) => item.click(item, main, {} as Electron.KeyboardEvent));
+      return { labels: rows.map((item) => item.label), mainTitle: main.getTitle(), hostVisible: host.isVisible() };
+    }, mainId);
+    expect(menu.labels).toEqual([menu.mainTitle]);
+    expect(menu.hostVisible).toBe(false);
+    await app.window.evaluate(() => (window as unknown as { pwragent: {
+      stopRenderingDiagnostics: () => Promise<RenderingCaptureResult>;
+    } }).pwragent.stopRenderingDiagnostics());
+    await capture;
+  } finally {
+    await app.close();
+  }
+});
+
+test("HotCpuProfiler co-records through rendering capture on independent debugger attachments", async () => {
   const app = await launchElectronApp({
     fixturePath: path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/smoke/replay.fixture.json"),
     env: {
@@ -197,7 +233,7 @@ test("HotCpuProfiler co-records through rendering capture on one debugger attach
   }
 });
 
-test("rendering capture refuses existing DevTools and unknown debugger attachments", async () => {
+test("rendering capture preserves existing DevTools and unknown debugger attachments", async () => {
   const app = await launchElectronApp({
     fixturePath: path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/smoke/replay.fixture.json"),
   });
@@ -208,7 +244,7 @@ test("rendering capture refuses existing DevTools and unknown debugger attachmen
     await app.electronApp.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0].webContents.debugger.attach("1.3");
     });
-    await expect(capture()).rejects.toThrow("Rendering capture failed");
+    await expect(capture()).resolves.toHaveProperty("summaryPath");
     const intact = await app.electronApp.evaluate(async ({ BrowserWindow }) => {
       const debuggerApi = BrowserWindow.getAllWindows()[0].webContents.debugger;
       const result = await debuggerApi.sendCommand("Runtime.evaluate", { expression: "40 + 2" });
@@ -222,7 +258,7 @@ test("rendering capture refuses existing DevTools and unknown debugger attachmen
       contents.openDevTools({ mode: "detach", activate: false });
       await opened;
     });
-    await expect(capture()).rejects.toThrow("Rendering capture failed");
+    await expect(capture()).resolves.toHaveProperty("summaryPath");
     expect(await app.electronApp.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].webContents.isDevToolsOpened())).toBe(true);
   } finally {
