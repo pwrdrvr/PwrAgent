@@ -71,28 +71,52 @@ static HANDLE verified_pipe(const wchar_t *path) {
    * No WaitNamedPipe/retry: a busy, absent or replaced endpoint fails once.
    */
   HANDLE pipe = CreateFileW(path, GENERIC_READ | GENERIC_WRITE | READ_CONTROL,
-    0, NULL, OPEN_EXISTING, SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, NULL);
+    0, NULL, OPEN_EXISTING,
+    FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, NULL);
   if (pipe == INVALID_HANDLE_VALUE) fail("cannot open local pipe");
   if (GetFileType(pipe) != FILE_TYPE_PIPE) fail("endpoint is not a pipe");
   verify_pipe_identity(pipe);
   return pipe;
 }
 
-typedef struct { HANDLE from; HANDLE to; } Copy;
+typedef struct { HANDLE from; HANDLE to; BOOL read_async; BOOL write_async; } Copy;
+
+static BOOL transfer(HANDLE handle, BOOL reading, BOOL asynchronous,
+  char *bytes, DWORD capacity, DWORD *size, HANDLE event) {
+  if (!asynchronous) {
+    return reading ? ReadFile(handle, bytes, capacity, size, NULL)
+      : WriteFile(handle, bytes, capacity, size, NULL);
+  }
+  OVERLAPPED operation = {0};
+  operation.hEvent = event;
+  if (!ResetEvent(event)) fail("cannot reset relay I/O event");
+  BOOL started = reading ? ReadFile(handle, bytes, capacity, NULL, &operation)
+    : WriteFile(handle, bytes, capacity, NULL, &operation);
+  if (!started && GetLastError() != ERROR_IO_PENDING) return FALSE;
+  return GetOverlappedResult(handle, &operation, size, TRUE);
+}
+
 static DWORD WINAPI copy_bytes(void *arg) {
   Copy *io = (Copy *)arg;
+  /* Simultaneous reads and writes on the one connected pipe require
+   * overlapped I/O. Each direction owns its event and operation; inherited
+   * stdin/stdout remain synchronous. ExitProcess cancels both directions.
+   */
+  HANDLE event = CreateEventW(NULL, TRUE, FALSE, NULL);
+  if (!event) fail("cannot create relay I/O event");
   char bytes[16384];
   DWORD size;
-  while (ReadFile(io->from, bytes, sizeof(bytes), &size, NULL) && size) {
+  while (transfer(io->from, TRUE, io->read_async, bytes, sizeof(bytes), &size, event) && size) {
     DWORD offset = 0;
     while (offset < size) {
       DWORD written;
-      if (!WriteFile(io->to, bytes + offset, size - offset, &written, NULL) || !written) ExitProcess(1);
+      if (!transfer(io->to, FALSE, io->write_async, bytes + offset, size - offset, &written, event)
+        || !written) ExitProcess(1);
       offset += written;
     }
   }
   /* Either direction closing ends the connection, including blocked writes
-   * on the other thread. Windows cancels process-owned synchronous I/O.
+   * on the other thread. Windows cancels process-owned I/O.
    */
   ExitProcess(0);
 }
@@ -103,8 +127,8 @@ int wmain(int argc, wchar_t **argv) {
   HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
   DWORD written;
   if (!WriteFile(output, "\1", 1, &written, NULL) || written != 1) fail("parent closed");
-  Copy up = { GetStdHandle(STD_INPUT_HANDLE), pipe };
-  Copy down = { pipe, output };
+  Copy up = { GetStdHandle(STD_INPUT_HANDLE), pipe, FALSE, TRUE };
+  Copy down = { pipe, output, TRUE, FALSE };
   HANDLE worker = CreateThread(NULL, 0, copy_bytes, &up, 0, NULL);
   if (!worker) fail("cannot start relay");
   copy_bytes(&down);
