@@ -19,7 +19,7 @@ test("MCP server URL form accepts local IPC syntax", async () => {
     await url.fill("unix:///run/user/1000/example-mcp/server.sock#/mcp");
     await expect(page.getByRole("button", { name: "Check", exact: true })).toBeEnabled();
     await url.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: test.info().outputPath("mcp-ipc-settings.png") });
+    await page.locator(".settings-mcp-create").screenshot({ path: test.info().outputPath("mcp-ipc-settings.png") });
   } finally {
     await app.close();
   }

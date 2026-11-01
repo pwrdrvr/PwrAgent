@@ -28,6 +28,8 @@ async function fixture() {
   const requests: { method: string; target: string; authorization?: string; body: Record<string, any> }[] = [];
   let notice: ServerResponse | undefined;
   let handler: ((res: ServerResponse) => void) | undefined;
+  let sse = false;
+  let connections = 0;
   const server = createServer(async (req, res) => {
     if (handler) { handler(res); return; }
     if (req.method === "GET") {
@@ -57,10 +59,12 @@ async function fixture() {
     }
     // Every response is fragmented across writes, including JSON UTF-8.
     const payload = JSON.stringify({ jsonrpc: "2.0", id: body.id, result });
-    res.writeHead(200, { "content-type": "application/json", "mcp-session-id": "fixture-session" });
-    for (let i = 0; i < payload.length; i += 7) res.write(payload.slice(i, i + 7));
+    const response = sse ? `event: message\ndata: ${payload}\n\n` : payload;
+    res.writeHead(200, { "content-type": sse ? "text/event-stream" : "application/json", "mcp-session-id": "fixture-session" });
+    for (let i = 0; i < response.length; i += 7) res.write(response.slice(i, i + 7));
     res.end();
   });
+  server.on("connection", () => { connections += 1; });
   await new Promise<void>((done, reject) => { server.once("error", reject); server.listen(path, done); });
   if (process.platform !== "win32") await chmod(path, 0o600);
   cleanups.push(async () => {
@@ -70,7 +74,7 @@ async function fixture() {
   });
   const ipc = createMcpIpcHttp(url, { executable });
   cleanups.push(ipc.close);
-  return { ipc, path, directory, url, requests, server, setHandler: (next: typeof handler) => { handler = next; }, notice: () => notice };
+  return { ipc, path, directory, url, requests, server, setSse: () => { sse = true; }, connections: () => connections, setHandler: (next: typeof handler) => { handler = next; }, notice: () => notice };
 }
 
 describe("verified HTTP MCP over local IPC", () => {
@@ -87,6 +91,15 @@ describe("verified HTTP MCP over local IPC", () => {
     const result = spawnSync(join(executable, "..", "mcp-ipc-identity-test"), ["wrong-user"], { encoding: "utf8" });
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("connected socket peer belongs to another user");
+  });
+
+  it.skipIf(process.platform !== "win32")("rejects foreign SIDs and remote pipe names in the native verifier", () => {
+    const program = join(executable, "..", "mcp-ipc-identity-test.exe");
+    for (const scenario of ["wrong-user", "remote"]) {
+      const result = spawnSync(program, [scenario], { encoding: "utf8" });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+    }
   });
   it("initializes, discovers, calls, reads and gets prompts without losing metadata", async () => {
     const f = await fixture();
@@ -117,6 +130,24 @@ describe("verified HTTP MCP over local IPC", () => {
     await expect(f.ipc.fetch("https://attacker.invalid/token", { headers: { authorization: "Bearer fixture" } })).rejects.toThrow("cannot change endpoint");
     await expect(f.ipc.fetch(f.ipc.url, { method: "POST", headers: { authorization: "Bearer fixture" }, body: "{}" })).rejects.toThrow("redirects");
     await expect(f.ipc.fetch(f.ipc.url)).rejects.toThrow();
+  });
+
+  it("accepts fragmented SSE POST responses and stops when the notification stream ends", async () => {
+    const f = await fixture();
+    f.setSse();
+    const transport = new StreamableHTTPClientTransport(f.ipc.url, { fetch: f.ipc.fetch, reconnectionOptions: MCP_IPC_NO_RECONNECT });
+    const client = new Client({ name: "sse-test", version: "1" }, { capabilities: {} });
+    cleanups.push(async () => { f.ipc.close(); await client.close(); });
+    await client.connect(transport);
+    expect((await client.listTools()).tools[0]?.name).toBe("echo");
+    await expect.poll(() => !!f.notice()).toBe(true);
+    const count = f.connections();
+    const disconnected = new Promise<void>((done) => { client.onerror = () => done(); });
+    f.notice()!.end();
+    await disconnected;
+    await expect(f.ipc.fetch(f.ipc.url)).rejects.toThrow();
+    await expect(client.listTools()).rejects.toThrow();
+    expect(f.connections()).toBe(count);
   });
 
   it("cancels an HTTP request and closes the connected relay", async () => {

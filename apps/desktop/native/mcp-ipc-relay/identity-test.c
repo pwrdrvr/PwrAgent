@@ -10,7 +10,19 @@
 int wmain(int argc, wchar_t **argv) {
   if (argc != 2) return 2;
   if (!wcscmp(argv[1], L"unreadable")) {
-    user_of(INVALID_HANDLE_VALUE);
+    verify_pipe_identity(INVALID_HANDLE_VALUE);
+    return 2;
+  }
+  if (!wcscmp(argv[1], L"wrong-user")) {
+    TOKEN_USER *user = user_of(GetCurrentProcess());
+    BYTE sid[SECURITY_MAX_SID_SIZE];
+    DWORD size = sizeof(sid);
+    if (!CreateWellKnownSid(WinLocalSystemSid, NULL, sid, &size)) return 2;
+    same_user(user->User.Sid, sid, "pipe identity belongs to another user");
+    return 2;
+  }
+  if (!wcscmp(argv[1], L"remote")) {
+    verified_pipe(L"\\\\remote-server\\pipe\\squatter");
     return 2;
   }
   return 2;
