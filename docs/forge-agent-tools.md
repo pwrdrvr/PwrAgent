@@ -49,6 +49,51 @@ Agent forge tools**:
   (`tools.forge_write`) for writes. `FORGE_AGENT_WRITE_TOOL_GROUPS` in
   `@pwragent/shared` lists every write, and both gates read it.
 
+### Project rules
+
+`[[git.agent_tools.rules]]` entries narrow or widen the write levels above for
+one repository and one agent. **Settings → Git → Agent forge tools → Project
+rules** edits them, and the approval card's **Always allow** menu writes one.
+
+```toml
+[[git.agent_tools.rules]]
+repository = "github.com/pwrdrvr/PwrAgent"
+agent = "claude"
+pull_requests = "allow"
+
+[[git.agent_tools.rules]]
+repository = "github.com/pwrdrvr/PwrAgent"
+agent = "codex"
+codex_model_provider = "llamacpp"
+model = "qwen3-abliterated"
+pull_requests = "ask"
+approve_merge = "off"
+```
+
+- `repository` is the forge repository a call acts in, `host/owner/repo`,
+  compared without regard to case. Every checkout and worktree of that
+  repository uses the same rules.
+- `agent` is `*` (all agents), `claude`, `codex`, or `acp:<registryId>`.
+  `codex_model_provider` and `model` narrow a row. They come from PwrAgent's
+  record of the thread, never from tool arguments.
+- A `codex` row without `codex_model_provider` covers only the default OpenAI
+  provider. A Codex thread on a custom provider needs its own row or `*`.
+  When Codex has not reported a thread's provider, Codex rules can only make
+  the level stricter.
+- Rules set `pull_requests`, `comments`, `issues`, `ci` and `approve_merge`.
+  Reads stay global.
+- For each call the most specific row that sets the group wins: model, then
+  provider, then `*`, then the global level. The master switch and a global
+  `off` still win, because those tools are not advertised to turns.
+- A rule's `off` refuses the call with `tools_disabled` naming the rule. A
+  rule's `allow` also lets an automation make that change.
+- An entry that cannot be read (unknown agent, misspelled key, bad level)
+  is ignored, and its repository asks for every write until it is fixed.
+  Settings shows a warning, and saving keeps the unreadable entry unchanged.
+- The **Always allow** menu appears only for pull requests, comments, issues
+  and CI reruns, never in automations, and never when a rule set `ask`. Main
+  accepts only an option it offered for that request.
+
 ## Pull request, merge request and issue tools
 
 One contract for GitHub, GitHub Enterprise and GitLab. Tool names say "pull
