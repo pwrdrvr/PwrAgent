@@ -197,8 +197,11 @@ runbook and existing scoped authorization. Do not provision a product-local lab.
 
 The small macOS/ARM64 visual-regression suite has lossless WebP baselines under
 `apps/desktop/e2e/*.spec.ts-snapshots/`. They are Git LFS objects, not ordinary
-Git blobs. Generate them only inside the lab VM. A `lab_e2e_run` request has
-this shape (replace the target, path, and attribution with actual values):
+Git blobs. They must match the CI renderer, a GitHub-hosted `macos-26` runner.
+The simplest source is the `*-actual.webp` files in a failing
+`desktop-e2e-macos-lane-*-artifacts` upload. To iterate before pushing, run the
+spec inside the lab VM. A `lab_e2e_run` request has this shape (replace the
+target, path, and attribution with actual values):
 
 ```json
 {
@@ -234,9 +237,8 @@ Review the retrieved `*-actual.webp` artifacts, promote the approved files to
 their `*-darwin.webp` baseline names, and check `git lfs status`. The launcher
 requires a clean worktree and transports only committed `HEAD`, so commit the
 promoted references as a disposable checkpoint before rerunning the focused
-spec. Amend or squash that checkpoint only after the VM verifies it. The CI
-lane runs on the selected-repository PwrDrvr organization runner shared with
-PwrSnap; fork PRs are deliberately excluded from that machine.
+spec. Amend or squash that checkpoint only after the VM verifies it. CI is
+the final check: a lab VM can render differently from the hosted runner.
 
 For manual screenshots of the branch-drift dialog, run
 `pnpm --filter @pwragent/desktop inspect:e2e:branch-drift`; it opens a

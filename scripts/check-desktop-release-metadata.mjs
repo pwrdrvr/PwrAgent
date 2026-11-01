@@ -36,7 +36,8 @@ const windowsArchiveScriptPath = resolve(
 );
 const desktopReleaseRunbookPath = resolve(repoRoot, "docs/desktop-release-runbook.md");
 const changelogPath = resolve(repoRoot, "CHANGELOG.md");
-const macosRunner = "[self-hosted, macOS, ARM64, pwrdrvr-macos]";
+// Free GitHub-hosted Apple Silicon. actool 26 needs a macOS 26 host.
+const macosRunner = "macos-26";
 
 function usage() {
   console.error("Usage: RELEASE_TAG=v1.0.0-alpha.4 pnpm release:check");
@@ -439,21 +440,16 @@ assertWorkflowJobOrdersText(
   "node apps/desktop/scripts/release.mjs --linux --no-publish",
   "Upload Linux package artifact",
 );
-for (const jobName of ["install-deps", "lint", "test"]) {
+for (const jobName of ["install-deps", "lint", "test", "prepare", "sign"]) {
   assertWorkflowJobRunner(releaseWorkflow, ".github/workflows/release.yml", jobName, macosRunner);
 }
-for (const jobName of ["prepare", "sign"]) {
-  assertWorkflowJobRunner(releaseWorkflow, ".github/workflows/release.yml", jobName, "macos-26");
-  assertWorkflowJobExcludesText(releaseWorkflow, ".github/workflows/release.yml", jobName, "persistent-store-dir:");
+assertWorkflowStepContainsText(
+  releaseWorkflow, ".github/workflows/release.yml", "install-deps",
+  "Install Node.js and dependencies", 'lookup-only: "true"',
+);
+for (const jobName of ["test-macos", "desktop-e2e-macos"]) {
+  assertWorkflowJobRunner(ciWorkflow, ".github/workflows/ci.yml", jobName, macosRunner);
 }
-for (const jobName of ["install-deps", "lint", "test"]) {
-  assertWorkflowStepContainsText(
-    releaseWorkflow, ".github/workflows/release.yml", jobName,
-    "Install Node.js and dependencies", "persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}",
-  );
-  assertWorkflowJobExcludesText(releaseWorkflow, ".github/workflows/release.yml", jobName, "lookup-only:");
-}
-assertWorkflowJobRunner(ciWorkflow, ".github/workflows/ci.yml", "test-macos", macosRunner);
 for (const expected of ["lane: [1, 2]", "run: pnpm test --shard=${{ matrix.lane }}/2", 'PWRAGENT_REQUIRE_ACTOOL: "1"']) {
   assertWorkflowJobContainsText(ciWorkflow, ".github/workflows/ci.yml", "test-macos", expected);
 }
