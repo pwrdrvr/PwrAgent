@@ -3026,17 +3026,28 @@ class DesktopAppServerService {
     prs: PrSummary[];
   }): Promise<void> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    const primaryRepoKey =
-      this.attachedPrsByThreadKey.get(threadKey)?.primaryRepoKey
-      ?? await this.resolveUncachedPrimaryRepoKey(params);
+    const current = this.attachedPrsByThreadKey.get(threadKey);
+    // Write the PR list before any await so overlapping updates keep their
+    // arrival order.
     this.setThreadPrAttachment(
       threadKey,
       {
         backend: params.backend,
-        ...(primaryRepoKey ? { primaryRepoKey } : {}),
+        ...(current?.primaryRepoKey
+          ? { primaryRepoKey: current.primaryRepoKey }
+          : {}),
         prs: params.prs,
       },
     );
+    if (!current?.primaryRepoKey) {
+      const primaryRepoKey = await this.resolveUncachedPrimaryRepoKey(params);
+      // Patch only the key onto whatever list is now current. A refresh may
+      // have supplied a key, or dropped the thread, while this resolved.
+      const latest = this.attachedPrsByThreadKey.get(threadKey);
+      if (primaryRepoKey && latest && !latest.primaryRepoKey) {
+        this.setThreadPrAttachment(threadKey, { ...latest, primaryRepoKey });
+      }
+    }
     await this.syncThreadPrAutoDispatchCandidates(params);
   }
 
@@ -3053,17 +3064,13 @@ class DesktopAppServerService {
     const summary = getDesktopBackendRegistry().getCachedThreadSummary(params);
     if (!summary) return undefined;
     const overlay = await this.getOverlayStore().getThreadOverlayState(params);
-    const primaryRepoKey = await resolvePrimaryThreadRepoKey({
+    return await resolvePrimaryThreadRepoKey({
       gitOriginUrl: summary.gitOriginUrl,
       linkedDirectories: mergeThreadLinkedDirectories([
         ...summary.linkedDirectories,
         ...(overlay?.extraLinkedDirectories ?? []),
       ]),
     });
-    // A navigation refresh may have filled the cache while this resolved.
-    return this.attachedPrsByThreadKey.get(
-      buildThreadIdentityKey(params.backend, params.threadId),
-    )?.primaryRepoKey ?? primaryRepoKey;
   }
 
   readPrimaryGitRepository(backend: AppServerBackendKind, threadId: string): string | undefined {
