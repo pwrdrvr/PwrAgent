@@ -94,6 +94,28 @@ describe("Claude SDK backend", () => {
     await f.backend.close();
   });
 
+  it("completes a monitor turn whose thread was released before the turn ended", async () => {
+    let release = () => {};
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "answer", content: [{ type: "text", text: "Monitor complete" }],
+      } } as SDKMessage;
+      // complete_monitoring ends the delegation, which releases the thread mid-turn.
+      release();
+      yield { type: "result", subtype: "success", is_error: false, result: "Monitor complete" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "full-access", ephemeral: { title: "Task monitor" } });
+    release = () => f.backend.releaseEphemeralThread(threadId);
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Watch CI" }] });
+    await f.waitForTurn();
+
+    const terminal = f.events.map((event) => event.notification.method)
+      .filter((method) => ["turn/completed", "turn/failed", "turn/cancelled"].includes(method));
+    expect(terminal).toEqual(["turn/completed"]);
+    await f.backend.close();
+  });
+
   it("moves a thread to another folder and resumes the same session there", async () => {
     const f = await fixture();
     const previous = path.join(f.root, "checkout");
