@@ -516,7 +516,11 @@ import {
   PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE,
   PrStatusTokenBucket,
 } from "../pr-status/pr-status-token-bucket";
-import { parsePullRequestReferenceUrl, type PullRequestReferenceIdentity } from "../pr-status/forge-reference";
+import {
+  isSameNumberInAnotherRepository,
+  parsePullRequestReferenceUrl,
+  type PullRequestReferenceIdentity,
+} from "../pr-status/forge-reference";
 import { logPrAutoDispatchOutcome } from "../pr-status/pr-auto-dispatch-log";
 import {
   PrStatusWatchCoordinator,
@@ -553,6 +557,8 @@ const isDevelopment = process.env.NODE_ENV !== "production";
 const PR_STATUS_WATCH_CURRENT_OUTCOME_MAX_AGE_MS = 30_000;
 /** How long a merge/close wake waits for sandbox cleanup to report. */
 const SANDBOX_CLEANUP_WAKE_WAIT_MS = 30_000;
+/** How long a by-URL resolve the forge could not answer waits before asking again. */
+const PR_REFERENCE_RETRY_MS = 10 * 60_000;
 
 async function withTimeout<T>(
   promise: Promise<T>,
@@ -1580,6 +1586,19 @@ class DesktopAppServerService {
   private readonly prLookupsInFlight = new PrLookupsInFlight();
   /** Repository renames the forge has answered with. See its class. */
   private readonly prRepositoryAliases = new PullRequestRepositoryAliases();
+  /** Counts learned renames, so stored watch keys move once per rename. */
+  private prRepositoryAliasGeneration = 0;
+  private prWatchKeysGeneration = 0;
+  private prWatchKeySync: Promise<void> = Promise.resolve();
+  /**
+   * By-URL resolves asked for stored references, by URL. An answer is kept
+   * for the session; a failure is asked again after `PR_REFERENCE_RETRY_MS`.
+   */
+  private readonly prReferenceResolutions = new Map<string, {
+    askedAt: number;
+    result: Promise<string | undefined>;
+    answered: boolean;
+  }>();
   private readonly prStatusTokenBucket = new PrStatusTokenBucket();
   private lastPrObservationTimestamp = 0;
   private prStatusRegistryLoaded = false;
@@ -6004,10 +6023,18 @@ class DesktopAppServerService {
   /** Record what the forge answered for a by-URL fetch. */
   private learnPullRequestRepository(requestedUrl: string, returned: PrSummary | undefined): void {
     if (!this.prRepositoryAliases.learn(requestedUrl, returned)) return;
+    this.prRepositoryAliasGeneration += 1;
     // A thread's primary PRs can now include rows under either name.
     for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
       this.setThreadPrAttachment(threadKey, attachment);
     }
+    // The poller no longer fetches a merged or closed PR, so a merge watch
+    // saved under the old name needs its cached status offered again.
+    void this.retryPendingPrTerminalWatches().catch((error) => {
+      appServerLog.warn("pr terminal watch retry after a repository rename failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     const requested = parsePullRequestReferenceUrl(requestedUrl);
     appServerLog.info("forge answered a pull request under another repository name", {
       requested: requested ? `${requested.provider}/${requested.org}/${requested.repo}` : requestedUrl,
@@ -6041,6 +6068,91 @@ class DesktopAppServerService {
       && answered.number === requested.number
       ? answered
       : undefined;
+  }
+
+  /**
+   * A stored PR URL under the repository name the forge reports now. Asks the
+   * forge at most once per URL per session, or again after a failed answer,
+   * because learned names live in memory and a reference saved under an old
+   * name has nothing else to learn it from after a restart.
+   */
+  private async resolveCurrentPullRequestUrl(url: string, cwd?: string): Promise<string | undefined> {
+    const known = this.prRepositoryAliases.canonicalizeUrl(url);
+    if (known !== url) return known;
+    const now = Date.now();
+    const cached = this.prReferenceResolutions.get(url);
+    if (cached && (cached.answered || now - cached.askedAt < PR_REFERENCE_RETRY_MS)) {
+      return await cached.result;
+    }
+    const entry = {
+      askedAt: now,
+      answered: false,
+      result: this.resolvePullRequestReference({ url, ...(cwd ? { cwd } : {}) })
+        .then((identity) => identity ? this.prRepositoryAliases.canonicalizeUrl(url) : undefined)
+        .catch(() => undefined),
+    };
+    this.prReferenceResolutions.set(url, entry);
+    const result = await entry.result;
+    entry.answered = result !== undefined;
+    return result;
+  }
+
+  /**
+   * Move stored watch keys to the repository names the forge has answered
+   * with, once per learned rename. Status snapshots carry the new name and a
+   * claim matches its key exactly.
+   */
+  private syncPrStatusWatchKeys(): Promise<void> {
+    const run = this.prWatchKeySync.then(async () => {
+      const generation = this.prRepositoryAliasGeneration;
+      if (generation === this.prWatchKeysGeneration) return;
+      try {
+        const moved = await this.getOverlayStore().canonicalizeThreadPrStatusWatchKeys({
+          canonicalizePrKey: (key) => this.prRepositoryAliases.canonicalizeKey(key),
+          canonicalizePrUrl: (url) => this.prRepositoryAliases.canonicalizeUrl(url),
+          now: Date.now(),
+        });
+        this.prWatchKeysGeneration = generation;
+        if (moved > 0) {
+          appServerLog.info("pr status watches moved to a renamed repository", { watchCount: moved });
+        }
+      } catch (error) {
+        // Claims still run; the next one tries the move again.
+        appServerLog.warn("pr status watch rename failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+    this.prWatchKeySync = run;
+    return run;
+  }
+
+  /**
+   * Ask the forge about watches whose PR is attached to their thread only
+   * under another repository name. Stored rows and status snapshots already
+   * use a renamed repository's new name, so after a restart a watch saved
+   * under the old one has nothing else to learn the rename from.
+   */
+  private async resolveRenamedPrWatchRepositories(): Promise<void> {
+    if (!this.backgroundPrPollingEnabled) return;
+    const store = this.getOverlayStore();
+    const watches = await store.listAllActiveThreadPrStatusWatches();
+    if (watches.length === 0) return;
+    await this.loadPrStatusRegistry();
+    const asked = new Set<string>();
+    for (const watch of watches) {
+      if (asked.has(watch.prUrl)) continue;
+      const prKey = this.prRepositoryAliases.canonicalizeKey(watch.prKey);
+      const overlay = await store.getThreadOverlayState({ backend: watch.backend, threadId: watch.threadId });
+      const rows = this.canonicalizePrs(overlay?.prs ?? []);
+      if (rows.some((pr) => getPrStatusKey(pr) === prKey)) continue;
+      const renamed = rows.find((pr) =>
+        isSameNumberInAnotherRepository(pr.url, this.prRepositoryAliases.canonicalizeUrl(watch.prUrl))
+      );
+      if (!renamed) continue;
+      asked.add(watch.prUrl);
+      await this.resolveCurrentPullRequestUrl(watch.prUrl, renamed.linkedDirectoryPaths?.[0]);
+    }
   }
 
   /**
@@ -6599,11 +6711,18 @@ class DesktopAppServerService {
         appServerLog.info("background PR polling started", {
           trackedPrCount: this.collectPrPollTargets().length,
         });
-        void this.retryPendingPrTerminalWatches().catch((error) => {
-          appServerLog.warn("pr terminal watch startup retry failed", {
-            error: error instanceof Error ? error.message : String(error),
+        void this.resolveRenamedPrWatchRepositories()
+          .catch((error) => {
+            appServerLog.warn("pr watch repository resolve failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          })
+          .then(() => this.retryPendingPrTerminalWatches())
+          .catch((error) => {
+            appServerLog.warn("pr terminal watch startup retry failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
           });
-        });
         void this.retryPendingSandboxCleanups().catch((error) => {
           appServerLog.warn("sandboxer cleanup startup retry failed", {
             error: error instanceof Error ? error.message : String(error),
@@ -9062,6 +9181,10 @@ class DesktopAppServerService {
     this.pendingEditCommitResolves.clear();
     this.prStatusRegistry.clear();
     this.prRepositoryAliases.clear();
+    this.prRepositoryAliasGeneration = 0;
+    this.prWatchKeysGeneration = 0;
+    this.prWatchKeySync = Promise.resolve();
+    this.prReferenceResolutions.clear();
     this.lastPrObservationTimestamp = 0;
     this.prLookupRegistry.clear();
     this.pendingPrLookupRefreshes.clear();
@@ -9158,6 +9281,7 @@ class DesktopAppServerService {
           }
           return formatSandboxCleanupLines(report);
         },
+        prepareClaims: async () => await this.syncPrStatusWatchKeys(),
       });
     }
     return this.prStatusWatchCoordinator;
@@ -9175,6 +9299,8 @@ class DesktopAppServerService {
           publish: (todo) => getThreadTodoService().publish(todo),
         },
         readThread: (condition) => this.readDependencyThread(condition),
+        canonicalizePrUrl: (url) => this.prRepositoryAliases.canonicalizeUrl(url),
+        resolvePrUrl: async (url) => await this.resolveCurrentPullRequestUrl(url),
         submit: async (request) => await this.submitDependencyWakeup(request),
         isConsumerBusy: (dependency) => Boolean(getDesktopBackendRegistry().getActiveTurnForThread(dependency)),
         // PR conditions also wait while the consumer's project holds PR
@@ -9373,6 +9499,7 @@ class DesktopAppServerService {
     thread?: { backend: AppServerBackendKind; threadId: string },
   ): Promise<void> {
     if (!this.backgroundPrPollingEnabled) return;
+    await this.syncPrStatusWatchKeys();
     const prKeys = await this.getOverlayStore()
       .listPendingPrTerminalWatchPrKeys(thread ?? {});
     if (prKeys.length === 0) return;
