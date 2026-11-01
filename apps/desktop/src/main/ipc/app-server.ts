@@ -4742,7 +4742,10 @@ class DesktopAppServerService {
       ciEvents.includes("failure") && coversFailure(watch?.baseline ?? baseline)
         ? ["failure"]
         : [];
-    const armed = Boolean(watch || terminalWatch);
+    // Armed only when every requested event has a waiting watch. A merge
+    // watch alone must not read as a wait for a CI result that already came.
+    const armed = (ciEvents.length === 0 || Boolean(watch))
+      && (terminalEvents.length === 0 || Boolean(terminalWatch));
     const reason: WatchThreadPullRequestReason = !armed
       ? "outcome_already_final"
       : (!watch || watchExisted) && (!terminalWatch || terminalWatchExisted)

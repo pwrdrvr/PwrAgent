@@ -472,7 +472,11 @@ export type WatchThreadPullRequestResult = {
   terminal?: PullRequestTerminalDetails;
   coveredByAutoFix: ThreadPullRequestWatchEvent[];
   prAutomation: ThreadPullRequestAutomationStatus;
-  /** True when a watch is waiting after this call, new or already armed. */
+  /**
+   * True when every requested event has a watch waiting after this call, new
+   * or already armed. A CI result that already finished leaves it false even
+   * when a merge/close watch was armed beside it.
+   */
   armed: boolean;
   reason: WatchThreadPullRequestReason;
   /** One plain sentence saying what will, or will not, wake the thread. */

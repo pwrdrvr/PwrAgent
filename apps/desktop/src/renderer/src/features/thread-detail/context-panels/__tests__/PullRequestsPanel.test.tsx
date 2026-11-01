@@ -265,6 +265,10 @@ describe("PullRequestsPanel", () => {
       baseline: undefined,
     };
 
+    function autoFixThread(prs: PrSummary[]): NavigationThreadSummary {
+      return { ...threadWithPrs(prs), prAutoDispatchEnabled: true, primaryGitRepository: "github.com/pwrdrvr/pwragent" };
+    }
+
     function renderPanel(options: {
       thread?: NavigationThreadSummary;
       watches?: ThreadPullRequestWatchSummary[];
@@ -274,7 +278,7 @@ describe("PullRequestsPanel", () => {
       const stop = vi.fn(async () => undefined);
       const askAgentToWatchCi = vi.fn();
       const onSetThreadPrAutoDispatch = vi.fn(async () => undefined);
-      const thread = options.thread ?? { ...threadWithPrs([openPr]), prAutoDispatchEnabled: true };
+      const thread = options.thread ?? autoFixThread([openPr]);
       render(
         <ThreadPrWatchIndicatorsContext.Provider value={{
           byThreadKey: summarizeThreadPrWatches(options.watches ?? []),
@@ -314,8 +318,31 @@ describe("PullRequestsPanel", () => {
         fireEvent.click(within(card).getByRole("button", { name: "Stop watching #3174 for merge" }));
       });
       expect(stop).toHaveBeenCalledWith(terminalWatch);
-      fireEvent.click(within(card).getByRole("button", { name: "Turn off Auto-fix for #3174" }));
+      // The setting is the thread's, so the button says so.
+      fireEvent.click(within(card).getByRole("button", { name: "Turn off Auto-fix for this thread" }));
       expect(onSetThreadPrAutoDispatch).toHaveBeenCalledWith(false);
+    });
+
+    it("lists Auto-fix only where it can wake the thread", () => {
+      const linkedPr: PrSummary = {
+        ...openPr,
+        number: 12,
+        repo: "docs.pwragent.ai",
+        url: "https://github.com/pwrdrvr/docs.pwragent.ai/pull/12",
+      };
+      renderPanel({ thread: autoFixThread([openPr, linkedPr]), context: { autoFixAvailable: true } });
+      const cards = screen.getAllByRole("listitem");
+      const docsCard = cards.find((card) => card.textContent?.includes("docs.pwragent.ai"))!;
+      const primaryCard = cards.find((card) => card !== docsCard)!;
+      expect(within(primaryCard).getByText("Auto-fix")).toBeInTheDocument();
+      // Auto-fix never polls a linked directory's PR.
+      expect(within(docsCard).queryByText("Auto-fix")).toBeNull();
+      cleanup();
+
+      // Git settings turned Auto-fix off: the thread's saved opt-in wakes nothing.
+      renderPanel({ context: { autoFixAvailable: false } });
+      expect(within(screen.getByRole("listitem")).queryByText("Auto-fix")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Turn off Auto-fix for this thread" })).toBeNull();
     });
 
     it("hints at asking for a CI watch when nothing waits for CI", () => {
@@ -354,6 +381,31 @@ describe("PullRequestsPanel", () => {
       expect(screen.getByText("Woke the thread · CI failed")).toBeInTheDocument();
       expect(screen.getByText("Moved to new head · 9f2c41a")).toBeInTheDocument();
       expect(screen.queryByText("Stopped")).toBeNull();
+    });
+
+    it("says the history could not load instead of claiming none ended, and retries on the next expand", async () => {
+      const manageThreadPrWatches = vi.fn()
+        .mockResolvedValueOnce({ ok: false, error: { code: "invalid_arguments", message: "state is closing" } })
+        .mockResolvedValueOnce({ ok: true, history: [
+          { ...ciWatch, watchId: "ended-1", status: "dispatched", updatedAt: Date.now(), endedReason: "another_thread_woke", wokeOn: "success" },
+        ] });
+      renderPanel({ watches: [ciWatch], desktopApi: { manageThreadPrWatches } });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "History" }));
+      });
+      expect(screen.getByText("Couldn't load history.")).toBeInTheDocument();
+      expect(screen.queryByText("No watch has ended yet.")).toBeNull();
+      expect(screen.queryByRole("button", { name: /History \(/ })).toBeNull();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "History" }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "History" }));
+      });
+      expect(manageThreadPrWatches).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("button", { name: "History (1)" })).toBeInTheDocument();
+      expect(screen.getByText("Another thread was woken · CI passed")).toBeInTheDocument();
     });
 
     it("shows a peer's watches read-only and names where to stop them", () => {

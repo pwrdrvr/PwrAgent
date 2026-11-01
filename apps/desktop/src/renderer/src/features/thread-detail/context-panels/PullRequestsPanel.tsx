@@ -5,7 +5,11 @@ import type {
   ThreadPrWatchHistoryEntry,
   ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
-import { buildPullRequestStatusKey, buildThreadIdentityKey } from "@pwragent/shared";
+import {
+  buildPullRequestStatusKey,
+  buildThreadIdentityKey,
+  pullRequestMatchesRepositoryKey,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
 import {
@@ -17,6 +21,7 @@ import { openExternalUrl } from "../../../lib/open-external-url";
 import { PullRequestWatchList } from "../../pr-watches/PullRequestWatchList";
 import {
   resolvePrChipWatch,
+  useThreadAutoFixRepository,
   useThreadPrWatchIndicatorsContext,
 } from "../../pr-watches/useThreadPrWatchIndicators";
 import { RailStatusChip, type RailChipTone } from "./RailStatusChip";
@@ -33,7 +38,8 @@ type WatchHistoryState = {
   threadKey: string;
   /** The active list it was read against; a change re-reads it. */
   source: readonly ThreadPullRequestWatchSummary[] | undefined;
-  entries: readonly ThreadPrWatchHistoryEntry[];
+  /** Undefined when the read failed; the next expand reads again. */
+  entries: readonly ThreadPrWatchHistoryEntry[] | undefined;
 };
 
 const NO_WATCHES: readonly ThreadPullRequestWatchSummary[] = [];
@@ -66,13 +72,17 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
     : undefined;
   // Undefined means unknown: no watch UI at all, rather than a false "none".
   const watches = ownerLabel !== undefined ? props.thread.activePrWatches : localWatches;
-  const autoFix = props.thread.prAutoDispatchEnabled === true;
+  const autoFixRepository = useThreadAutoFixRepository(props.thread);
   const canReadHistory = localWatches !== undefined && Boolean(props.desktopApi?.manageThreadPrWatches);
   const [openHistory, setOpenHistory] = useState<ReadonlySet<string>>(() => new Set());
   const [history, setHistory] = useState<WatchHistoryState>();
+  const [historyAttempt, setHistoryAttempt] = useState(0);
   const historyWanted = canReadHistory
     && [...openHistory].some((key) => key.startsWith(`${threadKey}|`));
-  const historyCurrent = history?.threadKey === threadKey && history.source === localWatches;
+  const historyCurrent = history?.threadKey === threadKey
+    && history.source === localWatches
+    && history.entries !== undefined;
+  const historyFailed = history?.threadKey === threadKey && history.entries === undefined;
   useEffect(() => {
     // History is read on first expand, then again whenever a watch changes.
     if (!historyWanted || historyCurrent) return;
@@ -86,21 +96,35 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
     }).then(
       (response) => {
         if (cancelled) return;
-        setHistory({ threadKey, source, entries: response.ok ? response.history ?? [] : [] });
+        setHistory({ threadKey, source, entries: response.ok ? response.history ?? [] : undefined });
       },
       () => {
-        if (!cancelled) setHistory({ threadKey, source, entries: [] });
+        if (!cancelled) setHistory({ threadKey, source, entries: undefined });
       },
     );
     return () => {
       cancelled = true;
     };
-  }, [historyWanted, historyCurrent, localWatches, props.desktopApi, props.thread.source, props.thread.id, threadKey]);
+  }, [
+    historyWanted,
+    historyCurrent,
+    historyAttempt,
+    localWatches,
+    props.desktopApi,
+    props.thread.source,
+    props.thread.id,
+    threadKey,
+  ]);
   const historyEntries = history?.threadKey === threadKey ? history.entries : undefined;
   const toggleHistory = (prKey: string): void => {
+    const key = `${threadKey}|${prKey}`;
+    // An expand after a failed read reads again.
+    if (historyFailed && !openHistory.has(key)) {
+      setHistory(undefined);
+      setHistoryAttempt((attempt) => attempt + 1);
+    }
     setOpenHistory((current) => {
       const next = new Set(current);
-      const key = `${threadKey}|${prKey}`;
       if (next.has(key)) next.delete(key);
       else next.add(key);
       return next;
@@ -149,7 +173,7 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
             const statusKey = buildPullRequestStatusKey(pr);
             const prWatches = watches?.filter((watch) => watch.prKey === statusKey) ?? NO_WATCHES;
             const chipWatch = ownerLabel === undefined && watchContext
-              ? resolvePrChipWatch(watchContext.byThreadKey.get(threadKey), pr, autoFix)
+              ? resolvePrChipWatch(watchContext.byThreadKey.get(threadKey), pr, autoFixRepository)
               : undefined;
             return (
               <li key={prKey(pr)} className="rail-card">
@@ -197,7 +221,7 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
                   <PullRequestWatchList
                     pr={pr}
                     watches={prWatches}
-                    autoFix={autoFix}
+                    autoFix={pullRequestMatchesRepositoryKey(pr, autoFixRepository)}
                     ownerLabel={ownerLabel}
                     onStop={watchContext?.stop}
                     onTurnOffAutoFix={props.onSetThreadPrAutoDispatch
@@ -207,6 +231,7 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
                       ? () => watchContext.askAgentToWatchCi!(props.thread, pr)
                       : undefined}
                     history={historyEntries?.filter((entry) => entry.prKey === statusKey)}
+                    historyFailed={historyFailed}
                     historyOpen={openHistory.has(`${threadKey}|${statusKey}`)}
                     onToggleHistory={canReadHistory ? () => toggleHistory(statusKey) : undefined}
                   />

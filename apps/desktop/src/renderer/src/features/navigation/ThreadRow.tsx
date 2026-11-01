@@ -31,7 +31,11 @@ import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageI
 import { PrChip } from "../pr-status/PrChip";
 import { findBranchDriftPr, type PrBranchDrift } from "../pr-status/pr-branch-drift";
 import { PrRollupChip } from "../pr-status/PrRollupChip";
-import { resolvePrChipWatch, useThreadPrWatches } from "../pr-watches/useThreadPrWatchIndicators";
+import {
+  resolvePrChipWatch,
+  useThreadAutoFixRepository,
+  useThreadPrWatches,
+} from "../pr-watches/useThreadPrWatchIndicators";
 import { ThreadRowDensityContext } from "./thread-row-density";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
@@ -275,7 +279,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   // Local threads only: watches run on the owning machine. Entries keep their
   // identity while unchanged, so a chip's memo still bails out.
   const prWatches = useThreadPrWatches(props.thread);
-  const prAutoFix = props.thread.prAutoDispatchEnabled === true;
+  const prAutoFixRepository = useThreadAutoFixRepository(props.thread);
   const density = useContext(ThreadRowDensityContext);
   // What this row reports back to the list that owns it, so the list can keep
   // one handler for every row instead of a closure per row. See `ThreadRowRef`.
@@ -726,7 +730,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                 repoPrefixedUrls={repoPrefixedPrUrls}
                 branchDrift={branchDrift}
                 prWatches={prWatches}
-                autoFix={prAutoFix}
+                autoFixRepository={prAutoFixRepository}
                 onHoverStart={armRollupHoverPrefetch}
                 onHoverEnd={cancelRollupHoverPrefetch}
                 onOpen={openPrStable}
@@ -814,7 +818,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                 pr={pr}
                 showRepoPrefix={needsRepoPrefix(props.thread, pr, prs)}
                 branchDrift={branchDrift?.url === pr.url ? branchDrift : undefined}
-                watch={resolvePrChipWatch(prWatches, pr, prAutoFix)}
+                watch={resolvePrChipWatch(prWatches, pr, prAutoFixRepository)}
                 onOpen={openPrStable}
                 onOpenContextMenu={
                   props.onOpenPullRequestContextMenu

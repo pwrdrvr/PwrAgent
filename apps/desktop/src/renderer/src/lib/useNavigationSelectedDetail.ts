@@ -259,9 +259,12 @@ export function useNavigationSelectedDetail(params: {
         && !("thread" in notification.params && notification.params.thread
           && typeof notification.params.thread === "object" && "id" in notification.params.thread);
       if (!exactThreadEvent && !ownerWideEvent && patchedThread === currentThread) return;
+      // A peer thread's watch list is owner-projected detail; nothing else
+      // re-reads it when a watch is armed, stopped or ends.
       if (!navigationQueryEventRequiresRefresh(notification.method)
         && notification.method !== "thread/codexEnvironment/updated"
-        && notification.method !== "thread/acpRuntime/updated") return;
+        && notification.method !== "thread/acpRuntime/updated"
+        && notification.method !== "thread/prWatches/updated") return;
       // A canonical event supersedes the retained collection too. Otherwise
       // the configuration read overlays its older cache and briefly erases
       // live accounting while replacement history pages are still loading.

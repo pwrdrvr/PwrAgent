@@ -5,7 +5,11 @@ import type {
   ThreadPullRequestWatchEvent,
   ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
-import { buildPullRequestStatusKey, buildThreadIdentityKey } from "@pwragent/shared";
+import {
+  buildPullRequestStatusKey,
+  buildThreadIdentityKey,
+  pullRequestMatchesRepositoryKey,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { resolveLifecycleState } from "../pr-status/pr-chip-state";
@@ -36,6 +40,11 @@ export type ThreadPrWatches = {
 
 export type ThreadPrWatchIndicatorsValue = {
   byThreadKey: ReadonlyMap<string, ThreadPrWatches>;
+  /**
+   * False when this instance's Git settings stop Auto-fix: background PR
+   * polling or Auto-fix PR is off. Absent where this window cannot tell.
+   */
+  autoFixAvailable?: boolean;
   /** Stops one watch. Absent where this window cannot stop watches. */
   stop?: (watch: ThreadPullRequestWatchSummary) => Promise<void>;
   /**
@@ -54,6 +63,28 @@ const REFRESH_DEBOUNCE_MS = 150;
 
 export function useThreadPrWatchIndicatorsContext(): ThreadPrWatchIndicatorsValue | undefined {
   return useContext(ThreadPrWatchIndicatorsContext);
+}
+
+/**
+ * The thread's primary repository key when Auto-fix can repair its PRs, else
+ * undefined. Main repairs only PRs on that repository, and only while the
+ * thread opted in and Git settings let Auto-fix run. A peer's thread runs
+ * under the peer's settings, which this window cannot read.
+ */
+export function resolveThreadAutoFixRepository(
+  thread: Pick<NavigationThreadSummary, "prAutoDispatchEnabled" | "primaryGitRepository" | "federation">,
+  autoFixAvailable: boolean | undefined,
+): string | undefined {
+  if (thread.prAutoDispatchEnabled !== true) return undefined;
+  if (!thread.federation && autoFixAvailable === false) return undefined;
+  return thread.primaryGitRepository;
+}
+
+export function useThreadAutoFixRepository(
+  thread: Pick<NavigationThreadSummary, "prAutoDispatchEnabled" | "primaryGitRepository" | "federation">,
+): string | undefined {
+  const context = useContext(ThreadPrWatchIndicatorsContext);
+  return resolveThreadAutoFixRepository(thread, context?.autoFixAvailable);
 }
 
 /** A local thread's watches. Watches run on the owning machine, so a peer's row has none. */
@@ -151,15 +182,20 @@ const withAutoFixCache = new WeakMap<PrChipWatch, PrChipWatch>();
 /**
  * The chip's `watch` prop. Identity is stable for unchanged data, so the
  * memoized chip bails out when only its row re-rendered.
+ * `autoFixRepository` comes from `resolveThreadAutoFixRepository`.
  */
 export function resolvePrChipWatch(
   watches: ThreadPrWatches | undefined,
   pr: PrSummary,
-  autoFix: boolean,
+  autoFixRepository: string | undefined,
 ): PrChipWatch | undefined {
   const base = watches?.byPrKey.get(buildPullRequestStatusKey(pr));
-  // Auto-fix repairs open PRs only; it means nothing on a merged card.
-  if (!autoFix || resolveLifecycleState(pr) !== "open") return base;
+  // Auto-fix repairs open PRs on the primary workspace's repository only; it
+  // means nothing on a merged card or a linked directory's PR.
+  if (
+    resolveLifecycleState(pr) !== "open"
+    || !pullRequestMatchesRepositoryKey(pr, autoFixRepository)
+  ) return base;
   if (!base) return AUTO_FIX_ONLY;
   let combined = withAutoFixCache.get(base);
   if (!combined) {

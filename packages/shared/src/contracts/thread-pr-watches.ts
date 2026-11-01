@@ -62,14 +62,20 @@ export type ThreadPrWatchEndedStatus =
 /**
  * How a watch ended. Rows that ended before this field existed have none.
  * `moved` means a push moved a CI watch to the new head, where a copy waits.
+ * `another_thread_woke` means an older watch on another thread received the
+ * same result, and this thread got no turn. `pr_merged` and `pr_closed` end a
+ * CI watch when its thread's merge/close watch woke it.
  */
 export type ThreadPrWatchEndedReason =
   | "woke"
+  | "another_thread_woke"
   | "moved"
   | "head_changed"
   | "cancelled_by_operator"
   | "detached"
   | "covered_by_auto_fix"
+  | "pr_merged"
+  | "pr_closed"
   | "failed";
 
 export type ThreadPrWatchHistoryEntry = ThreadPullRequestWatchSummary & {

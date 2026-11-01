@@ -946,7 +946,7 @@ const registerThreadPrStatusWatch = vi.fn(async ({ watch }) => ({
   existed: false,
   watch,
 }));
-const claimThreadPrStatusWatches = vi.fn(async () => []);
+const claimThreadPrStatusWatches = vi.fn(async () => ({ claims: [], threads: [] }));
 const releaseThreadPrStatusWatch = vi.fn(async () => undefined);
 const renewThreadPrStatusWatchLease = vi.fn(async () => false);
 const finishThreadPrStatusWatch = vi.fn(async () => []);
@@ -3168,6 +3168,22 @@ describe("app server ipc", () => {
         params: { backend: "codex", threadId: "thread-1", prKey: buildPullRequestStatusKey(failing) },
       },
     }));
+
+    // A merge watch armed beside a finished CI result must not read as a
+    // wait for that result.
+    registerThreadPrStatusWatch.mockClear();
+    const mixed = pullRequestWatchOf(await watchHandler({
+      backend: "codex", threadId: "thread-1", notifyOn: ["success", "failure", "merged", "closed"],
+    }));
+    expect(mixed).toMatchObject({
+      armed: false,
+      reason: "outcome_already_final",
+      currentOutcome: "failure",
+      terminalWatch: { kind: "terminal", notifyOn: ["merged", "closed"] },
+      message: expect.stringContaining("No CI watch was created"),
+    });
+    expect(mixed).not.toHaveProperty("watch");
+    expect(registerThreadPrStatusWatch).toHaveBeenCalledOnce();
   });
 
   it("claims Auto-fix covers a failure only when no failure baseline exists at the head", async () => {

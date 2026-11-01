@@ -11,6 +11,7 @@ import type { DesktopApi } from "../../../lib/desktop-api";
 import {
   buildWatchCiRequestText,
   resolvePrChipWatch,
+  resolveThreadAutoFixRepository,
   summarizeThreadPrWatches,
   ThreadPrWatchIndicatorsContext,
   useThreadPrWatches,
@@ -80,16 +81,48 @@ describe("summarizeThreadPrWatches", () => {
   });
 });
 
+const REPOSITORY = "github.com/pwrdrvr/pwragent";
+
 describe("resolvePrChipWatch", () => {
   it("adds Auto-fix to an open PR and keeps one object per entry", () => {
     const watches = summarizeThreadPrWatches([ciWatch]).get("codex:consumer");
-    const first = resolvePrChipWatch(watches, pr, true);
+    const first = resolvePrChipWatch(watches, pr, REPOSITORY);
     expect(first).toMatchObject({ ci: { runAttempt: 2 }, autoFix: true });
-    expect(resolvePrChipWatch(watches, { ...pr }, true)).toBe(first);
-    expect(resolvePrChipWatch(watches, pr, false)).toBe(watches?.byPrKey.get(ciWatch.prKey));
-    expect(resolvePrChipWatch(undefined, pr, true)).toBe(resolvePrChipWatch(undefined, pr, true));
-    expect(resolvePrChipWatch(undefined, { ...pr, lifecycleState: "merged" }, true)).toBeUndefined();
-    expect(resolvePrChipWatch(undefined, pr, false)).toBeUndefined();
+    expect(resolvePrChipWatch(watches, { ...pr }, REPOSITORY)).toBe(first);
+    expect(resolvePrChipWatch(watches, pr, undefined)).toBe(watches?.byPrKey.get(ciWatch.prKey));
+    expect(resolvePrChipWatch(undefined, pr, REPOSITORY)).toBe(resolvePrChipWatch(undefined, pr, REPOSITORY));
+    expect(resolvePrChipWatch(undefined, { ...pr, lifecycleState: "merged" }, REPOSITORY)).toBeUndefined();
+    expect(resolvePrChipWatch(undefined, pr, undefined)).toBeUndefined();
+  });
+
+  it("claims no Auto-fix for a PR outside the primary workspace's repository", () => {
+    // Main repairs primary-workspace PRs only; a linked directory's PR is not polled for it.
+    const linked = { ...pr, repo: "docs.pwragent.ai", url: "https://github.com/pwrdrvr/docs.pwragent.ai/pull/1" };
+    expect(resolvePrChipWatch(undefined, linked, REPOSITORY)).toBeUndefined();
+  });
+});
+
+describe("resolveThreadAutoFixRepository", () => {
+  const optedIn = { ...thread, prAutoDispatchEnabled: true, primaryGitRepository: REPOSITORY };
+
+  it("names the primary repository only while the thread opted in and Git settings allow Auto-fix", () => {
+    expect(resolveThreadAutoFixRepository(optedIn, true)).toBe(REPOSITORY);
+    expect(resolveThreadAutoFixRepository(optedIn, undefined)).toBe(REPOSITORY);
+    // Turned off in Git settings, or polling paused: main dispatches nothing.
+    expect(resolveThreadAutoFixRepository(optedIn, false)).toBeUndefined();
+    expect(resolveThreadAutoFixRepository({ ...optedIn, prAutoDispatchEnabled: false }, true)).toBeUndefined();
+    expect(resolveThreadAutoFixRepository({ ...optedIn, primaryGitRepository: undefined }, true)).toBeUndefined();
+  });
+
+  it("does not apply this instance's settings to a peer's thread", () => {
+    const peer = {
+      ...optedIn,
+      federation: {
+        ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "consumer" },
+        instanceLabel: "Laptop", peerStatus: "connected", capabilities: [],
+      },
+    } as NavigationThreadSummary;
+    expect(resolveThreadAutoFixRepository(peer, false)).toBe(REPOSITORY);
   });
 });
 

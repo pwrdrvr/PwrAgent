@@ -45,8 +45,11 @@ type PrRollupChipProps = {
   branchDrift?: PrBranchDrift;
   /** The thread's active PR watches; a CI watch draws the eye. */
   prWatches?: ThreadPrWatches;
-  /** The thread's Auto-fix setting, which the hover card lists. */
-  autoFix?: boolean;
+  /**
+   * The repository whose PRs the thread's Auto-fix repairs, which the hover
+   * card lists. From `resolveThreadAutoFixRepository`.
+   */
+  autoFixRepository?: string;
   /**
    * The row's hover prefetch. The chips line arms it for the chips in the
    * flow; this chip sits on the title line, outside that line.
@@ -85,7 +88,7 @@ export const PrRollupChip = memo(function PrRollupChip(props: PrRollupChipProps)
           pr={pr}
           showRepoPrefix={props.repoPrefixedUrls.split("\n").includes(pr.url)}
           branchDrift={props.branchDrift?.url === pr.url ? props.branchDrift : undefined}
-          watch={resolvePrChipWatch(props.prWatches, pr, props.autoFix === true)}
+          watch={resolvePrChipWatch(props.prWatches, pr, props.autoFixRepository)}
           onOpen={props.onOpen}
           onOpenContextMenu={props.onOpenContextMenu}
         />
@@ -125,7 +128,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   });
   const [cardUrl, setCardUrl] = useState<string>();
   const watchFor = (pr: PrSummary) =>
-    resolvePrChipWatch(props.prWatches, pr, props.autoFix === true);
+    resolvePrChipWatch(props.prWatches, pr, props.autoFixRepository);
   const watchStopHint = Boolean(props.onOpenContextMenu);
   const waitingForCi = rollup.ordered.some((pr) => watchFor(pr)?.ci);
   // Read from the live list, so a status update reaches an open card.
@@ -142,11 +145,11 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
       <PrStatusCard
         pr={cardPr}
         branchDrift={cardDrift}
-        watch={resolvePrChipWatch(props.prWatches, cardPr, props.autoFix === true)}
+        watch={resolvePrChipWatch(props.prWatches, cardPr, props.autoFixRepository)}
         watchStopHint={watchStopHint}
       />,
     );
-  }, [cardVisible, cardPr, cardDrift, props.prWatches, props.autoFix, watchStopHint, hideRowCard, updateCard]);
+  }, [cardVisible, cardPr, cardDrift, props.prWatches, props.autoFixRepository, watchStopHint, hideRowCard, updateCard]);
 
   const clearHoverTimer = (): void => {
     if (hoverTimerRef.current !== null) {

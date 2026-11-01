@@ -7,10 +7,7 @@ import type {
   PullRequestTerminalDetails,
   ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
-import {
-  buildPullRequestStatusKey,
-  buildThreadIdentityKey,
-} from "@pwragent/shared";
+import { buildPullRequestStatusKey } from "@pwragent/shared";
 import type {
   OverlayStoreLike,
   PrStatusWatchClaim,
@@ -107,10 +104,11 @@ export class PrStatusWatchCoordinator {
 
     const now = this.now();
     const failedCheckUrl = outcome === "failure" ? pr.failedCheckUrl : undefined;
-    // Auto-fix handles a covered thread's failure. Its watch keeps waiting
-    // when it also asked for success, so a later pass still wakes it.
+    // Auto-fix handles a covered thread's failure, so the claim never hands
+    // it a covered watch. That watch keeps waiting when it also asked for
+    // success, so a later pass still wakes it; a failure-only one ends.
     const skipThreadKeys = outcome === "failure" ? failureCoveredThreadKeys : undefined;
-    const claims = await this.options.store.claimThreadPrStatusWatches({
+    const { claims, threads: settled } = await this.options.store.claimThreadPrStatusWatches({
       prKey,
       headSha,
       outcome,
@@ -122,6 +120,7 @@ export class PrStatusWatchCoordinator {
       ...(failedCheckUrl ? { failedCheckUrl } : {}),
       ...(skipThreadKeys?.size ? { skipThreadKeys } : {}),
     });
+    await this.notifyWatchesChanged(settled);
     for (const claim of claims) {
       await this.dispatchClaim(
         claim,
@@ -282,6 +281,7 @@ export class PrStatusWatchCoordinator {
       await this.options.store.finishThreadPrTerminalWatch({
         watchId: claim.watch.watchId,
         ownerId: this.ownerId,
+        outcome,
         now: this.now(),
       });
       await this.notifyWatchesChanged([watchThreadRef(claim.watch)]);
@@ -302,7 +302,7 @@ export class PrStatusWatchCoordinator {
       return;
     }
     const failedCheckUrl = outcome === "failure" ? pr.failedCheckUrl : undefined;
-    const finish = async (endedReason: "woke" | "covered_by_auto_fix") => {
+    const finish = async () => {
       const threads = await this.options.store.finishThreadPrStatusWatch({
         watchId: claim.watch.watchId,
         ownerId: this.ownerId,
@@ -310,7 +310,6 @@ export class PrStatusWatchCoordinator {
         headSha: claim.watch.headSha,
         outcome,
         now: this.now(),
-        endedReason,
         ...(failedCheckUrl ? { failedCheckUrl } : {}),
         ...(outcome === "failure" && failureCoveredThreadKeys.size > 0
           ? { skipThreadKeys: failureCoveredThreadKeys }
@@ -318,16 +317,6 @@ export class PrStatusWatchCoordinator {
       });
       await this.notifyWatchesChanged(threads);
     };
-    // Only this watch's own thread's Auto-fix can stand in for its wake.
-    if (
-      outcome === "failure"
-      && failureCoveredThreadKeys.has(
-        buildThreadIdentityKey(claim.watch.backend, claim.watch.threadId),
-      )
-    ) {
-      await finish("covered_by_auto_fix");
-      return;
-    }
     const stopHeartbeat = this.startLeaseHeartbeat(claim.watch.watchId);
     try {
       const submission = await this.options.registry.submitTurnIfIdle({
@@ -361,7 +350,7 @@ export class PrStatusWatchCoordinator {
         await this.releaseClaim(claim, false);
         return;
       }
-      await finish("woke");
+      await finish();
     } catch {
       await this.releaseClaim(claim, true);
     } finally {

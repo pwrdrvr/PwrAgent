@@ -355,6 +355,15 @@ describe("PrStatusWatchCoordinator", () => {
       backend: "codex",
       threadId: "thread-2",
     })).toEqual([]);
+    // Only thread-1 got a turn, so only its history says it woke.
+    expect(await store.listThreadPrStatusWatchHistory({
+      backend: "codex", threadId: "thread-1", limit: 5,
+    })).toEqual([expect.objectContaining({ endedReason: "woke", wokeOn: "success" })]);
+    expect(await store.listThreadPrStatusWatchHistory({
+      backend: "codex", threadId: "thread-2", limit: 5,
+    })).toEqual([expect.objectContaining({
+      status: "dispatched", endedReason: "another_thread_woke", wokeOn: "success",
+    })]);
   });
 
   it("promotes the next-oldest watch when the first thread detaches", async () => {
@@ -592,6 +601,58 @@ describe("PrStatusWatchCoordinator Auto-fix coverage", () => {
     expect(harness.submitTurnIfIdle.mock.calls[0]?.[0]).toMatchObject({ threadId: "thread-a" });
   });
 
+  it("wakes an uncovered thread in the same poll when an older covered thread's failure-only watch hands off to Auto-fix", async () => {
+    const covered = await registerWatch(store, ["failure"], "thread-a");
+    now += 1;
+    await registerWatch(store, ["failure"], "thread-b");
+    const onWatchesChanged = vi.fn();
+    const submitTurnIfIdle = vi.fn(async (_request: { input: AppServerTurnInputItem[] }) => ({
+      status: "started" as const, turnId: "turn-watch-1",
+    }));
+    const coordinator = new PrStatusWatchCoordinator({
+      store, registry: { submitTurnIfIdle }, onWatchesChanged, now: () => now,
+    });
+
+    // Before the fix, A's Auto-fix ended B's watch as covered and B never woke.
+    await expect(coordinator.handleStatusSnapshot(
+      failingPr(),
+      now,
+      new Set(["codex:thread-a"]),
+    )).resolves.toBe(1);
+    expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
+    expect(submitTurnIfIdle.mock.calls[0]?.[0]).toMatchObject({ threadId: "thread-b" });
+    expect(await store.listThreadPrStatusWatchHistory({
+      backend: "codex", threadId: "thread-a", limit: 5,
+    })).toEqual([expect.objectContaining({
+      watchId: covered.watchId, status: "dispatched", endedReason: "covered_by_auto_fix",
+    })]);
+    expect(await store.listThreadPrStatusWatchHistory({
+      backend: "codex", threadId: "thread-b", limit: 5,
+    })).toEqual([expect.objectContaining({ endedReason: "woke", wokeOn: "failure" })]);
+    const prKey = buildPullRequestStatusKey(pr());
+    expect(onWatchesChanged).toHaveBeenCalledWith([{ backend: "codex", threadId: "thread-a", prKey }]);
+    expect(onWatchesChanged).toHaveBeenCalledWith([{ backend: "codex", threadId: "thread-b", prKey }]);
+  });
+
+  it("reports a watch held past a covered failure, so its baseline reaches the rail", async () => {
+    await registerWatch();
+    const onWatchesChanged = vi.fn();
+    const coordinator = new PrStatusWatchCoordinator({
+      store, registry: { submitTurnIfIdle: vi.fn(async () => ({ status: "busy" as const })) },
+      onWatchesChanged, now: () => now,
+    });
+
+    await coordinator.handleStatusSnapshot(failingPr(), now, new Set(["codex:thread-1"]));
+    expect(onWatchesChanged).toHaveBeenCalledTimes(1);
+    expect(onWatchesChanged).toHaveBeenCalledWith([{
+      backend: "codex", threadId: "thread-1", prKey: buildPullRequestStatusKey(pr()),
+    }]);
+    // The repeat poll finds the baseline already set and reports nothing.
+    now += 1;
+    await coordinator.handleStatusSnapshot(failingPr(), now, new Set(["codex:thread-1"]));
+    expect(onWatchesChanged).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves a success and failure watch waiting past a covered failure, then wakes on success at the pushed head", async () => {
     await registerWatch();
     const harness = createHarness();
@@ -705,7 +766,7 @@ describe("cancelThreadPrStatusWatch", () => {
       backend: "codex", threadId: "thread-1", watchId: sibling.watchId, now,
     })).resolves.toBeUndefined();
 
-    const claims = await store.claimThreadPrStatusWatches({
+    const { claims } = await store.claimThreadPrStatusWatches({
       prKey: sibling.prKey, headSha: sibling.headSha, outcome: "success", now,
       ownerId: "owner", leaseExpiresAt: now + 60_000, maxAttempts: 3,
     });
@@ -786,6 +847,26 @@ describe("PR watch notifications and write budgets", () => {
       note: "the operator stops one PR watch: 1 commit per click, 0 idle writes",
       scenario: "pr-watch-operator-cancel",
       writes: cancel,
+    });
+  });
+
+  it("records the commits for a failure Auto-fix covers, held once and then only read", async () => {
+    useMeasuredFileStateDb();
+    await registerWatch();
+    const harness = createHarness();
+    const covered = new Set(["codex:thread-1"]);
+    const { writes } = await measureSqliteWrites(async () => {
+      await harness.coordinator.handleStatusSnapshot(failingPr(), now, covered);
+      // Each later poll of the same failure finds the baseline already set.
+      for (let tick = 1; tick < 10; tick += 1) {
+        await harness.coordinator.handleStatusSnapshot(failingPr(), now + tick, covered);
+      }
+    });
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+    expectSqliteWriteBudget({
+      note: "ten polls of one CI failure that Auto-fix covers, one success and failure watch: 1 commit holds the failure as its baseline, the other 9 polls only read; at most 1 commit per failure",
+      scenario: "pr-watch-autofix-hold",
+      writes,
     });
   });
 });
@@ -977,6 +1058,13 @@ describe("PrStatusWatchCoordinator merge/close watches", () => {
       backend: "codex",
       threadId: "thread-1",
     })).toEqual([]);
+    // The merge woke the thread; no push ended the CI watch.
+    expect(await store.listThreadPrStatusWatchHistory({
+      backend: "codex", threadId: "thread-1", limit: 5,
+    })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "terminal", status: "dispatched", endedReason: "woke", wokeOn: "merged" }),
+      expect.objectContaining({ notifyOn: ["success"], status: "superseded", endedReason: "pr_merged" }),
+    ]));
   });
 
   it("wakes every thread that asked about the merge", async () => {

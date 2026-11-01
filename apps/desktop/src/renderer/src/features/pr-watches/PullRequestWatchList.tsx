@@ -26,6 +26,8 @@ type PullRequestWatchListProps = {
   onAskAgentToWatchCi?: () => void;
   /** Ended watches for this PR, newest first; absent until first loaded. */
   history?: readonly ThreadPrWatchHistoryEntry[];
+  /** The last history read failed. */
+  historyFailed?: boolean;
   historyOpen?: boolean;
   onToggleHistory?: () => void;
   /** Injected by tests so times are deterministic. */
@@ -122,7 +124,7 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
             <button
               type="button"
               className="pr-watch-list__action"
-              aria-label={`Turn off Auto-fix for #${props.pr.number}`}
+              aria-label="Turn off Auto-fix for this thread"
               onClick={props.onTurnOffAutoFix}
             >
               Turn Off
@@ -161,7 +163,9 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
           </button>
           {props.historyOpen ? (
             props.history === undefined ? (
-              <p className="pr-watch-list__sub">Loading…</p>
+              <p className="pr-watch-list__sub">
+                {props.historyFailed ? "Couldn't load history." : "Loading…"}
+              </p>
             ) : historyRows.length === 0 ? (
               <p className="pr-watch-list__sub">No watch has ended yet.</p>
             ) : (
@@ -225,6 +229,10 @@ function describeEnded(
   switch (entry.endedReason) {
     case "woke":
       return entry.wokeOn ? `Woke the thread · ${WOKE_ON[entry.wokeOn] ?? entry.wokeOn}` : "Woke the thread";
+    case "another_thread_woke":
+      return entry.wokeOn
+        ? `Another thread was woken · ${WOKE_ON[entry.wokeOn] ?? entry.wokeOn}`
+        : "Another thread was woken";
     case "moved": {
       const next = [...active, ...history].find((watch) => watch.watchId === entry.movedTo);
       return next ? `Moved to new head · ${next.headSha.slice(0, 7)}` : "Moved to new head";
@@ -237,6 +245,10 @@ function describeEnded(
       return "Ended when the PR was detached";
     case "covered_by_auto_fix":
       return "Handed to Auto-fix";
+    case "pr_merged":
+      return "Ended when the PR merged";
+    case "pr_closed":
+      return "Ended when the PR closed";
     case "failed":
       return "Could not wake the thread";
     case undefined:
@@ -255,7 +267,7 @@ function describeEnded(
 }
 
 /** A clock time today; with the date before today. */
-export function formatWatchTime(timestamp: number, now: number): string {
+function formatWatchTime(timestamp: number, now: number): string {
   const sameDay = new Date(timestamp).toDateString() === new Date(now).toDateString();
   return new Intl.DateTimeFormat(undefined, sameDay
     ? { hour: "numeric", minute: "2-digit" }

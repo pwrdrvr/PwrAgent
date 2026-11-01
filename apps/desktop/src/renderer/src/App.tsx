@@ -3292,7 +3292,18 @@ function DesktopAppShell(props: {
         watchId: watch.watchId,
       });
       // The list refreshes from `thread/prWatches/updated`.
-      if (response && !response.ok) failed(response.error.message);
+      if (response && !response.ok) {
+        // The watch ended, or is waking its thread, before the click landed.
+        if (response.error.code === "not_found") {
+          showAppNotice({
+            id: `pr-watch-stop:${watch.watchId}`,
+            title: "The watch already ended",
+            message: response.error.message,
+          });
+        } else {
+          failed(response.error.message);
+        }
+      }
     } catch (error) {
       failed(error instanceof Error ? error.message : String(error));
     }
@@ -3330,14 +3341,21 @@ function DesktopAppShell(props: {
       selectThreadNavigation(thread);
     }
   });
+  // Auto-fix rows claim a wake only where main can dispatch one. Until the
+  // settings load, or in a federation window, this is unknown.
+  const prAutoFixAvailable = settings.snapshot && !readRendererFederationTarget()
+    ? (settings.snapshot.git?.backgroundPrPolling?.value ?? DEFAULT_BACKGROUND_PR_POLLING)
+      && (settings.snapshot.git?.prAutoDispatchAllowed?.value ?? DEFAULT_PR_AUTO_DISPATCH_ALLOWED)
+    : undefined;
   const threadPrWatchContext = useMemo(
     () => ({
       byThreadKey: threadPrWatchIndicators,
+      ...(prAutoFixAvailable !== undefined ? { autoFixAvailable: prAutoFixAvailable } : {}),
       ...(canManagePrWatches
         ? { stop: stopPrWatch, askAgentToWatchCi }
         : {}),
     }),
-    [threadPrWatchIndicators, canManagePrWatches, stopPrWatch, askAgentToWatchCi],
+    [threadPrWatchIndicators, prAutoFixAvailable, canManagePrWatches, stopPrWatch, askAgentToWatchCi],
   );
   const threadHandoffTargets = useMemo(
     () =>
