@@ -48324,6 +48324,46 @@ script = "printf setup"
         .resolves.toEqual({ causalMessagingSource });
     });
 
+    it("merges a later steer with the turn's causal record, not the first prompt origin", async () => {
+      const firstPromptOrigin: AppServerThreadMessageOrigin = { kind: "agent", causalMessagingSource };
+      const { registry } = await steerCodexTurn(firstPromptOrigin);
+      await expect(registry.readCausalMessagingContext({ backend: "codex", threadId: "thread-1", turnId: "turn-1" }))
+        .resolves.toEqual({ causalMessagingSource });
+      const otherSource = { ...causalMessagingSource, requestId: "other-request", surfaceSelector: "other-topic" };
+      await registry.steerTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        expectedTurnId: "turn-1",
+        input: [{ type: "text", text: "Another sender" }],
+        requestId: "telegram-steer-2",
+      }, { ...steererOrigin, causalMessagingSource: otherSource });
+      // A third steer from the first source must not win the turn back.
+      await registry.steerTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        expectedTurnId: "turn-1",
+        input: [{ type: "text", text: "First sender again" }],
+        requestId: "telegram-steer-3",
+      }, steererOrigin);
+      await expect(registry.readCausalMessagingContext({ backend: "codex", threadId: "thread-1", turnId: "turn-1" }))
+        .resolves.toEqual({ causalMessagingAmbiguous: true });
+    });
+
+    it("merges overlapping steers on one turn instead of keeping the last writer", async () => {
+      const firstPromptOrigin: AppServerThreadMessageOrigin = { kind: "agent", causalMessagingSource };
+      const { registry } = await steerCodexTurn(firstPromptOrigin);
+      const otherSource = { ...causalMessagingSource, requestId: "other-request", surfaceSelector: "other-topic" };
+      await Promise.all([
+        registry.steerTurn({ backend: "codex", threadId: "thread-1", expectedTurnId: "turn-1",
+          input: [{ type: "text", text: "Other sender" }], requestId: "overlap-1" },
+        { ...steererOrigin, causalMessagingSource: otherSource }),
+        registry.steerTurn({ backend: "codex", threadId: "thread-1", expectedTurnId: "turn-1",
+          input: [{ type: "text", text: "First sender" }], requestId: "overlap-2" }, steererOrigin),
+      ]);
+      await expect(registry.readCausalMessagingContext({ backend: "codex", threadId: "thread-1", turnId: "turn-1" }))
+        .resolves.toEqual({ causalMessagingAmbiguous: true });
+    });
+
     it("still routes a turn whose only causal record is its first prompt origin", async () => {
       const overlayStore = createOverlayStoreMock();
       await overlayStore.upsertThreadMessageOrigin!({

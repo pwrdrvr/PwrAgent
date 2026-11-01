@@ -10030,6 +10030,7 @@ export class DesktopBackendRegistry {
   private readonly executionModeSelectionLocks = new PerKeyAsyncLock();
   private readonly acpSessionPromptLocks = new PerKeyAsyncLock();
   private readonly activeTurnControlLocks = new PerKeyAsyncLock();
+  private readonly turnCausalContextLocks = new PerKeyAsyncLock();
   private readonly queuedAcpRuntimeOptions = new Map<
     string,
     {
@@ -24091,15 +24092,19 @@ export class DesktopBackendRegistry {
     try {
       const result = await promise;
       if (result.disposition === "steered" && messageOrigin) {
-        const previous = await this.readTurnCausalMessagingOrigin({ backend: params.backend, threadId: params.threadId, turnId: result.turnId });
-        if (previous?.causalMessagingSource || previous?.causalMessagingAmbiguous
-          || messageOrigin.causalMessagingSource || messageOrigin.causalMessagingAmbiguous) {
-          // `user:<turnId>` is also the first prompt's displayed origin, and
-          // the steerer did not write that prompt. Keep routing in its own row.
-          await this.persistThreadMessageOrigin({ backend: params.backend, threadId: params.threadId,
-            messageId: buildTurnCausalMessagingContextId(result.turnId),
-            origin: { kind: messageOrigin.kind, ...mergeCausalMessagingContext([previous, messageOrigin]) } });
-        }
+        const turn = { backend: params.backend, threadId: params.threadId, turnId: result.turnId };
+        // Read-modify-write: overlapping steers must merge, not overwrite.
+        await this.turnCausalContextLocks.run(`${turn.backend}:${turn.threadId}:${turn.turnId}`, async () => {
+          const previous = await this.readTurnCausalMessagingOrigin(turn);
+          if (previous?.causalMessagingSource || previous?.causalMessagingAmbiguous
+            || messageOrigin.causalMessagingSource || messageOrigin.causalMessagingAmbiguous) {
+            // `user:<turnId>` is also the first prompt's displayed origin, and
+            // the steerer did not write that prompt. Keep routing in its own row.
+            await this.persistThreadMessageOrigin({ backend: turn.backend, threadId: turn.threadId,
+              messageId: buildTurnCausalMessagingContextId(turn.turnId),
+              origin: { kind: messageOrigin.kind, ...mergeCausalMessagingContext([previous, messageOrigin]) } });
+          }
+        });
       }
       return result;
     } catch (error) {
