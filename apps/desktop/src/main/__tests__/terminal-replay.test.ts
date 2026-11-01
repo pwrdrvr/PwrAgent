@@ -1,8 +1,9 @@
 import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import { Terminal } from "@xterm/headless";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { restoredHistoryPrelude, TerminalReplay, TERMINAL_SNAPSHOT_LIMIT } from "../terminal/terminal-replay";
 import { TerminalHistoryStore, type TerminalHistoryRecord } from "../terminal/terminal-history-store";
 
@@ -96,6 +97,64 @@ describe("TerminalReplay", () => {
     replay.append("step 1\rstep 2\r\n\x1b[32mDone\x1b[0m", 42);
     expect(await replay.readPlain()).toEqual({ data: "step 2\nDone", seq: 1, timestamp: 42 });
     expect(replay.read().frames[0]?.data).toContain("\x1b[32m");
+    await replay.dispose();
+  });
+});
+
+// Operation budget for attach. A thread view remount attaches every pane of
+// every thread at once, and each attach asks main for a snapshot. Serializing
+// a 2,000-line scrollback costs main 10-25 ms, so an idle pane must not pay it
+// again. `serializeCalls` counts SerializeAddon passes.
+describe("TerminalReplay snapshot budget", () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it("serializes an idle terminal once across repeated attaches", async () => {
+    const serializeCalls = vi.spyOn(SerializeAddon.prototype, "serialize");
+    const replay = new TerminalReplay(80, 6);
+    for (let line = 0; line < 40; line += 1) {
+      replay.append(`\x1b[90m12:00:${String(line).padStart(2, "0")}\x1b[0m \x1b[32mINFO\x1b[0m request ${line} ok\r\n`, line + 1);
+    }
+
+    // Three remounts of an idle pane.
+    const attaches = [await replay.snapshot(), await replay.snapshot(), await replay.snapshot()];
+    expect(serializeCalls).toHaveBeenCalledTimes(1);
+    expect(attaches[1]).toEqual(attaches[0]);
+    expect(attaches[2]).toEqual(attaches[0]);
+    // Each caller gets its own object.
+    attaches[0]!.data = "changed by a caller";
+    expect((await replay.snapshot()).data).toContain("request 39 ok");
+    expect(serializeCalls).toHaveBeenCalledTimes(1);
+
+    // New output changes the screen.
+    replay.append("request 40 ok\r\n", 100);
+    const afterOutput = await replay.snapshot();
+    expect(afterOutput).toMatchObject({ seq: 41, timestamp: 100 });
+    expect(afterOutput.data).toContain("request 40 ok");
+    expect(serializeCalls).toHaveBeenCalledTimes(2);
+
+    // A resize to the same grid changes nothing; a new grid does.
+    replay.resize(80, 6);
+    await replay.snapshot();
+    expect(serializeCalls).toHaveBeenCalledTimes(2);
+    replay.resize(100, 6);
+    expect(await replay.snapshot()).toMatchObject({ cols: 100, rows: 6 });
+    expect(serializeCalls).toHaveBeenCalledTimes(3);
+    await replay.dispose();
+  });
+
+  it("keeps parsing output after a snapshot fails", async () => {
+    vi.spyOn(SerializeAddon.prototype, "serialize").mockImplementationOnce(() => {
+      throw new Error("serialize failed");
+    });
+    const replay = new TerminalReplay(80, 4);
+    replay.append("before\r\n", 1);
+    await expect(replay.snapshot()).rejects.toThrow("serialize failed");
+
+    replay.append("after", 2);
+    const snapshot = await replay.snapshot();
+    expect(snapshot).toMatchObject({ seq: 2, timestamp: 2 });
+    expect(snapshot.data).toContain("after");
+    expect(await replay.readPlain()).toMatchObject({ data: "before\nafter", seq: 2 });
     await replay.dispose();
   });
 });
