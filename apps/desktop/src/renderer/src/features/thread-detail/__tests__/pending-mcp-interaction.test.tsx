@@ -454,6 +454,29 @@ describe("PendingMcpInteraction forge remember menu", () => {
     });
   });
 
+  it("portals the menu out of the clipping transcript, keeps it open for presses inside it, and closes it on scroll", () => {
+    const onSubmit = vi.fn();
+    const state = forgeState({ [FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY]: rememberOptions });
+    const { container } = render(<PendingMcpInteraction state={state} onChange={vi.fn()} onSubmit={onSubmit} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "More approval choices" }));
+    const menu = screen.getByRole("menu", { name: "Approval choices" });
+    expect(container.contains(menu)).toBe(false);
+    expect(menu.parentElement).toBe(document.body);
+    expect(menu.style.visibility).not.toBe("hidden");
+
+    const agentItem = screen.getByRole("menuitem", { name: rememberOptions[0]!.label });
+    fireEvent.pointerDown(agentItem);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    fireEvent.click(agentItem);
+    expect(onSubmit).toHaveBeenLastCalledWith(state, "accept", undefined, "agent");
+
+    fireEvent.click(screen.getByRole("button", { name: "More approval choices" }));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    fireEvent.scroll(document);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
   it("allows once from the menu and plainly from the split's main part", () => {
     const onSubmit = vi.fn();
     const state = forgeState({ [FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY]: rememberOptions });

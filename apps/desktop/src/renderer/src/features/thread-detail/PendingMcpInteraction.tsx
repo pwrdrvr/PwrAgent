@@ -1,8 +1,11 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ForgeApprovalRememberOption, ForgeApprovalRememberOptionId } from "@pwragent/shared";
+import { placeListbox, type ListboxPlacement } from "../../components/Select";
 import { ChevronDownIcon } from "../../icons";
 import { openExternalUrl } from "../../lib/open-external-url";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
+import { portalViewportTop } from "../../lib/useViewportTooltip";
 import {
   canAcceptMcpElicitation,
   mcpElicitationPurposeLabel,
@@ -292,22 +295,58 @@ function PendingMcpAllowSplit(props: PendingMcpAllowSplitProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuId = useId();
+  const [placement, setPlacement] = useState<ListboxPlacement | null>(null);
   const showMenu = open && !props.disabled;
   const close = (): void => setOpen(false);
 
   useMenuNavigation({ open: showMenu, menuRef, triggerRef, onClose: close });
 
   // The keyboard hook leaves the pointer to the menu: any press outside the
-  // split closes it.
+  // split and the menu closes it.
   useEffect(() => {
     if (!showMenu) return;
+    const inside = (target: EventTarget | null): boolean =>
+      Boolean(wrapperRef.current?.contains(target as Node))
+      || Boolean(menuRef.current?.contains(target as Node));
     const handlePointerDown = (event: PointerEvent): void => {
-      if (!wrapperRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
+      if (!inside(event.target)) setOpen(false);
     };
+    // The menu is placed once, against the window, so a scroll or resize
+    // under it closes it rather than leaving it beside nothing.
+    const handleScroll = (event: Event): void => {
+      if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const handleResize = (): void => setOpen(false);
     document.addEventListener("pointerdown", handlePointerDown, true);
-    return () => document.removeEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("scroll", handleScroll, true);
+    window.addEventListener("resize", handleResize);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("scroll", handleScroll, true);
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [showMenu]);
+
+  // The transcript clips its rows, and the card can sit at its top or its
+  // foot, so the menu is portalled and placed against the window: below the
+  // split when it fits, otherwise above, right-aligned with Allow. Before
+  // paint, so it never shows unplaced.
+  useLayoutEffect(() => {
+    if (!showMenu) {
+      setPlacement(null);
+      return;
+    }
+    const wrapper = wrapperRef.current;
+    const menu = menuRef.current;
+    if (wrapper === null || menu === null) return;
+    const rect = wrapper.getBoundingClientRect();
+    const width = menu.offsetWidth;
+    setPlacement(placeListbox({
+      trigger: { top: rect.top, bottom: rect.bottom, left: rect.right - width, width: 0 },
+      width,
+      contentHeight: menu.scrollHeight + menu.offsetHeight - menu.clientHeight,
+      viewport: { width: window.innerWidth, height: window.innerHeight, top: portalViewportTop() },
+    }));
   }, [showMenu]);
 
   const items: Array<{ id: string; label: string; description: string; onSelect: () => void }> = [
@@ -351,7 +390,7 @@ function PendingMcpAllowSplit(props: PendingMcpAllowSplitProps) {
       >
         <ChevronDownIcon size={12} />
       </button>
-      {showMenu ? (
+      {showMenu ? createPortal(
         <div
           ref={menuRef}
           id={menuId}
@@ -359,6 +398,11 @@ function PendingMcpAllowSplit(props: PendingMcpAllowSplitProps) {
           role="menu"
           aria-label="Approval choices"
           tabIndex={-1}
+          style={
+            placement === null
+              ? { top: 0, left: 0, visibility: "hidden" }
+              : { top: placement.top, left: placement.left, maxHeight: placement.maxHeight }
+          }
         >
           {items.map((item) => (
             <button
@@ -386,7 +430,8 @@ function PendingMcpAllowSplit(props: PendingMcpAllowSplitProps) {
               ) : null}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       ) : null}
     </div>
   );

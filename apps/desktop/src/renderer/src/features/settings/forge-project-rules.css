@@ -77,6 +77,8 @@
 .forge-rules__add {
   flex: 0 0 auto;
   border-style: dashed;
+  /* .button inherits its font, and the section body is 16px. */
+  font-size: 12px;
 }
 
 .forge-rules__project {

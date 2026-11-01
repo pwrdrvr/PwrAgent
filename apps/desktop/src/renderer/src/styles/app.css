@@ -33136,13 +33136,13 @@ div.composer-error-row__toggle {
   transform: rotate(180deg);
 }
 
-/* The card sits at the foot of the transcript, so the menu opens upward,
-   over the card, and right-aligned with Allow. */
+/* Portalled to the body and placed by PendingMcpAllowSplit against the
+   window, so the transcript's clipping never hides it. */
 .transcript-mcp__split-menu {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 6px);
-  z-index: 3;
+  position: fixed;
+  z-index: 150;
+  overflow-y: auto;
+  font-size: 13px;
   display: flex;
   width: max-content;
   min-width: 220px;
