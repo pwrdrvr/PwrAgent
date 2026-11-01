@@ -206,7 +206,7 @@ async function startObserver() {
     nativeSourceSha256: createHash("sha256").update(readFileSync(path.join(desktop, "scripts", "windows-pipe-diagnostics.cs"))).digest("hex") });
   const compiler = path.join(process.env.SystemRoot, "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe");
   const compiled = await run(compiler, ["/nologo", "/platform:x64", "/r:System.Web.Extensions.dll", "/out:" + executable,
-    path.join(desktop, "scripts", "windows-pipe-diagnostics.cs")], 10000);
+    path.join(desktop, "scripts", "windows-pipe-diagnostics.cs")], 20000);
   if (compiled.error) throw new Error("Native diagnostic compilation failed: " + json(compiled));
   watcher = spawn(executable, ["watch", stopFile], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
   let buffer = "";

@@ -40,7 +40,7 @@ async function stopOwned(process, closing, marker) {
 }
 try {
   await exec(compiler, ["/nologo", "/platform:x64", "/r:System.Web.Extensions.dll", "/out:" + executable,
-    path.join(import.meta.dirname, "windows-pipe-diagnostics.cs")], { windowsHide: true, timeout: 10000 });
+    path.join(import.meta.dirname, "windows-pipe-diagnostics.cs")], { windowsHide: true, timeout: 20000 });
   const ready = Promise.withResolvers();
   watcher = spawn(executable, ["watch", stop], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
   watcherClosed = once(watcher, "close");
