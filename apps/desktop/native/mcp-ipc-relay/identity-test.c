@@ -8,7 +8,48 @@
 #ifdef _WIN32
 #undef wmain
 #include <sddl.h>
+#include <accctrl.h>
 int wmain(int argc, wchar_t **argv) {
+  if (argc == 4 && !wcscmp(argv[1], L"secure-fixture")) {
+    /* Node/libuv uses the token's default owner, which can be the shared
+     * Administrators SID on elevated runners. The server fixture must set
+     * its own user owner and protected DACL; the production client must not
+     * relax its connected-owner check to accommodate that default.
+     * All instances share the named pipe's security descriptor. Restrict
+     * this test-only operation to a pipe served by the requesting test PID.
+     */
+    if (wcsncmp(argv[2], L"\\\\.\\pipe\\pwragent-test-", 23)) return 2;
+    HANDLE pipe = CreateFileW(argv[2], READ_CONTROL | WRITE_OWNER | WRITE_DAC,
+      0, NULL, OPEN_EXISTING, SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, NULL);
+    if (pipe == INVALID_HANDLE_VALUE) fail("cannot open fixture pipe security");
+    ULONG pid = 0;
+    wchar_t expected[32];
+    if (!GetNamedPipeServerProcessId(pipe, &pid) || !pid) fail("cannot verify fixture server PID");
+    swprintf(expected, 32, L"%lu", pid);
+    if (wcscmp(expected, argv[3])) fail("fixture belongs to another process");
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!process) fail("cannot open fixture server identity");
+    TOKEN_USER *user = user_of(GetCurrentProcess());
+    TOKEN_USER *server = user_of(process);
+    same_user(user->User.Sid, server->User.Sid, "fixture server is another user");
+    EXPLICIT_ACCESSW access = {0};
+    access.grfAccessPermissions = GENERIC_ALL;
+    access.grfAccessMode = SET_ACCESS;
+    access.grfInheritance = NO_INHERITANCE;
+    access.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    access.Trustee.TrusteeType = TRUSTEE_IS_USER;
+    access.Trustee.ptstrName = (LPWSTR)user->User.Sid;
+    PACL acl = NULL;
+    DWORD error = SetEntriesInAclW(1, &access, NULL, &acl);
+    if (error != ERROR_SUCCESS) { SetLastError(error); fail("cannot create fixture DACL"); }
+    error = SetSecurityInfo(pipe, SE_KERNEL_OBJECT,
+      OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+      user->User.Sid, NULL, acl, NULL);
+    if (error != ERROR_SUCCESS) { SetLastError(error); fail("cannot secure fixture pipe"); }
+    verify_pipe_identity(pipe);
+    LocalFree(acl); free(server); free(user); CloseHandle(process); CloseHandle(pipe);
+    return 0;
+  }
   if (argc != 2) return 2;
   if (!wcscmp(argv[1], L"unreadable")) {
     verify_pipe_identity(INVALID_HANDLE_VALUE);
