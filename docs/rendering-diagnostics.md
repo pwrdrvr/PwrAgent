@@ -158,15 +158,15 @@ The spec's status pulse test seeds six running sub-agents in the main window
 and hides the strip's thinking scanner, so only the dots move. It captures the
 dots at rest under reduced motion, pulsing, under the former infinite rule, and
 then offscreen under the former rule and under the pulse. Observed on Ubuntu
-x64 in Sandboxer with Electron 44.9.3 (2026-10-31), per second:
+x64 in Sandboxer with Electron 44.9.3 (2026-10-31, two runs), per second:
 
 | Main window, six dots | `DrawFrame`/s | `BeginFrame`/s |
 | --- | ---: | ---: |
-| At rest (reduced motion) | 2.4 | 4.6 |
-| Shared-timer pulses | 23.8 | 25.7 |
-| Former infinite loop | 60.3 | 60.3 |
+| At rest (reduced motion) | 2.4–2.8 | 4.2–4.6 |
+| Shared-timer pulses | 23.8–23.9 | 25.3–25.7 |
+| Former infinite loop | 60.3 | 60.0–60.3 |
 | Former loop, every dot offscreen | 1.0 | 60.0 |
-| Shared-timer pulses, every dot offscreen | 1.2 | 3.0 |
+| Shared-timer pulses, every dot offscreen | 1.2 | 2.6–3.0 |
 
 The offscreen row is what a live v1.3.7 capture found: six `status-blink`
 loops drawing nothing and waking the compositor on every refresh. The resting
