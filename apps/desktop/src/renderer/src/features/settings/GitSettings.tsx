@@ -175,6 +175,7 @@ export function GitSettings(props: {
       FORGE_AGENT_TOOL_GROUPS.map((group) => [group, agentTools.access[group].value]),
     ) as Record<ForgeAgentToolGroup, ForgeAgentToolAccess>,
     rules: agentToolRules ?? [],
+    unreadableRuleRepositories: agentTools.unreadableRuleRepositories ?? [],
   }), [agentTools, agentToolRules]);
   const ruleAcpAgents = useMemo(
     () => (props.acpAgents ?? [])

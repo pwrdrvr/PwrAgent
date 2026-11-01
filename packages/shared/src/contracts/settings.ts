@@ -1633,6 +1633,11 @@ export type DesktopSettingsSnapshot = {
        * Main always sends the list; absent reads as no rules.
        */
       rules?: ForgeAgentToolRule[];
+      /**
+       * Repositories named by a rule entry config.toml holds but PwrAgent
+       * cannot read. Every agent asks before writing there until it is fixed.
+       */
+      unreadableRuleRepositories?: string[];
     };
   };
   applications: DesktopApplicationsSnapshot;

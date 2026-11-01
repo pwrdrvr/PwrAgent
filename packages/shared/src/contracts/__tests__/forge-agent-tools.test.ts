@@ -10,6 +10,7 @@ import {
   forgeAgentToolRuleOffMessage,
   forgeAgentToolRuleSentence,
   forgeApprovalRememberRuleAgent,
+  forgeRuleProjectLabel,
   normalizeForgeAgentToolRules,
   normalizeForgeRuleRepository,
   readForgeApprovalRememberChoice,
@@ -18,6 +19,7 @@ import {
   resolveForgeAgentToolAccess,
   resolveForgeAgentToolInheritedAccess,
   upsertForgeAgentToolRule,
+  validateForgeAgentRuleAgent,
   type ForgeAgentIdentity,
   type ForgeAgentToolPolicy,
   type ForgeAgentToolRule,
@@ -169,7 +171,7 @@ describe("resolveForgeAgentToolAccess", () => {
     )).toEqual({ level: "auto", source: "default" });
   });
 
-  it("folds GitHub Enterprise case when the call names the provider", () => {
+  it("matches a repository without regard to case, whatever the provider", () => {
     const rules: ForgeAgentToolRule[] = [
       { repository: "git.corp.example/Team/Repo", agent: { backend: "claude" }, access: { issues: "allow" } },
     ];
@@ -182,9 +184,92 @@ describe("resolveForgeAgentToolAccess", () => {
     expect(resolveForgeAgentToolAccess(
       policy(rules),
       "issues",
-      { provider: "gitlab", host: "git.corp.example", owner: "team", repo: "repo" },
+      { provider: "gitlab", host: "git.corp.example", owner: "TEAM", repo: "repo" },
       CLAUDE,
-    ).level).toBe("auto");
+    ).level).toBe("allow");
+  });
+
+  describe("for a Codex thread whose model provider is unknown", () => {
+    const unknown: ForgeAgentIdentity = { backend: "codex", codexModelProviderUnknown: true, model: "qwen3-abliterated" };
+
+    it("never lets a Codex rule loosen access", () => {
+      const rules: ForgeAgentToolRule[] = [
+        { repository: REPO, agent: { backend: "codex" }, access: { comments: "allow" } },
+        { repository: REPO, agent: { backend: "codex", model: "qwen3-abliterated" }, access: { issues: "allow" } },
+      ];
+      expect(resolveForgeAgentToolAccess(policy(rules), "comments", REPO_REF, unknown))
+        .toEqual({ level: "auto", source: "default" });
+      expect(resolveForgeAgentToolAccess(policy(rules), "issues", REPO_REF, unknown))
+        .toEqual({ level: "auto", source: "default" });
+      // The same rules apply once Codex reports the default provider.
+      expect(resolveForgeAgentToolAccess(policy(rules), "comments", REPO_REF, CODEX_OPENAI).level).toBe("allow");
+    });
+
+    it("lets any Codex rule that could cover it restrict it", () => {
+      const rules: ForgeAgentToolRule[] = [
+        { repository: REPO, agent: { backend: "*" }, access: { comments: "allow", issues: "allow" } },
+        { repository: REPO, agent: { backend: "codex" }, access: { comments: "ask" } },
+        { repository: REPO, agent: { backend: "codex", codexModelProvider: "llamacpp" }, access: { issues: "off" } },
+      ];
+      expect(resolveForgeAgentToolAccess(policy(rules), "comments", REPO_REF, unknown))
+        .toMatchObject({ level: "ask", source: "project_rule", rule: rules[1] });
+      expect(resolveForgeAgentToolAccess(policy(rules), "issues", REPO_REF, unknown))
+        .toMatchObject({ level: "off", source: "project_rule", rule: rules[2] });
+      expect(resolveForgeAgentToolAccess(policy(rules), "pull_requests", REPO_REF, unknown))
+        .toEqual({ level: "auto", source: "default" });
+    });
+
+    it("is known once a qualified model names the provider", () => {
+      const rules: ForgeAgentToolRule[] = [
+        { repository: REPO, agent: { backend: "codex", codexModelProvider: "llamacpp" }, access: { comments: "allow" } },
+      ];
+      expect(resolveForgeAgentToolAccess(policy(rules), "comments", REPO_REF, {
+        ...unknown,
+        model: "@llamacpp/qwen3-abliterated",
+      }).level).toBe("allow");
+    });
+
+    it("offers no remember option, which could only name the default provider", () => {
+      expect(forgeApprovalRememberRuleAgent("agent", unknown)).toBeUndefined();
+      expect(forgeApprovalRememberRuleAgent("agent_model", unknown)).toBeUndefined();
+      expect(buildForgeApprovalRememberOptions({
+        group: "comments",
+        repository: REPO,
+        identity: unknown,
+        resolution: { level: "ask", source: "default" },
+        automation: false,
+      })).toEqual([]);
+    });
+  });
+
+  describe("for a repository with an unreadable rule entry", () => {
+    const rules: ForgeAgentToolRule[] = [
+      { repository: REPO, agent: { backend: "*" }, access: { pull_requests: "allow", issues: "off" } },
+    ];
+    const tainted = policy(rules, { unreadableRuleRepositories: ["github.com/PwrDrvr/PwrAgent"] });
+
+    it("caps Allow and Auto at Ask", () => {
+      expect(resolveForgeAgentToolAccess(tainted, "pull_requests", REPO_REF, CLAUDE))
+        .toEqual({ level: "ask", source: "unreadable_rule", repository: REPO });
+      expect(resolveForgeAgentToolAccess(tainted, "comments", REPO_REF, CLAUDE))
+        .toEqual({ level: "ask", source: "unreadable_rule", repository: REPO });
+    });
+
+    it("keeps Off, and leaves other repositories alone", () => {
+      expect(resolveForgeAgentToolAccess(tainted, "issues", REPO_REF, CLAUDE).level).toBe("off");
+      expect(resolveForgeAgentToolAccess(tainted, "comments", "github.com/other/repo", CLAUDE))
+        .toEqual({ level: "auto", source: "default" });
+    });
+
+    it("offers no remember option", () => {
+      expect(buildForgeApprovalRememberOptions({
+        group: "pull_requests",
+        repository: REPO,
+        identity: CLAUDE,
+        resolution: { level: "ask", source: "unreadable_rule", repository: REPO },
+        automation: false,
+      })).toEqual([]);
+    });
   });
 
   it("picks the more restrictive of two equally specific rules", () => {
@@ -221,6 +306,12 @@ describe("normalizeForgeRuleRepository", () => {
     ["https://GitHub.com/PwrDrvr/PwrAgent.git/", "github.com/pwrdrvr/pwragent"],
     ["gitlab.com/Group/Sub/Repo", "gitlab.com/Group/Sub/Repo"],
     ["github.com/a/b/c", undefined],
+    ["https://github.com/PwrDrvr/PwrAgent/pull/5", "github.com/pwrdrvr/pwragent"],
+    ["https://gitlab.com/Group/Repo/-/merge_requests/5", "gitlab.com/Group/Repo"],
+    ["https://gitlab.com/Group/Sub/Repo/-/tree/main?ref_type=heads", "gitlab.com/Group/Sub/Repo"],
+    ["gitlab.com/group/-/merge_requests", undefined],
+    ["gitlab.com/group/-repo", undefined],
+    ["gitlab.com/group/repo.atom", undefined],
     ["github.com/onlyowner", undefined],
     ["", undefined],
     ["github.com/../repo", undefined],
@@ -254,6 +345,35 @@ describe("normalizeForgeAgentToolRules", () => {
     ]);
     expect(problems).toHaveLength(6);
     expect(problems[0]).toBe("1: missing repository");
+  });
+
+  it("merges entries that differ only in repository case, keeping the first's spelling", () => {
+    expect(normalizeForgeAgentToolRules([
+      { repository: "ghe.example.com/Acme/Widget", agent: { backend: "codex" }, access: { comments: "auto" } },
+      { repository: "ghe.example.com/acme/widget", agent: { backend: "codex" }, access: { comments: "allow" } },
+    ])).toEqual([
+      { repository: "ghe.example.com/Acme/Widget", agent: { backend: "codex" }, access: { comments: "allow" } },
+    ]);
+  });
+
+  it("reads the built-in agent names in any case", () => {
+    expect(validateForgeAgentRuleAgent({ backend: "Claude" })).toEqual({ ok: true, agent: { backend: "claude" } });
+    expect(validateForgeAgentRuleAgent({ backend: " CODEX ", codexModelProvider: "llamacpp" }))
+      .toEqual({ ok: true, agent: { backend: "codex", codexModelProvider: "llamacpp" } });
+    expect(validateForgeAgentRuleAgent({ backend: "ACP:Grok" })).toEqual({ ok: true, agent: { backend: "acp:Grok" } });
+  });
+});
+
+describe("forgeRuleProjectLabel", () => {
+  it("names the registered project that clones the repository", () => {
+    const rows = [
+      { kind: "worktree", label: "PwrAgnt (worktree)", repositoryKey: "github.com/pwrdrvr/pwragent" },
+      { kind: "directory", label: "PwrAgnt", repositoryKey: "github.com/PwrDrvr/PwrAgent" },
+      { kind: "directory", label: "Other" },
+    ];
+    expect(forgeRuleProjectLabel(rows, REPO)).toBe("PwrAgnt");
+    expect(forgeRuleProjectLabel(rows.slice(0, 1), REPO)).toBe("PwrAgnt (worktree)");
+    expect(forgeRuleProjectLabel(rows, "github.com/other/repo")).toBeUndefined();
   });
 });
 
@@ -290,6 +410,30 @@ describe("upsertForgeAgentToolRule", () => {
     });
     expect(cleared[0].access).toEqual({});
     expect(removeForgeAgentToolRule(cleared, REPO, { backend: "*" })).toHaveLength(1);
+  });
+
+  it("updates the stored rule for a repository spelled in another case", () => {
+    // A GitHub Enterprise host is not recognized as GitHub without the call's
+    // provider, so Settings stores its owner and repo as written.
+    const stored: ForgeAgentToolRule[] = [
+      { repository: "ghe.example.com/Acme/Widget", agent: { backend: "codex" }, access: { comments: "auto" } },
+    ];
+    const updated = upsertForgeAgentToolRule(stored, {
+      repository: "ghe.example.com/acme/widget",
+      agent: { backend: "codex" },
+      group: "comments",
+      level: "allow",
+    });
+    expect(updated).toEqual([
+      { repository: "ghe.example.com/Acme/Widget", agent: { backend: "codex" }, access: { comments: "allow" } },
+    ]);
+    expect(resolveForgeAgentToolAccess(
+      policy(updated),
+      "comments",
+      { provider: "github", host: "ghe.example.com", owner: "Acme", repo: "Widget" },
+      CODEX_OPENAI,
+    ).level).toBe("allow");
+    expect(removeForgeAgentToolRule(updated, "ghe.example.com/ACME/widget", { backend: "codex" })).toEqual([]);
   });
 
   it("rejects an invalid agent", () => {

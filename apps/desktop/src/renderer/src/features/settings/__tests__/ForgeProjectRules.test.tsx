@@ -265,6 +265,71 @@ describe("ForgeProjectRules", () => {
     expect(screen.getByRole("table", { name: "Rules for pwrdrvr/pwrsnap" })).toBeInTheDocument();
   });
 
+  it("shows one project for a repository stored in another case", () => {
+    const stored = { ...CLAUDE_RULE, repository: "ghe.example.com/Acme/Widget" };
+    renderRules(policyWith([stored]), { focusRepository: "ghe.example.com/acme/widget" });
+    expect(screen.getAllByRole("table")).toHaveLength(1);
+    expect(screen.getByRole("table", { name: "Rules for Acme/Widget" })).toBeInTheDocument();
+  });
+
+  it("lists a repository with an unreadable entry and says every agent asks there", () => {
+    renderRules(
+      { ...policyWith([]), unreadableRuleRepositories: ["github.com/pwrdrvr/pwrsnap"] },
+      { focusRepository: "github.com/pwrdrvr/pwrsnap" },
+    );
+    expect(screen.queryByText("No project rules. Every project uses the defaults above.")).toBeNull();
+    expect(screen.getByRole("note")).toHaveTextContent(
+      "config.toml has a rule for pwrdrvr/pwrsnap that PwrAgent cannot read, so every agent asks before writing here",
+    );
+  });
+
+  describe("keyboard focus", () => {
+    it("moves into the Add agent form and back to its opener", async () => {
+      renderRules(policyWith([ALL_AGENTS_RULE]));
+      fireEvent.click(screen.getByRole("button", { name: "+ Add agent" }));
+      const picker = screen.getByRole("group", { name: "Add an agent" });
+      expect(within(picker).getByRole("combobox", { name: "Agent" })).toHaveFocus();
+      fireEvent.click(within(picker).getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "+ Add agent" })).toHaveFocus());
+    });
+
+    it("returns to + Add agent after adding an agent or removing a row", async () => {
+      renderRules(policyWith([ALL_AGENTS_RULE, CLAUDE_RULE]));
+      fireEvent.click(screen.getByRole("button", { name: "+ Add agent" }));
+      const picker = screen.getByRole("group", { name: "Add an agent" });
+      chooseSelectOption(within(picker).getByRole("combobox", { name: "Agent" }), "Grok");
+      fireEvent.click(within(picker).getByRole("button", { name: "Add agent" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "+ Add agent" })).toHaveFocus());
+
+      const remove = within(rulesTable()).getByRole("button", { name: "Remove the Claude row" });
+      remove.focus();
+      fireEvent.click(remove);
+      await waitFor(() => expect(screen.getByRole("button", { name: "+ Add agent" })).toHaveFocus());
+    });
+
+    it("moves to Keep when removing a project asks, and back when kept", async () => {
+      renderRules(policyWith([ALL_AGENTS_RULE, CLAUDE_RULE]));
+      fireEvent.click(screen.getByRole("button", { name: "Remove project" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Keep" })).toHaveFocus());
+      fireEvent.click(screen.getByRole("button", { name: "Keep" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Remove project" })).toHaveFocus());
+      fireEvent.click(screen.getByRole("button", { name: "Remove project" }));
+      fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "+ Add project" })).toHaveFocus());
+    });
+
+    it("moves into the Add project form and back to its opener", async () => {
+      renderRules(policyWith([]), { focusRepository: "" });
+      const opener = screen.getByRole("button", { name: "+ Add project" });
+      opener.focus();
+      fireEvent.click(opener);
+      const picker = screen.getByRole("group", { name: "Add a project" });
+      expect(within(picker).getByRole("textbox", { name: "Repository" })).toHaveFocus();
+      fireEvent.click(within(picker).getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(opener).toHaveFocus());
+    });
+  });
+
   it("disables every cell while forge tools are off", () => {
     renderRules({ ...policyWith([ALL_AGENTS_RULE, CLAUDE_RULE]), enabled: false });
     expect(within(rulesTable()).getByRole("combobox", { name: "Pull requests for Claude" })).toBeDisabled();

@@ -36,6 +36,12 @@ export type ForgeAgentToolPolicy = {
    * with `resolveForgeAgentToolAccess`, never by reading `access` alone.
    */
   rules?: readonly ForgeAgentToolRule[];
+  /**
+   * Repositories named by a `[[git.agent_tools.rules]]` entry that could not
+   * be read. The entry may have meant to restrict an agent, so every level a
+   * call there resolves to is capped at Ask until the entry is fixed.
+   */
+  unreadableRuleRepositories?: readonly string[];
 };
 
 export const DEFAULT_FORGE_AGENT_TOOL_POLICY: ForgeAgentToolPolicy = {
@@ -154,12 +160,15 @@ export type ForgeAgentToolRule = {
 /**
  * Who is calling, derived by the main process from PwrAgent's own records,
  * never from tool arguments. `codexModelProvider` undefined means Codex's
- * default provider; `model` undefined means the model is unknown, and then
- * no model-specific rule matches.
+ * default provider, unless `codexModelProviderUnknown` says PwrAgent could
+ * not tell which provider the thread runs on; Codex rules then only restrict.
+ * `model` undefined means the model is unknown, and then no model-specific
+ * rule matches.
  */
 export type ForgeAgentIdentity = {
   backend: string;
   codexModelProvider?: string;
+  codexModelProviderUnknown?: boolean;
   model?: string;
 };
 
@@ -186,6 +195,12 @@ export type ForgeAgentToolAccessResolution =
       source: "project_rule";
       rule: ForgeAgentToolRule;
       specificity: ForgeAgentRuleSpecificity;
+    }
+  | {
+      /** Always `ask`: an unreadable entry for the repository capped it. */
+      level: ForgeAgentToolAccess;
+      source: "unreadable_rule";
+      repository: string;
     };
 
 /** The `source` a tool result names when a project rule allowed the call. */
@@ -197,6 +212,7 @@ export type ForgeAgentToolRuleApprovalNote = {
   rule: string;
 };
 
+const FORGE_RULE_URL_SCHEME_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
 const FORGE_RULE_HOST_PATTERN = /^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?$/;
 const FORGE_RULE_SEGMENT_PATTERN = /^[A-Za-z0-9_.-]+$/;
 const FORGE_RULE_ACP_REGISTRY_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -223,8 +239,10 @@ function isGitHubRuleHost(host: string): boolean {
  * repository keys do; GitLab keeps case and allows nested groups in owner.
  * A string's provider is inferred from its host unless `provider` is given,
  * so pass the call's provider when it is known. A pasted URL, a trailing
- * `.git`, and stray slashes are accepted. Returns undefined when the value
- * names no repository.
+ * `.git`, and stray slashes are accepted: a GitLab page URL is cut at its
+ * `-` separator and a GitHub page URL at the repository. Returns undefined
+ * when the value names no repository. Compare keys with
+ * `forgeRuleRepositoryMatchKey`, never as strings.
  */
 export function normalizeForgeRuleRepository(
   value: string | ForgeRuleRepositoryRef,
@@ -233,13 +251,20 @@ export function normalizeForgeRuleRepository(
   let host: string;
   let pathSegments: string[];
   let resolvedProvider = provider;
+  let pasted = false;
   if (typeof value === "string") {
-    const trimmed = value
-      .trim()
-      .replace(/^[a-z][a-z0-9+.-]*:\/\//i, "")
+    const raw = value.trim();
+    pasted = FORGE_RULE_URL_SCHEME_PATTERN.test(raw);
+    const trimmed = raw
+      .replace(FORGE_RULE_URL_SCHEME_PATTERN, "")
+      .replace(/[?#].*$/, "")
       .replace(/\/+$/, "")
       .replace(/\.git$/i, "");
-    const segments = trimmed.split("/").filter((segment) => segment.length > 0);
+    let segments = trimmed.split("/").filter((segment) => segment.length > 0);
+    // GitLab reserves a `-` segment to separate a project's path from its
+    // pages (`group/repo/-/merge_requests/5`); the project comes before it.
+    const separator = segments.indexOf("-");
+    if (separator >= 0) segments = segments.slice(0, separator);
     if (segments.length < 3) return undefined;
     host = segments[0];
     pathSegments = segments.slice(1);
@@ -256,15 +281,70 @@ export function normalizeForgeRuleRepository(
   if (!pathSegments.every(isForgeRuleSegment)) return undefined;
   const github = resolvedProvider === "github"
     || (resolvedProvider === undefined && isGitHubRuleHost(host));
+  // A GitHub page URL (`owner/repo/pull/5`) names its repository first.
+  if (github && pasted && pathSegments.length > 2) pathSegments = pathSegments.slice(0, 2);
   if (github && pathSegments.length !== 2) return undefined;
+  // GitLab refuses a group or project path that starts with `-` or ends in
+  // `.atom`, so a key holding one could never match a call.
+  if (!github && pathSegments.some((segment) => segment.startsWith("-") || /\.atom$/i.test(segment))) {
+    return undefined;
+  }
   const path = pathSegments.join("/");
   return `${host}/${github ? path.toLowerCase() : path}`;
+}
+
+/**
+ * The key two rule repositories compare by: the canonical form folded to
+ * lowercase. GitHub and GitLab both find an owner and project without regard
+ * to case and refuse two projects that differ only in case, so case never
+ * separates repositories. Folding also lets a key stored without its
+ * provider (a GitHub Enterprise host keeps its case) meet the call's.
+ */
+export function forgeRuleRepositoryMatchKey(
+  value: string | ForgeRuleRepositoryRef,
+  provider?: ForgeRuleRepositoryProvider,
+): string | undefined {
+  return normalizeForgeRuleRepository(value, provider)?.toLowerCase();
+}
+
+export function sameForgeRuleRepository(left: string, right: string): boolean {
+  const key = forgeRuleRepositoryMatchKey(left);
+  return key !== undefined && key === forgeRuleRepositoryMatchKey(right);
+}
+
+/**
+ * The Directories lens label of the project that clones `repository`, so an
+ * approval card names a project as the sidebar and Settings do. A registered
+ * project wins over a worktree or workspace row.
+ */
+export function forgeRuleProjectLabel(
+  rows: readonly { kind: string; label: string; repositoryKey?: string }[],
+  repository: string,
+): string | undefined {
+  const key = forgeRuleRepositoryMatchKey(repository);
+  if (!key) return undefined;
+  const matches = rows.filter((row) =>
+    row.repositoryKey !== undefined && row.label.trim() && forgeRuleRepositoryMatchKey(row.repositoryKey) === key);
+  return (matches.find((row) => row.kind === "directory") ?? matches[0])?.label.trim();
 }
 
 /** `owner/repo` (or `group/subgroup/repo`) without the host. */
 export function forgeRuleRepositoryLabel(repository: string): string {
   const slash = repository.indexOf("/");
   return slash >= 0 ? repository.slice(slash + 1) : repository;
+}
+
+/**
+ * `Claude`, `CODEX` and `ACP:grok` mean the built-in names; a registry id
+ * keeps its case. An agent written with the wrong case must not be dropped,
+ * since a dropped rule lets a broader one apply.
+ */
+function foldForgeAgentRuleBackend(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower === "claude" || lower === "codex") return lower;
+  return lower.startsWith("acp:") ? `acp:${trimmed.slice("acp:".length)}` : trimmed;
 }
 
 export function isForgeAgentRuleBackend(value: unknown): value is ForgeAgentRuleBackend {
@@ -301,7 +381,7 @@ export function validateForgeAgentRuleAgent(value: {
   codexModelProvider?: unknown;
   model?: unknown;
 }): ForgeAgentRuleAgentValidation {
-  const backend = typeof value.backend === "string" ? value.backend.trim() : value.backend;
+  const backend = foldForgeAgentRuleBackend(value.backend);
   if (!isForgeAgentRuleBackend(backend)) {
     return { ok: false, reason: `unknown agent ${JSON.stringify(value.backend ?? null)}` };
   }
@@ -412,7 +492,7 @@ export function normalizeForgeAgentToolRules(
       return;
     }
     for (const problem of result.problems) onProblem?.(problem, index);
-    const key = `${result.rule.repository}\n${forgeAgentRuleAgentKey(result.rule.agent)}`;
+    const key = `${forgeRuleRepositoryMatchKey(result.rule.repository)}\n${forgeAgentRuleAgentKey(result.rule.agent)}`;
     const existing = byKey.get(key);
     if (existing) {
       existing.access = { ...existing.access, ...result.rule.access };
@@ -431,19 +511,29 @@ function sameRuleModel(ruleModel: string, identityModel: string, backend: string
 }
 
 /**
+ * The provider a Codex caller runs on: undefined for the default provider,
+ * null when PwrAgent could not tell. A qualified model id names its provider.
+ */
+function identityCodexModelProvider(identity: ForgeAgentIdentity): string | undefined | null {
+  const named = identity.codexModelProvider
+    ?? (identity.model ? parseCodexProviderModelId(identity.model).providerId : undefined);
+  if (named !== undefined) return normalizeCodexModelProvider(named);
+  return identity.codexModelProviderUnknown ? null : undefined;
+}
+
+/**
  * Does a rule's agent cover this caller? The All agents row covers everyone.
  * Codex rules compare the model provider, where none means the default
- * provider, so a Codex rule never covers a thread on a custom provider. A
- * model rule needs the caller's model to be known and identical.
+ * provider, so a Codex rule never covers a thread on a custom provider, nor
+ * one whose provider is unknown. A model rule needs the caller's model to be
+ * known and identical.
  */
 export function forgeAgentRuleMatches(agent: ForgeAgentRuleAgent, identity: ForgeAgentIdentity): boolean {
   if (agent.backend === FORGE_AGENT_RULE_ALL_AGENTS) return true;
   if (agent.backend !== identity.backend) return false;
   if (agent.backend === "codex") {
-    const identityProvider = normalizeCodexModelProvider(
-      identity.codexModelProvider
-        ?? (identity.model ? parseCodexProviderModelId(identity.model).providerId : undefined),
-    );
+    const identityProvider = identityCodexModelProvider(identity);
+    if (identityProvider === null) return false;
     if (normalizeCodexModelProvider(agent.codexModelProvider) !== identityProvider) return false;
   }
   if (agent.model === undefined) return true;
@@ -500,6 +590,12 @@ function repositoryProviderOf(
  * hidden from every schema. Otherwise the most specific rule for this
  * repository that covers the caller and sets the group decides, and with
  * none the global level does. `read` always uses the global level.
+ *
+ * Two cases fail closed. A Codex caller whose provider is unknown gets the
+ * most restrictive answer over every provider the rules name, the default,
+ * and a provider none names, so a Codex rule can restrict it but never
+ * loosen. A repository with an unreadable rule entry caps Allow and Auto at
+ * Ask, since the entry may have meant to restrict.
  */
 export function resolveForgeAgentToolAccess(
   policy: ForgeAgentToolPolicy,
@@ -513,14 +609,41 @@ export function resolveForgeAgentToolAccess(
     return { level: globalLevel, source: "default" };
   }
   const provider = repositoryProviderOf(repository);
-  const key = normalizeForgeRuleRepository(repository, provider);
-  if (!key) return { level: globalLevel, source: "default" };
-  const best = pickMostSpecificRule(policy.rules ?? [], group, (rule) =>
-    normalizeForgeRuleRepository(rule.repository, provider) === key
-    && forgeAgentRuleMatches(rule.agent, identity));
-  return best
-    ? { level: best.level, source: "project_rule", rule: best.rule, specificity: best.specificity }
-    : { level: globalLevel, source: "default" };
+  const canonical = normalizeForgeRuleRepository(repository, provider);
+  const key = canonical?.toLowerCase();
+  if (!canonical || !key) return { level: globalLevel, source: "default" };
+  const repositoryRules = (policy.rules ?? []).filter((rule) => forgeRuleRepositoryMatchKey(rule.repository) === key);
+  const resolveFor = (caller: ForgeAgentIdentity): ForgeAgentToolAccessResolution => {
+    const best = pickMostSpecificRule(repositoryRules, group, (rule) => forgeAgentRuleMatches(rule.agent, caller));
+    return best
+      ? { level: best.level, source: "project_rule", rule: best.rule, specificity: best.specificity }
+      : { level: globalLevel, source: "default" };
+  };
+  // An unknown Codex provider matches no Codex rule here: the answer for a
+  // provider no rule names.
+  let resolution = resolveFor(identity);
+  if (identity.backend === "codex" && identityCodexModelProvider(identity) === null) {
+    const providers = new Set<string | undefined>([undefined]);
+    for (const rule of repositoryRules) {
+      if (rule.agent.backend === "codex") providers.add(normalizeCodexModelProvider(rule.agent.codexModelProvider));
+    }
+    for (const candidate of providers) {
+      const answer = resolveFor({
+        backend: "codex",
+        ...(candidate ? { codexModelProvider: candidate } : {}),
+        ...(identity.model ? { model: identity.model } : {}),
+      });
+      if (FORGE_AGENT_TOOL_ACCESS_RANK[answer.level] < FORGE_AGENT_TOOL_ACCESS_RANK[resolution.level]) {
+        resolution = answer;
+      }
+    }
+  }
+  const unreadable = (policy.unreadableRuleRepositories ?? [])
+    .some((entry) => forgeRuleRepositoryMatchKey(entry) === key);
+  if (unreadable && (resolution.level === "allow" || resolution.level === "auto")) {
+    return { level: "ask", source: "unreadable_rule", repository: canonical };
+  }
+  return resolution;
 }
 
 /**
@@ -537,11 +660,11 @@ export function resolveForgeAgentToolInheritedAccess(
   if (!policy.enabled) return { level: "off", source: "disabled" };
   const globalLevel = policy.access[group];
   if (globalLevel === "off") return { level: globalLevel, source: "default" };
-  const key = normalizeForgeRuleRepository(repository);
+  const key = forgeRuleRepositoryMatchKey(repository);
   const rowSpecificity = forgeAgentRuleSpecificity(agent);
   const best = key
     ? pickMostSpecificRule(policy.rules ?? [], group, (rule) => {
-      if (normalizeForgeRuleRepository(rule.repository) !== key) return false;
+      if (forgeRuleRepositoryMatchKey(rule.repository) !== key) return false;
       if (forgeAgentRuleSpecificity(rule.agent) >= rowSpecificity) return false;
       return rule.agent.backend === FORGE_AGENT_RULE_ALL_AGENTS
         || (rule.agent.backend === agent.backend
@@ -559,7 +682,8 @@ export function resolveForgeAgentToolInheritedAccess(
  * list; the input is not changed. `level` undefined clears the group, which
  * then inherits. A rule that does not exist yet is appended. A rule left
  * with no groups is kept, because Settings shows an agent row until the
- * operator removes it.
+ * operator removes it. An existing rule is found by
+ * `forgeRuleRepositoryMatchKey` and keeps the repository it was stored under.
  */
 export function upsertForgeAgentToolRule(
   rules: readonly ForgeAgentToolRule[],
@@ -578,10 +702,12 @@ export function upsertForgeAgentToolRule(
     throw new Error(`Invalid forge rule level: ${String(update.level)}`);
   }
   const agentKey = forgeAgentRuleAgentKey(agent.agent);
+  const repositoryKey = repository.toLowerCase();
   let found = false;
   const next = rules.map((rule) => {
     if (
-      normalizeForgeRuleRepository(rule.repository) !== repository
+      found
+      || forgeRuleRepositoryMatchKey(rule.repository) !== repositoryKey
       || forgeAgentRuleAgentKey(rule.agent) !== agentKey
     ) {
       return rule;
@@ -608,10 +734,10 @@ export function removeForgeAgentToolRule(
   repository: string,
   agent: ForgeAgentRuleAgent,
 ): ForgeAgentToolRule[] {
-  const key = normalizeForgeRuleRepository(repository);
+  const key = forgeRuleRepositoryMatchKey(repository);
   const agentKey = forgeAgentRuleAgentKey(agent);
   return rules.filter((rule) =>
-    normalizeForgeRuleRepository(rule.repository) !== key
+    forgeRuleRepositoryMatchKey(rule.repository) !== key
     || forgeAgentRuleAgentKey(rule.agent) !== agentKey);
 }
 
@@ -659,12 +785,10 @@ export function forgeAgentRuleAgentForIdentity(
   identity: ForgeAgentIdentity,
   options: { includeModel: boolean },
 ): ForgeAgentRuleAgent | undefined {
-  const codexModelProvider = identity.backend === "codex"
-    ? normalizeCodexModelProvider(
-      identity.codexModelProvider
-        ?? (identity.model ? parseCodexProviderModelId(identity.model).providerId : undefined),
-    )
-    : undefined;
+  const identityProvider = identity.backend === "codex" ? identityCodexModelProvider(identity) : undefined;
+  // A rule written for an unknown provider would name the default one.
+  if (identityProvider === null) return undefined;
+  const codexModelProvider = identityProvider;
   const model = options.includeModel && identity.model
     ? identity.backend === "codex" ? parseCodexProviderModelId(identity.model).model : identity.model
     : undefined;
@@ -713,6 +837,21 @@ export function forgeAgentToolRuleSentence(
   options?: { projectLabel?: string; names?: ForgeAgentRuleNames },
 ): string {
   return `The ${forgeAgentToolRuleDescription(rule, options)} ${forgeAgentToolLevelPhrase(group, level)}.`;
+}
+
+/**
+ * The approval card's subtitle when an unreadable rule entry capped the
+ * level: "A pwrdrvr/PwrAgent rule in config.toml cannot be read, so PwrAgent
+ * asks before opening or updating pull requests."
+ */
+export function forgeAgentToolUnreadableRuleSentence(
+  repository: string,
+  group: ForgeAgentToolGroup,
+  options?: { projectLabel?: string },
+): string {
+  const project = options?.projectLabel?.trim() || forgeRuleRepositoryLabel(repository);
+  return `A ${project} rule in config.toml cannot be read, so PwrAgent ${forgeAgentToolLevelPhrase(group, "ask")}. `
+    + "Fix the rule in config.toml.";
 }
 
 /** The refusal when a rule set to Off decided the call. */
@@ -792,6 +931,8 @@ export function buildForgeApprovalRememberOptions(input: {
   if (!isForgeApprovalRememberGroup(input.group) || input.automation) return [];
   if (input.resolution.level === "off" || input.resolution.level === "allow") return [];
   if (input.resolution.source === "project_rule" && input.resolution.level === "ask") return [];
+  // A rule saved now could not lift the cap an unreadable entry sets.
+  if (input.resolution.source === "unreadable_rule") return [];
   const repository = normalizeForgeRuleRepository(input.repository);
   const agent = forgeAgentRuleAgentForIdentity(input.identity, { includeModel: false });
   if (!repository || !agent) return [];

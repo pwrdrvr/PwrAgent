@@ -47,6 +47,7 @@ import {
   forgeAgentToolRuleDescription,
   forgeAgentToolRuleOffMessage,
   forgeAgentToolRuleSentence,
+  forgeAgentToolUnreadableRuleSentence,
   forgeApprovalRememberRuleAgent,
   forgeRuleRepositoryLabel,
   isForgeApprovalRememberGroup,
@@ -893,6 +894,8 @@ const CODEX_RATE_LIMIT_BROADCAST_WINDOW_MS = 20_000;
 const THREAD_SEARCH_REUSE_WINDOW_MS = 2_000;
 /** Marks the approval cards PwrAgent's own forge tools raise. */
 const FORGE_TOOL_REQUEST_ID_PREFIX = "forge-tool:";
+/** How long a card waits for its project's name before using owner/repo. */
+const FORGE_PROJECT_LABEL_TIMEOUT_MS = 1_000;
 const FORGE_APPROVAL_WITHDRAWN_TODO_KEY = "forge-approval-withdrawn";
 
 /** Saves one group of one (repository, agent) forge project rule. */
@@ -1066,6 +1069,8 @@ type BackendClient = {
   readThreadPricingSnapshot?: CodexAppServerClient["readThreadPricingSnapshot"];
   /** The configured Codex model provider a thread runs on, if Codex reported one. */
   modelProviderForThread?(threadId: string): string | undefined;
+  /** Any model provider Codex reported for a thread, `openai` for its default. */
+  reportedModelProviderForThread?(threadId: string): string | undefined;
   enrichThreadDirectories?(
     threads: AppServerThreadSummary[],
     caller?: DirectoryEnrichmentCaller,
@@ -9726,6 +9731,7 @@ export class DesktopBackendRegistry {
   private forgePrToolPreflight?: ForgePrToolPreflight;
   private forgeToolPolicyResolver?: () => ForgeAgentToolPolicy;
   private forgeToolRuleWriter?: ForgeToolRuleWriter;
+  private forgeProjectLabelResolver?: (repository: string) => Promise<string | undefined>;
   /** Conversation grants for forge writes, keyed by thread, then tool and repository. Memory only. */
   private readonly forgeToolSessionApprovals = new Map<string, Map<string, string>>();
 
@@ -9746,6 +9752,11 @@ export class DesktopBackendRegistry {
   /** Saves the project rule an approval card's "Always allow" option chose. */
   setForgeToolRuleWriter(write: ForgeToolRuleWriter): void {
     this.forgeToolRuleWriter = write;
+  }
+
+  /** Names a repository's project as the Directories lens does. */
+  setForgeProjectLabelResolver(resolve: (repository: string) => Promise<string | undefined>): void {
+    this.forgeProjectLabelResolver = resolve;
   }
 
   private resolveForgeToolPolicy(): ForgeAgentToolPolicy {
@@ -9813,16 +9824,27 @@ export class DesktopBackendRegistry {
 
   /**
    * Which agent is making a forge call, from PwrAgent's own records and never
-   * from the call's arguments. A Codex thread with no model provider runs on
-   * the default OpenAI provider. A model that cannot be read is unknown, so
-   * rules naming a model do not apply, while agent and provider rules still do.
+   * from the call's arguments. A Codex thread's provider is the one Codex
+   * reported, configured in PwrAgent or not; `openai` is the default. A
+   * provider Codex has not reported is unknown, never assumed to be the
+   * default, so a Codex rule can restrict that thread but not loosen it. A
+   * model that cannot be read is unknown, so rules naming a model do not
+   * apply, while agent and provider rules still do.
    */
   private async resolveForgeAgentIdentity(context: AgentToolCallContext): Promise<ForgeAgentIdentity> {
     const { backend, threadId } = context;
     let codexModelProvider: string | undefined;
+    let codexModelProviderKnown = false;
     if (backend === "codex") {
       try {
-        codexModelProvider = this.codexClient.modelProviderForThread?.(threadId);
+        // A configured provider is reported too; the second read covers a
+        // client that only tracks those.
+        const reported = this.codexClient.reportedModelProviderForThread?.(threadId)
+          ?? this.codexClient.modelProviderForThread?.(threadId);
+        if (reported?.trim()) {
+          codexModelProvider = reported.trim();
+          codexModelProviderKnown = true;
+        }
       } catch (error) {
         backendRegistryLog.warn("could not read the thread's Codex model provider for forge rules", { threadId, error: String(error) });
       }
@@ -9840,14 +9862,45 @@ export class DesktopBackendRegistry {
     if (backend === "codex" && model) {
       // A qualified id names the provider; rules compare the bare model id.
       const parsed = parseCodexProviderModelId(model);
-      codexModelProvider ??= parsed.providerId;
+      if (!codexModelProviderKnown && parsed.providerId) {
+        codexModelProvider = parsed.providerId;
+        codexModelProviderKnown = true;
+      }
       model = parsed.model || undefined;
     }
     return {
       backend,
       ...(codexModelProvider ? { codexModelProvider } : {}),
+      ...(backend === "codex" && !codexModelProviderKnown ? { codexModelProviderUnknown: true } : {}),
       ...(model ? { model } : {}),
     };
+  }
+
+  /**
+   * The project's name in the Directories lens, so a card names it as the
+   * sidebar and Settings do. Owner/repo when no row matches or the lookup is
+   * slow: a card must not wait on the directory inventory.
+   */
+  private async forgeProjectLabel(repository: ForgeRepository | undefined): Promise<string | undefined> {
+    if (!repository) return undefined;
+    const fallback = `${repository.owner}/${repository.repo}`;
+    const key = normalizeForgeRuleRepository(repository);
+    if (!key || !this.forgeProjectLabelResolver) return fallback;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const label = await Promise.race([
+        this.forgeProjectLabelResolver(key),
+        new Promise<undefined>((resolve) => {
+          timer = setTimeout(resolve, FORGE_PROJECT_LABEL_TIMEOUT_MS);
+        }),
+      ]);
+      return label?.trim() || fallback;
+    } catch (error) {
+      backendRegistryLog.warn("could not read the project name for a forge card", { error: String(error) });
+      return fallback;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   /** Display names for rule wording: installed ACP agents and Codex model providers. */
@@ -9886,6 +9939,8 @@ export class DesktopBackendRegistry {
     const resolution = resolveForgeAgentToolAccess(this.resolveForgeToolPolicy(), group, repository, identity);
     const access = resolution.level;
     const rule = resolution.source === "project_rule" ? resolution.rule : undefined;
+    // What the agent reads names the repository; what the operator reads
+    // names the project, as the sidebar and Settings do.
     const wording = {
       ...(repository ? { projectLabel: `${repository.owner}/${repository.repo}` } : {}),
       names: this.forgeAgentRuleNames(),
@@ -9927,9 +9982,7 @@ export class DesktopBackendRegistry {
       ...(sessionGrant ? { persist: ["session"] } : {}),
       ...(repository ? { connector_name: `${repository.owner}/${repository.repo}` } : {}),
       ...(group === "approve_merge" ? { riskLevel: "high" } : {}),
-      subtitle: rule
-        ? `${forgeAgentToolRuleSentence(rule, group, access, wording)}${grantNote}`
-        : `${label} is set to ${levelName} in Settings → Git → Agent forge tools.${grantNote}`,
+      // `subtitle` is set below, once the call is known to need a card.
       tool_params_display: forgeToolParamsDisplay(args),
     };
     const notification: AppServerPendingRequestNotification = {
@@ -9960,7 +10013,9 @@ export class DesktopBackendRegistry {
     if (automation) {
       throw new ForgeReadError("approval_required", rule
         ? `${forgeAgentToolRuleSentence(rule, group, access, wording)} An automation cannot answer an approval. The operator can set the rule to Allow in Settings → Git → Agent forge tools.`
-        : `${label} is set to ${levelName} in Settings → Git → Agent forge tools, and an automation cannot answer an approval. The operator can set it to Allow.`);
+        : resolution.source === "unreadable_rule"
+          ? `${forgeAgentToolUnreadableRuleSentence(resolution.repository, group, wording)} An automation cannot answer an approval.`
+          : `${label} is set to ${levelName} in Settings → Git → Agent forge tools, and an automation cannot answer an approval. The operator can set it to Allow.`);
     }
     if (!context.turnId) {
       throw new ForgeReadError("approval_required", `${label} needs the operator's approval, which requires an active turn.`);
@@ -9970,8 +10025,17 @@ export class DesktopBackendRegistry {
     // thread links, and ends when the level that asked, or the rule that set
     // it, changes.
     const grantTarget = `${operation}\u0000${repository ? repositoryKey(repository) : ""}`;
-    const grantKey = `${group}:${access}${rule ? `:${rule.repository}:${forgeAgentRuleAgentKey(rule.agent)}` : ""}`;
+    const grantKey = `${group}:${access}${rule
+      ? `:${rule.repository}:${forgeAgentRuleAgentKey(rule.agent)}`
+      : resolution.source === "unreadable_rule" ? ":unreadable" : ""}`;
     if (sessionGrant && this.forgeToolSessionApprovals.get(sessionKey)?.get(grantTarget) === grantKey) return undefined;
+    const cardWording = { ...wording, projectLabel: await this.forgeProjectLabel(repository) };
+    signal.throwIfAborted();
+    meta.subtitle = rule
+      ? `${forgeAgentToolRuleSentence(rule, group, access, cardWording)}${grantNote}`
+      : resolution.source === "unreadable_rule"
+        ? `${forgeAgentToolUnreadableRuleSentence(resolution.repository, group, cardWording)}${grantNote}`
+        : `${label} is set to ${levelName} in Settings → Git → Agent forge tools.${grantNote}`;
     // "Always allow" choices for this card. Only offered options can be
     // chosen, and only for this request.
     const ruleRepository = repository ? normalizeForgeRuleRepository(repository) : undefined;
@@ -9982,8 +10046,8 @@ export class DesktopBackendRegistry {
         identity,
         resolution,
         automation: false,
-        projectLabel: wording.projectLabel,
-        names: wording.names,
+        projectLabel: cardWording.projectLabel,
+        names: cardWording.names,
       })
       : [];
     if (rememberOptions.length > 0) meta[FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY] = rememberOptions;
