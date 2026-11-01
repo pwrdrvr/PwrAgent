@@ -8729,6 +8729,8 @@ type CodexRetryableTurnStart = {
     reasoningEffort?: string;
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
+    agentMessageOrigins?: AppServerThreadMessageOrigin[];
+    agentMessages?: ThreadTurnQueueEntry["agentMessages"];
   };
   terminalObserved?: boolean;
   turnId?: string;
@@ -21731,6 +21733,8 @@ export class DesktopBackendRegistry {
               reasoningEffort: params.reasoningEffort,
               fastMode: params.fastMode,
               messageOrigin: params.messageOrigin,
+              agentMessageOrigins: params.agentMessageOrigins,
+              agentMessages: params.agentMessages,
             },
           }
         : undefined;

@@ -18270,6 +18270,66 @@ script = "echo setup"
     },
   );
 
+  it("keeps grouped agent origins on the turn retried after an invalid message-ID repair", async () => {
+    const threadId = "thread-invalid-id-retry-keeps-agent-group";
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startTurnResults: [
+        { threadId, turnId: "turn-failed-invalid-id" },
+        { threadId, turnId: "turn-retried-once" },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    const fromSender = (
+      senderThreadId: string,
+      turnId: string,
+    ): AppServerThreadMessageOrigin => ({
+      kind: "agent",
+      sourceThread: { backend: "codex", threadId: senderThreadId, turnId },
+    });
+    // A batch from two senders carries the first sender's origin as its
+    // messageOrigin; only the grouped origins show it has no single parent.
+    const agentMessageOrigins = [
+      fromSender("thread-sender-a", "turn-a"),
+      fromSender("thread-sender-b", "turn-b"),
+    ];
+
+    await registry["startTurnNow"]({
+      backend: "codex",
+      threadId,
+      input: [{ type: "text", text: "grouped agent messages" }],
+      messageOrigin: agentMessageOrigins[0],
+      agentMessageOrigins,
+    });
+    await codexClient.emit({
+      method: "turn/failed",
+      params: {
+        threadId,
+        turnId: "turn-failed-invalid-id",
+        turn: {
+          id: "turn-failed-invalid-id",
+          status: "failed",
+          error: {
+            message:
+              "[ApiIdParam] [input[2].id] [invalid_id_prefix] "
+              + "Invalid 'input[2].id': 'review_rollout_user'. "
+              + "Expected an ID that begins with 'msg'.",
+          },
+        },
+      },
+    });
+    await waitForCondition(() => codexClient.startTurnCallCount === 2);
+
+    expect(codexClient.startTurnCalls[0]).not.toHaveProperty("parentTurnId");
+    expect(codexClient.startTurnCalls[1]).not.toHaveProperty("parentTurnId");
+
+    await registry.close();
+  });
+
   describe("invalid message-ID recovery beside live turns on other threads", () => {
     const threadId = "019fb6c7-1545-77c1-be52-98f86cae3c11";
     const invalidIdFailure =
