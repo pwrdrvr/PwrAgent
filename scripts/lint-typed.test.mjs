@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
@@ -6,6 +6,8 @@ import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { checkTypedSuppressions, typedLintFiles, typedSuppressionLines } from "./lint-typed.mjs";
 import { syntaxLintPaths } from "./lint-syntax.mjs";
+import { tsgolintExecutable } from "./oxlint.mjs";
+import workspaceConfig from "../vitest.workspace.ts";
 
 const require = createRequire(import.meta.url);
 const directories = [];
@@ -113,9 +115,11 @@ describe("native typed lint correctness", () => {
     const { bin } = JSON.parse(readFileSync(packageFile, "utf8"));
     probe("fixture-setup-complete");
     probe("node-native-launch");
+    // Outside the repository oxlint finds tsgolint only through a
+    // node_modules/.bin on PATH. Name the binary the prewarm already ran.
     const result = spawnSync(process.execPath, [resolve(dirname(packageFile), bin.oxlint),
       "--config", join(root, "oxlint.typed.json"), "--format=json", file,
-    ], { cwd: root, encoding: "utf8" });
+    ], { cwd: root, encoding: "utf8", env: { ...process.env, OXLINT_TSGOLINT_PATH: tsgolintExecutable() } });
     probe("node-native-complete", {
       pid: result.pid,
       status: result.status,
@@ -131,6 +135,14 @@ describe("native typed lint correctness", () => {
     expect(diagnostics[0].code).toBe("typescript(unbound-method)");
     expect(diagnostics[0].labels[0].span.line).toBe(2);
     probe("assertions-complete");
+  });
+
+  // The prewarm catches everything, so these are the two ways it could stop
+  // working without failing anything: unregistered, or warming a missing file.
+  it("prewarms the native typed backend once per run", () => {
+    const project = workspaceConfig.test.projects.find((entry) => entry.test?.name === "desktop-main");
+    expect(project.test.globalSetup).toContain("scripts/native-typed-lint-prewarm.mjs");
+    expect(statSync(tsgolintExecutable()).isFile()).toBe(true);
   });
 
   it("preserves unused-binding exemptions and applies hook safety only to renderer files", () => {
