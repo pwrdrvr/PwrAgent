@@ -156,12 +156,11 @@ agent receives PwrAgent's one-sentence message, never server output.
 - On Windows, a descendant that detaches from its parent before the server
   exits can escape `taskkill /T`. POSIX process groups do not have this gap
   unless a descendant deliberately starts its own session.
-- If the gateway restarts while a bridge is alive, the bridge does not
-  re-attach; its sessions then stop on deselect, edit, disable, or quit
-  rather than when the bridge exits.
-- Tools a server adds after an agent has loaded its bridge reach that agent
-  through the fixed gateway entry tools, or after the agent reloads its MCP
-  servers.
+- If the gateway restarts while a bridge is alive, its attach socket closes
+  and ends the native bridge. The host must reconnect explicitly.
+- Native hosts receive advertised discovery-change notifications. A host
+  that does not rediscover after them needs an explicit MCP reconnect.
+  Fixed gateway tool searches always read the current catalog.
 
 ## Desktop-owned session contract
 
