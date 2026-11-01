@@ -44,7 +44,7 @@ export function buildMcpIpcRelay({ arch = process.arch, outputRoot = root, packa
     if (process.platform === "linux" && arch !== process.arch) throw new Error("Build the Linux IPC relay on its target architecture.");
     command = "cc";
     args = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2",
-      ...(process.platform === "darwin" ? ["-arch", arch === "x64" ? "x86_64" : arch] : []), source, "-o", output];
+      ...(process.platform === "darwin" ? ["-mmacosx-version-min=12.0", "-arch", arch === "x64" ? "x86_64" : arch] : []), source, "-o", output];
   }
   const result = spawnSync(command, args, {
     stdio: "inherit",
