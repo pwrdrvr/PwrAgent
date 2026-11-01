@@ -182,6 +182,20 @@ describe("status pulse", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("stops quietly when its document is gone before the pulse is due", () => {
+    // Vitest tears jsdom down when a test file ends. A pulse still pending
+    // then fired into a scope with no `document` and failed the run.
+    mountDots("status-dot status-dot--blink");
+    vi.stubGlobal("document", undefined);
+    try {
+      expect(() => vi.advanceTimersByTime(PERIOD)).not.toThrow();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(calls).toHaveLength(0);
+  });
+
   it("starts the timer from a chip only while it pulses", async () => {
     const { RailStatusChip } = await import("../../features/thread-detail/context-panels/RailStatusChip");
     const view = render(<RailStatusChip tone="active">Waiting</RailStatusChip>);
