@@ -10102,6 +10102,7 @@ describe("Sidebar directory pinning", () => {
       expect(onSetProjectForgeAutomation).toHaveBeenCalledWith(
         expect.objectContaining({ key: projectBDirectory.key }),
         { ...resumed, paused: false },
+        expect.anything(),
       );
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });

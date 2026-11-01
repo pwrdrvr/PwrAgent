@@ -833,20 +833,22 @@ it("raises a failed Forge Automation save as a toast unless the caller shows it"
 
 it("applies the owner's directory/forgeAutomation/updated event, and null clears it", async () => {
   const { f, key, owner } = forgeAutomationOwner();
-  let listener: ((event: AgentEvent) => void) | undefined;
+  // The hook subscribes more than once, so every subscriber hears the event.
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const emit = (event: AgentEvent) => listeners.forEach((listener) => listener(event));
   const api = { ...f.api,
-    onAgentEvent: (callback: (event: AgentEvent) => void) => { listener = callback; return () => { listener = undefined; }; } };
+    onAgentEvent: (callback: (event: AgentEvent) => void) => { listeners.add(callback); return () => { listeners.delete(callback); }; } };
   const { result, unmount } = renderHook(() => useThreadNavigation(api));
   const project = () => result.current.directories.find((directory) => directory.key === key);
   await waitFor(() => expect(project()).toBeDefined());
 
   owner.automation = PAUSED;
-  act(() => listener?.({ backend: "codex", notification: { method: "directory/forgeAutomation/updated",
+  act(() => emit({ backend: "codex", notification: { method: "directory/forgeAutomation/updated",
     params: { directoryKey: key, automation: PAUSED } } } as AgentEvent));
   expect(project()?.forgeAutomation).toEqual(PAUSED);
 
   owner.automation = undefined;
-  act(() => listener?.({ backend: "codex", notification: { method: "directory/forgeAutomation/updated",
+  act(() => emit({ backend: "codex", notification: { method: "directory/forgeAutomation/updated",
     params: { directoryKey: key, automation: null } } } as AgentEvent));
   expect(project()?.forgeAutomation).toBeUndefined();
   await waitFor(() => expect([...result.current.pagedNavigation.resources.values()]
