@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.3.8 - 2026-11-01
+
+- Scheduled Sends - Schedule a message for after the selected model's short-term rate limit resets, with a buffer before sending.
+- To-do Delivery - Send a To-do request to an existing thread instead of starting a new one, including across connected machines. Review the destination before sending.
+- Image Previews - Automatically display supported local images referenced in Codex and Claude replies, including Windows paths and images on connected machines.
+- Remote Startup - Show submission time, owner-side startup progress, and elapsed time when starting a remote thread. Cancel startup while it is still cancellable, with clear status when the owner disconnects.
+- Worktree Safety - Preserve attached worktrees during directory reconciliation and inherit repository trust for verified registered worktrees when moving threads.
+- Thread Families - Preserve children on connected machines when archiving nested threads.
+- Review Queue - Keep review requests queued while a new thread or Environment is starting, preserving the selected reviewer and scheduled send time.
+- Diagnostics and UI - Keep rendering captures from taking over existing Chromium traces or debugger sessions. Share status-dot timing and stop usage-warning pulses after two cycles to reduce unnecessary animation work.
+- Outpost Publishing - Separate accepted npm submissions from delayed, read-only registry verification so processing lag is not mistaken for a failed publish. Preserve receipts for recovery without republishing or rebuilding desktop assets.
+
 ## v1.3.7 - 2026-10-31
 
 - Navigation - Add configurable shortcuts for sidebar lenses, including a quick Attention toggle. Restore the selected thread and expanded projects after restart, keep new threads at the top of project pins, and prevent long directory names from overlapping the new-thread button.
