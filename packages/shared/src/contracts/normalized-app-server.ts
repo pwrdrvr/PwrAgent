@@ -711,6 +711,13 @@ export type AppServerThreadMessageOrigin = {
     celestialIcon?: CelestialIconId;
     threadId: ThreadIdentifier;
     title?: string;
+    /**
+     * The sender's access when it sent an agent message. The instance that
+     * owns the target compares it against the target's access when
+     * `general.block_agent_messages_to_higher_access` is on. Absent from an
+     * older sender, which that check treats as Default Access.
+     */
+    executionMode?: ThreadExecutionMode;
   };
   /**
    * The operator ran a to-do card's action, and the card's agent-written prompt

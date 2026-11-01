@@ -2558,6 +2558,10 @@ describe("App", () => {
           value: true,
           source: "default",
         },
+        blockAgentMessagesToHigherAccess: {
+          value: true,
+          source: "default",
+        },
         mcpGatewayEnabled: {
           value: true,
           source: "default",
