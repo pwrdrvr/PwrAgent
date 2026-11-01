@@ -4,7 +4,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -16,6 +16,7 @@ const executable = join(desktop, "build/mcp-ipc-relay", `${process.platform}-${p
 const cleanups: (() => Promise<unknown> | void)[] = [];
 beforeAll(() => {
   execFileSync(process.execPath, [join(desktop, "scripts/build-mcp-ipc-relay.mjs")], { stdio: "pipe" });
+  execFileSync(process.execPath, [join(desktop, "scripts/build-mcp-ipc-relay.mjs"), "--identity-test"], { stdio: "pipe" });
 }, 60_000);
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
@@ -73,6 +74,20 @@ async function fixture() {
 }
 
 describe("verified HTTP MCP over local IPC", () => {
+  it("fails closed when native identity lookup is unreadable", () => {
+    // Only replace the executable basename, not its containing directory.
+    const result = spawnSync(join(executable, "..", process.platform === "win32" ? "mcp-ipc-identity-test.exe" : "mcp-ipc-identity-test"), ["unreadable"], { encoding: "utf8" });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("MCP IPC:");
+  });
+
+  it.skipIf(process.platform === "win32" || process.geteuid?.() !== 0)("rejects an actual foreign Unix peer before sending any byte", () => {
+    const result = spawnSync(join(executable, "..", "mcp-ipc-identity-test"), ["wrong-user"], { encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("connected socket peer belongs to another user");
+  });
   it("initializes, discovers, calls, reads and gets prompts without losing metadata", async () => {
     const f = await fixture();
     const transport = new StreamableHTTPClientTransport(f.ipc.url, { fetch: f.ipc.fetch, reconnectionOptions: MCP_IPC_NO_RECONNECT });

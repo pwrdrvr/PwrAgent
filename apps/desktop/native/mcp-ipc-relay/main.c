@@ -178,6 +178,23 @@ static void check_socket(int dir, const char *name, struct stat *info) {
   }
 }
 
+static void check_peer(int fd) {
+  uid_t uid;
+#if defined(__linux__)
+  struct ucred peer;
+  socklen_t size = sizeof(peer);
+  if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &size) || size != sizeof(peer)) fail("cannot verify peer effective UID");
+  uid = peer.uid;
+#elif defined(__APPLE__)
+  gid_t gid;
+  if (getpeereid(fd, &uid, &gid)) fail("cannot verify peer effective UID");
+#else
+  deny("peer identity verification is unsupported on this platform");
+  uid = (uid_t)-1;
+#endif
+  if (uid != geteuid()) deny("connected socket peer belongs to another user");
+}
+
 static int verified_socket(const char *path) {
   struct sockaddr_un addr;
   memset(&addr, 0, sizeof(addr));
@@ -198,20 +215,7 @@ static int verified_socket(const char *path) {
   if (connect(fd, (struct sockaddr *)&addr, (socklen_t)(offsetof(struct sockaddr_un, sun_path) + strlen(path) + 1))) {
     fail("cannot connect to Unix socket");
   }
-  uid_t uid;
-#if defined(__linux__)
-  struct ucred peer;
-  socklen_t size = sizeof(peer);
-  if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &size) || size != sizeof(peer)) fail("cannot verify peer effective UID");
-  uid = peer.uid;
-#elif defined(__APPLE__)
-  gid_t gid;
-  if (getpeereid(fd, &uid, &gid)) fail("cannot verify peer effective UID");
-#else
-  deny("peer identity verification is unsupported on this platform");
-  uid = (uid_t)-1;
-#endif
-  if (uid != geteuid()) deny("connected socket peer belongs to another user");
+  check_peer(fd);
   check_socket(dir, name, &after);
   if (before.st_dev != after.st_dev || before.st_ino != after.st_ino) deny("socket changed during connection");
   /* Rewalk the original path as well: pinning its parent alone would miss a
