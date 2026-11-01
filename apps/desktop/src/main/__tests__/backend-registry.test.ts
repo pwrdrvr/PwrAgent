@@ -42253,7 +42253,7 @@ script = "printf setup"
         expect(response).toMatchObject({ success: trusted });
         const payload = JSON.parse((response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text);
         expect(payload).toMatchObject(trusted
-          ? { status: "queued", targetPath: expectedDir(targetPath) }
+          ? { status: "queued", targetPath }
           : { code: "forbidden" });
         expect(Boolean(inputRequest)).toBe(!trusted);
       },
