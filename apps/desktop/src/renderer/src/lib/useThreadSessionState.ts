@@ -34,7 +34,7 @@ import type {
   MessagingConversationKind,
   NavigationThreadSummary,
 } from "@pwragent/shared";
-import { isAppServerBackendKind, isCelestialIconId } from "@pwragent/shared";
+import { isAppServerBackendKind, isCelestialIconId, threadTodoMessageOriginFromUnknown } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
 import {
@@ -4442,6 +4442,11 @@ function threadMessageOriginFromUnknown(
       ...(prAutomation ? { prAutomation } : {}),
     };
   }
+  // A to-do marker names the thread that raised the card, so it needs one.
+  const threadTodo =
+    record.kind === "agent"
+      ? threadTodoMessageOriginFromUnknown(record.threadTodo)
+      : undefined;
   return {
     kind: record.kind,
     ...(dependencyId ? { dependencyId } : {}),
@@ -4465,6 +4470,7 @@ function threadMessageOriginFromUnknown(
         ? { title: sourceRecord.title }
         : {}),
     },
+    ...(threadTodo ? { threadTodo } : {}),
     ...(messaging ? { messaging } : {}),
     ...(subAgent ? { subAgent } : {}),
     ...(prAutomation ? { prAutomation } : {}),

@@ -51,6 +51,7 @@ export type ThreadTodoActionRunners = {
     sourceThreadId: string;
     target: ThreadTodoMessageTarget;
     prompt: string;
+    todo: ThreadTodoDispatchCard;
   }) => Promise<{ summary: string }>;
   mergePullRequest: (params: {
     cwd?: string;
@@ -68,6 +69,7 @@ export type ThreadTodoActionRunners = {
     cwd?: string;
     crossProject: boolean;
     action: StartThreadAction;
+    todo: ThreadTodoDispatchCard;
     modelSettings?: ThreadTodoModelSettings;
     /** The card's plain steps, raised as the new thread's own card. */
     plan?: ThreadTodoPlan;
@@ -82,12 +84,19 @@ export type ThreadTodoActionRunners = {
     project?: ThreadTodoProject;
     crossProject: boolean;
     action: StartThreadAction;
+    todo: ThreadTodoDispatchCard;
     /** Checked against the peer's catalog; absent uses the peer's defaults. */
     modelSettings?: ThreadTodoModelSettings;
     /** Raised on the peer when it answers `threadTodos.raisePlan`. */
     plan?: ThreadTodoPlan;
   } & ThreadTodoStartChoices) => Promise<ThreadTodoStartedThread>;
 };
+
+/**
+ * The card whose action sent a prompt, recorded on the message's origin. The
+ * card is resolved by then, so this is display text, never a link.
+ */
+export type ThreadTodoDispatchCard = { id: string; title?: string };
 
 /** What the operator chose on a handoff card besides its model. */
 export type ThreadTodoStartChoices = {
@@ -681,6 +690,8 @@ export class ThreadTodoService {
     // raising thread's workspace.
     const cwd = todo.targetProject ? todo.targetProject.path : todo.cwd;
     const crossProject = todo.targetProject !== undefined;
+    // The card's own title: the action's names the new thread, which shows it.
+    const dispatchCard: ThreadTodoDispatchCard = { id: todo.id, title: todo.title };
     this.running.add(id);
     try {
       if (action.type === "send_message" || options.messageTarget) {
@@ -694,6 +705,7 @@ export class ThreadTodoService {
         }
         const sent = await runners.sendMessage({
           sourceBackend: todo.backend, sourceThreadId: todo.threadId, target, prompt: action.prompt,
+          todo: dispatchCard,
         });
         return this.finish(id, { result: sent.summary });
       }
@@ -737,6 +749,7 @@ export class ThreadTodoService {
             project,
             crossProject,
             action,
+            todo: dispatchCard,
             // The thread's remembered dispatch was checked against this
             // machine's catalog, so only an explicit pick goes to a peer.
             ...(options.modelSettings ? { modelSettings: options.modelSettings } : {}),
@@ -749,6 +762,7 @@ export class ThreadTodoService {
             cwd,
             crossProject,
             action,
+            todo: dispatchCard,
             modelSettings: options.modelSettings
               ?? this.store.getThreadModelSettings(todo.backend, todo.threadId),
             ...(plan ? { plan } : {}),

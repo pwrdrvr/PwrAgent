@@ -30879,14 +30879,15 @@ command = "pnpm dev"
 
     steerDeferred.resolve({ threadId: "thread-1", turnId: "turn-1" });
     await expect(Promise.all(responses)).resolves.toEqual([
-      { backend: "codex", threadId: "thread-1", turnId: "turn-1" },
-      { backend: "codex", threadId: "thread-1", turnId: "turn-1" },
-      { backend: "codex", threadId: "thread-1", turnId: "turn-1" },
+      { backend: "codex", threadId: "thread-1", turnId: "turn-1", disposition: "steered" },
+      { backend: "codex", threadId: "thread-1", turnId: "turn-1", disposition: "steered" },
+      { backend: "codex", threadId: "thread-1", turnId: "turn-1", disposition: "steered" },
     ]);
     await expect(registry.steerTurn(request)).resolves.toEqual({
       backend: "codex",
       threadId: "thread-1",
       turnId: "turn-1",
+      disposition: "steered",
     });
     expect(steerSpy).toHaveBeenCalledTimes(1);
 
@@ -46954,16 +46955,116 @@ script = "printf setup"
       method: "turn/started", params: { threadId: "recipient", turnId: "busy", turn: { id: "busy" } },
     } });
     const prompt = "Refresh #42.\n\nKeep the current worktree.";
+    const todo = { id: "todo-7", title: "Refresh the PR" };
     await registry.sendThreadTodoMessage({ sourceBackend: "codex", sourceThreadId: "sender",
-      target: { backend: "codex", threadId: "recipient" }, prompt });
+      target: { backend: "codex", threadId: "recipient" }, prompt, todo });
     const queued = registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")]!;
     expect(queued).toHaveLength(1);
     const content = await registry.readQueuedTurn({ backend: "codex", threadId: "recipient", queueEntryId: queued[0]!.queueEntryId });
     expect(content.input).toEqual([{ type: "text", text: prompt }]);
-    expect(content.messageOrigin?.sourceThread).toMatchObject({ backend: "codex", threadId: "sender" });
+    // The raising thread and the card; the operator's click is no agent turn.
+    expect(content.messageOrigin).toEqual({
+      kind: "agent",
+      sourceThread: {
+        backend: "codex", threadId: "sender", title: "sender",
+        messageId: expect.stringMatching(/^correspondence:/),
+      },
+      threadTodo: todo,
+    });
     expect(codexClient.startTurnCalls).toHaveLength(0);
     await expect(registry.sendThreadTodoMessage({ sourceBackend: "codex", sourceThreadId: "sender",
-      target: { backend: "codex", threadId: "sender" }, prompt })).rejects.toThrow(/another thread/);
+      target: { backend: "codex", threadId: "sender" }, prompt, todo })).rejects.toThrow(/another thread/);
+  });
+
+  it("carries a to-do request's card to a remote target", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{ id: "sender", title: "Sender", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    const federatedSend = vi.fn(async (request: PwrAgentFederatedThreadMessageRequest) => ({
+      backend: request.backend, threadId: request.threadId, turnId: "remote-turn",
+      instanceId: "peer", instanceLabel: "Studio",
+    }));
+    registry.setFederatedThreadMessageHandler(federatedSend);
+
+    await registry.sendThreadTodoMessage({ sourceBackend: "codex", sourceThreadId: "sender",
+      target: { backend: "codex", threadId: "remote-recipient", instanceId: "peer" },
+      prompt: "Pick this up", todo: { id: "todo-8", title: "Hand it over" } });
+
+    expect(federatedSend).toHaveBeenCalled();
+    expect(federatedSend.mock.lastCall?.[0].messageOrigin).toEqual({
+      kind: "agent",
+      sourceThread: {
+        backend: "codex", threadId: "sender", title: "Sender",
+        messageId: expect.stringMatching(/^correspondence:/),
+      },
+      threadTodo: { id: "todo-8", title: "Hand it over" },
+    });
+  });
+
+  it("never lets an agent's own send claim a to-do card", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{ id: "sender", title: "Sender", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    const federatedSend = vi.fn(async (request: PwrAgentFederatedThreadMessageRequest) => ({
+      backend: request.backend, threadId: request.threadId, turnId: "remote-turn",
+      instanceId: "peer", instanceLabel: "Studio",
+    }));
+    registry.setFederatedThreadMessageHandler(federatedSend);
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "sender", turnId: "turn-1", turn: { id: "turn-1" } },
+    } });
+    const internal = registry as unknown as {
+      threadOrchestrationHandler: (request: PwrAgentThreadOrchestrationRequest) => Promise<PwrAgentThreadOrchestrationResponse>;
+    };
+
+    const response = await internal.threadOrchestrationHandler({
+      operation: "send_message_to_thread",
+      context: { backend: "codex", threadId: "sender", turnId: "turn-1" },
+      args: {
+        backend: "codex", threadId: "remote-recipient", instanceId: "peer", prompt: "Pick this up",
+        threadTodo: { id: "forged", title: "Forged card" },
+      } as never,
+    });
+
+    expect(response.ok).toBe(true);
+    expect(federatedSend).toHaveBeenCalled();
+    for (const [request] of federatedSend.mock.calls) {
+      expect(request.messageOrigin).not.toHaveProperty("threadTodo");
+    }
+    expect(federatedSend.mock.lastCall?.[0].messageOrigin?.sourceThread).toMatchObject({ threadId: "sender", turnId: "turn-1" });
+  });
+
+  it("builds a to-do origin from the raising thread without a fallback title or a turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [
+        { id: "named", title: "Named", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] },
+        { id: "unnamed", title: "New thread", titleSource: "fallback" as const, source: "codex" as const, linkedDirectories: [] },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+
+    await expect(registry.buildThreadTodoMessageOrigin({
+      backend: "codex", threadId: "named", todo: { id: "todo-9", title: "  Ship it  " },
+    })).resolves.toEqual({
+      kind: "agent",
+      sourceThread: { backend: "codex", threadId: "named", title: "Named" },
+      threadTodo: { id: "todo-9", title: "Ship it" },
+    });
+    await expect(registry.buildThreadTodoMessageOrigin({
+      backend: "codex", threadId: "unnamed", todo: { id: "todo-10" },
+    })).resolves.toEqual({
+      kind: "agent",
+      sourceThread: { backend: "codex", threadId: "unnamed" },
+      threadTodo: { id: "todo-10" },
+    });
   });
 
   it("keeps cross-thread queue content lossless and persists sender correspondence through cancellation and reload", async () => {
@@ -48788,6 +48889,209 @@ script = "printf setup"
     expect(response.replay.messages[1]).not.toHaveProperty("origin");
 
     await registry.close();
+  });
+
+  describe("causal messaging steers", () => {
+    const causalMessagingSource = { ownerId: "profile", requestId: "telegram-request", surfaceSelector: "telegram-topic" };
+    const steererOrigin: AppServerThreadMessageOrigin = {
+      kind: "messaging",
+      messaging: {
+        platform: "telegram",
+        surface: { id: "chat-1", kind: "dm" },
+        actor: { platformUserId: "telegram-user" },
+      },
+      causalMessagingSource,
+    };
+    const codexReplay = (): AppServerThreadReplay => {
+      const entries: AppServerThreadReplay["entries"] = [
+        {
+          type: "message",
+          id: "message-start",
+          role: "user",
+          text: "Start active work",
+          turn: { id: "turn-1", status: "completed" },
+        },
+        {
+          type: "message",
+          id: "message-steer",
+          role: "user",
+          text: "Course correct from Telegram",
+          turn: { id: "turn-1", status: "completed" },
+        },
+      ];
+      return {
+        entries,
+        messages: entries.flatMap((entry) =>
+          entry.type === "message" ? [{ id: entry.id, role: entry.role, text: entry.text }] : []),
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      };
+    };
+    const steerCodexTurn = async (firstPromptOrigin?: AppServerThreadMessageOrigin) => {
+      const overlayStore = createOverlayStoreMock({ executionMode: "full-access" });
+      const registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({
+          initializeResult: { methods: ["turn/start", "turn/steer"] },
+          replay: codexReplay(),
+        }),
+        overlayStore,
+        threadTitleGenerationService: null,
+      });
+      onTestFinished(() => registry.close());
+      await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "Start active work" }],
+        ...(firstPromptOrigin ? { messageOrigin: firstPromptOrigin } : {}),
+      });
+      await expect(registry.steerTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        expectedTurnId: "turn-1",
+        input: [{ type: "text", text: "Course correct from Telegram" }],
+        requestId: "telegram-steer-1",
+      }, steererOrigin)).resolves.toMatchObject({ disposition: "steered", turnId: "turn-1" });
+      return { overlayStore, registry };
+    };
+
+    it("leaves an operator-started Codex prompt without an origin and keeps the turn's routing", async () => {
+      const { overlayStore, registry } = await steerCodexTurn();
+
+      const response = await registry.readThread({ backend: "codex", threadId: "thread-1" });
+      expect(response.replay.entries[0]).toMatchObject({ id: "message-start" });
+      expect(response.replay.entries[0]).not.toHaveProperty("origin");
+      expect(response.replay.messages[0]).not.toHaveProperty("origin");
+      expect(overlayStore.upsertThreadMessageOrigin).not.toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: "user:turn-1" }));
+      // An operator prompt has no messaging source, so a messaging steer
+      // makes the turn's routing ambiguous rather than the steerer's.
+      await expect(registry.readCausalMessagingContext({ backend: "codex", threadId: "thread-1", turnId: "turn-1" }))
+        .resolves.toEqual({ causalMessagingAmbiguous: true });
+    });
+
+    it("keeps an agent-origin first prompt's kind after a causal steer", async () => {
+      const firstPromptOrigin: AppServerThreadMessageOrigin = {
+        kind: "agent",
+        sourceThread: { backend: "codex", threadId: "sender", title: "Sender" },
+        causalMessagingSource,
+      };
+      const { overlayStore, registry } = await steerCodexTurn(firstPromptOrigin);
+
+      const response = await registry.readThread({ backend: "codex", threadId: "thread-1" });
+      expect(response.replay.entries[0]).toMatchObject({ id: "message-start", origin: firstPromptOrigin });
+      expect((await overlayStore.readThreadMessageOrigins!({
+        backend: "codex", threadId: "thread-1", messageIds: ["user:turn-1"],
+      }))["user:turn-1"]).toEqual(firstPromptOrigin);
+      await expect(registry.readCausalMessagingContext({ backend: "codex", threadId: "thread-1", turnId: "turn-1" }))
+        .resolves.toEqual({ causalMessagingSource });
+    });
+
+    it("merges a later steer with the turn's causal record, not the first prompt origin", async () => {
+      const firstPromptOrigin: AppServerThreadMessageOrigin = { kind: "agent", causalMessagingSource };
+      const { registry } = await steerCodexTurn(firstPromptOrigin);
+      await expect(registry.readCausalMessagingContext({ backend: "codex", threadId: "thread-1", turnId: "turn-1" }))
+        .resolves.toEqual({ causalMessagingSource });
+      const otherSource = { ...causalMessagingSource, requestId: "other-request", surfaceSelector: "other-topic" };
+      await registry.steerTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        expectedTurnId: "turn-1",
+        input: [{ type: "text", text: "Another sender" }],
+        requestId: "telegram-steer-2",
+      }, { ...steererOrigin, causalMessagingSource: otherSource });
+      // A third steer from the first source must not win the turn back.
+      await registry.steerTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        expectedTurnId: "turn-1",
+        input: [{ type: "text", text: "First sender again" }],
+        requestId: "telegram-steer-3",
+      }, steererOrigin);
+      await expect(registry.readCausalMessagingContext({ backend: "codex", threadId: "thread-1", turnId: "turn-1" }))
+        .resolves.toEqual({ causalMessagingAmbiguous: true });
+    });
+
+    it("merges overlapping steers on one turn instead of keeping the last writer", async () => {
+      const firstPromptOrigin: AppServerThreadMessageOrigin = { kind: "agent", causalMessagingSource };
+      const { registry } = await steerCodexTurn(firstPromptOrigin);
+      const otherSource = { ...causalMessagingSource, requestId: "other-request", surfaceSelector: "other-topic" };
+      await Promise.all([
+        registry.steerTurn({ backend: "codex", threadId: "thread-1", expectedTurnId: "turn-1",
+          input: [{ type: "text", text: "Other sender" }], requestId: "overlap-1" },
+        { ...steererOrigin, causalMessagingSource: otherSource }),
+        registry.steerTurn({ backend: "codex", threadId: "thread-1", expectedTurnId: "turn-1",
+          input: [{ type: "text", text: "First sender" }], requestId: "overlap-2" }, steererOrigin),
+      ]);
+      await expect(registry.readCausalMessagingContext({ backend: "codex", threadId: "thread-1", turnId: "turn-1" }))
+        .resolves.toEqual({ causalMessagingAmbiguous: true });
+    });
+
+    it("still routes a turn whose only causal record is its first prompt origin", async () => {
+      const overlayStore = createOverlayStoreMock();
+      await overlayStore.upsertThreadMessageOrigin!({
+        backend: "codex", threadId: "thread-1", messageId: "user:turn-1",
+        origin: { kind: "messaging", causalMessagingSource },
+      });
+      const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore });
+      onTestFinished(() => registry.close());
+
+      await expect(registry.readCausalMessagingContext({ backend: "codex", threadId: "thread-1", turnId: "turn-1" }))
+        .resolves.toEqual({ causalMessagingSource });
+    });
+
+    it("leaves an operator-started Claude prompt without an origin and keeps the turn's routing", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-registry-"));
+      const finish = Promise.withResolvers<void>();
+      const prompts: Array<{ uuid?: string }> = [];
+      const events: AgentEvent[] = [];
+      const registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({}),
+        overlayStore: createOverlayStoreMock(),
+        agentToolMcpServer: null,
+        pdfToolMcpServer: null,
+        claudeBackendOptions: {
+          store: new ClaudeSessionStore(path.join(root, "sessions")),
+          getSessionInfo: async () => undefined,
+          inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+          discoverModels: async () => [],
+          query: ({ prompt, options = {} }) => {
+            if (typeof prompt === "string") throw new Error("Expected streaming input");
+            const input = prompt[Symbol.asyncIterator]();
+            async function* messages(): AsyncGenerator<ClaudeMessage> {
+              prompts.push((await input.next()).value);
+              yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
+              await finish.promise;
+              prompts.push((await input.next()).value);
+              yield { type: "result", subtype: "success", is_error: false,
+                user_message_uuid: prompts.at(-1)?.uuid,
+              } as ClaudeMessage;
+            }
+            return Object.assign(messages(), { close: () => { finish.resolve(); } }) as unknown as ClaudeQuery;
+          },
+        },
+      });
+      registry.onEvent((event) => { events.push(event); });
+      try {
+        const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
+        const identity = { backend: "claude" as const, threadId };
+        const started = await registry.startTurn({ ...identity, input: [{ type: "text", text: "Start" }] });
+        await vi.waitFor(() => expect(prompts).toHaveLength(1));
+        await expect(registry.steerTurn({ ...identity, expectedTurnId: started.turnId, requestId: "telegram-steer-1",
+          input: [{ type: "text", text: "Course correct from Telegram" }] }, steererOrigin))
+          .resolves.toMatchObject({ disposition: "steered", turnId: started.turnId });
+        finish.resolve();
+        await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+
+        const replay = await registry.readThread(identity);
+        const firstPrompt = replay.replay.messages.find((message) => message.text === "Start");
+        expect(firstPrompt?.id).toBe(`user:${started.turnId}`);
+        expect(firstPrompt).not.toHaveProperty("origin");
+        await expect(registry.readCausalMessagingContext({ ...identity, turnId: started.turnId }))
+          .resolves.toEqual({ causalMessagingAmbiguous: true });
+      } finally {
+        await registry.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   it("applies the legacy handoff fallback only on a page containing the thread start", async () => {

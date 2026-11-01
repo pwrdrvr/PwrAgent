@@ -63,6 +63,44 @@ describe("ThreadTurnQueue", () => {
     expect(entries[0]).not.toHaveProperty("title");
   });
 
+  it("keeps a to-do marker on one grouped message and drops it from a mixed batch", async () => {
+    const todoOrigin = {
+      kind: "agent" as const,
+      sourceThread: { backend: "codex" as const, threadId: "raiser" },
+      threadTodo: { id: "todo-1", title: "Refresh the PR" },
+    };
+    const agentOrigin = {
+      kind: "agent" as const,
+      sourceThread: { backend: "codex" as const, threadId: "sender" },
+    };
+    for (const order of [[todoOrigin, agentOrigin], [agentOrigin, todoOrigin]]) {
+      const queue = new ThreadTurnQueue({
+        isThreadActive: () => true,
+        startTurn: async (entry) => ({
+          backend: entry.backend,
+          threadId: entry.threadId,
+          turnId: `turn-${entry.id}`,
+        }),
+      });
+      const [first, second] = order;
+      await queue.submitGroupedSteer(buildEntry({ id: "group", messageOrigin: first }));
+      const alone = queue.getAllQueuedEntries()[0]!;
+      if (first === todoOrigin) expect(alone.messageOrigin?.threadTodo).toEqual(todoOrigin.threadTodo);
+      else expect(alone.messageOrigin).not.toHaveProperty("threadTodo");
+
+      await queue.submitGroupedSteer({
+        ...buildEntry({ id: "second", messageOrigin: second }),
+        input: [{ type: "text", text: "second report" }],
+      });
+
+      const batch = queue.getAllQueuedEntries()[0]!;
+      // The batch is no one card's prompt; each message keeps its own origin.
+      expect(batch.messageOrigin).not.toHaveProperty("threadTodo");
+      expect(batch.agentMessages?.map((message) => message.origin)).toEqual(order);
+      expect(batch.agentMessageOrigins).toEqual(order);
+    }
+  });
+
   it("starts idle thread submissions immediately", async () => {
     const startedEntries: string[] = [];
     const events: ThreadTurnQueueLifecycleEvent[] = [];

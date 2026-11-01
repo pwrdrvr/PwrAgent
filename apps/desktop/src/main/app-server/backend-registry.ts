@@ -110,6 +110,7 @@ import {
 } from "@pwragent/shared";
 import { codexNativeSubAgentName, readCodexNativeSubAgentName } from "@pwragent/shared";
 import { isThreadLockRefusal, normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
+import { threadTodoMessageOriginFromUnknown } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
 import {
   isRemoteLaunchpadStorageKey,
@@ -7413,6 +7414,14 @@ function buildTurnUserMessageOriginId(turnId: string): string {
   return `user:${turnId}`;
 }
 
+/**
+ * The turn's merged causal routing context. No message has this id, and
+ * origins are read by message id, so it never becomes a displayed origin.
+ */
+function buildTurnCausalMessagingContextId(turnId: string): string {
+  return `turn-causal:${turnId}`;
+}
+
 function resolveThreadMessageOrigin(params: {
   origin?: ThreadTurnQueueOrigin;
   messageOrigin?: AppServerThreadMessageOrigin;
@@ -9792,22 +9801,30 @@ export class DesktopBackendRegistry {
   async readCausalMessagingContext(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<
     Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">
   > {
-    const origin = await this.readExactTurnMessageOrigin(context);
+    const origin = await this.readTurnCausalMessagingOrigin(context);
     return { ...(origin?.causalMessagingSource ? { causalMessagingSource: origin.causalMessagingSource } : {}),
       ...(origin?.causalMessagingAmbiguous ? { causalMessagingAmbiguous: true } : {}) };
   }
 
-  private async readExactTurnMessageOrigin(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<AppServerThreadMessageOrigin | undefined> {
+  /**
+   * A causal steer writes the turn's routing record under its own key.
+   * Until one does, the turn's first prompt origin is the record. While the
+   * turn is starting, that origin is in memory before its row is written.
+   */
+  private async readTurnCausalMessagingOrigin(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<AppServerThreadMessageOrigin | undefined> {
     if (!context.turnId) return undefined;
     const starting = this.findStartingTurnOrigin(context);
-    if (starting?.turnId) return starting.origin;
-    const messageId = buildTurnUserMessageOriginId(context.turnId);
-    const persisted = this.overlayStore.readThreadMessageOrigins
-      ? (await this.overlayStore.readThreadMessageOrigins({ ...context, messageIds: [messageId] }))[messageId]
-      : undefined;
+    const causalId = buildTurnCausalMessagingContextId(context.turnId);
+    const promptId = buildTurnUserMessageOriginId(context.turnId);
+    const origins = this.overlayStore.readThreadMessageOrigins
+      ? await this.overlayStore.readThreadMessageOrigins({ ...context, messageIds: [causalId, promptId] })
+      : {};
     // Before the start call returns, the turn id is unknown. A thread starts
     // one turn at a time, so an unbound origin belongs to the turn calling.
-    return persisted ?? starting?.origin;
+    return origins[causalId]
+      ?? (starting?.turnId ? starting.origin : undefined)
+      ?? origins[promptId]
+      ?? starting?.origin;
   }
 
   /** The origin bound to this turn, else the thread's origin still awaiting its turn id. */
@@ -10465,6 +10482,7 @@ export class DesktopBackendRegistry {
   private readonly executionModeSelectionLocks = new PerKeyAsyncLock();
   private readonly acpSessionPromptLocks = new PerKeyAsyncLock();
   private readonly activeTurnControlLocks = new PerKeyAsyncLock();
+  private readonly turnCausalContextLocks = new PerKeyAsyncLock();
   private readonly queuedAcpRuntimeOptions = new Map<
     string,
     {
@@ -24650,17 +24668,19 @@ export class DesktopBackendRegistry {
     try {
       const result = await promise;
       if (result.disposition === "steered" && messageOrigin) {
-        const previous = await this.readExactTurnMessageOrigin({ backend: params.backend, threadId: params.threadId, turnId: result.turnId });
-        if (previous?.causalMessagingSource || previous?.causalMessagingAmbiguous
-          || messageOrigin.causalMessagingSource || messageOrigin.causalMessagingAmbiguous) {
-          const merged = { ...(previous ?? messageOrigin), ...mergeCausalMessagingContext([previous, messageOrigin]) };
-          // A steer can land before the turn's own origin is written; that
-          // write must not drop the steer's sender.
-          const starting = this.findStartingTurnOrigin({ backend: params.backend, threadId: params.threadId, turnId: result.turnId });
-          if (starting) starting.origin = merged;
-          await this.persistThreadMessageOrigin({ backend: params.backend, threadId: params.threadId,
-            messageId: buildTurnUserMessageOriginId(result.turnId), origin: merged });
-        }
+        const turn = { backend: params.backend, threadId: params.threadId, turnId: result.turnId };
+        // Read-modify-write: overlapping steers must merge, not overwrite.
+        await this.turnCausalContextLocks.run(`${turn.backend}:${turn.threadId}:${turn.turnId}`, async () => {
+          const previous = await this.readTurnCausalMessagingOrigin(turn);
+          if (previous?.causalMessagingSource || previous?.causalMessagingAmbiguous
+            || messageOrigin.causalMessagingSource || messageOrigin.causalMessagingAmbiguous) {
+            // `user:<turnId>` is also the first prompt's displayed origin, and
+            // the steerer did not write that prompt. Keep routing in its own row.
+            await this.persistThreadMessageOrigin({ backend: turn.backend, threadId: turn.threadId,
+              messageId: buildTurnCausalMessagingContextId(turn.turnId),
+              origin: { kind: messageOrigin.kind, ...mergeCausalMessagingContext([previous, messageOrigin]) } });
+          }
+        });
       }
       return result;
     } catch (error) {
@@ -25062,6 +25082,7 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: result.threadId,
       turnId: result.turnId,
+      disposition: "steered",
     };
   }
 
@@ -42813,12 +42834,29 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /** Operator dispatch of a to-do card: the raising thread, never a delegated turn. */
+  async buildThreadTodoMessageOrigin(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    todo: { id: string; title?: string };
+  }): Promise<AppServerThreadMessageOrigin> {
+    // No turnId on purpose: the operator clicked the card, so no agent turn
+    // sent this and no causal messaging or delegated lineage applies.
+    const messageOrigin = await this.buildAgentMessageOrigin({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const threadTodo = threadTodoMessageOriginFromUnknown(params.todo);
+    return threadTodo ? { ...messageOrigin, threadTodo } : messageOrigin;
+  }
+
   /** Operator-approved to-do dispatch uses the same routing, queue and receipts as agent messages. */
   async sendThreadTodoMessage(params: {
     sourceBackend: AppServerBackendKind;
     sourceThreadId: string;
     target: { backend: AppServerBackendKind; threadId: string; instanceId?: string };
     prompt: string;
+    todo: { id: string; title?: string };
   }): Promise<void> {
     const response = await this.deliverMessageToThread({
       operation: "send_message_to_thread",
@@ -42828,7 +42866,7 @@ export class DesktopBackendRegistry {
         includeRemote: params.target.instanceId !== undefined,
         prompt: params.prompt,
       },
-    });
+    }, { threadTodo: params.todo });
     if (!response.ok) throw new Error(response.error.message);
   }
 
@@ -42853,6 +42891,8 @@ export class DesktopBackendRegistry {
 
   private async deliverMessageToThread(
     request: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">,
+    /** Set only by the operator's to-do dispatch, never from tool arguments. */
+    options?: { threadTodo?: { id: string; title?: string } },
   ): Promise<PwrAgentThreadOrchestrationResponse> {
     const backend = request.args.backend;
     if (!isAppServerBackendKind(backend)) {
@@ -42921,6 +42961,8 @@ export class DesktopBackendRegistry {
         threadId: request.context.threadId,
         turnId: request.context.turnId,
       });
+      const threadTodo = threadTodoMessageOriginFromUnknown(options?.threadTodo);
+      if (threadTodo) messageOrigin.threadTodo = threadTodo;
       source.title = messageOrigin.sourceThread?.title;
       if (messageOrigin.sourceThread) {
         messageOrigin.sourceThread = { ...messageOrigin.sourceThread, messageId: correspondenceId };
