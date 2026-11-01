@@ -114,8 +114,20 @@ test("tooltip ignores sibling streaming and still detects sibling layout movemen
         observer.observe(target);
       });
       let reads = 0;
-      target.getBoundingClientRect = () => { reads += 1; return original(); };
-      Object.assign(window, { tooltipBudgetReads: () => reads });
+      const evidence: { stack: string | undefined; rect: object; fonts: string }[] = [];
+      target.getBoundingClientRect = () => {
+        const rect = original();
+        reads += 1;
+        // Capture only after a counted read, so evidence cannot move startup
+        // or observer delivery ahead of the first unexpected operation.
+        if (evidence.length < 4) evidence.push({
+          stack: new Error("tooltip anchor read").stack,
+          rect: rect.toJSON(),
+          fonts: document.fonts.status,
+        });
+        return rect;
+      };
+      Object.assign(window, { tooltipBudgetReads: () => reads, tooltipBudgetEvidence: () => evidence });
     });
     if (process.env.PWRAGENT_TOOLTIP_PERFORMANCE_TRACE === "1") {
       session = await app.window.context().newCDPSession(app.window);
@@ -135,6 +147,11 @@ test("tooltip ignores sibling streaming and still detects sibling layout movemen
     });
     await capture?.finish();
     console.log(JSON.stringify({ tooltipStreaming: { deliveries: 100, anchorGeometryReads: reads } }));
+    if (reads !== 0) {
+      console.log(JSON.stringify({ tooltipReadEvidence: await app.window.evaluate(() =>
+        (window as unknown as { tooltipBudgetEvidence: () => unknown }).tooltipBudgetEvidence(),
+      ) }));
+    }
     expect(reads).toBe(0);
     await expect(app.window.getByRole("tooltip")).toBeVisible();
     // A sibling's descendants resize without mutating any observed ancestor
