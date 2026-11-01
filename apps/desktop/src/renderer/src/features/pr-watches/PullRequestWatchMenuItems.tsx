@@ -2,6 +2,7 @@ import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
 import { buildPullRequestStatusKey } from "@pwragent/shared";
 import { resolveLifecycleState } from "../pr-status/pr-chip-state";
 import {
+  canWatchPrCi,
   isCiWatch,
   readWatchRunAttempt,
   useThreadPrWatches,
@@ -11,7 +12,11 @@ import {
 /**
  * The watch items in a PR chip's sidebar menu, between Copy Pull Request URL
  * and Detach Pull Request. Local threads only: a peer's watches run on the
- * peer, which no signed request can stop from here.
+ * peer, which no signed request can start or stop from here.
+ *
+ * Watch CI arms the watch at once. Ask Agent to Watch CI stays beside it: it
+ * drafts the request so the operator can add instructions for the wake, and
+ * it shows the phrasing that works in any thread.
  *
  * Its own component so the sidebar does not re-render when watches change.
  */
@@ -32,8 +37,10 @@ export function PullRequestWatchMenuItems(props: {
   const terminalWatch = watches.find((watch) => !isCiWatch(watch));
   const stop = context.stop;
   const ask = context.askAgentToWatchCi;
+  const watchCi = context.watchCi;
   const canAsk = Boolean(ask) && !ciWatch && resolveLifecycleState(props.pr) === "open";
-  if (!(stop && (ciWatch || terminalWatch)) && !canAsk) {
+  const canWatch = Boolean(watchCi) && !ciWatch && canWatchPrCi(props.thread, props.pr);
+  if (!(stop && (ciWatch || terminalWatch)) && !canAsk && !canWatch) {
     return null;
   }
   const runAttempt = ciWatch ? readWatchRunAttempt(ciWatch) : undefined;
@@ -67,6 +74,18 @@ export function PullRequestWatchMenuItems(props: {
           }}
         >
           Stop Watching for Merge
+        </button>
+      ) : null}
+      {canWatch ? (
+        <button
+          role="menuitem"
+          type="button"
+          onClick={() => {
+            props.onClose();
+            void watchCi!(props.thread, props.pr);
+          }}
+        >
+          Watch CI
         </button>
       ) : null}
       {canAsk ? (

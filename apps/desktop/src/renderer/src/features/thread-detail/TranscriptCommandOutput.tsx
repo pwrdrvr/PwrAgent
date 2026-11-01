@@ -197,6 +197,176 @@ export function TranscriptThreadToolActivity(props: {
   );
 }
 
+export function isPullRequestWatchToolDetail(
+  detail: AppServerThreadActivityDetail,
+): boolean {
+  const identifier = detail.command?.rawCommand
+    ?? detail.command?.displayCommand.split("\n", 1)[0]
+    ?? "";
+  return /(?:^|[/.]|__)watch_thread_pull_request$/i.test(identifier.trim());
+}
+
+/** What a `watch_thread_pull_request` row says, read from the tool's result. */
+export type PullRequestWatchToolPresentation = {
+  label: string;
+  /** The result's own sentence, shown when the row is expanded. */
+  message?: string;
+};
+
+/**
+ * The row's label for one `watch_thread_pull_request` call, or undefined
+ * when the call has no result to read yet, so the generic row draws it.
+ */
+export function describePullRequestWatchTool(
+  detail: AppServerThreadActivityDetail,
+): PullRequestWatchToolPresentation | undefined {
+  const command = detail.command;
+  if (!command || !isPullRequestWatchToolDetail(detail)) return undefined;
+  const output = parseJsonPayload(command.output);
+  if (!output) return undefined;
+  const data = readRecord(output.data) ?? output;
+  const args = parseJsonPayload(command.displayCommand.split("\n").slice(1).join("\n"));
+  const error = readRecord(output.error);
+  const errorMessage = readString(error, "message")
+    ?? (output.ok === false ? readString(output, "message") : undefined);
+  if (errorMessage) {
+    return { label: "No PR watch", message: errorMessage };
+  }
+  const listResult = readRecord(data.pullRequestWatches);
+  if (listResult) {
+    return describePullRequestWatchList(listResult);
+  }
+  const result = readRecord(data.pullRequestWatch);
+  if (!result) return undefined;
+  const message = readString(result, "message");
+  const watch = readRecord(result.watch);
+  const terminalWatch = readRecord(result.terminalWatch);
+  const prNumber = readNumber(watch, "prNumber")
+    ?? readNumber(terminalWatch, "prNumber")
+    ?? readNumber(readRecord(result.terminal), "prNumber")
+    ?? readPrNumberFromUrl(readString(args, "url"));
+  const pr = prNumber !== undefined ? `#${prNumber}` : "the PR";
+  const already = readString(result, "reason") === "already_armed";
+  const reason = readString(result, "reason");
+  const withMessage = (label: string): PullRequestWatchToolPresentation => ({
+    label,
+    ...(message ? { message } : {}),
+  });
+  if (reason === "pr_terminal") {
+    const outcome = readString(readRecord(result.terminal), "outcome")
+      ?? readString(result, "currentOutcome");
+    return withMessage(`No watch: ${pr} is already ${outcome === "merged" ? "merged" : "closed"}`);
+  }
+  if (watch) {
+    const runAttempt = readNumber(watch, "runAttempt")
+      ?? readNumber(readRecord(watch.baseline), "runAttempt");
+    return withMessage([
+      `${already ? "Already waiting" : "Waiting"} for CI`,
+      pr,
+      ...(runAttempt !== undefined ? [`attempt ${runAttempt}`] : []),
+      ...(terminalWatch ? ["and merge or close"] : []),
+    ].join(" · "));
+  }
+  if (reason === "outcome_already_final") {
+    return withMessage(terminalWatch
+      ? `No CI watch: checks already finished · watching ${pr} for merge or close`
+      : "No CI watch: checks already finished");
+  }
+  if (terminalWatch) {
+    return withMessage(`${already ? "Already watching" : "Watching"} ${pr} for merge or close`);
+  }
+  return message ? withMessage("PR watch") : undefined;
+}
+
+function describePullRequestWatchList(
+  result: Record<string, unknown>,
+): PullRequestWatchToolPresentation {
+  const message = readString(result, "message");
+  const withMessage = (label: string): PullRequestWatchToolPresentation => ({
+    label,
+    ...(message ? { message } : {}),
+  });
+  const cancelled = readRecord(result.cancelled);
+  if (readString(result, "action") === "cancel" && cancelled) {
+    const prNumber = readNumber(cancelled, "prNumber");
+    const pr = prNumber !== undefined ? `#${prNumber}` : "the PR";
+    return withMessage(readString(cancelled, "kind") === "terminal"
+      ? `Stopped watching ${pr} for merge or close`
+      : `Stopped waiting for CI · ${pr}`);
+  }
+  const count = Array.isArray(result.watches) ? result.watches.length : 0;
+  return withMessage(count === 0
+    ? "No PR watches waiting"
+    : `${count} PR ${count === 1 ? "watch" : "watches"} waiting`);
+}
+
+function readNumber(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): number | undefined {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readPrNumberFromUrl(url: string | undefined): number | undefined {
+  const match = url?.match(/\/(?:pull|merge_requests)\/([1-9]\d*)(?:[/?#]|$)/);
+  return match ? Number(match[1]) : undefined;
+}
+
+export function TranscriptPullRequestWatchActivity(props: {
+  createdAt?: number;
+  detail: AppServerThreadActivityDetail;
+  expanded: boolean;
+  presentation: PullRequestWatchToolPresentation;
+  onExpandedChange: (expanded: boolean) => void;
+}) {
+  const statusText = formatCommandStatus(props.detail);
+  const meta = (
+    <span className="transcript-thread-tool__meta">
+      {statusText}
+      {props.createdAt ? (
+        <time>
+          {new Intl.DateTimeFormat(undefined, {
+            hour: "numeric",
+            minute: "2-digit",
+          }).format(props.createdAt)}
+        </time>
+      ) : null}
+    </span>
+  );
+  if (!props.presentation.message) {
+    return (
+      <aside className="transcript-activity transcript-thread-tool">
+        <header className="transcript-thread-tool__header">
+          <span className="transcript-thread-tool__action">{props.presentation.label}</span>
+          {meta}
+        </header>
+      </aside>
+    );
+  }
+  return (
+    <aside className="transcript-activity transcript-thread-tool">
+      <header className="transcript-thread-tool__header">
+        <button
+          type="button"
+          className="transcript-thread-tool__toggle"
+          aria-expanded={props.expanded}
+          onClick={() => props.onExpandedChange(!props.expanded)}
+        >
+          <span className="transcript-activity__chevron" aria-hidden="true" />
+          <span className="transcript-thread-tool__action">{props.presentation.label}</span>
+        </button>
+        {meta}
+      </header>
+      {props.expanded ? (
+        <div className="transcript-thread-tool__body">
+          <p className="transcript-pr-watch__message">{props.presentation.message}</p>
+        </div>
+      ) : null}
+    </aside>
+  );
+}
+
 function buildThreadToolPresentation(
   detail: AppServerThreadActivityDetail,
   threadLinks: ReturnType<typeof useThreadLinks>,

@@ -29,6 +29,11 @@ have finished at this head. For a re-run started outside PwrAgent, call again
 with `waitForNextResult: true`. Do not end the turn assuming a wait that the
 result did not confirm.
 
+When a wait is no longer needed, call `watch_thread_pull_request` with
+`action: "list"` to read this thread's waiting watches, then with
+`action: "cancel"` and the `watchId` to stop one. The operator sees it end as
+stopped by the agent.
+
 Auto-fix PR coordinates failure wake-ups with watches; avoid duplicate monitors.
 A success watch can still be needed when Auto-fix is active. Follow the status
 tool's description for `autoFixActive` monitoring ownership and repair-event

@@ -20,6 +20,7 @@ import { PrChip } from "../../pr-status/PrChip";
 import { openExternalUrl } from "../../../lib/open-external-url";
 import { PullRequestWatchList } from "../../pr-watches/PullRequestWatchList";
 import {
+  canWatchPrCi,
   resolvePrChipWatch,
   useThreadAutoFixRepository,
   useThreadPrWatchIndicatorsContext,
@@ -230,8 +231,8 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
                     onTurnOffAutoFix={props.onSetThreadPrAutoDispatch
                       ? () => void props.onSetThreadPrAutoDispatch!(false)
                       : undefined}
-                    onAskAgentToWatchCi={watchContext?.askAgentToWatchCi
-                      ? () => watchContext.askAgentToWatchCi!(props.thread, pr)
+                    onWatchCi={watchContext?.watchCi && canWatchPrCi(props.thread, pr)
+                      ? async () => await watchContext.watchCi!(props.thread, pr)
                       : undefined}
                     history={historyEntries?.filter((entry) => entry.prKey === statusKey)}
                     historyFailed={historyFailed}

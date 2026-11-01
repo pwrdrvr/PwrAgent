@@ -397,7 +397,17 @@ export type PullRequestTerminalDetails = {
   detailsUnavailableReason?: string;
 };
 
+/**
+ * `watch` (the default) arms watches. `list` returns the thread's waiting
+ * watches, and `cancel` stops one of them by `watchId`.
+ */
+export type WatchThreadPullRequestAction = "watch" | "list" | "cancel";
+
 export type WatchThreadPullRequestToolArgs = {
+  /** Absent means `watch`, the only action before list and cancel existed. */
+  action?: WatchThreadPullRequestAction;
+  /** The watch `cancel` stops, from `list` or an earlier `watch` result. */
+  watchId?: string;
   /** Defaults to the invoking PwrAgent thread's backend when omitted. */
   backend?: AppServerBackendKind;
   /** Defaults to the invoking PwrAgent thread id when omitted. */
@@ -452,10 +462,13 @@ export type ThreadPullRequestWatchSummary = {
    * push drops it. Rows written before it existed carry only the baseline's.
    */
   runAttempt?: number;
-  /** The re-run's workflow run, beside `runAttempt`. */
+  /** The re-run's workflow run or GitLab pipeline, beside `runAttempt`. */
   runId?: number;
-  /** Absent means an agent: today only `watch_thread_pull_request` creates watches. */
-  createdBy?: "agent";
+  /**
+   * Who armed the watch: an agent through `watch_thread_pull_request`, or the
+   * operator through Watch CI. Absent means an agent: older rows predate it.
+   */
+  createdBy?: "agent" | "operator";
   /** The head this CI watch was armed at before a push moved it. */
   followedFrom?: string;
 };
@@ -488,6 +501,17 @@ export type WatchThreadPullRequestResult = {
   armed: boolean;
   reason: WatchThreadPullRequestReason;
   /** One plain sentence saying what will, or will not, wake the thread. */
+  message: string;
+};
+
+/** What `watch_thread_pull_request` returns for `list` and `cancel`. */
+export type ThreadPullRequestWatchListResult = {
+  action: "list" | "cancel";
+  /** The thread's waiting watches after this call, oldest first. */
+  watches: ThreadPullRequestWatchSummary[];
+  /** The watch `cancel` stopped. */
+  cancelled?: ThreadPullRequestWatchSummary;
+  /** One plain sentence saying what is, or is no longer, waiting. */
   message: string;
 };
 
@@ -854,6 +878,9 @@ export type PwrAgentThreadInspectionResponse =
           }
         | {
             pullRequestWatch: WatchThreadPullRequestResult;
+          }
+        | {
+            pullRequestWatches: ThreadPullRequestWatchListResult;
           }
         | {
             mutation: ThreadMutationResult;

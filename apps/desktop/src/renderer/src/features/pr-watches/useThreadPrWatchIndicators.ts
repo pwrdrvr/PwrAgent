@@ -64,6 +64,11 @@ export type ThreadPrWatchIndicatorsValue = {
   /** Stops one watch. Absent where this window cannot stop watches. */
   stop?: (watch: ThreadPullRequestWatchSummary) => Promise<void>;
   /**
+   * Arms a success and failure watch on one of the thread's PRs, as the
+   * agent tool would, without a turn. Absent where this window cannot.
+   */
+  watchCi?: (thread: NavigationThreadSummary, pr: PrSummary) => Promise<void>;
+  /**
    * Drafts a request for the agent to watch CI on a PR into that thread's
    * composer. It never sends. Absent where no composer can take it.
    */
@@ -281,7 +286,19 @@ function withBlockedAutoFix(
   return combined;
 }
 
-/** The composer text both "Ask Agent to Watch CI" entry points draft. */
+/**
+ * Whether Watch CI can arm a watch on this PR: an open PR on the thread's
+ * primary repository, which is the only kind main watches.
+ */
+export function canWatchPrCi(
+  thread: Pick<NavigationThreadSummary, "primaryGitRepository">,
+  pr: PrSummary,
+): boolean {
+  return resolveLifecycleState(pr) === "open"
+    && pullRequestMatchesRepositoryKey(pr, thread.primaryGitRepository);
+}
+
+/** The composer text "Ask Agent to Watch CI" drafts. */
 export function buildWatchCiRequestText(pr: Pick<PrSummary, "number">): string {
   return `Watch CI on #${pr.number} and wake this thread when it finishes, pass or fail.`;
 }

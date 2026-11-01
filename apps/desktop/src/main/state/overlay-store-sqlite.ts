@@ -8704,14 +8704,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   /**
-   * Stop one watch for the operator. A watch being delivered under a live
-   * lease is left alone: its wake is already on the way.
+   * Stop one watch for the operator, or for the agent when `endedReason`
+   * says so. A watch being delivered under a live lease is left alone: its
+   * wake is already on the way.
    */
   async cancelThreadPrStatusWatch(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
     watchId: string;
     now: number;
+    endedReason?: "cancelled_by_operator" | "cancelled_by_agent";
   }): Promise<PrStatusWatchThreadRef | undefined> {
     const cancel = this.stateDb.raw.transaction(() => {
       const row = this.stateDb.raw
@@ -8729,7 +8731,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           `UPDATE pr_status_watches
            SET status = 'cancelled', lease_owner = NULL,
                lease_expires_at = NULL, updated_at = ?,
-               payload = json_set(payload, '$.endedReason', 'cancelled_by_operator')
+               payload = json_set(payload, '$.endedReason', ?)
            WHERE watch_id = ?
              AND (
                status = 'watching'
@@ -8739,7 +8741,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
                )
              )`,
         )
-        .run(params.now, params.watchId, params.now);
+        .run(
+          params.now,
+          params.endedReason ?? "cancelled_by_operator",
+          params.watchId,
+          params.now,
+        );
       return updated.changes > 0 ? uniquePrStatusWatchThreads([row])[0] : undefined;
     });
     return cancel();

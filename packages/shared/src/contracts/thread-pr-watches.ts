@@ -3,13 +3,15 @@ import type { AppServerBackendKind } from "./normalized-app-server";
 import type {
   ThreadPullRequestWatchEvent,
   ThreadPullRequestWatchSummary,
+  WatchThreadPullRequestResult,
 } from "./thread-tools";
 
 /**
- * The operator's view of the PR watches that wake threads. Watches are created
- * by agents through `watch_thread_pull_request`; this channel lists them and
- * lets a local window stop one. A federation window cannot cancel: the owner
- * instance is authoritative and no signed request carries a cancel.
+ * The operator's view of the PR watches that wake threads. Agents create
+ * watches through `watch_thread_pull_request`; this channel lists them, lets
+ * a local window stop one, and arms a CI watch with the tool's own logic. A
+ * federation window can do neither: the owner instance is authoritative and
+ * no signed request carries a watch or a cancel.
  */
 export const THREAD_PR_WATCHES_CHANNEL = "thread:prWatches";
 
@@ -34,12 +36,26 @@ export type ThreadPrWatchesRequest =
       /** Set for a peer's thread, which this instance cannot stop. */
       federationTarget?: FederationTarget;
       watchId: string;
+    }
+  | {
+      /**
+       * The operator's Watch CI: a success and failure watch on one of the
+       * thread's primary-workspace PRs, armed as the agent tool arms one.
+       */
+      action: "watch";
+      backend: AppServerBackendKind;
+      threadId: string;
+      /** Set for a peer's thread, which this instance cannot watch. */
+      federationTarget?: FederationTarget;
+      prUrl: string;
     };
 
+/** `forbidden`: Git settings turned background PR polling off. */
 export type ThreadPrWatchesErrorCode =
   | "not_found"
   | "federation_unsupported"
-  | "invalid_arguments";
+  | "invalid_arguments"
+  | "forbidden";
 
 /**
  * Whether Auto-fix starts a repair turn on one opted-in local thread for one
@@ -70,6 +86,8 @@ export type ThreadPrWatchesResponse =
       autoFix?: ThreadPrAutoFixState[];
       history?: ThreadPrWatchHistoryEntry[];
       cancelled?: boolean;
+      /** Sent with `watch`: the same result the agent tool returns. */
+      watch?: WatchThreadPullRequestResult;
     }
   | {
       ok: false;
@@ -95,6 +113,7 @@ export type ThreadPrWatchEndedReason =
   | "moved"
   | "head_changed"
   | "cancelled_by_operator"
+  | "cancelled_by_agent"
   | "detached"
   | "covered_by_auto_fix"
   | "pr_merged"

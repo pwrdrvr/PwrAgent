@@ -884,6 +884,34 @@ describe("PR watch notifications and write budgets", () => {
     });
   });
 
+  it("records one commit for the operator's Watch CI and one for an agent's cancel", async () => {
+    useMeasuredFileStateDb();
+    const { writes: register } = await measureSqliteWrites(async () => {
+      await store.registerThreadPrStatusWatch({ watch: ciWatch({ createdBy: "operator" }), now });
+    });
+    expectSqliteWriteBudget({
+      note: "the operator arms one CI watch with Watch CI: 1 commit per click, 0 idle writes",
+      scenario: "pr-watch-operator-register",
+      writes: register,
+    });
+    const [armed] = await activeWatches();
+    expect(armed).toMatchObject({ createdBy: "operator", kind: "checks" });
+
+    const { writes: cancel } = await measureSqliteWrites(async () => {
+      await store.cancelThreadPrStatusWatch({
+        backend: "codex", threadId: "thread-1", watchId: armed!.watchId, now: now + 1,
+        endedReason: "cancelled_by_agent",
+      });
+    });
+    expectSqliteWriteBudget({
+      note: "an agent stops one PR watch through watch_thread_pull_request: 1 commit per call, 0 idle writes",
+      scenario: "pr-watch-agent-cancel",
+      writes: cancel,
+    });
+    expect(await store.listThreadPrStatusWatchHistory({ backend: "codex", threadId: "thread-1", limit: 1 }))
+      .toEqual([expect.objectContaining({ status: "cancelled", endedReason: "cancelled_by_agent" })]);
+  });
+
   it("records the commits for a failure Auto-fix covers, held once and then only read", async () => {
     useMeasuredFileStateDb();
     await registerWatch();

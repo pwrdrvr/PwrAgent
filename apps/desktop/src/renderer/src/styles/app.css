@@ -32411,6 +32411,13 @@ div.composer-error-row__toggle {
   font-size: 11px;
 }
 
+.transcript-pr-watch__message {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 /* Inside the accent-framed card the toggle must sit ON the card's text
    grid — the bare rows' negative margin (which aligns the chevron with
    the transcript's left edge) would bleed the toggle chrome into the
@@ -38049,7 +38056,7 @@ div.composer-error-row__toggle {
 }
 
 .pr-watch-list__action:hover:not(:disabled),
-.pr-watch-list__hint-action:hover {
+.pr-watch-list__hint-action:hover:not(:disabled) {
   border-color: var(--border-strong);
   background: var(--bg-panel-hover);
   color: var(--text-primary);
@@ -38062,7 +38069,8 @@ div.composer-error-row__toggle {
   outline-offset: 1px;
 }
 
-.pr-watch-list__action:disabled {
+.pr-watch-list__action:disabled,
+.pr-watch-list__hint-action:disabled {
   color: var(--text-muted);
   cursor: default;
 }

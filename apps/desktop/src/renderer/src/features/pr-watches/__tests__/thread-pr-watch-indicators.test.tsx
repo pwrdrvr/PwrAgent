@@ -11,6 +11,7 @@ import type {
 import type { DesktopApi } from "../../../lib/desktop-api";
 import {
   buildWatchCiRequestText,
+  canWatchPrCi,
   resolvePrChipWatch,
   resolveThreadAutoFixRepository,
   summarizeThreadPrWatches,
@@ -312,5 +313,18 @@ describe("buildWatchCiRequestText", () => {
     expect(buildWatchCiRequestText(pr)).toBe(
       "Watch CI on #3174 and wake this thread when it finishes, pass or fail.",
     );
+  });
+});
+
+describe("canWatchPrCi", () => {
+  it("allows only an open PR on the thread's primary repository, the kind main watches", () => {
+    expect(canWatchPrCi({ primaryGitRepository: REPOSITORY }, pr)).toBe(true);
+    expect(canWatchPrCi({ primaryGitRepository: undefined }, pr)).toBe(false);
+    const linked = { ...pr, repo: "docs.pwragent.ai", url: "https://github.com/pwrdrvr/docs.pwragent.ai/pull/1" };
+    expect(canWatchPrCi({ primaryGitRepository: REPOSITORY }, linked)).toBe(false);
+    expect(canWatchPrCi(
+      { primaryGitRepository: REPOSITORY },
+      { ...pr, lifecycleState: "merged", state: "merged" },
+    )).toBe(false);
   });
 });

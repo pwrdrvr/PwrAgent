@@ -335,4 +335,115 @@ describe("TranscriptActivity", () => {
       threadId: "target-thread",
     }));
   });
+
+  describe("watch_thread_pull_request", () => {
+    function watchEntry(params: { args?: Record<string, unknown>; output?: unknown; rawCommand?: string }) {
+      const rawCommand = params.rawCommand ?? "pwragent/watch_thread_pull_request";
+      return {
+        type: "activity" as const,
+        id: "watch-pr",
+        summary: "watch thread pull request",
+        status: "completed" as const,
+        details: [{
+          id: "watch-pr:detail",
+          kind: "command" as const,
+          label: "watch thread pull request",
+          status: "completed" as const,
+          command: {
+            rawCommand,
+            displayCommand: [rawCommand, JSON.stringify(params.args ?? {})].join("\n"),
+            ...(params.output !== undefined
+              ? { output: typeof params.output === "string" ? params.output : JSON.stringify(params.output) }
+              : {}),
+            source: "tool" as const,
+          },
+        }],
+      };
+    }
+    const ciWatch = {
+      watchId: "watch-ci", backend: "codex", threadId: "thread-1", prKey: "github.com/pwrdrvr/pwragent#3174",
+      prUrl: "https://github.com/pwrdrvr/PwrAgent/pull/3174", prNumber: 3174, headSha: "a".repeat(40),
+      notifyOn: ["success", "failure"], createdAt: 1, failureHandledByAutoFix: false, kind: "checks",
+    };
+    const terminalWatch = { ...ciWatch, watchId: "watch-merge", headSha: "", notifyOn: ["merged", "closed"], kind: "terminal" };
+    const result = (extra: Record<string, unknown>) => ({
+      pullRequestWatch: { coveredByAutoFix: [], prAutomation: {}, armed: true, reason: "armed", ...extra },
+    });
+
+    it.each([
+      [
+        "a CI watch after a re-run",
+        result({ watch: { ...ciWatch, runAttempt: 2 }, message: "Watching PR #3174 at aaaaaaa for the next success or failure (attempt 2)." }),
+        "Waiting for CI · #3174 · attempt 2",
+      ],
+      [
+        "an already armed CI watch",
+        result({ watch: ciWatch, reason: "already_armed", message: "Already watching PR #3174." }),
+        "Already waiting for CI · #3174",
+      ],
+      [
+        "a merge/close watch",
+        result({ terminalWatch, message: "Watching PR #3174 until it merges or closes without merge." }),
+        "Watching #3174 for merge or close",
+      ],
+      [
+        "a CI result that already finished",
+        result({ armed: false, reason: "outcome_already_final", currentOutcome: "success", message: "No watch was created: checks on aaaaaaa already finished with success 4s ago." }),
+        "No CI watch: checks already finished",
+      ],
+      [
+        "a merged PR",
+        result({ armed: false, reason: "pr_terminal", currentOutcome: "merged", terminal: { outcome: "merged", prNumber: 3174 }, message: "No watch was created: PR #3174 is already merged." }),
+        "No watch: #3174 is already merged",
+      ],
+      [
+        "an agent's list",
+        { pullRequestWatches: { action: "list", watches: [ciWatch, terminalWatch], message: "2 watches wait on this thread." } },
+        "2 PR watches waiting",
+      ],
+      [
+        "an agent's cancel",
+        { pullRequestWatches: { action: "cancel", watches: [], cancelled: ciWatch, message: "Stopped waiting for CI on PR #3174. Nothing else waits on this thread." } },
+        "Stopped waiting for CI · #3174",
+      ],
+    ])("labels %s from the tool's result", (_name, output, label) => {
+      render(<TranscriptActivity entry={watchEntry({ output })} />);
+      expect(screen.getByText(label)).toBeInTheDocument();
+      // The result is read, not printed.
+      expect(screen.queryByText(/"pullRequestWatch/)).not.toBeInTheDocument();
+    });
+
+    it("expands to the result's own sentence and reads the PR number from the url when no watch has it", () => {
+      render(<TranscriptActivity entry={watchEntry({
+        args: { url: "https://github.com/pwrdrvr/PwrAgent/pull/3174", notifyOn: ["success", "failure", "merged"] },
+        output: result({
+          armed: false,
+          reason: "outcome_already_final",
+          terminalWatch,
+          message: "No CI watch was created: checks on aaaaaaa already finished with failure 2s ago.",
+        }),
+      })} />);
+      const toggle = screen.getByRole("button", {
+        name: "No CI watch: checks already finished · watching #3174 for merge or close",
+      });
+      expect(screen.queryByText(/already finished with failure/)).not.toBeInTheDocument();
+      fireEvent.click(toggle);
+      expect(screen.getByText(/already finished with failure 2s ago/)).toBeInTheDocument();
+    });
+
+    it("reads Claude's MCP tool name and an error result", () => {
+      render(<TranscriptActivity entry={watchEntry({
+        rawCommand: "mcp__pwragent__watch_thread_pull_request",
+        output: { ok: false, error: { code: "not_found", message: "No waiting watch on this thread has that watchId." } },
+      })} />);
+      fireEvent.click(screen.getByRole("button", { name: "No PR watch" }));
+      expect(screen.getByText("No waiting watch on this thread has that watchId.")).toBeInTheDocument();
+    });
+
+    it("leaves a call with no result to the generic row", () => {
+      render(<TranscriptActivity entry={watchEntry({})} />);
+      expect(screen.queryByText(/Waiting for CI|PR watch/)).not.toBeInTheDocument();
+      expect(screen.getByText("watch thread pull request")).toBeInTheDocument();
+    });
+  });
 });

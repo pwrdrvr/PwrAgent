@@ -8738,10 +8738,12 @@ describe("Sidebar", () => {
     ) {
       const stop = vi.fn(async () => undefined);
       const askAgentToWatchCi = vi.fn();
+      const watchCi = vi.fn(async () => undefined);
       render(
         <ThreadPrWatchIndicatorsContext.Provider value={{
           byThreadKey: summarizeThreadPrWatches(watches),
           stop,
+          watchCi,
           askAgentToWatchCi,
         }}>
           <Sidebar
@@ -8763,7 +8765,7 @@ describe("Sidebar", () => {
       );
       const chip = screen.getByRole("button", { name: /^Open ExampleOrg\/ExampleApp#202 / });
       fireEvent.contextMenu(chip, { clientX: 48, clientY: 64 });
-      return { chip, stop, askAgentToWatchCi };
+      return { chip, stop, askAgentToWatchCi, watchCi };
     }
 
     it("lists the stops between copying and detaching, and stops the chosen watch", async () => {
@@ -8783,15 +8785,35 @@ describe("Sidebar", () => {
         "Detach Pull Request",
       ]);
       expect(labels).not.toContain("Ask Agent to Watch CI");
+      expect(labels).not.toContain("Watch CI");
 
       await clickElement(screen.getByRole("menuitem", { name: /^Stop Waiting for CI/ }));
       expect(stop).toHaveBeenCalledWith(ciWatch);
       expect(screen.queryByRole("menu")).toBeNull();
     });
 
+    it("offers Watch CI before Ask Agent to Watch CI on the primary workspace's open PR", async () => {
+      const thread = { ...pullRequestThread, primaryGitRepository: "github.com/exampleorg/exampleapp" };
+      const { watchCi, askAgentToWatchCi } = renderWithWatches([terminalWatch], thread);
+      const labels = within(screen.getByRole("menu"))
+        .getAllByRole("menuitem")
+        .map(menuItemLabel);
+      const watch = labels.indexOf("Watch CI");
+      expect(labels.slice(watch, watch + 2)).toEqual(["Watch CI", "Ask Agent to Watch CI"]);
+      await clickElement(screen.getByRole("menuitem", { name: "Watch CI" }));
+      expect(watchCi).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "thread-1" }),
+        expect.objectContaining({ number: 202 }),
+      );
+      expect(askAgentToWatchCi).not.toHaveBeenCalled();
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+
     it("offers Ask Agent to Watch CI on an open PR with no CI watch", async () => {
       const { askAgentToWatchCi } = renderWithWatches([terminalWatch]);
       expect(screen.queryByRole("menuitem", { name: /^Stop Waiting for CI/ })).toBeNull();
+      // Not on the thread's primary repository: main would not watch it.
+      expect(screen.queryByRole("menuitem", { name: "Watch CI" })).toBeNull();
       await clickElement(screen.getByRole("menuitem", { name: "Ask Agent to Watch CI" }));
       expect(askAgentToWatchCi).toHaveBeenCalledWith(
         expect.objectContaining({ id: "thread-1" }),

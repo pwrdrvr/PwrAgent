@@ -3309,6 +3309,32 @@ function DesktopAppShell(props: {
       failed(error instanceof Error ? error.message : String(error));
     }
   });
+  // Watch CI arms the watch in main, as the agent tool would. The list
+  // refreshes from `thread/prWatches/updated`; only a wait that did not
+  // start is worth a notice.
+  const watchPrCi = useEventCallback(async (thread: NavigationThreadSummary, pr: PrSummary) => {
+    const id = `pr-watch-ci:${threadSummaryIdentityKey(thread)}:${pr.url}`;
+    try {
+      const response = await desktopApi?.manageThreadPrWatches?.({
+        action: "watch",
+        backend: thread.source,
+        threadId: thread.id,
+        prUrl: pr.url,
+      });
+      if (!response) return;
+      if (!response.ok) {
+        showAppNotice({ id, title: "Couldn't watch CI", message: response.error.message });
+      } else if (response.watch && !response.watch.armed) {
+        showAppNotice({ id, title: "Not waiting for CI", message: response.watch.message });
+      }
+    } catch (error) {
+      showAppNotice({
+        id,
+        title: "Couldn't watch CI",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
   // "Ask Agent to Watch CI" drafts into the thread's composer and never
   // sends. It first shows the thread; the composer takes the request once
   // it shows that thread. Showing anything else drops it, so it never lands
@@ -3340,10 +3366,17 @@ function DesktopAppShell(props: {
       byThreadKey: threadPrWatchIndicators,
       ...(prAutoFixAvailable !== undefined ? { autoFixAvailable: prAutoFixAvailable } : {}),
       ...(canManagePrWatches
-        ? { stop: stopPrWatch, askAgentToWatchCi }
+        ? { stop: stopPrWatch, watchCi: watchPrCi, askAgentToWatchCi }
         : {}),
     }),
-    [threadPrWatchIndicators, prAutoFixAvailable, canManagePrWatches, stopPrWatch, askAgentToWatchCi],
+    [
+      threadPrWatchIndicators,
+      prAutoFixAvailable,
+      canManagePrWatches,
+      stopPrWatch,
+      watchPrCi,
+      askAgentToWatchCi,
+    ],
   );
   const threadHandoffTargets = useMemo(
     () =>

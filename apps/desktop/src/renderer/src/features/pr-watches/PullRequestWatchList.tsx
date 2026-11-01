@@ -32,7 +32,8 @@ type PullRequestWatchListProps = {
   ownerLabel?: string;
   onStop?: (watch: ThreadPullRequestWatchSummary) => Promise<void>;
   onTurnOffAutoFix?: () => void;
-  onAskAgentToWatchCi?: () => void;
+  /** Arms a success and failure watch now, without an agent turn. */
+  onWatchCi?: () => Promise<void>;
   /** Ended watches for this PR, newest first; absent until first loaded. */
   history?: readonly ThreadPrWatchHistoryEntry[];
   /** The last history read failed. */
@@ -46,10 +47,11 @@ type PullRequestWatchListProps = {
 /**
  * A Pull requests card's "Wakes this thread" list: each active watch with a
  * way to stop it, Auto-fix with a way to turn it off, and, when nothing waits
- * for CI, a hint that teaches the operator to ask the agent for a watch.
+ * for CI, a Watch CI button that arms one directly.
  */
 export function PullRequestWatchList(props: PullRequestWatchListProps) {
   const [stopping, setStopping] = useState<ReadonlySet<string>>(() => new Set());
+  const [arming, setArming] = useState(false);
   const now = props.now ?? Date.now();
   const readOnly = props.ownerLabel !== undefined;
   const ciWatches = props.watches.filter(isCiWatch);
@@ -64,6 +66,11 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
         return next;
       });
     });
+  };
+  const watchCi = (): void => {
+    if (!props.onWatchCi) return;
+    setArming(true);
+    void props.onWatchCi().finally(() => setArming(false));
   };
   const historyRows = props.history?.slice(0, HISTORY_ROWS) ?? [];
   const autoFixBlocked = props.autoFixBlocked;
@@ -80,7 +87,7 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
             <span className="pr-watch-list__title">
               {describeCiWatchTitle(watch)}
             </span>
-            <span className="pr-watch-list__sub">{describeCiWatch(watch, now)}</span>
+            <span className="pr-watch-list__sub">{describeCiWatch(watch, now, readOnly)}</span>
           </span>
           {!readOnly && props.onStop ? (
             <button
@@ -102,7 +109,7 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
           </span>
           <span className="pr-watch-list__text">
             <span className="pr-watch-list__title">Waiting for merge or close</span>
-            <span className="pr-watch-list__sub">{describeCreator(watch, now)}</span>
+            <span className="pr-watch-list__sub">{describeCreator(watch, now, readOnly)}</span>
           </span>
           {!readOnly && props.onStop ? (
             <button
@@ -173,13 +180,15 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
       {ciWatches.length === 0 && !readOnly ? (
         <div className="pr-watch-list__hint">
           <span className="pr-watch-list__hint-text">Not waiting for CI.</span>
-          {props.onAskAgentToWatchCi ? (
+          {props.onWatchCi ? (
             <button
               type="button"
               className="pr-watch-list__hint-action"
-              onClick={props.onAskAgentToWatchCi}
+              aria-label={`Watch CI on #${props.pr.number}`}
+              disabled={arming}
+              onClick={watchCi}
             >
-              Ask Agent to Watch CI
+              Watch CI
             </button>
           ) : null}
         </div>
@@ -232,10 +241,14 @@ function describeCiWatchTitle(watch: ThreadPullRequestWatchSummary): string {
   return runAttempt !== undefined ? `Waiting for CI · attempt ${runAttempt}` : "Waiting for CI";
 }
 
-function describeCiWatch(watch: ThreadPullRequestWatchSummary, now: number): string {
+function describeCiWatch(
+  watch: ThreadPullRequestWatchSummary,
+  now: number,
+  onPeer: boolean,
+): string {
   const parts = [
     `On ${describeCiOutcomes(watch.notifyOn)}.`,
-    `${describeCreator(watch, now)}.`,
+    `${describeCreator(watch, now, onPeer)}.`,
   ];
   const baseline = watch.baseline;
   if (baseline) {
@@ -252,9 +265,15 @@ function describeCiWatch(watch: ThreadPullRequestWatchSummary, now: number): str
   return parts.join(" ");
 }
 
-function describeCreator(watch: ThreadPullRequestWatchSummary, now: number): string {
-  // Absent means an agent: only `watch_thread_pull_request` creates watches.
-  return `Agent, ${formatWatchTime(watch.createdAt, now)}`;
+/** `onPeer`: the watch was armed on its owner, by whoever runs that instance. */
+function describeCreator(
+  watch: ThreadPullRequestWatchSummary,
+  now: number,
+  onPeer: boolean,
+): string {
+  // Absent means an agent: rows from before Watch CI have no creator.
+  const creator = watch.createdBy !== "operator" ? "Agent" : onPeer ? "Operator" : "You";
+  return `${creator}, ${formatWatchTime(watch.createdAt, now)}`;
 }
 
 const WOKE_ON: Record<string, string> = {
@@ -284,6 +303,8 @@ function describeEnded(
       return "Ended by a new push";
     case "cancelled_by_operator":
       return "Stopped by you";
+    case "cancelled_by_agent":
+      return "Stopped by the agent";
     case "detached":
       return "Ended when the PR was detached";
     case "covered_by_auto_fix":

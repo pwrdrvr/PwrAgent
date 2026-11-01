@@ -77,6 +77,8 @@ import {
   type DetachDirectoryFromThreadResponse,
   type CheckThreadPullRequestStatusToolArgs,
   type WatchThreadPullRequestToolArgs,
+  type WatchThreadPullRequestResult,
+  type ThreadPullRequestWatchListResult,
   type ThreadPullRequestAutomationStatus,
   type ThreadPullRequestWatchEvent,
   type ThreadPullRequestWatchSummary,
@@ -1297,6 +1299,8 @@ function describePrWatchArming(params: {
   knownAgeMs?: number;
   /** The checkout's head, past the cached head the watch was armed at. */
   pushedHeadSha?: string;
+  /** Who reads it: an agent learns the tool argument that waits anyway. */
+  audience: "agent" | "operator";
 }): string {
   const head = params.headSha.slice(0, 7);
   const sentences: string[] = [];
@@ -1326,7 +1330,11 @@ function describePrWatchArming(params: {
   } else if (params.knownOutcome && params.ciEvents.length > 0) {
     const seconds = Math.max(0, Math.round((params.knownAgeMs ?? 0) / 1000));
     sentences.push(
-      `No ${params.terminalWatch ? "CI " : ""}watch was created: checks on ${head} already finished with ${params.knownOutcome} ${seconds}s ago. If CI was re-run outside PwrAgent, call again with waitForNextResult: true.`,
+      `No ${params.terminalWatch ? "CI " : ""}watch was created: checks on ${head} already finished with ${params.knownOutcome} ${seconds}s ago.${
+        params.audience === "agent"
+          ? " If CI was re-run outside PwrAgent, call again with waitForNextResult: true."
+          : ""
+      }`,
     );
   }
   if (params.terminalWatch) {
@@ -1340,6 +1348,31 @@ function describePrWatchArming(params: {
     );
   }
   return sentences.join(" ");
+}
+
+function describePrWatchBrief(watch: ThreadPullRequestWatchSummary): string {
+  return (watch.kind ?? "checks") === "checks"
+    ? `CI on PR #${watch.prNumber}`
+    : `merge or close of PR #${watch.prNumber}`;
+}
+
+function describePrWatchList(watches: readonly ThreadPullRequestWatchSummary[]): string {
+  if (watches.length === 0) return "No PR watch is waiting on this thread.";
+  return `${watches.length} ${watches.length === 1 ? "watch waits" : "watches wait"} on this thread: ${
+    watches.map((watch) => `${describePrWatchBrief(watch)} (watchId ${watch.watchId})`).join(", ")
+  }.`;
+}
+
+function describePrWatchCancel(
+  cancelled: ThreadPullRequestWatchSummary,
+  remaining: readonly ThreadPullRequestWatchSummary[],
+): string {
+  const stopped = (cancelled.kind ?? "checks") === "checks"
+    ? `Stopped waiting for CI on PR #${cancelled.prNumber}.`
+    : `Stopped watching PR #${cancelled.prNumber} for merge or close.`;
+  return remaining.length === 0
+    ? `${stopped} Nothing else waits on this thread.`
+    : `${stopped} ${describePrWatchList(remaining)}`;
 }
 
 function normalizePrWatchUrl(url: string | undefined): string | undefined {
@@ -4579,6 +4612,100 @@ class DesktopAppServerService {
   async watchThreadPullRequestForTool(
     args: WatchThreadPullRequestToolArgs,
   ): Promise<PwrAgentThreadInspectionResponse> {
+    const action = args.action ?? "watch";
+    if (action === "list" || action === "cancel") {
+      return await this.listOrCancelThreadPrWatchesForTool({ ...args, action });
+    }
+    if (action !== "watch") {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "action must be watch, list, or cancel.",
+        },
+      };
+    }
+    const armed = await this.armThreadPrWatch({ ...args, createdBy: "agent" });
+    return armed.ok
+      ? { ok: true, data: { pullRequestWatch: armed.result } }
+      : { ok: false, error: armed.error };
+  }
+
+  /** The agent's own list and cancel, scoped to one thread's waiting watches. */
+  private async listOrCancelThreadPrWatchesForTool(
+    args: WatchThreadPullRequestToolArgs & { action: "list" | "cancel" },
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    const invalid = (message: string): PwrAgentThreadInspectionResponse => ({
+      ok: false,
+      error: { code: "invalid_arguments", message },
+    });
+    if (!args.backend || !isAppServerBackendKind(args.backend)) {
+      return invalid("backend must be a known PwrAgent backend.");
+    }
+    const threadId = args.threadId?.trim();
+    if (!threadId) return invalid("threadId is required.");
+    const backend = args.backend;
+    const store = this.getOverlayStore();
+    const waiting = await store.listActiveThreadPrStatusWatches({ backend, threadId });
+    const respond = (result: ThreadPullRequestWatchListResult): PwrAgentThreadInspectionResponse => ({
+      ok: true,
+      data: { pullRequestWatches: result },
+    });
+    if (args.action === "list") {
+      const requestedUrl = normalizePrWatchUrl(args.url);
+      const watches = requestedUrl
+        ? waiting.filter((watch) => normalizePrWatchUrl(watch.prUrl) === requestedUrl)
+        : waiting;
+      return respond({ action: "list", watches, message: describePrWatchList(watches) });
+    }
+    const watchId = args.watchId?.trim();
+    if (!watchId) {
+      return invalid("watchId is required to cancel. Call with action list to find it.");
+    }
+    const target = waiting.find((watch) => watch.watchId === watchId);
+    const cancelled = target
+      ? await store.cancelThreadPrStatusWatch({
+          backend,
+          threadId,
+          watchId,
+          now: Date.now(),
+          endedReason: "cancelled_by_agent",
+        })
+      : undefined;
+    if (!target || !cancelled) {
+      return {
+        ok: false,
+        error: {
+          code: "not_found",
+          message: target
+            ? "That watch is waking the thread now, so it can no longer be cancelled."
+            : "No waiting watch on this thread has that watchId. Call with action list to see them.",
+        },
+      };
+    }
+    await this.publishPrWatchesUpdated([cancelled]);
+    const watches = waiting.filter((watch) => watch.watchId !== watchId);
+    return respond({
+      action: "cancel",
+      watches,
+      cancelled: target,
+      message: describePrWatchCancel(target, watches),
+    });
+  }
+
+  /**
+   * Arms the watches `watch_thread_pull_request` and the operator's Watch CI
+   * create. Both run this, so a watch means the same thing whoever asked.
+   */
+  private async armThreadPrWatch(
+    args: WatchThreadPullRequestToolArgs & { createdBy: "agent" | "operator" },
+  ): Promise<
+    | { ok: true; result: WatchThreadPullRequestResult }
+    | {
+        ok: false;
+        error: { code: "invalid_arguments" | "not_found" | "forbidden"; message: string };
+      }
+  > {
     if (!args.backend || !isAppServerBackendKind(args.backend)) {
       return {
         ok: false,
@@ -4670,18 +4797,16 @@ class DesktopAppServerService {
         : getPrStatusWatchOutcome(pr);
       return {
         ok: true,
-        data: {
-          pullRequestWatch: {
-            ...(currentOutcome ? { currentOutcome } : {}),
-            ...(terminal ? { terminal } : {}),
-            coveredByAutoFix: failureCoveredByAutoFix ? ["failure"] : [],
-            prAutomation,
-            armed: false,
-            reason: "pr_terminal",
-            message: `No watch was created: PR #${pr.number} is already ${
-              terminalOutcome === "merged" ? "merged" : "closed without merge"
-            }.`,
-          },
+        result: {
+          ...(currentOutcome ? { currentOutcome } : {}),
+          ...(terminal ? { terminal } : {}),
+          coveredByAutoFix: failureCoveredByAutoFix ? ["failure"] : [],
+          prAutomation,
+          armed: false,
+          reason: "pr_terminal",
+          message: `No watch was created: PR #${pr.number} is already ${
+            terminalOutcome === "merged" ? "merged" : "closed without merge"
+          }.`,
         },
       };
     }
@@ -4765,7 +4890,7 @@ class DesktopAppServerService {
       prNumber: pr.number,
       ...(pr.title ? { prTitle: pr.title } : {}),
       createdAt,
-      createdBy: "agent" as const,
+      createdBy: args.createdBy,
     };
     let watch: ThreadPullRequestWatchSummary | undefined;
     let watchExisted = false;
@@ -4829,31 +4954,30 @@ class DesktopAppServerService {
         : "armed";
     return {
       ok: true,
-      data: {
-        pullRequestWatch: {
-          ...(watch ? { watch } : {}),
-          ...(terminalWatch ? { terminalWatch } : {}),
-          ...(ciOutcomeAlreadyKnown && currentOutcome ? { currentOutcome } : {}),
-          coveredByAutoFix,
-          prAutomation: await this.getThreadPullRequestAutomationStatus({
-            backend: args.backend,
-            threadId,
-          }),
-          armed,
-          reason,
-          message: describePrWatchArming({
-            prNumber: pr.number,
-            headSha: headSha ?? "",
-            ciEvents,
-            watch,
-            watchExisted,
-            terminalWatch,
-            terminalWatchExisted,
-            knownOutcome: ciOutcomeAlreadyKnown ? currentOutcome : undefined,
-            knownAgeMs: observedAt !== undefined ? createdAt - observedAt : undefined,
-            pushedHeadSha,
-          }),
-        },
+      result: {
+        ...(watch ? { watch } : {}),
+        ...(terminalWatch ? { terminalWatch } : {}),
+        ...(ciOutcomeAlreadyKnown && currentOutcome ? { currentOutcome } : {}),
+        coveredByAutoFix,
+        prAutomation: await this.getThreadPullRequestAutomationStatus({
+          backend: args.backend,
+          threadId,
+        }),
+        armed,
+        reason,
+        message: describePrWatchArming({
+          prNumber: pr.number,
+          headSha: headSha ?? "",
+          ciEvents,
+          watch,
+          watchExisted,
+          terminalWatch,
+          terminalWatchExisted,
+          knownOutcome: ciOutcomeAlreadyKnown ? currentOutcome : undefined,
+          knownAgeMs: observedAt !== undefined ? createdAt - observedAt : undefined,
+          pushedHeadSha,
+          audience: args.createdBy,
+        }),
       },
     };
   }
@@ -4875,8 +4999,12 @@ class DesktopAppServerService {
         autoFix: await this.listThreadPrAutoFixStates(),
       };
     }
-    if (request?.action !== "history" && request?.action !== "cancel") {
-      return invalid("action must be active, history, or cancel.");
+    if (
+      request?.action !== "history"
+      && request?.action !== "cancel"
+      && request?.action !== "watch"
+    ) {
+      return invalid("action must be active, history, cancel, or watch.");
     }
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
       return {
@@ -4903,6 +5031,18 @@ class DesktopAppServerService {
           limit: Number.isFinite(limit) ? limit : 10,
         }),
       };
+    }
+    if (request.action === "watch") {
+      if (!request.prUrl?.trim()) return invalid("prUrl is required.");
+      // Watch CI asks for the next pass or failure, as an agent's default does.
+      const armed = await this.armThreadPrWatch({
+        backend: request.backend,
+        threadId: request.threadId,
+        url: request.prUrl,
+        notifyOn: ["success", "failure"],
+        createdBy: "operator",
+      });
+      return armed.ok ? { ok: true, watch: armed.result } : { ok: false, error: armed.error };
     }
     if (!request.watchId?.trim()) return invalid("watchId is required.");
     const cancelled = await this.getOverlayStore().cancelThreadPrStatusWatch({

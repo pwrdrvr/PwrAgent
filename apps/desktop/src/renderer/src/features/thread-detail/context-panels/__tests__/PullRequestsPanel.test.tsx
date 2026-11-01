@@ -373,16 +373,52 @@ describe("PullRequestsPanel", () => {
       expect(within(card).queryByRole("button", { name: "Turn off Auto-fix for this thread" })).toBeNull();
     });
 
-    it("hints at asking for a CI watch when nothing waits for CI", () => {
-      const { askAgentToWatchCi, thread } = renderPanel({
-        thread: threadWithPrs([openPr]),
-        watches: [terminalWatch],
-      });
-      const card = screen.getByRole("listitem");
+    it("arms a CI watch from the hint when nothing waits for CI on a primary PR", async () => {
+      let finish!: () => void;
+      const watchCi = vi.fn(() => new Promise<void>((resolve) => {
+        finish = resolve;
+      }));
+      const thread = { ...threadWithPrs([openPr]), primaryGitRepository: "github.com/pwrdrvr/pwragent" };
+      renderPanel({ thread, watches: [terminalWatch], context: { watchCi } });
+      let card = screen.getByRole("listitem");
       expect(within(card).getByText("Not waiting for CI.")).toBeInTheDocument();
       expect(within(card).queryByText("Auto-fix")).toBeNull();
-      fireEvent.click(within(card).getByRole("button", { name: "Ask Agent to Watch CI" }));
-      expect(askAgentToWatchCi).toHaveBeenCalledWith(thread, openPr);
+      // The rail arms the watch itself; asking the agent stays in the chip menu.
+      expect(within(card).queryByRole("button", { name: "Ask Agent to Watch CI" })).toBeNull();
+      const watchButton = within(card).getByRole("button", { name: "Watch CI on #3174" });
+      await act(async () => {
+        fireEvent.click(watchButton);
+      });
+      expect(watchCi).toHaveBeenCalledWith(thread, openPr);
+      expect(watchButton).toBeDisabled();
+      await act(async () => {
+        finish();
+      });
+      expect(watchButton).not.toBeDisabled();
+      cleanup();
+
+      // Main watches only the primary workspace's PRs.
+      renderPanel({ thread: threadWithPrs([openPr]), watches: [terminalWatch], context: { watchCi } });
+      card = screen.getByRole("listitem");
+      expect(within(card).getByText("Not waiting for CI.")).toBeInTheDocument();
+      expect(within(card).queryByRole("button", { name: /Watch CI/ })).toBeNull();
+    });
+
+    it("names who armed a watch and who stopped one", async () => {
+      const operatorWatch: ThreadPullRequestWatchSummary = { ...ciWatch, createdBy: "operator", baseline: undefined };
+      const history: ThreadPrWatchHistoryEntry[] = [
+        { ...ciWatch, watchId: "ended-agent", status: "cancelled", updatedAt: Date.now(), endedReason: "cancelled_by_agent" },
+        { ...ciWatch, watchId: "ended-you", status: "cancelled", updatedAt: Date.now() - 1, endedReason: "cancelled_by_operator" },
+      ];
+      const manageThreadPrWatches = vi.fn(async () => ({ ok: true as const, history }));
+      renderPanel({ watches: [operatorWatch], desktopApi: { manageThreadPrWatches } });
+      const card = screen.getByRole("listitem");
+      expect(within(card).getByText(/^On pass or fail\. You, /)).toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "History" }));
+      });
+      expect(screen.getByText("Stopped by the agent")).toBeInTheDocument();
+      expect(screen.getByText("Stopped by you")).toBeInTheDocument();
     });
 
     it("loads the history on first expand and counts this PR's ended watches", async () => {
@@ -441,7 +477,8 @@ describe("PullRequestsPanel", () => {
         thread: {
           ...threadWithPrs([openPr]),
           prAutoDispatchEnabled: true,
-          activePrWatches: [ciWatch],
+          // The peer's operator armed it, who need not be this window's.
+          activePrWatches: [{ ...ciWatch, createdBy: "operator" }],
           federation: {
             ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "thread-1" },
             instanceLabel: "Laptop",
@@ -454,9 +491,10 @@ describe("PullRequestsPanel", () => {
       });
       const card = screen.getByRole("listitem");
       expect(within(card).getByText("Waiting for CI · attempt 2")).toBeInTheDocument();
+      expect(within(card).getByText(/^On pass or fail\. Operator, /)).toBeInTheDocument();
       expect(within(card).queryByText("Waiting for merge or close")).toBeNull();
       expect(within(card).getByText("Watches run on Laptop. Stop them there.")).toBeInTheDocument();
-      expect(within(card).queryByRole("button", { name: /^Stop|^Turn off|History|Ask Agent/ })).toBeNull();
+      expect(within(card).queryByRole("button", { name: /^Stop|^Turn off|History|Ask Agent|Watch CI/ })).toBeNull();
     });
 
     it("draws no watch list on a merged PR", () => {
