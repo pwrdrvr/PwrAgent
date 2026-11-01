@@ -46,6 +46,11 @@ import type {
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
+import {
+  PR_WATCH_AUDIT_UNWATCHED_PR,
+  PR_WATCH_AUDIT_WATCHED_PR,
+  seedPrWatchAuditState,
+} from "./fixtures/pr-watch-state-seeding";
 import { openStarMapWindow } from "./fixtures/star-map-window";
 import {
   buildAuditSubAgents,
@@ -94,6 +99,8 @@ async function launchAuditApp(options?: {
    * before anything else has.
    */
   preLaunchHook?: (homeRoot: string) => Promise<void>;
+  /** Launch environment overrides; `undefined` removes a variable. */
+  env?: Record<string, string | undefined>;
 }) {
   const app = await launchElectronApp({
     fixturePath:
@@ -111,6 +118,7 @@ async function launchAuditApp(options?: {
     ...(options?.preLaunchHook
       ? { preLaunchHook: options.preLaunchHook }
       : {}),
+    ...(options?.env ? { env: options.env } : {}),
   });
   await app.window.emulateMedia({ reducedMotion: "reduce" });
   return app;
@@ -197,6 +205,24 @@ const COMPOSER_AUTOCOMPLETE_FIXTURE = path.resolve(
   specDir,
   "fixtures/skill-autocomplete-interactions/replay.fixture.json",
 );
+
+// One thread on an invented GitHub repository, with no linked directory, so
+// its PRs are primary (Auto-fix and Watch CI apply) and no branch lookup runs.
+// The PRs and watches come from sqlite; see the block.
+const PR_WATCHES_FIXTURE = path.resolve(
+  specDir,
+  "fixtures/a11y-pr-watches/replay.fixture.json",
+);
+
+// The block's PRs are invented, so a real forge call can only fail. Without a
+// token the status poller's `gh` call fails before it reaches the network.
+const NO_FORGE_CREDENTIALS = {
+  GH_TOKEN: undefined,
+  GITHUB_TOKEN: undefined,
+  GH_ENTERPRISE_TOKEN: undefined,
+  GITHUB_ENTERPRISE_TOKEN: undefined,
+  GITLAB_TOKEN: undefined,
+};
 
 // Fourteen threads on one directory and one on a second, so the audited row
 // has a pinned lane, an unpinned lane that overflows the ten-row cap, and a
@@ -732,6 +758,152 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
           ).toBeVisible();
           await expect(app.window.locator(".live-strip__item")).toHaveCount(4);
           await runAxe(app.window, "sub-agents strip expanded rows");
+        });
+      } finally {
+        await app.close();
+      }
+    });
+
+    // PR watches: the eye on a sidebar PR chip, the chip's hover card and
+    // menu, and the rail's "Wakes this thread" list with its history. Nothing
+    // else renders them: a watch exists only after an agent or Watch CI arms
+    // one, and no replay fixture carries PRs at all.
+    //
+    // The list carries controls nothing else has: Stop, Turn Off and Watch CI
+    // at 11px, a dashed hint box, a mono attempt aside in the menu, and a
+    // history toggle that sits 4px into the card's padding. The hover card
+    // adds a muted Auto-fix value.
+    test("PR watch surfaces have no violations", async () => {
+      // Five unscoped scans plus a launch, like the Directories block.
+      test.setTimeout(75_000);
+      const app = await launchAuditApp({
+        ...appearance,
+        fixturePath: PR_WATCHES_FIXTURE,
+        env: NO_FORGE_CREDENTIALS,
+        // Through the overlay store's own writers, so the PR list, the
+        // Auto-fix opt-in and the watch table each keep one owner.
+        preLaunchHook: async (homeRoot) => {
+          await seedPrWatchAuditState(homeRoot);
+        },
+      });
+      const watched = PR_WATCH_AUDIT_WATCHED_PR;
+      const unwatched = PR_WATCH_AUDIT_UNWATCHED_PR;
+      const repository = `${watched.org}/${watched.repo}`;
+      try {
+        const threadRow = app.window
+          .getByRole("button", { name: /PR watch audit thread/i })
+          .first();
+        await expect(threadRow).toBeVisible();
+        await threadRow.click();
+        await expect(
+          app.window.getByRole("heading", { level: 2, name: "PR watch audit thread" }),
+        ).toBeVisible();
+
+        // Scoped to the sidebar row: the rail's card draws the same chip with
+        // the same name.
+        const sidebarRow = app.window.locator("[data-thread-row-key]").filter({
+          has: app.window.getByRole("button", { name: /PR watch audit thread/i }),
+        });
+        const sidebarChip = sidebarRow.getByRole("button", {
+          name: new RegExp(`^Open ${repository}#${watched.number} .*, waiting for CI$`),
+        });
+
+        await test.step("sidebar PR chip with a CI watch", async () => {
+          await expect(sidebarChip).toBeVisible();
+          // The unwatched PR's chip draws no eye. Without both, a seed that
+          // armed nothing would leave this scan green on a plain row.
+          await expect(sidebarChip.locator(".pr-chip__watch")).toBeVisible();
+          await expect(
+            sidebarRow.getByRole("button", {
+              name: new RegExp(`^Open ${repository}#${unwatched.number} \\([^)]*\\) in browser$`),
+            }),
+          ).toBeVisible();
+          if (runsFunctionalChecks) {
+            // The eye is drawn inside the 20px chip, not beside or below it.
+            const chipBox = await sidebarChip.boundingBox();
+            const eyeBox = await sidebarChip.locator(".pr-chip__watch").boundingBox();
+            expect(chipBox).not.toBeNull();
+            expect(eyeBox).not.toBeNull();
+            expect(eyeBox!.x).toBeGreaterThanOrEqual(chipBox!.x);
+            expect(eyeBox!.y).toBeGreaterThanOrEqual(chipBox!.y);
+            expect(eyeBox!.x + eyeBox!.width).toBeLessThanOrEqual(chipBox!.x + chipBox!.width);
+            expect(eyeBox!.y + eyeBox!.height).toBeLessThanOrEqual(chipBox!.y + chipBox!.height);
+          }
+          await runAxe(app.window, "sidebar PR chip with a CI watch");
+        });
+
+        await test.step("PR chip hover card with watches", async () => {
+          await sidebarChip.hover();
+          const card = app.window.locator(".pr-status-card").filter({
+            hasText: "Wakes this thread",
+          });
+          await expect(card).toBeVisible();
+          await expect(card).toContainText("attempt 2");
+          await expect(card).toContainText("Merge or close");
+          await expect(card).toContainText("Auto-fix");
+          await runAxe(app.window, "PR chip hover card with watches");
+          // Park the pointer so the card closes and no later scan sees it.
+          await app.window.mouse.move(0, 0);
+          await expect(card).toBeHidden();
+        });
+
+        await test.step("PR chip menu with watch items", async () => {
+          await sidebarChip.click({ button: "right" });
+          const menu = app.window.getByRole("menu");
+          await expect(
+            menu.getByRole("menuitem", { name: /^Stop Waiting for CI/ }),
+          ).toBeVisible();
+          await expect(
+            menu.getByRole("menuitem", { name: "Stop Watching for Merge" }),
+          ).toBeVisible();
+          await runAxe(app.window, "PR chip menu with watch items");
+          await app.window.keyboard.press("Escape");
+          await expect(menu).toBeHidden();
+        });
+
+        const panel = app.window.locator("#context-rail-panel");
+        const watchedCard = panel.locator(".rail-card").filter({
+          hasText: watched.title!,
+        });
+        const unwatchedCard = panel.locator(".rail-card").filter({
+          hasText: unwatched.title!,
+        });
+
+        await test.step("rail Pull requests panel with watches", async () => {
+          await app.window.getByRole("tab", { name: /^Pull requests/ }).click();
+          // One assertion per row kind, so a seed drifting to fewer watches
+          // fails here instead of auditing a shorter list.
+          await expect(watchedCard.getByText("Waiting for CI · attempt 2")).toBeVisible();
+          await expect(watchedCard.getByText("Waiting for merge or close")).toBeVisible();
+          await expect(
+            watchedCard.getByRole("button", {
+              name: `Stop waiting for CI on #${watched.number}`,
+            }),
+          ).toBeVisible();
+          await expect(
+            watchedCard.getByRole("button", {
+              name: `Stop watching #${watched.number} for merge`,
+            }),
+          ).toBeVisible();
+          await expect(
+            watchedCard.getByRole("button", { name: "Turn off Auto-fix for this thread" }),
+          ).toBeVisible();
+          await expect(unwatchedCard.getByText("Not waiting for CI.")).toBeVisible();
+          await expect(
+            unwatchedCard.getByRole("button", { name: `Watch CI on #${unwatched.number}` }),
+          ).toBeVisible();
+          await app.window.mouse.move(0, 0);
+          await runAxe(app.window, "rail Pull requests panel with watches");
+        });
+
+        await test.step("rail Pull requests watch history", async () => {
+          const toggle = watchedCard.getByRole("button", { name: /^History/ });
+          await toggle.click();
+          await expect(toggle).toHaveAttribute("aria-expanded", "true");
+          await expect(watchedCard.getByText("Stopped by you")).toBeVisible();
+          await expect(watchedCard.getByText("Stopped by the agent")).toBeVisible();
+          await app.window.mouse.move(0, 0);
+          await runAxe(app.window, "rail Pull requests watch history");
         });
       } finally {
         await app.close();
