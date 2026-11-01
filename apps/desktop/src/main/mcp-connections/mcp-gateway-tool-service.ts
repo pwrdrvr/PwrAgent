@@ -1,4 +1,4 @@
-import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, ElicitRequestParams, Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import type { McpConnectionGatewayService } from "./mcp-connection-gateway-service";
 import { gatewayCatalogRevision, validateGatewayArguments, type McpGatewayInvocation, type McpGatewayTool, type McpGatewaySource } from "./mcp-gateway-catalog";
@@ -27,6 +27,12 @@ export type McpGatewayToolServiceOptions = {
   toolAllowed?: (tool: McpGatewayTool, context: AgentToolCallContext) => boolean;
   /** `annotations` are the listed tool's own hints, under its exact schema revision. */
   approve: (invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, annotations: Tool["annotations"], catalogRevision: string, consentRevision?: string) => Promise<McpGatewayApproval>;
+  /**
+   * Shows a form the upstream server sends while an approved call runs, and
+   * resolves with the person's answer. Separate from `approve`: approving the
+   * invocation never answers the server's own form. Absent, forms fail closed.
+   */
+  elicit?: (request: ElicitRequestParams, invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal) => Promise<unknown>;
 };
 
 /** No disk catalog. Every invocation revalidates
@@ -139,9 +145,12 @@ export class McpGatewayToolService {
       if (this.options.toolAllowed?.(tool, context) === false) throw new Error("This MCP tool is no longer permitted for the calling thread.");
       // The owner lists and validates again, preventing schema/auth changes while
       // approval was pending from executing a different operation under that grant.
+      const elicit = this.options.elicit;
       const result = await this.options.connections.requestGatewayToolOperation({
         connectionId: args.connectionId, scopeKey: this.scopeKey(context),
         operation: "gateway/tools/call", invocation, signal,
+        ...(elicit ? { elicit: async (request: ElicitRequestParams, formSignal: AbortSignal) =>
+          await elicit(request, invocation, context, AbortSignal.any([signal, formSignal])) } : {}),
       }) as CallToolResult;
       if (typeof approval === "object") await approval.onInvoked();
       return { source, result };

@@ -268,6 +268,39 @@ describe("fixed MCP gateway tools", () => {
     expect(JSON.stringify(failed)).toContain("bad argument");
   });
 
+  it("sends upstream forms to the host's form handler for the call only, never to approval", async () => {
+    const f = fixture();
+    const form = { message: "Confirm?", requestedSchema: { type: "object" as const, properties: {} } };
+    const answer = { action: "decline" };
+    const elicit = vi.fn(async () => answer);
+    const service = new McpGatewayToolService({
+      connections: { requestGatewayToolOperation: f.requestGatewayToolOperation }, approve: f.approve, elicit,
+      selectedConnections: async (caller) => f.selected.get(caller.threadId) ?? [],
+    });
+    let forwarded: unknown;
+    f.requestGatewayToolOperation.mockImplementation(async (params) => {
+      if (params.operation === "gateway/tools/list") {
+        expect(params.elicit).toBeUndefined();
+        return f.catalog.get(params.connectionId) ?? [];
+      }
+      const formSignal = new AbortController();
+      forwarded = await params.elicit!(form, formSignal.signal);
+      formSignal.abort();
+      return f.result;
+    });
+
+    await service.call(f.args, context);
+
+    expect(forwarded).toBe(answer);
+    expect(f.approve).toHaveBeenCalledTimes(1);
+    expect(elicit).toHaveBeenCalledWith(
+      form,
+      expect.objectContaining({ connectionId: "one", toolName: "lookup", arguments: { id: "record" } }),
+      context,
+      expect.any(AbortSignal),
+    );
+  });
+
   it("retains original source attribution without confusing delimiters", () => {
     expect(gatewayInvocationName("pwragent__call_mcp_tool", { connectionId: "one", toolName: "search" })).toBe('mcp:["one","search"]');
     expect(gatewayInvocationName("pwragent", { tool: "call_mcp_tool", arguments: { connectionId: "one", toolName: "search" } })).toBe('mcp:["one","search"]');

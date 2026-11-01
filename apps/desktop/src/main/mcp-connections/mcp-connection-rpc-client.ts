@@ -1,6 +1,7 @@
 import { connect, type Socket } from "node:net";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { MCP_CONNECTION_TOOL_TIMEOUT_MS, MCP_DISCOVERY_RESPONSE_GRACE_MS } from "./mcp-connection-timeouts.js";
+import { ELICITATION_WIRE_OPT_IN, type ElicitationRoute } from "./mcp-elicitation-relay.js";
 
 const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 type RpcResponse =
@@ -60,6 +61,12 @@ export class ConnectionRpcClient {
     });
   }
 
+  /**
+   * One request on its own socket. `onElicit` makes it interactive: the
+   * owner may then send the upstream server's forms on this socket while the
+   * request runs, and each is answered here. Without it the owner refuses
+   * every form for this request.
+   */
   request(
     operation: string,
     params?: unknown,
@@ -67,16 +74,23 @@ export class ConnectionRpcClient {
     deadlineAt?: number,
     discoveryId?: string,
     rpcTimeoutMs?: number,
+    onElicit?: ElicitationRoute,
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const socket: Socket = connect(this.socketPath);
       let buffer = "";
       let settled = false;
+      // Forms still open when the request ends are withdrawn with it.
+      const forms = new Map<number, AbortController>();
       const finish = (error?: Error, value?: unknown): void => {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
         signal?.removeEventListener("abort", onAbort);
+        for (const form of forms.values()) {
+          form.abort(new DOMException("The MCP request ended.", "AbortError"));
+        }
+        forms.clear();
         socket.destroy();
         if (error) reject(error);
         else resolve(value);
@@ -95,6 +109,56 @@ export class ConnectionRpcClient {
         return;
       }
       signal?.addEventListener("abort", onAbort, { once: true });
+      const reply = (line: Record<string, unknown>): void => {
+        if (!settled && !socket.destroyed) socket.write(`${JSON.stringify(line)}\n`);
+      };
+      const answerForm = (id: number, formParams: unknown): void => {
+        if (!onElicit || forms.has(id)) {
+          reply({ elicitError: { id, message: "This client cannot show MCP forms." } });
+          return;
+        }
+        const controller = new AbortController();
+        forms.set(id, controller);
+        void onElicit(formParams as Parameters<ElicitationRoute>[0], controller.signal).then(
+          (result) => {
+            if (forms.get(id) !== controller || controller.signal.aborted) return;
+            forms.delete(id);
+            reply({ elicitResult: { id, result } });
+          },
+          (error: unknown) => {
+            if (forms.get(id) !== controller || controller.signal.aborted) return;
+            forms.delete(id);
+            reply({ elicitError: {
+              id,
+              message: error instanceof Error ? error.message : String(error),
+              ...(error instanceof McpError ? { code: error.code } : {}),
+            } });
+          },
+        );
+      };
+      const handleLine = (line: string): void => {
+        const message = JSON.parse(line) as RpcResponse & {
+          elicit?: { id?: unknown; params?: unknown };
+          elicitCancel?: { id?: unknown };
+        };
+        if (message.elicit && typeof message.elicit.id === "number") {
+          answerForm(message.elicit.id, message.elicit.params);
+          return;
+        }
+        if (message.elicitCancel && typeof message.elicitCancel.id === "number") {
+          const form = forms.get(message.elicitCancel.id);
+          forms.delete(message.elicitCancel.id);
+          form?.abort(new DOMException("The MCP server withdrew its form.", "AbortError"));
+          return;
+        }
+        if (!message.ok) {
+          finish(typeof message.code === "number"
+            ? new McpError(message.code, message.error, message.data)
+            : new Error(message.error));
+          return;
+        }
+        finish(undefined, message.result);
+      };
       socket.setEncoding("utf8");
       socket.on("connect", () => {
         socket.write(`${JSON.stringify({
@@ -102,6 +166,7 @@ export class ConnectionRpcClient {
           op: operation,
           ...(deadlineAt === undefined ? {} : { deadlineAt }),
           ...(discoveryId === undefined ? {} : { discoveryId }),
+          ...(onElicit ? { elicitation: ELICITATION_WIRE_OPT_IN } : {}),
           ...(params === undefined ? {} : { params }),
         })}\n`);
       });
@@ -111,19 +176,15 @@ export class ConnectionRpcClient {
           finish(new Error("PwrAgent MCP bridge response was too large."));
           return;
         }
-        const newline = buffer.indexOf("\n");
-        if (newline === -1) return;
-        try {
-          const response = JSON.parse(buffer.slice(0, newline)) as RpcResponse;
-          if (!response.ok) {
-            finish(typeof response.code === "number"
-              ? new McpError(response.code, response.error, response.data)
-              : new Error(response.error));
-            return;
+        let newline: number;
+        while (!settled && (newline = buffer.indexOf("\n")) !== -1) {
+          const line = buffer.slice(0, newline);
+          buffer = buffer.slice(newline + 1);
+          try {
+            handleLine(line);
+          } catch (error) {
+            finish(error instanceof Error ? error : new Error(String(error)));
           }
-          finish(undefined, response.result);
-        } catch (error) {
-          finish(error instanceof Error ? error : new Error(String(error)));
         }
       });
       socket.on("error", (error) => finish(error));
@@ -133,4 +194,3 @@ export class ConnectionRpcClient {
     });
   }
 }
-

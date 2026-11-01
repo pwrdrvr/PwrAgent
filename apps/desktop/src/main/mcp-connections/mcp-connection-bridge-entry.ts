@@ -3,6 +3,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   CallToolRequestSchema,
+  ElicitResultSchema,
   GetPromptRequestSchema,
   ListPromptsRequestSchema,
   ListResourceTemplatesRequestSchema,
@@ -11,8 +12,9 @@ import {
   ReadResourceRequestSchema,
   type ServerCapabilities,
 } from "@modelcontextprotocol/sdk/types.js";
-import { MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS } from "./mcp-connection-timeouts.js";
+import { MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS, MCP_CONNECTION_TOOL_TIMEOUT_MS } from "./mcp-connection-timeouts.js";
 import { ConnectionRpcClient } from "./mcp-connection-rpc-client.js";
+import { clientSupportsFormElicitation, type ElicitationRoute } from "./mcp-elicitation-relay.js";
 
 type BridgeDescription = {
   name?: string;
@@ -79,9 +81,22 @@ async function main(): Promise<void> {
       }
       return result as never;
     });
-    server.setRequestHandler(CallToolRequestSchema, async (request, extra) =>
-      await rpc.request("tools/call", request.params, extra.signal) as never,
-    );
+    server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+      // The upstream server's form goes to the agent's own MCP client, tied
+      // to this call, exactly as the server sent it. A client that never
+      // declared elicitation is not asked; the owner then refuses the form.
+      const onElicit: ElicitationRoute | undefined = clientSupportsFormElicitation(server.getClientCapabilities())
+        ? async (params, signal) => await extra.sendRequest(
+          { method: "elicitation/create", params },
+          ElicitResultSchema,
+          // A person is answering; wait as long as the call itself may run.
+          { signal, timeout: MCP_CONNECTION_TOOL_TIMEOUT_MS },
+        )
+        : undefined;
+      return await rpc.request(
+        "tools/call", request.params, extra.signal, undefined, undefined, undefined, onElicit,
+      ) as never;
+    });
   }
   if (description.resources) {
     server.setRequestHandler(ListResourcesRequestSchema, async (request, extra) =>

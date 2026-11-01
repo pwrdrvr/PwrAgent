@@ -14,7 +14,14 @@ import { shell } from "electron";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { ErrorCode, McpError, ToolListChangedNotificationSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import {
+  ErrorCode,
+  McpError,
+  ToolListChangedNotificationSchema,
+  type CallToolResult,
+  type ElicitRequestParams,
+  type ElicitResult,
+} from "@modelcontextprotocol/sdk/types.js";
 import { McpDiscovery, McpDiscoveryError, mcpDiscoveryContext, mcpDiscoveryPhaseContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
 import { SandboxerConnection } from "./sandboxer-connection";
 import {
@@ -28,6 +35,17 @@ import {
 } from "./mcp-stdio-launch";
 import { McpStdioSecretVault, type McpStdioSecretSettings } from "./mcp-stdio-secret-vault";
 import { ConnectionRpcClient } from "./mcp-connection-rpc-client";
+import {
+  ELICITATION_WIRE_OPT_IN,
+  UPSTREAM_FORM_ELICITATION_CAPABILITIES,
+  elicitationUnavailable,
+  type ElicitationRoute,
+} from "./mcp-elicitation-relay";
+import {
+  ElicitationWireChannel,
+  UpstreamElicitationRoutes,
+  VerbatimElicitRequestSchema,
+} from "./mcp-upstream-elicitation";
 import { gatewayToolRevision, validateGatewayArguments, type McpGatewayTool, type McpGatewayInvocation } from "./mcp-gateway-catalog";
 import {
   PWRSNAP_MCP_CONNECTION_ID,
@@ -147,6 +165,13 @@ type UpstreamSession = {
   transport: Transport;
 };
 
+/** Answers an upstream server's form for a thread session. */
+type UpstreamElicitHandler = (
+  client: Client,
+  request: ElicitRequestParams,
+  signal: AbortSignal,
+) => Promise<ElicitResult>;
+
 type BridgeRequest = {
   token?: unknown;
   brokerToken?: unknown;
@@ -154,6 +179,8 @@ type BridgeRequest = {
   params?: unknown;
   deadlineAt?: unknown;
   discoveryId?: unknown;
+  /** The caller can answer the upstream server's forms on this socket. */
+  elicitation?: unknown;
 };
 
 type BridgeResponse =
@@ -588,6 +615,8 @@ export class McpConnectionGatewayService {
   private bridgeAttachmentCount = 0;
   private readonly rpcSockets = new Set<Socket>();
   private activeRpcSockets = 0;
+  /** Requests in flight per thread session, for routing upstream forms. */
+  private readonly elicitationRoutes = new UpstreamElicitationRoutes();
   private readonly recordCreatedSandbox: NonNullable<McpConnectionGatewayServiceOptions["recordCreatedSandbox"]>;
 
   constructor(options: McpConnectionGatewayServiceOptions = {}) {
@@ -1681,6 +1710,8 @@ export class McpConnectionGatewayService {
     invocation?: McpGatewayInvocation;
     signal: AbortSignal;
     deadlineAt?: number;
+    /** Shows the upstream server's forms for a call to the thread's operator. */
+    elicit?: ElicitationRoute;
   }): Promise<McpGatewayTool[] | CallToolResult> {
     params.signal.throwIfAborted();
     const discovery = new McpDiscovery(params.connectionId, params.deadlineAt ?? Date.now() + MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS, params.signal);
@@ -1693,9 +1724,11 @@ export class McpConnectionGatewayService {
       );
       // The owner still needs the discovery deadline for catalog validation.
       // A call's socket must also cover execution after that validation ends.
+      const call = params.operation === "gateway/tools/call";
       return await rpc.request(
         params.operation, params.invocation, params.signal, discovery.deadlineAt, discovery.id,
-        params.operation === "gateway/tools/call" ? MCP_CONNECTION_TOOL_TIMEOUT_MS : undefined,
+        call ? MCP_CONNECTION_TOOL_TIMEOUT_MS : undefined,
+        call ? params.elicit : undefined,
       ) as McpGatewayTool[] | CallToolResult;
     } finally {
       discovery.close();
@@ -2441,6 +2474,8 @@ export class McpConnectionGatewayService {
       clientName: `pwragent-${connection.id}-proxy`,
       discovery,
       threadSession: true,
+      onElicit: async (client, request, signal) =>
+        await this.routeUpstreamElicitation(token, client, request, signal),
       // A session evicts itself when it actually dies. Leaving that to the
       // per-request error path would close a healthy session shared by every
       // in-flight request on this token the first time one of them was
@@ -2477,6 +2512,8 @@ export class McpConnectionGatewayService {
       discovery: McpDiscovery;
       /** A thread's session, counted in a local command's running total. */
       threadSession?: boolean;
+      /** Only a thread's session can reach a person, so only it takes forms. */
+      onElicit?: UpstreamElicitHandler;
     },
   ): Promise<UpstreamSession> {
     let transport: Transport;
@@ -2501,16 +2538,7 @@ export class McpConnectionGatewayService {
         { fetch: coordinator.authorizedFetch() },
       );
     }
-    const client = new Client(
-      {
-        name: options.clientName,
-        version: "1.0.0",
-      },
-      { capabilities: {} },
-    );
-    client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
-      this.invalidateConnectionTools(connection.id);
-    });
+    const client = this.createUpstreamClient(connection.id, options.clientName, options.onElicit);
     const onClose = options.onClose;
     if (onClose) client.onclose = () => onClose(client);
     const abort = (): void => { void transport.close().catch(() => undefined); };
@@ -2554,15 +2582,13 @@ export class McpConnectionGatewayService {
       onClose?: (client: Client) => void;
       discovery: McpDiscovery;
       threadSession?: boolean;
+      onElicit?: UpstreamElicitHandler;
     },
   ): Promise<UpstreamSession> {
     const launch = connection.stdio;
     if (!launch) throw new Error(`${connection.displayName} has no command to run.`);
     let transport: OwnedStdioClientTransport | undefined;
-    const client = new Client({ name: options.clientName, version: "1.0.0" }, { capabilities: {} });
-    client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
-      this.invalidateConnectionTools(connection.id);
-    });
+    const client = this.createUpstreamClient(connection.id, options.clientName, options.onElicit);
     const abort = (): void => { void transport?.close().catch(() => undefined); };
     options.discovery.signal.addEventListener("abort", abort, { once: true });
     try {
@@ -2620,6 +2646,73 @@ export class McpConnectionGatewayService {
     } finally {
       options.discovery.signal.removeEventListener("abort", abort);
     }
+  }
+
+  /**
+   * An MCP client for one upstream connection.
+   *
+   * Only a thread session declares form elicitation; its forms are routed
+   * per request. Settings reads and tests declare nothing, as before, so a
+   * server never asks them for a person's answer.
+   */
+  private createUpstreamClient(
+    connectionId: string,
+    clientName: string,
+    onElicit?: UpstreamElicitHandler,
+  ): Client {
+    const client = new Client(
+      { name: clientName, version: "1.0.0" },
+      { capabilities: onElicit ? UPSTREAM_FORM_ELICITATION_CAPABILITIES : {} },
+    );
+    client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
+      this.invalidateConnectionTools(connectionId);
+    });
+    if (onElicit) {
+      client.setRequestHandler(VerbatimElicitRequestSchema, async (request, extra) =>
+        await onElicit(client, request.params as ElicitRequestParams, extra.signal));
+    }
+    return client;
+  }
+
+  /**
+   * Send an upstream server's form to the request on this session that
+   * caused it, and its answer back, or fail closed.
+   *
+   * The person is asked only while the grant, this exact session and (for the
+   * gateway's fixed tools) the thread's selection are all still current, and
+   * the answer is delivered only if they still are. Otherwise the server
+   * hears `cancel`. A host execution grant, Full Access or tool-approval
+   * policy never answers a form: only the caller's client does.
+   */
+  private async routeUpstreamElicitation(
+    token: string,
+    client: Client,
+    request: ElicitRequestParams,
+    signal: AbortSignal,
+  ): Promise<ElicitResult> {
+    const grant = this.grants.get(token);
+    if (!grant) throw elicitationUnavailable("This MCP session is no longer granted to a thread.");
+    const gatewayScoped = grant.threadId?.startsWith("[\"gateway\"") === true;
+    const stillCurrent = async (): Promise<void> => {
+      if (this.grants.get(token) !== grant || this.upstreamSessions.get(token)?.client !== client) {
+        throw new Error("This MCP session has been replaced.");
+      }
+      this.requireAvailableConnection(grant.connectionId);
+      if (gatewayScoped) await this.requireGatewaySelection(grant);
+    };
+    return await this.elicitationRoutes.route({
+      token,
+      client,
+      request,
+      signal,
+      beforeAsk: stillCurrent,
+      beforeAnswer: stillCurrent,
+      // Never the form's text or the answer: either can carry private data.
+      onOutcome: (outcome) => connectionLog.info("upstream MCP form", {
+        connectionId: grant.connectionId,
+        outcome,
+      }),
+    });
   }
 
   /**
@@ -2763,22 +2856,36 @@ export class McpConnectionGatewayService {
     socket.setEncoding("utf8");
     socket.setTimeout(MCP_CONNECTION_TOOL_TIMEOUT_MS, () => socket.destroy());
     let buffer = "";
+    // One request per socket. Lines after it are answers to the upstream
+    // server's forms, and only a request that opted in listens for them.
+    let followUp: ((line: string) => void) | undefined;
+    const ignoreLine: (line: string) => void = () => undefined;
     socket.on("data", (chunk: string) => {
       buffer += chunk;
       if (buffer.length > MAX_RPC_LINE_BYTES) {
         this.respond(socket, { ok: false, error: "request too large" });
         return;
       }
-      const newline = buffer.indexOf("\n");
-      if (newline === -1) return;
-      const line = buffer.slice(0, newline);
-      buffer = "";
-      void this.handleBridgeLine(socket, line);
+      let newline: number;
+      while ((newline = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        if (followUp) {
+          followUp(line);
+          continue;
+        }
+        followUp = ignoreLine;
+        void this.handleBridgeLine(socket, line, (handler) => { followUp = handler; });
+      }
     });
     socket.on("error", () => socket.destroy());
   }
 
-  private async handleBridgeLine(socket: Socket, line: string): Promise<void> {
+  private async handleBridgeLine(
+    socket: Socket,
+    line: string,
+    listen: (handler: (line: string) => void) => void,
+  ): Promise<void> {
     let request: BridgeRequest;
     try {
       request = JSON.parse(line) as BridgeRequest;
@@ -2820,6 +2927,18 @@ export class McpConnectionGatewayService {
     }
     const abortController = new AbortController();
     socket.once("close", () => abortController.abort());
+    // Set up before the first await, so an answer cannot arrive unheard.
+    const forms = request.elicitation === ELICITATION_WIRE_OPT_IN
+      ? new ElicitationWireChannel((wireLine) => {
+        if (socket.destroyed || socket.writableEnded) return false;
+        socket.write(`${JSON.stringify(wireLine)}\n`);
+        return true;
+      })
+      : undefined;
+    if (forms) {
+      listen((answer) => forms.receive(answer));
+      socket.once("close", () => forms.close());
+    }
     try {
       const result = await this.dispatchBridgeOperation(
         request.token,
@@ -2829,9 +2948,12 @@ export class McpConnectionGatewayService {
         abortController.signal,
         typeof request.deadlineAt === "number" && Number.isFinite(request.deadlineAt) ? request.deadlineAt : undefined,
         typeof request.discoveryId === "string" && /^[a-f0-9-]{36}$/.test(request.discoveryId) ? request.discoveryId : undefined,
+        forms?.route,
       );
+      forms?.close();
       this.respond(socket, { ok: true, result });
     } catch (error) {
+      forms?.close();
       // Deliberately no session teardown here. One token is shared by every
       // in-flight request from the bridge child, so closing on any failure
       // would take a cancelled call, a 429, or a `-32602` and turn it into
@@ -3241,6 +3363,8 @@ export class McpConnectionGatewayService {
     signal?: AbortSignal,
     deadlineAt = Date.now() + MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS,
     parentDiscoveryId?: string,
+    /** Where the upstream server's forms for this request go, if anywhere. */
+    elicit?: ElicitationRoute,
   ): Promise<unknown> {
     // Net callbacks can inherit the registration that created the server.
     // Only this RPC owns its fetch signal; discovery phases override it locally.
@@ -3248,6 +3372,7 @@ export class McpConnectionGatewayService {
       const discovery = new McpDiscovery(grant.connectionId, Math.min(deadlineAt, Date.now() + MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS), signal, {
         threadId: grant.threadId, operation: typeof operation === "string" ? operation : undefined, parentDiscoveryId,
       });
+      let releaseRoute: (() => void) | undefined;
       try {
         if (operation === "gateway/tools/list" || operation === "gateway/tools/call") {
           await this.requireGatewaySelection(grant);
@@ -3258,6 +3383,17 @@ export class McpConnectionGatewayService {
           throw new Error("Delegated MCP access requires the read-only gateway.");
         }
         const client = await this.ensureUpstreamClient(token, grant, discovery);
+        // Every request on the session is counted, so a form is never handed
+        // to one caller while another may be the one it is for. Only a tool
+        // call from a caller that can show it gets a route. A Job Monitor's
+        // read-only scope has no one to ask.
+        const interactive = !delegated && (operation === "tools/call" || operation === "gateway/tools/call");
+        releaseRoute = this.elicitationRoutes.track(
+          token,
+          client,
+          signal ?? discovery.signal,
+          interactive ? elicit : undefined,
+        );
         const values = params && typeof params === "object"
           ? params as Record<string, unknown>
           : {};
@@ -3333,6 +3469,7 @@ export class McpConnectionGatewayService {
         this.recordDiscoveryFailure(grant.connectionId, error);
         throw error;
       } finally {
+        releaseRoute?.();
         discovery.close();
       }
     });

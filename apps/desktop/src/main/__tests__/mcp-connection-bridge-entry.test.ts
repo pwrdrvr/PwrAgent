@@ -1,6 +1,8 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { ElicitRequestSchema, type ElicitRequestParams } from "@modelcontextprotocol/sdk/types.js";
+import type { ElicitationRoute } from "../mcp-connections/mcp-elicitation-relay";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const bridge = vi.hoisted(() => ({
@@ -37,11 +39,12 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function openBridge(): Promise<Client> {
+async function openBridge(
+  client = new Client({ name: "native-catalog-fixture", version: "1.0.0" }),
+): Promise<Client> {
   const [transport, serverTransport] = InMemoryTransport.createLinkedPair();
   bridge.transport = serverTransport;
   await import("../mcp-connections/mcp-connection-bridge-entry");
-  const client = new Client({ name: "native-catalog-fixture", version: "1.0.0" });
   clients.push(client);
   await client.connect(transport);
   return client;
@@ -147,5 +150,64 @@ describe("native bridge catalog continuations", () => {
     const third = await client.listTools({ cursor: second.nextCursor });
     expect(third).toEqual({ ...tail, _meta: { fixture: "preserved" } });
     expect(deadlines).toEqual([1_060_000, 1_060_000, 1_060_000]);
+  });
+});
+
+describe("native bridge upstream forms", () => {
+  const form = {
+    message: "Remove /fixture/old? This cannot be undone.",
+    requestedSchema: {
+      type: "object" as const,
+      properties: { confirm: { type: "boolean" as const, title: "Remove permanently" } },
+      required: ["confirm"],
+    },
+    _meta: { "fixture/confirmation": "nonce-1", persist: ["session"] },
+  };
+
+  /** The owner sends one form during the call and returns what it got back. */
+  function callThatAsks(): { routes: Array<ElicitationRoute | undefined> } {
+    const routes: Array<ElicitationRoute | undefined> = [];
+    bridge.request.mockImplementation(async (operation: string, ...rest: unknown[]) => {
+      if (operation === "describe") return { tools: true };
+      const onElicit = rest[5] as ElicitationRoute | undefined;
+      routes.push(onElicit);
+      const answer = onElicit ? await onElicit(form, new AbortController().signal) : undefined;
+      return { content: [{ type: "text", text: JSON.stringify(answer ?? null) }] };
+    });
+    return { routes };
+  }
+
+  it("asks the agent's own client, with the form exactly as the server sent it", async () => {
+    const { routes } = callThatAsks();
+    const client = new Client(
+      { name: "native-form-fixture", version: "1.0.0" },
+      { capabilities: { elicitation: { form: {} } } },
+    );
+    const seen: ElicitRequestParams[] = [];
+    client.setRequestHandler(ElicitRequestSchema, async (request) => {
+      seen.push(request.params);
+      return { action: "accept", content: { confirm: true }, _meta: { "client/approval": "kept" } };
+    });
+    await openBridge(client);
+
+    const result = await client.callTool({ name: "remove", arguments: {} });
+
+    expect(routes[0]).toBeTypeOf("function");
+    // The agent's SDK client parses what it receives; the owner-side suite
+    // proves the bridge is handed the server's form verbatim.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject(form);
+    expect(JSON.parse((result.content as Array<{ text: string }>)[0]!.text)).toEqual({
+      action: "accept", content: { confirm: true }, _meta: { "client/approval": "kept" },
+    });
+  });
+
+  it("offers no route for an agent client that never declared elicitation", async () => {
+    const { routes } = callThatAsks();
+    const client = await openBridge();
+
+    await client.callTool({ name: "remove", arguments: {} });
+
+    expect(routes).toEqual([undefined]);
   });
 });

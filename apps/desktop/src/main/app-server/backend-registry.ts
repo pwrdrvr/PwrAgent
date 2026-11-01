@@ -647,6 +647,8 @@ import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gate
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { McpGatewayToolService, type McpGatewayApproval } from "../mcp-connections/mcp-gateway-tool-service";
 import { gatewayToolRequiresApproval, type McpGatewayInvocation, type McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
+import { elicitationUnavailable } from "../mcp-connections/mcp-elicitation-relay";
+import type { ElicitRequestParams } from "@modelcontextprotocol/sdk/types.js";
 import {
   getTokenMiserBridgeDescriptorPath,
   TOKEN_MISER_BRIDGE_DESCRIPTOR_ENV,
@@ -872,6 +874,8 @@ const CODEX_RATE_LIMIT_BROADCAST_WINDOW_MS = 20_000;
 const THREAD_SEARCH_REUSE_WINDOW_MS = 2_000;
 /** Marks the approval cards PwrAgent's own forge tools raise. */
 const FORGE_TOOL_REQUEST_ID_PREFIX = "forge-tool:";
+/** A form an upstream MCP server sent during a gateway call; see requestUpstreamMcpForm. */
+const MCP_UPSTREAM_FORM_REQUEST_ID_PREFIX = "mcp-upstream-form:";
 const FORGE_APPROVAL_WITHDRAWN_TODO_KEY = "forge-approval-withdrawn";
 const PENDING_APPROVAL_GUIDANCE =
   "The operator has not answered these yet. A call waiting on one stays pending until they do. "
@@ -10879,6 +10883,7 @@ export class DesktopBackendRegistry {
         toolAllowed: (tool, context) => !this.isTaskMonitorThread(context)
           || (tool.definition.annotations?.readOnlyHint === true && tool.definition.annotations.destructiveHint !== true),
         approve: (invocation, context, signal, annotations, catalogRevision, consentRevision) => this.approveGatewayInvocation(invocation, context, signal, annotations, catalogRevision, consentRevision),
+        elicit: (request, invocation, context, signal) => this.requestUpstreamMcpForm(request, invocation, context, signal),
       });
     }
     if (this.tokenMiserStore) {
@@ -40644,6 +40649,93 @@ export class DesktopBackendRegistry {
       signal.addEventListener("abort", aborted, { once: true });
       if (signal.aborted) { aborted(); return; }
       void this.emit({ backend: approvalContext.backend, notification }).catch((error) => finish(false, error));
+    });
+  }
+
+  /**
+   * Show a form that an upstream MCP server sends while a gateway call runs,
+   * on the calling thread's card, and return the person's answer.
+   *
+   * This is not invocation approval. Full Access, the connection's tool
+   * approval policy and conversation grants never answer it, and nothing is
+   * remembered from it: the next form asks again. The message, requested
+   * schema and `_meta` reach the card exactly as the server sent them. A Job
+   * Monitor or headless automation has no one to ask, so the form fails
+   * closed there; so does a turn that is no longer live.
+   */
+  private async requestUpstreamMcpForm(
+    request: ElicitRequestParams,
+    invocation: McpGatewayInvocation,
+    context: AgentToolCallContext,
+    signal: AbortSignal,
+  ): Promise<unknown> {
+    signal.throwIfAborted();
+    if (this.isTaskMonitorThread(context)) {
+      throw elicitationUnavailable("A Job Monitor cannot answer an MCP server's form.");
+    }
+    const requestId = `${MCP_UPSTREAM_FORM_REQUEST_ID_PREFIX}${randomUUID()}`;
+    const notification: AppServerPendingRequestNotification = {
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: context.threadId,
+        turnId: context.turnId,
+        requestId,
+        serverName: invocation.serverName,
+        mode: "form",
+        message: request.message,
+        requestedSchema: (request as { requestedSchema?: unknown }).requestedSchema,
+        _meta: request._meta ?? null,
+      },
+    };
+    if (this.findHeadlessAutomationTurnForRequest(context.backend, notification)) {
+      throw elicitationUnavailable("A headless automation run has no one to answer an MCP server's form.");
+    }
+    if (!this.isLiveDynamicToolCall(context.backend, context)) {
+      throw elicitationUnavailable("The turn that made this call has ended.");
+    }
+    const key = buildPendingRequestKey({ backend: context.backend, threadId: context.threadId, requestId });
+    return await new Promise<unknown>((resolve, reject) => {
+      let waiting = true;
+      const finish = (): boolean => {
+        if (!waiting) return false;
+        waiting = false;
+        signal.removeEventListener("abort", withdraw);
+        if (this.pendingServerRequests.get(key)?.notification === notification) {
+          this.pendingServerRequests.delete(key);
+        }
+        return true;
+      };
+      // The call ended first: take the card down and answer nothing.
+      const withdraw = (): void => {
+        if (!finish()) return;
+        reject(signal.reason ?? new DOMException("The MCP form was withdrawn.", "AbortError"));
+        void this.emit({ backend: context.backend, notification: {
+          method: "serverRequest/resolved",
+          params: { threadId: context.threadId, turnId: context.turnId, requestId },
+        } }).catch(() => undefined);
+      };
+      this.pendingServerRequests.set(key, {
+        backend: context.backend,
+        notification,
+        resolve: (response) => {
+          if (signal.aborted) {
+            withdraw();
+            return;
+          }
+          if (finish()) resolve(response);
+        },
+        reject: (error) => {
+          if (finish()) reject(error);
+        },
+      });
+      signal.addEventListener("abort", withdraw, { once: true });
+      if (signal.aborted) {
+        withdraw();
+        return;
+      }
+      void this.emit({ backend: context.backend, notification }).catch((error) => {
+        if (finish()) reject(error);
+      });
     });
   }
 
