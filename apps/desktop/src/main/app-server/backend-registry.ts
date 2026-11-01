@@ -24501,6 +24501,7 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: result.threadId,
       turnId: result.turnId,
+      disposition: "steered",
     };
   }
 

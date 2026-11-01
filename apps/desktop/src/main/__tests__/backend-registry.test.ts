@@ -30593,14 +30593,15 @@ command = "pnpm dev"
 
     steerDeferred.resolve({ threadId: "thread-1", turnId: "turn-1" });
     await expect(Promise.all(responses)).resolves.toEqual([
-      { backend: "codex", threadId: "thread-1", turnId: "turn-1" },
-      { backend: "codex", threadId: "thread-1", turnId: "turn-1" },
-      { backend: "codex", threadId: "thread-1", turnId: "turn-1" },
+      { backend: "codex", threadId: "thread-1", turnId: "turn-1", disposition: "steered" },
+      { backend: "codex", threadId: "thread-1", turnId: "turn-1", disposition: "steered" },
+      { backend: "codex", threadId: "thread-1", turnId: "turn-1", disposition: "steered" },
     ]);
     await expect(registry.steerTurn(request)).resolves.toEqual({
       backend: "codex",
       threadId: "thread-1",
       turnId: "turn-1",
+      disposition: "steered",
     });
     expect(steerSpy).toHaveBeenCalledTimes(1);
 
