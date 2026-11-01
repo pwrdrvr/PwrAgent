@@ -1285,15 +1285,11 @@ function primaryRepositoryKey(thread: NavigationThreadSummary): string | undefin
 function threadPrimaryRepository(
   thread: NavigationThreadSummary,
 ): RepositoryIdentity | undefined {
-  const [provider, ...path] = (thread.primaryGitRepository ?? "")
-    .split("/")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const repo = path.at(-1);
-  if (provider && repo && path.length >= 2) {
-    return { provider, org: path.slice(0, -1).join("/"), repo };
-  }
-  return parseRepositoryIdentity(thread.gitOriginUrl);
+  const primaryGitRepository = thread.primaryGitRepository?.trim();
+  return (primaryGitRepository
+    ? parseRepositoryIdentity(`https://${primaryGitRepository}`)
+    : undefined)
+    ?? parseRepositoryIdentity(thread.gitOriginUrl);
 }
 
 /**
