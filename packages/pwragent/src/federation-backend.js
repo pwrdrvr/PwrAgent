@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { mergeCausalMessagingContext, shortenDerivedThreadTitle } from "../dist/federation-core.js";
+import { mergeCausalMessagingContext, pageThreadReplay, shortenDerivedThreadTitle } from "../dist/federation-core.js";
 import { ACTIVE, atomicJson, digest } from "./store.js";
 
 export const METHOD_CAPABILITIES = Object.fromEntries([
@@ -153,7 +153,11 @@ export class HeadlessBackend {
         const messages = history.replay.messages.filter((message) => message.role === "assistant" && message.turn?.id === params.turnId);
         return { message: messages.find((message) => params.itemId ? message.id === params.itemId : message.text === params.text) || null };
       }
-      case "readThread": return this.readThread(params.threadId);
+      case "readThread": {
+        // Viewers take the newest page as returned. Page here, as desktop owners do.
+        const history = await this.readThread(params.threadId);
+        return { ...history, replay: pageThreadReplay(history.replay, params) };
+      }
       case "supportsMessagingPdfTools": return params.backend === "codex" && this.owned(params.threadId).messagingFileTools === true;
       case "startThread": return this.startThread(params);
       case "materializeDirectoryLaunchpad": return this.materializeLaunchpad(params, envelope);

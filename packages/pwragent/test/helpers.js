@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -24,7 +24,9 @@ export async function setup(t) {
   // limit), and the socket sits 35 bytes below this root. A root inside the
   // checkout fails in long checkouts such as Sandboxer's ~/pwragent/wt/<sha>,
   // so use /tmp: os.tmpdir() is a long /private/var/folders/... on macOS.
-  const root = mkdtempSync("/tmp/pwragent-h-");
+  // The daemon registers canonical project paths, and macOS /tmp is a link
+  // to /private/tmp, so callers must use the canonical root too.
+  const root = realpathSync(mkdtempSync("/tmp/pwragent-h-"));
   const workspace = path.join(root, "w");
   const home = path.join(root, "c");
   const data = path.join(root, "f");
