@@ -1,7 +1,7 @@
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import type { McpConnectionGatewayService } from "./mcp-connection-gateway-service";
-import { gatewayCatalogRevision, validateGatewayArguments, type McpGatewayInvocation, type McpGatewayTool, type McpGatewaySource } from "./mcp-gateway-catalog";
+import { gatewayCatalogRevision, validateGatewayArguments, type McpGatewayInvocation, type McpGatewayTool, type McpGatewaySource, type McpGatewayIdentity } from "./mcp-gateway-catalog";
 import { MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS, MCP_CONNECTION_TOOL_TIMEOUT_MS, MCP_DISCOVERY_RESPONSE_GRACE_MS } from "./mcp-connection-timeouts";
 
 export type McpGatewayCallArgs = Omit<McpGatewayInvocation, "serverName">;
@@ -11,7 +11,8 @@ export type McpGatewayApproval = boolean | {
   onInvoked: () => Promise<void>;
 };
 export type McpGatewaySearchResult = {
-  tools: Array<Omit<McpGatewayTool, "serverInstructions"> & { invocation: { name: "call_mcp_tool"; codeModeName: "pwragent__call_mcp_tool" } }>;
+  tools: Array<Omit<McpGatewayTool, "serverInstructions" | "serverIdentity"> & { invocation: { name: "call_mcp_tool"; codeModeName: "pwragent__call_mcp_tool" } }>;
+  servers?: Array<McpGatewayIdentity & { connectionId: string; serverName: string }>;
   unavailable: Array<{ connectionId: string; message: string }>;
   /** Each returned tool's server guidance, once per server. */
   serverInstructions?: Array<{ connectionId: string; serverName: string; instructions: string }>;
@@ -54,6 +55,7 @@ export class McpGatewayToolService {
       const ids = args.connectionId ? [args.connectionId] : [...new Set(selected)];
       if (ids.length > 64) throw new Error("Specify a connectionId when searching more than 64 selected connections.");
       const candidates: McpGatewayTool[] = [];
+      const identities = new Map<string, McpGatewayIdentity>();
       const instructions = new Map<string, { serverName: string; instructions: string }>();
       let candidateBytes = 0;
       const unavailable: McpGatewaySearchResult["unavailable"] = [];
@@ -71,7 +73,8 @@ export class McpGatewayToolService {
             const bytes = Buffer.byteLength(JSON.stringify(tools));
             if (candidateBytes + bytes > 8 * 1024 * 1024) throw new Error("Search a specific connectionId to stay within the catalog memory budget.");
             candidateBytes += bytes;
-            for (const { serverInstructions, ...tool } of tools) {
+            for (const { serverInstructions, serverIdentity, ...tool } of tools) {
+              if (serverIdentity) identities.set(connectionId, serverIdentity);
               if (this.options.toolAllowed?.(tool, context) === false) continue;
               if (serverInstructions) {
                 instructions.set(connectionId, { serverName: tool.serverName, instructions: serverInstructions });
@@ -98,16 +101,21 @@ export class McpGatewayToolService {
       const result: McpGatewaySearchResult = { tools: [], unavailable };
       for (const { tool } of ranked.slice(0, args.limit ?? 3)) {
         const entry = { ...tool, invocation: { name: "call_mcp_tool" as const, codeModeName: "pwragent__call_mcp_tool" as const } };
+        const identity = identities.get(tool.connectionId);
+        const servers = identity && !result.servers?.some((entry) => entry.connectionId === tool.connectionId)
+          ? [...(result.servers ?? []), { connectionId: tool.connectionId, serverName: tool.serverName, ...identity }]
+          : result.servers;
         const guidance = instructions.get(tool.connectionId);
         const serverInstructions = guidance && !result.serverInstructions?.some((entry) => entry.connectionId === tool.connectionId)
           ? [...(result.serverInstructions ?? []), { connectionId: tool.connectionId, ...guidance }]
           : result.serverInstructions;
         // Exact schemas are indivisible. Never return truncated valid-looking JSON.
-        if (Buffer.byteLength(JSON.stringify({ ...result, tools: [...result.tools, entry], serverInstructions })) > 24_000) {
+        if (Buffer.byteLength(JSON.stringify({ ...result, tools: [...result.tools, entry], serverInstructions, servers })) > 24_000) {
           result.unavailable.push({ connectionId: tool.connectionId, message: `The exact schema for ${tool.toolName} exceeds this result's size budget. Search its exact name alone or use native MCP invocation.` });
           continue;
         }
         result.tools.push(entry);
+        if (servers) result.servers = servers;
         if (serverInstructions) result.serverInstructions = serverInstructions;
       }
       return result;
