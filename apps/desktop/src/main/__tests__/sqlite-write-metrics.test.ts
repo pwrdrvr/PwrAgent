@@ -344,6 +344,64 @@ describe("sqlite write metrics", () => {
     } finally { await registry.close(); }
   });
 
+  it("budgets the origin a to-do card's Start thread records on its first prompt", async () => {
+    const run = gitCommand.getMockImplementation()!;
+    // This fixture is not a Git repository; keep native Git startup out of the budget.
+    gitCommand.mockImplementation(async (cwd, args, options) => {
+      if (cwd === tempDir && args.join(" ") === "rev-parse --abbrev-ref HEAD") {
+        return { stdout: "", stderr: "" };
+      }
+      return await run(cwd, args, options);
+    });
+    const finish = Promise.withResolvers<void>();
+    const prompts: SDKUserMessage[] = [];
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store: new ClaudeSessionStore(path.join(tempDir, "claude")),
+        getSessionInfo: async () => undefined,
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+        query: ({ prompt, options = {} }) => {
+          if (typeof prompt === "string") throw new Error("Expected streaming input");
+          const input = prompt[Symbol.asyncIterator]();
+          async function* messages(): AsyncGenerator<ClaudeMessage> {
+            prompts.push((await input.next()).value);
+            yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
+            // The turn stays open, so its completion stays outside the budget.
+            await finish.promise;
+            yield { type: "result", subtype: "success", is_error: false,
+              user_message_uuid: prompts.at(-1)?.uuid,
+            } as ClaudeMessage;
+          }
+          return Object.assign(messages(), { close: () => { finish.resolve(); } }) as unknown as ClaudeQuery;
+        },
+      },
+    });
+    try {
+      const { threadId } = await registry.startThread({ backend: "claude", cwd: tempDir, executionMode: "default" });
+      const identity = { backend: "claude" as const, threadId };
+      const origin: AppServerThreadMessageOrigin = {
+        kind: "agent",
+        sourceThread: { backend: "codex", threadId: "raising-thread", title: "Raising thread" },
+        threadTodo: { id: "todo-1", title: "Rewrite the CLI" },
+      };
+      const { result: started, writes } = await measureSqliteWrites(async () =>
+        await registry.startTurn({ ...identity, input: [{ type: "text", text: "Rewrite the CLI" }], messageOrigin: origin }));
+      expectSqliteWriteBudget({ scenario: "thread-todo-start-origin",
+        note: "One to-do Start thread click: the started thread's first prompt with its to-do origin. The origin row is the only write the card adds; ~1.2 MB/day at 100 starts, zero idle writes.",
+        writes });
+      const messageId = `user:${started.turnId}`;
+      expect((await store.readThreadMessageOrigins({ ...identity, messageIds: [messageId] }))[messageId]).toEqual(origin);
+      await vi.waitFor(() => expect(prompts).toHaveLength(1));
+    } finally {
+      finish.resolve();
+      try { await registry.close(); }
+      finally { gitCommand.mockImplementation(run); }
+    }
+  });
+
   it("keeps 24 hourly inactive-thread sweeps read-only", async () => {
     const thread: AppServerThreadSummary = {
       id: "recently-restored", title: "Restored thread", titleSource: "explicit", source: "codex", threadStatus: "notLoaded",

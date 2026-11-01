@@ -1752,8 +1752,16 @@ export function bootstrapApp(): void {
     });
     registerAgentIpcHandlers();
     registerScheduledActionIpcHandlers();
-    // A to-do's "Start thread on" runs through the same federation tools.
-    registerThreadTodoIpcHandlers({ federation: federationAgentToolsHandler });
+    // A to-do's "Start thread on" runs through the same federation tools,
+    // with the card's origin on the started thread's prompt.
+    registerThreadTodoIpcHandlers({
+      federation: federationAgentToolsHandler,
+      federationWithOrigin: (messageOrigin) =>
+        createFederationAgentToolsHandler({
+          ...federationAgentToolOptions,
+          resolveMessageOrigin: () => messageOrigin,
+        }),
+    });
     registerCodexEnvironmentEditorIpcHandlers();
     registerOperatorRequestIpcHandlers();
     registerApplicationIpcHandlers();
