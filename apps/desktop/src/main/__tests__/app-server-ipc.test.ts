@@ -10040,15 +10040,21 @@ describe("app server ipc", () => {
     expect(appServerService.readPrimaryGitRepository("claude", "claude-new")).toBeUndefined();
 
     listThreads.mockResolvedValue([newThread] as never);
-    emitRegistryEvent({
-      backend: "claude",
-      notification: { method: "thread/started", params: { threadId: "claude-new" } },
-    });
+    try {
+      emitRegistryEvent({
+        backend: "claude",
+        notification: { method: "thread/started", params: { threadId: "claude-new" } },
+      });
 
-    await vi.waitFor(() => {
-      expect(appServerService.readPrimaryGitRepository("claude", "claude-new"))
-        .toBe("github.com/pwrdrvr/pwragent");
-    });
+      await vi.waitFor(() => {
+        expect(appServerService.readPrimaryGitRepository("claude", "claude-new"))
+          .toBe("github.com/pwrdrvr/pwragent");
+      });
+      // Let the event's refresh finish before later tests count reads.
+      await refreshOwnerMetadata();
+    } finally {
+      listThreads.mockReset();
+    }
   });
 
   it("refreshes a thread's working state after its expected branch changes", async () => {
