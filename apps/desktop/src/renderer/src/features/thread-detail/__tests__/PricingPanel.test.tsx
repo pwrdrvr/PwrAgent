@@ -624,6 +624,32 @@ it("shows Claude limits without requesting or displaying the Codex account pace"
   expect(readUsageActivity).not.toHaveBeenCalled();
 });
 
+it("shows Grok's own limit, not the Codex account's pace", () => {
+  const readUsageActivity = vi.fn();
+  const { pricing } = buildTokenMiserPricingFixture();
+  const thread = { id: "grok-thread", source: "acp:grok" as const, updatedAt: 1 };
+  const backends = [
+    { kind: "codex", label: "OpenAI", rateLimits: [{ name: "Weekly limit", usedPercent: 68 }] },
+    { kind: "acp:grok", label: "Grok", rateLimits: [{ name: "Weekly limit", usedPercent: 12 }] },
+  ] as import("@pwragent/shared").BackendSummary[];
+  const view = render(<PricingPanel pricing={pricing} thread={thread} backends={backends}
+    desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} />);
+  expect(view.getByLabelText("Grok plan limits")).toHaveTextContent("12% used");
+  expect(view.getByLabelText("Grok plan limits")).not.toHaveTextContent("68%");
+  expect(view.container.querySelector(".usage-pace-card")).toBeNull();
+  expect(readUsageActivity).not.toHaveBeenCalled();
+});
+
+it("keeps the Grok card while Grok has not reported a limit yet", () => {
+  const { pricing } = buildTokenMiserPricingFixture();
+  const thread = { id: "grok-thread", source: "acp:grok" as const, updatedAt: 1 };
+  const view = render(<PricingPanel pricing={pricing} thread={thread}
+    backends={[{ kind: "acp:grok", label: "Grok" } as import("@pwragent/shared").BackendSummary]}
+    desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity: vi.fn() }} />);
+  expect(view.getByLabelText("Grok plan limits")).toHaveTextContent("Grok has not reported plan limits.");
+  expect(view.container.querySelector(".usage-pace-card")).toBeNull();
+});
+
 it("names a remote thread's owner on the Usage Activity card's spend", async () => {
   const now = new Date(2026, 9, 25, 15, 8).getTime();
   vi.spyOn(Date, "now").mockReturnValue(now);

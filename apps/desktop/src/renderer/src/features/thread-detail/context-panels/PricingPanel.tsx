@@ -57,7 +57,7 @@ import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
 import { TokenMiserSavingsBreakdown } from "./TokenMiserSavingsBreakdown";
 import { TokenMiserSummaryCard } from "./TokenMiserSummaryCard";
 import { ThreadFamilyPricingCard } from "./ThreadFamilyPricingCard";
-import { ClaudeUsageLimits, UsagePaceCard } from "./UsagePaceCard";
+import { AcpUsageLimits, ClaudeUsageLimits, UsagePaceCard } from "./UsagePaceCard";
 import {
   exactSummaryMoneyTitle,
   formatRoundedSummaryMoney,
@@ -204,6 +204,7 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
   const familyTarget = federation?.ref.target ?? readRendererFederationTarget();
   const familyOwner = familyTarget?.scope === "remote" ? familyTarget : undefined;
   const ownerLabel = familyOwner ? federation?.instanceLabel ?? readRendererFederationLabel() ?? "Remote machine" : undefined;
+  const threadBackend = source === undefined ? undefined : props.backends?.find((backend) => backend.kind === source);
   const snapshotVersion = federation?.ref.target.scope === "remote" && !federation.capabilities?.includes("event_subscriptions") ? updatedAt : undefined;
   const gateSource = useMemo<PricingGateSource>(() => ({
     desktopApi: props.desktopApi,
@@ -322,11 +323,15 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
       ) : null}
 
       {/* This thread's bill; the account's limit and its pace are the card,
-          and every thread's spend across instances is the window it opens. */}
+          and every thread's spend across instances is the window it opens.
+          Only Codex has that pace history. A provider that reports its own
+          limits shows them as meters instead of the Codex account's. */}
       {source === "claude"
-        ? <ClaudeUsageLimits backend={props.backends?.find((backend) => backend.kind === "claude")} />
-        : <UsagePaceCard desktopApi={props.desktopApi} backends={props.backends} ownerLabel={ownerLabel}
-          ownerInstanceId={familyOwner?.instanceId} />}
+        ? <ClaudeUsageLimits backend={threadBackend} />
+        : source?.startsWith("acp:") && (source === "acp:grok" || threadBackend?.rateLimits?.length)
+          ? <AcpUsageLimits backend={threadBackend} provider={formatBackendLabel(source, props.backends)} />
+          : <UsagePaceCard desktopApi={props.desktopApi} backends={props.backends} ownerLabel={ownerLabel}
+            ownerInstanceId={familyOwner?.instanceId} />}
 
       {/* Under the spend breakdown, above the turn rows: the gate's result is
           part of reading the bill, not a footnote to one turn of it. */}
