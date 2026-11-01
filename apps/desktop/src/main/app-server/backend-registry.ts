@@ -7219,6 +7219,19 @@ function mergeThreadMessageOrigins(
   };
 }
 
+/**
+ * Origin of a prompt PwrAgent writes into a monitor thread: its brief and
+ * any recovery instruction. Claude and ACP monitor transcripts are durable,
+ * so without one the prompt reads as the operator's. It carries no
+ * `subAgent` block: that block marks a monitor result, which the
+ * transcript draws as a completed-monitor card with an outcome.
+ */
+function buildTaskMonitorPromptOrigin(
+  causalContext: TaskMonitorDelegationRecord["causalContext"],
+): AppServerThreadMessageOrigin {
+  return { kind: "sub-agent", ...causalContext };
+}
+
 function buildTaskMonitorMessageOrigin(params: {
   monitorId: string;
   monitorThreadId?: string;
@@ -44801,9 +44814,7 @@ export class DesktopBackendRegistry {
         ...(params.preferredReasoningEffort === "provider-default"
           ? {}
           : { reasoningEffort: params.preferredReasoningEffort }),
-        ...(params.causalContext?.causalMessagingSource || params.causalContext?.causalMessagingAmbiguous
-          ? { messageOrigin: { kind: "sub-agent" as const, ...params.causalContext } }
-          : {}),
+        messageOrigin: buildTaskMonitorPromptOrigin(params.causalContext),
       }).catch((error: unknown) => {
         this.claudeBackend.releaseEphemeralThread(thread.threadId);
         throw error;
@@ -44861,11 +44872,9 @@ export class DesktopBackendRegistry {
         model: params.runtimeModel,
         reasoningEffort,
       });
-      const causalContext = params.causalContext ?? {};
-      if (causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous) {
-        await this.persistThreadMessageOrigin({ backend: params.context.backend, threadId: turn.threadId,
-          messageId: buildTurnUserMessageOriginId(turn.turnId), origin: { kind: "sub-agent", ...causalContext } });
-      }
+      await this.persistThreadMessageOrigin({ backend: params.context.backend, threadId: turn.threadId,
+        messageId: buildTurnUserMessageOriginId(turn.turnId),
+        origin: buildTaskMonitorPromptOrigin(params.causalContext) });
       return {
         cwd,
         executionMode,
@@ -45418,6 +45427,7 @@ export class DesktopBackendRegistry {
           ...(record.preferredReasoningEffort === "provider-default"
             ? {}
             : { reasoningEffort: record.preferredReasoningEffort }),
+          messageOrigin: buildTaskMonitorPromptOrigin(record.causalContext),
         });
         record.monitorTurnId = turn.turnId;
         record.lastActivityAt = Date.now();
@@ -45452,6 +45462,12 @@ export class DesktopBackendRegistry {
         });
         record.monitorTurnId = turn.turnId;
         record.lastActivityAt = Date.now();
+        await this.persistThreadMessageOrigin({
+          backend: record.backend,
+          threadId: turn.threadId,
+          messageId: buildTurnUserMessageOriginId(turn.turnId),
+          origin: buildTaskMonitorPromptOrigin(record.causalContext),
+        });
         backendRegistryLog.warn("started ACP task monitor recovery turn", {
           backend: record.backend,
           monitorId: record.monitorId,
