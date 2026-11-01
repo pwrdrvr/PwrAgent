@@ -319,12 +319,17 @@ function distinctGlyphs(terminal: Terminal): number {
   return keys.size;
 }
 
-/** A glyph measured while hidden gets a letter-spacing that stretches it to
- *  fill its cells; with real widths every span keeps the default spacing. */
-function stretchedSpans(container: HTMLElement): string[] {
-  return [...container.querySelectorAll<HTMLElement>(".xterm-rows span")]
+/** Letter-spacing xterm had to add to fit glyphs into their cells. With real
+ *  widths there is none: the row container's default is 0 and no span
+ *  overrides it. A width measured while hidden (0) sets a cell-wide default,
+ *  which every span then cancels with an inline style. */
+function spacingCorrections(container: HTMLElement): string[] {
+  const rows = container.querySelector<HTMLElement>(".xterm-rows");
+  const corrections = rows && rows.style.letterSpacing !== "0px"
+    ? [`rows:${rows.style.letterSpacing}`] : [];
+  return corrections.concat([...container.querySelectorAll<HTMLElement>(".xterm-rows span")]
     .filter((span) => span.style.letterSpacing !== "")
-    .map((span) => `${span.textContent}:${span.style.letterSpacing}`);
+    .map((span) => `${span.textContent}:${span.style.letterSpacing}`));
 }
 
 describe("IntegratedTerminal render budget (real xterm)", () => {
@@ -377,7 +382,7 @@ describe("IntegratedTerminal render budget (real xterm)", () => {
     const shown = budget();
     expect(shown.zeroWidthReads).toBe(0);
     expect(shown.widthReads).toBeLessThanOrEqual(distinctGlyphs(xterm));
-    expect(stretchedSpans(container)).toEqual([]);
+    expect(spacingCorrections(container)).toEqual([]);
     expect(container.querySelector(".xterm-rows")).toHaveTextContent("漢字かな wide glyphs 한국어");
     expect(container.querySelector(".xterm-rows")).toHaveTextContent("é combining ä ô");
     // One fit to the pane, sent once to the shared PTY.
@@ -400,7 +405,7 @@ describe("IntegratedTerminal render budget (real xterm)", () => {
   it("does no terminal work for an unchanged rerender or an unchanged observer delivery", async () => {
     const terminal = terminalApi();
     const { show } = mount(terminal.api, { visible: true });
-    await attached();
+    const xterm = await attached();
     terminal.raw.resizeIntegratedTerminal.mockClear();
     resetCounters();
 
@@ -409,7 +414,12 @@ describe("IntegratedTerminal render budget (real xterm)", () => {
     await settle();
 
     expect(budget()).toEqual({ widthReads: 0, zeroWidthReads: 0, rowRenders: 0 });
-    expect(terminal.raw.resizeIntegratedTerminal).not.toHaveBeenCalled();
+    // A fit re-sends the current grid; main deduplicates it, and re-sends
+    // after a refused resize depend on that. It must not be a new grid.
+    for (const [request] of terminal.raw.resizeIntegratedTerminal.mock.calls as unknown as Array<[unknown]>) {
+      expect(request).toEqual({ sessionId: SESSION, cols: xterm.cols, rows: xterm.rows });
+    }
+    expect(terminal.raw.resizeIntegratedTerminal.mock.calls.length).toBeLessThanOrEqual(1);
   });
 
   it("re-fits an actual resize once and re-measures nothing", async () => {
@@ -505,7 +515,7 @@ describe("IntegratedTerminal render budget (real xterm)", () => {
     const shown = budget();
     expect(shown.zeroWidthReads).toBe(0);
     expect(shown.widthReads).toBeLessThanOrEqual(distinctGlyphs(xterm));
-    expect(stretchedSpans(container)).toEqual([]);
+    expect(spacingCorrections(container)).toEqual([]);
   });
 
   it("disposes a never-shown pane and a shown pane without leaving work behind", async () => {

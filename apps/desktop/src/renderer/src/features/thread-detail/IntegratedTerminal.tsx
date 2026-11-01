@@ -86,6 +86,7 @@ export function IntegratedTerminal({
   const replayingBufferedOutputRef = useRef(false);
   const writableRef = useRef(true);
   const fitAndResizeRef = useRef<() => void>(() => undefined);
+  const openTerminalRef = useRef<() => void>(() => undefined);
   const visibleRef = useRef(visible);
   const onHiddenOutputRef = useRef(onHiddenOutput);
   onHiddenOutputRef.current = onHiddenOutput;
@@ -180,9 +181,25 @@ export function IntegratedTerminal({
           return true;
         });
         terminal.loadAddon(fitAddon);
-        terminal.open(container);
-        if (visibleRef.current) terminal.focus();
         terminalRef.current = terminal;
+
+        // Open xterm's DOM renderer the first time the pane is shown, not at
+        // mount. Every pane of every thread mounts and attaches, most of them
+        // under `hidden`. An opened xterm still redraws every row while
+        // hidden (a resize from its idle queue, a selection clear on reset or
+        // on an alternate-screen switch), and its width cache measures each
+        // cell of a display:none row as 0, keeps nothing, and forces a style
+        // flush per cell. Until it opens, the Terminal is a buffer: output,
+        // reset, and resize still apply, with nothing to draw.
+        let opened = false;
+        const openWhenShown = () => {
+          if (opened || disposed || !visibleRef.current) return;
+          opened = true;
+          terminal.open(container);
+        };
+        openTerminalRef.current = openWhenShown;
+        openWhenShown();
+        if (visibleRef.current) terminal.focus();
 
         let resizeFrame: number | undefined;
         const fitAndResize = () => {
@@ -384,6 +401,7 @@ export function IntegratedTerminal({
       pendingInputRef.current = [];
       replayingBufferedOutputRef.current = false;
       fitAndResizeRef.current = () => undefined;
+      openTerminalRef.current = () => undefined;
       cleanupTerminal?.();
     };
     // `cwd` is intentionally not a dependency — see `cwdRef` above.
@@ -393,6 +411,7 @@ export function IntegratedTerminal({
     if (!visible) {
       return;
     }
+    openTerminalRef.current();
     fitAndResizeRef.current();
     // Standalone, the only thing that changes this height is the pane's own
     // handle, and taking focus back afterwards is the point. Hosted, the
