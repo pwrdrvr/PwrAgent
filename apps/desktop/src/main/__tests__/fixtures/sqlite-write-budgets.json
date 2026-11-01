@@ -999,6 +999,13 @@
     "rowsChanged": 3,
     "statements": 3
   },
+  "renamed-repository-pr-watch-keys": {
+    "commits": 1,
+    "note": "Two undelivered watches saved under a renamed repository's old name move to the new name in one commit, once per learned rename; a second sync with no new rename reads only. 0 MB/day after the move.",
+    "observedWalBytes": 12360,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "runtime-lease-dead-owner-takeover": {
     "commits": 7,
     "note": "observe one dead owner, wait one minute, replace all profile runtime leases",
