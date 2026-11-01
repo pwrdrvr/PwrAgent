@@ -27,6 +27,8 @@ import type { Terminal } from "@xterm/xterm";
 const SESSION = "session-budget";
 const CHAR_WIDTH = 7;
 const CHAR_HEIGHT = 15;
+/** xterm's DEFAULT_SCROLL_BAR_WIDTH, which FitAddon subtracts from the host width. */
+const SCROLLBAR_WIDTH = 14;
 
 // Contrived screen: bold, italic, box drawing, CJK wide glyphs, and combining
 // marks, so the budgets cover the flat cache, the variant cache, and metrics
@@ -35,7 +37,7 @@ const SCREEN = [
   "\x1b[1mpwragent\x1b[0m build ok \x1b[32mpassed\x1b[0m 0123456789",
   "┌──────────┐ │ box │ └──────────┘",
   "漢字かな wide glyphs 한국어",
-  "é combining ä ô — dash",
+  "e\u0301 combining a\u0308 o\u0302 — dash",
   "\x1b[3mitalic\x1b[0m and \x1b[1;3mbold italic\x1b[0m",
   "plain ascii abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ",
 ].join("\r\n");
@@ -88,7 +90,7 @@ function isRendered(element: Element): boolean {
   return element.isConnected && !element.closest("[hidden]");
 }
 
-const WIDE = /[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦]/u;
+const WIDE = /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFF60\uFFE0-\uFFE6]/u;
 const COMBINING = /\p{M}/u;
 
 function textWidth(text: string): number {
@@ -100,12 +102,13 @@ function textWidth(text: string): number {
 }
 
 class FakeIntersectionObserver {
-  private readonly delivered = new Map<Element, boolean>();
+  /** `undefined` until the first delivery for that target. */
+  private readonly delivered = new Map<Element, boolean | undefined>();
   constructor(private readonly callback: IntersectionObserverCallback) {
     intersection.observers.add(this);
   }
   observe(target: Element) {
-    this.delivered.set(target, undefined as unknown as boolean);
+    this.delivered.set(target, undefined);
   }
   unobserve(target: Element) {
     this.delivered.delete(target);
@@ -384,9 +387,9 @@ describe("IntegratedTerminal render budget (real xterm)", () => {
     expect(shown.widthReads).toBeLessThanOrEqual(distinctGlyphs(xterm));
     expect(spacingCorrections(container)).toEqual([]);
     expect(container.querySelector(".xterm-rows")).toHaveTextContent("漢字かな wide glyphs 한국어");
-    expect(container.querySelector(".xterm-rows")).toHaveTextContent("é combining ä ô");
+    expect(container.querySelector(".xterm-rows")).toHaveTextContent("e\u0301 combining a\u0308 o\u0302");
     // One fit to the pane, sent once to the shared PTY.
-    expect(xterm.cols).toBe(Math.floor((viewport.width - 14) / CHAR_WIDTH));
+    expect(xterm.cols).toBe(Math.floor((viewport.width - SCROLLBAR_WIDTH) / CHAR_WIDTH));
     expect(terminal.raw.resizeIntegratedTerminal).toHaveBeenCalledExactlyOnceWith({
       sessionId: SESSION, cols: xterm.cols, rows: xterm.rows,
     });
