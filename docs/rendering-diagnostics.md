@@ -3,7 +3,7 @@
 Use this capture when a PwrAgent Chromium GPU helper stays busy. CPU profiles
 alone can miss compositor animations: CSS transforms and opacity can keep
 submitting frames without React commits or JavaScript animation callbacks.
-The capture uses Electron `contentTracing`, not a new profiler or an rAF loop.
+The capture uses Chromium CDP tracing through a managed Electron debugger connection.
 It works in release builds and requires no restart or graphics setting changes.
 
 ## Collect
@@ -53,9 +53,24 @@ does not run a countdown or poll while capturing.
    ```
 
 Only one capture can run per instance. Duration must be 1–30 seconds (default
-10). The main-process deadline survives a hidden, closed, or stalled requesting
-renderer. App shutdown also stops an active capture. A conflicting Chromium
-tracing session fails the request; it is not taken over.
+10). The main-process deadline survives a hidden or stalled requesting renderer.
+App shutdown also stops an active capture. The first live window hosts the CDP
+connection; destroying that host or replacing its debugger aborts the capture
+with a sanitized failure. No replacement connection is detached or stopped.
+
+Acquisition uses CDP `Tracing.start`, which rejects an existing Chromium trace,
+including a session started through Electron `contentTracing`. The capture sends
+`Tracing.end` only after its own start succeeds, and never retries an end command.
+Electron 44.9.3's [`contentTracing.startRecording` documentation](https://github.com/electron/electron/blob/v44.9.3/docs/api/content-tracing.md#contenttracingstartrecordingoptions)
+explicitly says it resolves when a recording already exists; that API cannot
+establish ownership and is no longer used by this capture.
+
+Rendering and HotCpuProfiler acquire separate exclusive CDP domain leases on
+one managed debugger attachment. Either can stop first; only the last lease
+releases the connection. A rejected trace start releases only its own lease.
+An unknown debugger attachment or open DevTools on the host causes capture to
+fail without attaching, detaching, or sending trace commands. Close DevTools
+before starting a capture. This does not interrupt an existing CPU recorder.
 
 ## Read the evidence
 
@@ -92,10 +107,11 @@ GPU-process events can serve several windows; only renderer-process events join
 directly to a window. Correlation is a lead, not proof of causality.
 
 The native buffer is 8 MiB and stops accepting events when full. Inspect
-`bufferUsage.percentage`, exported unchanged from Electron's
-`getTraceBufferUsage()` result. Near 1, treat trace event counts as lower bounds:
+`bufferUsage.percentage`, the largest CDP `Tracing.bufferUsage.percentFull`
+report received during capture (reported every 250 ms). `value` is the largest
+reported event count. These are periodic observations, not a final buffer query. Near 1, treat trace event counts as lower bounds:
 native `activeSeconds` buckets can stop before the capture ends, even while
-snapshots continue. A live v1.3.5 ten-second capture returned
+snapshots continue. The earlier contentTracing-based v1.3.5 ten-second capture returned
 `{percentage: 0.9853219985961914, value: 0}`; its native event buckets stopped
 before the capture ended. Missing later buckets do not establish idle rendering.
 Use a shorter capture to avoid saturation. A JSON expansion above 64 MiB is
@@ -108,7 +124,11 @@ comparison (use Sandboxer when connected, per repository guidance). It creates a
 contrived window with no React, polling or rAF. It captures the same spinner
 first paused, then running, and compares native `DrawFrame` counts for that
 renderer PID. The animation snapshot identifies the spinner in the running
-capture. This tests the capture in the built, minified app too.
+capture. This tests the capture in the built, minified app too. The same spec starts an
+external `contentTracing` recording, verifies the rendering request fails, and
+then successfully stops the original recording through its owner. It also checks
+that a real HotCpuProfiler recording survives rendering collection on the shared
+connection.
 
 Observed on Ubuntu x64 in Sandboxer with Electron 44.9.3 (2026-10-28):
 
@@ -137,8 +157,8 @@ tracing overhead, so compare against the same collection conditions.
 The exported summary contains fixed event/animation/view labels, numeric IDs,
 counts and window state. It excludes window titles, URLs, paths inside pages,
 DOM text, animation keyframes, custom class names, React props, JS stacks, trace
-arguments, and screenshots. A temporary raw trace is written inside a private
-capture directory with Chromium's argument filter enabled, then removed before
-the result resolves. A process crash or cleanup failure can leave that temporary file: treat it as
+arguments, and screenshots. Chromium's argument filter remains enabled. The returned CDP stream is read in
+64 KiB chunks into a mode-0600 raw file inside a private capture directory. The
+stream is closed and the raw file removed before the result resolves or rejects. A process crash or cleanup failure can leave that temporary file: treat it as
 private and delete it locally. Raw traces and logs must stay out of Git and PR
 attachments. Share only the relevant sanitized counts and conditions.
