@@ -56,6 +56,13 @@ export function observeTooltipAnchor(
   };
   for (let parent = target.parentElement; parent; parent = parent.parentElement) parents.push(parent);
   observePath(parents);
+  // Native box sizes and viewport-edge subtraction can differ by a few
+  // floating-point units. Ignore only that arithmetic noise; a layout-unit
+  // resize remains many orders of magnitude larger.
+  const coordinateRoundoff = Number.EPSILON * 8 * Math.max(
+    1, Math.abs(baseline.top), Math.abs(baseline.right),
+    Math.abs(baseline.bottom), Math.abs(baseline.left),
+  );
   const resize = typeof ResizeObserver === "undefined"
     ? undefined
     : new ResizeObserver((entries) => {
@@ -63,8 +70,9 @@ export function observeTooltipAnchor(
         // The native observer always sends an initial notification. The
         // rectangle measured on entry already covers an unchanged box; do not
         // turn that notification into a later, unrelated geometry read.
-        if (size && size.inlineSize === baseline.right - baseline.left
-          && size.blockSize === baseline.bottom - baseline.top) return;
+        if (size
+          && Math.abs(size.inlineSize - (baseline.right - baseline.left)) <= coordinateRoundoff
+          && Math.abs(size.blockSize - (baseline.bottom - baseline.top)) <= coordinateRoundoff) return;
         schedule();
       });
   resize?.observe(target);
