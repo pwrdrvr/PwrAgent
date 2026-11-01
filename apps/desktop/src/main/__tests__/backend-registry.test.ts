@@ -54527,7 +54527,8 @@ script = "printf setup"
         await vi.waitFor(async () => {
           const origins = await readUserOrigins();
           expect(origins).toHaveLength(2);
-          expect(origins[1]).toEqual({ id: expect.not.stringMatching(`^user:${monitorTurnId}$`), origin });
+          expect(origins[1]?.id).not.toBe(`user:${monitorTurnId}`);
+          expect(origins[1]?.origin).toEqual(origin);
         });
         expect(overlayStore.upsertThreadMessageOrigin).toHaveBeenCalledWith({
           backend: "claude", threadId: monitorThreadId, messageId: `user:${monitorTurnId}`, origin,

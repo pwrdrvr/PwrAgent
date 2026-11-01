@@ -7221,8 +7221,9 @@ function mergeThreadMessageOrigins(
 
 /**
  * Origin of a prompt PwrAgent writes into a monitor thread: its brief and
- * any recovery instruction. Claude and ACP monitor transcripts are durable,
- * so without one the prompt reads as the operator's. It carries no
+ * any recovery instruction. The sub-agent details link Claude and ACP
+ * monitor transcripts, so without one the prompt reads as the operator's.
+ * It carries no
  * `subAgent` block: that block marks a monitor result, which the
  * transcript draws as a completed-monitor card with an outcome.
  */
@@ -44952,7 +44953,7 @@ export class DesktopBackendRegistry {
     const causalContext = params.causalContext ?? {};
     if (causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous) {
       await this.persistThreadMessageOrigin({ backend: "codex", threadId: turn.threadId,
-        messageId: buildTurnUserMessageOriginId(turn.turnId), origin: { kind: "sub-agent", ...causalContext } });
+        messageId: buildTurnUserMessageOriginId(turn.turnId), origin: buildTaskMonitorPromptOrigin(causalContext) });
     }
 
     return {
