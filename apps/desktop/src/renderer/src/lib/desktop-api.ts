@@ -1012,6 +1012,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   manageThreadDependencies?: (
     request: import("@pwragent/shared").ManageThreadDependenciesRequest,
   ) => Promise<import("@pwragent/shared").ManageThreadDependenciesResponse>;
+  /** List, read the history of, or stop the PR watches that wake local threads. */
+  manageThreadPrWatches?: (
+    request: import("@pwragent/shared").ThreadPrWatchesRequest,
+  ) => Promise<import("@pwragent/shared").ThreadPrWatchesResponse>;
   readUsageActivity?: (request: ReadUsageActivityRequest) => Promise<ReadUsageActivityResponse>;
   /** Stored totals for a local thread and every sub-thread under it. */
   readThreadFamilyPricing?: (request: ReadThreadFamilyPricingRequest) => Promise<ReadThreadFamilyPricingResponse>;

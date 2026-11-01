@@ -31,6 +31,8 @@ import type {
   SetThreadParentRequest,
   ThreadGitWorkingState,
   ThreadPullRequestWatchEvent,
+  PwrAgentThreadInspectionResponse,
+  WatchThreadPullRequestToolArgs,
   ThreadSearchResponse,
 } from "@pwragent/shared";
 import { buildPullRequestStatusKey } from "@pwragent/shared";
@@ -941,13 +943,19 @@ const recoverOrphanedThreadPrAutoDispatches = vi.fn(async () => ({
 }));
 const registerThreadPrStatusWatch = vi.fn(async ({ watch }) => ({
   status: "watching" as const,
+  existed: false,
   watch,
 }));
 const claimThreadPrStatusWatches = vi.fn(async () => []);
 const releaseThreadPrStatusWatch = vi.fn(async () => undefined);
 const renewThreadPrStatusWatchLease = vi.fn(async () => false);
-const finishThreadPrStatusWatch = vi.fn(async () => undefined);
-const supersedeThreadPrStatusWatches = vi.fn(async () => 0);
+const finishThreadPrStatusWatch = vi.fn(async () => []);
+const advanceThreadPrStatusWatches = vi.fn(async () => ({
+  moved: 0,
+  superseded: 0,
+  baselinesCleared: 0,
+  threads: [],
+}));
 const listActiveThreadPrStatusWatches = vi.fn(async () => []);
 const cancelThreadPrStatusWatchesForPr = vi.fn(async () => 0);
 const claimThreadPrTerminalWatches = vi.fn(async () => []);
@@ -1130,7 +1138,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     releaseThreadPrStatusWatch,
     renewThreadPrStatusWatchLease,
     finishThreadPrStatusWatch,
-    supersedeThreadPrStatusWatches,
+    advanceThreadPrStatusWatches,
     listActiveThreadPrStatusWatches,
     cancelThreadPrStatusWatchesForPr,
     claimThreadPrTerminalWatches,
@@ -1520,7 +1528,7 @@ describe("app server ipc", () => {
     releaseThreadPrStatusWatch.mockClear();
     renewThreadPrStatusWatchLease.mockClear();
     finishThreadPrStatusWatch.mockClear();
-    supersedeThreadPrStatusWatches.mockClear();
+    advanceThreadPrStatusWatches.mockClear();
     listActiveThreadPrStatusWatches.mockClear();
     cancelThreadPrStatusWatchesForPr.mockClear();
     isGhAvailable.mockClear();
@@ -2900,16 +2908,15 @@ describe("app server ipc", () => {
     expect(claimThreadPrStatusWatches).not.toHaveBeenCalled();
   });
 
-  async function requestWatchForAttachedPr(
+  async function prepareWatchForAttachedPr(
     attached: PrSummary,
-    notifyOn: ThreadPullRequestWatchEvent[],
-    options: { autoFixEnabled?: boolean; url?: string } = {},
+    options: { autoFixEnabled?: boolean; fetchedAt?: number } = {},
   ) {
     readPrStatusCache.mockResolvedValueOnce({
       [buildPullRequestStatusKey(attached)]: {
         provider: "github.com",
         prKey: buildPullRequestStatusKey(attached),
-        fetchedAt: Date.now() - 60_000,
+        fetchedAt: options.fetchedAt ?? Date.now() - 60_000,
         pr: attached,
       },
     });
@@ -2951,14 +2958,322 @@ describe("app server ipc", () => {
       });
       expect(status?.backgroundPollingEnabled).toBe(true);
     });
-    const watchHandler = setThreadPullRequestWatchToolHandler.mock.calls.at(-1)?.[0];
-    return await watchHandler?.({
+    return setThreadPullRequestWatchToolHandler.mock.calls.at(-1)?.[0] as (
+      args: WatchThreadPullRequestToolArgs,
+    ) => Promise<PwrAgentThreadInspectionResponse>;
+  }
+
+  async function requestWatchForAttachedPr(
+    attached: PrSummary,
+    notifyOn: ThreadPullRequestWatchEvent[],
+    options: { autoFixEnabled?: boolean; url?: string } = {},
+  ) {
+    const watchHandler = await prepareWatchForAttachedPr(attached, options);
+    return await watchHandler({
       backend: "codex",
       threadId: "thread-1",
       notifyOn,
       url: options.url,
     });
   }
+
+  /** The watch tool's result, or a failure that names the error. */
+  function pullRequestWatchOf(response: PwrAgentThreadInspectionResponse | undefined) {
+    if (!response?.ok || !("pullRequestWatch" in response.data)) {
+      throw new Error(`Expected a pull request watch result: ${JSON.stringify(response)}`);
+    }
+    return response.data.pullRequestWatch;
+  }
+
+  it("arms a CI watch after rerun_failed_ci_jobs while the cache still holds the replaced failure", async () => {
+    const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
+    const { StateDb } = await import("../state/state-db");
+    const { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } = await import("../state/sqlite-write-metrics");
+    const { createTempStateDb, removeTempStateDbDir } = await import("./sqlite-test-utils");
+    const { appServerService } = await import("../ipc/app-server");
+    const headSha = "a".repeat(40);
+    const failedCheckUrl = "https://github.com/pwrdrvr/PwrAgent/actions/runs/42/job/1";
+    // Attempt 1 failed. The cache read it seconds ago, well inside the window
+    // in which a cached outcome counts as already known.
+    const failing = githubPr({
+      number: 3174, org: "pwrdrvr", repo: "PwrAgent", title: "Re-run CI", state: "failing",
+      headSha, failedCheckUrl, url: "https://github.com/pwrdrvr/PwrAgent/pull/3174",
+    });
+    const watchHandler = await prepareWatchForAttachedPr(failing, { fetchedAt: Date.now() - 2_000 });
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pr-watch-rerun-");
+    const db = StateDb.open(temp.dbPath);
+    const store = new SqliteOverlayStore(db);
+    const service = appServerService as unknown as {
+      getOverlayStore: () => typeof store;
+      forgePrToolService: () => { execute: (...args: unknown[]) => Promise<unknown> };
+      forgePrToolScope: (...args: unknown[]) => Promise<unknown>;
+      collectPrPollTargets: () => unknown[];
+      ciRerunsByPrKey?: Map<string, unknown>;
+    };
+    const execute = vi.fn(async () => ({
+      requested: true, runId: 42, runAttempt: 2, headSha,
+      repository: { provider: "github", host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" },
+    }));
+    const forge = vi.spyOn(service, "forgePrToolService").mockReturnValue({ execute });
+    const scope = vi.spyOn(service, "forgePrToolScope").mockResolvedValue({});
+    // No poll runs here: the refresh it queues is covered by the next test.
+    const pollTargets = vi.spyOn(service, "collectPrPollTargets").mockReturnValue([]);
+    const overlay = vi.spyOn(service, "getOverlayStore").mockReturnValue(store);
+    try {
+      await store.setThreadPullRequests({
+        backend: "codex", threadId: "thread-1", prs: [failing], fetchedAt: Date.now(), refreshKey: "fixture",
+      });
+      const { writes } = await measureSqliteWrites(async () => {
+        await appServerService.runForgePrToolForAgent(
+          "rerun_failed_ci_jobs",
+          { runId: 42 },
+          { backend: "codex", threadId: "thread-1", transport: "codex_dynamic_tool" },
+        );
+      });
+      // The re-run is remembered in memory; nothing is written.
+      expect(writes.commits).toBe(0);
+      expect(writes.statements).toBe(0);
+
+      // The thread's next call, within seconds: before the fix this returned
+      // currentOutcome "failure" and created no watch.
+      const first = pullRequestWatchOf(await watchHandler({
+        backend: "codex", threadId: "thread-1", notifyOn: ["success", "failure"],
+      }));
+      expect(first).toMatchObject({
+        armed: true,
+        reason: "armed",
+        coveredByAutoFix: [],
+        watch: {
+          kind: "checks",
+          headSha,
+          notifyOn: ["success", "failure"],
+          baseline: { outcome: "failure", failedCheckUrl, runAttempt: 2 },
+        },
+        message: expect.stringContaining("(attempt 2)"),
+      });
+      expect(first).not.toHaveProperty("currentOutcome");
+      expect(first.message).toContain("predates the re-run");
+      // The baseline is the outcome the watch must not fire on.
+      expect(claimThreadPrStatusWatches).not.toHaveBeenCalled();
+      const stored = await store.listActiveThreadPrStatusWatches({ backend: "codex", threadId: "thread-1" });
+      expect(stored).toEqual([expect.objectContaining({
+        watchId: first.watch!.watchId,
+        baseline: expect.objectContaining({ outcome: "failure", failedCheckUrl }),
+      })]);
+
+      const second = pullRequestWatchOf(await watchHandler({
+        backend: "codex", threadId: "thread-1", notifyOn: ["success", "failure"],
+      }));
+      expect(second).toMatchObject({
+        armed: true,
+        reason: "already_armed",
+        watch: { watchId: first.watch!.watchId },
+      });
+      expect(await store.listActiveThreadPrStatusWatches({ backend: "codex", threadId: "thread-1" }))
+        .toHaveLength(1);
+      expect(execute).toHaveBeenCalledOnce();
+    } finally {
+      overlay.mockRestore();
+      pollTargets.mockRestore();
+      scope.mockRestore();
+      forge.mockRestore();
+      service.ciRerunsByPrKey?.clear();
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("records a re-run only for the calling thread's open PRs at the run's head", async () => {
+    const { appServerService } = await import("../ipc/app-server");
+    const failing = githubPr({
+      number: 3176, org: "pwrdrvr", repo: "PwrAgent", state: "failing",
+      headSha: "a".repeat(40), url: "https://github.com/pwrdrvr/PwrAgent/pull/3176",
+    });
+    await prepareWatchForAttachedPr(failing, { fetchedAt: Date.now() });
+    const service = appServerService as unknown as {
+      forgePrToolService: () => { execute: (...args: unknown[]) => Promise<unknown> };
+      forgePrToolScope: (...args: unknown[]) => Promise<unknown>;
+      requestPriorityPrRefresh: (prKeys: ReadonlySet<string>) => void;
+      ciRerunsByPrKey: Map<string, unknown>;
+    };
+    const repository = { provider: "github", host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" };
+    const execute = vi.fn();
+    const forge = vi.spyOn(service, "forgePrToolService").mockReturnValue({ execute });
+    const scope = vi.spyOn(service, "forgePrToolScope").mockResolvedValue({});
+    const refresh = vi.spyOn(service, "requestPriorityPrRefresh").mockImplementation(() => undefined);
+    const context = { backend: "codex" as const, threadId: "thread-1", transport: "codex_dynamic_tool" as const };
+    try {
+      // A run at another head re-ran CI for a different commit.
+      execute.mockResolvedValueOnce({ requested: true, runId: 7, headSha: "b".repeat(40), repository });
+      await appServerService.runForgePrToolForAgent("rerun_failed_ci_jobs", { runId: 7 }, context);
+      // A run in another repository.
+      execute.mockResolvedValueOnce({ requested: true, runId: 8, headSha: "a".repeat(40),
+        repository: { ...repository, repo: "docs.pwragent.ai" } });
+      await appServerService.runForgePrToolForAgent("rerun_failed_ci_jobs", { runId: 8 }, context);
+      expect(service.ciRerunsByPrKey.size).toBe(0);
+
+      execute.mockResolvedValueOnce({ requested: true, runId: 9, repository });
+      await appServerService.runForgePrToolForAgent("rerun_failed_ci_jobs", { runId: 9 }, context);
+      // Without a known head, every attached open PR in the repository counts.
+      expect([...service.ciRerunsByPrKey.keys()]).toEqual([buildPullRequestStatusKey(failing)]);
+      // One priority refresh per re-run, for the recorded PRs only.
+      expect(refresh).toHaveBeenCalledTimes(3);
+      expect(refresh.mock.calls.map(([prKeys]) => [...prKeys])).toEqual([
+        [], [], [buildPullRequestStatusKey(failing)],
+      ]);
+    } finally {
+      refresh.mockRestore();
+      scope.mockRestore();
+      forge.mockRestore();
+      service.ciRerunsByPrKey.clear();
+    }
+  });
+
+  it("reports a fresh final outcome without arming, and arms past it on waitForNextResult", async () => {
+    const failing = githubPr({
+      number: 3175, org: "pwrdrvr", repo: "PwrAgent", state: "failing",
+      headSha: "b".repeat(40), url: "https://github.com/pwrdrvr/PwrAgent/pull/3175",
+    });
+    registerThreadPrStatusWatch.mockClear();
+    const watchHandler = await prepareWatchForAttachedPr(failing, { fetchedAt: Date.now() - 1_000 });
+
+    const known = pullRequestWatchOf(await watchHandler({
+      backend: "codex", threadId: "thread-1", notifyOn: ["success", "failure"],
+    }));
+    expect(known).toMatchObject({
+      armed: false,
+      reason: "outcome_already_final",
+      currentOutcome: "failure",
+      message: expect.stringContaining("waitForNextResult: true"),
+    });
+    expect(known).not.toHaveProperty("watch");
+    expect(registerThreadPrStatusWatch).not.toHaveBeenCalled();
+
+    const next = pullRequestWatchOf(await watchHandler({
+      backend: "codex", threadId: "thread-1", notifyOn: ["success", "failure"], waitForNextResult: true,
+    }));
+    expect(next).toMatchObject({
+      armed: true,
+      reason: "armed",
+      watch: { kind: "checks", createdBy: "agent", baseline: { outcome: "failure" } },
+    });
+    expect(next).not.toHaveProperty("currentOutcome");
+    expect(registerThreadPrStatusWatch).toHaveBeenCalledOnce();
+    expect(claimThreadPrStatusWatches).not.toHaveBeenCalled();
+    expect(publishLocalEvent).toHaveBeenCalledWith(expect.objectContaining({
+      notification: {
+        method: "thread/prWatches/updated",
+        params: { backend: "codex", threadId: "thread-1", prKey: buildPullRequestStatusKey(failing) },
+      },
+    }));
+  });
+
+  it("claims Auto-fix covers a failure only when no failure baseline exists at the head", async () => {
+    const pending = githubPr({
+      number: 3177, org: "pwrdrvr", repo: "PwrAgent", state: "pending",
+      headSha: "c".repeat(40), url: "https://github.com/pwrdrvr/PwrAgent/pull/3177",
+    });
+    getPrAutoDispatchCandidateWinner.mockResolvedValue({ backend: "codex", threadId: "thread-1" } as never);
+    const covered = pullRequestWatchOf(await requestWatchForAttachedPr(pending, ["success", "failure"], {
+      autoFixEnabled: true,
+    }));
+    expect(covered).toMatchObject({
+      armed: true,
+      coveredByAutoFix: ["failure"],
+      watch: { failureHandledByAutoFix: true },
+    });
+  });
+
+  it("does not claim Auto-fix covers a failure that repeats a baseline failure at the head", async () => {
+    // A failure that repeats at the same head is an Auto-fix duplicate: it
+    // will not wake the thread, so the watch must say so and handle it.
+    const failing = githubPr({
+      number: 3178, org: "pwrdrvr", repo: "PwrAgent", state: "failing",
+      headSha: "c".repeat(40), url: "https://github.com/pwrdrvr/PwrAgent/pull/3178",
+    });
+    getPrAutoDispatchCandidateWinner.mockResolvedValue({ backend: "codex", threadId: "thread-1" } as never);
+    const watchHandler = await prepareWatchForAttachedPr(failing, { autoFixEnabled: true, fetchedAt: Date.now() });
+    const repeat = pullRequestWatchOf(await watchHandler({
+      backend: "codex", threadId: "thread-1", notifyOn: ["success", "failure"], waitForNextResult: true,
+    }));
+    expect(repeat).toMatchObject({
+      armed: true,
+      coveredByAutoFix: [],
+      watch: { failureHandledByAutoFix: false, baseline: { outcome: "failure" } },
+    });
+  });
+
+  it("lists, explains, and stops PR watches over thread:prWatches, from local windows only", async () => {
+    const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
+    const { appServerService } = await import("../ipc/app-server");
+    const appState = await import("../state/app-state");
+    const { openInMemoryStateDb } = await import("./sqlite-test-utils");
+    const db = openInMemoryStateDb();
+    const store = new SqliteOverlayStore(db);
+    const service = appServerService as unknown as { getOverlayStore: () => typeof store };
+    const overlay = vi.spyOn(service, "getOverlayStore").mockReturnValue(store);
+    const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
+    registerAppServerIpcHandlers();
+    const handler = handlers.get("thread:prWatches")!;
+    const base = {
+      backend: "codex" as const, threadId: "thread-1", prKey: "github.com/pwrdrvr/pwragent#3179",
+      prUrl: "https://github.com/pwrdrvr/PwrAgent/pull/3179", prNumber: 3179, headSha: "d".repeat(40),
+      createdAt: 1, failureHandledByAutoFix: false,
+    };
+    try {
+      await store.registerThreadPrStatusWatch({
+        watch: { ...base, watchId: "ci", notifyOn: ["success", "failure"], kind: "checks" }, now: 1,
+      });
+      await store.registerThreadPrStatusWatch({
+        watch: { ...base, watchId: "merge", headSha: "", notifyOn: ["merged", "closed"], kind: "terminal" }, now: 1,
+      });
+      const local = { sender: { id: 1 } };
+      await expect(handler(local, { action: "active" })).resolves.toMatchObject({
+        ok: true, active: [expect.objectContaining({ watchId: "ci" }), expect.objectContaining({ watchId: "merge" })],
+      });
+      publishLocalEvent.mockClear();
+      await expect(handler(local, { action: "cancel", backend: "codex", threadId: "thread-1", watchId: "ci" }))
+        .resolves.toEqual({ ok: true, cancelled: true });
+      expect(publishLocalEvent).toHaveBeenCalledWith({
+        backend: "codex",
+        notification: {
+          method: "thread/prWatches/updated",
+          params: { backend: "codex", threadId: "thread-1", prKey: base.prKey },
+        },
+      });
+      await expect(handler(local, { action: "cancel", backend: "codex", threadId: "thread-1", watchId: "ci" }))
+        .resolves.toMatchObject({ ok: false, error: { code: "not_found" } });
+      await expect(handler(local, { action: "active" })).resolves.toMatchObject({
+        ok: true, active: [expect.objectContaining({ watchId: "merge" })],
+      });
+      await expect(handler(local, { action: "history", backend: "codex", threadId: "thread-1" })).resolves.toEqual({
+        ok: true,
+        history: [expect.objectContaining({
+          watchId: "ci", status: "cancelled", endedReason: "cancelled_by_operator",
+        })],
+      });
+
+      const remote = { scope: "remote" as const, instanceId: "peer_watch_owner" };
+      await expect(handler(local, {
+        action: "cancel", backend: "codex", threadId: "thread-1", watchId: "merge", federationTarget: remote,
+      })).resolves.toMatchObject({ ok: false, error: { code: "federation_unsupported" } });
+      await expect(handler({ sender: { id: 999 } }, { action: "active" }))
+        .resolves.toMatchObject({ ok: false, error: { code: "federation_unsupported" } });
+      await expect(handler({ sender: { id: 999 } }, {
+        action: "cancel", backend: "codex", threadId: "thread-1", watchId: "merge",
+      })).resolves.toMatchObject({ ok: false, error: { code: "federation_unsupported" } });
+      await expect(handler(local, { action: "cancel", backend: "codex", threadId: "thread-1", watchId: "" }))
+        .resolves.toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
+      expect(await store.listActiveThreadPrStatusWatches({ backend: "codex", threadId: "thread-1" }))
+        .toEqual([expect.objectContaining({ watchId: "merge" })]);
+    } finally {
+      mode.mockRestore();
+      overlay.mockRestore();
+      db.close();
+    }
+  });
 
   it("watches an explicitly attached upstream fork PR and reports active primary monitoring", async () => {
     const attached = githubPr({

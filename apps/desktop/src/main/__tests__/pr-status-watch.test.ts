@@ -242,8 +242,8 @@ describe("PrStatusWatchCoordinator", () => {
     });
   });
 
-  it("lets an accepted Auto-fix event satisfy failure without a duplicate turn", async () => {
-    await registerWatch();
+  it("lets an accepted Auto-fix event satisfy a failure-only watch without a duplicate turn", async () => {
+    await registerWatch(store, ["failure"]);
     const harness = createHarness();
 
     await harness.coordinator.handleStatusSnapshot(pr({
@@ -380,8 +380,8 @@ describe("PrStatusWatchCoordinator", () => {
     });
   });
 
-  it("supersedes a watch when the pull request head changes", async () => {
-    await registerWatch();
+  it("moves a CI watch to the new head when the pull request head changes", async () => {
+    const original = await registerWatch();
     const harness = createHarness();
 
     await harness.coordinator.handleStatusSnapshot(pr({
@@ -389,10 +389,17 @@ describe("PrStatusWatchCoordinator", () => {
       commitShas: ["b".repeat(40)],
     }), now);
 
-    expect(await store.listActiveThreadPrStatusWatches({
+    const [moved] = await store.listActiveThreadPrStatusWatches({
       backend: "codex",
       threadId: "thread-1",
-    })).toEqual([]);
+    });
+    expect(moved).toMatchObject({
+      headSha: "b".repeat(40),
+      followedFrom: "a".repeat(40),
+      notifyOn: ["success", "failure"],
+      createdAt: original.createdAt,
+    });
+    expect(moved?.watchId).not.toBe(original.watchId);
     expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
   });
 
@@ -427,6 +434,359 @@ describe("PrStatusWatchCoordinator", () => {
     expect(submitTurnIfIdle).toHaveBeenCalledTimes(
       PR_STATUS_WATCH_MAX_DISPATCH_ATTEMPTS,
     );
+  });
+});
+
+function ciWatch(overrides: Partial<ThreadPullRequestWatchSummary> = {}): ThreadPullRequestWatchSummary {
+  const target = pr();
+  return {
+    watchId: `watch-${Math.random()}`,
+    backend: "codex",
+    threadId: "thread-1",
+    prKey: buildPullRequestStatusKey(target),
+    prUrl: target.url,
+    prNumber: target.number,
+    prTitle: target.title,
+    headSha: target.headSha!,
+    notifyOn: ["success", "failure"],
+    createdAt: now,
+    failureHandledByAutoFix: false,
+    kind: "checks",
+    ...overrides,
+  };
+}
+
+const ATTEMPT_ONE_FAILURE = "https://github.com/pwrdrvr/PwrAgent/actions/runs/42/job/1";
+const ATTEMPT_TWO_FAILURE = "https://github.com/pwrdrvr/PwrAgent/actions/runs/42/job/2";
+
+function failingPr(overrides: Partial<PrSummary> = {}): PrSummary {
+  return pr({
+    state: "failing",
+    checkState: "failing",
+    failedCheckUrl: ATTEMPT_ONE_FAILURE,
+    ...overrides,
+  });
+}
+
+async function registerBaselineWatch(
+  overrides: Partial<ThreadPullRequestWatchSummary> = {},
+): Promise<ThreadPullRequestWatchSummary> {
+  return (await store.registerThreadPrStatusWatch({
+    watch: ciWatch({
+      baseline: {
+        outcome: "failure",
+        observedAt: now - 5,
+        failedCheckUrl: ATTEMPT_ONE_FAILURE,
+        rerunRequestedAt: now - 1,
+        runAttempt: 2,
+      },
+      ...overrides,
+    }),
+    now,
+  })).watch;
+}
+
+function activeWatches(threadId = "thread-1") {
+  return store.listActiveThreadPrStatusWatches({ backend: "codex", threadId });
+}
+
+describe("PrStatusWatchCoordinator baselines after a re-run", () => {
+  it("does not fire on the baseline failure, clears it while checks run, then fires on the next failure", async () => {
+    const watch = await registerBaselineWatch();
+    const onWatchesChanged = vi.fn();
+    const submitTurnIfIdle = vi.fn(async (_request: { input: AppServerTurnInputItem[] }) => ({
+      status: "started" as const, turnId: "turn-watch-1",
+    }));
+    const coordinator = new PrStatusWatchCoordinator({
+      store, registry: { submitTurnIfIdle }, onWatchesChanged, now: () => now,
+    });
+
+    // The poll that still shows attempt 1's failure.
+    await expect(coordinator.handleStatusSnapshot(failingPr(), now)).resolves.toBe(0);
+    expect(submitTurnIfIdle).not.toHaveBeenCalled();
+    expect(onWatchesChanged).not.toHaveBeenCalled();
+
+    now += 1;
+    await coordinator.handleStatusSnapshot(pr({ checksStillRunning: true }), now);
+    expect((await activeWatches())[0]).not.toHaveProperty("baseline");
+    expect(onWatchesChanged).toHaveBeenCalledWith([
+      { backend: "codex", threadId: "thread-1", prKey: watch.prKey },
+    ]);
+
+    now += 1;
+    await expect(coordinator.handleStatusSnapshot(failingPr(), now)).resolves.toBe(1);
+    expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
+    expect(await activeWatches()).toEqual([]);
+    expect(onWatchesChanged).toHaveBeenLastCalledWith([
+      { backend: "codex", threadId: "thread-1", prKey: watch.prKey },
+    ]);
+    expect(await store.listThreadPrStatusWatchHistory({
+      backend: "codex", threadId: "thread-1", limit: 5,
+    })).toEqual([expect.objectContaining({
+      watchId: watch.watchId, status: "dispatched", endedReason: "woke", wokeOn: "failure",
+    })]);
+  });
+
+  it("fires on a failure at another check without seeing the checks run", async () => {
+    await registerBaselineWatch();
+    const harness = createHarness();
+
+    await expect(harness.coordinator.handleStatusSnapshot(
+      failingPr({ failedCheckUrl: ATTEMPT_TWO_FAILURE }),
+      now,
+    )).resolves.toBe(1);
+    expect(promptOf(harness.submitTurnIfIdle)).toContain("- Outcome: failure");
+  });
+
+  it("fires at once on success after a failure baseline", async () => {
+    await registerBaselineWatch();
+    const harness = createHarness();
+
+    await expect(harness.coordinator.handleStatusSnapshot(
+      pr({ state: "passing", checkState: "passing" }),
+      now,
+    )).resolves.toBe(1);
+    expect(promptOf(harness.submitTurnIfIdle)).toContain("- Outcome: success");
+  });
+
+  it("keeps a baselined watch waiting when another thread's watch wakes on the baseline failure", async () => {
+    await store.registerThreadPrStatusWatch({ watch: ciWatch({ threadId: "thread-older" }), now });
+    now += 1;
+    await registerBaselineWatch();
+    const harness = createHarness();
+
+    await expect(harness.coordinator.handleStatusSnapshot(failingPr(), now)).resolves.toBe(1);
+    expect(harness.submitTurnIfIdle.mock.calls[0]?.[0]).toMatchObject({ threadId: "thread-older" });
+    expect(await activeWatches()).toHaveLength(1);
+  });
+
+  it("merges a newer baseline into an armed watch that had none, and reports it existed", async () => {
+    const first = await store.registerThreadPrStatusWatch({ watch: ciWatch(), now });
+    expect(first.existed).toBe(false);
+    const second = await store.registerThreadPrStatusWatch({
+      watch: ciWatch({ baseline: { outcome: "failure", observedAt: now, failedCheckUrl: ATTEMPT_ONE_FAILURE } }),
+      now,
+    });
+    expect(second).toMatchObject({
+      existed: true,
+      watch: { watchId: first.watch.watchId, baseline: { outcome: "failure" } },
+    });
+    const harness = createHarness();
+    await expect(harness.coordinator.handleStatusSnapshot(failingPr(), now)).resolves.toBe(0);
+  });
+});
+
+describe("PrStatusWatchCoordinator Auto-fix coverage", () => {
+  it("does not let another thread's Auto-fix coverage finish this thread's failure watch", async () => {
+    await registerWatch(store, ["failure"], "thread-a");
+    const harness = createHarness();
+
+    // Thread B owns Auto-fix for the PR. Before the fix, any covered thread
+    // finished every claimed failure watch on the PR.
+    await expect(harness.coordinator.handleStatusSnapshot(
+      failingPr(),
+      now,
+      new Set(["codex:thread-b"]),
+    )).resolves.toBe(1);
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+    expect(harness.submitTurnIfIdle.mock.calls[0]?.[0]).toMatchObject({ threadId: "thread-a" });
+  });
+
+  it("leaves a success and failure watch waiting past a covered failure, then wakes on success at the pushed head", async () => {
+    await registerWatch();
+    const harness = createHarness();
+    const covered = new Set(["codex:thread-1"]);
+
+    await expect(harness.coordinator.handleStatusSnapshot(failingPr(), now, covered)).resolves.toBe(0);
+    expect(await activeWatches()).toEqual([
+      expect.objectContaining({ baseline: expect.objectContaining({ outcome: "failure" }) }),
+    ]);
+    // The same failure on later polls is an Auto-fix duplicate, no longer
+    // covered. The watch must not wake on it.
+    now += 1;
+    await expect(harness.coordinator.handleStatusSnapshot(failingPr(), now)).resolves.toBe(0);
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+
+    // Auto-fix pushes a fix; CI passes at the new head.
+    now += 1;
+    const fixed = "e".repeat(40);
+    await harness.coordinator.handleStatusSnapshot(pr({ headSha: fixed, commitShas: [fixed] }), now);
+    now += 1;
+    await expect(harness.coordinator.handleStatusSnapshot(pr({
+      headSha: fixed, commitShas: [fixed], state: "passing", checkState: "passing",
+    }), now)).resolves.toBe(1);
+    expect(promptOf(harness.submitTurnIfIdle)).toContain(`- Watched head SHA: ${fixed}`);
+    expect(promptOf(harness.submitTurnIfIdle)).toContain("- Outcome: success");
+  });
+
+  it("finishes a covered failure-only watch as handled by Auto-fix", async () => {
+    const watch = await registerWatch(store, ["failure"]);
+    const harness = createHarness();
+
+    await harness.coordinator.handleStatusSnapshot(failingPr(), now, new Set(["codex:thread-1"]));
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+    expect(await store.listThreadPrStatusWatchHistory({
+      backend: "codex", threadId: "thread-1", limit: 5,
+    })).toEqual([expect.objectContaining({
+      watchId: watch.watchId, status: "dispatched", endedReason: "covered_by_auto_fix",
+    })]);
+  });
+});
+
+describe("advanceThreadPrStatusWatches", () => {
+  it("moves a CI watch, only supersedes one that conflicts at the new head, and leaves merge/close watches", async () => {
+    const moving = await registerWatch(store, ["success", "failure"], "thread-1");
+    const conflicting = await registerWatch(store, ["failure"], "thread-2");
+    const terminal = await registerTerminalWatch(store, ["merged"], "thread-1");
+    const newHead = "b".repeat(40);
+    await store.registerThreadPrStatusWatch({
+      watch: ciWatch({ threadId: "thread-2", headSha: newHead, notifyOn: ["success"] }),
+      now,
+    });
+
+    now += 1;
+    const result = await store.advanceThreadPrStatusWatches({
+      prKey: moving.prKey, headSha: newHead, checksRunning: true, now,
+    });
+    expect(result).toMatchObject({ moved: 1, superseded: 1, baselinesCleared: 0 });
+    expect(result.threads).toEqual(expect.arrayContaining([
+      { backend: "codex", threadId: "thread-1", prKey: moving.prKey },
+      { backend: "codex", threadId: "thread-2", prKey: moving.prKey },
+    ]));
+    const threadOne = await activeWatches("thread-1");
+    expect(threadOne).toEqual(expect.arrayContaining([
+      expect.objectContaining({ watchId: terminal.watchId, kind: "terminal" }),
+      expect.objectContaining({ headSha: newHead, followedFrom: "a".repeat(40) }),
+    ]));
+    expect(threadOne).toHaveLength(2);
+    expect(await activeWatches("thread-2")).toEqual([
+      expect.objectContaining({ headSha: newHead, notifyOn: ["success"] }),
+    ]);
+    const movedTo = threadOne.find((watch) => watch.headSha === newHead)!.watchId;
+    expect(await store.listThreadPrStatusWatchHistory({ backend: "codex", threadId: "thread-1", limit: 5 }))
+      .toEqual([expect.objectContaining({
+        watchId: moving.watchId, status: "superseded", endedReason: "moved", movedTo,
+      })]);
+    expect(await store.listThreadPrStatusWatchHistory({ backend: "codex", threadId: "thread-2", limit: 5 }))
+      .toEqual([expect.objectContaining({
+        watchId: conflicting.watchId, status: "superseded", endedReason: "head_changed",
+      })]);
+  });
+
+  it("drops the baseline when a watch follows a push", async () => {
+    await registerBaselineWatch();
+    const newHead = "b".repeat(40);
+    await store.advanceThreadPrStatusWatches({
+      prKey: buildPullRequestStatusKey(pr()), headSha: newHead, checksRunning: false, now: now + 1,
+    });
+    const [moved] = await activeWatches();
+    expect(moved).toMatchObject({ headSha: newHead });
+    expect(moved).not.toHaveProperty("baseline");
+  });
+});
+
+describe("cancelThreadPrStatusWatch", () => {
+  it("stops exactly one watch, keeps its sibling, and refuses one being delivered", async () => {
+    const ci = await registerWatch();
+    const terminal = await registerTerminalWatch();
+    const sibling = await registerWatch(store, ["success"], "thread-2");
+
+    now += 1;
+    await expect(store.cancelThreadPrStatusWatch({
+      backend: "codex", threadId: "thread-1", watchId: ci.watchId, now,
+    })).resolves.toEqual({ backend: "codex", threadId: "thread-1", prKey: ci.prKey });
+    expect(await activeWatches()).toEqual([expect.objectContaining({ watchId: terminal.watchId })]);
+    expect(await store.listThreadPrStatusWatchHistory({ backend: "codex", threadId: "thread-1", limit: 20 }))
+      .toEqual([expect.objectContaining({
+        watchId: ci.watchId, status: "cancelled", endedReason: "cancelled_by_operator", updatedAt: now,
+      })]);
+    // Another thread cannot stop it by naming its id.
+    await expect(store.cancelThreadPrStatusWatch({
+      backend: "codex", threadId: "thread-1", watchId: sibling.watchId, now,
+    })).resolves.toBeUndefined();
+
+    const claims = await store.claimThreadPrStatusWatches({
+      prKey: sibling.prKey, headSha: sibling.headSha, outcome: "success", now,
+      ownerId: "owner", leaseExpiresAt: now + 60_000, maxAttempts: 3,
+    });
+    expect(claims.map((claim) => claim.watch.watchId)).toEqual([sibling.watchId]);
+    await expect(store.cancelThreadPrStatusWatch({
+      backend: "codex", threadId: "thread-2", watchId: sibling.watchId, now,
+    })).resolves.toBeUndefined();
+    expect(await store.listAllActivePrStatusWatches()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ watchId: terminal.watchId }),
+      expect.objectContaining({ watchId: sibling.watchId }),
+    ]));
+  });
+});
+
+describe("PR watch notifications and write budgets", () => {
+  it("reports moved, failed, and delivered watches to onWatchesChanged", async () => {
+    await registerWatch();
+    const onWatchesChanged = vi.fn();
+    const submitTurnIfIdle = vi.fn(async () => {
+      throw new Error("backend unavailable");
+    });
+    const coordinator = new PrStatusWatchCoordinator({
+      store, registry: { submitTurnIfIdle }, onWatchesChanged, now: () => now,
+    });
+    const thread = { backend: "codex", threadId: "thread-1", prKey: buildPullRequestStatusKey(pr()) };
+    const newHead = "b".repeat(40);
+
+    await coordinator.handleStatusSnapshot(pr({ headSha: newHead, commitShas: [newHead] }), now);
+    expect(onWatchesChanged).toHaveBeenCalledTimes(1);
+    expect(onWatchesChanged).toHaveBeenLastCalledWith([thread]);
+
+    for (let attempt = 0; attempt < PR_STATUS_WATCH_MAX_DISPATCH_ATTEMPTS; attempt += 1) {
+      now += 1;
+      await coordinator.handleStatusSnapshot(pr({
+        headSha: newHead, commitShas: [newHead], state: "passing", checkState: "passing",
+      }), now);
+    }
+    // Only the last failed submission ends the watch.
+    expect(onWatchesChanged).toHaveBeenCalledTimes(2);
+    expect(await store.listThreadPrStatusWatchHistory({ backend: "codex", threadId: "thread-1", limit: 1 }))
+      .toEqual([expect.objectContaining({ status: "failed", endedReason: "failed" })]);
+  });
+
+  it("records the commits for a baseline clear, a head follow, and an operator stop", async () => {
+    useMeasuredFileStateDb();
+    await registerBaselineWatch();
+    const harness = createHarness();
+    const { writes: clear } = await measureSqliteWrites(async () => {
+      await harness.coordinator.handleStatusSnapshot(pr({ checksStillRunning: true }), now);
+      // Later polls while checks run find nothing to clear.
+      for (let tick = 1; tick < 10; tick += 1) {
+        await harness.coordinator.handleStatusSnapshot(pr({ checksStillRunning: true }), now + tick);
+      }
+    });
+    expectSqliteWriteBudget({
+      note: "ten polls while re-run checks run, one baselined watch: 1 commit clears the baseline once, the other 9 polls only read; at most 1 commit per watch lifetime",
+      scenario: "pr-watch-baseline-clear",
+      writes: clear,
+    });
+
+    const newHead = "b".repeat(40);
+    const { writes: follow } = await measureSqliteWrites(async () => {
+      await harness.coordinator.handleStatusSnapshot(pr({ headSha: newHead, commitShas: [newHead] }), now + 20);
+    });
+    expectSqliteWriteBudget({
+      note: "one poll that sees a pushed head: the CI watch's copy and the old row's end share 1 commit; only on pushes, well under 1 MB/day",
+      scenario: "pr-watch-follow-head",
+      writes: follow,
+    });
+
+    const [moved] = await activeWatches();
+    const { writes: cancel } = await measureSqliteWrites(async () => {
+      await store.cancelThreadPrStatusWatch({
+        backend: "codex", threadId: "thread-1", watchId: moved!.watchId, now: now + 30,
+      });
+    });
+    expectSqliteWriteBudget({
+      note: "the operator stops one PR watch: 1 commit per click, 0 idle writes",
+      scenario: "pr-watch-operator-cancel",
+      writes: cancel,
+    });
   });
 });
 
@@ -850,7 +1210,7 @@ describe("PrStatusWatchCoordinator merge/close watches", () => {
       }
     });
     expectSqliteWriteBudget({
-      note: "ten polls of an open PR that has a merge/close watch: 0 rows and 0 WAL; the 10 commits are the pre-existing per-poll supersede statement, which changes no row, so the watch adds 0 MB/day",
+      note: "ten polls of an open PR that has a merge/close watch: 0 commits, 0 rows and 0 WAL; the per-poll head/baseline advance only reads when nothing moved, so the watch adds 0 MB/day",
       scenario: "pr-terminal-watch-open-polls",
       writes,
     });

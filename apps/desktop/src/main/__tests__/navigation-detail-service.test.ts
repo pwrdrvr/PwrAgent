@@ -6,6 +6,7 @@ import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
 import type {
   NavigationThreadSummary,
   ThreadQueuedTurnSummary,
+  ThreadPullRequestWatchSummary,
   ThreadSubAgentSummary,
 } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -13,6 +14,8 @@ import { DesktopBackendRegistry } from "../app-server/backend-registry";
 const mocks = vi.hoisted(() => ({
   /** The selected thread's stored cards, as the store's card reads see them. */
   cards: [] as ThreadSubAgentSummary[],
+  /** The selected thread's active PR watches, as the watch table returns them. */
+  prWatches: [] as ThreadPullRequestWatchSummary[],
   /** The card table's order: newest `createdAt` first, then monitor id. */
   newestFirst: (cards: readonly ThreadSubAgentSummary[]) => [...cards].sort((left, right) =>
     right.createdAt - left.createdAt
@@ -40,6 +43,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
       mocks.cards.find((card) => card.monitorId === monitorId),
     getThreadSubAgents: async ({ monitorIds }: { monitorIds: readonly string[] }) =>
       mocks.cards.filter((card) => monitorIds.includes(card.monitorId)),
+    listActiveThreadPrStatusWatches: async () => mocks.prWatches,
     listActiveThreadSubAgents: async () => mocks.cards.filter((card) =>
       card.completedAt === undefined || card.status === "failed" || card.status === "failure"),
     readThreadSubAgentRevision: async () => {
@@ -126,6 +130,7 @@ describe("NavigationDetailService", () => {
     mocks.projectNavigationThreadDetail.mockReset();
     mocks.getThreadOverlayState.mockReset();
     mocks.cards = [];
+    mocks.prWatches = [];
     mocks.getLaunchpadDefaults.mockReset().mockResolvedValue({ backend: "codex", executionMode: "default" });
     mocks.getDirectoryLaunchpad.mockReset().mockResolvedValue(undefined);
     mocks.listCodexEnvironmentOptions.mockReset().mockResolvedValue([]);
@@ -442,6 +447,39 @@ describe("NavigationDetailService", () => {
     const completed = await service.readSelectedDetail({ ...request, knownRevision: first.revision });
     expect(completed.unchanged).not.toBe(true);
     expect(completed.thread?.activeSubAgents).toEqual([]);
+  });
+
+  it("projects the owner's active PR watches on selected detail only", async () => {
+    const selected = thread("selected");
+    const watch: ThreadPullRequestWatchSummary = {
+      watchId: "watch-ci", backend: "codex", threadId: selected.id,
+      prKey: "github.com/fixture/repo#7", prUrl: "https://github.com/fixture/repo/pull/7", prNumber: 7,
+      headSha: "a".repeat(40), notifyOn: ["success", "failure"], createdAt: 1,
+      failureHandledByAutoFix: false, kind: "checks",
+    };
+    mocks.prWatches = [watch];
+    mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
+    const service = new NavigationDetailService({
+      getCachedThreadSummary: () => selected,
+      getQueuedExecutionModeForThread: () => undefined,
+      canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
+      hydrateThreadGitWorkingStates: async (threads: unknown[]) => threads,
+      mergeLiveTokenMiserSubAgents: (_id: string, persisted: unknown[]) => persisted,
+      listLiveTokenMiserSubAgents: () => [],
+      readLiveSubAgentRevisionSource: () => [],
+    } as unknown as DesktopBackendRegistry);
+    const request = { protocol: 2 as const, ref: { backend: "codex" as const, threadId: selected.id } };
+
+    const first = await service.readSelectedDetail(request);
+    expect(first.thread?.activePrWatches).toEqual([watch]);
+    // The projection is per read: the stored navigation row is untouched.
+    expect(selected).not.toHaveProperty("activePrWatches");
+    expect(mocks.reconcileNavigationSnapshot).not.toHaveBeenCalled();
+
+    mocks.prWatches = [];
+    const stopped = await service.readSelectedDetail({ ...request, knownRevision: first.revision });
+    expect(stopped.unchanged).not.toBe(true);
+    expect(stopped.thread).not.toHaveProperty("activePrWatches");
   });
 
   it("pages a complete FIFO projection with its own revision", () => {

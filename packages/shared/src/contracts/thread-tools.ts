@@ -409,6 +409,25 @@ export type WatchThreadPullRequestToolArgs = {
    * Add merged and/or closed to also wake when the PR reaches a terminal state.
    */
   notifyOn?: ThreadPullRequestWatchEvent[];
+  /**
+   * Arm the CI watch for the next result even when a final outcome is already
+   * known at this head, for a re-run PwrAgent did not request. The known
+   * outcome becomes the watch's baseline and cannot fire it.
+   */
+  waitForNextResult?: boolean;
+};
+
+/**
+ * The CI outcome a watch saw when it was armed. It cannot fire the watch: the
+ * watch waits for checks to run again, or for a failure on another check.
+ */
+export type ThreadPullRequestWatchBaseline = {
+  outcome: "success" | "failure";
+  observedAt: number;
+  failedCheckUrl?: string;
+  /** Set when PwrAgent requested the re-run that made the outcome stale. */
+  rerunRequestedAt?: number;
+  runAttempt?: number;
 };
 
 export type ThreadPullRequestWatchSummary = {
@@ -426,7 +445,22 @@ export type ThreadPullRequestWatchSummary = {
   failureHandledByAutoFix: boolean;
   /** Absent on rows written before terminal watches existed: those are `checks`. */
   kind?: ThreadPullRequestWatchKind;
+  baseline?: ThreadPullRequestWatchBaseline;
+  /** Absent means an agent: today only `watch_thread_pull_request` creates watches. */
+  createdBy?: "agent";
+  /** The head this CI watch was armed at before a push moved it. */
+  followedFrom?: string;
 };
+
+/**
+ * Why `watch_thread_pull_request` did or did not arm a watch. `already_armed`
+ * means an identical active watch existed and is returned instead.
+ */
+export type WatchThreadPullRequestReason =
+  | "armed"
+  | "already_armed"
+  | "outcome_already_final"
+  | "pr_terminal";
 
 export type WatchThreadPullRequestResult = {
   /** The CI watch, when success or failure was requested. */
@@ -438,6 +472,11 @@ export type WatchThreadPullRequestResult = {
   terminal?: PullRequestTerminalDetails;
   coveredByAutoFix: ThreadPullRequestWatchEvent[];
   prAutomation: ThreadPullRequestAutomationStatus;
+  /** True when a watch is waiting after this call, new or already armed. */
+  armed: boolean;
+  reason: WatchThreadPullRequestReason;
+  /** One plain sentence saying what will, or will not, wake the thread. */
+  message: string;
 };
 
 export type ThreadMutationField =

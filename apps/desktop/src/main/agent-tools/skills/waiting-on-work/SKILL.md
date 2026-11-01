@@ -22,6 +22,13 @@ CI success or failure, and include `merged` and `closed` in `notifyOn` when this
 thread must clean up resources after the PR lands. Read the watch result: an
 already terminal PR returns its outcome without creating a wait.
 
+After `rerun_failed_ci_jobs`, call `watch_thread_pull_request` and check
+`armed`. PwrAgent records its own re-runs, so the replaced attempt's result
+cannot fire the watch. If `armed` is false, read `message`: checks may already
+have finished at this head. For a re-run started outside PwrAgent, call again
+with `waitForNextResult: true`. Do not end the turn assuming a wait that the
+result did not confirm.
+
 Auto-fix PR coordinates failure wake-ups with watches; avoid duplicate monitors.
 A success watch can still be needed when Auto-fix is active. Follow the status
 tool's description for `autoFixActive` monitoring ownership and repair-event

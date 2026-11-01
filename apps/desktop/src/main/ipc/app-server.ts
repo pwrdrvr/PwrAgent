@@ -10,6 +10,7 @@ import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { createOwnerRoutedForgeReadHandler } from "../federation/federated-forge-read-service";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
+import { THREAD_PR_WATCHES_CHANNEL, THREAD_PR_WATCH_HISTORY_MAX_LIMIT, type ThreadPrWatchesRequest, type ThreadPrWatchesResponse, type WatchThreadPullRequestReason } from "@pwragent/shared";
 import { THREAD_DEPENDENCIES_CHANNEL, type ManageThreadDependenciesRequest, type ManageThreadDependenciesResponse, type ThreadDependencyCondition, type AppServerThreadTurnMetadata, type AppServerNotification } from "@pwragent/shared";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import { ThreadDependencyCoordinator, validateDependencyCreate, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
@@ -78,6 +79,7 @@ import {
   type ThreadPullRequestAutomationStatus,
   type ThreadPullRequestWatchEvent,
   type ThreadPullRequestWatchSummary,
+  type ThreadPullRequestWatchBaseline,
   type CancelThreadPrAutoDispatchRequest,
   type SendThreadPrAutoDispatchNowRequest,
   type SetThreadPrAutoDispatchRequest,
@@ -516,6 +518,13 @@ import {
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const PR_STATUS_WATCH_CURRENT_OUTCOME_MAX_AGE_MS = 30_000;
+/**
+ * GitHub can take this long to show a queued re-run, so a status read this
+ * soon after `rerun_failed_ci_jobs` may still be the attempt it replaced.
+ */
+const RERUN_SETTLE_MS = 20_000;
+/** A recorded re-run older than this no longer explains a cached outcome. */
+const RERUN_RECORD_MAX_AGE_MS = 24 * 60 * 60_000;
 /** How long a merge/close wake waits for sandbox cleanup to report. */
 const SANDBOX_CLEANUP_WAKE_WAIT_MS = 30_000;
 
@@ -1274,6 +1283,56 @@ const PR_STATUS_WATCH_EVENTS: ReadonlySet<string> = new Set([
   "closed",
 ]);
 
+/** One or two plain sentences on what will wake the thread, for the agent. */
+function describePrWatchArming(params: {
+  prNumber: number;
+  headSha: string;
+  ciEvents: ThreadPullRequestWatchEvent[];
+  watch?: ThreadPullRequestWatchSummary;
+  watchExisted: boolean;
+  terminalWatch?: ThreadPullRequestWatchSummary;
+  terminalWatchExisted: boolean;
+  knownOutcome?: ThreadPullRequestWatchEvent;
+  knownAgeMs?: number;
+}): string {
+  const head = params.headSha.slice(0, 7);
+  const sentences: string[] = [];
+  if (params.watch) {
+    const baseline = params.watch.baseline;
+    const attempt = baseline?.runAttempt !== undefined
+      ? ` (attempt ${baseline.runAttempt})`
+      : "";
+    sentences.push(
+      `${params.watchExisted ? "Already watching" : "Watching"} PR #${params.prNumber} at ${head} for the next ${
+        params.watch.notifyOn.join(" or ")
+      }${attempt}.`,
+    );
+    if (baseline) {
+      sentences.push(
+        `The ${baseline.outcome} observed at ${new Date(baseline.observedAt).toISOString()} ${
+          baseline.rerunRequestedAt !== undefined ? "predates the re-run and " : ""
+        }will not fire this watch.`,
+      );
+    }
+  } else if (params.knownOutcome && params.ciEvents.length > 0) {
+    const seconds = Math.max(0, Math.round((params.knownAgeMs ?? 0) / 1000));
+    sentences.push(
+      `No ${params.terminalWatch ? "CI " : ""}watch was created: checks on ${head} already finished with ${params.knownOutcome} ${seconds}s ago. If CI was re-run outside PwrAgent, call again with waitForNextResult: true.`,
+    );
+  }
+  if (params.terminalWatch) {
+    const outcomes = params.terminalWatch.notifyOn.map((event) =>
+      event === "merged" ? "merges" : "closes without merge"
+    );
+    sentences.push(
+      `${params.terminalWatchExisted ? "Already watching" : "Watching"} PR #${params.prNumber} until it ${
+        outcomes.join(" or ")
+      }.`,
+    );
+  }
+  return sentences.join(" ");
+}
+
 function normalizePrWatchUrl(url: string | undefined): string | undefined {
   const normalized = url?.trim().replace(/\/+$/, "").toLowerCase();
   return normalized || undefined;
@@ -1590,6 +1649,16 @@ class DesktopAppServerService {
   private prAutoDispatchBudgetPausedAt: number | undefined;
   private prAutoDispatchCoordinator: PrAutoDispatchCoordinator | undefined;
   private prStatusWatchCoordinator: PrStatusWatchCoordinator | undefined;
+  /**
+   * CI re-runs this instance requested, by PR. In memory only: they explain
+   * why a cached result at the same head is not the next one.
+   */
+  private readonly ciRerunsByPrKey = new Map<string, {
+    headSha?: string;
+    runId: number;
+    runAttempt?: number;
+    requestedAt: number;
+  }>();
   private threadDependencyCoordinator: ThreadDependencyCoordinator | undefined;
   private sandboxerPrCleanup: SandboxerPrCleanupService | undefined;
   private ownerNavigationActive = false;
@@ -4225,7 +4294,75 @@ class DesktopAppServerService {
   /** Pull request and issue tools act only in the calling thread's own repositories. */
   async runForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<unknown> {
     const result = await this.forgePrToolService().execute(operation, args, await this.forgePrToolScope(context), context.signal);
+    if (operation === "rerun_failed_ci_jobs") this.recordCiRerun(result, context);
     return { ...(result as Record<string, unknown>), backend: context.backend, threadId: context.threadId };
+  }
+
+  /**
+   * A re-run keeps the head, so the cached failure it replaces still looks
+   * current. Record it for the calling thread's open PRs at that head, then
+   * refresh those PRs once through the shared poll budget.
+   */
+  private recordCiRerun(result: unknown, context: AgentToolCallContext): void {
+    const rerun = result as {
+      requested?: unknown;
+      runId?: unknown;
+      runAttempt?: unknown;
+      headSha?: unknown;
+      repository?: { host?: unknown; owner?: unknown; repo?: unknown };
+    } | undefined;
+    if (rerun?.requested !== true || typeof rerun.runId !== "number") return;
+    const repository = rerun.repository;
+    const fold = (value: unknown) => typeof value === "string" ? value.toLowerCase() : undefined;
+    const headSha = typeof rerun.headSha === "string" && rerun.headSha.trim()
+      ? rerun.headSha.trim()
+      : undefined;
+    const requestedAt = Date.now();
+    const attachment = this.attachedPrsByThreadKey.get(
+      buildThreadIdentityKey(context.backend, context.threadId),
+    );
+    const prKeys = new Set<string>();
+    for (const attached of attachment?.prs ?? []) {
+      if (!pullRequestMatchesRepositoryKey(attached, attachment?.primaryRepoKey)) continue;
+      const prKey = getPrStatusKey(attached);
+      const pr = this.prStatusRegistry.get(prKey)?.pr ?? attached;
+      if (isTerminalPullRequest(pr)) continue;
+      const prRepository = repositoryFromPr(pr.url);
+      if (
+        !prRepository
+        || fold(prRepository.host) !== fold(repository?.host)
+        || fold(prRepository.owner) !== fold(repository?.owner)
+        || fold(prRepository.repo) !== fold(repository?.repo)
+      ) {
+        continue;
+      }
+      if (headSha && pr.headSha && pr.headSha.trim() !== headSha) continue;
+      prKeys.add(prKey);
+    }
+    for (const [prKey, entry] of this.ciRerunsByPrKey) {
+      if (requestedAt - entry.requestedAt > RERUN_RECORD_MAX_AGE_MS) this.ciRerunsByPrKey.delete(prKey);
+    }
+    for (const prKey of prKeys) {
+      this.ciRerunsByPrKey.set(prKey, {
+        ...(headSha ? { headSha } : {}),
+        runId: rerun.runId,
+        ...(typeof rerun.runAttempt === "number" ? { runAttempt: rerun.runAttempt } : {}),
+        requestedAt,
+      });
+    }
+    this.requestPriorityPrRefresh(prKeys);
+  }
+
+  /** Poll these PRs on the next pass whatever their cadence, within the shared token budget. */
+  private requestPriorityPrRefresh(prKeys: ReadonlySet<string>): void {
+    const scheduler = this.prPollingScheduler;
+    if (!scheduler || prKeys.size === 0 || !this.backgroundPrPollingEnabled) return;
+    const targets = this.collectPrPollTargets()
+      .filter((target) => prKeys.has(target.prKey))
+      .map(({ fetchedAt: _fetchedAt, ...target }) => target);
+    if (targets.length === 0) return;
+    for (const target of targets) scheduler.forgetTarget(target.prKey);
+    void scheduler.tick(() => targets);
   }
 
   async readForgeForTool(operation: ForgeReadOperation, args: ForgeReadArgs, context: AgentToolCallContext): Promise<unknown> {
@@ -4470,9 +4607,6 @@ class DesktopAppServerService {
     });
     const failureCoveredByAutoFix = prAutomation.autoFixActive
       && ciEvents.includes("failure");
-    const coveredByAutoFix: ThreadPullRequestWatchEvent[] = failureCoveredByAutoFix
-      ? ["failure" as const]
-      : [];
     if (isTerminalPullRequest(pr)) {
       // A merged or closed PR has nothing left to watch. Report it now, with
       // the same merge details a merge/close wake would carry.
@@ -4488,8 +4622,13 @@ class DesktopAppServerService {
           pullRequestWatch: {
             ...(currentOutcome ? { currentOutcome } : {}),
             ...(terminal ? { terminal } : {}),
-            coveredByAutoFix,
+            coveredByAutoFix: failureCoveredByAutoFix ? ["failure"] : [],
             prAutomation,
+            armed: false,
+            reason: "pr_terminal",
+            message: `No watch was created: PR #${pr.number} is already ${
+              terminalOutcome === "merged" ? "merged" : "closed without merge"
+            }.`,
           },
         },
       };
@@ -4505,30 +4644,44 @@ class DesktopAppServerService {
         },
       };
     }
+    const createdAt = Date.now();
     const currentOutcome = getPrStatusWatchOutcome(pr);
-    const currentOutcomeIsFresh = Boolean(
-      currentPrEntry
-      && Date.now() - currentPrEntry.fetchedAt
-        <= PR_STATUS_WATCH_CURRENT_OUTCOME_MAX_AGE_MS,
+    const observedAt = currentPrEntry?.fetchedAt;
+    const currentOutcomeIsFresh = observedAt !== undefined
+      && createdAt - observedAt <= PR_STATUS_WATCH_CURRENT_OUTCOME_MAX_AGE_MS;
+    // A re-run keeps the head, so neither the head nor the cache's age can
+    // tell its result from the attempt it replaced. A status read before the
+    // re-run settled is the old attempt, fresh or not.
+    const recordedRerun = this.ciRerunsByPrKey.get(prKey);
+    const rerun = recordedRerun && (!recordedRerun.headSha || recordedRerun.headSha === headSha)
+      ? recordedRerun
+      : undefined;
+    const staleAfterRerun = Boolean(
+      rerun && (observedAt ?? 0) <= rerun.requestedAt + RERUN_SETTLE_MS,
     );
+    const baseline: ThreadPullRequestWatchBaseline | undefined = currentOutcome
+      && ciEvents.length > 0
+      && (staleAfterRerun || args.waitForNextResult === true)
+      ? {
+          outcome: currentOutcome,
+          observedAt: observedAt ?? createdAt,
+          ...(currentOutcome === "failure" && pr.failedCheckUrl
+            ? { failedCheckUrl: pr.failedCheckUrl }
+            : {}),
+          ...(rerun ? { rerunRequestedAt: rerun.requestedAt } : {}),
+          ...(rerun?.runAttempt !== undefined ? { runAttempt: rerun.runAttempt } : {}),
+        }
+      : undefined;
     const ciOutcomeAlreadyKnown = Boolean(
       currentOutcome
       && ciEvents.includes(currentOutcome)
-      && currentOutcomeIsFresh,
+      && currentOutcomeIsFresh
+      && !baseline,
     );
-    if (ciOutcomeAlreadyKnown && terminalEvents.length === 0) {
-      return {
-        ok: true,
-        data: {
-          pullRequestWatch: {
-            currentOutcome,
-            coveredByAutoFix,
-            prAutomation,
-          },
-        },
-      };
-    }
-    const createdAt = Date.now();
+    // Auto-fix dedupes a repeat failure at the same head, so it will not wake
+    // the thread for a failure that follows a baseline failure there.
+    const coversFailure = (watchBaseline: ThreadPullRequestWatchBaseline | undefined) =>
+      failureCoveredByAutoFix && watchBaseline?.outcome !== "failure";
     const baseWatch = {
       backend: args.backend,
       threadId,
@@ -4537,9 +4690,10 @@ class DesktopAppServerService {
       prNumber: pr.number,
       ...(pr.title ? { prTitle: pr.title } : {}),
       createdAt,
-      failureHandledByAutoFix: coveredByAutoFix.length > 0,
+      createdBy: "agent" as const,
     };
     let watch: ThreadPullRequestWatchSummary | undefined;
+    let watchExisted = false;
     if (ciEvents.length > 0 && headSha && !ciOutcomeAlreadyKnown) {
       const registration = await this.getOverlayStore().registerThreadPrStatusWatch({
         watch: {
@@ -4547,13 +4701,17 @@ class DesktopAppServerService {
           watchId: randomUUID(),
           headSha,
           notifyOn: ciEvents,
+          failureHandledByAutoFix: coversFailure(baseline),
           kind: "checks",
+          ...(baseline ? { baseline } : {}),
         },
         now: createdAt,
       });
       watch = registration.watch;
+      watchExisted = registration.existed;
     }
     let terminalWatch: ThreadPullRequestWatchSummary | undefined;
+    let terminalWatchExisted = false;
     if (terminalEvents.length > 0) {
       // Not bound to a head: pushes and CI results leave it in place until
       // the PR merges or closes, and it survives restarts in sqlite.
@@ -4569,11 +4727,27 @@ class DesktopAppServerService {
         now: createdAt,
       });
       terminalWatch = registration.watch;
+      terminalWatchExisted = registration.existed;
     }
-    if (watch && currentOutcomeIsFresh) {
+    if (watch || terminalWatch) {
+      await this.publishPrWatchesUpdated([{ backend: args.backend, threadId, prKey }]);
+    }
+    // A baseline is the outcome the watch must not fire on, so it is never
+    // offered as a snapshot.
+    if (watch && currentOutcomeIsFresh && !watch.baseline) {
       await this.getPrStatusWatchCoordinator().handleStatusSnapshot(pr, createdAt);
     }
 
+    const coveredByAutoFix: ThreadPullRequestWatchEvent[] =
+      ciEvents.includes("failure") && coversFailure(watch?.baseline ?? baseline)
+        ? ["failure"]
+        : [];
+    const armed = Boolean(watch || terminalWatch);
+    const reason: WatchThreadPullRequestReason = !armed
+      ? "outcome_already_final"
+      : (!watch || watchExisted) && (!terminalWatch || terminalWatchExisted)
+        ? "already_armed"
+        : "armed";
     return {
       ok: true,
       data: {
@@ -4586,9 +4760,106 @@ class DesktopAppServerService {
             backend: args.backend,
             threadId,
           }),
+          armed,
+          reason,
+          message: describePrWatchArming({
+            prNumber: pr.number,
+            headSha: headSha ?? "",
+            ciEvents,
+            watch,
+            watchExisted,
+            terminalWatch,
+            terminalWatchExisted,
+            knownOutcome: ciOutcomeAlreadyKnown ? currentOutcome : undefined,
+            knownAgeMs: observedAt !== undefined ? createdAt - observedAt : undefined,
+          }),
         },
       },
     };
+  }
+
+  /** The operator's list, history, and Stop for PR watches on local threads. */
+  async manageThreadPrWatches(
+    request: ThreadPrWatchesRequest,
+  ): Promise<ThreadPrWatchesResponse> {
+    const invalid = (message: string): ThreadPrWatchesResponse => ({
+      ok: false,
+      error: { code: "invalid_arguments", message },
+    });
+    if (request?.action === "active") {
+      // Before a profile's state opens there is nothing to list, not an error.
+      if (!getAppStateMode()) return { ok: true, active: [] };
+      return {
+        ok: true,
+        active: await this.getOverlayStore().listAllActivePrStatusWatches(),
+      };
+    }
+    if (request?.action !== "history" && request?.action !== "cancel") {
+      return invalid("action must be active, history, or cancel.");
+    }
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return {
+        ok: false,
+        error: {
+          code: "federation_unsupported",
+          message: "PR watches run on the instance that owns the thread. Stop them there.",
+        },
+      };
+    }
+    if (!isAppServerBackendKind(request.backend) || !request.threadId?.trim()) {
+      return invalid("backend and threadId are required.");
+    }
+    if (request.action === "history") {
+      const limit = Math.min(
+        THREAD_PR_WATCH_HISTORY_MAX_LIMIT,
+        Math.max(1, Math.floor(request.limit ?? 10)),
+      );
+      return {
+        ok: true,
+        history: await this.getOverlayStore().listThreadPrStatusWatchHistory({
+          backend: request.backend,
+          threadId: request.threadId,
+          limit: Number.isFinite(limit) ? limit : 10,
+        }),
+      };
+    }
+    if (!request.watchId?.trim()) return invalid("watchId is required.");
+    const cancelled = await this.getOverlayStore().cancelThreadPrStatusWatch({
+      backend: request.backend,
+      threadId: request.threadId,
+      watchId: request.watchId,
+      now: Date.now(),
+    });
+    if (!cancelled) {
+      return {
+        ok: false,
+        error: {
+          code: "not_found",
+          message: "That watch is no longer waiting, or it is waking the thread now.",
+        },
+      };
+    }
+    await this.publishPrWatchesUpdated([cancelled]);
+    return { ok: true, cancelled: true };
+  }
+
+  /** Tell windows a thread's PR watches changed; they re-list them. */
+  private async publishPrWatchesUpdated(
+    threads: Array<{ backend: AppServerBackendKind; threadId: string; prKey?: string }>,
+  ): Promise<void> {
+    for (const thread of threads) {
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend: thread.backend,
+        notification: {
+          method: "thread/prWatches/updated",
+          params: {
+            backend: thread.backend,
+            threadId: thread.threadId,
+            ...(thread.prKey ? { prKey: thread.prKey } : {}),
+          },
+        },
+      });
+    }
   }
 
   async getThreadPullRequestAutomationStatus(
@@ -4688,12 +4959,15 @@ class DesktopAppServerService {
       threadId: request.threadId,
       pr: request.pr,
     });
-    await this.getOverlayStore().cancelThreadPrStatusWatchesForPr({
+    const cancelledWatches = await this.getOverlayStore().cancelThreadPrStatusWatchesForPr({
       backend,
       threadId: request.threadId,
       prKey,
       now: Date.now(),
     });
+    if (cancelledWatches > 0) {
+      await this.publishPrWatchesUpdated([{ backend, threadId: request.threadId, prKey }]);
+    }
     const prs = overlay.prs ?? [];
     await this.publishThreadPullRequestsUpdated({
       backend,
@@ -8664,6 +8938,7 @@ class DesktopAppServerService {
           }
           return formatSandboxCleanupLines(report);
         },
+        onWatchesChanged: async (threads) => await this.publishPrWatchesUpdated(threads),
       });
     }
     return this.prStatusWatchCoordinator;
@@ -9171,6 +9446,19 @@ export function registerAppServerIpcHandlers(): void {
     if (isFederationWindowWebContents(event.sender)) throw new Error("Thread dependencies currently require a local window.");
     if (request?.action === "active") return appServerService.listActiveThreadDependencies();
     return await appServerService.manageThreadDependencies(request);
+  });
+  ipcMain.removeHandler(THREAD_PR_WATCHES_CHANNEL);
+  ipcMain.handle(THREAD_PR_WATCHES_CHANNEL, async (event, request: ThreadPrWatchesRequest): Promise<ThreadPrWatchesResponse> => {
+    if (isFederationWindowWebContents(event.sender)) {
+      return {
+        ok: false,
+        error: {
+          code: "federation_unsupported",
+          message: "PR watches are listed and stopped in a local window of the instance that owns the thread.",
+        },
+      };
+    }
+    return await appServerService.manageThreadPrWatches(request);
   });
   getDesktopBackendRegistry().setThreadPullRequestWatchToolHandler(
     async (args) => await appServerService.watchThreadPullRequestForTool(args),
@@ -10440,6 +10728,7 @@ export function registerAppServerIpcHandlers(): void {
 export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL);
   ipcMain.removeHandler(THREAD_DEPENDENCIES_CHANNEL);
+  ipcMain.removeHandler(THREAD_PR_WATCHES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL);
   await navigationAttentionViewLeases.dispose();

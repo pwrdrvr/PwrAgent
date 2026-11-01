@@ -293,6 +293,11 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   subAgents?: ThreadSubAgentSummary[];
   /** Owner-projected composer rows, independent of lazily loaded sub-agent history. */
   activeSubAgents?: ThreadActiveSubAgent[];
+  /**
+   * Owner-projected active PR watches, on selected detail only, like
+   * `activeSubAgents`. Never written to the navigation store.
+   */
+  activePrWatches?: import("./thread-tools").ThreadPullRequestWatchSummary[];
   /** Durable origin metadata for threads created by an Agent handoff tool. */
   handoffOrigin?: ThreadHandoffOrigin;
   /**

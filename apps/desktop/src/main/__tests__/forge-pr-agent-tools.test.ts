@@ -126,8 +126,31 @@ describe("GitHub tool client", () => {
     const { calls, client } = harness(() => new Response(null, { status: 201 }));
     const result = await client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx({ repository: { ...repo, host } }));
     const root = host === "github.com" ? "https://api.github.com" : `https://${host}/api/v3`;
-    expect(calls).toEqual([{ url: `${root}/repos/fixture/project/actions/runs/42/rerun-failed-jobs`, method: "POST", body: undefined, accept: "application/vnd.github+json" }]);
-    expect(result).toMatchObject({ requested: true, runId: 42, providerRequests: 1, scope: "failed_jobs_and_dependents", url: `https://${host}/fixture/project/actions/runs/42` });
+    expect(calls[0]).toEqual({ url: `${root}/repos/fixture/project/actions/runs/42/rerun-failed-jobs`, method: "POST", body: undefined, accept: "application/vnd.github+json" });
+    // The follow-up read of the run returned no body: the accepted re-run is
+    // still reported, without its attempt or head.
+    expect(calls[1]).toMatchObject({ url: `${root}/repos/fixture/project/actions/runs/42`, method: "GET" });
+    expect(result).toMatchObject({ requested: true, runId: 42, providerRequests: 2, scope: "failed_jobs_and_dependents", url: `https://${host}/fixture/project/actions/runs/42` });
+    expect(result).not.toHaveProperty("runAttempt");
+    expect(result).not.toHaveProperty("headSha");
+  });
+
+  it("reports the re-run's attempt and head from one follow-up read of the run", async () => {
+    const { calls, client } = harness((call) => call.method === "POST"
+      ? new Response(null, { status: 201 })
+      : json({ id: 42, run_attempt: 2, head_sha: "c".repeat(40), status: "queued" }));
+    const result = await client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx());
+    expect(calls.map((call) => call.method)).toEqual(["POST", "GET"]);
+    expect(result).toMatchObject({ requested: true, runId: 42, runAttempt: 2, headSha: "c".repeat(40), providerRequests: 2 });
+  });
+
+  it("still reports an accepted re-run when the follow-up read fails", async () => {
+    const { client } = harness((call) => call.method === "POST"
+      ? new Response(null, { status: 201 })
+      : json({ message: "Server Error" }, 500));
+    const result = await client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx());
+    expect(result).toMatchObject({ requested: true, runId: 42, providerRequests: 2 });
+    expect(result).not.toHaveProperty("runAttempt");
   });
 
   it("returns a refused rerun without falling back to rerunning the whole workflow", async () => {

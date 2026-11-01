@@ -51400,6 +51400,9 @@ script = "printf setup"
             createdAt: 1_000,
             failureHandledByAutoFix: true,
           },
+          armed: true,
+          reason: "armed" as const,
+          message: "Watching PR #1105 at aaaaaaa for the next success.",
         },
       },
     }));
