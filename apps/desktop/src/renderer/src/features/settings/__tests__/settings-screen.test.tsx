@@ -10420,7 +10420,7 @@ describe("SettingsScreen", () => {
     fireEvent.change(await screen.findByLabelText("Name"), {
       target: { value: "Datadog" },
     });
-    fireEvent.change(screen.getByLabelText("Remote MCP URL"), {
+    fireEvent.change(screen.getByLabelText("MCP server URL"), {
       target: { value: "https://mcp.example.com/mcp" },
     });
     // Nothing is written until the endpoint has been checked: the button is a
@@ -10497,7 +10497,7 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    fireEvent.change(await screen.findByLabelText("Remote MCP URL"), {
+    fireEvent.change(await screen.findByLabelText("MCP server URL"), {
       target: { value: "npx -y @modelcontextprotocol/server-filesystem '/home/example/My Projects'" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Check" }));
@@ -10706,7 +10706,7 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(within(row).getByRole("button", { name: "Edit" }));
     const dialog = screen.getByRole("dialog", { name: "Edit connection" });
-    expect(within(dialog).queryByLabelText("Remote MCP URL")).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("MCP server URL")).not.toBeInTheDocument();
     const secret = within(dialog).getByLabelText("FIXTURE_TOKEN value");
     expect(secret).toHaveValue("");
     expect(secret).toHaveAttribute("placeholder", "Stored encrypted");
