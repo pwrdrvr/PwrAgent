@@ -1,4 +1,5 @@
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
+import { startWindowPrototypeBridge } from "./federation-window-prototype-bridge";
 import type { ThreadTodoFeedDelta, ThreadTodosChangedEvent } from "@pwragent/shared";
 import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION_METHODS,
   registerFederationOperatorQuestionHandlers, type OperatorQuestionOperation,
@@ -1282,6 +1283,7 @@ export class DesktopFederationRuntime {
   private readonly serviceForwarder = new FederationServiceForwarder();
   private readonly serviceViews = new Map<number, { viewId: string; instanceId: string; thread: ServiceThread }>();
   private releaseWorktreeTerminalOwner?: () => void;
+  private windowPrototypeBridge?: { dispose: () => Promise<void> };
   private filePushReceiver?: FederationFilePushReceiver;
   private threadHandoffService?: ThreadInstanceHandoffService;
   private readonly messagingFileReceipts = new FederationFilePushReceipts();
@@ -1758,6 +1760,8 @@ export class DesktopFederationRuntime {
     this.services = undefined;
     this.releaseWorktreeTerminalOwner?.();
     this.releaseWorktreeTerminalOwner = undefined;
+    await this.windowPrototypeBridge?.dispose();
+    this.windowPrototypeBridge = undefined;
     await this.ptyService?.disposeAll();
     this.ptyService = undefined;
     this.client?.close();
@@ -4080,6 +4084,25 @@ export class DesktopFederationRuntime {
           this.handleClientConnectionFailure(error);
         });
       }
+    }
+    if (startupAborted()) return;
+    try {
+      const windowPrototypeBridge = await startWindowPrototypeBridge({
+        packaged: app.isPackaged,
+        configPath: process.env.PWRAGENT_DEV_WINDOW_PROTOTYPE,
+        router,
+        localInstanceId,
+        peerConnected: (peerId) => this.visiblePeers().some((peer) => peer.id === peerId && peer.status === "connected"),
+        requestPeer: (peerId, method, params) => this.rpcFor({ scope: "remote", instanceId: peerId }).request({ method, params, timeoutMs: 3000 }),
+        log: { info: (message) => log.info(message), error: (message) => log.error(message) },
+      });
+      if (startupAborted()) {
+        await windowPrototypeBridge?.dispose();
+        return;
+      }
+      this.windowPrototypeBridge = windowPrototypeBridge;
+    } catch (error) {
+      log.error("Window fixture adapter did not start", error);
     }
   }
 
