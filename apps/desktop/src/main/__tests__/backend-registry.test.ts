@@ -67244,6 +67244,92 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("gates an ACP tool call made before the turn's origin row is written", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const threadId = "acp-messaging-turn";
+    const causalMessagingSource = { ownerId: "owner-1", requestId: "request-1" };
+    const overlayStore = createOverlayStoreMock();
+    // Hold the origin write open, so the tool call can only see the origin
+    // through the registry's memory.
+    let releaseOriginWrite!: () => void;
+    const originWriteGate = new Promise<void>((resolve) => { releaseOriginWrite = resolve; });
+    const writeOrigin = overlayStore.upsertThreadMessageOrigin!;
+    const persistOrigin = writeOrigin.getMockImplementation()!;
+    writeOrigin.mockImplementation(async (params) => {
+      await originWriteGate;
+      return await persistOrigin(params);
+    });
+    let toolCall: Promise<string | null> | undefined;
+    let registry!: DesktopBackendRegistry;
+    // The agent calls a gated tool before startPrompt returns its turn id.
+    const startPrompt = vi.fn((params: { sessionId: string; turnId?: string }) => {
+      const turnId = params.turnId ?? `turn:${params.sessionId}`;
+      toolCall = (registry as unknown as {
+        authorizeAgentToolMcpCall(params: {
+          backend: AppServerBackendKind;
+          catalogId?: string;
+          threadId: string;
+          tool: string;
+          turnId: string;
+        }): Promise<string | null>;
+      }).authorizeAgentToolMcpCall({
+        backend: acpBackendId,
+        catalogId: "thread_inspection",
+        threadId: params.sessionId,
+        tool: "read_thread",
+        turnId,
+      });
+      return { sessionId: params.sessionId, turnId };
+    });
+    ({ registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessions: [{
+        backendId: acpBackendId,
+        sessionId: threadId,
+        title: "Messaging turn",
+        cwd: "/repo/app",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      }],
+      sessionId: threadId,
+      startPrompt,
+      overlayStore,
+    }));
+    const authorizeRetainedTool = vi.fn(async () => ({ allowed: false, permission: "thread.read" }));
+    const checkDynamicToolPermission = vi.fn(() => ({ allowed: true }));
+    registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: vi.fn(),
+      checkDynamicToolPermission,
+      authorizeRetainedTool,
+    });
+
+    const started = registry.startTurn({
+      backend: acpBackendId,
+      threadId,
+      input: [{ type: "text", text: "Summarize the open threads" }],
+      messageOrigin: { kind: "messaging", causalMessagingSource },
+    });
+    await vi.waitFor(() => expect(toolCall).toBeDefined());
+    await expect(toolCall).resolves.toBe("thread.read");
+    expect(authorizeRetainedTool).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId, causalMessagingSource }),
+      expect.objectContaining({ category: "thread_inspection", tool: "read_thread" }),
+    );
+    expect(checkDynamicToolPermission).not.toHaveBeenCalled();
+
+    releaseOriginWrite();
+    const turn = await started;
+    expect(writeOrigin).toHaveBeenCalledWith({
+      backend: acpBackendId,
+      threadId,
+      messageId: `user:${turn.turnId}`,
+      origin: { kind: "messaging", causalMessagingSource },
+    });
+
+    await registry.close();
+  });
+
   it("keeps Grok MCP calls active when an idle metadata update finishes after turn start", async () => {
     const backend = "acp:grok" as AcpBackendId;
     const threadId = "grok-mcp-lifecycle";

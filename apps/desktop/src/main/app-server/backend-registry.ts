@@ -8658,6 +8658,17 @@ function buildWorkspaceMoveFailurePrompt(params: {
   ].join("\n");
 }
 
+/**
+ * A turn's origin while its `user:<turnId>` row is not yet written. `turnId`
+ * is unset until the provider's start call returns it.
+ */
+type StartingTurnOrigin = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  origin: AppServerThreadMessageOrigin;
+  turnId?: string;
+};
+
 type PendingThreadMessageContext = {
   backend: AppServerBackendKind;
   createdAt: number;
@@ -9300,6 +9311,12 @@ export class DesktopBackendRegistry {
     string,
     PendingThreadMessageContext
   >();
+  /**
+   * A provider can call a tool before its turn-start call returns, and so
+   * before the turn's origin row is written. The causal lookup reads these
+   * first, so that call is gated like the rest of the turn. Memory only.
+   */
+  private readonly startingTurnOrigins = new Set<StartingTurnOrigin>();
   // Keep accepted requests through the active turn, not just while the RPC is
   // in flight. The backend can acknowledge a steer before its user item is
   // observed, and completion signals in that window must not resubmit it.
@@ -9781,9 +9798,74 @@ export class DesktopBackendRegistry {
   }
 
   private async readExactTurnMessageOrigin(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<AppServerThreadMessageOrigin | undefined> {
-    if (!context.turnId || !this.overlayStore.readThreadMessageOrigins) return undefined;
+    if (!context.turnId) return undefined;
+    const starting = this.findStartingTurnOrigin(context);
+    if (starting?.turnId) return starting.origin;
     const messageId = buildTurnUserMessageOriginId(context.turnId);
-    return (await this.overlayStore.readThreadMessageOrigins({ ...context, messageIds: [messageId] }))[messageId];
+    const persisted = this.overlayStore.readThreadMessageOrigins
+      ? (await this.overlayStore.readThreadMessageOrigins({ ...context, messageIds: [messageId] }))[messageId]
+      : undefined;
+    // Before the start call returns, the turn id is unknown. A thread starts
+    // one turn at a time, so an unbound origin belongs to the turn calling.
+    return persisted ?? starting?.origin;
+  }
+
+  /** The origin bound to this turn, else the thread's origin still awaiting its turn id. */
+  private findStartingTurnOrigin(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): StartingTurnOrigin | undefined {
+    let unbound: StartingTurnOrigin | undefined;
+    for (const entry of this.startingTurnOrigins) {
+      if (entry.backend !== context.backend || entry.threadId !== context.threadId) continue;
+      if (entry.turnId === undefined) unbound = entry;
+      else if (entry.turnId === context.turnId) return entry;
+    }
+    return unbound;
+  }
+
+  /**
+   * Call before the provider starts the turn. Every path must end in
+   * `persistStartingTurnOrigin` or `dropStartingTurnOrigin`.
+   */
+  private beginStartingTurnOrigin(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    origin?: AppServerThreadMessageOrigin;
+  }): StartingTurnOrigin | undefined {
+    if (!params.origin) return undefined;
+    const entry: StartingTurnOrigin = { backend: params.backend, threadId: params.threadId, origin: params.origin };
+    this.startingTurnOrigins.add(entry);
+    return entry;
+  }
+
+  /** Bind as soon as the start call returns, so the origin matches this turn only. */
+  private bindStartingTurnOrigin(
+    entry: StartingTurnOrigin | undefined,
+    turn: { threadId: string; turnId: string },
+  ): void {
+    if (!entry) return;
+    entry.threadId = turn.threadId;
+    entry.turnId = turn.turnId;
+  }
+
+  private dropStartingTurnOrigin(entry: StartingTurnOrigin | undefined): void {
+    if (entry) this.startingTurnOrigins.delete(entry);
+  }
+
+  /** Writes the bound origin as the turn's `user:<turnId>` row, then forgets it. */
+  private async persistStartingTurnOrigin(entry: StartingTurnOrigin | undefined): Promise<void> {
+    if (!entry?.turnId) {
+      this.dropStartingTurnOrigin(entry);
+      return;
+    }
+    try {
+      await this.persistThreadMessageOrigin({
+        backend: entry.backend,
+        threadId: entry.threadId,
+        messageId: buildTurnUserMessageOriginId(entry.turnId),
+        origin: entry.origin,
+      });
+    } finally {
+      this.dropStartingTurnOrigin(entry);
+    }
   }
 
   private forgeReadHandler?: ForgeReadHandler;
@@ -21733,6 +21815,7 @@ export class DesktopBackendRegistry {
       const registrations = await this.registerMcpConnections(overlay?.mcpConnectionIds, params.threadId);
       // Once handed over, the Claude session revokes them when it closes.
       let handedOver = false;
+      let startingOrigin: StartingTurnOrigin | undefined;
       let revoked = false;
       const revokeConnections = () => {
         if (revoked) return;
@@ -21761,6 +21844,7 @@ export class DesktopBackendRegistry {
         const instructions = (await this.getThreadAgentMetadata(params))?.instructions;
         handedOver = true;
         const messageOrigin = resolveThreadMessageOrigin(params);
+        startingOrigin = this.beginStartingTurnOrigin({ backend: "claude", threadId: params.threadId, origin: messageOrigin });
         const result = await this.claudeBackend.startTurn({
           ...params, input, model: modelSettings.model, reasoningEffort: modelSettings.reasoningEffort,
           messageOrigin,
@@ -21776,14 +21860,16 @@ export class DesktopBackendRegistry {
           ),
           onSessionClosed: revokeConnections,
         });
-        await this.persistThreadMessageOrigin({ backend: "claude", threadId: params.threadId,
-          messageId: `user:${result.turnId}`, origin: messageOrigin });
+        this.bindStartingTurnOrigin(startingOrigin, { threadId: params.threadId, turnId: result.turnId });
+        await this.persistStartingTurnOrigin(startingOrigin);
         return result;
       } catch (error) {
         // A live session shares the thread's grants, so it alone revokes them.
         if (!handedOver) revokeConnections();
         if (error instanceof ClaudeTurnActiveError) throw new ThreadAlreadyActiveError(error.message);
         throw error;
+      } finally {
+        this.dropStartingTurnOrigin(startingOrigin);
       }
     }
     // A selection already in flight must finish before this turn reads its runtime.
@@ -21833,6 +21919,7 @@ export class DesktopBackendRegistry {
       }
       this.reservedAcpStartThreadKeys.add(reservationKey);
       let pendingMessageContextId: string | undefined;
+      let startingOrigin: StartingTurnOrigin | undefined;
       try {
         const preparedPdfInput = await preparePdfTurnInput({
           handling: this.resolvePdfTurnInputHandling({
@@ -21878,6 +21965,11 @@ export class DesktopBackendRegistry {
           origin: resolveThreadMessageOrigin(params),
           text: extractFirstMeaningfulTextInput(params.input),
         });
+        startingOrigin = this.beginStartingTurnOrigin({
+          backend: params.backend,
+          threadId: params.threadId,
+          origin: resolveThreadMessageOrigin(params),
+        });
         const result = await this.startAcpTurn({
           backend: params.backend,
           threadId: params.threadId,
@@ -21885,6 +21977,7 @@ export class DesktopBackendRegistry {
           model: modelSettings.model,
           reasoningEffort: modelSettings.reasoningEffort,
         });
+        this.bindStartingTurnOrigin(startingOrigin, result);
         await this.overlayStore.consumeManagedReviewContexts({
           backend: params.backend,
           threadId: params.threadId,
@@ -21907,12 +22000,7 @@ export class DesktopBackendRegistry {
           pendingMessageContextId,
           result.turnId,
         );
-        await this.persistThreadMessageOrigin({
-          backend: params.backend,
-          threadId: result.threadId,
-          messageId: buildTurnUserMessageOriginId(result.turnId),
-          origin: resolveThreadMessageOrigin(params),
-        });
+        await this.persistStartingTurnOrigin(startingOrigin);
         await this.rememberTurnInputAttachments({
           backend: params.backend,
           threadId: result.threadId,
@@ -21925,6 +22013,7 @@ export class DesktopBackendRegistry {
         this.forgetPendingThreadMessageContext(pendingMessageContextId);
         throw error;
       } finally {
+        this.dropStartingTurnOrigin(startingOrigin);
         this.reservedAcpStartThreadKeys.delete(reservationKey);
       }
     }
@@ -22123,6 +22212,11 @@ export class DesktopBackendRegistry {
         retryableCodexTurnStart,
       );
     }
+    const startingOrigin = this.beginStartingTurnOrigin({
+      backend: params.backend,
+      threadId: params.threadId,
+      origin: resolveThreadMessageOrigin(params),
+    });
     try {
       result = await this.withCodexThreadClient(
         params.threadId,
@@ -22187,6 +22281,7 @@ export class DesktopBackendRegistry {
         params.executionMode,
       );
     } catch (error) {
+      this.dropStartingTurnOrigin(startingOrigin);
       await this.emit({
         backend: params.backend,
         notification: {
@@ -22243,6 +22338,7 @@ export class DesktopBackendRegistry {
       }
       throw error;
     }
+    this.bindStartingTurnOrigin(startingOrigin, result);
     if (retryableCodexTurnStart) {
       retryableCodexTurnStart.turnId = result.turnId;
     }
@@ -22255,12 +22351,7 @@ export class DesktopBackendRegistry {
       pdfAttachments,
     );
     this.bindPendingThreadMessageContext(pendingMessageContextId, result.turnId);
-    await this.persistThreadMessageOrigin({
-      backend: params.backend,
-      threadId: result.threadId,
-      messageId: buildTurnUserMessageOriginId(result.turnId),
-      origin: resolveThreadMessageOrigin(params),
-    });
+    await this.persistStartingTurnOrigin(startingOrigin);
     this.rebindPendingReviewStartsForStartedTurn({
       backend: params.backend,
       threadId: params.threadId,
@@ -24562,9 +24653,13 @@ export class DesktopBackendRegistry {
         const previous = await this.readExactTurnMessageOrigin({ backend: params.backend, threadId: params.threadId, turnId: result.turnId });
         if (previous?.causalMessagingSource || previous?.causalMessagingAmbiguous
           || messageOrigin.causalMessagingSource || messageOrigin.causalMessagingAmbiguous) {
+          const merged = { ...(previous ?? messageOrigin), ...mergeCausalMessagingContext([previous, messageOrigin]) };
+          // A steer can land before the turn's own origin is written; that
+          // write must not drop the steer's sender.
+          const starting = this.findStartingTurnOrigin({ backend: params.backend, threadId: params.threadId, turnId: result.turnId });
+          if (starting) starting.origin = merged;
           await this.persistThreadMessageOrigin({ backend: params.backend, threadId: params.threadId,
-            messageId: buildTurnUserMessageOriginId(result.turnId),
-            origin: { ...(previous ?? messageOrigin), ...mergeCausalMessagingContext([previous, messageOrigin]) } });
+            messageId: buildTurnUserMessageOriginId(result.turnId), origin: merged });
         }
       }
       return result;
@@ -45359,16 +45454,22 @@ export class DesktopBackendRegistry {
         hidden: true,
       });
       this.bindTaskMonitorMcpThread(params.monitorId, thread.threadId, executionMode);
-      const turn = await this.startAcpTurn({
-        backend: params.context.backend,
-        threadId: thread.threadId,
-        input: [{ type: "text", text: params.prompt }],
-        model: params.runtimeModel,
-        reasoningEffort,
-      });
-      await this.persistThreadMessageOrigin({ backend: params.context.backend, threadId: turn.threadId,
-        messageId: buildTurnUserMessageOriginId(turn.turnId),
-        origin: buildTaskMonitorPromptOrigin(params.causalContext) });
+      const startingOrigin = this.beginStartingTurnOrigin({ backend: params.context.backend,
+        threadId: thread.threadId, origin: buildTaskMonitorPromptOrigin(params.causalContext) });
+      let turn: { threadId: string; turnId: string };
+      try {
+        turn = await this.startAcpTurn({
+          backend: params.context.backend,
+          threadId: thread.threadId,
+          input: [{ type: "text", text: params.prompt }],
+          model: params.runtimeModel,
+          reasoningEffort,
+        });
+        this.bindStartingTurnOrigin(startingOrigin, turn);
+        await this.persistStartingTurnOrigin(startingOrigin);
+      } finally {
+        this.dropStartingTurnOrigin(startingOrigin);
+      }
       return {
         cwd,
         executionMode,
@@ -45401,6 +45502,11 @@ export class DesktopBackendRegistry {
     });
     this.bindTaskMonitorMcpThread(params.monitorId, thread.threadId, executionMode);
     this.reservedCodexStartThreadIds.add(thread.threadId);
+    const causalContext = params.causalContext ?? {};
+    const startingOrigin = causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous
+      ? this.beginStartingTurnOrigin({ backend: "codex", threadId: thread.threadId,
+        origin: buildTaskMonitorPromptOrigin(causalContext) })
+      : undefined;
     let turn: { threadId: string; turnId: string };
     try {
       turn = await client.startTurn({
@@ -45428,6 +45534,10 @@ export class DesktopBackendRegistry {
         buildActiveTurnModeKey(turn.threadId, turn.turnId),
         executionMode,
       );
+      this.bindStartingTurnOrigin(startingOrigin, turn);
+    } catch (error) {
+      this.dropStartingTurnOrigin(startingOrigin);
+      throw error;
     } finally {
       this.reservedCodexStartThreadIds.delete(thread.threadId);
     }
@@ -45443,11 +45553,7 @@ export class DesktopBackendRegistry {
       parentThreadId: params.context.threadId,
     });
 
-    const causalContext = params.causalContext ?? {};
-    if (causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous) {
-      await this.persistThreadMessageOrigin({ backend: "codex", threadId: turn.threadId,
-        messageId: buildTurnUserMessageOriginId(turn.turnId), origin: buildTaskMonitorPromptOrigin(causalContext) });
-    }
+    await this.persistStartingTurnOrigin(startingOrigin);
 
     return {
       cwd,
@@ -45935,33 +46041,36 @@ export class DesktopBackendRegistry {
         return;
       }
       if (isAcpBackendId(record.backend)) {
-        const turn = await this.startAcpTurn({
-          backend: record.backend,
-          threadId: record.monitorThreadId,
-          input: [
-            {
-              type: "text",
-              text: buildTaskMonitorRecoveryPrompt({
-                monitorId: record.monitorId,
-                task: record.task,
-                terminalStatus: params.terminalStatus,
-              }),
-            },
-          ],
-          model: record.runtimeModel,
-          reasoningEffort:
-            record.preferredReasoningEffort === "provider-default"
-              ? undefined
-              : record.preferredReasoningEffort,
-        });
-        record.monitorTurnId = turn.turnId;
-        record.lastActivityAt = Date.now();
-        await this.persistThreadMessageOrigin({
-          backend: record.backend,
-          threadId: turn.threadId,
-          messageId: buildTurnUserMessageOriginId(turn.turnId),
-          origin: buildTaskMonitorPromptOrigin(record.causalContext),
-        });
+        const startingOrigin = this.beginStartingTurnOrigin({ backend: record.backend,
+          threadId: record.monitorThreadId, origin: buildTaskMonitorPromptOrigin(record.causalContext) });
+        let turn: { threadId: string; turnId: string };
+        try {
+          turn = await this.startAcpTurn({
+            backend: record.backend,
+            threadId: record.monitorThreadId,
+            input: [
+              {
+                type: "text",
+                text: buildTaskMonitorRecoveryPrompt({
+                  monitorId: record.monitorId,
+                  task: record.task,
+                  terminalStatus: params.terminalStatus,
+                }),
+              },
+            ],
+            model: record.runtimeModel,
+            reasoningEffort:
+              record.preferredReasoningEffort === "provider-default"
+                ? undefined
+                : record.preferredReasoningEffort,
+          });
+          this.bindStartingTurnOrigin(startingOrigin, turn);
+          record.monitorTurnId = turn.turnId;
+          record.lastActivityAt = Date.now();
+          await this.persistStartingTurnOrigin(startingOrigin);
+        } finally {
+          this.dropStartingTurnOrigin(startingOrigin);
+        }
         backendRegistryLog.warn("started ACP task monitor recovery turn", {
           backend: record.backend,
           monitorId: record.monitorId,
