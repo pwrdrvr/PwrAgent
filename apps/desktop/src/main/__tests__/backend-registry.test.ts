@@ -19105,13 +19105,21 @@ script = "echo setup"
             .toEqual([attached, primary]);
           // The provider does not report the attachment. Archive must find it
           // solely through the persisted overlay, including after restart.
+          const archiveClient = Object.assign(new MockBackendClient({
+            threads: [{ ...thread, linkedDirectories: [primary] }],
+          }), {
+            listArchiveCleanupThreadsPage: vi.fn(async ({ archived }: { archived: boolean }) => ({
+              threads: archived ? [{ ...thread, archived: true, linkedDirectories: [primary] }] : [],
+            })),
+          });
           const archiveRegistry = new DesktopBackendRegistry({
-            codexClient: new MockBackendClient({ threads: [{ ...thread, linkedDirectories: [primary] }] }),
+            codexClient: archiveClient,
             overlayStore: reopenedStore,
             worktreeArchiveService: { archive: archiveWorktree } as unknown as WorktreeArchiveService,
           });
           try {
             const archived = await archiveRegistry.archiveThread(identity);
+            expect(archiveClient.listArchiveCleanupThreadsPage).toHaveBeenCalled();
             expect(archived.cleanup).toEqual(expect.arrayContaining([
               expect.objectContaining({ worktreePath: primaryPath, removedWorktree: true }),
               expect.objectContaining({ worktreePath: secondaryPath, removedWorktree: true }),
