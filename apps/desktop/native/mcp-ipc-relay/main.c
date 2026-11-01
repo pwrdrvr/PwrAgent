@@ -135,6 +135,7 @@ static void deny(const char *message) { errno = EACCES; fail(message); }
 #ifdef __APPLE__
 static void no_grant_acl(acl_t acl) {
   if (!acl) fail("cannot inspect endpoint ACL");
+  if (acl_valid(acl)) fail("endpoint ACL is invalid");
   acl_entry_t entry;
   int result = acl_get_entry(acl, ACL_FIRST_ENTRY, &entry);
   while (result == 0) {
@@ -144,6 +145,26 @@ static void no_grant_acl(acl_t acl) {
     result = acl_get_entry(acl, ACL_NEXT_ENTRY, &entry);
   }
   acl_free(acl);
+}
+
+static void check_acl(int fd, const char *path) {
+  filesec_t security = filesec_init();
+  struct stat info;
+  if (!security) fail("cannot allocate endpoint security metadata");
+  if ((fd >= 0 ? fstatx_np(fd, &info, security) : lstatx_np(path, &info, security))) {
+    fail("cannot read endpoint security metadata");
+  }
+  acl_t acl = NULL;
+  /* Apple represents an absent ACL property as ENOENT too. Query it only
+   * after a successful statx, distinguishing absence from an unreadable or
+   * nonexistent filesystem object. Never accept an acl_get_* lookup error.
+   */
+  if (filesec_get_property(security, FILESEC_ACL, &acl)) {
+    if (errno != ENOENT) fail("cannot read endpoint ACL property");
+  } else {
+    no_grant_acl(acl);
+  }
+  filesec_free(security);
 }
 #endif
 
@@ -166,7 +187,7 @@ static int protected_parent(const char *path, char **storage, char **name) {
     struct stat info;
     if (fstat(dir, &info)) fail("cannot inspect endpoint parent");
 #ifdef __APPLE__
-    no_grant_acl(acl_get_fd(dir));
+    check_acl(dir, NULL);
 #endif
     if (info.st_uid != 0 && info.st_uid != geteuid()) deny("endpoint ancestor belongs to another user");
     if ((info.st_mode & 0022) && !(info.st_uid == 0 && (info.st_mode & S_ISVTX))) {
@@ -216,7 +237,7 @@ static int verified_socket(const char *path) {
   struct stat before, after;
   check_socket(dir, name, &before);
 #ifdef __APPLE__
-  no_grant_acl(acl_get_link_np(path, ACL_TYPE_EXTENDED));
+  check_acl(-1, path);
 #endif
   int fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0) fail("cannot create Unix socket");

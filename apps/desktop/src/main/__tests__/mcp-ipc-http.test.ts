@@ -188,9 +188,19 @@ describe("verified HTTP MCP over local IPC", () => {
     const link = join(f.directory, "link.sock");
     await symlink(f.path, link);
     await attempts(link);
+    const parentLink = join(f.directory, "alias");
+    await symlink(f.directory, parentLink);
+    await attempts(join(parentLink, "server.sock"));
     const squatter = join(f.directory, "squatter.sock");
     await writeFile(squatter, "not a socket", { mode: 0o600 });
     await attempts(squatter);
+    expect(f.requests).toHaveLength(0);
+  });
+
+  it.skipIf(process.platform !== "darwin")("rejects macOS extended allow ACLs even when mode bits are private", async () => {
+    const f = await fixture();
+    execFileSync("/bin/chmod", ["+a", "everyone allow list", f.directory]);
+    await expect(f.ipc.fetch(f.ipc.url, { method: "POST", body: "{}" })).rejects.toThrow("extended allow ACL");
     expect(f.requests).toHaveLength(0);
   });
 
