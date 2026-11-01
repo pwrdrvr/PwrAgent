@@ -270,6 +270,8 @@ import {
   type MessagingWorkspaceHandoffContext,
 } from "./messaging-status-card.js";
 import {
+  acpBackendDeclaresExecutionMode,
+  acpBackendUsesExecutionModePermissions,
   buildMessagingAcpRuntimeModeSummary,
   messagingAcpRuntimeValueLooksPrivileged,
 } from "./messaging-acp-runtime.js";
@@ -9329,6 +9331,7 @@ export class MessagingController {
           ? directoryForProjectSelection(navigation, nextSession.selectedProject)
           : undefined;
         const runtimeChoices = summary
+          && !acpBackendUsesExecutionModePermissions(summary)
           ? buildMessagingAcpRuntimeModeSummary({
               backend: summary,
               runtime: newThreadOptionsForSession(
@@ -10174,10 +10177,14 @@ export class MessagingController {
           (model) => model.supportsReasoning,
         ),
       );
+    const acpExecutionModePermissions =
+      acpBackendUsesExecutionModePermissions(selectedBackend);
     const supportsPermissionsControls =
       !isAcpBackendId(selectedBackend.kind) ||
+      acpExecutionModePermissions ||
       options.executionMode === "full-access";
     const acpRuntimeMode = isAcpBackendId(selectedBackend.kind)
+      && !acpExecutionModePermissions
       ? buildMessagingAcpRuntimeModeSummary({
           backend: selectedBackend,
           runtime: options.acpRuntime,
@@ -10766,6 +10773,18 @@ export class MessagingController {
       navigation.launchpadDefaults.executionMode;
     if (executionMode === currentMode) {
       await this.presentNewThreadPromptGate(session, event, navigation);
+      return;
+    }
+    const backendKind = session.backend ?? navigation.launchpadDefaults.backend;
+    if (
+      isAcpBackendId(backendKind)
+      && executionMode !== "default"
+      && !acpBackendDeclaresExecutionMode(
+        await this.getBackendSummary(backendKind),
+        executionMode,
+      )
+    ) {
+      await this.deliverInvalidBrowseSelection(event);
       return;
     }
     if (executionMode === "full-access") {
@@ -12784,7 +12803,10 @@ export class MessagingController {
           backend: summary,
           runtime: thread?.acpRuntime ?? binding.preferences?.acpRuntime,
         });
-        if (runtimeMode.choices.length > 0) {
+        if (
+          !acpBackendUsesExecutionModePermissions(summary)
+          && runtimeMode.choices.length > 0
+        ) {
           await this.presentStatusAcpRuntimeModePicker(binding, event);
         } else {
           await this.presentPermissionsPicker(binding, event);
@@ -14046,6 +14068,20 @@ export class MessagingController {
     if (executionMode === currentMode) {
       await this.clearActiveBindingSubmodeIntent(event, binding);
       await this.renderBindingStatus(binding, event, navigation);
+      return;
+    }
+    if (
+      isAcpBackendId(binding.backend)
+      && executionMode !== "default"
+      && !acpBackendDeclaresExecutionMode(
+        await this.getBackendSummary(
+          binding.backend,
+          federationTargetForBinding(binding),
+        ),
+        executionMode,
+      )
+    ) {
+      await this.deliverInvalidStatusSelection(event);
       return;
     }
     if (executionMode === "full-access") {
@@ -21807,7 +21843,10 @@ function newThreadPromptGateBody(
   toolUpdateMode: MessagingToolUpdateMode,
   showStreaming: boolean,
 ): string {
+  const acpExecutionModePermissions =
+    acpBackendUsesExecutionModePermissions(backend);
   const acpRuntimeMode = isAcpBackendId(options.backend)
+    && !acpExecutionModePermissions
     ? buildMessagingAcpRuntimeModeSummary({
         backend,
         runtime: options.acpRuntime,
@@ -21826,7 +21865,10 @@ function newThreadPromptGateBody(
     `Provider: ${backend.label}`,
     `Workspace: ${options.workMode === "worktree" ? "New Worktree" : "Local"}`,
     options.workMode === "worktree" ? `Base branch: ${options.branchName}` : undefined,
-    acpRuntimeMode || !isAcpBackendId(options.backend) || options.executionMode === "full-access"
+    acpRuntimeMode
+      || !isAcpBackendId(options.backend)
+      || acpExecutionModePermissions
+      || options.executionMode === "full-access"
       ? `Permissions: ${permissionsLabel}`
       : undefined,
     options.codexEnvironmentOptions.length > 0 || options.codexEnvironmentId

@@ -13301,7 +13301,7 @@ describe("MessagingController", () => {
       kind: "confirmation",
       title: "Ready to start",
       body: expect.stringContaining(
-        "Provider: Grok\nWorkspace: Local\nPermissions: Agent default\nEnvironment: Codex Environment\nModel: grok-4.5\nReasoning: low",
+        "Provider: Grok\nWorkspace: Local\nPermissions: Default Access\nEnvironment: Codex Environment\nModel: grok-4.5\nReasoning: low",
       ),
       actions: expect.arrayContaining([
         expect.objectContaining({
@@ -13353,7 +13353,7 @@ describe("MessagingController", () => {
       kind: "confirmation",
       title: "Ready to start",
       body: expect.stringContaining(
-        "Provider: Grok\nWorkspace: Local\nPermissions: Agent default\nEnvironment: Codex Environment\nModel: grok-4.5\nReasoning: low",
+        "Provider: Grok\nWorkspace: Local\nPermissions: Default Access\nEnvironment: Codex Environment\nModel: grok-4.5\nReasoning: low",
       ),
     });
 
@@ -13999,6 +13999,62 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       body: expect.not.stringContaining("Agent default"),
     });
+  });
+
+  it("refuses new-thread Full Access for an ACP provider that declares no execution modes", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      backend: "acp:gemini",
+      executionMode: "default",
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            kind: "acp:gemini",
+            label: "Gemini CLI",
+            source: "acp",
+            executionModes: [],
+          }),
+        ],
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-permissions",
+        value: { executionMode: "full-access" },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Invalid selection",
+    });
+    await harness.controller.handleInboundEvent(buildTextEvent("Use Gemini"));
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        launchpad: expect.objectContaining({
+          backend: "acp:gemini",
+          executionMode: "default",
+        }),
+      }),
+      expectMaterializeOptions(),
+    );
   });
 
   it("treats selecting the current new-thread Full Access permission as a no-op", async () => {
@@ -25062,7 +25118,6 @@ describe("MessagingController", () => {
     navigation.threads[0] = {
       ...navigation.threads[0]!,
       source: "acp:grok",
-      executionMode: "default",
     };
     const harness = await createHarness({
       navigation,
