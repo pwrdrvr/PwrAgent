@@ -1564,7 +1564,7 @@ describe("Sidebar", () => {
       releaseThreadPinPointer({ x: 50, y: 70 });
     });
 
-    expect(onSetThreadParent).toHaveBeenCalledWith(loose, "target", "codex");
+    expect(onSetThreadParent).toHaveBeenCalledWith(loose, "target", "codex", true);
     expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(target, false);
     expect(shell("Target thread")).not.toHaveClass("is-drop-target-inside");
   });
@@ -1622,7 +1622,7 @@ describe("Sidebar", () => {
     });
 
     expect(onSetThreadParent).toHaveBeenCalledTimes(1);
-    expect(onSetThreadParent).toHaveBeenCalledWith(child, "other", "codex");
+    expect(onSetThreadParent).toHaveBeenCalledWith(child, "other", "codex", true);
   });
 
   it("does not expose sub-thread disclosure controls for an older remote peer", () => {
@@ -6689,7 +6689,7 @@ describe("Sidebar", () => {
       releaseThreadPinPointer({ x: 50, y: 20 });
     });
 
-    expect(onSetThreadParent).toHaveBeenCalledWith(second, "thread-first", "codex");
+    expect(onSetThreadParent).toHaveBeenCalledWith(second, "thread-first", "codex", true);
     expect(onReorderThreadPins).not.toHaveBeenCalled();
   });
 
