@@ -32,7 +32,7 @@ test("centers the local-to-worktree handoff dialog in the window", async () => {
   });
 
   try {
-    await app.window.getByRole("button", { name: "Local handoff thread" }).click();
+    await app.window.getByRole("button", { name: "Local handoff thread", exact: true }).click();
 
     await app.window.getByLabel(/^Workspace mode(?::|$)/).click();
     await app.window.getByRole("menuitem", { name: "Handoff to New Worktree" }).click();
