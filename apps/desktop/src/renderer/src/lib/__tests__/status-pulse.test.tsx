@@ -78,14 +78,12 @@ describe("status pulse", () => {
   it("holds still until the shared wall-clock boundary, then dips every dot in one batch", () => {
     const setTimeoutSpy = vi.spyOn(window, "setTimeout");
     const requestAnimationFrameSpy = vi.spyOn(window, "requestAnimationFrame");
+    const dots = mountDots("status-dot status-dot--active status-dot--blink", "rail-chip__dot rail-chip__dot--blink");
     const pr = document.createElement("span");
     pr.className = "pr-chip pr-chip--failing pr-chip--checks-running";
     pr.innerHTML = "<span class=\"pr-chip__dot\"></span>";
     document.body.append(pr);
-    const dots = [
-      ...mountDots("status-dot status-dot--active status-dot--blink", "rail-chip__dot rail-chip__dot--blink"),
-      pr.firstElementChild!,
-    ];
+    dots.push(pr.firstElementChild as HTMLElement);
     pulse.statusPulseRef(dots[2]!);
 
     // Three mounts, one timer: the scheduler is per window, not per dot.
