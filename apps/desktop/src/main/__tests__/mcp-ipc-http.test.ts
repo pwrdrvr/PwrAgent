@@ -39,7 +39,7 @@ async function fixture() {
     for await (const chunk of req) text += chunk;
     const body = text ? JSON.parse(text) : {};
     requests.push({ method: req.method!, target: req.url!, authorization: req.headers.authorization, body });
-    if (!body.id) { res.writeHead(202).end(); return; }
+    if (body.id === undefined) { res.writeHead(202).end(); return; }
     let result: unknown;
     switch (body.method) {
       case "initialize": result = {

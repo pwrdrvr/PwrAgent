@@ -42,8 +42,10 @@ export function parseMcpIpcUrl(value: string): McpIpcEndpoint {
   }
   // Reject transformations (including encoded dot segments), preserving the
   // escaped HTTP path/query byte-for-byte instead of decoding the fragment.
-  const http = new URL(requestTarget, "http://pwragent-ipc.invalid");
-  if (`${http.pathname}${http.search}` !== requestTarget) {
+  const httpPath = requestTarget.split("?", 1)[0]!;
+  if (!/^\/[A-Za-z0-9\-._~!$&()*+,;=:@/?%]*$/.test(requestTarget)
+    || requestTarget.endsWith("?")
+    || httpPath.split("/").some((part) => [".", ".."].includes(part.replace(/%2e/gi, ".")))) {
     throw new Error("The IPC HTTP path must not contain dot segments or require URL normalization.");
   }
   const encodedPath = path.split("/").map(encodeURIComponent).join("/");

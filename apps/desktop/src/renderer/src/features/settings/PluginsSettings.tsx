@@ -1571,7 +1571,7 @@ export function PluginsSettings(props: {
               disabled={Boolean(connectionPending)}
               label="Server type"
               options={[
-                { label: "Remote URL", meta: "Signs in with OAuth", value: "remote" },
+                { label: "Server URL", meta: "HTTP over network or local IPC", value: "remote" },
                 { label: "Local command", meta: "Runs on this computer", value: "local" },
               ]}
               value={connectionAddKind}
