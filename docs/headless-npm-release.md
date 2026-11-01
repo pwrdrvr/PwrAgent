@@ -133,11 +133,39 @@ suffix-free tag. Use `-prerelease.N` when stable npm consumers must not advance.
    and channel state. npm **>=11.5.1**, OIDC and `--provenance --ignore-scripts
    --access public --registry https://registry.npmjs.org` are required. There is
    no publish path on a PR, ordinary branch push, fork or arbitrary dispatch ref.
-5. Publication is verified against public npm metadata before a success receipt
-   is written. `outpost-release-receipt` records version, tag, source commit,
-   integrity, channel and `published` or `verified-existing`. The always-running
-   **Verify desktop and Outpost release completion** job fails if prerequisites,
-   validation, desktop publication or npm publication failed/skipped/cancelled.
+5. Submission and verification are separate jobs. Before invoking npm, the
+   submission job writes `outpost-publication-attempt` with version, tag, source
+   commit, tested integrity, channel and `publish-uncertain`. npm exit zero changes
+   that receipt to `accepted`; it makes **no immediate registry request**. npm
+   stdout/acceptance alone never completes the shared release.
+6. A read-only job verifies public npm metadata after processing time. Its
+   `outpost-release-receipt` records `verified-existing` only after integrity,
+   source, owner, SLSA provenance marker and channel checks pass. Missing version,
+   provenance or channel advancement remains `verification-pending`, retaining
+   the acceptance receipt. The always-running **Verify desktop and Outpost
+   release completion** job requires both submission and verification jobs to
+   succeed, as well as prerequisites, validation and desktop publication.
+
+### Registry visibility and caching
+
+[npm publish](https://docs.npmjs.com/cli/v11/commands/npm-publish/) documents that
+name/version pairs cannot be reused, even after unpublish, and submits tarball
+SHA-512 integrity. npm's [cache configuration](https://docs.npmjs.com/cli/v11/using-npm/config/#prefer-online)
+only promises client staleness checks; neither it nor the
+[registry API](https://github.com/npm/registry/blob/main/docs/REGISTRY-API.md)
+provides a read-after-write deadline. There is no documented consistency SLA on
+which to base a short post-publish poll. Cache-busting or revalidation is not
+proof of freshness.
+
+Our verification policy waits at least five minutes before its first read, then
+at least ten and twenty minutes between subsequent reads (three reads total).
+These are conservative policy intervals, not guaranteed npm processing times.
+`Cache-Control` shared/max age minus `Age`, and `Retry-After`, can postpone the
+next read further. No random query strings or tight loops repeatedly warm an
+old full package document. A forty-minute verification window bounds each job;
+a longer cache deadline produces a pending receipt containing `nextCheckAt`.
+Retries restore that deadline. Elapsed time never substitutes for the actual
+integrity/source/provenance/channel checks.
 
 ## Partial failures and retries
 
@@ -145,26 +173,41 @@ GitHub Releases and npm are independent services. There is **no cross-service
 transaction**. Desktop publication comes first so a failed desktop build cannot
 publish a usable Outpost version for an absent desktop. The tradeoff is that
 desktop assets/notes can be visible while npm is awaiting approval or has failed.
-That state is **incomplete**, never evidence that Outpost shipped. Do not promote
-the desktop release or report shared-release success until the completion job
+That state is **incomplete**. An accepted npm submission may already have shipped
+while public metadata is still stale; the shared release is not yet verified.
+Do not promote the desktop release or report shared-release success until the completion job
 and npm receipt are successful. A denied approval or authentication failure does
 not automatically unpublish/delete either service's artifacts.
 
 - If preflight fails, follow its named migration/source guard error before
   rerunning; do not weaken branch policies, permissions or ownership checks.
-- If npm fails (including an ambiguous network response), the job fails even if
-  the server might have accepted the write. Inspect registry metadata, then rerun
-  the **failed jobs of the original release run**. This preserves successful
-  desktop jobs and the original tested tarball/job integrity output, and requires
-  any applicable environment approval again. No CLI dispatch/tag is needed.
+- If npm fails (including authentication rejection or an ambiguous network
+  response), submission fails and retains its uncertain attempt when possible.
+  Acceptance is not inferred from stdout, and no retry is attempted in that job.
+- If verification remains pending, the submission job stays successful and the
+  shared release stays incomplete. Wait until the receipt's `nextCheckAt`, then
+  rerun the **failed jobs of the original release run**. Only the verifier and
+  completion job need to run again; no publish or environment approval is needed.
+- When submission itself failed, a retry restores its attempt receipt from the
+  same run. Every workflow retry is read-only recovery, including a retry with a
+  missing/expired attempt receipt, and never calls npm publish. The verifier must
+  find the exact tested version before completion can pass. This also covers an
+  occupied version whose original response was lost. Original successful desktop
+  jobs, tested tarball and independent integrity output are preserved. Any
+  applicable submission environment approval still applies.
+- If the original run never reached npm and read-only recovery cannot find the
+  version, investigate npm state before deliberately starting a new release run.
+  An absent registry read or lost artifact does not establish that submission
+  never occurred. Do not repeatedly dispatch publishes to resolve uncertainty.
 - An occupied version is accepted only if registry **SHA-512 integrity**, packed
   source tag/commit metadata and npm's **SLSA provenance marker** match the tested
   release, with a valid channel at or ahead of it. This is an authenticated public
   registry comparison, not independent cryptographic verification of the Sigstore
   bundle. That retry reports `verified-existing` and makes **no npm mutation**.
   A later channel version is not rolled back.
-- Different bytes/source, absent provenance, a channel behind the occupied
-  version, missing/expired artifacts or an unavailable registry are blockers.
+- Different bytes/source, invalid owner/provenance or an unavailable registry
+  fail verification. Missing provenance or a lagging channel stays pending and
+  blocks completion; missing/expired tested package artifacts also block recovery.
   Inspect the original run and restore its original tested artifact when possible;
   otherwise cut a new **desktop and Outpost** version together. Never overwrite
   an immutable npm version, move the release tag, delete a published version,
