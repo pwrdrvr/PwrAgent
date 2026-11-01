@@ -2904,7 +2904,7 @@ describe("app server ipc", () => {
   async function requestWatchForAttachedPr(
     attached: PrSummary,
     notifyOn: ThreadPullRequestWatchEvent[],
-    options: { autoFixEnabled?: boolean; url?: string } = {},
+    options: { autoFixEnabled?: boolean; url?: string; gitOriginUrl?: string } = {},
   ) {
     readPrStatusCache.mockResolvedValueOnce({
       [buildPullRequestStatusKey(attached)]: {
@@ -2920,7 +2920,7 @@ describe("app server ipc", () => {
         title: "PR automation",
         titleSource: "explicit",
         source: "codex",
-        gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+        gitOriginUrl: options.gitOriginUrl ?? "git@github.com:pwrdrvr/PwrAgent.git",
         linkedDirectories: [
           {
             id: "directory:/repo/PwrAgent",
@@ -3038,6 +3038,33 @@ describe("app server ipc", () => {
       url: "https://github.com/pwrdrvr/PwrAgnt/pull/3179",
     }));
     expect(registerThreadPrStatusWatch).toHaveBeenCalledOnce();
+  });
+
+  it("watches a renamed repository's PR from a checkout whose remote has the old name", async () => {
+    // The attach stored the forge's name, PwrAgent, but `origin` still says
+    // PwrAgnt. Once the forge names the repository, the PR is primary.
+    const attached = githubPr({
+      number: 3179, org: "pwrdrvr", repo: "PwrAgent", state: "pending",
+      headRefName: "fix/renamed-repo", headSha: "3".repeat(40),
+      explicitlyAttached: true,
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3179",
+    });
+    registerThreadPrStatusWatch.mockClear();
+    fetchPullRequestByUrl.mockImplementation(async ({ url }) =>
+      url === "https://github.com/pwrdrvr/PwrAgnt/pull/3179" ? attached : undefined
+    );
+    const response = await requestWatchForAttachedPr(attached, ["failure"], {
+      url: "https://github.com/pwrdrvr/PwrAgnt/pull/3179",
+      gitOriginUrl: "git@github.com:pwrdrvr/PwrAgnt.git",
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: { pullRequestWatch: { watch: { prKey: "github.com/pwrdrvr/pwragent#3179", notifyOn: ["failure"] } } },
+    });
+    expect(registerThreadPrStatusWatch).toHaveBeenCalledOnce();
+    const { appServerService } = await import("../ipc/app-server");
+    expect(appServerService.readPrimaryGitRepository("codex", "thread-1")).toBe("github.com/pwrdrvr/pwragent");
   });
 
   it("watches a PR on a thread the owner navigation refresh has not listed yet", async () => {
@@ -8453,15 +8480,194 @@ describe("app server ipc", () => {
       });
       await store.addThreadPullRequestReference({ backend: "codex", threadId: request.threadId, pr: typedPr });
       await store.detachThreadPullRequest({ backend: "codex", threadId: request.threadId, pr: typedPr });
-      detectPullRequestsForThread.mockResolvedValue([]);
+      // The branch lookup finds the PR again, under its new name.
+      detectPullRequestsForThread.mockResolvedValue([forgePr]);
       fetchPullRequestByUrl.mockImplementation(async ({ url }) => url === PRE_RENAME_PR_URL ? forgePr : undefined);
-      await refresh(request);
+      expect(await refresh(request)).toEqual([]);
       expect(fetchPullRequestByUrl).toHaveBeenCalledWith(expect.objectContaining({ url: PRE_RENAME_PR_URL }));
       const stored = await store.getThreadOverlayState(request);
       expect(stored?.prs ?? []).toEqual([]);
       expect(stored?.detachedPrKeys).toEqual(["github.com/pwrdrvr/pwragent#3179"]);
       expect(await refresh(request)).toEqual([]);
       expect((await store.getThreadOverlayState(request))?.prs ?? []).toEqual([]);
+    });
+  });
+
+  it("keeps the copy the operator kept after detaching a pre-rename duplicate", async () => {
+    // Before the fix the thread showed #3179 twice, and the operator
+    // detached one chip to clean up. Collapsing the rows must keep the other.
+    for (const detached of ["pre-rename", "renamed"] as const) {
+      await withRenamedRepositoryStore(`renamed-repo-kept-${detached}-`, async ({ store, refresh }) => {
+        const request = {
+          backend: "codex",
+          threadId: `renamed-repo-kept-${detached}`,
+          branch: "fix/renamed-repo",
+          directoryPaths: ["/repo/PwrAgent"],
+          trigger: "user",
+        } satisfies RefreshThreadPullRequestsRequest;
+        const lookupPr = githubPr({
+          number: 3179, org: "pwrdrvr", repo: "PwrAgent", state: "pending", headRefName: "fix/renamed-repo",
+          url: RENAMED_PR_URL, linkedDirectoryPaths: ["/repo/PwrAgent"],
+        });
+        const typedPr = githubPr({
+          number: 3179, org: "pwrdrvr", repo: "PwrAgnt", state: "pending", url: PRE_RENAME_PR_URL,
+        });
+        const forgePr = githubPr({
+          number: 3179, org: "pwrdrvr", repo: "PwrAgent", state: "passing", headRefName: "fix/renamed-repo",
+          url: RENAMED_PR_URL,
+        });
+        await store.setThreadPullRequests({
+          backend: "codex", threadId: request.threadId, prs: [lookupPr],
+          fetchedAt: Date.now() - 120_000, refreshKey: buildThreadPrRequestKey(request),
+        });
+        await store.addThreadPullRequestReference({ backend: "codex", threadId: request.threadId, pr: typedPr });
+        await store.detachThreadPullRequest({
+          backend: "codex", threadId: request.threadId, pr: detached === "pre-rename" ? typedPr : lookupPr,
+        });
+        detectPullRequestsForThread.mockResolvedValue([forgePr]);
+        fetchPullRequestByUrl.mockImplementation(async ({ url }) => url === PRE_RENAME_PR_URL ? forgePr : undefined);
+
+        await refresh(request);
+
+        const stored = await store.getThreadOverlayState(request);
+        expect(stored?.prs?.map((pr) => pr.url)).toEqual([RENAMED_PR_URL]);
+        if (detached === "renamed") expect(stored?.prs?.[0]?.explicitlyAttached).toBe(true);
+        expect(stored?.detachedPrKeys ?? []).toEqual([]);
+        expect(stored?.detachedPrs ?? []).toEqual([]);
+        expect((await refresh(request)).map((pr) => pr.url)).toEqual([RENAMED_PR_URL]);
+      });
+    }
+  });
+
+  it("shows a PR attached under its new name after its old name was detached", async () => {
+    await withRenamedRepositoryStore("renamed-repo-reattached-", async ({ store, refresh }) => {
+      const { appServerService } = await import("../ipc/app-server");
+      const request = {
+        backend: "codex",
+        threadId: "renamed-repo-reattached",
+        branch: "fix/renamed-repo",
+        directoryPaths: ["/repo/PwrAgent"],
+        trigger: "user",
+      } satisfies RefreshThreadPullRequestsRequest;
+      const typedPr = githubPr({
+        number: 3179, org: "pwrdrvr", repo: "PwrAgnt", state: "pending", url: PRE_RENAME_PR_URL,
+      });
+      const forgePr = githubPr({
+        number: 3179, org: "pwrdrvr", repo: "PwrAgent", state: "passing", url: RENAMED_PR_URL,
+      });
+      await store.addThreadPullRequestReference({ backend: "codex", threadId: request.threadId, pr: typedPr });
+      await store.detachThreadPullRequest({ backend: "codex", threadId: request.threadId, pr: typedPr });
+      // The attach tool resolved the URL with the forge and stored the new name.
+      fetchPullRequestByUrl.mockImplementation(async ({ url }) => url === PRE_RENAME_PR_URL ? forgePr : undefined);
+      expect(await appServerService.resolvePullRequestReference({ url: PRE_RENAME_PR_URL }))
+        .toMatchObject({ repo: "PwrAgent", number: 3179 });
+      await store.addThreadPullRequestReference({ backend: "codex", threadId: request.threadId, pr: forgePr });
+      detectPullRequestsForThread.mockResolvedValue([]);
+
+      expect((await refresh(request)).map((pr) => pr.url)).toEqual([RENAMED_PR_URL]);
+      const stored = await store.getThreadOverlayState(request);
+      expect(stored?.prs?.map((pr) => pr.url)).toEqual([RENAMED_PR_URL]);
+      expect(stored?.detachedPrKeys ?? []).toEqual([]);
+      expect((await refresh(request)).map((pr) => pr.url)).toEqual([RENAMED_PR_URL]);
+    });
+  });
+
+  it("detaches a renamed PR's row still stored under the old name", async () => {
+    await withRenamedRepositoryStore("renamed-repo-detach-both-", async ({ store, refresh }) => {
+      const { appServerService } = await import("../ipc/app-server");
+      const request = {
+        backend: "codex",
+        threadId: "renamed-repo-detach-both",
+        branch: "fix/renamed-repo",
+        directoryPaths: ["/repo/PwrAgent"],
+        trigger: "user",
+      } satisfies RefreshThreadPullRequestsRequest;
+      const lookupPr = githubPr({
+        number: 3179, org: "pwrdrvr", repo: "PwrAgent", state: "pending", headRefName: "fix/renamed-repo",
+        url: RENAMED_PR_URL, linkedDirectoryPaths: ["/repo/PwrAgent"],
+      });
+      const typedPr = githubPr({
+        number: 3179, org: "pwrdrvr", repo: "PwrAgnt", state: "pending", url: PRE_RENAME_PR_URL,
+      });
+      await store.setThreadPullRequests({
+        backend: "codex", threadId: request.threadId, prs: [lookupPr],
+        fetchedAt: Date.now() - 120_000, refreshKey: buildThreadPrRequestKey(request),
+      });
+      await store.addThreadPullRequestReference({ backend: "codex", threadId: request.threadId, pr: typedPr });
+      // The alias is known, but no lookup has written the collapse yet.
+      fetchPullRequestByUrl.mockImplementation(async ({ url }) => url === PRE_RENAME_PR_URL ? lookupPr : undefined);
+      await appServerService.resolvePullRequestReference({ url: PRE_RENAME_PR_URL });
+
+      const response = await appServerService.detachThreadPullRequest({
+        backend: "codex", threadId: request.threadId, pr: lookupPr,
+      });
+
+      expect(response.prs).toEqual([]);
+      const stored = await store.getThreadOverlayState(request);
+      expect(stored?.prs ?? []).toEqual([]);
+      expect(stored?.detachedPrKeys).toEqual([
+        "github.com/pwrdrvr/pwragent#3179",
+        "github.com/pwrdrvr/pwragnt#3179",
+      ]);
+      detectPullRequestsForThread.mockResolvedValue([lookupPr]);
+      expect(await refresh(request)).toEqual([]);
+      expect((await store.getThreadOverlayState(request))?.prs ?? []).toEqual([]);
+    });
+  });
+
+  it("merges a finished thread's pre-rename duplicate on a scheduled refresh", async () => {
+    // Every PR on the branch has merged, which normally skips the lookup.
+    // A duplicate under a pre-rename name is fetched once to learn the name.
+    await withRenamedRepositoryStore("renamed-repo-terminal-", async ({ store, refresh }) => {
+      const request = {
+        backend: "codex",
+        threadId: "renamed-repo-terminal",
+        branch: "fix/renamed-repo",
+        directoryPaths: ["/repo/PwrAgent"],
+        trigger: "scheduled",
+      } satisfies RefreshThreadPullRequestsRequest;
+      const mergedPr = githubPr({
+        number: 3179, org: "pwrdrvr", repo: "PwrAgent", state: "passing", lifecycleState: "merged",
+        headRefName: "fix/renamed-repo", url: RENAMED_PR_URL, linkedDirectoryPaths: ["/repo/PwrAgent"],
+      });
+      const typedPr = githubPr({
+        number: 3179, org: "pwrdrvr", repo: "PwrAgnt", state: "passing", lifecycleState: "merged",
+        url: PRE_RENAME_PR_URL,
+      });
+      const fetchedAt = Date.now() - 120_000;
+      await store.writePrLookupCacheEntry({
+        lookupKey: buildPrLookupKey(request),
+        provider: "github.com",
+        branch: request.branch,
+        directoryPaths: request.directoryPaths,
+        prs: [mergedPr],
+        fetchedAt,
+      });
+      await store.setThreadPullRequests({
+        backend: "codex", threadId: request.threadId, prs: [mergedPr],
+        fetchedAt, refreshKey: buildThreadPrRequestKey(request),
+      });
+      await store.addThreadPullRequestReference({ backend: "codex", threadId: request.threadId, pr: typedPr });
+      detectPullRequestsForThread.mockResolvedValue([mergedPr]);
+      fetchPullRequestByUrl.mockImplementation(async ({ url }) => url === PRE_RENAME_PR_URL ? mergedPr : undefined);
+
+      await refresh(request);
+
+      expect(fetchPullRequestByUrl).toHaveBeenCalledWith(expect.objectContaining({ url: PRE_RENAME_PR_URL }));
+      const stored = await store.getThreadOverlayState(request);
+      expect(stored?.prs?.map((pr) => pr.url)).toEqual([RENAMED_PR_URL]);
+      expect(stored?.prs?.[0]?.explicitlyAttached).toBe(true);
+
+      // Collapsed, the finished thread short-circuits again.
+      fetchPullRequestByUrl.mockClear();
+      detectPullRequestsForThread.mockClear();
+      const { appServerService } = await import("../ipc/app-server");
+      await expect(appServerService.refreshThreadPullRequests(request)).resolves.toMatchObject({
+        prs: [expect.objectContaining({ url: RENAMED_PR_URL })],
+        shortCircuited: true,
+      });
+      expect(detectPullRequestsForThread).not.toHaveBeenCalled();
+      expect(fetchPullRequestByUrl).not.toHaveBeenCalled();
     });
   });
 

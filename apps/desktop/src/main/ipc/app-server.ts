@@ -56,6 +56,7 @@ import type {
   PrStatusCacheEntry,
   SqliteOverlayStore,
 } from "../state/overlay-store-sqlite";
+import { canonicalizeDetachedPrKeys } from "../state/overlay-store-sqlite";
 import {
   type AgentEvent,
   type AppServerBackendKind,
@@ -1284,13 +1285,12 @@ function normalizePrWatchUrl(url: string | undefined): string | undefined {
 function filterDetachedPullRequests(
   prs: PrSummary[],
   detachedPrKeys: string[] | undefined,
-  canonicalizeKey: (key: string) => string = (key) => key,
 ): PrSummary[] {
   if (!detachedPrKeys?.length) {
     return prs;
   }
   const detached = new Set(
-    detachedPrKeys.map((key) => canonicalizeKey(key.trim().toLowerCase())).filter(Boolean),
+    detachedPrKeys.map((key) => key.trim().toLowerCase()).filter(Boolean),
   );
   return prs.filter((pr) => !detached.has(getPrStatusKey(pr)));
 }
@@ -2964,13 +2964,33 @@ class DesktopAppServerService {
     }
   }
 
+  /**
+   * `pullRequestMatchesRepositoryKey` for a thread's primary repository. A
+   * checkout whose remote still uses a renamed repository's old name holds the
+   * repository the forge reports PRs under, so once the forge has named it,
+   * both sides compare under its current name.
+   */
+  private matchesPrimaryRepository(pr: PrSummary, primaryRepoKey: string | undefined): boolean {
+    if (pullRequestMatchesRepositoryKey(pr, primaryRepoKey)) return true;
+    if (!primaryRepoKey || !this.prRepositoryAliases.hasRenames()) return false;
+    return pullRequestMatchesRepositoryKey(
+      this.prRepositoryAliases.canonicalize(pr),
+      this.prRepositoryAliases.canonicalizeRepositoryKey(primaryRepoKey),
+    );
+  }
+
+  /** A primary repository key under the forge's current name. */
+  private canonicalPrimaryRepoKey(primaryRepoKey: string | undefined): string | undefined {
+    return primaryRepoKey && this.prRepositoryAliases.canonicalizeRepositoryKey(primaryRepoKey);
+  }
+
   private setThreadPrAttachment(
     threadKey: string,
     attachment: { backend: AppServerBackendKind; primaryRepoKey?: string; prs: PrSummary[] } | undefined,
   ): void {
     this.primaryPrThreadsByKey.set(threadKey, (attachment?.prs ?? [])
-      .filter((pr) => pullRequestMatchesRepositoryKey(pr, attachment?.primaryRepoKey))
-      .map(getPrStatusKey));
+      .filter((pr) => this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey))
+      .map((pr) => getPrStatusKey(this.prRepositoryAliases.canonicalize(pr))));
     if (attachment) this.attachedPrsByThreadKey.set(threadKey, attachment);
     else this.attachedPrsByThreadKey.delete(threadKey);
   }
@@ -3006,7 +3026,7 @@ class DesktopAppServerService {
       candidates.push({
         backend: thread.source,
         threadId: thread.id,
-        prKeys: (thread.prs ?? []).filter((pr) => pullRequestMatchesRepositoryKey(pr, primaryRepoKey)).map(getPrStatusKey),
+        prKeys: (thread.prs ?? []).filter((pr) => this.matchesPrimaryRepository(pr, primaryRepoKey)).map(getPrStatusKey),
       });
     }
     if (options.replace) {
@@ -3079,16 +3099,18 @@ class DesktopAppServerService {
   }
 
   readPrimaryGitRepository(backend: AppServerBackendKind, threadId: string): string | undefined {
-    return this.attachedPrsByThreadKey.get(buildThreadIdentityKey(backend, threadId))?.primaryRepoKey;
+    return this.canonicalPrimaryRepoKey(
+      this.attachedPrsByThreadKey.get(buildThreadIdentityKey(backend, threadId))?.primaryRepoKey,
+    );
   }
 
   private applyPrimaryGitRepositories(
     threads: NavigationSnapshot["threads"],
   ): NavigationSnapshot["threads"] {
     return threads.map((thread) => {
-      const primaryGitRepository = this.attachedPrsByThreadKey.get(
+      const primaryGitRepository = this.canonicalPrimaryRepoKey(this.attachedPrsByThreadKey.get(
         buildThreadIdentityKey(thread.source, thread.id),
-      )?.primaryRepoKey;
+      )?.primaryRepoKey);
       return primaryGitRepository
         ? { ...thread, primaryGitRepository }
         : thread;
@@ -3138,7 +3160,7 @@ class DesktopAppServerService {
     const prKeys = attachment
       ? attachment.prs
           .filter((pr) =>
-            pullRequestMatchesRepositoryKey(pr, attachment.primaryRepoKey),
+            this.matchesPrimaryRepository(pr, attachment.primaryRepoKey),
           )
           .map(getPrStatusKey)
       : [];
@@ -3158,7 +3180,7 @@ class DesktopAppServerService {
       buildThreadIdentityKey(params.backend, params.threadId),
     );
     return params.prs.filter((pr) =>
-      pullRequestMatchesRepositoryKey(pr, attachment?.primaryRepoKey),
+      this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey),
     );
   }
 
@@ -3172,7 +3194,7 @@ class DesktopAppServerService {
     );
     return attachment?.prs.some((pr) =>
       getPrStatusKey(pr) === params.prKey
-      && pullRequestMatchesRepositoryKey(pr, attachment.primaryRepoKey),
+      && this.matchesPrimaryRepository(pr, attachment.primaryRepoKey),
     ) ?? false;
   }
 
@@ -4435,7 +4457,7 @@ class DesktopAppServerService {
         prs: overlayPrs,
       });
     }
-    const attachedPrs = this.primaryAttachedPrsForThread({
+    let attachedPrs = this.primaryAttachedPrsForThread({
       backend: args.backend,
       threadId,
       prs: overlayPrs,
@@ -4455,7 +4477,16 @@ class DesktopAppServerService {
         url: args.url!.trim(),
         ...(cwd ? { cwd } : {}),
       });
-      if (resolved) matches = matchesUrl(resolved.url);
+      if (resolved) {
+        // The answer can teach a rename, which changes both the rows and
+        // which of them belong to the primary repository.
+        attachedPrs = this.primaryAttachedPrsForThread({
+          backend: args.backend,
+          threadId,
+          prs: this.canonicalizePrs(overlay?.prs ?? []),
+        });
+        matches = matchesUrl(resolved.url);
+      }
     }
     if (matches.length !== 1) {
       const message = requestedUrl
@@ -4718,6 +4749,12 @@ class DesktopAppServerService {
         threadId: request.threadId,
         pr: alias,
       });
+      await this.getOverlayStore().cancelThreadPrStatusWatchesForPr({
+        backend,
+        threadId: request.threadId,
+        prKey: getPrStatusKey(alias),
+        now: Date.now(),
+      });
     }
     await this.getOverlayStore().cancelThreadPrStatusWatchesForPr({
       backend,
@@ -4835,11 +4872,16 @@ class DesktopAppServerService {
       });
     }
     let knownPrs = this.mergePrHistory(existingPrs, currentLookupPrs);
+    // The same rule as the store's write, so a response never hides a chip
+    // the store keeps.
     const visibleKnownPrs = (): PrSummary[] =>
       filterDetachedPullRequests(
         knownPrs,
-        existing?.detachedPrKeys,
-        (key) => this.prRepositoryAliases.canonicalizeKey(key),
+        canonicalizeDetachedPrKeys({
+          detachedPrKeys: existing?.detachedPrKeys,
+          attachedPrKeys: storedPrs.map(getPrStatusKey),
+          canonicalizePrKey: (key) => this.prRepositoryAliases.canonicalizeKey(key),
+        }).detachedPrKeys,
       );
     const statusFetchedAt = lookupEntry?.fetchedAt
       ?? (existingPrs.length > 0 || existingLookupMatches
@@ -4909,6 +4951,7 @@ class DesktopAppServerService {
         persistedRefreshKey: existing?.prsRefreshKey,
         prs: currentLookupPrs,
         fetchedAt: lookupEntry.fetchedAt,
+        renamePending: this.storedPrsNeedRename(existing),
       });
     }
     // Terminal-state short-circuit: once every cached PR for a lookup is
@@ -4934,6 +4977,9 @@ class DesktopAppServerService {
       && branch !== "HEAD"
       && request.trigger !== "user"
       && request.trigger !== "post-turn"
+      // A PR shown under two repository names is one the lookup's by-URL
+      // fetch can merge, and aliases are relearned after each launch.
+      && this.prRepositoryAliases.renameCandidates(visibleKnownPrs()).length === 0
     ) {
       return {
         backend,
@@ -5028,6 +5074,7 @@ class DesktopAppServerService {
         ? { allowPrimedBranchLookup: false }
         : {}),
     })).map(normalizePrSummary);
+    this.prRepositoryAliases.confirm(prs);
     const retainedPrs = await this.fetchRetainedNonTerminalPullRequests({
       prs: this.getPullRequestLookupSubscriberPreviousPrs({
         lookupKey: params.lookupKey,
@@ -5097,13 +5144,23 @@ class DesktopAppServerService {
       params.discoveredPrs.map((pr) => getPrStatusKey(pr)),
     );
     const seenRetainedKeys = new Set<string>();
-    const retainedPrs = params.prs
-      .map(normalizePrSummary)
+    const normalizedPrs = params.prs.map(normalizePrSummary);
+    // A finished PR is fetched again only to learn whether its repository is
+    // another's old name.
+    const renameCandidateKeys = new Set(
+      this.prRepositoryAliases
+        .renameCandidates([...params.discoveredPrs, ...normalizedPrs])
+        .map(getPrStatusKey),
+    );
+    const retainedPrs = normalizedPrs
       .filter((pr) => {
         const key = getPrStatusKey(pr);
         if (discoveredKeys.has(key)) return false;
         if (seenRetainedKeys.has(key)) return false;
-        if (pr.lifecycleState === "merged" || pr.lifecycleState === "closed") {
+        if (
+          (pr.lifecycleState === "merged" || pr.lifecycleState === "closed")
+          && !renameCandidateKeys.has(key)
+        ) {
           return false;
         }
         seenRetainedKeys.add(key);
@@ -5492,14 +5549,19 @@ class DesktopAppServerService {
     persistedRefreshKey?: string;
     prs: PrSummary[];
     fetchedAt: number;
+    /** Stored rows or detached keys still use a renamed repository's old name. */
+    renamePending?: boolean;
   }): Promise<PrSummary[]> {
     const associatedPrs = associatePrsWithLinkedDirectories(
       params.prs,
       params.request.directoryPaths,
     );
     const nextPrs = this.mergePrHistory(params.persistedPrs, associatedPrs);
+    // `persistedPrs` is already projected under the forge's names, so it can
+    // equal the result while storage still holds the old ones.
     if (
       params.persistedRefreshKey === params.requestKey
+      && !params.renamePending
       && prSummariesEqual(params.persistedPrs, nextPrs)
     ) {
       return params.persistedPrs;
@@ -5840,6 +5902,21 @@ class DesktopAppServerService {
     return merged;
   }
 
+  /**
+   * Whether a write would move a thread's stored rows or detached keys to the
+   * forge's repository names. Detached rows are left out: they keep the name
+   * they were detached under, and their keys carry the decision.
+   */
+  private storedPrsNeedRename(state: ThreadOverlayState | undefined): boolean {
+    if (!state || !this.prRepositoryAliases.hasRenames()) return false;
+    return (state.prs ?? []).some((pr) =>
+      getPrStatusKey(this.prRepositoryAliases.canonicalize(normalizePrSummary(pr))) !== getPrStatusKey(pr)
+    ) || (state.detachedPrKeys ?? []).some((key) => {
+      const folded = key.trim().toLowerCase();
+      return this.prRepositoryAliases.canonicalizeKey(folded) !== folded;
+    });
+  }
+
   /** Store option that keeps detachments recorded under a renamed repository's old name. */
   private detachedPrKeyCanonicalizer(): { canonicalizePrKey?: (key: string) => string } {
     return this.prRepositoryAliases.hasRenames()
@@ -5850,6 +5927,10 @@ class DesktopAppServerService {
   /** Record what the forge answered for a by-URL fetch. */
   private learnPullRequestRepository(requestedUrl: string, returned: PrSummary | undefined): void {
     if (!this.prRepositoryAliases.learn(requestedUrl, returned)) return;
+    // A thread's primary PRs can now include rows under either name.
+    for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
+      this.setThreadPrAttachment(threadKey, attachment);
+    }
     const requested = parsePullRequestReferenceUrl(requestedUrl);
     appServerLog.info("forge answered a pull request under another repository name", {
       requested: requested ? `${requested.provider}/${requested.org}/${requested.repo}` : requestedUrl,
@@ -6654,7 +6735,7 @@ class DesktopAppServerService {
     for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
       if (!this.backgroundPrPollingEnabled) break;
       for (const pr of attachment.prs.filter((candidate) =>
-        pullRequestMatchesRepositoryKey(candidate, attachment.primaryRepoKey)
+        this.matchesPrimaryRepository(candidate, attachment.primaryRepoKey)
       )) {
         const prKey = getPrStatusKey(pr);
         const status = this.prStatusRegistry.get(prKey);
@@ -6943,7 +7024,7 @@ class DesktopAppServerService {
       );
       previouslyEligiblePrs.push(
         ...(attachment?.prs ?? []).filter((pr) =>
-          pullRequestMatchesRepositoryKey(pr, attachment?.primaryRepoKey),
+          this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey),
         ),
       );
       await coordinator.cancelAllPendingForThread(request);
@@ -7041,7 +7122,7 @@ class DesktopAppServerService {
       return Boolean(
         attachment?.primaryRepoKey
         && attachment.prs.some((pr) =>
-          pullRequestMatchesRepositoryKey(pr, attachment.primaryRepoKey)
+          this.matchesPrimaryRepository(pr, attachment.primaryRepoKey)
           && !isTerminalPullRequest(pr)
         ),
       );

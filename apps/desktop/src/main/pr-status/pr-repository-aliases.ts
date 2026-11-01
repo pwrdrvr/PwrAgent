@@ -28,6 +28,13 @@ function repositoryKey(ref: Pick<PullRequestRepositoryRef, "provider" | "org" | 
  */
 export class PullRequestRepositoryAliases {
   private readonly canonicalByKey = new Map<string, PullRequestRepositoryRef>();
+  /**
+   * Repository keys the forge has answered for this session, by a by-URL
+   * fetch or a branch lookup. A name it has answered for is no longer a
+   * question, so two PRs that share a number across such names stay apart
+   * without being asked about again.
+   */
+  private readonly answeredKeys = new Set<string>();
 
   /** Whether any recorded answer moves a status key, not only its casing. */
   hasRenames(): boolean {
@@ -39,6 +46,45 @@ export class PullRequestRepositoryAliases {
 
   clear(): void {
     this.canonicalByKey.clear();
+    this.answeredKeys.clear();
+  }
+
+  /**
+   * Record repositories the forge named on its own, such as branch lookup
+   * results. The forge reports a PR under its repository's current name.
+   */
+  confirm(prs: readonly Pick<PrSummary, "url">[]): void {
+    for (const pr of prs) {
+      const parsed = parsePullRequestReferenceUrl(pr.url);
+      if (parsed) this.answeredKeys.add(repositoryKey(parsed));
+    }
+  }
+
+  /**
+   * Rows that may be one PR under two repository names, and that no forge
+   * answer has placed yet: a row shares its provider and number with a row
+   * of another repository, and its own repository is unanswered. Fetching
+   * such a row by URL tells whether its repository was renamed.
+   */
+  renameCandidates<T extends PrSummary>(prs: readonly T[]): T[] {
+    const repositoriesByNumber = new Map<string, Set<string>>();
+    const rows = prs.map((pr) => {
+      const identity = resolvePullRequestIdentity(pr);
+      const ownKey = repositoryKey(identity);
+      const canonical = this.canonicalRepository(identity);
+      const numberKey = `${identity.provider.trim().toLowerCase()}#${identity.number}`;
+      const repositories = repositoriesByNumber.get(numberKey) ?? new Set<string>();
+      repositories.add(canonical ? repositoryKey(canonical) : ownKey);
+      repositoriesByNumber.set(numberKey, repositories);
+      return { pr, ownKey, numberKey };
+    });
+    return rows
+      .filter(({ ownKey, numberKey }) =>
+        (repositoriesByNumber.get(numberKey)?.size ?? 0) > 1
+        && !this.answeredKeys.has(ownKey)
+        && !this.canonicalByKey.has(ownKey)
+      )
+      .map(({ pr }) => pr);
   }
 
   /**
@@ -53,6 +99,9 @@ export class PullRequestRepositoryAliases {
   ): boolean {
     const requested = parsePullRequestReferenceUrl(requestedUrl);
     const canonical = parsePullRequestReferenceUrl(returned?.url);
+    // Asked once, a name is not a rename candidate again this session, even
+    // when the forge could not answer.
+    if (requested) this.answeredKeys.add(repositoryKey(requested));
     if (
       !requested
       || !canonical
@@ -63,6 +112,7 @@ export class PullRequestRepositoryAliases {
     }
     const requestedKey = repositoryKey(requested);
     const canonicalKey = repositoryKey(canonical);
+    this.answeredKeys.add(canonicalKey);
     const ref: PullRequestRepositoryRef = {
       provider: canonical.provider,
       org: canonical.org,
@@ -169,20 +219,28 @@ export class PullRequestRepositoryAliases {
   }
 
   /**
-   * A `provider/org/repo#number` status key under the forge's repository
-   * name. The whole prefix before `#` is the lookup key, so GitLab subgroup
-   * paths cannot match a shorter or longer repository path.
+   * A case-folded `provider/org/repo` key under the forge's repository name.
+   * The whole key is the lookup key, so GitLab subgroup paths cannot match a
+   * shorter or longer repository path.
    */
+  canonicalizeRepositoryKey(key: string): string {
+    if (this.canonicalByKey.size === 0) return key;
+    const folded = key.trim().toLowerCase();
+    if (!this.canonicalByKey.has(folded)) return key;
+    const [provider = "", ...rest] = folded.split("/");
+    const repo = rest.pop();
+    if (!provider || !repo || rest.length === 0) return key;
+    const canonical = this.canonicalRepository({ provider, org: rest.join("/"), repo });
+    return canonical ? repositoryKey(canonical) : key;
+  }
+
+  /** A `provider/org/repo#number` status key under the forge's repository name. */
   canonicalizeKey(key: string): string {
     if (this.canonicalByKey.size === 0) return key;
     const hashIndex = key.lastIndexOf("#");
     if (hashIndex <= 0) return key;
-    const prefix = key.slice(0, hashIndex).trim().toLowerCase();
-    if (!this.canonicalByKey.has(prefix)) return key;
-    const [provider = "", ...rest] = prefix.split("/");
-    const repo = rest.pop();
-    if (!provider || !repo || rest.length === 0) return key;
-    const canonical = this.canonicalRepository({ provider, org: rest.join("/"), repo });
-    return canonical ? `${repositoryKey(canonical)}${key.slice(hashIndex)}` : key;
+    const prefix = key.slice(0, hashIndex);
+    const canonical = this.canonicalizeRepositoryKey(prefix);
+    return canonical === prefix ? key : `${canonical}${key.slice(hashIndex)}`;
   }
 }

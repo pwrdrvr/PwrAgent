@@ -479,6 +479,41 @@ function normalizeDetachedPrKeys(keys: string[] | undefined): string[] {
   ].sort((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Detached PR status keys under the forge's current repository names.
+ *
+ * A renamed repository showed one PR as two chips, one per name, and
+ * detaching either chip removed a duplicate, not the PR. So a detached key is
+ * released while the thread still holds a row for the same PR under another
+ * stored key: that is the copy the operator kept, or one attached again under
+ * the new name. Every other key moves to the new name, which keeps a PR
+ * detached once the forge reports it under that name.
+ */
+export function canonicalizeDetachedPrKeys(params: {
+  detachedPrKeys: string[] | undefined;
+  attachedPrKeys: Iterable<string>;
+  canonicalizePrKey: (key: string) => string;
+}): { detachedPrKeys: string[]; releasedPrKeys: Set<string> } {
+  const attachedByCanonical = new Map<string, Set<string>>();
+  for (const key of normalizeDetachedPrKeys([...params.attachedPrKeys])) {
+    const canonical = params.canonicalizePrKey(key);
+    attachedByCanonical.set(canonical, (attachedByCanonical.get(canonical) ?? new Set()).add(key));
+  }
+  const releasedPrKeys = new Set<string>();
+  const detachedPrKeys = normalizeDetachedPrKeys(
+    normalizeDetachedPrKeys(params.detachedPrKeys).flatMap((key) => {
+      const canonical = params.canonicalizePrKey(key);
+      const attached = attachedByCanonical.get(canonical);
+      if (attached && [...attached].some((attachedKey) => attachedKey !== key)) {
+        releasedPrKeys.add(key);
+        return [];
+      }
+      return [canonical];
+    }),
+  );
+  return { detachedPrKeys, releasedPrKeys };
+}
+
 function filterDetachedPrs(prs: PrSummary[], detachedPrKeys: string[]): PrSummary[] {
   if (detachedPrKeys.length === 0) {
     return prs;
@@ -6046,19 +6081,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const explicitKeys = new Set((current.prs ?? [])
       .filter((pr) => pr.explicitlyAttached)
       .map((pr) => canonicalizePrKey(buildPullRequestStatusKey(pr))));
-    const currentKeys = new Set((current.prs ?? []).map(buildPullRequestStatusKey));
-    const detachedPrKeys = normalizeDetachedPrKeys(
-      normalizeDetachedPrKeys(current.detachedPrKeys).flatMap((key) => {
-        const canonical = canonicalizePrKey(key);
-        // A PR attached under its current name after its old name was
-        // detached is attached: the attach cleared only the key it knew.
-        return canonical !== key && currentKeys.has(canonical) && explicitKeys.has(canonical)
-          ? []
-          : [canonical];
-      }),
-    );
+    const { detachedPrKeys, releasedPrKeys } = canonicalizeDetachedPrKeys({
+      detachedPrKeys: current.detachedPrKeys,
+      attachedPrKeys: (current.prs ?? []).map(buildPullRequestStatusKey),
+      canonicalizePrKey,
+    });
     const detachedPrs = mergePrSummariesByStatusKey(
-      current.detachedPrs,
+      // A released duplicate would come back as its own chip after a restart,
+      // before the forge names its repository again.
+      current.detachedPrs?.filter((pr) => !releasedPrKeys.has(buildPullRequestStatusKey(pr))),
       collectDetachedPrs(params.prs, detachedPrKeys),
     );
     const nextState: ThreadOverlayState = {

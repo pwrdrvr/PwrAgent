@@ -114,4 +114,44 @@ describe("PullRequestRepositoryAliases", () => {
       sourceRepository: { provider: "github.com", org: "contributor", repo: "PwrAgnt" },
     })).sourceRepository).toEqual({ provider: "github.com", org: "contributor", repo: "PwrAgnt" });
   });
+
+  it("canonicalizes a primary repository key", () => {
+    const aliases = new PullRequestRepositoryAliases();
+    expect(aliases.canonicalizeRepositoryKey("github.com/pwrdrvr/pwragnt")).toBe("github.com/pwrdrvr/pwragnt");
+
+    aliases.learn(OLD_URL, pr(NEW_URL));
+
+    expect(aliases.canonicalizeRepositoryKey("github.com/pwrdrvr/pwragnt")).toBe("github.com/pwrdrvr/pwragent");
+    expect(aliases.canonicalizeRepositoryKey("github.com/pwrdrvr/pwrsnap")).toBe("github.com/pwrdrvr/pwrsnap");
+  });
+
+  it("names rows that may be one PR under two repository names until the forge answers", () => {
+    const aliases = new PullRequestRepositoryAliases();
+    const renamed = pr(NEW_URL, { lifecycleState: "merged" });
+    const stale = pr(OLD_URL, { lifecycleState: "merged" });
+    const unrelated = pr("https://github.com/pwrdrvr/PwrSnap/pull/12");
+
+    expect(aliases.renameCandidates([renamed, unrelated])).toEqual([]);
+    expect(aliases.renameCandidates([renamed, stale, unrelated])).toEqual([renamed, stale]);
+
+    // A branch lookup names its PR's repository; only the other row remains.
+    aliases.confirm([renamed]);
+    expect(aliases.renameCandidates([renamed, stale])).toEqual([stale]);
+
+    aliases.learn(OLD_URL, pr(NEW_URL));
+    expect(aliases.renameCandidates([renamed, stale])).toEqual([]);
+  });
+
+  it("stops asking about a same-numbered PR in another repository once answered", () => {
+    const aliases = new PullRequestRepositoryAliases();
+    const first = pr("https://github.com/acme/one/pull/12");
+    const second = pr("https://github.com/acme/two/pull/12");
+
+    aliases.confirm([first]);
+    expect(aliases.renameCandidates([first, second])).toEqual([second]);
+
+    // The forge answers under the same name: two repositories, two PRs.
+    expect(aliases.learn(second.url, second)).toBe(false);
+    expect(aliases.renameCandidates([first, second])).toEqual([]);
+  });
 });
