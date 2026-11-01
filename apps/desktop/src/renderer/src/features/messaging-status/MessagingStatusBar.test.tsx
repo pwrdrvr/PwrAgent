@@ -479,6 +479,122 @@ describe("MessagingStatusBar", () => {
     });
   });
 
+  it.each([
+    ["telegram", "Telegram"],
+    ["discord", "Discord"],
+    ["mattermost", "Mattermost"],
+    ["slack", "Slack"],
+    ["feishu", "Feishu / Lark"],
+    ["line", "LINE"],
+  ] as const)("keeps a configured %s without runtime status still and unavailable", async (platform, name) => {
+    const desktopApi: DesktopApi = {
+      getMessagingPlatformStatuses: vi.fn(async () => []),
+      onMessagingPlatformStatusEvent: vi.fn(() => () => {}),
+      readMessagingSettings: vi.fn(async () => ({
+        snapshot: messagingSettingsSnapshot(
+          { [platform]: true },
+          { configured: { [platform]: true } },
+        ),
+      })),
+    };
+    const { container } = render(<MessagingStatusBar desktopApi={desktopApi} />);
+    const controller = await screen.findByRole("button", {
+      name: new RegExp(`${name}: Status unavailable`),
+    });
+    fireEvent.click(controller);
+    expect(screen.getByText("No runtime status reported")).toBeInTheDocument();
+    expect(screen.queryByText(/Connecting|Starting|Loading/)).not.toBeInTheDocument();
+    expect(container.querySelectorAll(".status-dot")).toHaveLength(2);
+    expect(container.querySelector(".status-dot--blink")).toBeNull();
+
+    fireEvent.click(controller);
+    vi.useFakeTimers();
+    act(() => vi.advanceTimersByTime(24 * 60 * 60 * 1000));
+    expect(controller).toHaveAccessibleName(/Status unavailable/);
+    expect(container.querySelector(".status-dot--blink")).toBeNull();
+  });
+
+  it.each([
+    ["lease_held", true, "Active elsewhere", "Messaging is already active in another PwrAgent instance for this profile."],
+    ["runtime_stopped", false, "Suspended", "Messaging is stopped for this app instance."],
+    ["no_runnable_adapters", false, "Suspended", "No messaging platforms are configured for this profile."],
+    ["startup_error", false, "Errored", "Messaging could not be started for this app instance."],
+    ["saved_disabled", true, "Off", "Messaging is disabled in saved settings."],
+    ["explicit_override", true, "Off", "Messaging is disabled for this app instance."],
+  ] as const)("shows a still labelled state when %s omits runtime statuses", async (kind, disabled, label, reason) => {
+    const snapshot = messagingSettingsSnapshot(
+      { line: true },
+      { configured: { line: true }, runtimeMessagingDisabled: disabled },
+    );
+    snapshot.runtime.disabledReasonKind = kind;
+    snapshot.runtime.disabledReason = reason;
+    const desktopApi: DesktopApi = {
+      getMessagingPlatformStatuses: vi.fn(async () => []),
+      onMessagingPlatformStatusEvent: vi.fn(() => () => {}),
+      readMessagingSettings: vi.fn(async () => ({ snapshot })),
+    };
+    const { container } = render(<MessagingStatusBar desktopApi={desktopApi} />);
+    fireEvent.click(await screen.findByRole("button", { name: new RegExp(`LINE: ${label}`) }));
+    const dialog = screen.getByRole("dialog", { name: "Messaging platforms" });
+    expect(dialog.querySelector(".messaging-status-popover__state")).toHaveTextContent(label);
+    expect(dialog.querySelector(".messaging-status-popover__row-sub")).toHaveTextContent(reason);
+    expect(container.querySelector(".status-dot--blink")).toBeNull();
+  });
+
+  it("pulses only reported startup and recent healthy traffic, then settles or errors", async () => {
+    let emit!: (event: MessagingPlatformStatusEvent) => void;
+    const desktopApi: DesktopApi = {
+      getMessagingPlatformStatuses: vi.fn(async () => []),
+      onMessagingPlatformStatusEvent: vi.fn((listener) => {
+        emit = listener;
+        return () => {};
+      }),
+      readMessagingSettings: vi.fn(async () => ({
+        snapshot: messagingSettingsSnapshot({ line: true }, { configured: { line: true } }),
+      })),
+    };
+    const { container } = render(<MessagingStatusBar desktopApi={desktopApi} />);
+    const controller = await screen.findByRole("button", { name: /LINE: Status unavailable/ });
+    vi.useFakeTimers();
+    await act(async () => emit({ kind: "health-changed", platform: "line", health: "unknown", at: Date.now() }));
+    expect(controller).toHaveAccessibleName(/LINE: Connecting/);
+    expect(container.querySelector(".status-dot--blink")).not.toBeNull();
+    await act(async () => emit({ kind: "health-changed", platform: "line", health: "enabled", at: Date.now() }));
+    expect(container.querySelector(".status-dot--blink")).toBeNull();
+    await act(async () => emit({ kind: "activity", platform: "line", at: Date.now() }));
+    expect(container.querySelector(".status-dot--blink")).not.toBeNull();
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(container.querySelector(".status-dot--blink")).toBeNull();
+    await act(async () => emit({ kind: "health-changed", platform: "line", health: "unknown", at: Date.now() }));
+    await act(async () => emit({ kind: "health-changed", platform: "line", health: "errored", reason: "Startup timed out", at: Date.now() }));
+    expect(controller).toHaveAccessibleName(/LINE: Errored/);
+    expect(container.querySelector(".status-dot--blink")).toBeNull();
+  });
+
+  it("refreshes a lease-held explanation when the same platform recovers", async () => {
+    let emit!: (event: MessagingPlatformStatusEvent) => void;
+    const snapshot = messagingSettingsSnapshot({ line: true }, { runtimeMessagingDisabled: true });
+    snapshot.runtime.disabledReasonKind = "lease_held";
+    snapshot.runtime.disabledReason = "Messaging is already active in another PwrAgent instance for this profile.";
+    const desktopApi: DesktopApi = {
+      getMessagingPlatformStatuses: vi.fn(async () => [
+        { platform: "line", health: "suspended", changedAt: 1 },
+      ] satisfies MessagingPlatformStatus[]),
+      onMessagingPlatformStatusEvent: vi.fn((listener) => {
+        emit = listener;
+        return () => {};
+      }),
+      readMessagingSettings: vi.fn(async () => ({ snapshot })),
+    };
+    const { container } = render(<MessagingStatusBar desktopApi={desktopApi} />);
+    const controller = await screen.findByRole("button", { name: /LINE: Active elsewhere/ });
+    snapshot.runtime = { disabled: false };
+    await act(async () => emit({ kind: "health-changed", platform: "line", health: "enabled", at: Date.now() }));
+    await waitFor(() => expect(controller).toHaveAccessibleName(/LINE: Enabled/));
+    expect(controller).toHaveTextContent("Msg");
+    expect(container.querySelector(".status-dot--blink")).toBeNull();
+  });
+
   it("shows persisted provider request and response activity summaries", async () => {
     const now = Date.now();
     const statuses = [
@@ -774,11 +890,11 @@ function messagingSettingsSnapshot(enabled: {
       disabled: options.runtimeMessagingDisabled ?? false,
     },
     messaging: {
-      telegram: { enabled: setting(enabled.telegram ?? true) },
-      discord: { enabled: setting(enabled.discord ?? true) },
-      mattermost: { enabled: setting(enabled.mattermost ?? true) },
-      slack: { enabled: setting(enabled.slack ?? true) },
-      feishu: { enabled: setting(enabled.feishu ?? true) },
+      telegram: { enabled: setting(enabled.telegram ?? true), botToken: secret(options.configured?.telegram) },
+      discord: { enabled: setting(enabled.discord ?? true), botToken: secret(options.configured?.discord) },
+      mattermost: { enabled: setting(enabled.mattermost ?? true), botToken: secret(options.configured?.mattermost) },
+      slack: { enabled: setting(enabled.slack ?? true), botToken: secret(options.configured?.slack) },
+      feishu: { enabled: setting(enabled.feishu ?? true), appSecret: secret(options.configured?.feishu) },
       line: {
         enabled: setting(enabled.line ?? true),
         channelAccessToken: secret(options.configured?.line),
