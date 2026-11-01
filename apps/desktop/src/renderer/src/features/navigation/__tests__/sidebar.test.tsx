@@ -4256,77 +4256,43 @@ describe("Sidebar", () => {
       expect(review).toHaveAttribute("data-zero", "true");
     });
 
-    it("re-pins the scanner to the shared animation epoch when the count leaves zero", () => {
-      // Every thinking scanner in the app is pinned to one document-timeline
-      // origin on mount (ThinkingScanner.tsx, PR #1187) so no two sweeping
-      // bars are ever visibly out of phase. The zero state must therefore be
-      // a DIFFERENT element, not a `ThinkingScanner` with its animation
-      // switched off in CSS: `data-zero` sits on the parent span, so React
-      // would keep the same scanner across the flip, its ref would never
-      // re-run, and the animation CSS restarts would run unpinned forever.
-      const animations = [{ startTime: 4242 }];
-      let animationIndex = 0;
-      const getAnimations = vi.fn(() => {
-        const animation = animations[animationIndex++];
-        return animation ? [animation] : [];
+    it("swaps the dormant track for a live scanner when the count leaves zero", () => {
+      // Zero is its own element, an empty track, not a scanner greyed out in
+      // CSS: a lit beam beside a 0 would say the opposite of the number. The
+      // live scanner mounts on the 0 -> 1 flip, which is also what schedules
+      // its scans (ThinkingScanner.tsx).
+      const idle = { ...idleThread };
+      const busy = { ...idleThread, threadStatus: "active" as const };
+      const sidebarProps = (threads: typeof allThreads) => ({
+        backends,
+        browseMode: "inbox" as const,
+        directories,
+        inboxThreads: threads,
+        loading: false,
+        creatingThread: undefined,
+        selectedItemKey: undefined,
+        threads,
+        onBrowseModeChange: () => undefined,
+        onCreateThread: async () => undefined,
+        onOpenLaunchpad: async () => undefined,
+        onSelectThread: () => undefined,
       });
-      const originalDescriptor = Object.getOwnPropertyDescriptor(
-        HTMLElement.prototype,
-        "getAnimations",
-      );
-      Object.defineProperty(HTMLElement.prototype, "getAnimations", {
-        configurable: true,
-        value: getAnimations,
-      });
 
-      try {
-        const idle = { ...idleThread };
-        const busy = { ...idleThread, threadStatus: "active" as const };
-        const sidebarProps = (threads: typeof allThreads) => ({
-          backends,
-          browseMode: "inbox" as const,
-          directories,
-          inboxThreads: threads,
-          loading: false,
-          creatingThread: undefined,
-          selectedItemKey: undefined,
-          threads,
-          onBrowseModeChange: () => undefined,
-          onCreateThread: async () => undefined,
-          onOpenLaunchpad: async () => undefined,
-          onSelectThread: () => undefined,
-        });
+      const view = render(<Sidebar {...sidebarProps([idle])} />);
 
-        const view = render(<Sidebar {...sidebarProps([idle])} />);
+      const zeroTab = screen.getByRole("tab", { name: /^Attention,/ });
+      expect(
+        zeroTab.querySelector(".signal-count__dormant-scanner"),
+      ).not.toBeNull();
+      expect(zeroTab.querySelector(".thinking-scanner")).toBeNull();
 
-        const zeroTab = screen.getByRole("tab", { name: /^Attention,/ });
-        expect(
-          zeroTab.querySelector(".signal-count__dormant-scanner"),
-        ).not.toBeNull();
-        expect(zeroTab.querySelector(".thinking-scanner")).toBeNull();
-        expect(getAnimations).not.toHaveBeenCalled();
+      view.rerender(<Sidebar {...sidebarProps([busy])} />);
 
-        // 0 -> 1: the scanner must MOUNT here, which is what runs the sync ref.
-        view.rerender(<Sidebar {...sidebarProps([busy])} />);
-
-        const liveTab = screen.getByRole("tab", { name: /^Attention,/ });
-        expect(liveTab.querySelector(".thinking-scanner")).not.toBeNull();
-        expect(
-          liveTab.querySelector(".signal-count__dormant-scanner"),
-        ).toBeNull();
-        expect(getAnimations).toHaveBeenCalled();
-        expect(animations[0]!.startTime).toBe(0);
-      } finally {
-        if (originalDescriptor) {
-          Object.defineProperty(
-            HTMLElement.prototype,
-            "getAnimations",
-            originalDescriptor,
-          );
-        } else {
-          Reflect.deleteProperty(HTMLElement.prototype, "getAnimations");
-        }
-      }
+      const liveTab = screen.getByRole("tab", { name: /^Attention,/ });
+      expect(liveTab.querySelector(".thinking-scanner")).not.toBeNull();
+      expect(
+        liveTab.querySelector(".signal-count__dormant-scanner"),
+      ).toBeNull();
     });
 
     describe("remote turn readout", () => {

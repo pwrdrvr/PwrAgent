@@ -1,94 +1,127 @@
-import type { AnimationEvent } from "react";
-
 type ThinkingScannerProps = {
   compact?: boolean;
 };
 
-// A canceled CSS animation loses its startTime. Keep its identity weakly so
-// the initial animationstart event can skip a second style query after the
-// ref has already pinned it, while a replacement animation still gets pinned.
-const pinnedAnimations = new WeakMap<Element, Animation>();
+/**
+ * A running turn's mark: a lit beam held at the centre of its track, which
+ * makes one scan — out to the right edge, across to the left, back to centre —
+ * every few seconds and then holds still.
+ *
+ * Still between scans, on purpose. The former sweep looped forever, and a
+ * running compositor animation costs work on every frame of the display even
+ * where its stepped output does not change: the compositor still wakes on each
+ * vsync to tick it. A stopped beam costs nothing. The held pose (`app.css`) is
+ * the bright, centred one, so a scanner between scans still reads as running
+ * against its idle counterpart, the empty `.signal-count__dormant-scanner`.
+ *
+ * One timer for the whole window, not one animation per beam. When a scan is
+ * due, every visible beam starts a finite Web Animation in the same task, so
+ * they share one start time and every beam moves in the same frames. The timer
+ * is aligned to the wall clock, so other windows scan in the same frames too.
+ * There is no registry of mounted beams: each scan reads the live set from the
+ * DOM, so an unmounted beam cannot leak, and the timer stops once no beam is
+ * left. A mount restarts it.
+ */
+export const THINKING_SCAN_PERIOD_MS = 4500;
+export const THINKING_SCAN_DURATION_MS = 1800;
+/** Named for the rendering capture's animation allowlist. */
+export const THINKING_SCAN_ANIMATION_ID = "pwragent-thinking-scanner-scan";
 
-function pinToSharedEpoch(element: Element): void {
-  if (pinnedAnimations.get(element)?.startTime === 0) {
-    return;
-  }
+// ~30 position changes a second while moving, the cadence #3102 set for the
+// former sweep: a quarter of the scan out, half across, a quarter back.
+const SCAN_STEPS = { out: 14, across: 27, back: 14 } as const;
 
-  if (typeof element.getAnimations !== "function") {
-    return;
-  }
-
-  for (const animation of element.getAnimations()) {
-    // CSS animations normally start when their element's styles resolve. That
-    // leaves scanners mounted during separate, busy renderer commits with
-    // permanently different phases. Pin each animation to the document
-    // timeline's origin instead: the compositor advances every scanner from
-    // one shared epoch without a React tick or a root-level style mutation.
-    if (animation.startTime !== 0) {
-      animation.startTime = 0;
-    }
-    pinnedAnimations.set(element, animation);
-  }
-}
-
-function syncThinkingScannerAnimation(element: HTMLDivElement | null): void {
-  if (!element) {
-    return;
-  }
-
-  pinToSharedEpoch(element);
-}
-
-function syncRestartedThinkingScannerAnimation(event: AnimationEvent<HTMLDivElement>): void {
-  if (event.animationName === "pwragent-thinking-scanner-sweep") {
-    // Moving a keyed row with insertBefore recreates its CSS animation in
-    // Chromium without remounting React or calling the ref again. Hiding an
-    // ancestor with display:none does the same. Repair that new animation on
-    // its start event; iterations need no JS, timer, or React state update.
-    pinToSharedEpoch(event.currentTarget);
-  }
-}
+const keyframesByTravel = new Map<number, Keyframe[]>();
 
 /**
- * Re-pins every beam on screen when `prefers-reduced-motion` changes.
- *
- * `app.css` drops the sweep entirely under the preference, and the browser
- * CANCELS the animation rather than pausing it. Turning the preference back
- * off therefore builds a NEW animation whose `startTime` is the moment of the
- * flip — measured at 1285 against a fresh mount's 0, which left two beams 19px
- * apart in the same 62px track. Every scanner already on screen would run on a
- * different epoch from every scanner mounted afterwards: the exact desync the
- * mount-time pin exists to prevent (PR #1187, and the warning on
- * `.signal-count__dormant-scanner` in `app.css`).
- *
- * The live set is read off the DOM rather than kept in a module-level registry
- * of mounted elements. The pin is a property of the whole set, not of any one
- * element, and a registry would have to track unmounts exactly or retain
- * detached nodes for the life of the window — a query on a preference flip is
- * both cheaper to be right about and impossible to leak. The animation is
- * already attached by the time the event fires, so no frame has to be waited
- * on; in the other direction there is nothing to pin and this is a no-op.
- *
- * Nothing here branches the RENDER on the preference — the markup is identical
- * either way, so no element is torn down and no scanner loses its pin.
+ * Pixel keyframes for one track width, read once per width from the beam's
+ * `--thinking-scanner-travel`. Each step is then a plain transform on the
+ * beam's existing layer: no paint and no raster during a scan.
  */
-function watchReducedMotionForRepin(): void {
-  // jsdom ships no `matchMedia`, and neither does a non-DOM import of this
-  // module; the pin is a progressive enhancement in both cases.
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+function scanKeyframes(travel: number): Keyframe[] {
+  let keyframes = keyframesByTravel.get(travel);
+  if (!keyframes) {
+    const centre = `translateX(${travel / 2}px)`;
+    keyframes = [
+      { offset: 0, transform: centre, easing: `steps(${SCAN_STEPS.out}, end)` },
+      { offset: 0.25, transform: `translateX(${travel}px)`, easing: `steps(${SCAN_STEPS.across}, end)` },
+      { offset: 0.75, transform: "translateX(0px)", easing: `steps(${SCAN_STEPS.back}, end)` },
+      { offset: 1, transform: centre },
+    ];
+    keyframesByTravel.set(travel, keyframes);
+  }
+  return keyframes;
+}
+
+const reducedMotion = typeof window !== "undefined" && typeof window.matchMedia === "function"
+  ? window.matchMedia("(prefers-reduced-motion: reduce)")
+  : null;
+
+// The held pose IS the reduced-motion pose, so the preference only has to stop
+// new scans. One already moving is cancelled back to the pose at once rather
+// than left to finish.
+reducedMotion?.addEventListener("change", () => {
+  if (!reducedMotion.matches || typeof document.getAnimations !== "function") {
+    return;
+  }
+  for (const animation of document.getAnimations()) {
+    if (animation.id === THINKING_SCAN_ANIMATION_ID) {
+      animation.cancel();
+    }
+  }
+});
+
+let scanTimer: ReturnType<typeof setTimeout> | undefined;
+
+function scheduleNextScan(): void {
+  if (scanTimer !== undefined) {
+    return;
+  }
+  scanTimer = setTimeout(runScan, THINKING_SCAN_PERIOD_MS - (Date.now() % THINKING_SCAN_PERIOD_MS));
+}
+
+function isOnScreen(element: Element): boolean {
+  const rect = element.getBoundingClientRect();
+  return rect.width > 0
+    && rect.height > 0
+    && rect.bottom > 0
+    && rect.right > 0
+    && rect.top < window.innerHeight
+    && rect.left < window.innerWidth;
+}
+
+function runScan(): void {
+  scanTimer = undefined;
+  const beams = document.querySelectorAll<HTMLElement>(".thinking-scanner__beam");
+  if (beams.length === 0) {
     return;
   }
 
-  window
-    .matchMedia("(prefers-reduced-motion: reduce)")
-    .addEventListener("change", () => {
-      for (const beam of document.querySelectorAll(".thinking-scanner__beam")) {
-        pinToSharedEpoch(beam);
+  // A hidden or occluded window, or an offscreen beam, would tick for frames
+  // that are never drawn. The next scan finds any beam that has come back.
+  if (document.visibilityState === "visible" && !reducedMotion?.matches) {
+    for (const beam of beams) {
+      if (typeof beam.animate !== "function" || !isOnScreen(beam)) {
+        continue;
       }
-    });
+      const travel = Number.parseFloat(getComputedStyle(beam).getPropertyValue("--thinking-scanner-travel"));
+      if (!Number.isFinite(travel)) {
+        continue;
+      }
+      beam.animate(scanKeyframes(travel), {
+        duration: THINKING_SCAN_DURATION_MS,
+        id: THINKING_SCAN_ANIMATION_ID,
+      });
+    }
+  }
+  scheduleNextScan();
 }
 
-watchReducedMotionForRepin();
+function startScanning(element: HTMLDivElement | null): void {
+  if (element) {
+    scheduleNextScan();
+  }
+}
 
 export function ThinkingScanner(props: ThinkingScannerProps = {}) {
   return (
@@ -96,11 +129,7 @@ export function ThinkingScanner(props: ThinkingScannerProps = {}) {
       aria-hidden="true"
       className={`thinking-scanner${props.compact ? " thinking-scanner--mini" : ""}`}
     >
-      <div
-        className="thinking-scanner__beam"
-        onAnimationStart={syncRestartedThinkingScannerAnimation}
-        ref={syncThinkingScannerAnimation}
-      />
+      <div className="thinking-scanner__beam" ref={startScanning} />
     </div>
   );
 }

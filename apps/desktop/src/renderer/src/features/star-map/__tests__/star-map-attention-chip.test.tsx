@@ -180,10 +180,9 @@ describe("star map attention filter", () => {
   });
 
   /**
-   * The zero state must be a DIFFERENT element, not a stopped scanner:
-   * every `ThinkingScanner` is pinned to one document-timeline epoch by a
-   * mount-time ref, and an animation CSS stops and restarts under a live
-   * element is never re-pinned. See ThinkingScanner.tsx and PR #1187.
+   * The zero state must be a DIFFERENT element, not a stopped scanner: a
+   * scanner's lit beam rests centred between scans, so only the empty dormant
+   * track reads as nothing running. See AttentionSignals.tsx.
    */
   it("swaps the scanner element at zero rather than freezing it", async () => {
     const { container } = renderMap([idle]);

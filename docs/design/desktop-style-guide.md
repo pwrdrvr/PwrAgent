@@ -345,12 +345,21 @@ almost always available, and reaching for the exemption is how eight beams
 ended up sweeping through a preference that asked them not to.
 
 One trap in both "stop it" and "hold it": the query **cancels** a running
-animation rather than pausing it, so turning the preference back off builds a
-new one starting at the moment of the flip. Any animation whose phase is
-synchronized across elements — the thinking scanner pins every beam to one
-document-timeline epoch — has to re-synchronize on that change, or the marks
-already on screen drift permanently against the ones mounted afterwards.
-`ThinkingScanner.tsx` is the worked example.
+CSS animation rather than pausing it, so turning the preference back off builds
+a new one starting at the moment of the flip. Any looping animation whose phase
+is synchronized across elements has to re-synchronize on that change, or the
+marks already on screen drift permanently against the ones mounted afterwards.
+
+### Repeated status motion
+
+A looping compositor animation is not free when its pixels hold still. The
+compositor wakes on every display refresh for as long as the animation runs,
+and each changed frame is a new window composite on macOS. For a status mark
+that many rows repeat, rest on a still pose that carries the meaning and move
+in short, finite bursts. Start every burst for the window from one shared
+timer, so all marks move in the same frames. `ThinkingScanner.tsx` is the
+worked example. It scans for 1.8s every 4.5s, aligned to the wall clock.
+See [rendering-diagnostics.md](../rendering-diagnostics.md) for measurements.
 
 ## Copy Rules
 

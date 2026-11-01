@@ -9,7 +9,7 @@ export type RenderingCaptureResult = {
 /** Self-contained: main serializes this function into each renderer on demand. */
 export function readRenderingSnapshot() {
   const names = new Set([
-    "pwragent-thinking-scanner-sweep", "status-blink", "pending-spinner-spin",
+    "pwragent-thinking-scanner-scan", "status-blink", "pending-spinner-spin",
     "app-update-banner-sweep", "settings-keyboard-example", "star-map-intake-pulse",
     "missing-worktree-card-scan", "usage-pace-ping",
   ]);

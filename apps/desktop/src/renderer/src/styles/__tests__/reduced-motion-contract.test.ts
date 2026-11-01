@@ -178,7 +178,7 @@ describe("app.css reduced-motion contract", () => {
     // vacuously true, which is the one failure mode this gate cannot survive.
     expect(loopingRules.length).toBeGreaterThanOrEqual(5);
     expect(loopingRules.flatMap((rule) => rule.selectors)).toContain(
-      ".thinking-scanner__beam",
+      ".pending-spinner",
     );
   });
 
@@ -192,7 +192,6 @@ describe("app.css reduced-motion contract", () => {
     expect(reducedSelectors.has(".settings-nav__sublist")).toBe(false);
     // While a rule that does settle the animation still registers.
     expect(reducedSelectors.has(".settings-pending .pending-spinner")).toBe(true);
-    expect(reducedSelectors.has(".thinking-scanner__beam")).toBe(true);
   });
 
   it("gives every infinite animation a reduced-motion decision", () => {
@@ -234,67 +233,50 @@ describe("thinking scanner under reduced motion", () => {
   const beamRules = rules.filter((rule) =>
     rule.selectors.includes(".thinking-scanner__beam"),
   );
-  const sweeping = beamRules.find(
-    (rule) => rule.atRules.length === 0 && /animation:/.test(rule.body),
+  const held = beamRules.find(
+    (rule) => rule.atRules.length === 0 && /transform:/.test(rule.body),
   );
   const parked = beamRules.find((rule) =>
     hasMotionQuery(rule.atRules, "reduce"),
   );
+  const scanner = readFileSync(
+    path.resolve(testDir, "../../features/thread-detail/ThinkingScanner.tsx"),
+    "utf8",
+  );
 
-  it("parks the beam mid-travel instead of stopping it where it started", () => {
-    expect(parked).toBeDefined();
-    // `animation: none` alone would drop the beam to frame 0% of the sweep:
-    // hard against the left edge at 0.76 opacity — the dimmest frame, reading
-    // as a bar that has not started, on a turn that is running. All three
-    // declarations together are the fix; any one of them alone is not.
-    expect(parked?.body).toMatch(/animation:\s*none;/);
-    expect(parked?.body).toMatch(/opacity:\s*1;/);
-    expect(parked?.body).toMatch(
+  it("rests the beam centred and lit, which is also the reduced-motion pose", () => {
+    // The beam is still between scans and still under the preference, so the
+    // base rule IS the parked pose. Hard left at reduced opacity would read as
+    // a bar that has not started, against the same edge the dormant track
+    // anchors, on a turn that is running.
+    expect(held).toBeDefined();
+    expect(held?.body).toMatch(/opacity:\s*1;/);
+    expect(held?.body).toMatch(
       /transform:\s*translateX\(calc\(var\(--thinking-scanner-travel\)\s*\/\s*2\)\);/,
     );
   });
 
-  it("drops the compositor promotion along with the animation", () => {
-    // `will-change` is on the beam for the sweep. Left standing under the
-    // preference it promotes a layer per scanner for an element that never
-    // changes again — on precisely the busy-fleet case this rule targets.
-    expect(sweeping?.body).toMatch(/will-change:\s*opacity,\s*transform;/);
+  it("loops nothing in CSS: scans are finite and started by the component", () => {
+    // An infinite compositor animation wakes the compositor on every vsync,
+    // even across a stepped or held stretch whose pixels do not change.
+    expect(beamRules.some((rule) => /animation:/.test(rule.body))).toBe(false);
+    expect(css).not.toMatch(/@keyframes pwragent-thinking-scanner/);
+    expect(scanner).toMatch(/\.animate\(/);
+  });
+
+  it("drops the layer promotion along with the scans", () => {
+    // `will-change` keeps the beam's layer between scans so a scan does not
+    // re-raster it. Under the preference no scan comes, and the layer would
+    // only promote every scanner of a busy fleet for nothing.
+    expect(held?.body).toMatch(/will-change:\s*transform;/);
     expect(parked?.body).toMatch(/will-change:\s*auto;/);
   });
 
-  it("holds the brightest frame of the sweep, not a second pose", () => {
-    // The parked values must BE the sweep's 50% keyframe. If someone retunes
-    // that keyframe, this pins the two together so the still state stays the
-    // animation held rather than drifting into a look of its own.
-    const midFrame = css.match(
-      /@keyframes pwragent-thinking-scanner-sweep\s*\{[\s\S]*?50%\s*\{(?<body>[^}]*)\}/,
-    )?.groups?.body;
-    expect(midFrame).toMatch(/opacity:\s*1;/);
-    expect(midFrame).toMatch(
-      /transform:\s*translateX\(var\(--thinking-scanner-travel\)\);/,
-    );
-    // And the base rule keeps the frame-0% pose, which is what the override
-    // above exists to replace. Guarded, because `expect(undefined).toMatch`
-    // reports "received value must be a string" rather than naming the rule
-    // that went missing.
-    expect(sweeping).toBeDefined();
-    expect(sweeping?.body).toMatch(/opacity:\s*0\.76;/);
-    expect(sweeping?.body).toMatch(/transform:\s*translateX\(0\);/);
-  });
-
-  it("re-pins live beams when the preference changes", () => {
-    // The reduce rule CANCELS the sweep, so flipping the preference back off
-    // builds a new animation on the moment of the flip instead of the shared
-    // epoch — leaving every beam already on screen out of phase with every one
-    // mounted afterwards. `ThinkingScanner` listens for that and re-pins.
-    // Without the listener the CSS above is a silent regression of PR #1187.
-    const scanner = readFileSync(
-      path.resolve(testDir, "../../features/thread-detail/ThinkingScanner.tsx"),
-      "utf8",
-    );
+  it("starts no scan under the preference and stops one already moving", () => {
     expect(scanner).toMatch(/matchMedia\(\s*"\(prefers-reduced-motion: reduce\)"\s*\)/);
     expect(scanner).toMatch(/addEventListener\(\s*"change"/);
-    expect(scanner).toContain("querySelectorAll(\".thinking-scanner__beam\")");
+    expect(scanner).toMatch(/!reducedMotion\?\.matches/);
+    expect(scanner).toMatch(/animation\.cancel\(\)/);
   });
 
   it("keeps travel equal to track width minus beam width in every variant", () => {

@@ -75,3 +75,28 @@ it("exports only fixed animation and view labels, bounded counts and geometric v
   expect(readRenderingSnapshot().omittedAnimations).toBe(72);
   expect(readRenderingSnapshot().animations[0].count).toBe(128);
 });
+
+it("names a script animation by an allowlisted id and redacts any other id", () => {
+  vi.stubGlobal("CSSAnimation", class {});
+  const beam = document.createElement("div");
+  beam.className = "thinking-scanner__beam";
+  const scanner = document.createElement("div");
+  scanner.className = "thinking-scanner";
+  scanner.append(beam);
+  document.body.append(scanner);
+  const scriptAnimation = (id: string) => ({
+    id,
+    playState: "running",
+    effect: { target: beam, getTiming: () => ({ iterations: 1 }) },
+  });
+  Object.defineProperty(document, "getAnimations", {
+    configurable: true,
+    value: () => [scriptAnimation("pwragent-thinking-scanner-scan"), scriptAnimation("private-id")],
+  });
+  const result = readRenderingSnapshot();
+  expect(result.animations.map((group) => group.state)).toEqual([
+    ["pwragent-thinking-scanner-scan", ".thinking-scanner", "running", false, false],
+    ["other", ".thinking-scanner", "running", false, false],
+  ]);
+  expect(JSON.stringify(result)).not.toContain("private");
+});

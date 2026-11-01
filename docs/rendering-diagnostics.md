@@ -93,8 +93,11 @@ with Chromium and platform. Compare repeated captures of the same scene:
 
 `renderer.animations[].state` is `[name, source, playState, infinite, inViewport]`;
 `count` groups identical states. Names and source selectors use a fixed allowlist.
-For example, `pwragent-thinking-scanner-sweep` with `.thinking-scanner` identifies
-the running-turn beam; `pending-spinner-spin` identifies the shared spinner.
+A CSS animation is named by its keyframes and a script animation by its `id`.
+For example, `pwragent-thinking-scanner-scan` with `.thinking-scanner` identifies
+a running-turn beam's scan; `pending-spinner-spin` identifies the shared spinner.
+A scan is finite and runs 1.8s of every 4.5s, so a one-second sample can
+correctly find no scanner animation while turns are running.
 Unknown names and selectors become `other`. Only the first 128 animations per
 window are examined, with an omission count. Geometric viewport intersection
 does not establish whether an element is occluded or actually drawn.

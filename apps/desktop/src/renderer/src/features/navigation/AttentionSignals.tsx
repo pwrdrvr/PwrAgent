@@ -30,18 +30,14 @@ import {
 /**
  * The sweeping bar next to a turn count, or its idle stand-in.
  *
- * At zero this is a static element, NOT a greyed-out `ThinkingScanner`.
- * Killing the sweep with CSS on a mounted scanner is a desync trap: `data-zero`
- * lives on the parent span, so React would keep the same scanner element across
- * the flip, its ref would never re-run, and the restarted animation would never
- * be re-pinned to the shared epoch — leaving this readout drifting against
- * every other scanner on screen. Swapping the element type guarantees a mount,
- * so `syncThinkingScannerAnimation` runs and the beam comes back in phase. See
- * ThinkingScanner.tsx and PR #1187.
+ * At zero this is a static element, an empty track, NOT a greyed-out
+ * `ThinkingScanner`: a lit beam beside a 0 would say the opposite of the
+ * number. Swapping the element type also mounts the scanner on the 0 -> 1
+ * flip, which is what schedules its scans (ThinkingScanner.tsx).
  *
  * The remote readout's beam is neutral rather than accent, but it is the same
  * untouched component tinted by its parent's tokens — a peer's turn is running
- * for real, so it sweeps for real, on the same epoch as the rest.
+ * for real, so it scans for real, in the same frames as the rest.
  */
 function AttentionTurnScanner(props: { count: number }) {
   return props.count === 0 ? (

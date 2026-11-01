@@ -2695,11 +2695,10 @@ describe("Tangerine Terminal theme contract", () => {
     expect(cardZ).toBeGreaterThan(windowZ);
   });
 
-  it("keeps thinking scanner variants on one shared visible sweep", () => {
+  it("keeps thinking scanner variants on one shared geometry and held pose", () => {
     expect(css).not.toContain("--thinking-scanner-progress");
     expect(css).not.toContain("--thinking-scanner-full-offset");
     expect(css).not.toContain("--thinking-scanner-mini-offset");
-    expect(css).toContain("@keyframes pwragent-thinking-scanner-sweep");
     // Read the blocks out by selector rather than matching declarations
     // anywhere after the first `.thinking-scanner {` in the file. A descendant
     // rule that retints the scanner (`.signal-count--remote-active
@@ -2717,9 +2716,12 @@ describe("Tangerine Terminal theme contract", () => {
     expect(miniScanner).toMatch(/--thinking-scanner-beam-width:\s*6px;/);
     expect(miniScanner).toMatch(/--thinking-scanner-travel:\s*10px;/);
     expect(miniScanner).toMatch(/width:\s*16px;/);
-    expect(extractRuleBody(css, ".thinking-scanner__beam")).toMatch(
-      /animation:\s*pwragent-thinking-scanner-sweep 1800ms steps\(27, end\) infinite;/
-    );
+    // Both sizes rest on the base beam rule. Motion is a finite scan started
+    // by ThinkingScanner.tsx, so no variant can carry a loop of its own.
+    const beam = extractRuleBody(css, ".thinking-scanner__beam");
+    expect(beam).not.toMatch(/animation:/);
+    expect(beam).toMatch(/transform:\s*translateX\(calc\(var\(--thinking-scanner-travel\) \/ 2\)\);/);
+    expect(extractRuleBody(css, ".thinking-scanner--mini .thinking-scanner__beam")).not.toMatch(/animation|transform/);
   });
 
   it("keeps every composer autocomplete on the shared popover highlight", () => {

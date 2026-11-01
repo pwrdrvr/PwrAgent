@@ -4,8 +4,9 @@ import { expect, test } from "@playwright/test";
 import { launchElectronApp, threadRowCard } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
+const SCAN_ID = "pwragent-thinking-scanner-scan";
 
-test("keeps restarted thinking scanners on the shared epoch", async () => {
+test("scans every visible thinking beam together and holds them still between scans", async () => {
   const app = await launchElectronApp({
     fixturePath: path.join(specDir, "fixtures/approval-pending/replay.fixture.json"),
   });
@@ -19,54 +20,58 @@ test("keeps restarted thinking scanners on the shared epoch", async () => {
     await app.advance({ stepId: "turn-started-1" });
 
     const row = threadRowCard(app.window, /Approval pending replay/i);
-    const beam = row.locator(".thinking-scanner__beam");
+    await expect(row.locator(".thinking-scanner__beam")).toBeVisible();
     const beams = app.window.locator(".thinking-scanner__beam");
-    await expect(beam).toBeVisible();
-    const mountedBeam = await beam.elementHandle();
-    expect(mountedBeam).not.toBeNull();
     await expect.poll(() => beams.count()).toBeGreaterThan(1);
-    const sharedEpochs = Array<number>(await beams.count()).fill(0);
-    const readEpochs = () => beams.evaluateAll((elements) => elements.flatMap(
-      (element) => element.getAnimations().map((animation) => animation.startTime),
-    ));
-    await expect.poll(readEpochs).toEqual(sharedEpochs);
 
-    // Use the DOM move React uses for keyed row reorders. The beam, component,
-    // and mount-time ref survive, but Chromium replaces the CSS animation.
-    const restarted = await beam.evaluate(async (element) => {
-      const original = element.getAnimations()[0];
-      const rowShell = element.closest(".thread-row-shell")!;
-      const parent = rowShell.parentElement!;
-      parent.appendChild(rowShell);
-      await new Promise<void>((resolve) => requestAnimationFrame(() => {
-        requestAnimationFrame(() => resolve());
-      }));
+    // One scan per period, started for every on-screen beam in one task, so
+    // they share a start time and move in the same frames.
+    const readScan = () => beams.evaluateAll((elements) => {
+      const onScreen = elements.filter((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.bottom > 0 && rect.top < innerHeight;
+      });
+      const animations = onScreen.flatMap((element) => element.getAnimations());
       return {
-        sameBeam: rowShell.querySelector(".thinking-scanner__beam") === element,
-        newAnimation: element.getAnimations()[0] !== original,
+        onScreen: onScreen.length,
+        scanning: animations.filter((animation) => animation.id === "pwragent-thinking-scanner-scan").length,
+        others: animations.length - animations.filter((animation) => animation.id === "pwragent-thinking-scanner-scan").length,
+        startTimes: [...new Set(animations.map((animation) => animation.startTime))],
       };
     });
-    expect(restarted).toEqual({ sameBeam: true, newAnimation: true });
-    await expect.poll(readEpochs).toEqual(sharedEpochs);
+    await expect.poll(async () => {
+      const scan = await readScan();
+      return scan.scanning > 0 && scan.startTimes.every((time) => time !== null) ? scan : null;
+    }, { timeout: 10_000, intervals: [50] }).toMatchObject({ others: 0, startTimes: [expect.any(Number)] });
+    const scan = await readScan();
+    expect(scan.scanning).toBe(scan.onScreen);
 
-    // The sidebar stays mounted when hidden. Showing it recreates animations
-    // too, and must not require a lens flip to repair their phase.
-    const sidebar = app.window.locator(".sidebar");
-    await sidebar.evaluate((element) => { element.style.display = "none"; });
-    // The row locator contains a visible-button role filter, so it no longer
-    // resolves while the sidebar is hidden. Retain the mounted node instead.
-    await expect.poll(() => mountedBeam!.evaluate((element) => ({
-      connected: element.isConnected,
-      animationCount: element.getAnimations().length,
-    }))).toEqual({ connected: true, animationCount: 0 });
-    await sidebar.evaluate((element) => { element.style.removeProperty("display"); });
-    await expect(beam).toBeVisible();
-    await expect.poll(readEpochs).toEqual(sharedEpochs);
+    // Finite: once the scan ends nothing is left running, and the beam rests on
+    // the held pose, centred.
+    await expect.poll(async () => (await readScan()).scanning, { timeout: 5_000 }).toBe(0);
+    const pose = await row.locator(".thinking-scanner__beam").evaluate((element) => ({
+      transform: getComputedStyle(element).transform,
+      opacity: getComputedStyle(element).opacity,
+      travel: getComputedStyle(element).getPropertyValue("--thinking-scanner-travel").trim(),
+    }));
+    expect(pose.opacity).toBe("1");
+    expect(pose.transform).toBe(`matrix(1, 0, 0, 1, ${Number.parseFloat(pose.travel) / 2}, 0)`);
 
+    // Under reduced motion no scan starts at all, across a full period.
     await app.window.emulateMedia({ reducedMotion: "reduce" });
-    await expect.poll(readEpochs).toEqual([]);
-    await app.window.emulateMedia({ reducedMotion: "no-preference" });
-    await expect.poll(readEpochs).toEqual(sharedEpochs);
+    const scansWhileReduced = await app.window.evaluate(async (id) => {
+      // The media change event lands at the next rendering update, which is
+      // also when a scan already moving is cancelled. Sample after it.
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      let seen = 0;
+      const until = performance.now() + 5_000;
+      while (performance.now() < until) {
+        seen += document.getAnimations().filter((animation) => animation.id === id).length;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      return seen;
+    }, SCAN_ID);
+    expect(scansWhileReduced).toBe(0);
   } finally {
     await app.close();
   }

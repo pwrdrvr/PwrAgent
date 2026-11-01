@@ -6007,9 +6007,9 @@ body.is-project-index-resizing {
 
 /* The idle stand-in for the scanner. A beam still sweeping next to a 0 would
    say the opposite of the number, so the zero state is its own empty track and
-   the live state is a `ThinkingScanner`. Live beams share one document-timeline
-   epoch, pinned on mount and on CSS animation restarts (ThinkingScanner.tsx).
-   Matches `.thinking-scanner--mini`'s footprint
+   the live state is a `ThinkingScanner`, whose lit beam rests centred in the
+   same track between scans (ThinkingScanner.tsx). Matches
+   `.thinking-scanner--mini`'s footprint
    so the tab does not reflow when the count leaves zero. */
 .signal-count__dormant-scanner {
   display: block;
@@ -33765,12 +33765,17 @@ div.composer-error-row__toggle {
   box-shadow:
     0 0 10px color-mix(in srgb, var(--thinking-scanner-tint) 42%, transparent),
     0 0 18px color-mix(in srgb, var(--thinking-scanner-tint) 22%, transparent);
-  /* Each half-sweep is 900ms: 27 steps limit changing pixels to 30Hz instead
-     of redrawing this small indicator at the display's full refresh rate. */
-  animation: pwragent-thinking-scanner-sweep 1800ms steps(27, end) infinite;
-  opacity: 0.76;
-  transform: translateX(0);
-  will-change: opacity, transform;
+  /* The held pose: centred, full opacity, glow intact. A running turn's beam
+     spends most of its time here — `ThinkingScanner.tsx` moves it for one
+     1800ms scan every 4500ms and then lets it stop — so this is the pose
+     that has to read as "running" beside the empty dormant track.
+     `will-change` keeps the beam on its own layer between scans. Without it,
+     each scan promotes the beam and each end demotes it, and both re-raster it.
+     `--thinking-scanner-travel` is the track width minus the beam width in
+     both sizes (62 − 18 = 44, 16 − 6 = 10), so half of it centres the beam. */
+  opacity: 1;
+  transform: translateX(calc(var(--thinking-scanner-travel) / 2));
+  will-change: transform;
 }
 
 .thinking-scanner--mini .thinking-scanner__beam {
@@ -33779,23 +33784,9 @@ div.composer-error-row__toggle {
     0 0 14px color-mix(in srgb, var(--thinking-scanner-tint) 22%, transparent);
 }
 
-@keyframes pwragent-thinking-scanner-sweep {
-  0%,
-  100% {
-    opacity: 0.76;
-    transform: translateX(0);
-  }
-
-  50% {
-    opacity: 1;
-    transform: translateX(var(--thinking-scanner-travel));
-  }
-}
-
-/* The sweep is the app's most repeated motion — one beam per running turn, so
-   a busy fleet paints eight or more 1800ms loops at once in the operator's
-   peripheral vision, on every surface at once. It was the one animated
-   indicator in the renderer with no reduced-motion rule at all.
+/* Reduced motion: no scans at all. The held pose is the stopped state, so
+   nothing here has to choose a frame: `ThinkingScanner.tsx` starts no scan
+   under the preference and cancels one already moving when it turns on.
 
    Held, not hidden. This beam is the ONLY thing on a thread row that says a
    turn is running, and its idle counterpart (`.signal-count__dormant-scanner`)
@@ -33803,33 +33794,12 @@ div.composer-error-row__toggle {
    make "running" and "nothing running" the same pixels, on the readout that
    exists to answer "can I quit now?".
 
-   So it parks at frame 50% of its own keyframes: centred, `opacity: 1`, glow
-   intact. That is the brightest frame of the loop, which is what a mark with
-   no motion left needs, and it is a pose the operator already knows. A bare
-   `animation: none` would instead fall back to frame 0% — hard left at 0.76
-   opacity, the dimmest frame, reading as a bar that has not started, and
-   pinned to the same edge the dormant track anchors.
-
-   `translateX(travel / 2)` centres it in every variant without a new number:
-   `--thinking-scanner-travel` is defined as the track width minus the beam
-   width in both sizes (62 − 18 = 44, 16 − 6 = 10), which is why the sweep ends
-   flush at the right edge.
-
-   Nothing branches the RENDER on the preference, so no scanner is torn down
-   when it flips. But this rule DOES cancel a live animation, which is the
-   trap the `.signal-count__dormant-scanner` note above describes: turning the
-   preference back off builds a new animation whose start time is the moment of
-   the flip, not the shared epoch. `ThinkingScanner.tsx` listens for the change
-   and re-pins every beam on screen — do not drop that listener.
-
-   `will-change` goes with the animation. The beam is promoted for a sweep it
-   is no longer running, and this is exactly the case with the most scanners on
-   screen at once. */
+   `will-change` goes with the motion. The layer exists so a scan does not
+   re-raster the beam; with no scan coming, it is a layer per scanner for an
+   element that never changes, on exactly the busy-fleet case with the most
+   scanners on screen. */
 @media (prefers-reduced-motion: reduce) {
   .thinking-scanner__beam {
-    animation: none;
-    opacity: 1;
-    transform: translateX(calc(var(--thinking-scanner-travel) / 2));
     will-change: auto;
   }
 }
