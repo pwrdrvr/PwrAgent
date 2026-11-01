@@ -280,6 +280,15 @@ its `directoryKey`/`cwd`; omitting it selects the configured workspace root. Sel
 the defaults remain local and read-only. Launchpad requests for worktrees,
 grouping, environments or provider extensions are rejected before creation.
 
+A new thread is named from its first user message, shortened the way desktop
+names a thread before any helper-model title. The outpost has no helper model.
+The name is stored in `threads.json`, and subscribed viewers receive
+`thread/name/updated` with `titleSource: derived`, followed by a navigation
+invalidation. A later turn never renames a thread. An explicit `renameThread`
+always wins and is never replaced. A thread that still has a placeholder name,
+such as one created before this release, takes Codex's `preview` the next time
+it is read. The outpost does not set the Codex thread name.
+
 ## Identity, compute lifetime and remaining scope
 
 The private `federation.json` stores the retained peer ID, signing/Noise keys,

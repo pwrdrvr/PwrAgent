@@ -151,6 +151,8 @@ export class Runtime {
       return;
     }
     this.save({ ...this.store.get(job.id), turnId: turn.turn.id, status: "running" });
+    // The prompt stays in memory: job records never store it.
+    this.onEvent?.({ method: "headless/turnStarted", params: { threadId: result.thread.id, jobId: job.id, prompt } });
     if (this.earlyCompletion?.turn?.id === turn.turn.id) {
       this.complete(this.earlyCompletion);
     } else if (["completed", "failed", "interrupted"].includes(turn.turn.status)) {
