@@ -644,7 +644,7 @@ it("keeps the Grok card while Grok has not reported a limit yet", () => {
   const { pricing } = buildTokenMiserPricingFixture();
   const thread = { id: "grok-thread", source: "acp:grok" as const, updatedAt: 1 };
   const view = render(<PricingPanel pricing={pricing} thread={thread}
-    backends={[{ kind: "acp:grok", label: "Grok" } as import("@pwragent/shared").BackendSummary]}
+    backends={[{ kind: "acp:grok", label: "Grok", available: true } as unknown as import("@pwragent/shared").BackendSummary]}
     desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity: vi.fn() }} />);
   expect(view.getByLabelText("Grok plan limits")).toHaveTextContent("Grok has not reported plan limits.");
   expect(view.container.querySelector(".usage-pace-card")).toBeNull();
