@@ -46387,6 +46387,10 @@ button.composer__subthread-source-parent:hover {
   animation: pending-spinner-spin 0.8s linear infinite;
 }
 
+.pending-spinner[data-spinner-visible="false"] {
+  animation-play-state: paused;
+}
+
 /* 12px — inline beside a settings control, sized to its 12px label text. */
 .pending-spinner--sm {
   width: 12px;

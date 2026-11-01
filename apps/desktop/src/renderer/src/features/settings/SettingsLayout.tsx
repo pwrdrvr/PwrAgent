@@ -1,3 +1,4 @@
+import { pendingSpinnerRef } from "../../lib/pending-spinner";
 import {
   createContext,
   useCallback,
@@ -771,7 +772,7 @@ export function SettingsPendingIndicator(props: {
 
   return (
     <span className="settings-pending" role="status">
-      <span aria-hidden="true" className="pending-spinner pending-spinner--sm" />
+      <span ref={pendingSpinnerRef} aria-hidden="true" className="pending-spinner pending-spinner--sm" />
       {props.label ?? "Saving…"}
     </span>
   );

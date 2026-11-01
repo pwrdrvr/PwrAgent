@@ -2,11 +2,141 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
+import { build } from "vite";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import { seedThreadSubAgents } from "./fixtures/sub-agent-state-seeding";
 import { tolerateTransientRpcFailure } from "./fixtures/transient-rpc-poll";
 import type { RenderingCaptureResult } from "../src/shared/rendering-diagnostics";
+
+test("pending spinners keep moving onscreen and pause outside visible panes", async () => {
+  test.setTimeout(90_000);
+  const app = await launchElectronApp({
+    fixturePath: path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/smoke/replay.fixture.json"),
+  });
+  try {
+    // Bundle the production ref and its shared observer into this otherwise
+    // inert probe. The stylesheet comes from the built app; no copied loop or
+    // visibility implementation can make the regression pass by itself.
+    const bundle = await build({
+      configFile: false,
+      logLevel: "silent",
+      build: {
+        write: false,
+        lib: {
+          entry: path.resolve(import.meta.dirname, "../src/renderer/src/lib/pending-spinner.ts"),
+          name: "pendingSpinnerProbe",
+          formats: ["iife"],
+        },
+      },
+    });
+    const output = (Array.isArray(bundle) ? bundle[0]! : bundle) as { output: { type: string; code?: string }[] };
+    const script = output.output.find((chunk) => chunk.type === "chunk")!.code!;
+    await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().waitFor();
+    // CSSOM serialization drops the variable border shorthand after the
+    // border-top-color override. Read the built stylesheet bytes so the probe
+    // retains the actual visible ring, rather than an invisible transform.
+    const stylesheets = await app.window.evaluate(() => [...document.styleSheets]
+      .map((sheet) => sheet.href).filter((href): href is string => href !== null));
+    const sources = await Promise.all(stylesheets.map((href) => readFile(new URL(href), "utf8")));
+    const selectors = /^\.pending-spinner(?:--(?:sm|lg)|\[data-spinner-visible=(?:"false"|false)\])?$/;
+    const css = sources.flatMap((source) => [
+      ...[...source.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+        .filter((match) => selectors.test(match[1]!.trim())).map((match) => match[0]),
+      ...source.match(/@keyframes\s+pending-spinner-spin\s*\{(?:[^{}]*\{[^{}]*\})+\s*\}/g) ?? [],
+    ]).join("\n");
+    expect(css).toContain("pending-spinner-spin");
+    expect(css).toContain("border:");
+    const created = app.electronApp.waitForEvent("window");
+    const pid = await app.electronApp.evaluate(async ({ BrowserWindow }, css) => {
+      const probe = new BrowserWindow({ width: 640, height: 480, webPreferences: { contextIsolation: true, sandbox: true } });
+      await probe.loadURL("data:text/html," + encodeURIComponent(`<!doctype html><style>
+        :root { --border-subtle: gray; --accent: orange; } ${css}
+        .pending-spinner { display:inline-block; }
+        #pane { width:200px;height:100px;overflow:auto; }
+        #rings { padding-top:20px; }
+        </style><div id="pane"><div id="rings">${'<span class="pending-spinner"></span>'.repeat(6)}</div></div>`));
+      return probe.webContents.getOSProcessId();
+    }, css);
+    const page = await created;
+    await page.waitForLoadState("domcontentloaded");
+    await app.electronApp.evaluate(({ BrowserWindow }, pid) => {
+      const probe = BrowserWindow.getAllWindows().find((window) => window.webContents.getOSProcessId() === pid)!;
+      probe.show();
+      probe.focus();
+      probe.moveTop();
+    }, pid);
+    await page.bringToFront();
+    const rings = page.locator(".pending-spinner");
+    await expect(rings.first()).toBeVisible();
+    const capture = async () => {
+      const result = await app.window.evaluate(() => (window as unknown as { pwragent: {
+        captureRenderingDiagnostics: (seconds: number) => Promise<RenderingCaptureResult>;
+      } }).pwragent.captureRenderingDiagnostics(3));
+      const summary = JSON.parse(await readFile(result.summaryPath, "utf8")) as {
+        bufferUsage: { percentage: number };
+        trace: { pid: number; events: { name: string; count: number }[] }[];
+      };
+      expect(summary.bufferUsage.percentage).toBeLessThan(0.9);
+      const events = summary.trace.filter((process) => process.pid === pid).flatMap((process) => process.events);
+      const rate = (name: string) => events.filter((event) => event.name === name)
+        .reduce((sum, event) => sum + event.count, 0) / 3;
+      return { drawFrames: rate("DrawFrame"), beginFrames: rate("BeginFrame") };
+    };
+    const measurements: Record<string, Awaited<ReturnType<typeof capture>>> = {};
+    const setScene = async (scene: "onscreen" | "offscreen" | "clipped" | "scrolled" | "hidden") => {
+      await page.evaluate((scene) => {
+        const pane = document.getElementById("pane")!;
+        pane.style.cssText = scene === "offscreen" ? "translate:0 -10000px" : scene === "hidden" ? "display:none" : "";
+        document.getElementById("rings")!.style.paddingTop = scene === "clipped" || scene === "scrolled" ? "1000px" : "20px";
+        pane.scrollTop = scene === "scrolled" ? 1000 : 0;
+      }, scene);
+    };
+    // Same six rings and three-second captures, first with explicit overrides
+    // for a paused baseline and the former always-running behavior.
+    for (const scene of ["onscreen", "offscreen", "clipped", "hidden"] as const) {
+      await setScene(scene);
+      for (const state of ["paused", "running"] as const) {
+        await page.evaluate((state) => document.querySelectorAll<HTMLElement>(".pending-spinner")
+          .forEach((element) => { element.style.animationPlayState = state; }), state);
+        measurements[`${scene}-${state}`] = await capture();
+      }
+    }
+    await page.addScriptTag({ content: script });
+    await page.evaluate(() => {
+      const probe = (window as unknown as { pendingSpinnerProbe: {
+        pendingSpinnerRef: (element: HTMLSpanElement) => () => void;
+      } }).pendingSpinnerProbe;
+      document.querySelectorAll<HTMLSpanElement>(".pending-spinner").forEach((element) => {
+        element.style.animationPlayState = "";
+        probe.pendingSpinnerRef(element);
+      });
+    });
+    for (const scene of ["onscreen", "offscreen", "clipped", "scrolled", "hidden", "onscreen"] as const) {
+      await setScene(scene);
+      const visible = scene === "onscreen" || scene === "scrolled";
+      await expect.poll(() => rings.evaluateAll((elements, visible) => elements.every((element) =>
+        (element as HTMLElement).dataset.spinnerVisible === String(visible)), visible)).toBe(true);
+      measurements[`${scene}-observed`] = await capture();
+    }
+    console.log(JSON.stringify({ pendingSpinnerFramesPerSecond: measurements }));
+    const baseline = measurements["offscreen-paused"]!;
+    expect(measurements["onscreen-running"]!.drawFrames).toBeGreaterThan(30);
+    expect(measurements["onscreen-observed"]!.drawFrames).toBeGreaterThan(30);
+    expect(measurements["scrolled-observed"]!.drawFrames).toBeGreaterThan(30);
+    for (const scene of ["offscreen", "clipped"]) {
+      expect(measurements[`${scene}-running`]!.beginFrames).toBeGreaterThan(30);
+      expect(measurements[`${scene}-running`]!.beginFrames)
+        .toBeGreaterThan(measurements[`${scene}-observed`]!.beginFrames * 4);
+    }
+    for (const scene of ["offscreen", "clipped", "hidden"]) {
+      expect(measurements[`${scene}-observed`]!.beginFrames).toBeLessThanOrEqual(baseline.beginFrames + 3);
+      expect(measurements[`${scene}-observed`]!.drawFrames).toBeLessThanOrEqual(1);
+    }
+  } finally {
+    await app.close();
+  }
+});
 
 test("rendering capture distinguishes static pixels from a compositor animation", async () => {
   const app = await launchElectronApp({

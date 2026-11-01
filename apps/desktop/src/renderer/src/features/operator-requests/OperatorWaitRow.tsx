@@ -1,3 +1,4 @@
+import { pendingSpinnerRef } from "../../lib/pending-spinner";
 import { useEffect, useRef, useState, type ComponentType } from "react";
 import type { SubmitServerRequestRequest } from "@pwragent/shared";
 import {
@@ -158,7 +159,7 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
       {busyLabel ? (
         <div className="thread-todos-panel__row-actions">
           <span className="thread-todos-panel__row-busy" role="status">
-            <span className="pending-spinner pending-spinner--sm" aria-hidden="true" />
+            <span ref={pendingSpinnerRef} className="pending-spinner pending-spinner--sm" aria-hidden="true" />
             {busyLabel}
           </span>
         </div>

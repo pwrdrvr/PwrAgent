@@ -1,3 +1,4 @@
+import { pendingSpinnerRef } from "../../lib/pending-spinner";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ProviderCatalogRefreshProviderState,
@@ -137,6 +138,7 @@ export function ProviderCatalogRefreshControl(props: {
           <>
             <span className="settings-pending" role="status">
               <span
+                ref={pendingSpinnerRef}
                 aria-hidden="true"
                 className="pending-spinner pending-spinner--sm"
               />
@@ -200,7 +202,7 @@ function ProviderRefreshRow(props: {
     <li className="provider-refresh__row" data-status={provider.status}>
       <span className="provider-refresh__mark" aria-hidden="true">
         {provider.status === "running" ? (
-          <span className="pending-spinner pending-spinner--sm" />
+          <span ref={pendingSpinnerRef} className="pending-spinner pending-spinner--sm" />
         ) : (
           <span className={`status-dot ${STATUS_DOT_CLASS[provider.status]}`} />
         )}

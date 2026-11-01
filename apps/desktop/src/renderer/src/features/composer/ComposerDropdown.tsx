@@ -1,3 +1,4 @@
+import { pendingSpinnerRef } from "../../lib/pending-spinner";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
@@ -469,7 +470,7 @@ export function ComposerDropdown(props: {
       >
         {props.busy ? (
           <span aria-hidden="true" className="composer-dropdown__icon">
-            <span className="pending-spinner pending-spinner--sm" />
+            <span ref={pendingSpinnerRef} className="pending-spinner pending-spinner--sm" />
           </span>
         ) : Icon ? (
           <span aria-hidden="true" className="composer-dropdown__icon">

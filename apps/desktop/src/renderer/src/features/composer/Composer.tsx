@@ -1,3 +1,4 @@
+import { pendingSpinnerRef } from "../../lib/pending-spinner";
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
 import { codexProviderIdOfModel, formatModelOptionLabel } from "@pwragent/shared";
 import { mayContainLinearPastedImages } from "@pwragent/shared";
@@ -13160,6 +13161,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     >
                       {previewState?.status === "loading" ? (
                         <span
+                          ref={pendingSpinnerRef}
                           aria-hidden="true"
                           className="pending-spinner pending-spinner--lg"
                         />
@@ -14980,6 +14982,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 >
                   {currentThreadEnvActionStarting ? (
                     <span
+                      ref={pendingSpinnerRef}
                       aria-hidden="true"
                       className="pending-spinner"
                     />
@@ -15196,6 +15199,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               >
                 {preparingSend ? (
                   <span
+                    ref={pendingSpinnerRef}
                     aria-hidden="true"
                     className="pending-spinner pending-spinner--sm"
                   />
@@ -15493,6 +15497,7 @@ function RemoteFileUploadPill({
         <FileCodeIcon size={13} aria-hidden="true" />
       ) : percent === undefined ? (
         <span
+          ref={pendingSpinnerRef}
           aria-hidden="true"
           className="pending-spinner pending-spinner--sm"
         />

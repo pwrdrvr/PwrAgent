@@ -161,6 +161,38 @@ and [implementation](https://github.com/electron/electron/blob/v44.9.3/shell/bro
 show why a resolved `contentTracing.startRecording()` promise does not establish
 ownership: the binding resolves even when Chromium refuses to start recording.
 
+### Pending spinner visibility
+
+The same spec bundles the production `pendingSpinnerRef` and its shared
+IntersectionObserver into a contrived window with six rings and the built app's
+spinner CSS. It compares three-second captures with an explicit paused baseline,
+the former always-running behavior, and the visibility ref. It checks viewport
+exclusion, clipping by a scroll container, scrolling back into view, and a
+`display: none` pane. Unit tests cover document visibility changes and ref
+cleanup. Read the built CSS bytes:
+Chromium's CSSOM serialization drops the variable `border` shorthand after its
+`border-top-color` override, leaving an invisible animated box in a copied rule.
+
+Observed on Ubuntu x64 in Sandboxer with Electron 44.9.3 (2026-10-31):
+
+| Six rings, same renderer | `DrawFrame`/s | `BeginFrame`/s |
+| --- | ---: | ---: |
+| Offscreen, explicitly paused | 0.3 | 0.7 |
+| Onscreen, former loop / visibility ref | 60 / 60 | 60 / 60 |
+| Offscreen, former loop / visibility ref | 0 / 0 | 60.3 / 0 |
+| Scroll-clipped, former loop / visibility ref | 0 / 0 | 60 / 0 |
+| Hidden pane, former loop / visibility ref | 0 / 0 | 0 / 0 |
+
+The mount audit found fourteen rings in eight components. Review cards can keep
+one mounted for the whole turn (`sending || working`, where `working` includes
+`threadRunning`), inside a scrollable rail. Usage analysis can span a model call,
+with its tab ring inside a scrollable inspector. To-do dispatch, queued operator
+answers, provider refresh, and remote uploads can also outlast a short request.
+Settings saves, archive loading, composer preparation, and PDF previews normally
+mount for the pending operation only; they still use the same ref so scrolling
+or hiding a pane cannot leave a ring running. These are source-based lifetime
+observations, not measurements of how often operators scroll them away.
+
 For an investigation, compare idle, active, and paused captures in an isolated
 instance before changing live state. Pause only the animation under investigation
 and repeat the same collection. Existing React DevTools and hot-CPU diagnostics

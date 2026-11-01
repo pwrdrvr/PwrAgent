@@ -1,3 +1,4 @@
+import { pendingSpinnerRef } from "../../lib/pending-spinner";
 import {
   useCallback,
   useEffect,
@@ -272,7 +273,7 @@ export function ArchivedThreadsSettings(props: {
   if (state.loading && !hasLoaded) {
     toolbarStatus = (
       <>
-        <span aria-hidden="true" className="pending-spinner pending-spinner--sm" />
+        <span ref={pendingSpinnerRef} aria-hidden="true" className="pending-spinner pending-spinner--sm" />
         <span>Loading…</span>
       </>
     );
