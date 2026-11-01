@@ -1640,6 +1640,8 @@ export function bootstrapApp(): void {
     // already imports the registry, so the reverse import would be a cycle.
     const federationAgentToolOptions = {
       targetStore: getDesktopOverlayStore(),
+      resolveCallerExecutionMode: async (context: PwrAgentFederationContext) =>
+        await getDesktopBackendRegistry().resolveAgentCallerExecutionMode(context),
       resolveSourceTurnAttachments: (context: PwrAgentFederationContext) => {
         const turnId = context.turnId?.trim();
         return turnId
@@ -1688,12 +1690,16 @@ export function bootstrapApp(): void {
     //   in it — so it returns nothing and the operator's pasted screenshots
     //   never reach the thread they described. The intake's staged
     //   attachments are handed in directly instead.
+    // - `resolveCallerExecutionMode`: the helper turn has no thread whose
+    //   access it could pass on. The intake agent may name Default Access;
+    //   without a mode the thread takes the project's own.
     getDesktopBackendRegistry().setStarMapIntakeFederationHandlerFactory(
       (attachments) =>
         createFederationAgentToolsHandler({
           ...federationAgentToolOptions,
           resolveMessageOrigin: () => ({ kind: "pwragent" }),
           resolveSourceTurnAttachments: () => attachments,
+          resolveCallerExecutionMode: () => "default",
         }),
     );
     getDesktopBackendRegistry().setFederatedThreadMessageHandler(
