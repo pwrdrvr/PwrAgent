@@ -100,7 +100,11 @@ test("tooltip ignores sibling streaming and still detects sibling layout movemen
             super((entries, observer) => {
               for (const entry of entries) {
                 if (entry.target === target && diagnostics.sizes.length < 8) {
-                  diagnostics.sizes.push({ ...entry.borderBoxSize[0] });
+                  diagnostics.sizes.push({
+                    inlineSize: entry.borderBoxSize[0]?.inlineSize,
+                    blockSize: entry.borderBoxSize[0]?.blockSize,
+                    fontStatus: document.fonts.status,
+                  });
                 }
               }
               callback(entries, observer);
@@ -135,7 +139,7 @@ test("tooltip ignores sibling streaming and still detects sibling layout movemen
       const diagnostics = (window as unknown as { tooltipBudgetDiagnostics?: {
         activeFrame: string; frames: string[]; baseline?: object;
       } }).tooltipBudgetDiagnostics;
-      if (diagnostics) diagnostics.baseline = original().toJSON();
+      if (diagnostics) diagnostics.baseline = { rect: original().toJSON(), fontStatus: document.fonts.status };
       target.getBoundingClientRect = () => {
         reads += 1;
         if (diagnostics && diagnostics.frames.length < 8) {
