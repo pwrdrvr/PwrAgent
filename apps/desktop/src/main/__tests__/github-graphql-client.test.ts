@@ -838,17 +838,17 @@ describe("GithubGraphqlPrClient", () => {
     });
 
     it("learns it from a commit lookup too", async () => {
-      const request = vi.fn(async () => ({ r0: { nameWithOwner: "pwrdrvr/PwrAgent", object: null } }));
+      const request = vi.fn(async (_query: string) => ({ r0: { nameWithOwner: "pwrdrvr/PwrAgent", object: null } }));
       await client(request).fetchPullRequestsForCommits([
         { owner: "pwrdrvr", repo: "PwrAgnt", sha: "a".repeat(40) },
       ]);
 
-      expect(String((request.mock.calls[0] as unknown[])[0])).toContain("nameWithOwner object(oid:");
+      expect(request.mock.calls[0]![0]).toContain("nameWithOwner object(oid:");
       expect(forgeRepositoryName(oldName).repo).toBe("PwrAgent");
     });
 
     it("asks only for repositories GitHub has not named since launch", async () => {
-      const request = vi.fn(async () => ({ r0: { nameWithOwner: "pwrdrvr/PwrAgent" } }));
+      const request = vi.fn(async (_query: string) => ({ r0: { nameWithOwner: "pwrdrvr/PwrAgent" } }));
       const graphqlClient = client(request);
 
       await graphqlClient.resolveRepositoryNames([
