@@ -140,6 +140,20 @@ Observed on Ubuntu x64 in Sandboxer with Electron 44.9.3 (2026-10-28):
 | Spinner paused | 0 |
 | Spinner running | 121 |
 
+A second test captures a real running replay turn in the main window over two
+full 4.5s scan periods. It then restores the former infinite stepped sweep in
+the same window and captures again. Observed on Ubuntu x64 in Sandboxer
+(2026-10-31, two runs):
+
+| Same window, nine-second capture | `DrawFrame` | `BeginFrame` |
+| --- | ---: | ---: |
+| Shared-timer scans | 116–118 | 227–229 |
+| Former infinite sweep | 298–354 | 540 |
+
+`BeginFrame` is the compositor waking. An infinite animation requests one every
+display refresh even while its output is unchanged, and even when every
+animated element is offscreen.
+
 This validates the collection and source attribution on a controlled scene. It
 does not identify the component behind an operator's live GPU activity or measure
 hardware GPU utilization.
