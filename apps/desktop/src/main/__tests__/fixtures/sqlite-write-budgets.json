@@ -922,6 +922,13 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "pr-watch-autofix-hold": {
+    "commits": 1,
+    "note": "ten polls of one CI failure that Auto-fix covers, one success and failure watch: 1 commit holds the failure as its baseline, the other 9 polls only read; at most 1 commit per failure",
+    "observedWalBytes": 4120,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "pr-watch-baseline-clear": {
     "commits": 1,
     "note": "ten polls while re-run checks run, one baselined watch: 1 commit clears the baseline once, the other 9 polls only read; at most 1 commit per watch lifetime",
