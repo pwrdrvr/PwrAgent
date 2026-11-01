@@ -38,7 +38,7 @@ export function buildMcpIpcRelay({ arch = process.arch, outputRoot = root, packa
       writeFileSync(response, args.map((arg) => `"${arg}"`).join("\n"));
       writeFileSync(script, `@echo off\r\ncall "${vcvars}" ${arch === "x64" ? "x64" : "arm64"} >nul\r\nif errorlevel 1 exit /b 1\r\ncl.exe @"${response}"\r\n`);
       command = process.env.ComSpec ?? "C:\\Windows\\System32\\cmd.exe";
-      args = ["/d", "/c", `"${script}"`];
+      args = ["/d", "/s", "/c", `""${script}""`];
     }
   } else {
     if (process.platform === "linux" && arch !== process.arch) throw new Error("Build the Linux IPC relay on its target architecture.");
@@ -46,7 +46,12 @@ export function buildMcpIpcRelay({ arch = process.arch, outputRoot = root, packa
     args = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2",
       ...(process.platform === "darwin" ? ["-arch", arch === "x64" ? "x86_64" : arch] : []), source, "-o", output];
   }
-  const result = spawnSync(command, args, { stdio: "inherit" });
+  const result = spawnSync(command, args, {
+    stdio: "inherit",
+    // cmd.exe's quote grammar is different from CommandLineToArgvW. /s
+    // removes the outer quote pair; libuv must not backslash-escape it.
+    ...(process.platform === "win32" && command !== "cl.exe" ? { windowsVerbatimArguments: true } : {}),
+  });
   if (result.error || result.status !== 0) {
     throw new Error(`MCP IPC relay build failed: ${result.error?.message ?? result.status}. Windows builds require a Visual Studio developer environment.`);
   }
