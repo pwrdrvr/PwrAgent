@@ -42176,7 +42176,10 @@ script = "printf setup"
   });
 
   describe.each(["default", "auto"] as const)("existing-worktree trust in %s mode", (executionMode) => {
-    it.each(["repository", "ancestor", "symlink", "worktree-only", "remote-only", "other-clone"] as const)(
+    it.each([
+      "repository", "ancestor", "symlink", "worktree-only", "remote-only", "other-clone",
+      "unregistered-primary-gitdir", "unregistered-linked-gitdir",
+    ] as const)(
       "checks the destination's Git repository against %s trust",
       async (trustSource) => {
         const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-trust-")));
@@ -42190,7 +42193,16 @@ script = "printf setup"
         await git(repositoryPath, ["add", "README.md"]);
         await git(repositoryPath, ["commit", "-m", "initial"]);
         await git(repositoryPath, ["worktree", "add", "--detach", sourcePath, "main"]);
-        if (trustSource === "other-clone") {
+        if (trustSource === "unregistered-primary-gitdir" || trustSource === "unregistered-linked-gitdir") {
+          await mkdir(targetPath, { recursive: true });
+          const gitDir = trustSource === "unregistered-primary-gitdir"
+            ? path.join(repositoryPath, ".git")
+            : await git(sourcePath, ["rev-parse", "--absolute-git-dir"]);
+          await writeFile(path.join(targetPath, ".git"), `gitdir: ${expectedDir(gitDir)}\n`);
+          expect(await git(targetPath, ["rev-parse", "--show-toplevel"])).toBe(expectedDir(targetPath));
+          const worktreeList = await git(targetPath, ["worktree", "list", "--porcelain"]);
+          expect(worktreeList).not.toContain(`worktree ${expectedDir(targetPath)}\n`);
+        } else if (trustSource === "other-clone") {
           const clonePath = path.join(root, "clone");
           await git(root, ["clone", repositoryPath, clonePath]);
           await git(clonePath, ["worktree", "add", "--detach", targetPath, "HEAD"]);
