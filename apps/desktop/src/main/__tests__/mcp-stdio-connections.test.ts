@@ -1,6 +1,6 @@
 import { sandboxerStub } from "./helpers/sandboxer-stub";
 import fs from "node:fs";
-import { connect, type Socket } from "node:net";
+import { connect, createServer, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { mcpConnectionsForPeer } from "@pwragent/shared";
@@ -8,6 +8,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
 import { ConnectionRpcClient } from "../mcp-connections/mcp-connection-rpc-client";
+import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
+import type { McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
 import { McpStdioSecretVault } from "../mcp-connections/mcp-stdio-secret-vault";
 
 /*
@@ -23,6 +25,14 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const mode = process.env.FIXTURE_MODE || "serve";
 const pidDir = process.env.FIXTURE_PID_DIR;
+if (mode === "relay") {
+  // This executable never changes when the desktop catalog/version changes.
+  const socket = require("node:net").connect(process.env.FIXTURE_ENDPOINT);
+  socket.on("connect", () => { process.stdin.pipe(socket); socket.pipe(process.stdout); });
+  socket.on("end", () => process.exit(0));
+  socket.on("error", () => { process.stderr.write("Start the desktop yourself.\n"); process.exit(1); });
+  return;
+}
 if (pidDir) fs.writeFileSync(path.join(pidDir, "server-" + process.pid), "");
 if (process.env.FIXTURE_GRANDCHILD === "1") {
   const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
@@ -51,7 +61,7 @@ function handle(message) {
   if (message.method === "initialize") {
     send({ jsonrpc: "2.0", id: message.id, result: {
       protocolVersion: message.params.protocolVersion,
-      capabilities: { tools: {} },
+      capabilities: { tools: { listChanged: mode === "notify" }, ...(mode === "notify" ? { resources: { listChanged: true, subscribe: true }, prompts: { listChanged: true } } : {}) },
       serverInfo: { name: "fixture-files", version: "1.2.3" },
     } });
   } else if (message.method === "tools/list") {
@@ -73,6 +83,12 @@ function handle(message) {
           hasHome: Boolean(process.env.HOME),
         });
     send({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text }] } });
+    if (mode === "notify") {
+      for (const method of ["notifications/tools/list_changed", "notifications/prompts/list_changed", "notifications/resources/list_changed"]) send({ jsonrpc: "2.0", method, params: { _meta: { revision: 2 } } });
+      send({ jsonrpc: "2.0", method: "notifications/resources/updated", params: { uri: "skill://fixture/SKILL.md" } });
+    }
+  } else if (message.method === "resources/subscribe" || message.method === "resources/unsubscribe") {
+    send({ jsonrpc: "2.0", id: message.id, result: {} });
   } else {
     send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "no such method" } });
   }
@@ -119,7 +135,7 @@ function memorySecretSettings() {
   };
 }
 
-function createService(fixture: Fixture, overrides: { gatewayEnabled?: () => boolean } = {}) {
+function createService(fixture: Fixture, overrides: { gatewayEnabled?: () => boolean; readGatewaySelection?: () => Promise<string[]> } = {}) {
   const registry = new McpConnectionRegistry({ configPath: path.join(fixture.root, "config.toml") });
   const secretSettings = memorySecretSettings();
   const service = new McpConnectionGatewayService({
@@ -127,6 +143,7 @@ function createService(fixture: Fixture, overrides: { gatewayEnabled?: () => boo
     bridgeEntryPath: "/test/mcp-connection-bridge.js",
     gatewayEnabled: overrides.gatewayEnabled ?? (() => true),
     leaseManager: null,
+    readGatewaySelection: overrides.readGatewaySelection,
     registry,
     // OAuth storage for the built-in rows; no local command reads it.
     settings: {
@@ -431,5 +448,164 @@ describe.skipIf(process.platform === "win32")("local command MCP connections", (
     const status = (await service.listConnections()).find((entry) => entry.id === connection.id);
     expect(status).toMatchObject({ configured: false });
     expect(status?.detail).toContain("FIXTURE_TOKEN");
+  });
+});
+
+
+describe.skipIf(process.platform === "win32")("desktop-owned MCP lifecycle through an unchanged relay", () => {
+  it("keeps a healthy thread's revisions and pending approval when another session exits", async () => {
+    const fixture = makeFixture();
+    let id = "";
+    const { service } = createService(fixture, { readGatewaySelection: async () => [id] });
+    const connection = await service.createConnection({ displayName: "Independent sessions", stdio: launch(fixture) });
+    id = connection.id;
+    const signal = new AbortController().signal;
+    const scope = (thread: string) => JSON.stringify(["gateway", "codex", thread]);
+    const list = async (thread: string) => await service.requestGatewayToolOperation({
+      connectionId: id, scopeKey: scope(thread), operation: "gateway/tools/list", signal,
+    }) as McpGatewayTool[];
+    await list("exiting-thread");
+    const exiting = await bridgeFor(service, id, scope("exiting-thread"));
+    let ended = false;
+    await exiting.rpc.attach(5_000, (event) => { if (event.method === "connection/closed") ended = true; });
+    const identity = await whoami(exiting.rpc);
+    const healthy = await list("healthy-thread");
+    const echo = healthy.find((entry) => entry.toolName === "echo")!;
+    const cached = await service.listConnectionTools({ connectionId: id });
+    const starts = pidsOf(fixture, "server").length;
+    let release!: (approved: boolean) => void;
+    const approval = new Promise<boolean>((resolve) => { release = resolve; });
+    const approve = vi.fn(async () => await approval);
+    const gateway = new McpGatewayToolService({ connections: service, selectedConnections: async () => [id], approve });
+    const outcome = gateway.call({ ...echo, arguments: { text: "still approved" } }, {
+      backend: "codex", threadId: "healthy-thread", turnId: "turn", callId: "call", transport: "codex_dynamic_tool",
+    }).then((result) => ({ result }), (error: unknown) => ({ error }));
+    try {
+      await vi.waitFor(() => expect(approve).toHaveBeenCalledOnce());
+      expect(pidsOf(fixture, "server")).toContain(identity.pid);
+      process.kill(identity.pid, "SIGTERM");
+      await vi.waitFor(() => expect(ended).toBe(true));
+      await expect(list("exiting-thread")).rejects.toThrow("turn this connection off and on");
+      const freshInventory = await service.listConnectionTools({ connectionId: id });
+      expect(freshInventory.fetchedAt).toBeGreaterThan(cached.fetchedAt);
+      expect(pidsOf(fixture, "server")).toHaveLength(starts + 1);
+      expect(await list("healthy-thread")).toEqual(healthy);
+      release(true);
+      await expect(outcome).resolves.toMatchObject({ result: { result: { content: [{ text: "still approved" }] } } });
+      expect(approve).toHaveBeenCalledOnce();
+    } finally {
+      release(false);
+      await outcome;
+    }
+  });
+
+  it("forwards supported discovery notifications and resource subscriptions over the live attach socket", async () => {
+    const fixture = makeFixture();
+    const { service } = createService(fixture);
+    const connection = await service.createConnection({ displayName: "Changing catalog", stdio: launch(fixture, [
+      { name: "FIXTURE_MODE", secret: false, value: "notify" },
+    ]) });
+    const bridge = await bridgeFor(service, connection.id, "notification-thread");
+    const events: Array<{ method: string }> = [];
+    expect(await bridge.rpc.attach(5_000, (event) => events.push(event))).toBe(true);
+    expect(await bridge.rpc.request("describe")).toMatchObject({ capabilities: { tools: { listChanged: true }, resources: { subscribe: true } } });
+    await bridge.rpc.request("resources/subscribe", { uri: "skill://fixture/SKILL.md" });
+    const before = await service.listConnectionTools({ connectionId: connection.id });
+    await bridge.rpc.request("tools/call", { name: "echo", arguments: { text: "notify" }, _meta: { "fixture/approval": "unchanged" } });
+    await vi.waitFor(() => expect(events).toHaveLength(4));
+    expect(events.map((event) => event.method)).toEqual(["notifications/tools/list_changed", "notifications/prompts/list_changed", "notifications/resources/list_changed", "notifications/resources/updated"]);
+    const after = await service.listConnectionTools({ connectionId: connection.id });
+    expect(after.fetchedAt).toBeGreaterThan(before.fetchedAt);
+    await bridge.rpc.request("resources/unsubscribe", { uri: "skill://fixture/SKILL.md" });
+  });
+
+  it("requires explicit reconnect after EOF and rejects an approval from the old session", async () => {
+    const fixture = makeFixture();
+    const endpoint = path.join(fixture.root, "desktop.sock");
+    let version = "2.0.0";
+    let catalog = [{ name: "remove", inputSchema: { type: "object" as const }, annotations: { destructiveHint: true } }];
+    const peers = new Set<Socket>();
+    const methods: string[] = [];
+    const desktop = createServer((peer) => {
+      peers.add(peer);
+      peer.on("close", () => peers.delete(peer));
+      let buffer = "";
+      peer.setEncoding("utf8");
+      peer.on("data", (chunk: string) => {
+        buffer += chunk;
+        let newline: number;
+        while ((newline = buffer.indexOf("\n")) !== -1) {
+          const request = JSON.parse(buffer.slice(0, newline));
+          buffer = buffer.slice(newline + 1);
+          methods.push(request.method);
+          if (request.id === undefined) continue;
+          const result = request.method === "initialize" ? {
+            protocolVersion: request.params.protocolVersion, capabilities: { tools: { listChanged: true } },
+            serverInfo: { name: "fixture-desktop", version }, instructions: `Read skill ${version}.`,
+            _meta: { "com.pwrdrvr.pwrdisk/interface": { owner: "desktop", desktopVersion: version, relayVersion: "0.1.0" } },
+          } : request.method === "tools/list" ? { tools: catalog }
+            : { content: [{ type: "text", text: "removed fixture" }] };
+          peer.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n`);
+          if (request.method === "initialize") expect(request.params.capabilities.elicitation).toBeUndefined();
+        }
+      });
+    });
+    await new Promise<void>((resolve) => desktop.listen(endpoint, resolve));
+    let id = "";
+    const { service } = createService(fixture, { readGatewaySelection: async () => [id] });
+    const connection = await service.createConnection({ displayName: "Fixture desktop", stdio: launch(fixture, [
+      { name: "FIXTURE_MODE", secret: false, value: "relay" },
+      { name: "FIXTURE_ENDPOINT", secret: false, value: endpoint },
+    ]) });
+    id = connection.id;
+    const scope = JSON.stringify(["gateway", "codex", "desktop-thread"]);
+    const base = { connectionId: id, scopeKey: scope, signal: new AbortController().signal };
+    let approve!: (value: boolean) => void;
+    const approval = new Promise<boolean>((resolve) => { approve = resolve; });
+    const asked = vi.fn(async () => await approval);
+    const gateway = new McpGatewayToolService({ connections: service, selectedConnections: async () => [id], approve: asked });
+    try {
+      const first = await service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/list" }) as McpGatewayTool[];
+      expect(first[0].serverIdentity).toMatchObject({ serverInfo: { version: "2.0.0" }, metadata: { "com.pwrdrvr.pwrdisk/interface": { owner: "desktop", relayVersion: "0.1.0" } } });
+      const pending = gateway.call({ ...first[0], arguments: {} }, { backend: "codex", threadId: "desktop-thread", turnId: "turn", callId: "call", transport: "codex_dynamic_tool" });
+      const outcome = pending.catch((error: unknown) => error);
+      await vi.waitFor(() => expect(asked).toHaveBeenCalledOnce());
+      for (const peer of peers) peer.end();
+      await vi.waitFor(async () => expect((await service.listConnections()).find((entry) => entry.id === id)?.localProcesses).toBeUndefined());
+      approve(true);
+      expect(await outcome).toMatchObject({ message: expect.stringContaining("turn this connection off and on") });
+      await expect(service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/list" })).rejects.toThrow("Start the desktop yourself");
+      expect(methods.filter((method) => method === "tools/call")).toHaveLength(0);
+      // The existing thread selection control calls this when deselected.
+      await service.closeThreadSessions("desktop-thread", [id]);
+      version = "3.0.0";
+      catalog = [...catalog, { ...catalog[0], name: "new_tool" }];
+      const refreshed = await service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/list" }) as McpGatewayTool[];
+      expect(refreshed.map((tool) => tool.toolName)).toEqual(["remove", "new_tool"]);
+      expect(refreshed[0].schemaRevision).not.toBe(first[0].schemaRevision);
+      expect(refreshed[0].serverIdentity?.serverInfo?.version).toBe("3.0.0");
+      const native = await bridgeFor(service, id, scope);
+      expect(await native.rpc.request("describe")).toMatchObject({
+        instructions: "Read skill 3.0.0.",
+        metadata: { "com.pwrdrvr.pwrdisk/interface": { desktopVersion: "3.0.0", relayVersion: "0.1.0" } },
+      });
+      await expect(service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/call", invocation: { ...first[0], arguments: {} } })).rejects.toThrow("schema or authorization changed");
+      expect(methods.filter((method) => method === "tools/call")).toHaveLength(0);
+    } finally {
+      approve(false);
+      await service.close();
+      for (const peer of peers) peer.destroy();
+      await new Promise<void>((resolve) => desktop.close(() => resolve()));
+    }
+  });
+
+  it("reports absence without attempting to launch the desktop", async () => {
+    const fixture = makeFixture();
+    const { service } = createService(fixture);
+    const result = await service.testStdioConnection({ stdio: launch(fixture, [
+      { name: "FIXTURE_MODE", secret: false, value: "relay" },
+      { name: "FIXTURE_ENDPOINT", secret: false, value: path.join(fixture.root, "absent.sock") },
+    ]) });
+    expect(result).toMatchObject({ ok: false, output: expect.stringContaining("Start the desktop yourself") });
   });
 });

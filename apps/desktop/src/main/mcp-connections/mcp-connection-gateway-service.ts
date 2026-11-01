@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdtemp, rm, stat } from "node:fs/promises";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
@@ -14,7 +14,8 @@ import { shell } from "electron";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { ErrorCode, McpError, ToolListChangedNotificationSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { ErrorCode, McpError, ToolListChangedNotificationSchema, PromptListChangedNotificationSchema, ResourceListChangedNotificationSchema, ResourceUpdatedNotificationSchema, type InitializeResult, type Notification, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { McpInitializationTransport } from "./mcp-initialization-transport";
 import { McpDiscovery, McpDiscoveryError, mcpDiscoveryContext, mcpDiscoveryPhaseContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
 import { SandboxerConnection } from "./sandboxer-connection";
 import {
@@ -201,8 +202,6 @@ export type McpConnectionGatewayServiceOptions = {
   fetchFn?: FetchLike;
   openExternal?: (url: string) => Promise<void>;
   openPath?: (path: string) => Promise<string>;
-  launchPollAttempts?: number;
-  launchPollDelayMs?: number;
   resolveInstallPaths?: () => string[];
   settings?: GatewaySettings;
   registry?: McpConnectionRegistry;
@@ -267,9 +266,7 @@ function resolveDefaultPwrSnapInstallPaths(): string[] {
   ];
 }
 
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
+
 
 /**
  * The page the browser lands on after the MCP server's authorization screen.
@@ -494,8 +491,6 @@ export class McpConnectionGatewayService {
       >
     | null;
   private readonly brokerDiscovery: McpConnectionBrokerDiscovery;
-  private readonly launchPollAttempts: number;
-  private readonly launchPollDelayMs: number;
   private bridgeServer?: NetServer;
   private bridgeSocketPath?: string;
   private bridgeSocketDirectory?: string;
@@ -560,6 +555,12 @@ export class McpConnectionGatewayService {
     Promise<ListMcpConnectionToolsResponse>
   >();
   private readonly toolInventoryGenerations = new Map<string, number>();
+  // Inventory eviction must discard stale Settings reads without changing
+  // the schema/consent revisions of unrelated live thread sessions.
+  private readonly toolInventoryCacheGenerations = new Map<string, number>();
+  private readonly sessionIdentities = new WeakMap<Client, string>();
+  private readonly initializations = new WeakMap<Client, InitializeResult>();
+  private readonly disconnectedStdioGrants = new Set<string>();
   private connectPromise?: Promise<ConnectPwrSnapResponse>;
   private sessionRevoked = false;
   private leaseHeld = false;
@@ -629,8 +630,6 @@ export class McpConnectionGatewayService {
       : options.leaseManager;
     this.brokerDiscovery =
       options.brokerDiscovery ?? new McpConnectionBrokerDiscovery();
-    this.launchPollAttempts = options.launchPollAttempts ?? 16;
-    this.launchPollDelayMs = options.launchPollDelayMs ?? 500;
     this.stdioSecrets = options.stdioSecrets ?? new McpStdioSecretVault(
       hasStdioSecretStore(this.settings) ? { settings: this.settings } : {},
     );
@@ -1504,7 +1503,7 @@ export class McpConnectionGatewayService {
     if (cached) return cached;
     const pending = this.toolInventoryReads.get(connection.id);
     if (pending) return await pending;
-    const generation = this.toolInventoryGenerations.get(connection.id) ?? 0;
+    const generation = this.toolInventoryCacheGenerations.get(connection.id) ?? 0;
     const read = this.readConnectionTools(connection, generation).finally(() => {
       if (this.toolInventoryReads.get(connection.id) === read) {
         this.toolInventoryReads.delete(connection.id);
@@ -1515,13 +1514,21 @@ export class McpConnectionGatewayService {
   }
 
   private invalidateConnectionTools(connectionId: string): void {
+    this.evictConnectionToolInventory(connectionId);
+    this.toolInventoryGenerations.set(
+      connectionId,
+      (this.toolInventoryGenerations.get(connectionId) ?? 0) + 1,
+    );
+  }
+
+  private evictConnectionToolInventory(connectionId: string): void {
     const health = this.discoveryHealth.get(connectionId);
     if (health) this.discoveryHealth.set(connectionId, { ...health, state: "untested" });
     this.toolInventories.delete(connectionId);
     this.toolInventoryReads.delete(connectionId);
-    this.toolInventoryGenerations.set(
+    this.toolInventoryCacheGenerations.set(
       connectionId,
-      (this.toolInventoryGenerations.get(connectionId) ?? 0) + 1,
+      (this.toolInventoryCacheGenerations.get(connectionId) ?? 0) + 1,
     );
   }
 
@@ -1557,13 +1564,13 @@ export class McpConnectionGatewayService {
         tools,
         fetchedAt: Date.now(),
       };
-      if ((this.toolInventoryGenerations.get(connection.id) ?? 0) === generation) {
+      if ((this.toolInventoryCacheGenerations.get(connection.id) ?? 0) === generation) {
         this.toolInventories.set(connection.id, inventory);
         this.recordDiscoverySuccess(connection.id);
       }
       return inventory;
     } catch (error) {
-      if ((this.toolInventoryGenerations.get(connection.id) ?? 0) === generation) this.recordDiscoveryFailure(connection.id, error);
+      if ((this.toolInventoryCacheGenerations.get(connection.id) ?? 0) === generation) this.recordDiscoveryFailure(connection.id, error);
       throw error;
     } finally {
       discovery.close();
@@ -2012,19 +2019,10 @@ export class McpConnectionGatewayService {
 
   private async connectNow(): Promise<ConnectPwrSnapResponse> {
     if (!(await this.isEndpointAvailable())) {
-      if (this.findInstalledPath()) {
-        await this.openApplication();
-        for (let attempt = 0; attempt < this.launchPollAttempts; attempt += 1) {
-          await delay(this.launchPollDelayMs);
-          if (await this.isEndpointAvailable()) break;
-        }
-      }
-      if (!(await this.isEndpointAvailable())) {
-        return {
-          outcome: "needs_local_agent_access",
-          status: await this.readStatus(),
-        };
-      }
+      return {
+        outcome: "needs_local_agent_access",
+        status: await this.readStatus(),
+      };
     }
 
     await this.authorizeConnection(PWRSNAP_MCP_CONNECTION_ID);
@@ -2403,6 +2401,9 @@ export class McpConnectionGatewayService {
     discovery.remaining();
     const existing = this.upstreamSessions.get(token);
     if (existing) return existing.client;
+    if (this.disconnectedStdioGrants.has(token)) {
+      throw new Error("The MCP desktop connection ended. Start the desktop yourself, then turn this connection off and on in the thread MCP access panel. Search tools again and reread relevant skills/resources. Previously injected text may remain in the conversation. Never replay a write or reuse its approval.");
+    }
     let pending = this.upstreamStarts.get(token);
     if (!pending) {
       const controller = new AbortController();
@@ -2431,6 +2432,35 @@ export class McpConnectionGatewayService {
     }
   }
 
+  private sendBridgeEvent(token: string, event: { method: string; params?: unknown }): void {
+    const line = `${JSON.stringify({ event })}\n`;
+    for (const socket of this.bridgeAttachments.get(token) ?? []) {
+      // A stalled bridge cannot retain an unbounded notification queue.
+      if (socket.writableLength + Buffer.byteLength(line) > MAX_RPC_LINE_BYTES) socket.destroy();
+      else socket.write(line);
+    }
+  }
+
+  private installDiscoveryNotifications(client: Client, connection: McpConnectionRecord): void {
+    const forward = (notification: Notification): void => {
+      const caps = client.getServerCapabilities();
+      const method = notification.method;
+      const supported = method === "notifications/tools/list_changed" ? caps?.tools?.listChanged
+        : method === "notifications/prompts/list_changed" ? caps?.prompts?.listChanged
+        : method === "notifications/resources/list_changed" ? caps?.resources?.listChanged
+        : caps?.resources?.subscribe;
+      if (!supported) return;
+      if (method === "notifications/tools/list_changed") this.invalidateConnectionTools(connection.id);
+      for (const [token, session] of this.upstreamSessions) {
+        if (session.client === client) this.sendBridgeEvent(token, notification);
+      }
+    };
+    client.setNotificationHandler(ToolListChangedNotificationSchema, forward);
+    client.setNotificationHandler(PromptListChangedNotificationSchema, forward);
+    client.setNotificationHandler(ResourceListChangedNotificationSchema, forward);
+    client.setNotificationHandler(ResourceUpdatedNotificationSchema, forward);
+  }
+
   private async openUpstreamSession(
     token: string,
     connection: McpConnectionRecord,
@@ -2448,6 +2478,9 @@ export class McpConnectionGatewayService {
       onClose: (client) => {
         if (this.upstreamSessions.get(token)?.client === client) {
           this.upstreamSessions.delete(token);
+          this.evictConnectionToolInventory(connection.id);
+          if (connection.kind === "stdio") this.disconnectedStdioGrants.add(token);
+          this.sendBridgeEvent(token, { method: "connection/closed" });
         }
       },
     });
@@ -2458,6 +2491,7 @@ export class McpConnectionGatewayService {
       await session.client.close();
       throw new Error("The MCP connection changed while its session was opening. Retry discovery.");
     }
+    this.sessionIdentities.set(session.client, randomUUID());
     this.upstreamSessions.set(token, session);
     return session.client;
   }
@@ -2508,17 +2542,17 @@ export class McpConnectionGatewayService {
       },
       { capabilities: {} },
     );
-    client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
-      this.invalidateConnectionTools(connection.id);
-    });
+    this.installDiscoveryNotifications(client, connection);
     const onClose = options.onClose;
     if (onClose) client.onclose = () => onClose(client);
     const abort = (): void => { void transport.close().catch(() => undefined); };
     options.discovery.signal.addEventListener("abort", abort, { once: true });
     try {
-      await client.connect(transport, {
+      const observed = new McpInitializationTransport(transport);
+      await client.connect(observed, {
         timeout: options.discovery.remaining(), signal: options.discovery.signal,
       });
+      if (observed.initialization) this.initializations.set(client, observed.initialization);
       options.discovery.remaining();
       if (connection.id === PWRSNAP_MCP_CONNECTION_ID) {
         await this.settings.clearPwrSnapMcpCredential();
@@ -2560,9 +2594,7 @@ export class McpConnectionGatewayService {
     if (!launch) throw new Error(`${connection.displayName} has no command to run.`);
     let transport: OwnedStdioClientTransport | undefined;
     const client = new Client({ name: options.clientName, version: "1.0.0" }, { capabilities: {} });
-    client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
-      this.invalidateConnectionTools(connection.id);
-    });
+    this.installDiscoveryNotifications(client, connection);
     const abort = (): void => { void transport?.close().catch(() => undefined); };
     options.discovery.signal.addEventListener("abort", abort, { once: true });
     try {
@@ -2588,9 +2620,11 @@ export class McpConnectionGatewayService {
       );
       const onClose = options.onClose;
       if (onClose) client.onclose = () => onClose(client);
-      await client.connect(transport, {
+      const observed = new McpInitializationTransport(transport);
+      await client.connect(observed, {
         timeout: options.discovery.remaining(), signal: options.discovery.signal,
       });
+      if (observed.initialization) this.initializations.set(client, observed.initialization);
       options.discovery.remaining();
       return { client, transport };
     } catch (error) {
@@ -2649,13 +2683,15 @@ export class McpConnectionGatewayService {
     );
   }
 
-  private async closeUpstreamSession(token: string): Promise<void> {
+  private async closeUpstreamSession(token: string, resetDisconnected = true): Promise<void> {
+    if (resetDisconnected) this.disconnectedStdioGrants.delete(token);
     const start = this.upstreamStarts.get(token);
     this.upstreamStarts.delete(token);
     start?.controller.abort(new DOMException("MCP session closed.", "AbortError"));
     const session = this.upstreamSessions.get(token);
     this.upstreamSessions.delete(token);
     if (!session) return;
+    this.sendBridgeEvent(token, { method: "connection/closed" });
     await session.client.close().catch(async () => {
       await session.transport.close().catch(() => undefined);
     });
@@ -2882,7 +2918,7 @@ export class McpConnectionGatewayService {
       if (current.size > 0) return;
       this.bridgeAttachments.delete(token);
       if (this.registry.get(grant.connectionId)?.kind === "stdio") {
-        void this.closeUpstreamSession(token);
+        void this.closeUpstreamSession(token, false);
       }
     };
     socket.once("close", detach);
@@ -3199,7 +3235,7 @@ export class McpConnectionGatewayService {
           connectionId: connection.id,
           serverName: connection.displayName,
           toolName: definition.name,
-          schemaRevision: gatewayToolRevision(token, generation, definition),
+          schemaRevision: gatewayToolRevision(JSON.stringify([token, this.sessionIdentities.get(client)]), generation, definition),
           consentRevision: gatewayToolRevision(JSON.stringify([this.consentEpoch, connection.id]), generation, definition),
           definition,
         });
@@ -3220,6 +3256,11 @@ export class McpConnectionGatewayService {
       throw new Error("The MCP connection changed during discovery. Search again.");
     }
     this.recordDiscoverySuccess(connection.id);
+    if (tools[0]) {
+      tools[0] = { ...tools[0], serverIdentity: {
+        serverInfo: client.getServerVersion?.(), metadata: this.initializations.get(client)?._meta,
+      } };
+    }
     // Sandboxer's say to stop each sandbox when done; dropping them left the
     // agent nothing telling it a forgotten machine keeps billing. Only the
     // built-in Sandboxer connection's: a third-party server's instructions would be
@@ -3293,6 +3334,10 @@ export class McpConnectionGatewayService {
               tools: Boolean(capabilities?.tools),
               resources: Boolean(capabilities?.resources),
               prompts: Boolean(capabilities?.prompts),
+              capabilities,
+              serverInfo: client.getServerVersion?.(),
+              instructions: client.getInstructions?.(),
+              metadata: this.initializations.get(client)?._meta,
             };
           }
           case "tools/list": {
@@ -3320,6 +3365,10 @@ export class McpConnectionGatewayService {
             return await client.readResource(
               values as Parameters<Client["readResource"]>[0],
             );
+          case "resources/subscribe":
+            return await client.subscribeResource(values as Parameters<Client["subscribeResource"]>[0]);
+          case "resources/unsubscribe":
+            return await client.unsubscribeResource(values as Parameters<Client["unsubscribeResource"]>[0]);
           case "prompts/list":
             return await client.listPrompts(values);
           case "prompts/get":

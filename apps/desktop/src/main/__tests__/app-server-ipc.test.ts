@@ -728,6 +728,8 @@ const publishLocalEvent = vi.fn(async (_event?: unknown) => undefined);
 const setForgeReadHandlers = vi.fn();
 const setForgePrToolHandler = vi.fn();
 const setForgeToolPolicyResolver = vi.fn();
+const setForgeToolRuleWriter = vi.fn();
+const setForgeProjectLabelResolver = vi.fn();
 const setThreadPullRequestStatusToolHandler = vi.fn();
 const setThreadPullRequestCanonicalizer = vi.fn();
 const setLocalPullRequestAuthorityResolver = vi.fn();
@@ -1195,6 +1197,8 @@ vi.mock("../app-server/backend-registry", () => {
     setForgeReadHandlers,
     setForgePrToolHandler,
     setForgeToolPolicyResolver,
+    setForgeToolRuleWriter,
+    setForgeProjectLabelResolver,
     getLocalFilePrivateStorageRoots: () => [],
     setThreadPullRequestStatusToolHandler,
     setThreadPullRequestCanonicalizer,
@@ -3012,6 +3016,68 @@ describe("app server ipc", () => {
     const watchHandler = setThreadPullRequestWatchToolHandler.mock.calls.at(-1)?.[0];
     await expect(watchHandler?.({ backend: "codex", threadId: "thread-1", url: attached.url, notifyOn: ["merged", "closed"] }))
       .resolves.toMatchObject({ ok: true });
+  });
+
+  it("watches a PR on a thread the owner navigation refresh has not listed yet", async () => {
+    // A thread handed off mid-session attached its PR and asked for a
+    // merge/close watch before any navigation refresh listed it. The watch
+    // was refused as "not attached to this thread's primary workspace".
+    const attached = githubPr({
+      number: 3168, org: "pwrdrvr", repo: "PwrAgent", state: "passing",
+      headRefName: "fix/messaging-grok-permissions", headSha: "3".repeat(40),
+      explicitlyAttached: true,
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3168",
+    });
+    listThreads.mockResolvedValueOnce([] as never);
+    getCachedThreadSummary.mockImplementation(({ threadId }) => threadId === "thread-new"
+      ? {
+          id: "thread-new",
+          title: "Handed-off fix",
+          source: "claude",
+          linkedDirectories: [{
+            id: "/repo/PwrAgent",
+            kind: "worktree",
+            label: "PwrAgent",
+            path: "/repo/PwrAgent",
+            worktreePath: "/worktrees/abc/PwrAgent",
+          }],
+          updatedAt: 2000,
+        } as never
+      : undefined);
+    resolveGitHubRepoForDirectory.mockResolvedValue({
+      host: "github.com", owner: "pwrdrvr", repo: "PwrAgent",
+    } as never);
+    getThreadOverlayState.mockResolvedValue({
+      backend: "claude",
+      threadId: "thread-new",
+      executionMode: "full-access",
+      extraLinkedDirectories: [],
+      prs: [attached],
+    });
+    registerThreadPrStatusWatch.mockClear();
+
+    registerAppServerIpcHandlers();
+    await refreshOwnerMetadata();
+    const { appServerService } = await import("../ipc/app-server");
+    expect(appServerService.readPrimaryGitRepository("claude", "thread-new")).toBeUndefined();
+
+    const watchHandler = setThreadPullRequestWatchToolHandler.mock.calls.at(-1)?.[0];
+    const response = await watchHandler?.({
+      backend: "claude",
+      threadId: "thread-new",
+      url: attached.url,
+      notifyOn: ["merged", "closed"],
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: { pullRequestWatch: {
+        terminalWatch: { kind: "terminal", notifyOn: ["merged", "closed"], prUrl: attached.url },
+      } },
+    });
+    expect(registerThreadPrStatusWatch).toHaveBeenCalledOnce();
+    expect(appServerService.readPrimaryGitRepository("claude", "thread-new"))
+      .toBe("github.com/pwrdrvr/pwragent");
   });
 
   it.each([
@@ -9688,6 +9754,8 @@ describe("app server ipc", () => {
     getThreadOverlayState.mockResolvedValue({ backend: "codex", threadId: "thread-1", executionMode: "default", prs: [] });
     registerAppServerIpcHandlers();
     expect(setForgeToolPolicyResolver).toHaveBeenCalledWith(expect.any(Function));
+    expect(setForgeToolRuleWriter).toHaveBeenCalledWith(expect.any(Function));
+    expect(setForgeProjectLabelResolver).toHaveBeenCalledWith(expect.any(Function));
     const github = setForgePrToolHandler.mock.calls.at(-1)?.[0];
     expect(github).toBeTypeOf("function");
     await expect(github("get_issue", { number: 1 }, { backend: "codex", threadId: "thread-1", transport: "mcp" }))

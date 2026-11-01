@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import type { AppServerBackendKind, NavigationQueryPage } from "@pwragent/shared";
+import type { AppServerBackendKind, NavigationDirectoryRow, NavigationQueryPage } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { NavigationMetadataBudget, NAVIGATION_METADATA_MAX_RETAINED_BYTES } from "./navigation-metadata-budget";
 import { readNavigationQueryRange } from "./read-navigation-query-range";
@@ -50,6 +50,12 @@ export async function readNavigationLaunchpadKeys(api: DesktopApi, backend?: App
     .map((directory) => directory.key);
 }
 
+/** Every directory row, for surfaces that name projects by their repository. */
+export async function readNavigationDirectoryRows(api: DesktopApi, signal?: AbortSignal): Promise<NavigationDirectoryRow[]> {
+  const page = await readSettingsMetadata(api, "directory-index", undefined, signal);
+  return page.directories ?? [];
+}
+
 export async function readNavigationModelInventory(api: DesktopApi, backend: AppServerBackendKind, signal?: AbortSignal) {
   const page = await readSettingsMetadata(api, "model-inventory", backend, signal);
   return page.modelGroups ?? [];
@@ -78,5 +84,9 @@ export function useNavigationSettingsPreview(api?: DesktopApi) {
     if (!api) throw new Error("Settings previews require the desktop bridge.");
     return readNavigationModelInventory(api, backend, begin());
   }, [api, begin]);
-  return { readLaunchpadKeys, readModelInventory };
+  const readDirectories = useCallback(async () => {
+    if (!api) throw new Error("Settings previews require the desktop bridge.");
+    return readNavigationDirectoryRows(api, begin());
+  }, [api, begin]);
+  return { readDirectories, readLaunchpadKeys, readModelInventory };
 }

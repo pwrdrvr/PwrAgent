@@ -54,6 +54,17 @@ describe("CodexModelProviderTranslator", () => {
     expect(t.reportedProviderForThread("t4")).toBe("my-own");
   });
 
+  it("reports every provider Codex named, and nothing for a thread it has not", () => {
+    const { translator: t } = translator();
+    t.observeResponse("thread/read", { threadId: "t4" }, { thread: { id: "t4", modelProvider: "ollama", model: "llama" } });
+    t.observeResponse("thread/read", { threadId: "t5" }, { thread: { id: "t5", modelProvider: "openai", model: "gpt-5.5" } });
+    t.observeResponse("thread/read", { threadId: "t6" }, { thread: { id: "t6", modelProvider: "refuseless", model: "glm" } });
+    expect(t.reportedProviderForThread("t4")).toBe("ollama");
+    expect(t.reportedProviderForThread("t5")).toBe("openai");
+    expect(t.reportedProviderForThread("t6")).toBe("refuseless");
+    expect(t.reportedProviderForThread("t7")).toBeUndefined();
+  });
+
   it("resumes a provider thread on its provider and refuses a switch to another", () => {
     const { translator: t } = translator(["refuseless", "bonsai"]);
     t.observeResponse("thread/read", { threadId: "t1" }, { thread: { id: "t1", modelProvider: "refuseless", model: "glm" } });

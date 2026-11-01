@@ -30,7 +30,11 @@ export class CodexModelProviderTranslator {
     return provider && this.resolveProviderIds().has(provider) ? provider : undefined;
   }
 
-  /** Includes providers defined only in the operator's Codex profile. */
+  /**
+   * The provider Codex last reported for a thread, configured or not:
+   * `openai` for Codex's default, an id from the operator's own Codex config
+   * (such as `ollama`), or undefined when Codex has not reported one.
+   */
   reportedProviderForThread(threadId: string): string | undefined {
     return this.threadProviders.get(threadId);
   }

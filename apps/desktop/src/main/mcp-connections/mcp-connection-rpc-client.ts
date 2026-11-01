@@ -7,6 +7,8 @@ type RpcResponse =
   | { ok: true; result: unknown }
   | { ok: false; error: string; code?: number; data?: unknown };
 
+export type McpBridgeEvent = { method: string; params?: Record<string, unknown> };
+
 export class ConnectionRpcClient {
   constructor(
     private readonly socketPath: string,
@@ -22,11 +24,12 @@ export class ConnectionRpcClient {
    * has closed stdin. Resolves false when the gateway does not support it
    * (an older owner), which only means cleanup waits for revocation instead.
    */
-  attach(timeoutMs = 5_000): Promise<boolean> {
+  attach(timeoutMs = 5_000, onEvent?: (event: McpBridgeEvent) => void): Promise<boolean> {
     return new Promise((resolve) => {
       const socket: Socket = connect(this.socketPath);
       let buffer = "";
       let settled = false;
+      let attached = false;
       const finish = (attached: boolean): void => {
         if (settled) return;
         settled = true;
@@ -40,23 +43,32 @@ export class ConnectionRpcClient {
         socket.write(`${JSON.stringify({ token: this.token, op: "attach" })}\n`);
       });
       socket.on("data", (chunk: string) => {
-        if (settled) return;
         buffer += chunk;
-        const newline = buffer.indexOf("\n");
-        if (newline === -1) {
-          if (buffer.length > 4_096) finish(false);
-          return;
-        }
-        try {
-          const response = JSON.parse(buffer.slice(0, newline)) as RpcResponse;
-          if (response.ok) socket.unref();
-          finish(response.ok);
-        } catch {
-          finish(false);
+        if (buffer.length > 1024 * 1024) { socket.destroy(); finish(false); return; }
+        let newline: number;
+        while ((newline = buffer.indexOf("\n")) !== -1) {
+          const line = buffer.slice(0, newline);
+          buffer = buffer.slice(newline + 1);
+          try {
+            const response = JSON.parse(line) as RpcResponse & { event?: McpBridgeEvent };
+            if (!settled) {
+              if (response.ok) socket.unref();
+              attached = response.ok;
+              finish(response.ok);
+            } else if (response.event && typeof response.event.method === "string") {
+              onEvent?.(response.event);
+            }
+          } catch {
+            socket.destroy();
+            finish(false);
+          }
         }
       });
       socket.on("error", () => finish(false));
-      socket.on("close", () => finish(false));
+      socket.on("close", () => {
+        if (attached) onEvent?.({ method: "connection/closed" });
+        finish(false);
+      });
     });
   }
 

@@ -39,6 +39,28 @@ import {
   type ForgeAgentToolPolicy,
   type McpConnectionToolApproval,
 } from "@pwragent/shared";
+import {
+  buildForgeApprovalRememberOptions,
+  FORGE_AGENT_RULE_APPROVAL_SOURCE,
+  FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY,
+  forgeAgentRuleAgentKey,
+  forgeAgentToolRuleDescription,
+  forgeAgentToolRuleOffMessage,
+  forgeAgentToolRuleSentence,
+  forgeAgentToolUnreadableRuleSentence,
+  forgeApprovalRememberRuleAgent,
+  forgeRuleRepositoryLabel,
+  isForgeApprovalRememberGroup,
+  normalizeForgeRuleRepository,
+  readForgeApprovalRememberChoice,
+  resolveForgeAgentToolAccess,
+  type ForgeAgentIdentity,
+  type ForgeAgentRuleAgent,
+  type ForgeAgentRuleNames,
+  type ForgeAgentToolRuleApprovalNote,
+  type ForgeAgentToolRuleGroup,
+  type ForgeApprovalRememberOptionId,
+} from "@pwragent/shared";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -872,7 +894,39 @@ const CODEX_RATE_LIMIT_BROADCAST_WINDOW_MS = 20_000;
 const THREAD_SEARCH_REUSE_WINDOW_MS = 2_000;
 /** Marks the approval cards PwrAgent's own forge tools raise. */
 const FORGE_TOOL_REQUEST_ID_PREFIX = "forge-tool:";
+/** How long a card waits for its project's name before using owner/repo. */
+const FORGE_PROJECT_LABEL_TIMEOUT_MS = 1_000;
 const FORGE_APPROVAL_WITHDRAWN_TODO_KEY = "forge-approval-withdrawn";
+
+/** Saves one group of one (repository, agent) forge project rule. */
+export type ForgeToolRuleWriter = (update: {
+  repository: string;
+  agent: ForgeAgentRuleAgent;
+  group: ForgeAgentToolRuleGroup;
+  level: ForgeAgentToolAccess | undefined;
+}) => Promise<unknown>;
+
+/** What the agent is told about how a forge write was approved. */
+type ForgeWriteApprovalNotes = {
+  /** A project rule set to Allow ran the call without a card. */
+  approval?: ForgeAgentToolRuleApprovalNote;
+  /** The card's "Always allow" choice, and whether its rule was saved. */
+  rememberedRule?:
+    | { rule: string; saved: true }
+    | { rule: string; saved: false; error: string };
+};
+
+function withForgeApprovalNotes(result: unknown, notes: ForgeWriteApprovalNotes | undefined): unknown {
+  if (!notes || (!notes.approval && !notes.rememberedRule)) return result;
+  const record = readRecord(result);
+  if (!record) return result;
+  return {
+    ...record,
+    ...(notes.approval ? { approval: notes.approval } : {}),
+    ...(notes.rememberedRule ? { rememberedRule: notes.rememberedRule } : {}),
+  };
+}
+
 const PENDING_APPROVAL_GUIDANCE =
   "The operator has not answered these yet. A call waiting on one stays pending until they do. "
   + "If this turn ends first, the request is withdrawn and the waiting call is cancelled. "
@@ -1015,6 +1069,8 @@ type BackendClient = {
   readThreadPricingSnapshot?: CodexAppServerClient["readThreadPricingSnapshot"];
   /** The configured Codex model provider a thread runs on, if Codex reported one. */
   modelProviderForThread?(threadId: string): string | undefined;
+  /** Any model provider Codex reported for a thread, `openai` for its default. */
+  reportedModelProviderForThread?(threadId: string): string | undefined;
   enrichThreadDirectories?(
     threads: AppServerThreadSummary[],
     caller?: DirectoryEnrichmentCaller,
@@ -8526,6 +8582,51 @@ function buildWorkspaceMoveSuccessPrompt(params: {
   ].join("\n");
 }
 
+function describeReviewTarget(target: AppServerReviewTarget): string {
+  switch (target.type) {
+    case "pullRequest":
+      return `pull request ${target.url}`;
+    case "uncommittedChanges":
+      return "uncommitted changes";
+    case "baseBranch":
+      return `changes against ${target.branch}`;
+    case "commit":
+      return `commit ${target.sha}`;
+    case "custom":
+      return "custom review instructions";
+  }
+}
+
+/**
+ * Identifies a set of failed starts by what a person would read: the target
+ * and the error. A pull request target also carries a snapshot stamped with
+ * the time it was taken, which differs on every attempt.
+ */
+export function reviewStartFailureFingerprint(
+  failures: Array<{ error: string; target: AppServerReviewTarget }>,
+): string {
+  return JSON.stringify(
+    failures.map((failure) => [describeReviewTarget(failure.target), failure.error]),
+  );
+}
+
+function buildReviewStartFailurePrompt(
+  failures: Array<{ error: string; target: AppServerReviewTarget }>,
+): string {
+  return [
+    failures.length === 1
+      ? "PwrAgent could not start the review scheduled for the end of the last turn."
+      : "PwrAgent could not start the reviews scheduled for the end of the last turn.",
+    "",
+    ...failures.flatMap((failure) => [
+      `- Target: ${describeReviewTarget(failure.target)}`,
+      `  Error: ${failure.error}`,
+    ]),
+    "",
+    "No review is running. Tell the operator that the review did not start and why. Call start_review again only if you can change what caused the error.",
+  ].join("\n");
+}
+
 function buildWorkspaceMoveFailurePrompt(params: {
   error: unknown;
   move: PendingThreadWorkspaceMoveSummary;
@@ -9142,6 +9243,12 @@ export class DesktopBackendRegistry {
     PendingThreadWorkspaceMoveSummary
   >();
   private readonly pendingReviewStarts = new Map<string, PendingReviewStartRecord>();
+  /**
+   * Fingerprint of the failure notice each thread was last sent, kept until a
+   * turn ends without a failed start, so only an immediate retry that fails
+   * the same way stays quiet.
+   */
+  private readonly reviewStartFailureNotices = new Map<string, string>();
   private readonly codexProtocolCaptureSession?: CodexProtocolCaptureSession;
   private readonly captureStores: ProtocolCaptureStore[] = [];
   private readonly eventListeners = new Set<
@@ -9674,6 +9781,8 @@ export class DesktopBackendRegistry {
   private forgePrToolHandler?: ForgePrToolHandler;
   private forgePrToolPreflight?: ForgePrToolPreflight;
   private forgeToolPolicyResolver?: () => ForgeAgentToolPolicy;
+  private forgeToolRuleWriter?: ForgeToolRuleWriter;
+  private forgeProjectLabelResolver?: (repository: string) => Promise<string | undefined>;
   /** Conversation grants for forge writes, keyed by thread, then tool and repository. Memory only. */
   private readonly forgeToolSessionApprovals = new Map<string, Map<string, string>>();
 
@@ -9689,6 +9798,16 @@ export class DesktopBackendRegistry {
 
   setForgeToolPolicyResolver(resolve: () => ForgeAgentToolPolicy): void {
     this.forgeToolPolicyResolver = resolve;
+  }
+
+  /** Saves the project rule an approval card's "Always allow" option chose. */
+  setForgeToolRuleWriter(write: ForgeToolRuleWriter): void {
+    this.forgeToolRuleWriter = write;
+  }
+
+  /** Names a repository's project as the Directories lens does. */
+  setForgeProjectLabelResolver(resolve: (repository: string) => Promise<string | undefined>): void {
+    this.forgeProjectLabelResolver = resolve;
   }
 
   private resolveForgeToolPolicy(): ForgeAgentToolPolicy {
@@ -9722,20 +9841,21 @@ export class DesktopBackendRegistry {
 
   private readonly gatedForgePrToolHandler: ForgePrToolHandler = async (operation, args, context) => {
     const group = forgePrToolGroup(operation, args);
-    const access = this.assertForgeToolAllowed(group, operation);
+    this.assertForgeToolAllowed(group, operation);
     let target = args;
+    let notes: ForgeWriteApprovalNotes | undefined;
     if (group !== "read") {
       // Settle the call before asking: an approved call that then fails on its
       // arguments makes the agent retry and the operator approve it twice.
       const prepared = this.forgePrToolPreflight ? await this.forgePrToolPreflight(operation, args, context) : undefined;
       const repository = prepared?.repository ?? args.repository;
       const settled = prepared?.args ?? args;
-      await this.approveForgeToolWrite(operation, settled, context, group, access, repository);
+      notes = await this.approveForgeToolWrite(operation, settled, context, group, repository);
       // Act exactly where the card said, even if the thread's remotes or branch change while it waits.
       target = repository ? { ...settled, repository } : settled;
     }
     if (!this.forgePrToolHandler) throw new ForgeReadError("unavailable", "Forge tools are unavailable on this instance.");
-    const result = await this.forgePrToolHandler(operation, target, context);
+    const result = withForgeApprovalNotes(await this.forgePrToolHandler(operation, target, context), notes);
     if (operation === "create_pull_request") return await this.attachCreatedPullRequest(result, context);
     return result;
   };
@@ -9754,28 +9874,168 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * The operator's consent for one GitHub write. `allow` runs; `auto` follows
-   * the turn's approval mode (see `forgeAutoRunsWithoutApproval`); otherwise
-   * the shipped MCP approval card asks. Automations cannot answer, so they are
-   * refused with the setting to change.
+   * Which agent is making a forge call, from PwrAgent's own records and never
+   * from the call's arguments. A Codex thread's provider is the one Codex
+   * reported, configured in PwrAgent or not; `openai` is the default. A
+   * provider Codex has not reported is unknown, never assumed to be the
+   * default, so a Codex rule can restrict that thread but not loosen it. A
+   * model that cannot be read is unknown, so rules naming a model do not
+   * apply, while agent and provider rules still do.
+   */
+  private async resolveForgeAgentIdentity(context: AgentToolCallContext): Promise<ForgeAgentIdentity> {
+    const { backend, threadId } = context;
+    let codexModelProvider: string | undefined;
+    let codexModelProviderKnown = false;
+    if (backend === "codex") {
+      try {
+        // A configured provider is reported too; the second read covers a
+        // client that only tracks those.
+        const reported = this.codexClient.reportedModelProviderForThread?.(threadId)
+          ?? this.codexClient.modelProviderForThread?.(threadId);
+        if (reported?.trim()) {
+          codexModelProvider = reported.trim();
+          codexModelProviderKnown = true;
+        }
+      } catch (error) {
+        backendRegistryLog.warn("could not read the thread's Codex model provider for forge rules", { threadId, error: String(error) });
+      }
+    }
+    let model: string | undefined;
+    try {
+      if (isAcpBackendId(backend)) {
+        model = this.acpBackend.getSession(backend, threadId)?.acpRuntime?.currentModelId?.trim() || undefined;
+      }
+      model ??= (await this.overlayStore.getThreadOverlayState({ backend, threadId }))?.model?.trim() || undefined;
+    } catch (error) {
+      model = undefined;
+      backendRegistryLog.warn("could not read the thread's model for forge rules", { backend, threadId, error: String(error) });
+    }
+    if (backend === "codex" && model) {
+      // A qualified id names the provider; rules compare the bare model id.
+      const parsed = parseCodexProviderModelId(model);
+      if (!codexModelProviderKnown && parsed.providerId) {
+        codexModelProvider = parsed.providerId;
+        codexModelProviderKnown = true;
+      }
+      model = parsed.model || undefined;
+    }
+    return {
+      backend,
+      ...(codexModelProvider ? { codexModelProvider } : {}),
+      ...(backend === "codex" && !codexModelProviderKnown ? { codexModelProviderUnknown: true } : {}),
+      ...(model ? { model } : {}),
+    };
+  }
+
+  /**
+   * The project's name in the Directories lens, so a card names it as the
+   * sidebar and Settings do. Owner/repo when no row matches or the lookup is
+   * slow: a card must not wait on the directory inventory.
+   */
+  private async forgeProjectLabel(repository: ForgeRepository | undefined): Promise<string | undefined> {
+    if (!repository) return undefined;
+    const fallback = `${repository.owner}/${repository.repo}`;
+    const key = normalizeForgeRuleRepository(repository);
+    if (!key || !this.forgeProjectLabelResolver) return fallback;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const label = await Promise.race([
+        this.forgeProjectLabelResolver(key),
+        new Promise<undefined>((resolve) => {
+          timer = setTimeout(() => resolve(undefined), FORGE_PROJECT_LABEL_TIMEOUT_MS);
+        }),
+      ]);
+      return label?.trim() || fallback;
+    } catch (error) {
+      backendRegistryLog.warn("could not read the project name for a forge card", { error: String(error) });
+      return fallback;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /** Display names for rule wording: installed ACP agents and Codex model providers. */
+  private forgeAgentRuleNames(): ForgeAgentRuleNames {
+    return {
+      acpAgent: (registryId) => {
+        const backendId = `acp:${registryId}`;
+        return isAcpBackendId(backendId) ? this.acpBackend.getInstalledAgent(backendId)?.name : undefined;
+      },
+      codexModelProvider: (providerId) => {
+        try {
+          return this.resolveCodexModelProvidersFn().find((provider) => provider.id === providerId)?.name;
+        } catch {
+          return undefined;
+        }
+      },
+    };
+  }
+
+  /**
+   * The operator's consent for one GitHub write. The level comes from the
+   * most specific project rule for this repository and agent, else the
+   * group's setting. `allow` runs; `auto` follows the turn's approval mode
+   * (see `forgeAutoRunsWithoutApproval`); otherwise the shipped MCP approval
+   * card asks. Automations cannot answer, so they are refused with the
+   * setting to change.
    */
   private async approveForgeToolWrite(
     operation: ForgePrToolOperation,
     args: ForgePrToolArgs,
     context: AgentToolCallContext,
     group: ForgeAgentToolGroup,
-    access: ForgeAgentToolAccess,
     repository?: ForgeRepository,
-  ): Promise<void> {
-    if (access === "allow") return;
+  ): Promise<ForgeWriteApprovalNotes | undefined> {
+    const identity = await this.resolveForgeAgentIdentity(context);
+    const resolution = resolveForgeAgentToolAccess(this.resolveForgeToolPolicy(), group, repository, identity);
+    const access = resolution.level;
+    const rule = resolution.source === "project_rule" ? resolution.rule : undefined;
+    // What the agent reads names the repository; what the operator reads
+    // names the project, as the sidebar and Settings do.
+    const wording = {
+      ...(repository ? { projectLabel: `${repository.owner}/${repository.repo}` } : {}),
+      names: this.forgeAgentRuleNames(),
+    };
+    if (access === "off") {
+      if (rule) {
+        throw new ForgeReadError("tools_disabled", `${forgeAgentToolRuleOffMessage(rule, group, wording)} Do not work around it with the gh or glab CLI.`);
+      }
+      // The setting changed while the call was prepared.
+      this.assertForgeToolAllowed(group, operation);
+      throw new ForgeReadError("tools_disabled", `${FORGE_AGENT_TOOL_GROUP_LABELS[group]} is Off in Settings → Git → Agent forge tools, so ${operation} is unavailable.`);
+    }
+    if (access === "allow") {
+      if (!rule) return undefined;
+      const description = forgeAgentToolRuleDescription(rule, wording);
+      backendRegistryLog.info("running forge write allowed by a project rule", {
+        backend: context.backend,
+        threadId: context.threadId,
+        turnId: context.turnId,
+        operation,
+        rule: description,
+      });
+      return { approval: { source: FORGE_AGENT_RULE_APPROVAL_SOURCE, rule: description } };
+    }
     const signal = context.signal ?? new AbortController().signal;
     signal.throwIfAborted();
     const label = FORGE_AGENT_TOOL_GROUP_LABELS[group];
+    const levelName = access === "auto" ? "Auto" : "Ask";
     const requestId = `${FORGE_TOOL_REQUEST_ID_PREFIX}${randomUUID()}`;
     const forge = repository?.provider === "gitlab" ? "GitLab" : "GitHub";
     // Comment-sized changes may be granted for the conversation; opening,
     // editing, approving and merging are always one call at a time.
     const sessionGrant = group === "comments" || group === "issues";
+    const grantNote = sessionGrant
+      ? " A conversation grant lasts until PwrAgent restarts or the setting changes."
+      : " This allows this call only.";
+    const meta: Record<string, unknown> = {
+      pwragent_approval_kind: "mcp_tool_call",
+      ...(sessionGrant ? { persist: ["session"] } : {}),
+      ...(repository ? { connector_name: `${repository.owner}/${repository.repo}` } : {}),
+      ...(group === "approve_merge" ? { riskLevel: "high" } : {}),
+      // `subtitle` is set below, once the call is known to need a card.
+      tool_params_display: forgeToolParamsDisplay(args),
+    };
     const notification: AppServerPendingRequestNotification = {
       method: "mcpServer/elicitation/request",
       params: {
@@ -9786,14 +10046,7 @@ export class DesktopBackendRegistry {
         mode: "form",
         message: forgeToolApprovalMessage(operation, args, repository?.provider ?? "github"),
         requestedSchema: { type: "object", properties: {} },
-        _meta: {
-          pwragent_approval_kind: "mcp_tool_call",
-          ...(sessionGrant ? { persist: ["session"] } : {}),
-          ...(repository ? { connector_name: `${repository.owner}/${repository.repo}` } : {}),
-          ...(group === "approve_merge" ? { riskLevel: "high" } : {}),
-          subtitle: `${label} is set to ${access === "auto" ? "Auto" : "Ask"} in Settings → Git → Agent forge tools.${sessionGrant ? " A conversation grant lasts until PwrAgent restarts or the setting changes." : " This allows this call only."}`,
-          tool_params_display: forgeToolParamsDisplay(args),
-        },
+        _meta: meta,
       },
     };
     const automation = this.findHeadlessAutomationTurnForRequest(context.backend, notification);
@@ -9804,24 +10057,55 @@ export class DesktopBackendRegistry {
         threadId: context.threadId,
         turnId: context.turnId,
         operation,
+        ...(rule ? { rule: forgeAgentToolRuleDescription(rule, wording) } : {}),
       });
-      return;
+      return undefined;
     }
     if (automation) {
-      throw new ForgeReadError("approval_required", `${label} is set to ${access === "auto" ? "Auto" : "Ask"} in Settings → Git → Agent forge tools, and an automation cannot answer an approval. The operator can set it to Allow.`);
+      throw new ForgeReadError("approval_required", rule
+        ? `${forgeAgentToolRuleSentence(rule, group, access, wording)} An automation cannot answer an approval. The operator can set the rule to Allow in Settings → Git → Agent forge tools.`
+        : resolution.source === "unreadable_rule"
+          ? `${forgeAgentToolUnreadableRuleSentence(resolution.repository, group, wording)} An automation cannot answer an approval.`
+          : `${label} is set to ${levelName} in Settings → Git → Agent forge tools, and an automation cannot answer an approval. The operator can set it to Allow.`);
     }
     if (!context.turnId) {
       throw new ForgeReadError("approval_required", `${label} needs the operator's approval, which requires an active turn.`);
     }
     const sessionKey = JSON.stringify([context.backend, context.threadId]);
     // A grant covers one tool in one repository, never every repository the
-    // thread links, and ends when that group's access level changes.
+    // thread links, and ends when the level that asked, or the rule that set
+    // it, changes.
     const grantTarget = `${operation}\u0000${repository ? repositoryKey(repository) : ""}`;
-    const grantKey = `${group}:${access}`;
-    if (sessionGrant && this.forgeToolSessionApprovals.get(sessionKey)?.get(grantTarget) === grantKey) return;
+    const grantKey = `${group}:${access}${rule
+      ? `:${rule.repository}:${forgeAgentRuleAgentKey(rule.agent)}`
+      : resolution.source === "unreadable_rule" ? ":unreadable" : ""}`;
+    if (sessionGrant && this.forgeToolSessionApprovals.get(sessionKey)?.get(grantTarget) === grantKey) return undefined;
+    const cardWording = { ...wording, projectLabel: await this.forgeProjectLabel(repository) };
+    signal.throwIfAborted();
+    meta.subtitle = rule
+      ? `${forgeAgentToolRuleSentence(rule, group, access, cardWording)}${grantNote}`
+      : resolution.source === "unreadable_rule"
+        ? `${forgeAgentToolUnreadableRuleSentence(resolution.repository, group, cardWording)}${grantNote}`
+        : `${label} is set to ${levelName} in Settings → Git → Agent forge tools.${grantNote}`;
+    // "Always allow" choices for this card. Only offered options can be
+    // chosen, and only for this request.
+    const ruleRepository = repository ? normalizeForgeRuleRepository(repository) : undefined;
+    const rememberOptions = ruleRepository
+      ? buildForgeApprovalRememberOptions({
+        group,
+        repository: ruleRepository,
+        identity,
+        resolution,
+        automation: false,
+        projectLabel: cardWording.projectLabel,
+        names: cardWording.names,
+      })
+      : [];
+    if (rememberOptions.length > 0) meta[FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY] = rememberOptions;
     const key = buildPendingRequestKey({ backend: context.backend, threadId: context.threadId, requestId });
-    const approved = await new Promise<"once" | "session" | false>((resolve, reject) => {
-      const finish = (value: "once" | "session" | false, error?: unknown): void => {
+    type Approval = { grant: "once" | "session"; remember?: ForgeApprovalRememberOptionId } | false;
+    const approved = await new Promise<Approval>((resolve, reject) => {
+      const finish = (value: Approval, error?: unknown): void => {
         signal.removeEventListener("abort", aborted);
         this.pendingServerRequests.delete(key);
         if (error) reject(error);
@@ -9838,8 +10122,17 @@ export class DesktopBackendRegistry {
         resolve: (response) => {
           if (signal.aborted) { aborted(); return; }
           const accepted = Boolean(response && "action" in response && response.action === "accept");
-          const persist = response && "_meta" in response ? readRecord(response._meta)?.persist : undefined;
-          finish(accepted ? (sessionGrant && persist === "session" ? "session" : "once") : false);
+          if (!accepted) { finish(false); return; }
+          const responseMeta = response && "_meta" in response ? readRecord(response._meta) : undefined;
+          const choice = readForgeApprovalRememberChoice(responseMeta);
+          const remember = choice && rememberOptions.some((option) => option.id === choice) ? choice : undefined;
+          if (choice && !remember) {
+            backendRegistryLog.warn("ignoring a forge remember choice this card did not offer", { threadId: context.threadId, requestId, choice });
+          }
+          finish({
+            grant: sessionGrant && responseMeta?.persist === "session" ? "session" : "once",
+            ...(remember ? { remember } : {}),
+          });
         },
         reject: (error) => finish(false, error),
       });
@@ -9848,10 +10141,60 @@ export class DesktopBackendRegistry {
       void this.emit({ backend: context.backend, notification }).catch((error) => finish(false, error));
     });
     if (!approved) throw new ForgeReadError("declined", `The operator declined ${operation}. Do not retry it or use the gh or glab CLI instead; ask what they want changed.`);
-    if (approved === "session") {
+    if (approved.grant === "session") {
       const grants = this.forgeToolSessionApprovals.get(sessionKey) ?? new Map<string, string>();
       grants.set(grantTarget, grantKey);
       this.forgeToolSessionApprovals.set(sessionKey, grants);
+    }
+    if (!approved.remember || !ruleRepository || !isForgeApprovalRememberGroup(group)) return undefined;
+    return {
+      rememberedRule: await this.rememberForgeApprovalRule(approved.remember, {
+        group, repository: ruleRepository, identity, context, wording,
+      }),
+    };
+  }
+
+  /**
+   * Save the project rule an approval card's "Always allow" option chose,
+   * before the approved call runs. The operator approved the call either
+   * way, so a failed save is reported and the call still runs once.
+   */
+  private async rememberForgeApprovalRule(
+    optionId: ForgeApprovalRememberOptionId,
+    request: {
+      group: ForgeAgentToolRuleGroup;
+      repository: string;
+      identity: ForgeAgentIdentity;
+      context: AgentToolCallContext;
+      wording: { projectLabel?: string; names: ForgeAgentRuleNames };
+    },
+  ): Promise<NonNullable<ForgeWriteApprovalNotes["rememberedRule"]>> {
+    const { group, repository, identity, context, wording } = request;
+    const agent = forgeApprovalRememberRuleAgent(optionId, identity);
+    const rule = agent
+      ? forgeAgentToolRuleDescription({ repository, agent }, wording)
+      : `${wording.projectLabel ?? forgeRuleRepositoryLabel(repository)} rule`;
+    try {
+      if (!agent) throw new Error("This agent cannot be named in a project rule.");
+      if (!this.forgeToolRuleWriter) throw new Error("Project rules cannot be saved on this instance.");
+      await this.forgeToolRuleWriter({ repository, agent, group, level: "allow" });
+      backendRegistryLog.info("saved a forge project rule from an approval card", {
+        backend: context.backend,
+        threadId: context.threadId,
+        group,
+        rule,
+      });
+      return { rule, saved: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      backendRegistryLog.warn("could not save a forge project rule from an approval card", {
+        backend: context.backend,
+        threadId: context.threadId,
+        group,
+        rule,
+        error: message,
+      });
+      return { rule, saved: false, error: `The operator approved this call, but the rule could not be saved, so later calls still ask: ${message}` };
     }
   }
 
@@ -21389,8 +21732,10 @@ export class DesktopBackendRegistry {
           : { type: "stdio" as const, command: server.command, args: server.args, env: server.env }]));
         const instructions = (await this.getThreadAgentMetadata(params))?.instructions;
         handedOver = true;
+        const messageOrigin = resolveThreadMessageOrigin(params);
         const result = await this.claudeBackend.startTurn({
           ...params, input, model: modelSettings.model, reasoningEffort: modelSettings.reasoningEffort,
+          messageOrigin,
           executionMode: params.executionMode ?? overlay?.executionMode,
           instructions,
           mcpServers,
@@ -21404,7 +21749,7 @@ export class DesktopBackendRegistry {
           onSessionClosed: revokeConnections,
         });
         await this.persistThreadMessageOrigin({ backend: "claude", threadId: params.threadId,
-          messageId: `user:${result.turnId}`, origin: resolveThreadMessageOrigin(params) });
+          messageId: `user:${result.turnId}`, origin: messageOrigin });
         return result;
       } catch (error) {
         // A live session shares the thread's grants, so it alone revokes them.
@@ -22291,6 +22636,45 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * Reviewer for a review an agent schedules with `start_review`. The tool
+   * has no reviewer argument, so this matches the composer's default: the
+   * thread's own provider when it can review, else the first provider that
+   * can. Undefined means no provider can.
+   */
+  private async resolveAgentToolReviewBackend(
+    threadBackend: AppServerBackendKind,
+  ): Promise<AppServerBackendKind | undefined> {
+    try {
+      this.assertReviewBackendSupported(threadBackend);
+      return threadBackend;
+    } catch {
+      // A Claude thread reviews on another provider.
+    }
+    try {
+      const methods = (await this.getClient("codex").getInitializeResult()).methods ?? [];
+      if (buildCapabilities(methods, "codex").reviewRunner) return "codex";
+    } catch (error) {
+      backendRegistryLog.debug("codex reviewer lookup failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    try {
+      const acpReviewer = (await this.acpBackend.describeInstalledBackends()).find(
+        (summary) =>
+          summary.available
+          && isAcpBackendId(summary.kind)
+          && this.acpBackend.supportsManagedReview(summary.kind),
+      );
+      return acpReviewer?.kind;
+    } catch (error) {
+      backendRegistryLog.debug("ACP reviewer lookup failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
   /** Owner-side submission boundary. Caller snapshots are never authoritative. */
   async prepareReviewRequest(
     params: StartReviewRequest,
@@ -23122,6 +23506,7 @@ export class DesktopBackendRegistry {
         candidate.invokingTurnId === params.turnId &&
         candidate.status === "scheduled",
     );
+    const failures: Array<{ error: string; target: AppServerReviewTarget }> = [];
     for (const candidate of pending) {
       if (params.method !== "turn/completed") {
         const error =
@@ -23163,6 +23548,9 @@ export class DesktopBackendRegistry {
           reviewTurnId: response.turnId,
           updatedAt: Date.now(),
         });
+        this.reviewStartFailureNotices.delete(
+          buildThreadIdentityKey(candidate.backend, candidate.threadId),
+        );
         await this.emit({
           backend: candidate.backend,
           notification: {
@@ -23219,7 +23607,63 @@ export class DesktopBackendRegistry {
             },
           },
         });
+        failures.push({ error: message, target: candidate.request.target });
       }
+    }
+    if (failures.length > 0) {
+      await this.sendReviewStartFailureNotice({
+        backend: params.backend,
+        threadId: params.threadId,
+        failures,
+      });
+    } else {
+      // The thread moved on without retrying, so a later failure is news.
+      this.reviewStartFailureNotices.delete(
+        buildThreadIdentityKey(params.backend, params.threadId),
+      );
+    }
+  }
+
+  /**
+   * The agent was told its review was scheduled and then ended its turn, so
+   * nothing else tells it, or the operator, that the start failed. The notice
+   * queues behind any turn the thread is running, like other PwrAgent turns.
+   */
+  private async sendReviewStartFailureNotice(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    failures: Array<{ error: string; target: AppServerReviewTarget }>;
+  }): Promise<void> {
+    const noticeKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const fingerprint = reviewStartFailureFingerprint(params.failures);
+    // A retry that fails the same way would otherwise start a turn that
+    // retries again, without end.
+    if (this.reviewStartFailureNotices.get(noticeKey) === fingerprint) {
+      backendRegistryLog.warn("repeated scheduled review start failure not re-sent", {
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      return;
+    }
+    try {
+      await this.submitTurn({
+        backend: params.backend,
+        threadId: params.threadId,
+        input: [{
+          type: "text",
+          text: buildReviewStartFailurePrompt(params.failures),
+        }],
+        origin: "automation",
+        messageOrigin: { kind: "pwragent" },
+      });
+      // Only a delivered notice suppresses the next one.
+      this.reviewStartFailureNotices.set(noticeKey, fingerprint);
+    } catch (error) {
+      backendRegistryLog.warn("failed to send scheduled review start failure notice", {
+        backend: params.backend,
+        threadId: params.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -24378,7 +24822,7 @@ export class DesktopBackendRegistry {
       this.localFilePrivateStorageRoots,
     );
     if (params.backend === "claude") {
-      const result = await this.claudeBackend.steerTurn({ ...params, input });
+      const result = await this.claudeBackend.steerTurn({ ...params, input, messageOrigin });
       await this.persistThreadMessageOrigin({ backend: "claude", threadId: params.threadId,
         messageId: result.messageId, origin: messageOrigin });
       return { backend: "claude", threadId: result.threadId, turnId: result.turnId, disposition: "steered" };
@@ -41111,6 +41555,24 @@ export class DesktopBackendRegistry {
         "Selected backend does not support review/start.",
       );
     }
+    // The start runs after this turn ends, where a failure reaches only the
+    // log. Choose the reviewer now, so a review that cannot run fails here.
+    const reviewBackend = await this.resolveAgentToolReviewBackend(
+      request.context.backend,
+    );
+    if (!reviewBackend) {
+      return threadOrchestrationFailure(
+        "unsupported_backend",
+        `${request.context.backend} cannot run reviews, and no other installed provider can run one for this thread.`,
+      );
+    }
+    const reviewBackendDiffers = reviewBackend !== request.context.backend;
+    if (reviewBackendDiffers && request.args.runMode === "codex-sub-agent") {
+      return threadOrchestrationFailure(
+        "invalid_arguments",
+        `This thread's reviews run on ${reviewBackend}, which requires runMode pwragent-sub-agent.`,
+      );
+    }
 
     try {
       const pending = this.scheduleReviewStart({
@@ -41123,6 +41585,7 @@ export class DesktopBackendRegistry {
           target: request.args.target,
           runMode: request.args.runMode,
           delivery: "inline",
+          ...(reviewBackendDiffers ? { reviewBackend } : {}),
           ...(request.args.cwd ? { cwd: request.args.cwd } : {}),
         }),
       });
@@ -41137,8 +41600,9 @@ export class DesktopBackendRegistry {
           ...(pending.request.cwd ? { cwd: pending.request.cwd } : {}),
           invokingTurnId: pending.invokingTurnId,
           createdAt: pending.createdAt,
-          message:
-            "Review scheduled. Stop work and let this turn complete; PwrAgent will start the review automatically.",
+          message: reviewBackendDiffers
+            ? `Review scheduled to run on ${isAcpBackendId(reviewBackend) ? reviewBackend : BACKEND_LABELS[reviewBackend]}, because ${request.context.backend} cannot run reviews. Stop work and let this turn complete; PwrAgent will start the review automatically.`
+            : "Review scheduled. Stop work and let this turn complete; PwrAgent will start the review automatically.",
         } satisfies StartReviewToolResult,
       };
     } catch (error) {

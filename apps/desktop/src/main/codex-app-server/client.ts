@@ -9904,6 +9904,15 @@ export class CodexAppServerClient {
     return this.modelProviderTranslator?.providerForThread(threadId);
   }
 
+  /**
+   * The model provider Codex last reported for a thread, whether or not
+   * PwrAgent configured it: `openai` for Codex's default. Undefined when this
+   * connection has not been told, which callers must treat as unknown.
+   */
+  reportedModelProviderForThread(threadId: string): string | undefined {
+    return this.modelProviderTranslator?.reportedProviderForThread(threadId);
+  }
+
   async readThreadPricingSnapshot(threadId: string): Promise<ThreadPricingSnapshot> {
     await this.ensureInitialized();
     const existing = this.pricingSnapshotReads.get(threadId);
