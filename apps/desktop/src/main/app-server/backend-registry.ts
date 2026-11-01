@@ -19578,6 +19578,18 @@ export class DesktopBackendRegistry {
       parentThreadId,
       threadId: result.threadId,
     });
+    // Codex announces its own threads. Claude and ACP backends do not, so
+    // without this nothing told navigation listeners, such as the owner's PR
+    // primary-repository cache, about a new thread until its turn ended.
+    if (backend !== "codex") {
+      await this.emit({
+        backend,
+        notification: {
+          method: "thread/started",
+          params: { threadId: result.threadId },
+        },
+      });
+    }
 
     return {
       backend,

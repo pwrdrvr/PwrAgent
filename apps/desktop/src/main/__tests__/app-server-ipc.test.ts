@@ -10017,6 +10017,40 @@ describe("app server ipc", () => {
     expect(scheduleWorktreeGitWorkingStateRefresh.mock.calls.at(-1)![0]).not.toHaveProperty("userAction", true);
   });
 
+  it("learns a new Claude thread's primary repository when the thread starts", async () => {
+    const newThread = {
+      id: "claude-new",
+      title: "Handed-off fix",
+      titleSource: "explicit",
+      source: "claude",
+      gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+      linkedDirectories: [{
+        id: "/repo/PwrAgent",
+        kind: "local",
+        label: "PwrAgent",
+        path: "/repo/PwrAgent",
+      }],
+      updatedAt: 2000,
+    };
+    listThreads.mockResolvedValueOnce([] as never);
+
+    registerAppServerIpcHandlers();
+    await refreshOwnerMetadata();
+    const { appServerService } = await import("../ipc/app-server");
+    expect(appServerService.readPrimaryGitRepository("claude", "claude-new")).toBeUndefined();
+
+    listThreads.mockResolvedValue([newThread] as never);
+    emitRegistryEvent({
+      backend: "claude",
+      notification: { method: "thread/started", params: { threadId: "claude-new" } },
+    });
+
+    await vi.waitFor(() => {
+      expect(appServerService.readPrimaryGitRepository("claude", "claude-new"))
+        .toBe("github.com/pwrdrvr/pwragent");
+    });
+  });
+
   it("refreshes a thread's working state after its expected branch changes", async () => {
 
     listThreads.mockResolvedValueOnce([
