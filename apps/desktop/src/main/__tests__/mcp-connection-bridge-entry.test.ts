@@ -162,6 +162,7 @@ describe("native bridge catalog continuations", () => {
 describe("desktop-owned native bridge discovery", () => {
   it("preserves desktop identity, relay metadata, instructions and advertised subscriptions", async () => {
     const metadata = { "com.pwrdrvr.pwrdisk/interface": { owner: "desktop", desktopVersion: "2.0.0", relayVersion: "0.1.0" } };
+    let skill = "Original safety brief.";
     bridge.request.mockImplementation(async (operation: string) => {
       if (operation === "describe") return {
         tools: true, resources: true, prompts: true,
@@ -169,20 +170,24 @@ describe("desktop-owned native bridge discovery", () => {
         capabilities: { tools: { listChanged: true }, resources: { listChanged: true, subscribe: true }, prompts: { listChanged: true } },
       };
       if (operation.endsWith("subscribe")) return {};
+      if (operation === "resources/read") return { contents: [{ uri: "skill://fixture/SKILL.md", text: skill }] };
       return tail;
     });
     const client = await openBridge();
     expect(client.getServerVersion()).toEqual({ name: "desktop", version: "2.0.0" });
     expect(client.getInstructions()).toBe("Read the current skill.");
     expect(bridge.initialization?._meta).toEqual(metadata);
+    expect(await client.readResource({ uri: "skill://fixture/SKILL.md" })).toMatchObject({ contents: [{ text: skill }] });
     const notifications: string[] = [];
     for (const schema of [ToolListChangedNotificationSchema, PromptListChangedNotificationSchema, ResourceListChangedNotificationSchema, ResourceUpdatedNotificationSchema]) {
       client.setNotificationHandler(schema, (notification) => { notifications.push(notification.method); });
     }
     for (const method of ["notifications/tools/list_changed", "notifications/prompts/list_changed", "notifications/resources/list_changed"]) bridge.event?.({ method });
     await client.subscribeResource({ uri: "skill://fixture/SKILL.md", _meta: { "fixture/approval": "retained" } });
+    skill = "Updated safety brief.";
     bridge.event?.({ method: "notifications/resources/updated", params: { uri: "skill://fixture/SKILL.md", _meta: { revision: 2 } } });
     await vi.waitFor(() => expect(notifications).toHaveLength(4));
+    expect(await client.readResource({ uri: "skill://fixture/SKILL.md" })).toMatchObject({ contents: [{ text: "Updated safety brief." }] });
     await client.unsubscribeResource({ uri: "skill://fixture/SKILL.md" });
     expect(bridge.request).toHaveBeenCalledWith("resources/subscribe", { uri: "skill://fixture/SKILL.md", _meta: { "fixture/approval": "retained" } }, expect.any(AbortSignal));
     expect(client.getServerCapabilities()?.resources).toEqual({ listChanged: true, subscribe: true });

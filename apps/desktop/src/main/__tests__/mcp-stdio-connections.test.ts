@@ -500,6 +500,7 @@ describe.skipIf(process.platform === "win32")("desktop-owned MCP lifecycle throu
           } : request.method === "tools/list" ? { tools: catalog }
             : { content: [{ type: "text", text: "removed fixture" }] };
           peer.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n`);
+          if (request.method === "initialize") expect(request.params.capabilities.elicitation).toBeUndefined();
         }
       });
     });
@@ -537,6 +538,11 @@ describe.skipIf(process.platform === "win32")("desktop-owned MCP lifecycle throu
       expect(refreshed.map((tool) => tool.toolName)).toEqual(["remove", "new_tool"]);
       expect(refreshed[0].schemaRevision).not.toBe(first[0].schemaRevision);
       expect(refreshed[0].serverIdentity?.serverInfo?.version).toBe("3.0.0");
+      const native = await bridgeFor(service, id, scope);
+      expect(await native.rpc.request("describe")).toMatchObject({
+        instructions: "Read skill 3.0.0.",
+        metadata: { "com.pwrdrvr.pwrdisk/interface": { desktopVersion: "3.0.0", relayVersion: "0.1.0" } },
+      });
       await expect(service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/call", invocation: { ...first[0], arguments: {} } })).rejects.toThrow("schema or authorization changed");
       expect(methods.filter((method) => method === "tools/call")).toHaveLength(0);
     } finally {
