@@ -26,6 +26,33 @@ sqlite payload columns.
   entries remain readable without rewriting history. Ephemeral sessions stay
   in memory, including their images.
 
+## Claude history
+
+A Claude thread has two copies of its conversation:
+
+- PwrAgent's transcript, `state/claude/<thread-id>.jsonl`. It renders the
+  thread and has no age limit.
+- Claude Code's session, which the next turn resumes by `sdkSessionId` (or a
+  fork's `forkFromSdkSessionId`). Claude Code deletes a session that has been
+  idle longer than its `cleanupPeriodDays` setting, 30 days by default.
+
+After Claude Code deletes the session, the thread still reads correctly, but
+Claude cannot continue it or rewind it:
+
+- A resume fails before the session starts. Claude Code answers with an
+  `error_during_execution` result whose error is
+  `No conversation found with session ID: <id>`, and sends no `init`.
+  The backend matches that error only when it names the session the launch
+  resumed. The turn then fails with a message that says Claude no longer has
+  the conversation. Any other resume failure keeps Claude's own message.
+- A rewind reads the session as empty. When `getSessionInfo` also finds the
+  session in no project folder, the preview and the rewind both say Claude
+  no longer has the conversation.
+
+The thread keeps its `sdkSessionId`. PwrAgent never changes the operator's
+`cleanupPeriodDays`: Claude Code applies it to every session on the machine,
+not only PwrAgent's.
+
 ## Desktop Metadata
 
 Desktop may persist scalar metadata derived from history when it is needed for

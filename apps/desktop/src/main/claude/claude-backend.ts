@@ -113,6 +113,35 @@ function claudeResultFailure(message: SDKResultMessage): string | undefined {
   }
 }
 
+/**
+ * Claude Code deletes a session after `cleanupPeriodDays` (30 by default),
+ * but a PwrAgent thread keeps its own transcript with no age limit. Never
+ * change that setting here: it governs every session on the machine.
+ */
+const CLAUDE_SESSION_CLEANUP_NOTE = "Claude Code deletes sessions that have been idle longer than its "
+  + "cleanupPeriodDays setting (30 days by default). This thread's transcript is still here.";
+
+export const CLAUDE_SESSION_GONE_MESSAGE = "Claude no longer has this conversation, so it cannot continue it. "
+  + `${CLAUDE_SESSION_CLEANUP_NOTE} Start a new thread to keep working.`;
+
+export const CLAUDE_FORK_SOURCE_GONE_MESSAGE = "Claude no longer has the conversation this thread was forked from, "
+  + `so it cannot continue it. ${CLAUDE_SESSION_CLEANUP_NOTE} Start a new thread to keep working.`;
+
+export const CLAUDE_SESSION_GONE_REWIND_MESSAGE = "Claude no longer has this conversation, so it cannot rewind it. "
+  + CLAUDE_SESSION_CLEANUP_NOTE;
+
+/**
+ * Resuming a deleted session fails before the session starts, with this
+ * error naming the session. Only that session's error matches: another
+ * resume failure keeps Claude's own message.
+ */
+function claudeResumedSessionGone(message: SDKResultMessage, resumed: LiveSession["resumed"]): string | undefined {
+  if (!resumed || message.subtype !== "error_during_execution") return undefined;
+  const expected = `No conversation found with session ID: ${resumed.sdkSessionId}`;
+  if (!message.errors.some((error) => error.trim() === expected)) return undefined;
+  return resumed.fork ? CLAUDE_FORK_SOURCE_GONE_MESSAGE : CLAUDE_SESSION_GONE_MESSAGE;
+}
+
 function claudeExceptionMessage(error: unknown, stderr: string): string {
   return (error instanceof Error ? error.message : String(error)).trim()
     || stderr.trim()
@@ -320,6 +349,8 @@ type LiveSession = {
   toolRows: Map<string, { entry: AppServerThreadActivityEntry; turnId: string }>;
   /** Tool calls answered with a background placeholder and not yet settled. */
   launchedToolUseIds: Set<string>;
+  /** The Claude session this process resumed; a fork resumes its source's. */
+  resumed?: { sdkSessionId: string; fork: boolean };
   /** Set at the first native init; a follow-up turn's init repeats it. */
   initialized?: boolean;
   /** Settles once the first init has confirmed the signed-in account, or the session closed. */
@@ -868,12 +899,14 @@ export class ClaudeBackend {
       // taken, so the next session gets its own.
       // An ephemeral session has no file to resume, so each launch starts fresh.
       const freshSdkSessionId = session.rewinds?.length || session.ephemeral ? randomUUID() : threadId;
+      const resumedSdkSessionId = session.ephemeral ? undefined : session.sdkSessionId ?? session.forkFromSdkSessionId;
+      if (resumedSdkSessionId) current.resumed = { sdkSessionId: resumedSdkSessionId, fork: !session.sdkSessionId };
       const sdkOptions: Options = {
         ...claudeHarnessOptions(executable, env),
         cwd: session.cwd,
-        ...(!session.ephemeral && (session.sdkSessionId ?? session.forkFromSdkSessionId)
+        ...(resumedSdkSessionId
           ? {
-            resume: session.sdkSessionId ?? session.forkFromSdkSessionId,
+            resume: resumedSdkSessionId,
             ...(session.resumeSessionAt ? { resumeSessionAt: session.resumeSessionAt } : {}),
             // A fork continues the source's conversation in a session of its own.
             ...(session.sdkSessionId ? {} : { forkSession: true }),
@@ -1319,7 +1352,13 @@ export class ClaudeBackend {
             await this.settleInputWrites(live);
             for (const id of message.user_message_uuids ?? []) turn.pendingSteers.delete(id);
             if (message.user_message_uuid) turn.pendingSteers.delete(message.user_message_uuid);
-            turn.resultFailure ??= claudeResultFailure(message);
+            const sessionGone = claudeResumedSessionGone(message, live.resumed);
+            if (sessionGone && !turn.resultFailure) {
+              claudeBackendLog.warn("Claude no longer has the session this thread resumes", {
+                threadId, sdkSessionId: live.resumed?.sdkSessionId, fork: live.resumed?.fork,
+              });
+            }
+            turn.resultFailure ??= sessionGone ?? claudeResultFailure(message);
             // The totals are cumulative. A turn stopped after this result must
             // not bill its spend to the next turn.
             if (claudeHasModelUsage(message.modelUsage)) session.modelUsage = message.modelUsage;
@@ -2650,6 +2689,11 @@ export class ClaudeBackend {
       ? messages.findIndex((message) => message.uuid === session.resumeSessionAt)
       : messages.length;
     if (!promptUuid || index < 0 || (resumeIndex >= 0 && index > resumeIndex)) {
+      // A deleted session reads as empty. Search every project folder before
+      // saying so, since an empty read alone also fits an unreadable file.
+      if (messages.length === 0 && await this.claudeSessionGone(session.sdkSessionId)) {
+        throw new Error(CLAUDE_SESSION_GONE_REWIND_MESSAGE);
+      }
       throw new Error("Claude's conversation does not have this prompt, so it cannot rewind to before it. "
         + "Prompts sent before rewind support, or before Claude compacted the conversation, cannot be rewound.");
     }
@@ -2659,6 +2703,15 @@ export class ClaudeBackend {
       // A pending rewind already ends the conversation at its point.
       leafUuid: session.resumeSessionAt ?? messages.at(-1)?.uuid,
     };
+  }
+
+  /** True only when Claude has no file for the session in any project folder. */
+  private async claudeSessionGone(sdkSessionId: string): Promise<boolean> {
+    try {
+      return await (this.options.getSessionInfo ?? getSessionInfo)(sdkSessionId) === undefined;
+    } catch {
+      return false;
+    }
   }
 
   /**
