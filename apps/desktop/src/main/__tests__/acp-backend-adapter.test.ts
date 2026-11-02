@@ -3221,7 +3221,7 @@ describe("AcpBackendAdapter", () => {
           creditUsagePercent: 42.5,
           currentPeriod: {
             type: "USAGE_PERIOD_TYPE_WEEKLY",
-            end: "2026-08-03T00:00:00Z",
+            end: "2099-08-03T00:00:00Z",
           },
         },
         subscription_tier: "SuperGrok Heavy",
@@ -3286,7 +3286,7 @@ describe("AcpBackendAdapter", () => {
         {
           name: "Weekly limit",
           usedPercent: 42.5,
-          resetAt: Date.parse("2026-08-03T00:00:00Z"),
+          resetAt: Date.parse("2099-08-03T00:00:00Z"),
         },
       ],
     });

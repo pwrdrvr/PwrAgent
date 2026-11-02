@@ -309,9 +309,10 @@ export function planLimitKey(limit: BackendRateLimitSummary): string {
 }
 
 /**
- * Merge one reading into the held windows, keeping their order and adding new
- * windows after them. `newest` means the reading was taken after everything
- * held. Exported for tests; use `PlanLimitStore`.
+ * Merge one reading into the held windows. `newest` means the reading was
+ * taken after everything held, so its order leads, followed by the windows it
+ * left out; otherwise the held order stays and new windows follow it.
+ * Exported for tests; use `PlanLimitStore`.
  */
 export function mergePlanLimits(
   held: readonly HeldLimit[],
@@ -339,7 +340,17 @@ export function mergePlanLimits(
       ? { ...merged, limit: reading.describe(merged.limit) }
       : merged);
   }
-  return [...limits.values()];
+  if (!newest) return [...limits.values()];
+  const ordered = new Map<string, HeldLimit>();
+  for (const limit of reading.limits) {
+    const key = planLimitKey(limit);
+    const merged = limits.get(key);
+    if (merged) ordered.set(key, merged);
+  }
+  for (const [key, merged] of limits) {
+    if (!ordered.has(key)) ordered.set(key, merged);
+  }
+  return [...ordered.values()];
 }
 
 function mergeWindow(
@@ -369,10 +380,11 @@ function mergeWindow(
 
 /** -1: the reading is from an earlier window; 0: the same window; 1: a later one. */
 function windowOrder(known: number | undefined, reading: number | undefined, toleranceMs: number): -1 | 0 | 1 {
-  // A window without a reset cannot be ordered, so the latest reading wins.
-  // A reading without one is taken to describe the known window.
-  if (known === undefined) return 1;
+  // A reading without a reset is taken to describe the known window. A
+  // window without one cannot be ordered, so a reading that names its reset
+  // replaces it.
   if (reading === undefined) return 0;
+  if (known === undefined) return 1;
   if (reading > known + toleranceMs) return 1;
   if (reading < known - toleranceMs) return -1;
   return 0;
