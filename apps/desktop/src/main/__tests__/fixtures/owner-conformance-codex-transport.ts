@@ -18,6 +18,13 @@ type FixtureThread = {
  * the first prompt becomes the thread's preview, and a turn completes shortly
  * after it starts with one "Fixture result" agent message. It runs in process
  * because desktop's client sends requests the Outpost fixture rejects.
+ *
+ * It also sends two notifications that Codex 0.159.2 sends, recorded in a
+ * protocol capture of thread/start then thread/name/set: `thread/started`
+ * after a thread starts, and a `thread/name/updated` echo, with no
+ * `titleSource`, after each name is set. Each one follows its response.
+ * Desktop announces new Codex threads through the first, and must not pass
+ * the second to viewers.
  */
 export class OwnerConformanceCodexTransport implements JsonRpcTransport {
   static threads = new Map<string, FixtureThread>();
@@ -51,6 +58,7 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
       ephemeral: false, path: null, cliVersion: "0.159.2", gitInfo: null,
     });
     let result: unknown = {};
+    let followUp: { method: string; params: unknown } | undefined;
     if (request.method === "initialize") {
       result = { userAgent: "fixture-codex/0.159.2", codexHome: "/fixture-codex-home", platformFamily: "unix", platformOs: "linux" };
     } else if (request.method === "model/list") {
@@ -63,6 +71,7 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
       threads.set(thread.id, thread);
       result = { thread: wire(thread), model: "fixture-model", modelProvider: "openai", cwd: thread.cwd,
         approvalPolicy: "never", sandbox: { type: "workspaceWrite" }, reasoningEffort: null };
+      followUp = { method: "thread/started", params: { thread: wire(thread) } };
     } else if (request.method === "thread/resume" || request.method === "thread/read") {
       const thread = threads.get(String(params.threadId));
       if (!thread) {
@@ -78,10 +87,11 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
     } else if (request.method === "thread/list") {
       result = { data: [...threads.values()].map(wire), nextCursor: null, backwardsCursor: null };
     } else if (request.method === "thread/name/set") {
-      // Stored and returned by reads and listings. No notification echoes it,
-      // so every name event the suite sees comes from the owner itself.
       const thread = threads.get(String(params.threadId));
-      if (thread) thread.name = String(params.name);
+      if (thread) {
+        thread.name = String(params.name);
+        followUp = { method: "thread/name/updated", params: { threadId: thread.id, threadName: thread.name } };
+      }
     } else if (request.method === "turn/start") {
       const thread = threads.get(String(params.threadId));
       const input = params.input as Array<{ type: string; text?: string }> | undefined;
@@ -102,5 +112,7 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
       }
     }
     this.handler(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
+    const next = followUp;
+    if (next) setTimeout(() => this.notify(next.method, next.params), 0);
   }
 }

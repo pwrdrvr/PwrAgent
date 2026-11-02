@@ -599,6 +599,9 @@ function isHandledServerRequestMethod(method: string): boolean {
   );
 }
 
+/** How long after a thread/name/set its echo is still recognized. */
+const THREAD_NAME_ECHO_WINDOW_MS = 60_000;
+
 function isKnownCodexNotificationMethod(
   method: string
 ): boolean {
@@ -7801,6 +7804,15 @@ export class CodexAppServerClient {
   private archivedThreadListingGeneration = 0;
   private readonly threadListingInvalidations = new WeakSet<AppServerNotification>();
   private readonly recordedThreadNames = new Map<string, string>();
+  /**
+   * Names this client set with `thread/name/set` that Codex has not echoed
+   * yet. Codex 0.159.2 answers the request, then sends `thread/name/updated`
+   * with no `titleSource`, which every recorder reads as an operator rename.
+   * The caller of each set announces the name with its real source, so the
+   * echo is dropped. An entry expires, so a build that never echoes cannot
+   * leave one behind to swallow a later rename to the same name.
+   */
+  private readonly pendingThreadNameEchoes = new Map<string, Array<{ name: string; expiresAt: number }>>();
   private readonly requestListeners = new Set<
     (
       request: AppServerPendingRequestNotification
@@ -8003,6 +8015,7 @@ export class CodexAppServerClient {
         this.takeGuardianDenialLimitMessage(method, params),
       );
       if (navigationQueryEventRequiresRefresh(method)) this.invalidateThreadListings(normalized);
+      if (method === "thread/name/updated" && this.consumeThreadNameEcho(params)) return;
       const helperThreadId = extractThreadIdFromNotification(normalized, params);
       // Codex can send startup warnings before thread/start returns its ID.
       // Wait only for startup notices, then suppress those belonging to the
@@ -8318,6 +8331,7 @@ export class CodexAppServerClient {
     this.pendingFirstTurnThreadResults.clear();
     this.pendingFirstTurnShellEnvironments.clear();
     this.recordedThreadNames.clear();
+    this.pendingThreadNameEchoes.clear();
     this.helperThreadIds.clear();
     this.helperThreadToolHandlers.clear();
     this.helperToolTurnThreadIds.clear();
@@ -8953,6 +8967,15 @@ export class CodexAppServerClient {
         threadId: params.threadId,
         error: error instanceof Error ? error.message : String(error),
       });
+      return;
+    }
+    // The first prompt named the thread. Announce it as derived; Codex's own
+    // echo of this set is dropped because it cannot say where the name came from.
+    for (const listener of this.notificationListeners) {
+      await listener({
+        method: "thread/name/updated",
+        params: { threadId: params.threadId, threadName, titleSource: "derived" },
+      });
     }
   }
 
@@ -8960,14 +8983,48 @@ export class CodexAppServerClient {
     threadId: string;
     name: string;
   }): Promise<void> {
-    await requestWithThreadMetadataReadRetry(async () => {
-      await requestWithFallbacks({
-        client: this.connection,
-        methods: ["thread/name/set"],
-        payloads: [{ threadId: params.threadId, name: params.name }],
-        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    // Before the request: Codex sends the echo right after its response.
+    const echo = params.name.trim();
+    const now = Date.now();
+    const pending = (this.pendingThreadNameEchoes.get(params.threadId) ?? []).filter((entry) => entry.expiresAt > now);
+    // Delete first so a thread named again moves to the newest end of the map.
+    this.pendingThreadNameEchoes.delete(params.threadId);
+    rememberBoundedMap(this.pendingThreadNameEchoes, params.threadId,
+      [...pending, { name: echo, expiresAt: now + THREAD_NAME_ECHO_WINDOW_MS }].slice(-8), 1_000);
+    try {
+      await requestWithThreadMetadataReadRetry(async () => {
+        await requestWithFallbacks({
+          client: this.connection,
+          methods: ["thread/name/set"],
+          payloads: [{ threadId: params.threadId, name: params.name }],
+          timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        });
       });
-    });
+      // The echo follows the response, so the window runs from here.
+      const entry = this.pendingThreadNameEchoes.get(params.threadId)?.find((pending) => pending.name === echo);
+      if (entry) entry.expiresAt = Date.now() + THREAD_NAME_ECHO_WINDOW_MS;
+    } catch (error) {
+      this.forgetThreadNameEcho(params.threadId, echo);
+      throw error;
+    }
+  }
+
+  /** Whether a `thread/name/updated` is Codex echoing a name this client set. */
+  private consumeThreadNameEcho(params: unknown): boolean {
+    const record = asRecord(params) ?? {};
+    const threadId = pickString(record, ["threadId", "thread_id"]);
+    const threadName = pickString(record, ["threadName", "thread_name"]);
+    return threadId !== undefined && threadName !== undefined && this.forgetThreadNameEcho(threadId, threadName);
+  }
+
+  private forgetThreadNameEcho(threadId: string, name: string): boolean {
+    const now = Date.now();
+    const pending = this.pendingThreadNameEchoes.get(threadId);
+    const index = pending?.findIndex((entry) => entry.name === name && entry.expiresAt > now) ?? -1;
+    if (!pending || index < 0) return false;
+    pending.splice(index, 1);
+    if (!pending.length) this.pendingThreadNameEchoes.delete(threadId);
+    return true;
   }
 
   private handleHelperThreadNotification(

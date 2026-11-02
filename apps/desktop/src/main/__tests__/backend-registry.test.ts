@@ -54505,7 +54505,7 @@ script = "printf setup"
       expect(codexClient.lastRenameThreadParams).toEqual({ threadId: "ordinary-thread", name: "Investigate rename feedback" });
       expect(events).toContainEqual({ backend: "codex", notification: {
         method: "thread/name/updated", params: {
-          threadId: "ordinary-thread", threadName: "Investigate rename feedback",
+          threadId: "ordinary-thread", threadName: "Investigate rename feedback", titleSource: "explicit",
           renameOrigin: "agent_tool", previousThreadName: "Original title",
         },
       } });
@@ -54540,7 +54540,7 @@ script = "printf setup"
       expect(await call({ title: "Investigate rename feedback" })).toMatchObject({ success: true });
       expect(events).toContainEqual({ backend: "codex", notification: {
         method: "thread/name/updated", params: {
-          threadId: "ordinary-thread", threadName: "Investigate rename feedback",
+          threadId: "ordinary-thread", threadName: "Investigate rename feedback", titleSource: "explicit",
           renameOrigin: "agent_tool", previousThreadName: "Please fix the parser",
         },
       } });

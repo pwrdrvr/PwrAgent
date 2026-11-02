@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { HeadlessBackend } from "../src/federation-backend.js";
+import { HeadlessBackend, PLACEHOLDER_THREAD_TITLE } from "../src/federation-backend.js";
 
 function backendFixture(t, jobs, read = async () => ({ thread: { turns: [] } })) {
   const local = fileURLToPath(new URL("../../../.local/", import.meta.url));
@@ -20,6 +20,19 @@ function backendFixture(t, jobs, read = async () => ({ thread: { turns: [] } }))
 function job(id, threadId, extra = {}) {
   return { id, threadId, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", status: "running", sandbox: "read-only", ...extra };
 }
+
+test("a thread keeps desktop's placeholder title until it is named, including one stored under the old placeholder", (t) => {
+  const { backend } = backendFixture(t, new Map());
+  writeFileSync(backend.file, JSON.stringify({ version: 1, threads: [
+    { id: "legacy", title: "New outpost thread", titleSource: "fallback", createdAt: 1 },
+    { id: "named", title: "New outpost thread", titleSource: "explicit", createdAt: 1 },
+  ] }));
+  const reopened = new HeadlessBackend(backend.runtime, () => {});
+  assert.equal(PLACEHOLDER_THREAD_TITLE, "Untitled thread");
+  assert.deepEqual((({ title, titleSource }) => ({ title, titleSource }))(reopened.summary(reopened.owned("legacy"))),
+    { title: "Untitled thread", titleSource: "fallback" });
+  assert.equal(reopened.owned("named").title, "New outpost thread", "an operator's own name is never rewritten");
+});
 
 test("the first prompt names a placeholder thread and announces it", (t) => {
   const jobs = new Map([["first", job("first", "thread", { turnId: "turn-1" })]]);

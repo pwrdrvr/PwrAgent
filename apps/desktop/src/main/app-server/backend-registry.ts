@@ -17679,7 +17679,9 @@ export class DesktopBackendRegistry {
           params: {
             threadId: result.threadId,
             threadName: request.name.trim(),
-            ...(options?.titleSource ? { titleSource: options.titleSource } : {}),
+            // Only this class's title generator passes a source; any other
+            // rename was requested by the operator or an agent.
+            titleSource: options?.titleSource ?? "explicit",
             ...(options?.renameOrigin ? { renameOrigin: options.renameOrigin } : {}),
             ...(options?.previousThreadName ? { previousThreadName: options.previousThreadName } : {}),
           },
