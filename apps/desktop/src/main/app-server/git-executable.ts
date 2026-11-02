@@ -5,7 +5,7 @@ import { noteBundledGitCommand } from "../bundled-git-lfs-advisory";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { gitRuntimeEnvironment, resolveRuntimeGitExecutable } from "../git-runtime";
 import { startWindowsJobReadyPoll, wrapCommandInWindowsJob } from "../windows-job-wrapper";
-import { collectProcessTreeIds, terminateOwnedProcessTree, waitForProcessTreeGone } from "../process-tree";
+import { collectProcessTreeIds, isProcessIdAlive, terminateOwnedProcessTree } from "../process-tree";
 
 const execFile = promisify(execFileCallback);
 
@@ -201,8 +201,14 @@ async function stopOwnedGitProcessTree(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
   const knownPids = collectProcessTreeIds(child.pid);
   child.kill();
-  if (!await waitForProcessTreeGone({ knownPids, timeoutMs: 5_000 })) {
-    throw new Error(`Git process tree ${child.pid} did not exit after it was stopped.`);
+  // Poll the snapshot only. Each tree walk is a blocking CIM query, and the
+  // closed Job starts nothing new.
+  const deadline = Date.now() + 5_000;
+  while (knownPids.some((pid) => isProcessIdAlive(pid))) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Git process tree ${child.pid} did not exit after it was stopped.`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
 
