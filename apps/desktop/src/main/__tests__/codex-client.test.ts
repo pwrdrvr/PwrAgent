@@ -12561,6 +12561,17 @@ describe("CodexAppServerClient", () => {
         { threadId, threadName: "Repair the flaky login test", titleSource: "derived" },
         { threadId, threadName: "Renamed elsewhere" },
       ]);
+      // An echo that never came expires: a later rename to that name still arrives.
+      await client.renameThread({ threadId, name: "Release checklist" });
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now + 61_000);
+      try {
+        transport.notify("thread/name/updated", { threadId, threadName: "Release checklist" });
+        await vi.waitFor(() => expect(names).toHaveLength(3));
+      } finally {
+        clock.mockRestore();
+      }
+      expect(names[2]).toEqual({ threadId, threadName: "Release checklist" });
     } finally {
       await client.close();
     }

@@ -599,6 +599,9 @@ function isHandledServerRequestMethod(method: string): boolean {
   );
 }
 
+/** How long after a thread/name/set its echo is still recognized. */
+const THREAD_NAME_ECHO_WINDOW_MS = 60_000;
+
 function isKnownCodexNotificationMethod(
   method: string
 ): boolean {
@@ -7806,9 +7809,10 @@ export class CodexAppServerClient {
    * yet. Codex 0.159.2 answers the request, then sends `thread/name/updated`
    * with no `titleSource`, which every recorder reads as an operator rename.
    * The caller of each set announces the name with its real source, so the
-   * echo is dropped.
+   * echo is dropped. An entry expires, so a build that never echoes cannot
+   * leave one behind to swallow a later rename to the same name.
    */
-  private readonly pendingThreadNameEchoes = new Map<string, string[]>();
+  private readonly pendingThreadNameEchoes = new Map<string, Array<{ name: string; expiresAt: number }>>();
   private readonly requestListeners = new Set<
     (
       request: AppServerPendingRequestNotification
@@ -8981,8 +8985,12 @@ export class CodexAppServerClient {
   }): Promise<void> {
     // Before the request: Codex sends the echo right after its response.
     const echo = params.name.trim();
-    const pending = this.pendingThreadNameEchoes.get(params.threadId) ?? [];
-    rememberBoundedMap(this.pendingThreadNameEchoes, params.threadId, [...pending, echo].slice(-8), 1_000);
+    const now = Date.now();
+    const pending = (this.pendingThreadNameEchoes.get(params.threadId) ?? []).filter((entry) => entry.expiresAt > now);
+    // Delete first so a thread named again moves to the newest end of the map.
+    this.pendingThreadNameEchoes.delete(params.threadId);
+    rememberBoundedMap(this.pendingThreadNameEchoes, params.threadId,
+      [...pending, { name: echo, expiresAt: now + THREAD_NAME_ECHO_WINDOW_MS }].slice(-8), 1_000);
     try {
       await requestWithThreadMetadataReadRetry(async () => {
         await requestWithFallbacks({
@@ -8992,6 +9000,9 @@ export class CodexAppServerClient {
           timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
         });
       });
+      // The echo follows the response, so the window runs from here.
+      const entry = this.pendingThreadNameEchoes.get(params.threadId)?.find((pending) => pending.name === echo);
+      if (entry) entry.expiresAt = Date.now() + THREAD_NAME_ECHO_WINDOW_MS;
     } catch (error) {
       this.forgetThreadNameEcho(params.threadId, echo);
       throw error;
@@ -9007,8 +9018,9 @@ export class CodexAppServerClient {
   }
 
   private forgetThreadNameEcho(threadId: string, name: string): boolean {
+    const now = Date.now();
     const pending = this.pendingThreadNameEchoes.get(threadId);
-    const index = pending?.indexOf(name) ?? -1;
+    const index = pending?.findIndex((entry) => entry.name === name && entry.expiresAt > now) ?? -1;
     if (!pending || index < 0) return false;
     pending.splice(index, 1);
     if (!pending.length) this.pendingThreadNameEchoes.delete(threadId);
