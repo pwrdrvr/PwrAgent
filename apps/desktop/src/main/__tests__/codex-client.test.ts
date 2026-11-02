@@ -12535,6 +12535,37 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it("announces a first-prompt name as derived and drops Codex's echo of each name it set", async () => {
+    const threadId = "thread-name-echoes";
+    MockTransport.threadStartResult = {
+      thread: { id: threadId, cwd: "/fixture/workspace", preview: "", name: null, updatedAt: 1_777_347_163 },
+      model: "gpt-5.5",
+    };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const names: unknown[] = [];
+    client.onNotification((notification) => {
+      if (notification.method === "thread/name/updated") names.push(notification.params);
+    });
+    try {
+      await client.startThread({ cwd: "/fixture/workspace" });
+      const transport = MockTransport.instances.at(-1)!;
+      // Codex 0.159.2 echoes every thread/name/set, without a titleSource.
+      transport.notify("thread/name/updated", { threadId, threadName: "Untitled thread" });
+      await client.startTurn({ threadId, input: [{ type: "text", text: "Repair the flaky login test" }] });
+      transport.notify("thread/name/updated", { threadId, threadName: "Repair the flaky login test" });
+      // A rename made elsewhere, such as another Codex client, still arrives.
+      transport.notify("thread/name/updated", { threadId, threadName: "Renamed elsewhere" });
+      await vi.waitFor(() => expect(names).toHaveLength(2));
+      expect(names).toEqual([
+        { threadId, threadName: "Repair the flaky login test", titleSource: "derived" },
+        { threadId, threadName: "Renamed elsewhere" },
+      ]);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("retries a derived thread name while new session metadata is temporarily unreadable", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-session-index-"));
     const threadId = "thread-transient-metadata-name";

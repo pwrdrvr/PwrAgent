@@ -318,6 +318,7 @@ import {
 import { materializeTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
 import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { markLocalThreadSeen } from "../app-server/mark-local-thread-seen";
 import {
   DIRECTORY_GIT_STATUS_BACKGROUND_BATCH_SIZE,
   DIRECTORY_GIT_STATUS_FORCE_COALESCE_WINDOW_MS,
@@ -4287,27 +4288,18 @@ class DesktopAppServerService {
         .markThreadSeen(remoteRequest);
     }
     const backend = request.backend ?? "codex";
-
-    const markSeen = async () => await this.getOverlayStore().markThreadSeen({
+    const response = await markLocalThreadSeen({
       backend,
       seenAt: request.seenAt,
       seenUpdatedAt: request.seenUpdatedAt,
       threadId: request.threadId,
     });
-    const registry = getExistingDesktopBackendRegistry();
-    const response = registry
-      ? await registry.withThreadLifecycleMutation({ backend, threadId: request.threadId }, markSeen)
-      : await markSeen();
 
     logDebug("markThreadSeen", {
       backend,
       threadId: request.threadId,
       seenUpdatedAt: request.seenUpdatedAt ?? null,
     });
-
-    await getDesktopBackendRegistry().publishLocalEvent({ backend, notification: {
-      method: "navigation/thread/seen", params: { threadId: request.threadId, seenUpdatedAt: request.seenUpdatedAt },
-    } });
     return response;
   }
 

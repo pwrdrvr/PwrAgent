@@ -303,6 +303,7 @@ import {
   type UpdateThreadExpectedBranchRequest,
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
+import { markLocalThreadSeen } from "../app-server/mark-local-thread-seen";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { threadFamilyPricingForPeer } from "../app-server/thread-family-pricing";
@@ -7334,9 +7335,10 @@ function localBackendOperations(): FederationBackendOperations {
     async markThreadSeen(
       request: MarkThreadSeenRequest,
     ): Promise<MarkThreadSeenResponse> {
-      const backend = request.backend ?? "codex";
-      return await getDesktopOverlayStore().markThreadSeen({
-        backend,
+      // The same path as the owner's own window, so its windows and other
+      // viewers hear about a peer's mark.
+      return await markLocalThreadSeen({
+        backend: request.backend ?? "codex",
         seenAt: request.seenAt,
         seenUpdatedAt: request.seenUpdatedAt,
         threadId: request.threadId,
