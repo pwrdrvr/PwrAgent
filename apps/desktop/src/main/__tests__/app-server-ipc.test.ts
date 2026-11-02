@@ -901,7 +901,9 @@ const readPrStatusCache = vi.fn(async () => ({}));
 const writePrStatusCacheEntries = vi.fn(async () => undefined);
 const readPrLookupCache = vi.fn(async () => ({}));
 const writePrLookupCacheEntry = vi.fn(async () => undefined);
-const syncThreadPrAutoDispatchCandidates = vi.fn(async () => undefined);
+const syncThreadPrAutoDispatchCandidates = vi.fn(
+  async (_params?: unknown): Promise<Array<{ backend: "codex"; threadId: string; prKey: string }> | undefined> => undefined,
+);
 const getPrAutoDispatchCandidateWinner = vi.fn(async () => undefined);
 const resetThreadPrAutoDispatchForOperator = vi.fn(async () => false);
 const getPrAutoDispatchBudgetStatus = vi.fn(async (params: {
@@ -2370,6 +2372,43 @@ describe("app server ipc", () => {
     await expect(handlers.get(NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL)?.({}, { enabled: true }))
       .rejects.toThrow("Thread discovery is incomplete");
     expect(setThreadPrAutoDispatchBatch).not.toHaveBeenCalled();
+  });
+
+  it("tells windows to re-list Auto-fix when a thread's candidacy changes", async () => {
+    // A window that listed the thread's watches before its candidacy existed
+    // otherwise kept drawing no Auto-fix row for the session.
+    const pr = githubPr({
+      number: 3198, org: "pwrdrvr", repo: "PwrAgent",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3198",
+    });
+    const prKey = buildPullRequestStatusKey(pr);
+    registerAppServerIpcHandlers();
+    syncThreadPrAutoDispatchCandidates.mockClear();
+    syncThreadPrAutoDispatchCandidates.mockResolvedValueOnce([{ backend: "codex", threadId: "thread-1", prKey }]);
+    publishLocalEvent.mockClear();
+    emitRegistryEvent({
+      backend: "codex",
+      notification: { method: "thread/pullRequests/updated", params: { threadId: "thread-1", prs: [pr] } },
+    });
+    await vi.waitFor(() => expect(publishLocalEvent).toHaveBeenCalledWith(expect.objectContaining({
+      notification: {
+        method: "thread/prWatches/updated",
+        params: { backend: "codex", threadId: "thread-1" },
+      },
+    })));
+    expect(syncThreadPrAutoDispatchCandidates).toHaveBeenCalledTimes(1);
+
+    // An unchanged candidacy publishes nothing.
+    publishLocalEvent.mockClear();
+    emitRegistryEvent({
+      backend: "codex",
+      notification: { method: "thread/pullRequests/updated", params: { threadId: "thread-1", prs: [pr] } },
+    });
+    await vi.waitFor(() => expect(syncThreadPrAutoDispatchCandidates).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(publishLocalEvent).not.toHaveBeenCalledWith(expect.objectContaining({
+      notification: expect.objectContaining({ method: "thread/prWatches/updated" }),
+    }));
   });
 
   it("does not advertise Auto-fix as active without a primary Git repository", async () => {

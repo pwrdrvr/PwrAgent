@@ -308,12 +308,19 @@ describe("PrAutoDispatchCoordinator", () => {
       prKeys: [prKey],
       now: clock,
     });
-    await store.syncThreadPrAutoDispatchCandidates({
+    // The sync reports its changed rows, so windows can re-list Auto-fix.
+    await expect(store.syncThreadPrAutoDispatchCandidates({
       backend: "codex",
       threadId: "thread-2",
       prKeys: [prKey],
       now: clock + 1,
-    });
+    })).resolves.toEqual([{ backend: "codex", threadId: "thread-2", prKey }]);
+    await expect(store.syncThreadPrAutoDispatchCandidates({
+      backend: "codex",
+      threadId: "thread-2",
+      prKeys: [prKey],
+      now: clock + 1,
+    })).resolves.toEqual([]);
 
     expect(await store.getPrAutoDispatchCandidateWinner({ prKey })).toMatchObject({
       threadId: "thread-1",
@@ -326,12 +333,12 @@ describe("PrAutoDispatchCoordinator", () => {
       threadId: "thread-1",
     });
 
-    await store.syncThreadPrAutoDispatchCandidates({
+    await expect(store.syncThreadPrAutoDispatchCandidates({
       backend: "codex",
       threadId: "thread-1",
       prKeys: [],
       now: clock + 2,
-    });
+    })).resolves.toEqual([{ backend: "codex", threadId: "thread-1", prKey }]);
     expect(await store.getPrAutoDispatchCandidateWinner({ prKey })).toMatchObject({
       threadId: "thread-2",
     });

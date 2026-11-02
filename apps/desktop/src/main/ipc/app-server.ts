@@ -54,6 +54,7 @@ import path from "node:path";
 import type {
   DirectoryGitStatusCacheEntry,
   OverlayStoreLike,
+  PrAutoDispatchCandidateChange,
   PrLookupCacheEntry,
   PrStatusCacheEntry,
   SqliteOverlayStore,
@@ -3161,7 +3162,9 @@ class DesktopAppServerService {
       }
     }
     if (options.isCurrent && !options.isCurrent()) return;
-    await this.getOverlayStore().syncThreadPrAutoDispatchCandidatesBatch({ threads: candidates, now: Date.now() });
+    this.publishPrAutoFixCandidateChanges(
+      await this.getOverlayStore().syncThreadPrAutoDispatchCandidatesBatch({ threads: candidates, now: Date.now() }),
+    );
   }
 
   private async rememberThreadPrAttachmentUpdate(params: {
@@ -3283,10 +3286,40 @@ class DesktopAppServerService {
           )
           .map(getPrStatusKey)
       : [];
-    await this.getOverlayStore().syncThreadPrAutoDispatchCandidates({
-      ...params,
-      prKeys,
-      now: Date.now(),
+    this.publishPrAutoFixCandidateChanges(
+      await this.getOverlayStore().syncThreadPrAutoDispatchCandidates({
+        ...params,
+        prKeys,
+        now: Date.now(),
+      }),
+    );
+  }
+
+  /**
+   * Auto-fix candidacy changed after a window may have listed it. Each
+   * thread holding an affected PR re-lists: one thread's candidacy can move
+   * another between active and handled by another thread.
+   */
+  private publishPrAutoFixCandidateChanges(
+    changes: PrAutoDispatchCandidateChange[] | undefined,
+  ): void {
+    if (!changes?.length) return;
+    void (async () => {
+      const prKeys = new Set(changes.map((change) => change.prKey));
+      const holders = (await this.getOverlayStore().listPrAutoDispatchCandidates())
+        .filter((candidate) => prKeys.has(candidate.prKey));
+      const threads = new Map<string, { backend: AppServerBackendKind; threadId: string }>();
+      for (const thread of [...changes, ...holders]) {
+        threads.set(buildThreadIdentityKey(thread.backend, thread.threadId), {
+          backend: thread.backend,
+          threadId: thread.threadId,
+        });
+      }
+      await this.publishPrWatchesUpdated([...threads.values()]);
+    })().catch((error: unknown) => {
+      appServerLog.warn("failed to publish Auto-fix candidate change", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
   }
 

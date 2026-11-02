@@ -266,6 +266,9 @@ export type PrAutoDispatchCandidate = {
   threadId: string;
 };
 
+/** A thread's Auto-fix candidacy for one PR that a sync added or removed. */
+export type PrAutoDispatchCandidateChange = Omit<PrAutoDispatchCandidate, "eligibleSince">;
+
 export type PrStatusWatchClaim = {
   attemptCount: number;
   watch: ThreadPullRequestWatchSummary;
@@ -6877,14 +6880,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     threadId: string;
     prKeys: string[];
     now: number;
-  }): Promise<void> {
-    await this.syncThreadPrAutoDispatchCandidatesBatch({ threads: [params], now: params.now });
+  }): Promise<PrAutoDispatchCandidateChange[]> {
+    return await this.syncThreadPrAutoDispatchCandidatesBatch({ threads: [params], now: params.now });
   }
 
+  /** Returns the candidate rows it added or removed. */
   async syncThreadPrAutoDispatchCandidatesBatch(params: {
     threads: Array<{ backend: ThreadOverlayState["backend"]; threadId: string; prKeys: string[] }>;
     now: number;
-  }): Promise<void> {
+  }): Promise<PrAutoDispatchCandidateChange[]> {
     const readChanges = () => {
       const changes: Array<{ thread: typeof params.threads[number]; add: string[]; remove: string[] }> = [];
       for (let offset = 0; offset < params.threads.length; offset += 500) {
@@ -6919,7 +6923,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       return changes;
     };
     // Do not create even an empty transaction for an unchanged owner index.
-    if (!readChanges().some((changes) => changes.add.length > 0 || changes.remove.length > 0)) return;
+    if (!readChanges().some((changes) => changes.add.length > 0 || changes.remove.length > 0)) return [];
+    const changed: PrAutoDispatchCandidateChange[] = [];
     this.stateDb.raw.transaction(() => {
       const remove = this.stateDb.raw.prepare(
         `DELETE FROM pr_auto_dispatch_candidates WHERE pr_key = ? AND backend = ? AND thread_id = ?`,
@@ -6934,8 +6939,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         const { thread } = changes;
         for (const key of changes.remove) remove.run(key, thread.backend, thread.threadId);
         for (const key of changes.add) insert.run(key, thread.backend, thread.threadId, params.now, params.now);
+        for (const prKey of [...changes.remove, ...changes.add]) {
+          changed.push({ backend: thread.backend, threadId: thread.threadId, prKey });
+        }
       }
     })();
+    return changed;
   }
 
   async getPrAutoDispatchCandidateWinner(params: {
