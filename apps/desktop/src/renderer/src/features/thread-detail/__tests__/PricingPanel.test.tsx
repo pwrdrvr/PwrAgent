@@ -640,6 +640,17 @@ it("shows Grok's own limit, not the Codex account's pace", () => {
   expect(readUsageActivity).not.toHaveBeenCalled();
 });
 
+it("shows a peer-owned Grok thread's limit from its owner's account", () => {
+  const { pricing } = buildTokenMiserPricingFixture();
+  const thread = { id: "grok-thread", source: "acp:grok" as const, updatedAt: 1 };
+  const grok = (usedPercent: number) => ({ kind: "acp:grok", label: "Grok", available: true,
+    rateLimits: [{ name: "Weekly limit", usedPercent }] }) as unknown as import("@pwragent/shared").BackendSummary;
+  const view = render(<PricingPanel pricing={pricing} thread={thread} backends={[grok(80)]} ownerBackends={[grok(10)]}
+    desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity: vi.fn() }} />);
+  expect(view.getByLabelText("Grok plan limits")).toHaveTextContent("10% used");
+  expect(view.getByLabelText("Grok plan limits")).not.toHaveTextContent("80%");
+});
+
 it("keeps the Grok card while Grok has not reported a limit yet", () => {
   const { pricing } = buildTokenMiserPricingFixture();
   const thread = { id: "grok-thread", source: "acp:grok" as const, updatedAt: 1 };

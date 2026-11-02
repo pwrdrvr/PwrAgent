@@ -4984,6 +4984,7 @@ export function ThreadView(props: ThreadViewProps) {
             activeTab={activeContextTab}
             backendError={props.backendError}
             backends={props.backends}
+            ownerBackends={peerOwnerTarget ? peerOwnerSummaries.backends : undefined}
             desktopApi={props.desktopApi}
             onOpenAutomations={props.onOpenAutomations}
             onActiveTabChange={onActiveContextTabChange}

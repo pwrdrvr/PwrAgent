@@ -75,6 +75,11 @@ type PricingPanelProps = {
   desktopApi?: DesktopApi;
   /** Supplies the Codex limits that tell the Usage Activity card to reread. */
   backends?: BackendSummary[];
+  /**
+   * The owning peer's providers for a remote thread. A provider's own limits
+   * are that account's, never this machine's.
+   */
+  ownerBackends?: BackendSummary[];
   thread?: PricingGateSource["thread"];
   display?: ThreadPricingDisplay;
   onLoadMore?: () => void;
@@ -204,7 +209,9 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
   const familyTarget = federation?.ref.target ?? readRendererFederationTarget();
   const familyOwner = familyTarget?.scope === "remote" ? familyTarget : undefined;
   const ownerLabel = familyOwner ? federation?.instanceLabel ?? readRendererFederationLabel() ?? "Remote machine" : undefined;
-  const threadBackend = source === undefined ? undefined : props.backends?.find((backend) => backend.kind === source);
+  const threadBackends = props.ownerBackends ?? props.backends;
+  const threadBackend = source === undefined ? undefined : threadBackends?.find((backend) => backend.kind === source);
+  const isAcp = source?.startsWith("acp:") ?? false;
   const snapshotVersion = federation?.ref.target.scope === "remote" && !federation.capabilities?.includes("event_subscriptions") ? updatedAt : undefined;
   const gateSource = useMemo<PricingGateSource>(() => ({
     desktopApi: props.desktopApi,
@@ -329,10 +336,10 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
           way into the window but never shows the Codex account's limit. */}
       {source === "claude"
         ? <ClaudeUsageLimits backend={threadBackend} />
-        : source?.startsWith("acp:") && (source === "acp:grok" || threadBackend?.rateLimits?.length)
-          ? <AcpUsageLimits backend={threadBackend} provider={formatBackendLabel(source, props.backends)} />
+        : isAcp && source && (source === "acp:grok" || threadBackend?.rateLimits?.length)
+          ? <AcpUsageLimits backend={threadBackend} provider={formatBackendLabel(source, threadBackends)} />
           : <UsagePaceCard desktopApi={props.desktopApi} backends={props.backends} ownerLabel={ownerLabel}
-            ownerInstanceId={familyOwner?.instanceId} codexLimit={!source?.startsWith("acp:")} />}
+            ownerInstanceId={familyOwner?.instanceId} codexLimit={!isAcp} />}
 
       {/* Under the spend breakdown, above the turn rows: the gate's result is
           part of reading the bill, not a footnote to one turn of it. */}
