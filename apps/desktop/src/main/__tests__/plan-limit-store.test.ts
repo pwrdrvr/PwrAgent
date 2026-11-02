@@ -96,9 +96,10 @@ describe("PlanLimitStore", () => {
       const { store } = storeAt(now);
       claude(store, [weekly, credits, fable], true);
       // Another CLI's probe, taken before the reading above: one window, lower.
+      // It cannot move the newer probe's usage or reset back.
       const older = { ...weekly, usedPercent: 49.4, resetAt: weeklyReset - 17 * 60_000 };
-      expect(claude(store, [older], true)).toBe(true);
-      const merged = [{ ...older, usedPercent: 50 }, credits, fable];
+      expect(claude(store, [older], true)).toBe(false);
+      const merged = [weekly, credits, fable];
       expect(store.limits("claude")).toEqual(merged);
       // A reading from the window before the reset is ignored outright.
       expect(claude(store, [{ ...older, usedPercent: 97, resetAt: weeklyReset - 7 * 24 * hour }], true)).toBe(false);
@@ -137,8 +138,21 @@ describe("PlanLimitStore", () => {
       expect(store.limits("claude")).toEqual([]);
       claude(store, [{ ...weekly, usedPercent: 25 }], true);
       expect(store.limits("claude")).toEqual([{ ...weekly, usedPercent: 25 }]);
+      // A reading that does not name the plan is not a plan change.
+      expect(store.setAccount("claude", { account: "a" })).toBe(false);
+      expect(store.limits("claude")).toEqual([{ ...weekly, usedPercent: 25 }]);
       store.setAccount("claude", { account: "b", plan: "max" });
       expect(store.snapshot("claude")).toEqual({ limits: [], account: "b", plan: "max" });
+    });
+
+    it("fills the remembered account in when a reading arrived before the file loaded", () => {
+      const now = Date.parse("2026-11-01T20:00:00Z");
+      const { store } = storeAt(now);
+      const weekly = { name: "Weekly limit", limitId: "seven_day", usedPercent: 50, resetAt: now + 24 * hour };
+      claude(store, [weekly]);
+      expect(store.restore("claude", { limits: [{ ...weekly, usedPercent: 40 }], account: "a", plan: "max",
+        observedAt: now - hour })).toBe(false);
+      expect(store.snapshot("claude")).toEqual({ limits: [weekly], account: "a", plan: "max", observedAt: now });
     });
 
     it("dates the limits only when a reading names them all", () => {
@@ -182,6 +196,8 @@ describe("PlanLimitStore", () => {
       const { store } = storeAt(now);
       store.record("codex", { limits: [fiveHour, weekly, credits], since: store.mark("codex"), dated: true });
       expect(notify(store, [rolling(50, fiveHour.resetAt)])).toBe(true);
+      // An older turn's reset, a second off, does not replace the newer one.
+      expect(notify(store, [rolling(49, fiveHour.resetAt! - 1_000)])).toBe(false);
       // A turn whose request started earlier reports 49% after the 50%.
       expect(notify(store, [rolling(49, fiveHour.resetAt)])).toBe(false);
       expect(notify(store, [rolling(49)])).toBe(false);
@@ -263,6 +279,19 @@ describe("PlanLimitStore", () => {
       if (store.setAccount("acp:grok", { plan })) since = store.mark("acp:grok");
       return store.record("acp:grok", { limits, since, dated: true });
     };
+
+    it("keeps the limit when a read leaves out the plan", () => {
+      const { store } = storeAt(now);
+      const readAt = (plan: string | undefined, limits: BackendRateLimitSummary[]) => {
+        let since = store.mark("acp:grok");
+        if (store.setAccount("acp:grok", { plan })) since = store.mark("acp:grok");
+        return store.record("acp:grok", { limits, since, dated: true });
+      };
+      readAt("SuperGrok", [monthly]);
+      readAt(undefined, []);
+      expect(store.limits("acp:grok")).toEqual([monthly]);
+      expect(store.snapshot("acp:grok")?.plan).toBe("SuperGrok");
+    });
 
     it("keeps the period's limit when a read leaves it out", () => {
       const { store } = storeAt(now);

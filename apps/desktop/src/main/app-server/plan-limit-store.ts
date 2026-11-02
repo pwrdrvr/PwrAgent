@@ -15,8 +15,8 @@ import type { BackendRateLimitSummary } from "@pwragent/shared";
  *   reading is older.
  * - A reset well after the known one starts a new window and replaces it. A
  *   reset well before it is a reading from the previous window, and ignored.
- * - A precise reading may refine a window's reset and labels; a coarse one
- *   only fills gaps and raises usage.
+ * - A precise reading may refine the reset and labels a coarse reading left;
+ *   a coarse one only fills gaps and raises usage.
  * - A reading requested after everything held (see `mark`) is the newest
  *   value and replaces the windows it names, even downward: a Codex reset
  *   credit lowers usage inside a window.
@@ -47,8 +47,9 @@ export type PlanLimitReading = {
    */
   since?: number;
   /**
-   * Exact usage and reset: may refine a held window's reset and labels even
-   * when its usage is lower. A coarse reading only fills gaps and raises use.
+   * Exact usage and reset: may refine a reset and labels that a coarse
+   * reading left, even when its usage is lower. A coarse reading only fills
+   * gaps and raises use.
    */
   precise?: boolean;
   /**
@@ -77,7 +78,8 @@ export type PlanLimitSnapshot = {
   observedAt?: number;
 };
 
-type HeldLimit = { limit: BackendRateLimitSummary; toleranceMs: number };
+/** `precise`: the row's reset and labels came from a precise reading. */
+type HeldLimit = { limit: BackendRateLimitSummary; toleranceMs: number; precise: boolean };
 
 type Entry = {
   held: HeldLimit[];
@@ -98,6 +100,7 @@ export class PlanLimitStore {
   private sequence = 0;
   private readonly listeners = new Set<(provider: string) => void>();
   private expiry?: { at: number; timer: ReturnType<typeof setTimeout> };
+  private closed = false;
   private readonly now: () => number;
 
   constructor(options: PlanLimitStoreOptions = {}) {
@@ -150,16 +153,18 @@ export class PlanLimitStore {
   /**
    * Record which account and plan the limits describe. A different account,
    * or a different plan on the same account, clears them. A value seen for
-   * the first time (none recorded yet) is adopted. Returns whether anything
-   * changed.
+   * the first time (none recorded yet) is adopted. A value the provider did
+   * not report keeps the one held. Returns whether anything changed.
    */
-  setAccount(provider: string, account: { account?: string; plan?: string }): boolean {
+  setAccount(provider: string, reported: { account?: string; plan?: string }): boolean {
     const entry = this.entry(provider);
-    if (entry.account === account.account && entry.plan === account.plan) return false;
-    const accountChanged = entry.account !== undefined && entry.account !== account.account;
-    const planChanged = entry.plan !== undefined && entry.plan !== account.plan;
-    entry.account = account.account;
-    entry.plan = account.plan;
+    const account = reported.account ?? entry.account;
+    const plan = reported.plan ?? entry.plan;
+    if (entry.account === account && entry.plan === plan) return false;
+    const accountChanged = entry.account !== undefined && entry.account !== account;
+    const planChanged = entry.plan !== undefined && entry.plan !== plan;
+    entry.account = account;
+    entry.plan = plan;
     if (accountChanged || planChanged) this.clear(provider);
     return true;
   }
@@ -188,11 +193,18 @@ export class PlanLimitStore {
 
   /**
    * Adopt remembered limits, unless the provider has reported since launch:
-   * that reading is newer than anything remembered.
+   * that reading is newer than anything remembered. The remembered account
+   * and plan still fill in what has not been reported yet.
    */
   restore(provider: string, saved: PlanLimitSnapshot & { resetToleranceMs?: number }): boolean {
-    if (this.entries.has(provider)) return false;
+    const known = this.entries.get(provider);
+    if (known) {
+      known.account ??= saved.account;
+      known.plan ??= saved.plan;
+      return false;
+    }
     const entry = this.entry(provider);
+    // Nothing says how precise a remembered reset was, so a probe may refine it.
     entry.held = mergePlanLimits([], { limits: saved.limits, resetToleranceMs: saved.resetToleranceMs }, this.now(), false);
     entry.account = saved.account;
     entry.plan = saved.plan;
@@ -208,6 +220,7 @@ export class PlanLimitStore {
   }
 
   close(): void {
+    this.closed = true;
     if (this.expiry) clearTimeout(this.expiry.timer);
     this.expiry = undefined;
     this.listeners.clear();
@@ -253,20 +266,14 @@ export class PlanLimitStore {
     return limits;
   }
 
-  private nextReset(entry: Entry, now: number): number | undefined {
-    let next: number | undefined;
-    for (const { limit: { resetAt } } of entry.held) {
-      if (resetAt !== undefined && resetAt > now && (next === undefined || resetAt < next)) next = resetAt;
-    }
-    return next;
-  }
-
   private scheduleExpiry(): void {
+    if (this.closed) return;
     const now = this.now();
     let next: number | undefined;
     for (const entry of this.entries.values()) {
-      const reset = this.nextReset(entry, now);
-      if (reset !== undefined && (next === undefined || reset < next)) next = reset;
+      this.live(entry);
+      const reset = entry.live!.until;
+      if (Number.isFinite(reset) && (next === undefined || reset < next)) next = reset;
     }
     if (this.expiry?.at === next) return;
     if (this.expiry) clearTimeout(this.expiry.timer);
@@ -312,9 +319,8 @@ export function planLimitKey(limit: BackendRateLimitSummary): string {
  * Merge one reading into the held windows. `newest` means the reading was
  * taken after everything held, so its order leads, followed by the windows it
  * left out; otherwise the held order stays and new windows follow it.
- * Exported for tests; use `PlanLimitStore`.
  */
-export function mergePlanLimits(
+function mergePlanLimits(
   held: readonly HeldLimit[],
   reading: Pick<PlanLimitReading, "limits" | "precise" | "resetToleranceMs" | "describe">,
   now: number,
@@ -334,7 +340,7 @@ export function mergePlanLimits(
     if (limit.resetAt !== undefined && limit.resetAt <= now) continue;
     const key = planLimitKey(limit);
     const known = limits.get(key);
-    const merged = mergeWindow(known, { limit, toleranceMs }, newest, precise);
+    const merged = mergeWindow(known, { limit, toleranceMs, precise }, newest);
     if (!merged) continue;
     limits.set(key, reading.describe
       ? { ...merged, limit: reading.describe(merged.limit) }
@@ -357,25 +363,36 @@ function mergeWindow(
   known: HeldLimit | undefined,
   reading: HeldLimit,
   newest: boolean,
-  precise: boolean,
 ): HeldLimit | undefined {
   const { limit } = reading;
   // A balance has no window to order by; the last reading is the balance.
   if (!known || limit.windowKey === "credits") return reading;
   const order = windowOrder(known.limit.resetAt, limit.resetAt, Math.max(known.toleranceMs, reading.toleranceMs));
   // A new window: nothing measured in the old one carries over.
-  if (order > 0) return { limit: { ...withoutUsage(known.limit), ...limit }, toleranceMs: reading.toleranceMs };
-  if (newest) return { limit: { ...known.limit, ...limit }, toleranceMs: resetTolerance(known, reading) };
+  if (order > 0) return { ...reading, limit: { ...withoutUsage(known.limit), ...limit } };
+  if (newest) return refined(known, reading, { ...known.limit, ...limit });
   if (order < 0) return undefined;
-  const usage = compareUsage(known.limit, limit);
-  if (usage > 0) {
-    return precise
-      ? { limit: { ...known.limit, ...limit }, toleranceMs: resetTolerance(known, reading) }
-      : { limit: { ...known.limit, ...usageOf(limit) }, toleranceMs: known.toleranceMs };
+  if (compareUsage(known.limit, limit) > 0) {
+    // The reading is the newer one: a precise reading takes over the window,
+    // a coarse one only raises its use.
+    return reading.precise
+      ? refined(known, reading, { ...known.limit, ...limit })
+      : { ...known, limit: { ...known.limit, ...usageOf(limit) } };
   }
-  return precise
-    ? { limit: { ...known.limit, ...withoutUsage(limit) }, toleranceMs: resetTolerance(known, reading) }
+  // An older reading may still refine a reset that a coarse one left; never
+  // one a precise reading set.
+  return reading.precise && !known.precise
+    ? refined(known, reading, { ...known.limit, ...withoutUsage(limit) })
     : known;
+}
+
+/** A merged row whose reset and labels now come from `reading` where it named them. */
+function refined(known: HeldLimit, reading: HeldLimit, limit: BackendRateLimitSummary): HeldLimit {
+  return {
+    limit,
+    toleranceMs: reading.limit.resetAt !== undefined ? reading.toleranceMs : known.toleranceMs,
+    precise: known.precise || reading.precise,
+  };
 }
 
 /** -1: the reading is from an earlier window; 0: the same window; 1: a later one. */
@@ -404,11 +421,6 @@ function compareUsage(known: BackendRateLimitSummary, reading: BackendRateLimitS
     return after > before ? 1 : after < before ? -1 : 0;
   }
   return 0;
-}
-
-/** The held tolerance follows whichever reading's reset the row keeps. */
-function resetTolerance(known: HeldLimit, reading: HeldLimit): number {
-  return reading.limit.resetAt !== undefined ? reading.toleranceMs : known.toleranceMs;
 }
 
 function usageOf(limit: BackendRateLimitSummary): Partial<BackendRateLimitSummary> {
