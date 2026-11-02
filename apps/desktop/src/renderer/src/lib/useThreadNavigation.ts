@@ -1133,12 +1133,12 @@ function applyFederationPeerStatusUpdate(
   instanceId: string,
   status: FederationPeerSummary["status"],
 ): NavigationLoadedRows | undefined {
-  // Only a loss of connection is patched in place. A row held while its
-  // owner was away carries the capabilities stamped then, and the event
-  // carries none. Marking that row connected undims it while its menu still
-  // withholds every owner action. The refresh each reconnect schedules
-  // brings the owner's status and capabilities in one stamp.
-  if (!snapshot || status === "connected") {
+  // Callers patch only a loss of connection. A row held while its owner was
+  // away carries the capabilities stamped then, and the event carries none.
+  // Marking that row connected would undim it while its menu still withholds
+  // every owner action. A reconnect refresh brings the owner's status and
+  // capabilities in one stamp instead.
+  if (!snapshot) {
     return snapshot;
   }
   let changed = false;
@@ -4349,6 +4349,10 @@ export function useThreadNavigation(
         markNavigationActivity({ refreshOnIdleResume: false });
         if (params.status === "connected") {
           // The pinned rows stay dimmed until this refresh restamps them.
+          // The dimming was patched here, not read, so an owner whose
+          // revision did not move would answer `unchanged` and keep it.
+          // Invalidating first makes every page read in full.
+          invalidateNavigation();
           scheduleEventRefresh(undefined, undefined, false, {
             forceRefresh: true,
           });
