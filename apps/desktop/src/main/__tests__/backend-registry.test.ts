@@ -49195,8 +49195,9 @@ script = "printf setup"
     it("leaves an operator-started Claude prompt without an origin and keeps the turn's routing", async () => {
       const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-registry-"));
       const finish = Promise.withResolvers<void>();
+      const firstPromptRead = Promise.withResolvers<void>();
+      const turnFinished = Promise.withResolvers<AgentEvent>();
       const prompts: Array<{ uuid?: string }> = [];
-      const events: AgentEvent[] = [];
       const registry = new DesktopBackendRegistry({
         codexClient: new MockBackendClient({}),
         overlayStore: createOverlayStoreMock(),
@@ -49212,6 +49213,7 @@ script = "printf setup"
             const input = prompt[Symbol.asyncIterator]();
             async function* messages(): AsyncGenerator<ClaudeMessage> {
               prompts.push((await input.next()).value);
+              firstPromptRead.resolve();
               yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
               await finish.promise;
               prompts.push((await input.next()).value);
@@ -49223,17 +49225,37 @@ script = "printf setup"
           },
         },
       });
-      registry.onEvent((event) => { events.push(event); });
+      // Wait on the turn's own end, not wall time.
+      registry.onEvent((event) => {
+        if (["turn/completed", "turn/failed", "turn/cancelled"].includes(event.notification.method)) turnFinished.resolve(event);
+      });
+      // The root is not a repository, so each branch read (thread start, and
+      // turn end before listeners see turn/completed) falls back to an owned
+      // Git process. On Windows that is PowerShell plus Git. Answer as Git
+      // does outside a repository.
+      const runGitCommand = gitExecutable.runGitCommand;
+      const branchRead = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+        if (cwd !== root) return await runGitCommand(cwd, args, options);
+        throw new Error("fatal: not a git repository (or any of the parent directories): .git");
+      });
       try {
         const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
         const identity = { backend: "claude" as const, threadId };
         const started = await registry.startTurn({ ...identity, input: [{ type: "text", text: "Start" }] });
-        await vi.waitFor(() => expect(prompts).toHaveLength(1));
+        await firstPromptRead.promise;
+        expect(prompts).toHaveLength(1);
         await expect(registry.steerTurn({ ...identity, expectedTurnId: started.turnId, requestId: "telegram-steer-1",
           input: [{ type: "text", text: "Course correct from Telegram" }] }, steererOrigin))
           .resolves.toMatchObject({ disposition: "steered", turnId: started.turnId });
+        branchRead.mockClear();
         finish.resolve();
-        await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+        await expect(turnFinished.promise).resolves.toMatchObject({
+          notification: { method: "turn/completed", params: { turnId: started.turnId } },
+        });
+        // The turn-end branch read ran, and ran without a Git process.
+        expect(branchRead).toHaveBeenCalledWith(
+          root, ["rev-parse", "--abbrev-ref", "HEAD"], expect.objectContaining({ ownProcessTree: true }),
+        );
 
         const replay = await registry.readThread(identity);
         const firstPrompt = replay.replay.messages.find((message) => message.text === "Start");
@@ -49242,7 +49264,11 @@ script = "printf setup"
         await expect(registry.readCausalMessagingContext({ ...identity, turnId: started.turnId }))
           .resolves.toEqual({ causalMessagingAmbiguous: true });
       } finally {
-        await registry.close();
+        try {
+          await registry.close();
+        } finally {
+          branchRead.mockRestore();
+        }
         await rm(root, { recursive: true, force: true });
       }
     });
@@ -52183,6 +52209,163 @@ script = "printf setup"
     )).toEqual([123, 789]);
 
     await registry.close();
+  });
+
+  async function attachBarePullRequestNumberAcrossCheckouts(params: {
+    remotes: string[];
+    resolver?: (request: { url: string; cwd?: string }) => Promise<
+      { provider: string; org: string; repo: string; url: string } | undefined
+    >;
+  }) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-renamed-remotes-"));
+    try {
+      const linkedDirectories = [];
+      for (const [index, remote] of params.remotes.entries()) {
+        const checkout = path.join(root, `checkout-${index}`);
+        await mkdir(checkout, { recursive: true });
+        await git(checkout, ["init", "-b", "main"]);
+        await git(checkout, ["remote", "add", "origin", remote]);
+        linkedDirectories.push({
+          id: checkout,
+          kind: "local" as const,
+          label: `checkout-${index}`,
+          path: checkout,
+        });
+      }
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [
+          {
+            id: "target-thread",
+            title: "Checkouts from before and after a rename",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories,
+            updatedAt: 2000,
+          },
+        ],
+      });
+      const overlayStore = createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread": createAgentOverlay(),
+        },
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore,
+      });
+      try {
+        const resolver = params.resolver ? vi.fn(params.resolver) : undefined;
+        if (resolver) registry.setPullRequestReferenceResolver(resolver);
+        await registry.publishLocalEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/started",
+            params: {
+              threadId: "agent-thread",
+              turnId: "turn-1",
+              turn: { id: "turn-1" },
+            },
+          },
+        });
+        const response = await codexClient.emitRequest({
+          method: "item/tool/call",
+          params: {
+            threadId: "agent-thread",
+            turnId: "turn-1",
+            callId: "call-1",
+            requestId: "call-1",
+            namespace: "pwragent",
+            tool: "attach_thread_pull_request",
+            arguments: {
+              backend: "codex",
+              threadId: "target-thread",
+              number: 3179,
+            },
+          },
+        } as AppServerPendingRequestNotification);
+        const overlay = await overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "target-thread",
+        });
+        return { overlay, resolver, response };
+      } finally {
+        await registry.close();
+      }
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  }
+
+  it("attaches a bare PR number when checkouts name a renamed repository both ways", async () => {
+    // One checkout was cloned before pwrdrvr/PwrAgnt became pwrdrvr/PwrAgent.
+    // GitHub answers the old name with the new one, so the two remotes are
+    // one repository, not an ambiguity.
+    const { overlay, resolver, response } = await attachBarePullRequestNumberAcrossCheckouts({
+      remotes: [
+        "git@github.com:pwrdrvr/PwrAgnt.git",
+        "https://github.com/pwrdrvr/PwrAgent.git",
+      ],
+      resolver: async ({ url }) => {
+        const parsed = /\/pull\/(\d+)$/.exec(url);
+        return {
+          provider: "github.com",
+          org: "pwrdrvr",
+          repo: "PwrAgent",
+          url: `https://github.com/pwrdrvr/PwrAgent/pull/${parsed?.[1]}`,
+        };
+      },
+    });
+
+    expect(response).toMatchObject({ success: true });
+    expect(overlay?.prs).toHaveLength(1);
+    expect(overlay?.prs?.[0]).toMatchObject({
+      provider: "github.com",
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      number: 3179,
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3179",
+    });
+    // One question per inferred name; the attach does not ask again.
+    expect(resolver?.mock.calls.map(([request]) => request.url).sort()).toEqual([
+      "https://github.com/pwrdrvr/PwrAgent/pull/3179",
+      "https://github.com/pwrdrvr/PwrAgnt/pull/3179",
+    ]);
+  });
+
+  it("attaches a bare PR number when checkout remotes differ only by letter case", async () => {
+    const { overlay, response } = await attachBarePullRequestNumberAcrossCheckouts({
+      remotes: [
+        "https://github.com/pwrdrvr/pwragent.git",
+        "https://github.com/pwrdrvr/PwrAgent.git",
+      ],
+    });
+
+    expect(response).toMatchObject({ success: true });
+    expect(overlay?.prs).toHaveLength(1);
+    expect(overlay?.prs?.[0]).toMatchObject({ number: 3179 });
+    expect(overlay?.prs?.[0]?.repo.toLowerCase()).toBe("pwragent");
+  });
+
+  it("still refuses a bare PR number when the forge names two repositories", async () => {
+    const { overlay, resolver, response } = await attachBarePullRequestNumberAcrossCheckouts({
+      remotes: [
+        "https://github.com/pwrdrvr/PwrAgent.git",
+        "https://github.com/pwrdrvr/PwrGit.git",
+      ],
+      // Each repository has its own #3179.
+      resolver: async ({ url }) => {
+        const parsed = /github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)$/.exec(url);
+        return parsed
+          ? { provider: "github.com", org: parsed[1]!, repo: parsed[2]!, url }
+          : undefined;
+      },
+    });
+
+    expect(response).toMatchObject({ success: false });
+    expect(JSON.stringify(response)).toContain("multiple inferable repositories");
+    expect(overlay?.prs).toBeUndefined();
+    expect(resolver).toHaveBeenCalledTimes(2);
   });
 
   it("routes user-invoked PR status checks through the registered handler", async () => {
@@ -55564,6 +55747,8 @@ script = "printf setup"
       taskMonitorModels?: Record<string, DesktopTaskMonitorModelChoice>;
       /** Holds every query after the first until it settles. */
       laterQueriesHeld?: Promise<void>;
+      /** Replaces each query's messages, for a monitor that runs tasks. */
+      script?: (options: ClaudeOptions) => AsyncGenerator<ClaudeMessage>;
     }) {
       const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-monitor-"));
       const store = new ClaudeSessionStore(path.join(root, "sessions"));
@@ -55572,6 +55757,7 @@ script = "printf setup"
         linkedDirectories: [{ id: root, kind: "local", label: "repo", path: root }],
       } });
       const prompts: ClaudeOptions[] = [];
+      const queries: { close: ReturnType<typeof vi.fn> }[] = [];
       let release!: () => void;
       const held = new Promise<void>((resolve) => { release = resolve; });
       const codexClient = new MockBackendClient({
@@ -55609,7 +55795,20 @@ script = "printf setup"
               await (prompts.length > 1 && params.laterQueriesHeld ? params.laterQueriesHeld : held);
               yield { type: "result", subtype: "success", is_error: false, result: "Done" } as ClaudeMessage;
             }
-            return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+            let endStream!: () => void;
+            const closed = new Promise<undefined>((resolve) => { endStream = () => resolve(undefined); });
+            const query = { close: vi.fn(endStream), setPermissionMode: vi.fn() };
+            queries.push(query);
+            // Closing a real query ends its process, and with it the stream.
+            async function* scripted(source: AsyncGenerator<ClaudeMessage>): AsyncGenerator<ClaudeMessage> {
+              for (;;) {
+                const step = await Promise.race([source.next(), closed]);
+                if (!step || step.done) return;
+                yield step.value;
+              }
+            }
+            const stream = params.script ? scripted(params.script(options)) : messages();
+            return Object.assign(stream, query) as unknown as ClaudeQuery;
           },
         },
       });
@@ -55636,7 +55835,7 @@ script = "printf setup"
         await registry.close();
         await rm(root, { recursive: true, force: true });
       };
-      return { close, codexClient, overlayStore, prompts, registry, release, root, store };
+      return { close, codexClient, overlayStore, prompts, queries, registry, release, root, store };
     }
 
     it("runs on Claude's lightweight model in an ephemeral thread, and can complete", async () => {
@@ -55719,6 +55918,202 @@ script = "printf setup"
         });
       } finally {
         releaseRecovery();
+        await close();
+      }
+    });
+
+    // Claude Code blocks a long foreground sleep, so a Claude monitor waits in
+    // a Monitor watcher and ends its native turn; the watcher's notification
+    // starts its next one. These are the messages the CLI sends for that.
+    const watcherStarted = [
+      { type: "system", subtype: "background_tasks_changed",
+        tasks: [{ task_id: "watch-1", task_type: "local_bash", description: "Watch PR #8 checks" }] },
+      { type: "system", subtype: "task_started", task_id: "watch-1", tool_use_id: "toolu-watch",
+        task_type: "local_bash", description: "Watch PR #8 checks", is_backgrounded: true },
+    ] as ClaudeMessage[];
+    const watcherEnded = [
+      { type: "system", subtype: "task_notification", task_id: "watch-1", tool_use_id: "toolu-watch",
+        status: "completed", output_file: "", summary: "PR #8 checks: pass" },
+      { type: "system", subtype: "background_tasks_changed", tasks: [] },
+    ] as ClaudeMessage[];
+    const nativeResult = {
+      type: "result", subtype: "success", is_error: false, result: "Watching.", num_turns: 8, stop_reason: "end_turn",
+    } as ClaudeMessage;
+    const monitorRecord = (registry: DesktopBackendRegistry, monitorId: string) =>
+      (registry as unknown as {
+        taskMonitorDelegations: Map<string, { awaitingClaudeTaskWake?: boolean }>;
+      }).taskMonitorDelegations.get(monitorId);
+    const userMessageCount = async (registry: DesktopBackendRegistry, threadId: string) =>
+      (await registry.readThread({ backend: "claude", threadId })).replay.messages
+        .filter((message) => message.role === "user").length;
+
+    it("waits for its background watcher instead of starting a recovery turn", async () => {
+      let endWatcher!: () => void;
+      const watcherRunning = new Promise<void>((resolve) => { endWatcher = resolve; });
+      let endFollowUp!: () => void;
+      const followUpRunning = new Promise<void>((resolve) => { endFollowUp = resolve; });
+      const { close, prompts, registry, store } = await createClaudeMonitorRegistry({
+        script: async function* (options) {
+          yield { type: "system", subtype: "init", session_id: options.sessionId } as ClaudeMessage;
+          yield* watcherStarted;
+          yield nativeResult;
+          await watcherRunning;
+          yield* watcherEnded;
+          // Claude answers the notification with a native turn of its own.
+          yield { type: "system", subtype: "init", session_id: options.sessionId } as ClaudeMessage;
+          await followUpRunning;
+          yield nativeResult;
+        },
+      });
+      const monitorTurnStarts: string[] = [];
+      try {
+        const response = await callRegistryMcpTool({
+          registry, backend: "claude", threadId: parentThreadId, turnId: "parent-turn",
+          tool: "create_monitor_delegation", args: { task: "Watch PR #8 checks until they finish." },
+        });
+        expect(response.isError).not.toBe(true);
+        const monitorId = String(response.structuredContent?.monitorId);
+        const monitorThreadId = String(response.structuredContent?.monitorThreadId);
+        const monitorTurnId = String(response.structuredContent?.monitorTurnId);
+        registry.onEvent((event) => {
+          if (event.notification.method === "turn/started" && event.notification.params.threadId === monitorThreadId) {
+            monitorTurnStarts.push((event.notification.params as { turn: { id: string } }).turn.id);
+          }
+        });
+
+        // The first turn ends with the watcher running: no recovery prompt.
+        await vi.waitFor(() => expect(monitorRecord(registry, monitorId)?.awaitingClaudeTaskWake).toBe(true));
+        await expect(userMessageCount(registry, monitorThreadId)).resolves.toBe(1);
+
+        // The watcher's notification wakes the monitor, which reports.
+        endWatcher();
+        await vi.waitFor(() => expect(monitorTurnStarts.filter((id) => id !== monitorTurnId)).toHaveLength(1));
+        const followUpTurnId = monitorTurnStarts.find((id) => id !== monitorTurnId)!;
+        expect(monitorRecord(registry, monitorId)?.awaitingClaudeTaskWake).toBe(false);
+        const completed = await callRegistryMcpTool({
+          registry, backend: "claude", threadId: monitorThreadId, turnId: followUpTurnId,
+          tool: "complete_monitoring",
+          args: { monitorId, outcome: "success", summary: "PR #8 checks passed.", triggerParentTurn: false },
+        });
+        expect(completed.isError).not.toBe(true);
+        expect(completed.structuredContent).toMatchObject({ monitorId });
+        endFollowUp();
+        await vi.waitFor(async () => {
+          await expect(store.read(monitorThreadId)).rejects.toBeDefined();
+        });
+        // One process, one brief, and no recovery turn.
+        expect(prompts).toHaveLength(1);
+      } finally {
+        endWatcher();
+        endFollowUp();
+        await close();
+      }
+    });
+
+    it("recovers a monitor whose watcher ended without Claude answering it", async () => {
+      let endWatcher!: () => void;
+      const watcherRunning = new Promise<void>((resolve) => { endWatcher = resolve; });
+      const { close, registry, release } = await createClaudeMonitorRegistry({
+        script: async function* (options) {
+          yield { type: "system", subtype: "init", session_id: options.sessionId } as ClaudeMessage;
+          yield* watcherStarted;
+          yield nativeResult;
+          await watcherRunning;
+          yield* watcherEnded;
+          // Claude never starts a turn for the notification.
+          await new Promise<void>(() => {});
+        },
+      });
+      const checkStale = (now: number) =>
+        (registry as unknown as { checkStaleTaskMonitors(now: number): Promise<void> }).checkStaleTaskMonitors(now);
+      const tasks = async (threadId: string) =>
+        (await registry.listBackgroundTerminals({ backend: "claude", threadId })).terminals;
+      try {
+        const response = await callRegistryMcpTool({
+          registry, backend: "claude", threadId: parentThreadId, turnId: "parent-turn",
+          tool: "create_monitor_delegation", args: { task: "Watch PR #8 checks until they finish." },
+        });
+        const monitorId = String(response.structuredContent?.monitorId);
+        const monitorThreadId = String(response.structuredContent?.monitorThreadId);
+        await vi.waitFor(() => expect(monitorRecord(registry, monitorId)?.awaitingClaudeTaskWake).toBe(true));
+
+        // A running watcher is the monitor's running command: never stale.
+        await checkStale(Date.now() + 24 * 60 * 60 * 1000);
+        await expect(userMessageCount(registry, monitorThreadId)).resolves.toBe(1);
+        expect(monitorRecord(registry, monitorId)?.awaitingClaudeTaskWake).toBe(true);
+
+        endWatcher();
+        await vi.waitFor(async () => expect(await tasks(monitorThreadId)).toHaveLength(0));
+        await checkStale(Date.now() + 24 * 60 * 60 * 1000);
+        await vi.waitFor(() => expect(userMessageCount(registry, monitorThreadId)).resolves.toBe(2));
+      } finally {
+        endWatcher();
+        release();
+        await close();
+      }
+    });
+
+    it("ends a finished monitor's watcher with its process", async () => {
+      const { close, queries, registry, release } = await createClaudeMonitorRegistry({
+        script: async function* (options) {
+          yield { type: "system", subtype: "init", session_id: options.sessionId } as ClaudeMessage;
+          yield* watcherStarted;
+          yield nativeResult;
+          await new Promise<void>(() => {});
+        },
+      });
+      try {
+        const response = await callRegistryMcpTool({
+          registry, backend: "claude", threadId: parentThreadId, turnId: "parent-turn",
+          tool: "create_monitor_delegation", args: { task: "Watch PR #8 checks until they finish." },
+        });
+        const monitorId = String(response.structuredContent?.monitorId);
+        const monitorThreadId = String(response.structuredContent?.monitorThreadId);
+        await vi.waitFor(() => expect(monitorRecord(registry, monitorId)?.awaitingClaudeTaskWake).toBe(true));
+        expect(queries[0]!.close).not.toHaveBeenCalled();
+
+        const completed = await callRegistryMcpTool({
+          registry, backend: "claude", threadId: monitorThreadId,
+          turnId: String(response.structuredContent?.monitorTurnId), tool: "complete_monitoring",
+          args: { monitorId, outcome: "success", summary: "Done.", triggerParentTurn: false },
+        });
+        expect(completed.isError).not.toBe(true);
+        // A watcher left running would wake a monitor nothing owns.
+        await vi.waitFor(() => expect(queries[0]!.close).toHaveBeenCalled());
+      } finally {
+        release();
+        await close();
+      }
+    });
+
+    it("cancels a monitor that is waiting on its watcher", async () => {
+      const { close, queries, registry, release } = await createClaudeMonitorRegistry({
+        script: async function* (options) {
+          yield { type: "system", subtype: "init", session_id: options.sessionId } as ClaudeMessage;
+          yield* watcherStarted;
+          yield nativeResult;
+          await new Promise<void>(() => {});
+        },
+      });
+      try {
+        const response = await callRegistryMcpTool({
+          registry, backend: "claude", threadId: parentThreadId, turnId: "parent-turn",
+          tool: "create_monitor_delegation", args: { task: "Watch PR #8 checks until they finish." },
+        });
+        const monitorId = String(response.structuredContent?.monitorId);
+        await vi.waitFor(() => expect(monitorRecord(registry, monitorId)?.awaitingClaudeTaskWake).toBe(true));
+
+        // No turn is running, so no terminal event can finish the cancel.
+        const cancelled = await callRegistryMcpTool({
+          registry, backend: "claude", threadId: parentThreadId, turnId: "parent-turn",
+          tool: "cancel_monitor_delegation", args: { monitorId },
+        });
+        expect(cancelled.isError).not.toBe(true);
+        expect(cancelled.structuredContent).toMatchObject({ monitorId, outcome: "cancelled" });
+        expect(monitorRecord(registry, monitorId)).toBeUndefined();
+        await vi.waitFor(() => expect(queries[0]!.close).toHaveBeenCalled());
+      } finally {
+        release();
         await close();
       }
     });

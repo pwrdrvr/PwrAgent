@@ -281,6 +281,8 @@ type LiveSession = {
   onClosed: (() => void)[];
   closing?: boolean;
   closed?: boolean;
+  /** Its owner released the thread: the process ends with the turn, tasks and all. */
+  released?: boolean;
   contextWindow?: ClaudeSession["contextWindow"];
   /** One background context probe at a time; a request while it runs reruns it once. */
   contextRefresh?: { promise: Promise<void>; again: boolean };
@@ -420,6 +422,11 @@ export class ClaudeBackend {
   private readonly starting = new Map<string, AbortController>();
   /** Turn starts can still read the store before they enter sessions. */
   private readonly turnStarts = new Set<Promise<ClaudeTurnStart>>();
+  /**
+   * Every session's message pump until it settles. A session leaves
+   * `sessions` before its last turn's terminal event has reached listeners.
+   */
+  private readonly sessionRuns = new Set<Promise<void>>();
   private closing = false;
   private closeOperation?: Promise<void>;
   /** Threads a rewind is changing; a message for one waits in the queue. */
@@ -631,9 +638,15 @@ export class ClaudeBackend {
   /**
    * Ends an ephemeral thread. Its process exits after every settled turn, and
    * a monitor may still need a recovery turn, so its owner ends it instead.
+   * A process kept open for a background task, such as a monitor's watcher,
+   * ends now, or with the turn that is running.
    */
   releaseEphemeralThread(threadId: string): void {
     this.store.forgetEphemeral(threadId);
+    const live = this.sessions.get(threadId);
+    if (!live) return;
+    live.released = true;
+    if (!live.turn) live.wake.wake();
   }
 
   async readThread(threadId: string): Promise<AppServerThreadReplay> {
@@ -896,9 +909,10 @@ export class ClaudeBackend {
       } finally { releasePrompt(); }
       turn.usageBaseline = session.modelUsage;
       turn.needsUsageBaseline = Boolean(session.sdkSessionId ?? session.forkFromSdkSessionId) && !session.modelUsage;
-      current.done = this.consume(current);
+      const done = current.done = this.consume(current);
       // consume owns every error after launch, including terminal notification.
-      void current.done.catch(() => {});
+      this.sessionRuns.add(done);
+      void done.catch(() => {}).finally(() => this.sessionRuns.delete(done));
       return { backend: "claude", threadId, turnId: turn.turnId };
     } catch (error) {
       const failure = claudeExceptionMessage(error, live?.stderr ?? "");
@@ -1332,6 +1346,7 @@ export class ClaudeBackend {
    */
   private sessionSettled(live: LiveSession, ignoreTurn = false): boolean {
     if (live.turn && !ignoreTurn) return false;
+    if (live.released) return true;
     if (live.tasks.active().length > 0) return false;
     if (live.sessionState !== undefined && live.sessionState !== "idle") return false;
     return live.lastNotificationSeq < live.lastResultSeq || live.followUpWaivedAt === live.messageSeq;
@@ -2753,6 +2768,9 @@ export class ClaudeBackend {
       Promise.allSettled([...this.turnStarts]),
       Promise.all([...this.sessions.values()].map((live) => this.closeSession(live))),
     ]);
+    // A session already gone from `sessions` may still be reporting its last
+    // turn, and that report's listeners read the store and the workspace.
+    await Promise.allSettled([...this.sessionRuns]);
     await this.rateLimitWrites;
   }
 }
