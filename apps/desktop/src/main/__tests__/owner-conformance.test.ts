@@ -181,6 +181,8 @@ const FIRST_PROMPT_SCENARIO: Step[] = [
       context.threadId = started.threadId;
       return started;
     } },
+  // A viewer's sidebar is open before the first turn; the owner sees that read.
+  { name: "list it before its first turn", method: "backend.getNavigationQueryPage", run: (host) => inbox(host), values: rowValues },
   { name: "start its first turn", method: "backend.startTurn",
     run: async (host, context) => {
       const turn = await host.client.startTurn({ ...ref(context), input: [{ type: "text", text: FIRST_PROMPT }] });
