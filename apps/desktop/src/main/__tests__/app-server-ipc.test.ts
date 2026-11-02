@@ -1312,10 +1312,10 @@ vi.mock("../pr-status/pr-status-token-bucket", async () => {
 });
 
 // Load the module under test while the file loads, not in a hook. A static
-// import would run before the mock helpers above exist, so this waits for them.
-// Loading it is about 4 s of cold transform on a CI runner, and a hook's 10 s
-// timer turned a loaded macOS runner into a failed suite; file loading has no
-// timer, as for every test file that imports its subject statically.
+// import would run the mock factories before the helpers above exist, so this
+// waits for them. A cold load takes 3.5 to 4.7 s on the CI runners, and a
+// hook's 10 s timer failed the suite on a loaded macOS runner. File loading
+// has no timer, as for every test file that imports its subject statically.
 const {
   disposeAppServerIpcHandlers,
   registerAppServerIpcHandlers,
