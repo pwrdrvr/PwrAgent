@@ -92,6 +92,10 @@ async function startDesktopOwner(): Promise<OwnerHost> {
     threadTitleGenerationService: null, pdfToolMcpServer: null, runtimeInstanceId: "conformance-desktop",
     resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [] });
   desktopOwner.registry = registry;
+  // A running desktop has reconciled its window's full navigation snapshot
+  // before any viewer connects. Until then it puts no thread in Inbox.
+  await overlayStore.reconcileNavigationSnapshot({ backend: "all", fetchedAt: Date.now(),
+    threads: await registry.listThreads({ callerReason: "navigation-snapshot" }), workspaceRoots: [] });
   const events: AgentEvent[] = [];
   // What the federation runtime sends a viewer subscribed to every thread in
   // these classes; the rest of its fan-out is per-subscriber routing.
