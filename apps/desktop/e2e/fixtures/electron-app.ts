@@ -1329,15 +1329,15 @@ export async function closeElectronWithSessionDrain(
         })}\n`);
       };
       record("installed");
-      app.on("before-quit", () => record("before-quit"));
-      app.on("will-quit", () => record("will-quit"));
-      app.on("quit", () => record("quit"));
+      app.once("before-quit", () => record("before-quit"));
+      app.once("quit", () => record("quit"));
       const sessions = new Set([
         session.defaultSession,
         ...webContents.getAllWebContents().map((contents) => contents.session),
       ]);
       let quitHeld = false;
       const holdNativeQuit = (event: Electron.Event) => {
+        record("will-quit");
         event.preventDefault();
         quitHeld = true;
       };
