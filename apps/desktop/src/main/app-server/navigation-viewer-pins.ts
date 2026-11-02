@@ -230,6 +230,10 @@ export function attachRemoteThreadsToLocalDirectories(
       if (homeIndex === -1) {
         homeIndex = mergedDirectories.push(placeholder) - 1;
       }
+    }
+    // Every member counts, including one that found the placeholder by
+    // name after an earlier thread created it.
+    if (mergedDirectories[homeIndex]?.localAvailability === "unconfigured") {
       const members = placeholderThreads.get(homeIndex) ?? [];
       members.push(thread);
       placeholderThreads.set(homeIndex, members);
