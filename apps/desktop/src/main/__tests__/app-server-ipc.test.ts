@@ -185,6 +185,8 @@ const federationMock = vi.hoisted(() => {
       remoteTargetSupportsCapability: vi.fn(() => true),
       remoteNavigationSnapshot: vi.fn(),
       remoteNavigationQueryPage: vi.fn(),
+      remoteMarkNavigationDirectorySeen: vi.fn(),
+      navigationActionOwnerLabel: vi.fn(),
       stampRemoteNavigationQueryPage: vi.fn((_target: FederationRemoteTarget, page: NavigationQueryPage) => page),
       remoteNavigationSelectedDetail: vi.fn(),
       remoteNavigationQueueProjection: vi.fn(),
@@ -1360,6 +1362,17 @@ const {
 } = await import("../ipc/app-server");
 
 describe("app server ipc", () => {
+  it("keeps the selected owner and original cause in remote directory mark-read failures", async () => {
+    const { appServerService } = await import("../ipc/app-server");
+    const target = { scope: "remote" as const, instanceId: "pwr_laptop" };
+    const cause = "Owner state changed during the directory check (codex, thread/status/changed, thread busy-thread).";
+    federationMock.runtime.remoteMarkNavigationDirectorySeen.mockRejectedValueOnce(new Error(cause));
+    federationMock.runtime.navigationActionOwnerLabel.mockReturnValueOnce("Fixture Laptop (pwr_laptop)");
+    await expect(appServerService.markNavigationDirectorySeen({ directoryKey: "workspace:/scratch", federationTarget: target }))
+      .rejects.toThrow(`Could not mark workspace:/scratch read on Fixture Laptop (pwr_laptop): ${cause}`);
+    expect(federationMock.runtime.navigationActionOwnerLabel).toHaveBeenLastCalledWith(target);
+  });
+
   it("reads exact persisted peer membership without repinning or listing navigation rows", async () => {
     const { NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL } = await import("../../shared/ipc");
     registerAppServerIpcHandlers();

@@ -1613,7 +1613,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     if (!threads.length) return 0;
     const seenAt = Date.now();
     return this.stateDb.raw.transaction(() => {
-      for (const thread of threads) this.putThreadSeen({ ...thread, seenAt });
+      for (const thread of threads) {
+        const current = this.getThread(buildThreadIdentityKey(thread.backend, thread.threadId));
+        // A snapshot can predate another reader. Bulk Mark Read must never
+        // move that reader's watermark backward; explicit Mark Unread still can.
+        const seenUpdatedAt = thread.seenUpdatedAt === undefined ? current?.lastSeenUpdatedAt
+          : Math.max(thread.seenUpdatedAt, current?.lastSeenUpdatedAt ?? 0);
+        this.putThreadSeen({ ...thread, seenAt, seenUpdatedAt });
+      }
       return threads.length;
     })();
   }

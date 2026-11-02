@@ -2501,10 +2501,17 @@ class DesktopAppServerService {
   }
 
   async markNavigationDirectorySeen(request: MarkNavigationDirectorySeenRequest): Promise<MarkNavigationDirectorySeenResponse> {
-    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
-      return getDesktopFederationRuntime().remoteMarkNavigationDirectorySeen(request.federationTarget, request);
+    const target = request.federationTarget;
+    try {
+      if (target && isRemoteFederationTarget(target)) {
+        return await getDesktopFederationRuntime().remoteMarkNavigationDirectorySeen(target, request);
+      }
+      return await markLocalNavigationDirectorySeen(request);
+    } catch (error) {
+      const owner = getDesktopFederationRuntime().navigationActionOwnerLabel(target);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Could not mark ${request.directoryKey} read on ${owner}: ${message}`);
     }
-    return markLocalNavigationDirectorySeen(request);
   }
 
   async removeNavigationDirectory(request: RemoveNavigationDirectoryRequest): Promise<RemoveNavigationDirectoryResponse> {

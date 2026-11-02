@@ -1,8 +1,18 @@
-import { buildThreadIdentityKey, type MarkNavigationDirectorySeenRequest, type MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
+import { buildThreadIdentityKey, navigationInvalidationMayChangeMembership, navigationQueryEventRequiresRefresh,
+  type AgentEvent, type MarkNavigationDirectorySeenRequest, type MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { ArchiveThreadRequest, ArchiveThreadResponse, RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "./backend-registry";
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import { loadLocalNavigationQueryIndex } from "./navigation-query-source";
+
+function directoryCheckChangeDescription(event: AgentEvent): string {
+  const params = event.notification.params as { threadId?: unknown; thread?: { id?: unknown } } | undefined;
+  const threadId = typeof params?.threadId === "string" ? params.threadId
+    : typeof params?.thread?.id === "string" ? params.thread.id : undefined;
+  const thread = threadId ? `, thread ${threadId}` : ", no thread ID in event";
+  const instance = event.federationTarget?.scope === "remote" ? `, event instance ${event.federationTarget.instanceId}` : "";
+  return `${event.backend}, ${event.notification.method}${thread}${instance}`;
+}
 
 /** No renderer membership assertion authorizes removing a registration. */
 export async function removeLocalNavigationDirectory(
@@ -66,13 +76,23 @@ export async function markLocalNavigationDirectorySeen(
 ): Promise<MarkNavigationDirectorySeenResponse> {
   if (typeof request.directoryKey !== "string" || !request.directoryKey) throw new Error("A directory identity is required.");
   const registry = getDesktopBackendRegistry();
-  let changedDuringRead = false;
-  const unsubscribe = registry.onEvent(() => { changedDuringRead = true; });
+  let changedDuringRead: string | undefined;
+  const unsubscribe = registry.onEvent((event) => {
+    const { method, params } = event.notification;
+    const sourceMethod = method === "navigation/invalidated" ? params.sourceMethod : method;
+    // Activity can advance updatedAt while we read; the captured watermark
+    // leaves those newer updates unread. Only membership changes invalidate it.
+    if (navigationQueryEventRequiresRefresh(method, params) && navigationInvalidationMayChangeMembership(sourceMethod)) {
+      changedDuringRead ??= directoryCheckChangeDescription(event);
+    }
+  });
   let changedCount: number;
   try {
     const index = await loadLocalNavigationQueryIndex({ callerReason: "mark-navigation-directory-seen" });
     if (index.coverage && index.coverage.state !== "complete") throw new Error("Owner directory membership is still checking or unavailable. Try again after providers are ready.");
-    if (changedDuringRead) throw new Error("Owner state changed during the directory check. Refresh navigation and try again.");
+    if (changedDuringRead) {
+      throw new Error(`Owner state changed during the directory check (${changedDuringRead}). Refresh navigation and try again.`);
+    }
     const directory = index.directories.find((candidate) => candidate.key === request.directoryKey);
     if (!directory) throw new Error("This directory is no longer available on its owner.");
     const keys = new Set(directory.threadKeys);

@@ -214,6 +214,7 @@ import {
   type ForkThreadRequest,
   type EnsureDirectoryLaunchpadRequest,
   type FederationRemoteTarget,
+  type FederationTarget,
   type DesktopApplicationsSnapshot,
   type DesktopFederationMode,
   type HandoffThreadWorkspaceRequest,
@@ -3226,6 +3227,28 @@ export class DesktopFederationRuntime {
     _rpcOptions?: FederationRpcRequestOptions,
   ): Promise<NavigationSnapshot> {
     throw navigationUpgradeRequired(target.instanceId);
+  }
+
+  /** Identify a failed navigation action without creating an instance identity or requiring a live connection. */
+  navigationActionOwnerLabel(target?: FederationTarget): string {
+    try {
+      if (target?.scope === "remote") {
+        const peersById = new Map(this.remotePeerDirectory);
+        if (isAppStateInitialized()) {
+          for (const peer of this.store().listPeers({ includeRevoked: true })) peersById.set(peer.id, peer);
+        }
+        const peers = [...peersById.values()];
+        const peer = peersById.get(target.instanceId);
+        return peer ? `${formatFederationPeerDisplayLabel(peer, peers)} (${target.instanceId})` : target.instanceId;
+      }
+      const label = this.readRuntimeConfig().instanceLabel || defaultInstanceLabel();
+      const instanceId = this.localInstanceId
+        ?? (isAppStateInitialized() ? getAppStateDb().getMeta(INSTANCE_ID_META_KEY) : undefined);
+      return instanceId ? `${label} (${instanceId}, local)` : `${label} (local)`;
+    } catch {
+      if (target?.scope === "remote") return target.instanceId;
+      return this.localInstanceId ? `${this.localInstanceId} (local)` : "local instance";
+    }
   }
 
   private diagnosticInstanceLabel(instanceId: string): string {
