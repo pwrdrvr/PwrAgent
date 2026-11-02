@@ -519,6 +519,13 @@ type SidebarProps = {
    */
   federationOwnerForgeAutomation?: boolean;
   /**
+   * In this instance's own windows, the connected peers that advertise
+   * `project_forge_automation` and let this machine control their turns. A
+   * placeholder row standing for one of their projects offers its Forge
+   * Automation items.
+   */
+  peerForgeAutomationInstanceIds?: ReadonlySet<string>;
+  /**
    * Remove an empty directory (no linked threads) from the Directories list.
    * Offered in the directory context menu only when the directory has no
    * threads; deletes the registered launchpad overlay row that keeps the empty
@@ -2009,9 +2016,36 @@ export function Sidebar(props: SidebarProps) {
     setDirectoryContextMenu({
       requestedPosition: position,
       directory,
-      directories: resolveDirectoryContextMenuDirectories(directory),
+      // A placeholder's menu holds its peer project's Forge Automation
+      // only, so it never acts on a selection.
+      directories: directory.localAvailability === "unconfigured"
+        ? [directory]
+        : resolveDirectoryContextMenuDirectories(directory),
     });
   };
+
+  const peerForgeAutomationInstanceIds = props.peerForgeAutomationInstanceIds;
+  const peerAdvertisesForgeAutomation = useCallback(
+    (instanceId: string): boolean => peerForgeAutomationInstanceIds?.has(instanceId) === true,
+    [peerForgeAutomationInstanceIds],
+  );
+  // A placeholder row opens the project menu only for its peer project's
+  // Forge Automation items. DirectoriesList asks during render, so this is
+  // a real dependency-tracked callback, never an event callback.
+  const canSetProjectForgeAutomation = Boolean(props.onSetProjectForgeAutomation);
+  const federationWindow = federationTarget !== undefined;
+  const placeholderOffersProjectMenu = useCallback(
+    (directory: NavigationDirectorySummary): boolean =>
+      directory.localAvailability === "unconfigured"
+      && canSetProjectForgeAutomation
+      && canEditProjectForgeAutomation(
+        directory,
+        federationWindow,
+        false,
+        peerAdvertisesForgeAutomation,
+      ),
+    [canSetProjectForgeAutomation, federationWindow, peerAdvertisesForgeAutomation],
+  );
 
   // The project index's items open the project header's own menu, for the
   // same rows the header offers it on.
@@ -2022,7 +2056,7 @@ export function Sidebar(props: SidebarProps) {
     const directory = props.directories.find((candidate) => candidate.key === key);
     if (
       !directory
-      || directory.localAvailability === "unconfigured"
+      || (directory.localAvailability === "unconfigured" && !placeholderOffersProjectMenu(directory))
       || (directory.kind !== "directory" && directory.kind !== "workspace")
     ) {
       return;
@@ -3036,16 +3070,23 @@ export function Sidebar(props: SidebarProps) {
     directoryContextMenu?.directories ?? [];
   const directoryContextMenuIsBulk =
     directoryContextMenuDirectories.length > 1;
-  const directoryMenuCanMarkRead = Boolean(props.onMarkDirectoriesSeen);
+  // A placeholder stands for a peer's project: its menu offers that
+  // project's Forge Automation and nothing that needs a local checkout.
+  const directoryMenuIsPlaceholder =
+    directoryContextMenu?.directory.localAvailability === "unconfigured";
+  const directoryMenuCanMarkRead = Boolean(props.onMarkDirectoriesSeen && !directoryMenuIsPlaceholder);
   const directoryMenuCanArchive = Boolean(props.onArchiveDirectories
+    && !directoryMenuIsPlaceholder
     && directoryContextMenuDirectories.some((directory) => directory.kind === "directory" || directory.kind === "workspace"));
   const directoryMenuCanPin = Boolean(
     !directoryContextMenuIsBulk
+      && !directoryMenuIsPlaceholder
       && directoryContextMenu
       && props.onSetDirectoryPin,
   );
   const directoryMenuCanRemove = Boolean(
     !directoryContextMenuIsBulk
+      && !directoryMenuIsPlaceholder
       && props.onRemoveDirectory
       && directoryContextMenu?.directory.kind === "directory"
       && directoryContextMenu.directory.counts?.total === 0,
@@ -3071,7 +3112,7 @@ export function Sidebar(props: SidebarProps) {
   const directoryMenuHasPinActions =
     directoryMenuCanPin || directoryMenuShowMoveItems;
   const directoryMenuForgeRepository =
-    !directoryContextMenuIsBulk && props.onOpenForgePermissions
+    !directoryContextMenuIsBulk && !directoryMenuIsPlaceholder && props.onOpenForgePermissions
       ? directoryContextMenu?.directory.repositoryKey
         ?? directoryContextMenu?.directory.gitStatus?.originRepository
       : undefined;
@@ -3089,6 +3130,7 @@ export function Sidebar(props: SidebarProps) {
         directoryMenuDirectory,
         federationTarget !== undefined,
         props.federationOwnerForgeAutomation === true,
+        peerAdvertisesForgeAutomation,
       ),
   );
   const directoryMenuHasForgeSection =
@@ -3486,6 +3528,7 @@ export function Sidebar(props: SidebarProps) {
                   ? openDirectoryContextMenu
                   : undefined
               }
+              placeholderOffersDirectoryContextMenu={placeholderOffersProjectMenu}
               onOpenPullRequestContextMenu={openPullRequestContextMenu}
               onSelectDirectory={selectDirectoryFromList}
               onSelectThread={selectThreadFromList}

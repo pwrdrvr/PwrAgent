@@ -38,6 +38,7 @@ import type {
   FederationCapability,
   FederationInstanceId,
   FederationPeerSummary,
+  FederationRemoteTarget,
   FederationTarget,
 } from "./federation";
 import type {
@@ -116,6 +117,8 @@ export type NavigationLaunchpadAgent = Pick<
 export type NavigationThreadSummary = AppServerThreadSummary & {
   /** Most recent completed probe for `gitWorkingState`, even when its value was unchanged. */
   gitWorkingStateFetchedAt?: number;
+  /** See `NavigationRow.homeProject`. */
+  homeProject?: NavigationRowHomeProject;
   /** Present when this row describes a thread owned by another PwrAgent instance. */
   federation?: {
     ref: FederatedThreadRef;
@@ -1365,9 +1368,30 @@ export type NavigationDirectorySummary = {
   directoryThreadsCollapsed?: boolean;
   /**
    * The owner's Forge Automation for this project. Absent means the
-   * defaults, and is always absent on placeholder rows. A peer window's
-   * rows carry what the peer stored.
+   * defaults. A peer window's rows carry what the peer stored, and so does a
+   * placeholder row with a `peerProject`. Other placeholder rows never
+   * carry it.
    */
+  forgeAutomation?: ProjectForgeAutomation;
+  /** See `NavigationDirectoryRow.peerProject`. */
+  peerProject?: NavigationPeerProject;
+};
+
+/**
+ * The one peer project a placeholder row stands for: every thread under the
+ * row lives in that project on that peer. Forge Automation changes for the
+ * row go to `target`, naming the project by the owner's own `directoryKey`.
+ */
+export type NavigationPeerProject = {
+  target: FederationRemoteTarget;
+  directoryKey: string;
+};
+
+/** The owner's Directories project a thread row is filed under. */
+export type NavigationRowHomeProject = {
+  /** The owner's `directory:<path>` key. */
+  directoryKey: string;
+  /** The project's Forge Automation. Absent means the defaults. */
   forgeAutomation?: ProjectForgeAutomation;
 };
 
@@ -2109,6 +2133,14 @@ export type NavigationRow = {
   /** The owner's active CI watches; absent from an owner that predates them. */
   prCiWatches?: import("./thread-pr-watches").ThreadPrCiWatchMark[];
   scheduledStart?: ThreadScheduledStart;
+  /**
+   * `group-members` pages only: the owner's Directories project for a thread
+   * it owns. A viewer reads pinned rows through these pages, and a project
+   * it has no checkout of shows as a placeholder row, which takes the
+   * project's Forge Automation from here. Absent from older owners, other
+   * pages, and threads outside a configured project.
+   */
+  homeProject?: NavigationRowHomeProject;
 };
 
 export type NavigationDirectoryRow = {
@@ -2137,8 +2169,17 @@ export type NavigationDirectoryRow = {
   latestUpdatedAt?: number;
   pinnedRank?: string;
   directoryThreadsCollapsed?: boolean;
-  /** The owner's Forge Automation. Absent means defaults; never set on placeholder rows. */
+  /**
+   * The owner's Forge Automation. Absent means defaults. A placeholder row
+   * carries it only with a `peerProject`, as that peer stored it.
+   */
   forgeAutomation?: ProjectForgeAutomation;
+  /**
+   * Placeholder rows only, when all their threads live in one peer project.
+   * Absent when the threads come from several projects or peers, or from an
+   * owner that does not report a thread's project.
+   */
+  peerProject?: NavigationPeerProject;
   gitStatus?: {
     currentBranch?: string;
     defaultBranch?: string;

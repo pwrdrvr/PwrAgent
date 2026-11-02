@@ -246,6 +246,14 @@ type DirectoriesListProps = {
     directory: NavigationDirectorySummary,
     position: { x: number; y: number; anchorTop?: number },
   ) => void;
+  /**
+   * Whether a placeholder row (a peer's project with no local checkout)
+   * opens the project menu. It does only for its peer project's Forge
+   * Automation; without this it opens none.
+   */
+  placeholderOffersDirectoryContextMenu?: (
+    directory: NavigationDirectorySummary,
+  ) => boolean;
   onSetReaction?: (
     thread: NavigationThreadSummary,
     emoji: string,
@@ -1099,6 +1107,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const rootResourceId = `directory:${directory.key}`;
     const rootResource = props.pagedNavigation?.resources.get(rootResourceId);
     const forgeActivityPaused = directory.forgeAutomation?.paused === true;
+    // A placeholder's menu holds its peer project's Forge Automation only
+    // while that peer can take the change.
+    const forgeAutomationMenuAvailable = !directoryUnconfigured
+      || props.placeholderOffersDirectoryContextMenu?.(directory) === true;
     const directorySummaryLabel = [
       directory.label,
       directoryUnconfigured ? "not configured on this instance" : undefined,
@@ -1499,7 +1511,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
             }}
             onContextMenu={(() => {
               const openMenu = props.onOpenDirectoryContextMenu;
-              if (!openMenu || !isPinnableDirectoryKind(directory)) {
+              if (!openMenu || !(isPinnableDirectoryKind(directory)
+                || props.placeholderOffersDirectoryContextMenu?.(directory))) {
                 return undefined;
               }
               return (event) => {
@@ -1566,7 +1579,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 <span
                   aria-hidden="true"
                   className="directory-row__paused tooltip-target"
-                  data-tooltip="Forge activity paused. Right-click for Forge Automation."
+                  data-tooltip={forgeAutomationMenuAvailable
+                    ? "Forge activity paused. Right-click for Forge Automation."
+                    : "Forge activity paused."}
                 >
                   <PauseIcon size={10} strokeWidth={2.5} />
                   Paused

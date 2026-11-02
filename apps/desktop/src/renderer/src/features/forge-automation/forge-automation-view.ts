@@ -3,6 +3,7 @@ import {
   isToolManagedWorktreePath,
   orderByHomePreference,
   resolveProjectForgeAutomation,
+  type FederationTarget,
   type NavigationThreadSummary,
   type ProjectForgeAutomation,
 } from "@pwragent/shared";
@@ -11,19 +12,43 @@ import type { NavigationDirectoryView } from "../../lib/navigation-loaded-rows";
 /**
  * Whether a project row offers Pause Forge Activity and Forge Automation….
  * The setting lives on the instance that owns the project's threads, so
- * only a configured `directory:` project of the window's owner can carry
- * it: this instance's own in its window, or a peer's in that peer's window
- * once the peer advertises `project_forge_automation`. A placeholder row
- * gets neither.
+ * only a `directory:` project of one owner can carry it: this instance's
+ * own in its window, or a peer's once the peer advertises
+ * `project_forge_automation` and lets this machine control its turns. A
+ * peer's project shows in that peer's window, or in this instance's window
+ * as a placeholder row whose threads all live in it (`peerProject`).
+ * Any other placeholder row gets neither.
  */
 export function canEditProjectForgeAutomation(
-  directory: Pick<NavigationDirectoryView, "kind" | "localAvailability">,
+  directory: Pick<NavigationDirectoryView, "kind" | "localAvailability" | "peerProject">,
   federationWindow: boolean,
   ownerAdvertisesForgeAutomation = false,
+  peerAdvertisesForgeAutomation: (instanceId: string) => boolean = () => false,
 ): boolean {
-  return (!federationWindow || ownerAdvertisesForgeAutomation)
-    && directory.kind === "directory"
-    && directory.localAvailability !== "unconfigured";
+  if (directory.kind !== "directory") return false;
+  if (directory.localAvailability === "unconfigured") {
+    return !federationWindow
+      && directory.peerProject !== undefined
+      && peerAdvertisesForgeAutomation(directory.peerProject.target.instanceId);
+  }
+  return !federationWindow || ownerAdvertisesForgeAutomation;
+}
+
+/**
+ * Where a project's Forge Automation requests go: the peer a placeholder
+ * row stands for, by that peer's own key, or else the window's owner.
+ */
+export function projectForgeAutomationRequestTarget(
+  directory: Pick<NavigationDirectoryView, "key" | "localAvailability" | "peerProject">,
+  windowTarget: FederationTarget | undefined,
+): { directoryKey: string; federationTarget?: FederationTarget } {
+  if (!windowTarget && directory.localAvailability === "unconfigured" && directory.peerProject) {
+    return {
+      directoryKey: directory.peerProject.directoryKey,
+      federationTarget: directory.peerProject.target,
+    };
+  }
+  return { directoryKey: directory.key, ...(windowTarget ? { federationTarget: windowTarget } : {}) };
 }
 
 export function isProjectForgeActivityPaused(

@@ -4,6 +4,7 @@ import {
   canEditProjectForgeAutomation,
   describeProjectAutoFixOverride,
   findThreadProjectDirectory,
+  projectForgeAutomationRequestTarget,
   withProjectForgePause,
 } from "../forge-automation-view";
 
@@ -21,6 +22,46 @@ describe("canEditProjectForgeAutomation", () => {
     expect(canEditProjectForgeAutomation({ kind: "workspace" }, true, true)).toBe(false);
     expect(canEditProjectForgeAutomation({ kind: "directory", localAvailability: "unconfigured" }, true, true))
       .toBe(false);
+  });
+
+  it("offers it on a placeholder standing for one peer project, once that peer advertises it", () => {
+    const placeholder = {
+      kind: "directory" as const,
+      localAvailability: "unconfigured" as const,
+      peerProject: { target: { scope: "remote" as const, instanceId: "peer" }, directoryKey: "directory:/peer/repo" },
+    };
+    const advertises = (instanceId: string) => instanceId === "peer";
+    expect(canEditProjectForgeAutomation(placeholder, false, false, advertises)).toBe(true);
+    expect(canEditProjectForgeAutomation(placeholder, false, false, () => false)).toBe(false);
+    expect(canEditProjectForgeAutomation(placeholder, false)).toBe(false);
+    // A peer window shows its owner's own rows, never another's placeholder.
+    expect(canEditProjectForgeAutomation(placeholder, true, true, advertises)).toBe(false);
+    expect(canEditProjectForgeAutomation({ ...placeholder, peerProject: undefined }, false, false, advertises))
+      .toBe(false);
+  });
+});
+
+describe("projectForgeAutomationRequestTarget", () => {
+  const target = { scope: "remote" as const, instanceId: "peer" };
+  const placeholder = {
+    key: "unconfigured-directory:repo",
+    localAvailability: "unconfigured" as const,
+    peerProject: { target, directoryKey: "directory:/peer/repo" },
+  };
+
+  it("names the peer and its own key for a placeholder", () => {
+    expect(projectForgeAutomationRequestTarget(placeholder, undefined))
+      .toEqual({ directoryKey: "directory:/peer/repo", federationTarget: target });
+  });
+
+  it("names the window's owner, or none, for any other row", () => {
+    expect(projectForgeAutomationRequestTarget({ key: "directory:/repo" }, undefined))
+      .toEqual({ directoryKey: "directory:/repo" });
+    const windowTarget = { scope: "remote" as const, instanceId: "window-owner" };
+    expect(projectForgeAutomationRequestTarget({ key: "directory:/repo" }, windowTarget))
+      .toEqual({ directoryKey: "directory:/repo", federationTarget: windowTarget });
+    expect(projectForgeAutomationRequestTarget(placeholder, windowTarget))
+      .toEqual({ directoryKey: placeholder.key, federationTarget: windowTarget });
   });
 });
 

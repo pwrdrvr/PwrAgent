@@ -9130,7 +9130,7 @@ describe("Sidebar directory pinning", () => {
 
   function renderSidebar(
     directoriesArg: NavigationDirectorySummary[],
-    overrides: {
+    initialOverrides: {
       threads?: NavigationThreadSummary[];
       onSetDirectoryPin?: (
         directory: NavigationDirectoryView,
@@ -9151,10 +9151,11 @@ describe("Sidebar directory pinning", () => {
       onListProjectHeldWakeups?: ComponentProps<typeof Sidebar>["onListProjectHeldWakeups"];
       onResolveProjectHeldWakeups?: ComponentProps<typeof Sidebar>["onResolveProjectHeldWakeups"];
       federationOwnerForgeAutomation?: boolean;
+      peerForgeAutomationInstanceIds?: ReadonlySet<string>;
       checkFederationTargetProject?: CheckFederationTargetProject;
     } = {},
-  ): void {
-    render(
+  ): { rerender: (next: typeof initialOverrides) => void } {
+    const element = (overrides: typeof initialOverrides) => (
       <Sidebar
         backends={backends}
         browseMode="directories"
@@ -9163,6 +9164,7 @@ describe("Sidebar directory pinning", () => {
         onListProjectHeldWakeups={overrides.onListProjectHeldWakeups}
         onResolveProjectHeldWakeups={overrides.onResolveProjectHeldWakeups}
         federationOwnerForgeAutomation={overrides.federationOwnerForgeAutomation}
+        peerForgeAutomationInstanceIds={overrides.peerForgeAutomationInstanceIds}
         inboxThreads={[]}
         loading={false}
         creatingThread={undefined}
@@ -9181,8 +9183,10 @@ describe("Sidebar directory pinning", () => {
         onReorderDirectoryPins={overrides.onReorderDirectoryPins}
         onRemoveDirectory={overrides.onRemoveDirectory}
         onOpenForgePermissions={overrides.onOpenForgePermissions}
-      />,
+      />
     );
+    const result = render(element(initialOverrides));
+    return { rerender: (next) => result.rerender(element(next)) };
   }
 
   /**
@@ -10354,6 +10358,91 @@ describe("Sidebar directory pinning", () => {
         onSetDirectoryPin: async () => undefined,
       });
       expect(getDirectorySummary(/ProjectB/i)).toHaveAccessibleName("ProjectB, forge activity paused");
+    });
+
+    describe("on a placeholder for a peer's project", () => {
+      const placeholder: NavigationDirectorySummary = {
+        key: "unconfigured-directory:projectc",
+        kind: "directory",
+        label: "ProjectC",
+        localAvailability: "unconfigured",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 3000,
+        forgeAutomation: PAUSED,
+        peerProject: {
+          target: { scope: "remote", instanceId: "peer-owner" },
+          directoryKey: "directory:/Users/peer/ProjectC",
+        },
+      };
+
+      it("marks the project paused as its owner stored it", () => {
+        renderSidebar([placeholder], { onSetDirectoryPin: async () => undefined });
+        const header = getDirectorySummary(/ProjectC/i);
+        expect(header).toHaveAccessibleName(
+          "ProjectC, not configured on this instance, forge activity paused",
+        );
+        // No menu to point at while the peer cannot take a change.
+        expect(header.querySelector(".directory-row__paused"))
+          .toHaveAttribute("data-tooltip", "Forge activity paused.");
+      });
+
+      it("offers only the Forge Automation items once the peer advertises them, and resumes there", async () => {
+        const onSetProjectForgeAutomation = vi.fn(async () => undefined);
+        const onListProjectHeldWakeups = vi.fn(async () => []);
+        renderSidebar([placeholder], {
+          onSetDirectoryPin: async () => undefined,
+          onRemoveDirectory: () => undefined,
+          onOpenForgePermissions: () => undefined,
+          onSetProjectForgeAutomation,
+          onListProjectHeldWakeups,
+          peerForgeAutomationInstanceIds: new Set(["peer-owner"]),
+        });
+        fireEvent.contextMenu(getDirectorySummary(/ProjectC/i));
+        const menu = await screen.findByRole("menu");
+        const pause = within(menu).getByRole("menuitemcheckbox", { name: "Pause Forge Activity" });
+        expect(pause).toHaveAttribute("aria-checked", "true");
+        expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent))
+          .toEqual(["Forge Automation…"]);
+        expect(getDirectorySummary(/ProjectC/i).querySelector(".directory-row__paused"))
+          .toHaveAttribute("data-tooltip", "Forge activity paused. Right-click for Forge Automation.");
+        await clickElement(pause);
+        await waitFor(() => expect(onSetProjectForgeAutomation).toHaveBeenCalledTimes(1));
+        expect(onListProjectHeldWakeups).toHaveBeenCalledWith(
+          expect.objectContaining({ key: placeholder.key }),
+        );
+        const { pausedAt: _pausedAt, ...resumed } = PAUSED;
+        expect(onSetProjectForgeAutomation).toHaveBeenCalledWith(
+          expect.objectContaining({ key: placeholder.key, peerProject: placeholder.peerProject }),
+          { ...resumed, paused: false },
+          expect.anything(),
+        );
+      });
+
+      it("offers the items as soon as the peer starts advertising them", async () => {
+        const overrides = {
+          onSetDirectoryPin: async () => undefined,
+          onSetProjectForgeAutomation: vi.fn(async () => undefined),
+        };
+        const { rerender } = renderSidebar([placeholder], overrides);
+        // The peer connects after the first render; nothing else re-renders.
+        rerender({ ...overrides, peerForgeAutomationInstanceIds: new Set(["peer-owner"]) });
+        expect(getDirectorySummary(/ProjectC/i).querySelector(".directory-row__paused"))
+          .toHaveAttribute("data-tooltip", "Forge activity paused. Right-click for Forge Automation.");
+        fireEvent.contextMenu(getDirectorySummary(/ProjectC/i));
+        expect(await screen.findByRole("menuitemcheckbox", { name: "Pause Forge Activity" }))
+          .toBeInTheDocument();
+      });
+
+      it("opens no menu while the peer does not advertise them", () => {
+        renderSidebar([placeholder], {
+          onSetDirectoryPin: async () => undefined,
+          onSetProjectForgeAutomation: vi.fn(async () => undefined),
+          peerForgeAutomationInstanceIds: new Set(["another-peer"]),
+        });
+        fireEvent.contextMenu(getDirectorySummary(/ProjectC/i));
+        expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      });
     });
 
     it("pauses in place, keeping the stored switches and the menu open", async () => {

@@ -95,6 +95,7 @@ import {
   navigationThreadSelectionKey,
 } from "./navigation-query-state";
 import type { ThreadActionErrorKind } from "../features/notifications/thread-action-error-notice";
+import { projectForgeAutomationRequestTarget } from "../features/forge-automation/forge-automation-view";
 import { fileLabelFromPath } from "./directory-references";
 import {
   readRendererFederationLabel,
@@ -9615,9 +9616,10 @@ export function useThreadNavigation(
     [publishThreadActionError, setDirectoryThreadsCollapsedRequest, setUnpinnedExpandedByKey, noteDirectoryPatch],
   );
 
-  // Owner-scoped: a peer window's request names that peer, and main sends it
-  // there. Not optimistic: a pause changes what the owner polls and
-  // dispatches, so the row shows what the owner stored.
+  // Owner-scoped: a peer window's request names that peer, and so does a
+  // placeholder row standing for one peer's project; main sends it there.
+  // Not optimistic: a pause changes what the owner polls and dispatches, so
+  // the row shows what the owner stored.
   const setProjectForgeAutomation = useCallback(
     async (
       directory: NavigationDirectorySummary,
@@ -9630,19 +9632,19 @@ export function useThreadNavigation(
       }
       if (reportError) publishThreadActionError("forge-automation");
       try {
-        const federationTarget = readRendererFederationTarget();
         const result = await setProjectForgeAutomationRequest({
-          directoryKey: directory.key,
+          ...projectForgeAutomationRequestTarget(directory, readRendererFederationTarget()),
           automation,
-          ...(federationTarget ? { federationTarget } : {}),
         });
-        noteDirectoryPatch([result.directoryKey]);
+        // Patch the row by its own key: a placeholder's differs from the
+        // owner's key in the result.
+        noteDirectoryPatch([directory.key]);
         setState((current) => ({
           ...current,
           rows: updateDirectoryForgeAutomationInLoadedRows(
             current.rows,
             {
-              directoryKey: result.directoryKey,
+              directoryKey: directory.key,
               automation: isDefaultProjectForgeAutomation(result.automation)
                 ? null
                 : result.automation,
@@ -9662,11 +9664,9 @@ export function useThreadNavigation(
       if (!listProjectHeldWakeupsRequest) {
         return [];
       }
-      const federationTarget = readRendererFederationTarget();
-      const result = await listProjectHeldWakeupsRequest({
-        directoryKey: directory.key,
-        ...(federationTarget ? { federationTarget } : {}),
-      });
+      const result = await listProjectHeldWakeupsRequest(
+        projectForgeAutomationRequestTarget(directory, readRendererFederationTarget()),
+      );
       return result.wakeups;
     },
     [listProjectHeldWakeupsRequest],
@@ -9680,11 +9680,9 @@ export function useThreadNavigation(
       if (!resolveProjectHeldWakeupsRequest) {
         throw new Error("Held wake-ups cannot be resolved in this window.");
       }
-      const federationTarget = readRendererFederationTarget();
       return await resolveProjectHeldWakeupsRequest({
-        directoryKey: directory.key,
+        ...projectForgeAutomationRequestTarget(directory, readRendererFederationTarget()),
         resolutions,
-        ...(federationTarget ? { federationTarget } : {}),
       });
     },
     [resolveProjectHeldWakeupsRequest],

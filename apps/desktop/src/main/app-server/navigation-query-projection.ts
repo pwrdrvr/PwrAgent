@@ -14,6 +14,7 @@ import type {
   NavigationModelInventoryRow,
   NavigationQueryRequest,
   NavigationRow,
+  NavigationRowHomeProject,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import {
@@ -264,6 +265,7 @@ function projectNavigationRow(params: {
   viewerChildCount?: number;
   needsInput: boolean;
   thread: NavigationThreadSummary & { nativeSubAgentCount?: number };
+  homeProject?: NavigationRowHomeProject;
 }): NavigationRow {
   const { thread } = params;
   const linkedDirectories = limitRecords(thread.linkedDirectories);
@@ -384,6 +386,7 @@ function projectNavigationRow(params: {
       : {}),
     ...(prCiWatches.items ? { prCiWatches: prCiWatches.items } : {}),
     ...(thread.scheduledStart ? { scheduledStart: thread.scheduledStart } : {}),
+    ...(params.homeProject ? { homeProject: params.homeProject } : {}),
   };
   return {
     ...projected,
@@ -455,10 +458,13 @@ function buildDirectoryRows(params: {
       ...(directory.directoryThreadsCollapsed !== undefined
         ? { directoryThreadsCollapsed: directory.directoryThreadsCollapsed }
         : {}),
-      // Owner-only: a placeholder row stands for a peer's project, which
-      // this instance neither stores nor enforces.
-      ...(directory.forgeAutomation && !directory.localAvailability
+      // A placeholder row stands for a peer's project. It shows that
+      // project's setting only when its threads name one project on one peer.
+      ...(directory.forgeAutomation && (!directory.localAvailability || directory.peerProject)
         ? { forgeAutomation: directory.forgeAutomation }
+        : {}),
+      ...(directory.localAvailability && directory.peerProject
+        ? { peerProject: directory.peerProject }
         : {}),
       ...(gitStatus ? { gitStatus } : {}),
       launchpadPresent: Boolean(directory.launchpad),
@@ -812,6 +818,33 @@ function buildModelInventory(threads: readonly NavigationThreadSummary[]): Navig
   return [...groups].sort(([left], [right]) => left.localeCompare(right)).map(([, group]) => group);
 }
 
+/**
+ * The Directories project each thread this instance owns is filed under, for
+ * `group-members` rows. A viewer reads its pinned rows through those pages
+ * and shows the project's Forge Automation on the placeholder row that
+ * stands for it. A peer's thread and a placeholder carry none: their project
+ * belongs to another instance.
+ */
+function buildHomeProjects(
+  directories: readonly NavigationDirectorySummary[],
+  threadsByLegacyKey: ReadonlyMap<string, NavigationThreadSummary>,
+): Map<NavigationThreadSummary, NavigationRowHomeProject> {
+  const homes = new Map<NavigationThreadSummary, NavigationRowHomeProject>();
+  for (const directory of directories) {
+    if (directory.kind !== "directory" || !directory.key.startsWith("directory:")
+      || directory.localAvailability) continue;
+    const home: NavigationRowHomeProject = {
+      directoryKey: directory.key,
+      ...(directory.forgeAutomation ? { forgeAutomation: directory.forgeAutomation } : {}),
+    };
+    for (const key of directory.threadKeys) {
+      const thread = threadsByLegacyKey.get(key);
+      if (thread && !thread.federation && !homes.has(thread)) homes.set(thread, home);
+    }
+  }
+  return homes;
+}
+
 function buildThreadsByLegacyKey(index: NavigationQueryIndex): Map<string, NavigationThreadSummary> {
   return new Map(
     index.threads.map((thread) => [
@@ -974,6 +1007,8 @@ export function projectNavigationQuery(params: {
     ? directoryMemberThreads(params.index.directories.find((directory) => directory.key === query.directoryKey), threadsByLegacyKey)
     : undefined;
   const directoryParentOf = directoryMembers ? directoryParentResolver(directoryMembers, parentCandidates) : undefined;
+  const homeProjects = query.kind === "group-members"
+    ? buildHomeProjects(params.index.directories, threadsByLegacyKey) : undefined;
   const entries = selectedThreads.map((thread, index): NavigationQueryEntry => {
     const parent = parentIdentity(thread, parentCandidates);
     const placementParent = attentionMemberKeys && parent && !attentionMemberKeys.has(identityKey(parent))
@@ -989,6 +1024,7 @@ export function projectNavigationQuery(params: {
         needsInput: starMapSignals(thread, params.index).approval,
         thread: parent?.ownerInstanceId && !thread.parentThreadInstanceId
           ? { ...thread, parentThreadInstanceId: parent.ownerInstanceId } : thread,
+        homeProject: homeProjects?.get(thread),
       }),
       orderKey: rowOrderKey(index),
       ...(params.attentionOrder?.members.has(navigationAttentionIdentity(thread))
