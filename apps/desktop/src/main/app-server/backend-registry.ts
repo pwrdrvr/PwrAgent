@@ -18408,7 +18408,18 @@ export class DesktopBackendRegistry {
     const backend = request.backend ?? "codex";
     if (backend === "claude") {
       const storedReplay = await this.claudeBackend.readThread(request.threadId);
-      const messageIds = storedReplay.messages.flatMap((message) =>
+      // Every review imports, not only the requested page's, so a review
+      // older than the newest page still reaches To-dos. An older-page read
+      // has nothing to add to the latest read's import.
+      if (request.before === undefined) {
+        this.threadTodoHandler?.importReviews?.({ backend, threadId: request.threadId },
+          storedReplay.entries.filter((entry): entry is AppServerThreadReviewEntry => entry.type === "review"));
+      }
+      // PwrAgent's Claude transcript is read whole, so cut the requested page
+      // here, as for ACP. Without a page the renderer has no older history to
+      // ask for when its copy of the thread is missing some.
+      const pagedReplay = pageNormalizedReplay(storedReplay, { ...request, backend });
+      const messageIds = pagedReplay.messages.flatMap((message) =>
         message.role === "user" ? [message.id] : [],
       );
       const origins = await this.overlayStore.readThreadMessageOrigins?.({
@@ -18416,9 +18427,7 @@ export class DesktopBackendRegistry {
         threadId: request.threadId,
         messageIds,
       }) ?? {};
-      const replay = mergeThreadMessageOrigins(storedReplay, origins);
-      this.threadTodoHandler?.importReviews?.({ backend, threadId: request.threadId },
-        replay.entries.filter((entry): entry is AppServerThreadReviewEntry => entry.type === "review"));
+      const replay = mergeThreadMessageOrigins(pagedReplay, origins);
       const pendingRequest = this.getPendingRequestForThread({ backend, threadId: request.threadId });
       return { backend, threadId: request.threadId, fetchedAt: Date.now(), replay, pendingRequest, threadStatus: replay.threadStatus };
     }
@@ -48694,6 +48703,7 @@ export class DesktopBackendRegistry {
     this.assertNotBootstrap("readThreadForContentSearch");
     const { backend, threadId, limit } = request;
     const replay = backend === "claude"
+      // The whole transcript is already in memory; search all of it.
       ? await this.claudeBackend.readThread(threadId)
       : isAcpBackendId(backend)
         ? pageNormalizedReplay(await this.acpBackend.readReplay(backend, threadId), request)
