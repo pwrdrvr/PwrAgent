@@ -473,6 +473,10 @@ describe("createMainWindow", () => {
 
       vi.stubEnv("PWRAGENT_E2E", "1");
       createMainWindow();
+      expect(browserWindowState.options).toMatchObject(fitted);
+
+      vi.stubEnv("PWRAGENT_E2E_LARGER_THAN_SCREEN", "1");
+      createMainWindow();
       expect(browserWindowState.options).toMatchObject({
         x: 0,
         y: 24,

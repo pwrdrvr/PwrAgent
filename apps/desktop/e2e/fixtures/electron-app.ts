@@ -341,6 +341,11 @@ export async function launchElectronApp(
     HOME: homeRoot,
     NODE_ENV: "production",
     PWRAGENT_E2E: "1",
+    // Keep the main window at its 1440x960 default, and let it grow past a
+    // small screen, as on Linux. A hosted macOS runner's 1024x768 display
+    // would otherwise shrink it to 1024x677. A spec that checks the
+    // work-area fit passes this as undefined.
+    PWRAGENT_E2E_LARGER_THAN_SCREEN: "1",
     PWRAGENT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS: "15000",
     ...(params.fixturePath
       ? { PWRAGENT_REPLAY_FIXTURE_PATH: params.fixturePath }
