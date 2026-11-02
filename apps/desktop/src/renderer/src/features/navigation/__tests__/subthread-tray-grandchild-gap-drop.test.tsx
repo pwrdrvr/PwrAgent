@@ -31,7 +31,7 @@ type Grandchild = "local-grand" | "peer-grand";
  * names this machine as Alpha's owner. The tray lists them flat:
  * Alpha, Local grand, Peer grand, Bravo.
  */
-function mount(browseMode: Lens, saved: boolean | Promise<boolean> = true) {
+function mount(browseMode: Lens, saved: boolean | Promise<boolean> = true, grandparent: "alpha" | "bravo" = "alpha") {
   const directory: NavigationDirectoryRow = {
     key: "workspace:/projects", label: "Workspaces", path: "/projects", kind: "workspace",
     counts: { total: 5, active: 0, unread: 0, review: 0 }, pinnedRootCount: 1, unpinnedRootCount: 0, launchpadPresent: false,
@@ -46,12 +46,13 @@ function mount(browseMode: Lens, saved: boolean | Promise<boolean> = true) {
   });
   const root = row("root", { title: "Tray owner", pinnedRank: "1", ordinaryChildCount: 2, createdAt: 1 });
   const alpha = row("alpha", { title: "Alpha", parentThreadId: "root", parentThreadBackend: "codex",
-    ordinaryChildCount: 2, createdAt: 10 });
-  const bravo = row("bravo", { title: "Bravo", parentThreadId: "root", parentThreadBackend: "codex", createdAt: 20 });
-  const localGrand = row("local-grand", { title: "Local grand", parentThreadId: "alpha", parentThreadBackend: "codex",
+    ordinaryChildCount: grandparent === "alpha" ? 2 : 0, createdAt: 10 });
+  const bravo = row("bravo", { title: "Bravo", parentThreadId: "root", parentThreadBackend: "codex",
+    ordinaryChildCount: grandparent === "bravo" ? 2 : 0, createdAt: 20 });
+  const localGrand = row("local-grand", { title: "Local grand", parentThreadId: grandparent, parentThreadBackend: "codex",
     createdAt: 30 });
   const peerGrand = row("peer-grand", {
-    title: "Peer grand", parentThreadId: "alpha", parentThreadBackend: "codex", parentThreadInstanceId: LOCAL, createdAt: 40,
+    title: "Peer grand", parentThreadId: grandparent, parentThreadBackend: "codex", parentThreadInstanceId: LOCAL, createdAt: 40,
     ref: { backend: "codex", threadId: "peer-grand", ownerInstanceId: PEER },
     federation: { ref: buildFederatedThreadRef({ backend: "codex", instanceId: PEER, threadId: "peer-grand" }),
       instanceLabel: "Win PC / dev", capabilities: ["thread_grouping"] },
@@ -70,8 +71,8 @@ function mount(browseMode: Lens, saved: boolean | Promise<boolean> = true) {
   } else {
     add("lens-pins", { kind: "lens", lens: "recents", roots: "pinned" }, [rootEntry]);
   }
-  const childrenOf = { root: [alpha, bravo], alpha: [localGrand, peerGrand] };
-  for (const owner of [root, alpha]) {
+  const childrenOf = { root: [alpha, bravo], [grandparent]: [localGrand, peerGrand] };
+  for (const owner of [root, grandparent === "alpha" ? alpha : bravo]) {
     add(`children:${navigationIdentityKey(owner.ref)}`, { kind: "children", parent: owner.ref },
       childrenOf[owner.id as keyof typeof childrenOf].map((child, index) => ({ row: child, orderKey: String(index),
         placement: { kind: "child", parent: { backend: "codex", threadId: owner.id } } })));
@@ -89,7 +90,7 @@ function mount(browseMode: Lens, saved: boolean | Promise<boolean> = true) {
     pagedNavigation={navigation} onUpdateSubthreadOrder={onUpdateSubthreadOrder} onSetThreadParent={onSetThreadParent}
     onBrowseModeChange={() => undefined} onSelectThread={() => undefined}
     onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />);
-  layOut();
+  layOut(grandparent === "alpha" ? TOPS : LAST_TOPS);
   return { onUpdateSubthreadOrder, onSetThreadParent };
 }
 
@@ -107,17 +108,22 @@ function shell(title: string): HTMLElement {
 }
 
 const TITLES: Record<Grandchild, string> = { "local-grand": "Local grand", "peer-grand": "Peer grand" };
-const TOPS = { "Alpha": 0, "Local grand": 40, "Peer grand": 80, "Bravo": 120 };
+type Tops = Record<string, number>;
+const TOPS: Tops = { "Alpha": 0, "Local grand": 40, "Peer grand": 80, "Bravo": 120 };
+/** The grandchildren under Bravo, so they end the tray. */
+const LAST_TOPS: Tops = { "Alpha": 0, "Bravo": 40, "Local grand": 80, "Peer grand": 120 };
+let tops: Tops = TOPS;
 
 /** Rows are 40px tall; the tray spans 0 to 160. */
-function layOut(): void {
+function layOut(layout: Tops): void {
+  tops = layout;
   rect(document.querySelector("[data-subthread-tray]")!, 0, 160);
-  for (const [title, top] of Object.entries(TOPS)) rect(shell(title), top, 40);
+  for (const [title, top] of Object.entries(layout)) rect(shell(title), top, 40);
 }
 
 async function drag(grandchild: Grandchild, toY: number): Promise<void> {
   const source = shell(TITLES[grandchild]);
-  const fromY = TOPS[TITLES[grandchild] as keyof typeof TOPS] + 20;
+  const fromY = tops[TITLES[grandchild]]! + 20;
   expect(source).toHaveAttribute("data-nested-depth", "2");
   expect(source).toHaveClass("is-draggable");
   fireEvent.pointerDown(source, { button: 0, clientX: 50, clientY: fromY, pointerId: POINTER_ID });
@@ -226,5 +232,22 @@ it.each(["directories", "recents"] as const)(
 
     expect(onSetThreadParent).not.toHaveBeenCalled();
     expect(onUpdateSubthreadOrder).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["directories", "recents"] as const)(
+  "draws the end line after the last row that stays when the tray's last row moves up (%s)",
+  async (browseMode) => {
+    const { onUpdateSubthreadOrder } = mount(browseMode, true, "bravo");
+
+    await drag("peer-grand", 165);
+    await waitFor(() => expect(shell("Local grand")).toHaveClass("is-drop-target-after"));
+    expect(shell("Peer grand")).not.toHaveClass("is-drop-target-after");
+    await drop(165);
+
+    await waitFor(() => expect(onUpdateSubthreadOrder).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "root" }),
+      { threadId: "peer-grand", anchorThreadId: "bravo", placement: "after" },
+    ));
   },
 );

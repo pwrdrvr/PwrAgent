@@ -110,8 +110,9 @@ export function useSubthreadReorderDrag(params: {
           value: { kind: "reorder", anchorKey: keys[before], placement: "before" } };
       }
       // After the last child means after its whole subtree, which ends at the
-      // tray's last row.
-      const shells = tray.querySelectorAll<HTMLElement>(".thread-row-shell");
+      // tray's last row. A deeper row leaving that subtree is not the end.
+      const shells = [...tray.querySelectorAll<HTMLElement>(".thread-row-shell")]
+        .filter((shell) => shell !== source);
       const lastShell = shells[shells.length - 1] ?? rows[rows.length - 1];
       return { element: lastShell, key: `subthread-end:${keys[keys.length - 1]}`, position: "after",
         value: { kind: "reorder", anchorKey: keys[keys.length - 1], placement: "after" } };
