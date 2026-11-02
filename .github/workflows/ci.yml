@@ -703,6 +703,9 @@ jobs:
         id: xcode
         uses: ./.github/actions/select-xcode-for-actool
 
+      - name: Measure bundled Git startup
+        run: node scripts/probe-bundled-git-startup.mjs
+
       - name: Test (unit)
         env:
           # Require the icon compile check wherever Vitest assigns its suite.

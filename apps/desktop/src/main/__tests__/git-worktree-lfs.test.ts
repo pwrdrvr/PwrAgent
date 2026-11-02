@@ -1,12 +1,23 @@
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import { GitDirectoryService } from "../app-server/git-directory-service";
 import { runGitCommand } from "../app-server/git-executable";
 
 describe("worktree creation with bundled Git LFS", () => {
   it.each(["detached", "attached"] as const)("hydrates LFS content in a new %s worktree and rolls it back", async (worktreeBranchMode) => {
+    const started = performance.now();
+    const phases: Record<string, number> = {};
+    const measure = async <T>(label: string, run: () => Promise<T>): Promise<T> => {
+      const start = performance.now();
+      try {
+        return await run();
+      } finally {
+        phases[label] = Math.round(performance.now() - start);
+      }
+    };
     const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-lfs-")));
     const repo = path.join(root, "repo");
     const remote = path.join(root, "origin.git");
@@ -21,7 +32,9 @@ describe("worktree creation with bundled Git LFS", () => {
       GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid",
       GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid",
     };
-    const git = async (cwd: string, args: string[]) => (await runGitCommand(cwd, args, { env })).stdout.trim();
+    let gitCall = 0;
+    const git = async (cwd: string, args: string[]) =>
+      (await measure(`git-${++gitCall}-${args[0]}`, () => runGitCommand(cwd, args, { env }))).stdout.trim();
     try {
       await mkdir(repo);
       await writeFile(env.GIT_CONFIG_GLOBAL, "");
@@ -46,11 +59,11 @@ describe("worktree creation with bundled Git LFS", () => {
         resolveWorktreeStorage: () => "user-home",
       });
       // Use the production runner, path allocator and worktree transaction.
-      const workspace = await service.prepareLaunchpadWorkspace({
+      const workspace = await measure("prepare-workspace", () => service.prepareLaunchpadWorkspace({
         directoryKind: "directory", directoryLabel: "LFS fixture",
         directoryPath: repo, branchName: "main", workMode: "worktree",
         worktreeBranchMode,
-      });
+      }));
       expect(workspace.workMode).toBe("worktree");
       expect(workspace.cwd).toBeDefined();
       expect(await realpath(workspace.cwd!)).not.toBe(repo);
@@ -62,7 +75,7 @@ describe("worktree creation with bundled Git LFS", () => {
       expect(await git(workspace.cwd!, ["rev-parse", "HEAD"])).toBe(head);
 
       expect(workspace.rollback).toBeTypeOf("function");
-      await workspace.rollback!();
+      await measure("rollback", () => workspace.rollback!());
       await expect(readFile(path.join(workspace.cwd!, "asset.bin"))).rejects.toMatchObject({ code: "ENOENT" });
       expect((await git(repo, ["worktree", "list", "--porcelain"])).match(/^worktree /gm)).toHaveLength(1);
       expect(await git(repo, ["branch", "--show-current"])).toBe("main");
@@ -71,6 +84,7 @@ describe("worktree creation with bundled Git LFS", () => {
       expect(await readFile(path.join(repo, "asset.bin"))).toEqual(payload);
     } finally {
       await rm(root, { recursive: true, force: true });
+      console.log("[git-worktree-lfs-phases]", JSON.stringify({ mode: worktreeBranchMode, total: Math.round(performance.now() - started), phases }));
     }
   });
 });
