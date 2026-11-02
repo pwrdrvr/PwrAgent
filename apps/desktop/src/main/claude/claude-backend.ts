@@ -26,7 +26,7 @@ import { claudeHarnessOptions, discoverClaudeModels, readClaudeMcpServerStatus, 
 import { CLAUDE_TERMINAL_COMMANDS_SEED, claudeCommandSummaries } from "./claude-commands";
 import {
   claudeRateLimits, claudeStreamRateLimits, claudeTelemetry, claudeTurnUsage, liveClaudeRateLimits,
-  mergeClaudeStreamRateLimits, nextClaudeRateLimitReset,
+  mergeClaudeRateLimits, nextClaudeRateLimitReset,
 } from "./claude-usage";
 import { claudeCommandActivity, groupClaudeActivities } from "./claude-activity";
 import { backUpRewindFiles, recordRewoundFiles, restoreRewindFiles } from "./claude-rewind-backup";
@@ -63,6 +63,8 @@ export type ClaudeBackendOptions = {
   cancelRequest: (threadId: string, turnId: string, requestId: string) => Promise<void>;
   /** Overrides CLAUDE_TASK_FOLLOW_UP_GRACE_MS. */
   taskFollowUpGraceMs?: number;
+  /** Overrides CLAUDE_LIVE_USAGE_INTERVAL_MS. */
+  liveUsageIntervalMs?: number;
   /** Overrides CLAUDE_INTERRUPT_GRACE_MS. */
   interruptGraceMs?: number;
   /** Overrides CLAUDE_REWIND_PREVIEW_TIMEOUT_MS. */
@@ -119,6 +121,13 @@ function claudeExceptionMessage(error: unknown, stderr: string): string {
  * of its own; this bounds the wait when it does not.
  */
 const CLAUDE_TASK_FOLLOW_UP_GRACE_MS = 5_000;
+
+/**
+ * The shortest gap between usage reports while a turn runs. Each report is a
+ * usage probe and one write of the turn's usage row (about 55 KB of WAL), so
+ * a thread that streams for an hour writes about 6.6 MB, and none while idle.
+ */
+const CLAUDE_LIVE_USAGE_INTERVAL_MS = 30_000;
 
 /**
  * How long Stop waits for Claude to end an interrupted turn before ending it
@@ -234,12 +243,23 @@ type RunningTurn = {
   usageBaseline?: ClaudeSession["modelUsage"];
   /** An old session with no baseline cannot attribute its first totals. */
   needsUsageBaseline: boolean;
+  /** Usage reports while the turn runs; stopped before its final report. */
+  liveUsage?: LiveUsageRefresh;
   /** Stop interrupted Claude rather than ending the query, so the turn ends cancelled. */
   interrupted?: boolean;
   /** Claude did not answer the interrupt in time; the turn ends without it. */
   abandoned?: boolean;
   /** Settles once the turn has reported its end. */
   ended: ClaudeDeferred;
+};
+
+type LiveUsageRefresh = {
+  lastAt: number;
+  timer?: ReturnType<typeof setTimeout>;
+  running?: Promise<void>;
+  /** A message arrived during a report; schedule another after it. */
+  again: boolean;
+  stopped: boolean;
 };
 
 /** What a live session was launched with, compared when a turn reuses it. */
@@ -1216,11 +1236,7 @@ export class ClaudeBackend {
           }
         }
         if (message.type === "rate_limit_event") {
-          const update = claudeStreamRateLimits(message.rate_limit_info);
-          const merged = mergeClaudeStreamRateLimits(this.rateLimits ?? [], update, Date.now());
-          // Only an update naming every window is a reading of all of them.
-          const reported = new Set(update.map((limit) => limit.limitId));
-          if (this.setRateLimits(merged, merged.every((limit) => reported.has(limit.limitId)))) {
+          if (this.mergeRateLimits(claudeStreamRateLimits(message.rate_limit_info), false)) {
             await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
           }
         }
@@ -1242,6 +1258,8 @@ export class ClaudeBackend {
         if (turn && message.type === "assistant" && !message.parent_tool_use_id) {
           this.scheduleContextRefresh(live);
         }
+        // Subagent requests bill the turn too.
+        if (turn && message.type === "assistant") this.scheduleLiveUsage(live, turn);
         if (message.type === "result") {
           live.lastResultSeq = live.messageSeq;
           if (turn) {
@@ -1443,6 +1461,7 @@ export class ClaudeBackend {
   ): Promise<void> {
     const threadId = live.session.thread.id;
     const { turnId } = turn;
+    await this.stopLiveUsage(turn);
     const cancelled = outcome.cancelled || turn.interrupted === true;
     let { failure } = outcome;
     const status = cancelled ? "cancelled" : failure ? "failed" : "completed";
@@ -1506,6 +1525,8 @@ export class ClaudeBackend {
     const threadId = session.thread.id;
     const turnId = turn.turnId;
     turn.ending = true;
+    // The result's totals are final; a live report must not land after them.
+    await this.stopLiveUsage(turn);
     let failure = turn.resultFailure;
     // A normal send with no visible work must not silently look answered.
     // Local slash commands can legitimately finish without model output, and
@@ -1708,20 +1729,97 @@ export class ClaudeBackend {
     }
   }
 
-  private async refreshUsage(live: LiveSession) {
+  /**
+   * `announce: "changed"` reports the limits only when they moved, for the
+   * probes a running turn makes. Otherwise every probe is announced, changed
+   * or not: it marks the turn's provider refresh as settled for listeners.
+   */
+  private async refreshUsage(live: LiveSession, options: { announce?: "always" | "changed" } = {}) {
     const usage = await claudeTelemetry(() => live.query!.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }));
-    // The snapshot is complete, so it replaces every window. A probe that
-    // timed out or returned nothing keeps the last good reading. Only an
+    // Each CLI answers from its own reading, which can be older than one
+    // already shown, so a probe merges forward like a stream event. A probe
+    // that timed out or returned nothing keeps the last good reading. Only an
     // account Claude does not meter by subscription clears it.
     const limits = usage?.rate_limits_available && usage.rate_limits ? claudeRateLimits(usage) : [];
-    if (limits.length > 0) this.setRateLimits(limits);
+    let changed = false;
+    if (limits.length > 0) changed = this.mergeRateLimits(limits, true);
     else if (usage && !usage.rate_limits_available && claudeHasNoPlanLimits(this.installation)) {
-      this.setRateLimits([]);
+      changed = this.setRateLimits([]);
     }
-    // Emitted after every probe, changed or not: it marks the turn's provider
-    // refresh as settled for listeners.
-    await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
+    if (options.announce !== "changed" || changed) {
+      await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
+    }
     return usage;
+  }
+
+  /**
+   * Merge one reading into the account's limits; see mergeClaudeRateLimits.
+   * Returns whether the shown limits changed.
+   */
+  private mergeRateLimits(reading: BackendRateLimitSummary[], precise: boolean): boolean {
+    const now = Date.now();
+    const merged = mergeClaudeRateLimits(this.rateLimits ?? [], reading, now, { precise });
+    // A probe is a reading of the account. A stream event names one or two
+    // windows, and dates the rest as read now only when it names them all.
+    const reported = new Set(liveClaudeRateLimits(reading, now).map((limit) => limit.limitId));
+    return this.setRateLimits(merged, precise || merged.every((limit) => reported.has(limit.limitId)));
+  }
+
+  /**
+   * Claude puts a turn's usage on its result, so without these reports a
+   * long turn shows no usage until it ends. Each is a usage probe and a
+   * write of the turn's usage row, so they run at most once per interval and
+   * only while Claude streams. The result's totals still settle the turn.
+   */
+  private scheduleLiveUsage(live: LiveSession, turn: RunningTurn): void {
+    // Without a baseline the totals cannot be attributed to this turn.
+    if (turn.needsUsageBaseline || turn.ending) return;
+    const state = turn.liveUsage ??= { lastAt: turn.startedAt, again: false, stopped: false };
+    if (state.stopped || state.timer) return;
+    if (state.running) {
+      state.again = true;
+      return;
+    }
+    const interval = this.options.liveUsageIntervalMs ?? CLAUDE_LIVE_USAGE_INTERVAL_MS;
+    state.timer = setTimeout(() => {
+      state.timer = undefined;
+      if (state.stopped || live.closed) return;
+      state.lastAt = Date.now();
+      state.running = this.reportLiveUsage(live, turn, state).finally(() => {
+        state.running = undefined;
+        if (!state.again) return;
+        state.again = false;
+        this.scheduleLiveUsage(live, turn);
+      });
+    }, Math.max(0, state.lastAt + interval - Date.now()));
+    state.timer.unref?.();
+  }
+
+  private async reportLiveUsage(live: LiveSession, turn: RunningTurn, state: LiveUsageRefresh): Promise<void> {
+    try {
+      const usage = await this.refreshUsage(live, { announce: "changed" });
+      const modelUsage = usage?.session?.model_usage;
+      if (state.stopped || !claudeHasModelUsage(modelUsage)) return;
+      // The totals are cumulative; the turn bills what grew since it began.
+      // Each report replaces the last as the turn's usage.
+      const tokenUsage = claudeTurnUsage(modelUsage, turn.usageBaseline);
+      await this.emit({ method: "thread/tokenUsage/updated", params: {
+        threadId: live.session.thread.id, turnId: turn.turnId, model: tokenUsage.model, tokenUsage,
+      } });
+    } catch (error) {
+      // A live reading must never fail the turn.
+      claudeBackendLog.warn("Could not report Claude usage during the turn", error);
+    }
+  }
+
+  /** Stop live reports and wait out one in flight, so a final report comes last. */
+  private async stopLiveUsage(turn: RunningTurn): Promise<void> {
+    const state = turn.liveUsage;
+    if (!state) return;
+    state.stopped = true;
+    if (state.timer) clearTimeout(state.timer);
+    state.timer = undefined;
+    await state.running;
   }
 
   /**
