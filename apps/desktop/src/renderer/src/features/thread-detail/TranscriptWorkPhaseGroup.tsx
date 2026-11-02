@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useState } from "react";
+import { memo, useEffect, useId, useMemo, useState } from "react";
 import type {
   AppServerBackendKind,
   AppServerSkillSummary,
@@ -11,10 +11,11 @@ import type {
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadLinkSource } from "../../lib/thread-links";
 import { TranscriptActivity } from "./TranscriptActivity";
-import { TranscriptMessage } from "./TranscriptMessage";
+import { TranscriptImageTile, TranscriptMessage } from "./TranscriptMessage";
 import { TranscriptPlan } from "./TranscriptPlan";
 import { TranscriptReview } from "./TranscriptReview";
 import { formatElapsedMs } from "./transcript-render-items";
+import { collectThreadImageGallery } from "./thread-image-gallery";
 
 type TranscriptWorkPhaseGroupProps = {
   activeStartedAt?: number;
@@ -46,6 +47,10 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
 ) {
   const hiddenRegionId = useId();
   const shouldRenderContent = !props.collapsible || props.expanded;
+  const images = useMemo(
+    () => shouldRenderContent ? [] : collectThreadImageGallery(props.entries),
+    [props.entries, shouldRenderContent],
+  );
 
   return (
     <div className="transcript-work-phase-group">
@@ -97,6 +102,18 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
               threadLinkSource: props.threadLinkSource,
             })
           )}
+        </div>
+      ) : images.length > 0 ? (
+        <div className="transcript-work-phase-group__images" role="group" aria-label="Images from previous work">
+          {images.map((image, index) => (
+            <TranscriptImageTile
+              key={image.url}
+              desktopApi={props.desktopApi}
+              imagePart={image}
+              imageNumber={index + 1}
+              onOpenImage={props.onOpenImage}
+            />
+          ))}
         </div>
       ) : null}
     </div>
