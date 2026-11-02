@@ -3030,6 +3030,36 @@ Implementation notes remain in a readable bubble.`;
     expect(screen.getByText("Third commentary.")).toBeVisible();
   });
 
+  it("keeps a stopped turn's work open until the operator folds it", () => {
+    const turn = { id: "stopped-turn", status: "cancelled" as const, durationMs: 430_000 };
+    const entries: AppServerThreadEntry[] = [
+      { type: "activity", id: "tool-1", summary: "Read AGENTS.md", details: [], turn },
+      { type: "activity", id: "tool-2", summary: "Ran cargo test", details: [], turn },
+    ];
+    const onExpandedWorkPhaseGroupIdsChange = vi.fn();
+    const props = {
+      entries,
+      loading: false,
+      loadingMore: false,
+      threadId: "thread-1",
+      onExpandedWorkPhaseGroupIdsChange,
+      onLoadOlder: async () => undefined,
+    };
+    const view = render(<TranscriptList {...props} expandedWorkPhaseGroupIds={[]} />);
+
+    const toggle = screen.getByRole("button", { name: /Worked for 7m 10s · 2 tool updates/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Ran cargo test")).toBeVisible();
+
+    fireEvent.click(toggle);
+    const foldedGroupIds = onExpandedWorkPhaseGroupIdsChange.mock.calls[0]?.[0];
+    expect(foldedGroupIds).toHaveLength(1);
+
+    view.rerender(<TranscriptList {...props} expandedWorkPhaseGroupIds={foldedGroupIds} />);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Ran cargo test")).not.toBeInTheDocument();
+  });
+
   it("restores expanded work and the viewport after the transcript remounts", () => {
     const entries = [
       {
