@@ -53,7 +53,7 @@
   "devDependencies": {
     "@pwragent/federation": "workspace:*",
     "@pwragent/shared": "workspace:*",
-    "esbuild": "0.28.1",
+    "esbuild": "0.28.2",
     "@pwragent/agent-tools": "workspace:*"
   },
   "dependencies": {
