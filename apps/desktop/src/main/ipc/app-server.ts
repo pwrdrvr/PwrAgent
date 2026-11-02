@@ -668,7 +668,7 @@ type ThreadPrRefreshContext = {
 
 const appServerLog = getMainLogger("pwragent:app-server");
 /** How far back the Waiting for list reads ended scheduled actions. */
-const PENDING_WAKES_SCHEDULED_HISTORY_MS = 7 * 24 * 60 * 60 * 1000;
+const PENDING_WAKES_SCHEDULED_HISTORY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Forge Automation is owner-local and per Directories project. A remote
@@ -5277,12 +5277,15 @@ class DesktopAppServerService {
           ...thread, limit: Math.min(limit, THREAD_PR_WATCH_HISTORY_MAX_LIMIT),
         }),
       autoFix: async () => await this.listThreadPrAutoFixStates(),
-      dependencies: async (thread) => (await this.getThreadDependencyCoordinator().manage({
-        action: "list", ...thread,
-      })).dependencies,
-      // Ended actions stay 30 days; a week of them is enough to show.
-      scheduledActions: (thread) => getScheduledThreadActionService().list({
-        ...thread, terminalUpdatedAfter: Date.now() - PENDING_WAKES_SCHEDULED_HISTORY_MS,
+      // A plain store read: the coordinator's list waits behind evaluations,
+      // and selected detail reads this list.
+      dependencies: async (thread) => new ThreadDependencyStore(getAppStateDb().raw)
+        .list(thread.backend, thread.threadId),
+      // Each action reads its payload file, so ended ones are read only for
+      // the history, and only from the last day.
+      scheduledActions: (thread, includeEnded) => getScheduledThreadActionService().list({
+        ...thread,
+        ...(includeEnded ? { terminalUpdatedAfter: Date.now() - PENDING_WAKES_SCHEDULED_HISTORY_MS } : {}),
       }).actions,
       monitors: (thread) => registry.listPendingTaskMonitorWakes(thread),
       recentSubAgents: async (thread, limit) => limit === 0 ? []

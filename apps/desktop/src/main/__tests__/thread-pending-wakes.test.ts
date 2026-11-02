@@ -185,6 +185,17 @@ describe("buildThreadPendingWakes", () => {
     ]);
   });
 
+  it("reads no ended rows for a list that shows none", async () => {
+    const scheduledActions = vi.fn(() => [] as ScheduledThreadAction[]);
+    const prWatchHistory = vi.fn(async () => [] as ThreadPrWatchHistoryEntry[]);
+    const recentSubAgents = vi.fn(async () => [] as ThreadSubAgentSummary[]);
+    const list = await buildThreadPendingWakes(readers({ scheduledActions, prWatchHistory, recentSubAgents }), THREAD, { endedLimit: 0 });
+    expect(list.ended).toEqual([]);
+    expect(scheduledActions).toHaveBeenCalledWith(THREAD, false);
+    expect(prWatchHistory).toHaveBeenCalledWith(THREAD, 0);
+    expect(recentSubAgents).toHaveBeenCalledWith(THREAD, 0);
+  });
+
   it("leaves out a source it cannot read and says the list may be missing a wake", async () => {
     const onReadError = vi.fn();
     const list = await buildThreadPendingWakes(readers({
@@ -276,7 +287,9 @@ describe("pending wake list writes", () => {
       for (let read = 0; read < 50; read += 1) {
         await buildThreadPendingWakes(readers({
           dependencies: async (thread) => dependencies.list(thread.backend, thread.threadId),
-          scheduledActions: (thread) => scheduledStore.list({ ...thread, terminalUpdatedAfter: 0 }),
+          scheduledActions: (thread, includeEnded) => scheduledStore.list({
+            ...thread, ...(includeEnded ? { terminalUpdatedAfter: 0 } : {}),
+          }),
         }), THREAD);
       }
     });

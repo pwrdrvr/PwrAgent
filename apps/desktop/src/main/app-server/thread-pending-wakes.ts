@@ -43,8 +43,11 @@ export type ThreadPendingWakeReaders = {
   autoFix: (thread: PendingWakeThread) => Promise<ThreadPrAutoFixState[]>;
   /** Every registration this thread waits on, active and ended. */
   dependencies: (thread: PendingWakeThread) => Promise<ThreadDependency[]>;
-  /** Every scheduled action on this thread, active and ended. */
-  scheduledActions: (thread: PendingWakeThread) => ScheduledThreadAction[] | Promise<ScheduledThreadAction[]>;
+  /** The thread's active scheduled actions, plus recently ended ones when asked. */
+  scheduledActions: (
+    thread: PendingWakeThread,
+    includeEnded: boolean,
+  ) => ScheduledThreadAction[] | Promise<ScheduledThreadAction[]>;
   monitors: (thread: PendingWakeThread) => PendingTaskMonitorWake[];
   /** The thread's newest sub-agent cards, for monitors that ended. */
   recentSubAgents: (thread: PendingWakeThread, limit: number) => Promise<ThreadSubAgentSummary[]>;
@@ -83,7 +86,7 @@ export async function buildThreadPendingWakes(
     read("prWatchHistory", [] as ThreadPrWatchHistoryEntry[], () => readers.prWatchHistory(thread, endedLimit)),
     read("autoFix", [] as ThreadPrAutoFixState[], () => readers.autoFix(thread)),
     read("dependencies", [] as ThreadDependency[], () => readers.dependencies(thread)),
-    read("scheduledActions", [] as ScheduledThreadAction[], () => readers.scheduledActions(thread)),
+    read("scheduledActions", [] as ScheduledThreadAction[], () => readers.scheduledActions(thread, endedLimit > 0)),
     read("monitors", [] as PendingTaskMonitorWake[], () => readers.monitors(thread)),
     read("recentSubAgents", [] as ThreadSubAgentSummary[], () => readers.recentSubAgents(thread, endedLimit * 2)),
     read("backendTasks", [] as AppServerBackgroundTask[], () => readers.backendTasks(thread)),
