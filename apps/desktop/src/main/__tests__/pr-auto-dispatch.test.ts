@@ -1212,11 +1212,11 @@ describe("PrAutoDispatchCoordinator", () => {
       prKey,
     })).toBe(1);
 
-    // The conflict joined the incident, so seeing it again spends nothing new.
+    // The same head and condition is the repair already dispatched.
     const conflictingAgain = pr({ headSha: heads[2], mergeState: "conflicting" });
     expect(
       (await observe(harness.coordinator, conflictingAgain))[0]?.status,
-    ).not.toBe("scheduled");
+    ).toBe("duplicate");
   });
 
   it("uses a unique SQLite claim across two app instances", async () => {
