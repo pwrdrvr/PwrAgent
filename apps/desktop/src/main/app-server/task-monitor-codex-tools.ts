@@ -211,8 +211,12 @@ export function buildMonitorDelegationPrompt(params: {
   preferredReasoningEffort?: string;
   task: string;
   mcpConnectionIds?: string[];
-  /** Claude Code defers MCP tools until ToolSearch loads them. */
-  deferredMcpTools?: boolean;
+  /**
+   * The monitor runs in Claude Code. It defers MCP tools until ToolSearch
+   * loads them, and it blocks a long foreground sleep, so the monitor waits
+   * in a background watcher whose output wakes it.
+   */
+  claudeCode?: boolean;
 }): string {
   const pollInterval =
     normalizePollIntervalSeconds(params.pollIntervalSeconds) ??
@@ -242,7 +246,7 @@ export function buildMonitorDelegationPrompt(params: {
     "- This monitor is already running with the returned preferredModel and preferredReasoningEffort values.",
     "- Do not launch or hand off to a different provider runtime.",
     "</model_guidance>",
-    ...(params.deferredMcpTools
+    ...(params.claudeCode
       ? [
           "",
           `Before the first call, load the PwrAgent tools with ToolSearch: select:${claudeMcpToolName("inject_progress")},${claudeMcpToolName("complete_monitoring")},${claudeMcpToolName("search_mcp_tools")},${claudeMcpToolName("call_mcp_tool")}.`,
@@ -266,6 +270,14 @@ export function buildMonitorDelegationPrompt(params: {
     "- For an already-started local process: monitor it only when the context gives a durable OS-level process id, pidfile, log file, status file, or wait API that this thread can access. If only a parent tool session id was provided, call inject_progress with status \"blocked\", then complete_monitoring with outcome \"failure\" explaining that the parent session is not accessible to the monitor.",
     "- For a remote or external operation: use the provided target identifiers, URLs, APIs, or status commands to poll until all required status checks are terminal.",
     `- Repeat the delegated status check about every ${pollInterval} seconds until the task is terminal.`,
+    ...(params.claudeCode
+      ? [
+          `- Claude Code blocks a long foreground sleep, so wait between checks with one Monitor watcher (load it with ToolSearch select:Monitor). Its command loops: run the status check, print one line with the observed state, stop when the state is terminal, otherwise sleep ${pollInterval} seconds. For a command you start yourself, run it with run_in_background instead.`,
+          "- Each printed line, and the end of a background command, wakes you: send that poll's progress injection, and call complete_monitoring once a line shows a terminal state. If the watcher stops or expires first, start another.",
+          "- After you start the watcher, end your turn. PwrAgent keeps this monitor open while the watcher runs. Ending a turn with no watcher running, before complete_monitoring, ends monitoring without a result.",
+          "- PwrAgent guidance against waiting in sleep loops, background shells, or Monitor is for parent agents. It does not apply to this monitor.",
+        ]
+      : []),
     "- If the task or monitor_context does not include enough information to perform the same polling the parent was about to do, call inject_progress with status \"blocked\" explaining the missing input, then call complete_monitoring with outcome \"failure\" and triggerParentTurn true.",
     "</delegated_monitoring_procedure>",
     "",
