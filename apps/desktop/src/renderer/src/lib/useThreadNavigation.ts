@@ -1133,6 +1133,11 @@ function applyFederationPeerStatusUpdate(
   instanceId: string,
   status: FederationPeerSummary["status"],
 ): NavigationLoadedRows | undefined {
+  // Callers patch only a loss of connection. A row held while its owner was
+  // away carries the capabilities stamped then, and the event carries none.
+  // Marking that row connected would undim it while its menu still withholds
+  // every owner action. A reconnect refresh brings the owner's status and
+  // capabilities in one stamp instead.
   if (!snapshot) {
     return snapshot;
   }
@@ -4342,6 +4347,17 @@ export function useThreadNavigation(
         };
         const status = params.status as FederationPeerSummary["status"];
         markNavigationActivity({ refreshOnIdleResume: false });
+        if (params.status === "connected") {
+          // The pinned rows stay dimmed until this refresh restamps them.
+          // The dimming was patched here, not read, so an owner whose
+          // revision did not move would answer `unchanged` and keep it.
+          // Invalidating first makes every page read in full.
+          invalidateNavigation();
+          scheduleEventRefresh(undefined, undefined, false, {
+            forceRefresh: true,
+          });
+          return;
+        }
         setState((current) => ({
           ...current,
           rows: applyFederationPeerStatusUpdate(
@@ -4350,12 +4366,6 @@ export function useThreadNavigation(
             status,
           ),
         }));
-        if (params.status === "connected") {
-          scheduleEventRefresh(undefined, undefined, false, {
-            forceRefresh: true,
-          });
-          return;
-        }
         return;
       }
 
@@ -4383,16 +4393,9 @@ export function useThreadNavigation(
         const status = params.status as FederationPeerSummary["status"];
         if (params.status === "connected") {
           remotePeerDisconnectedRef.current = false;
-          setState((current) => ({
-            ...current,
-            rows: applyFederationPeerStatusUpdate(
-              current.rows,
-              params.instanceId,
-              status,
-            ),
-          }));
           // The bounded window owns this remote connection lifetime and
           // resumes its resources exactly once, even for duplicate events.
+          // Its read restamps the rows; until then they stay dimmed.
           return;
         }
         remotePeerDisconnectedRef.current = true;
