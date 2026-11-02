@@ -1,5 +1,5 @@
 // Test diagnostics only. Compile for x64 with the Windows .NET Framework csc.
-// No remote handle duplication. All process handles are non-inheritable.
+// No remote handle duplication. Retain only non-inheritable process-query handles.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -21,8 +21,6 @@ static class WindowsPipeDiagnostics {
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool QueryFullProcessImageNameW(IntPtr process, uint flags, StringBuilder name, ref uint length);
   [DllImport("kernel32.dll")] static extern uint GetCurrentProcessId();
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
-  [DllImport("dbghelp.dll", SetLastError = true)] static extern bool MiniDumpWriteDump(IntPtr process, uint pid, IntPtr file,
-    uint kind, IntPtr exception, IntPtr streams, IntPtr callback);
 
   static long Now() { return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); }
   static Dictionary<string, object> D(params object[] fields) {
@@ -145,47 +143,12 @@ static class WindowsPipeDiagnostics {
     } finally { CloseHandle(process); }
   }
 
-  static void Dump(uint pid, long expectedCreated, string filename) {
-    long started = Now();
-    // QUERY_INFORMATION | VM_READ only: never duplicate launcher pipe handles.
-    IntPtr process = OpenProcess(0x400 | 0x10, false, pid);
-    if (process == IntPtr.Zero) {
-      Emit(D("kind", "dump", "started", started, "ended", Now(), "status", "open-failed", "errorCode", Marshal.GetLastWin32Error()));
-      return;
-    }
-    try {
-      long exit, created = Created(process, out exit);
-      if (created != expectedCreated || exit != 0) {
-        Emit(D("kind", "dump", "started", started, "ended", Now(), "status", "identity-not-live",
-          "created", created.ToString(), "nativeExit", exit.ToString()));
-        return;
-      }
-      bool written; int error; long bytes;
-      using (var file = new FileStream(filename, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
-        // Filter stack memory to unwind pointers; omit data, heap, handles,
-        // environment and tokens. Raw dumps remain private and are deleted.
-        written = MiniDumpWriteDump(process, pid, file.SafeFileHandle.DangerousGetHandle(),
-          0x8 | 0x80 | 0x1000 | 0x20000, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
-        error = written ? 0 : Marshal.GetLastWin32Error();
-        bytes = file.Length;
-      }
-      long exitAfter; bool same = Created(process, out exitAfter) == expectedCreated;
-      Emit(D("kind", "dump", "started", started, "ended", Now(), "status", written && same ? "written" : "write-failed",
-        "created", created.ToString(), "nativeExitAfter", exitAfter.ToString(), "bytes", bytes, "errorCode", error));
-    } catch (Exception error) {
-      // File/DbgHelp exceptions can embed paths. Publish only the error type/code.
-      Emit(D("kind", "dump", "started", started, "ended", Now(), "status", "write-failed",
-        "errorType", error.GetType().Name, "errorCode", error.HResult));
-    } finally { CloseHandle(process); }
-  }
-
   public static int Main(string[] args) {
     try {
       Console.OutputEncoding = new UTF8Encoding(false);
       if (IntPtr.Size != 8) throw new Exception("Windows pipe diagnostics require x64");
       if (args[0] == "watch") Watch(args[1]);
       else if (args[0] == "identity") Identity(uint.Parse(args[1]));
-      else if (args[0] == "dump") Dump(uint.Parse(args[1]), long.Parse(args[2]), args[3]);
       else throw new Exception("Unknown diagnostic mode");
       return 0;
     } catch (Exception error) { Emit(D("kind", "error", "at", Now(), "error", error.Message)); return 1; }

@@ -1,3 +1,20 @@
+import path from "node:path";
+
+export function nativeStackArguments(pid, cache, command = "~* kn 40;q") {
+  if (!Number.isSafeInteger(pid) || pid <= 0 || !path.isAbsolute(cache)) throw new Error("Invalid native stack target or local symbol cache.");
+  // -pvr never suspends the target. -pd also prevents target termination if a
+  // debugger session ends. Symbol downloads must happen before E2E starts.
+  return ["-pvr", "-pd", "-noinh", "-noshell", "-sins", "-netsyms:no",
+    "-y", "srv*" + cache, "-p", String(pid), "-c", command];
+}
+
+export function verifiedNativeStack(before, after, expectedCreated, stack) {
+  return before?.verified === true && before.liveAfter === true
+    && after?.verified === true && after.liveAfter === true
+    && before.pid === after.pid && before.created === expectedCreated && after.created === expectedCreated
+    && stack.threads.length > 0 && stack.threads.every((thread) => parseInt(thread.pid, 16) === before.pid);
+}
+
 // CDB output includes local paths, arguments and addresses. Keep only bounded
 // thread identities and call-site symbols; never persist its raw output.
 export function parseNativeStacks(output) {

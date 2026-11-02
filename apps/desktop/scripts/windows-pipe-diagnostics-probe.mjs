@@ -8,7 +8,9 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS } from "./windows-pipe-observation.mjs";
+import { nativeStackArguments, parseNativeStacks } from "./windows-native-stack.mjs";
 
 const directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-native-pipe-proof-"));
 const executable = path.join(directory, "native.exe");
@@ -16,6 +18,7 @@ const compiler = path.join(process.env.SystemRoot, "Microsoft.NET", "Framework64
 const stop = path.join(directory, "watch.stop");
 const stopSource = path.join(directory, "source.stop");
 const readySource = path.join(directory, "source.ready");
+const heartbeat = path.join(directory, "source.heartbeat");
 const records = [];
 const execute = promisify(execFile);
 async function exec(...args) {
@@ -28,7 +31,16 @@ async function exec(...args) {
     }));
   }
 }
-let watcher, child, lines, sourceClosed, watcherClosed;
+let watcher, child, lines, sourceClosed, watcherClosed, debuggerProcess, debuggerClosed;
+export let probeResult;
+// When imported by the controller, these are its directly owned leaf children.
+// Never put a kill deadline around an intermediate probe process.
+const stopOnExit = () => {
+  for (const owned of [debuggerProcess, child, watcher]) {
+    if (owned && owned.exitCode === null && owned.signalCode === null) owned.kill();
+  }
+};
+process.once("exit", stopOnExit);
 async function bounded(promise, ms, message) {
   let timer;
   const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); });
@@ -64,8 +76,8 @@ try {
   watcher.once("exit", () => ready.reject(new Error("Native watcher exited before ready")));
   await bounded(ready.promise, 5000, "Native watcher readiness was not observed");
   const oldNames = new Set(process.report.getReport().libuv.flatMap((handle) => [handle.localEndpoint, handle.remoteEndpoint]));
-  const source = "const fs=require('node:fs');fs.writeFileSync(process.argv[1],String(process.pid));setInterval(()=>{if(fs.existsSync(process.argv[2]))process.exit(0)},20)";
-  child = spawn(process.execPath, ["-e", source, readySource, stopSource], {
+  const source = "const fs=require('node:fs');let beat=0;fs.writeFileSync(process.argv[1],String(process.pid));setInterval(()=>{fs.writeFileSync(process.argv[3],String(++beat));if(fs.existsSync(process.argv[2]))process.exit(0)},20)";
+  child = spawn(process.execPath, ["-e", source, readySource, stopSource, heartbeat], {
     windowsHide: true, stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"],
   });
   sourceClosed = once(child, "close");
@@ -94,33 +106,66 @@ try {
     exactPipes = 4;
   }
 
-  const dump = path.join(directory, "private.dmp");
-  const rejected = JSON.parse((await exec(executable, ["dump", String(child.pid), String(BigInt(result.process.created) + 1n), dump],
-    { timeout: 3000, windowsHide: true })).stdout);
-  assert.equal(rejected.status, "identity-not-live");
-  assert.equal(existsSync(dump), false);
-  const captured = JSON.parse((await exec(executable, ["dump", String(child.pid), result.process.created, dump],
-    { timeout: 5000, windowsHide: true })).stdout);
-  assert.equal(captured.status, "written");
-  assert.equal(captured.created, result.process.created);
-  assert.equal(readFileSync(dump).subarray(0, 4).toString(), "MDMP");
-  rmSync(dump);
+  let noninvasiveDebuggerVerified;
+  if (process.env.PWRAGENT_WINDOWS_CDB_EXE) {
+    let lastBeat = 0;
+    const readBeat = () => {
+      if (existsSync(heartbeat)) lastBeat = Math.max(lastBeat, Number(readFileSync(heartbeat, "utf8")) || 0);
+      return lastBeat;
+    };
+    await waitFor(() => readBeat() > 0, "Controlled source heartbeat did not start");
+    const readyDebugger = Promise.withResolvers();
+    debuggerProcess = spawn(process.env.PWRAGENT_WINDOWS_CDB_EXE,
+      nativeStackArguments(child.pid, directory, ".echo pwragent-noninvasive-ready;~* kn 40"),
+      { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    debuggerClosed = once(debuggerProcess, "close");
+    void debuggerClosed.catch(() => {});
+    let output = "";
+    debuggerProcess.stdout.on("data", (chunk) => {
+      output = (output + chunk).slice(-512 * 1024);
+      if (output.includes("pwragent-noninvasive-ready")) readyDebugger.resolve();
+    });
+    debuggerProcess.stderr.resume();
+    debuggerProcess.once("error", readyDebugger.reject);
+    debuggerProcess.once("exit", () => readyDebugger.reject(new Error("Noninvasive debugger exited before readiness")));
+    await bounded(readyDebugger.promise, 5000, "Noninvasive debugger readiness was not observed");
+    await waitFor(() => parseNativeStacks(output).frameCount > 0, "Noninvasive debugger did not produce native frames");
+    const attachedBeat = readBeat();
+    await waitFor(() => readBeat() > attachedBeat + 2, "Debugger suspended the controlled source");
+    assert.equal(debuggerProcess.exitCode, null);
+    debuggerProcess.kill();
+    await bounded(debuggerClosed, 2000, "Cancelled noninvasive debugger did not close");
+    const cancelledBeat = readBeat();
+    await waitFor(() => readBeat() > cancelledBeat + 2, "Debugger cancellation suspended the controlled source");
+    noninvasiveDebuggerVerified = true;
+  }
 
   writeFileSync(stopSource, "stop");
   await bounded(sourceClosed, 3000, "Controlled source did not finish");
   await waitFor(() => records.some((row) => row.kind === "gone" && row.pid === child.pid
     && row.created === result.process.created && BigInt(row.nativeExit) > 0n), "Native source exit FILETIME was not retained");
-  console.log(JSON.stringify({ creationIdentityVerified: true, nativeExitTimeVerified: true, dumpIdentityVerified: true, exactPipes }));
+  probeResult = { creationIdentityVerified: true, nativeExitTimeVerified: true, noninvasiveDebuggerVerified, exactPipes };
 } finally {
-  try { await stopOwned(child, sourceClosed, stopSource); }
-  finally {
-    try { await stopOwned(watcher, watcherClosed, stop); }
+  try {
+    if (debuggerProcess && debuggerProcess.exitCode === null && debuggerProcess.signalCode === null) {
+      debuggerProcess.kill();
+      await bounded(debuggerClosed, 2000, "Noninvasive debugger cleanup did not finish");
+    }
+  } finally {
+    try { await stopOwned(child, sourceClosed, stopSource); }
     finally {
-      lines?.close();
-      assert.equal(path.dirname(path.resolve(directory)), path.resolve(os.tmpdir()));
-      assert(path.basename(directory).startsWith("pwragent-native-pipe-proof-"));
-      rmSync(directory, { recursive: true, force: true });
+      try { await stopOwned(watcher, watcherClosed, stop); }
+      finally {
+        lines?.close();
+        assert.equal(path.dirname(path.resolve(directory)), path.resolve(os.tmpdir()));
+        assert(path.basename(directory).startsWith("pwragent-native-pipe-proof-"));
+        rmSync(directory, { recursive: true, force: true });
+        if ([debuggerProcess, child, watcher].every((owned) => !owned || owned.exitCode !== null || owned.signalCode !== null)) {
+          process.removeListener("exit", stopOnExit);
+        }
+      }
     }
   }
 }
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) console.log(JSON.stringify(probeResult));
 

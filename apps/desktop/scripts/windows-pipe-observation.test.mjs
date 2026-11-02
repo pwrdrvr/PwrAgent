@@ -6,7 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, normalizePipeName, parseHandleOutput, observeWindowsLauncher, packageManagerCommand } from "./windows-pipe-observation.mjs";
-import { parseNativeStacks } from "./windows-native-stack.mjs";
+import { nativeStackArguments, parseNativeStacks, verifiedNativeStack } from "./windows-native-stack.mjs";
 
 const roots = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -15,6 +15,27 @@ const names = [1, 2, 3, 4].map((n) => "\\Device\\NamedPipe\\uv\\" + n + "-123");
 const inventory = () => ({ verified: true, liveAfter: true, pipes: names.map((name) => ({ name })) });
 
 describe("Windows natural pipe evidence", () => {
+  it("samples with a non-suspending attach and local symbols, then rejects changed process identities", () => {
+    const cache = path.resolve("private-symbol-cache");
+    expect(nativeStackArguments(77, cache)).toEqual([
+      "-pvr", "-pd", "-noinh", "-noshell", "-sins", "-netsyms:no",
+      "-y", "srv*" + cache, "-p", "77", "-c", "~* kn 40;q",
+    ]);
+    expect(() => nativeStackArguments(0, cache)).toThrow();
+    expect(() => nativeStackArguments(77, "relative-cache")).toThrow();
+    const before = { pid: 77, created: "134381166159731584", verified: true, liveAfter: true };
+    const stack = { threads: [{ pid: "4d", frames: [] }] };
+    expect(verifiedNativeStack(before, { ...before }, before.created, stack)).toBe(true);
+    for (const changed of [
+      { created: "134381166159731585" }, { pid: 78 }, { verified: false }, { liveAfter: false },
+    ]) {
+      expect(verifiedNativeStack(before, { ...before, ...changed }, before.created, stack)).toBe(false);
+    }
+    expect(verifiedNativeStack(before, before, "134381166159731585", stack)).toBe(false);
+    expect(verifiedNativeStack(before, before, before.created, { threads: [{ pid: "4e" }] })).toBe(false);
+    expect(verifiedNativeStack(before, before, before.created, { threads: [] })).toBe(false);
+  });
+
   it("retains native stack symbols without debugger paths, arguments or memory", () => {
     const parsed = parseNativeStacks([
       "CommandLine: C:\\private\\secret-command.exe secret-token",
@@ -203,7 +224,7 @@ describe("Windows natural pipe evidence", () => {
       windowsHide: true, timeout: 35000,
     });
     expect(JSON.parse(result.stdout)).toEqual(expect.objectContaining({
-      creationIdentityVerified: true, nativeExitTimeVerified: true, dumpIdentityVerified: true,
+      creationIdentityVerified: true, nativeExitTimeVerified: true,
     }));
   }, 40000);
 });

@@ -2,9 +2,10 @@ import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, packageManagerCommand, parseHandleOutput } from "./windows-pipe-observation.mjs";
-import { parseNativeStacks } from "./windows-native-stack.mjs";
+import { nativeStackArguments, parseNativeStacks, verifiedNativeStack } from "./windows-native-stack.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
 const root = path.join(desktop, ".local", "windows-pipe-diagnostics", randomUUID());
@@ -15,9 +16,9 @@ const stopFile = path.join(root, "stop");
 const executable = path.join(root, "windows-pipe-diagnostics.exe");
 const handleExecutable = process.env.PWRAGENT_WINDOWS_HANDLE_EXE;
 const cdbExecutable = process.env.PWRAGENT_WINDOWS_CDB_EXE;
+const symchkExecutable = process.env.PWRAGENT_WINDOWS_SYMCHK_EXE;
 // Never copy this directory into evidence/test-results or print its contents.
-const privateStacks = path.join(root, "private-stacks");
-const dumps = [];
+const privateSymbols = path.join(root, "private-symbols");
 const rows = new Map();
 const launches = new Map();
 const launchEvents = new Map();
@@ -28,6 +29,7 @@ let watcher, requestWatcher, poll, liveArtifacts = false;
 let nativeBytes = 0, omittedNativeRecords = 0, captures = 0, watcherAvailable = false;
 let stalledCaptures = 0;
 let nativeCaptures = 0;
+let nativeStackEnabled = false;
 
 // Raw tool output may contain unrelated file paths; persist only parsed pipe names.
 const json = (data) => JSON.stringify(data, (key, value) => key === "toolText" ? undefined : value);
@@ -198,7 +200,7 @@ async function capture(event) {
 }
 
 async function captureNativeStack(event) {
-  if (!cdbExecutable || !Number.isFinite(event.closeStartedAt)) return;
+  if (!nativeStackEnabled || !Number.isFinite(event.closeStartedAt)) return;
   const due = event.closeStartedAt + 5000;
   if (Date.now() < due) await new Promise((resolve) => setTimeout(resolve, due - Date.now()));
   const launch = await launches.get(event.launchId);
@@ -207,47 +209,46 @@ async function captureNativeStack(event) {
   const row = rows.get(event.pid + ":" + created);
   if (!row || row.ppid !== event.workerPid || row.name.toLowerCase() !== "electron.exe" || row.goneAt || nativeCaptures >= 4) return;
   nativeCaptures++;
-  mkdirSync(privateStacks, { recursive: true });
-  const filename = path.join(privateStacks, event.launchId + ".dmp");
-  const query = await run(executable, ["dump", String(event.pid), created, filename], 2000, true);
-  const report = { event, expectedCreated: created, due, requested: query.requested, started: query.started, ended: query.ended,
-    result: query.value, execution: query.error && { code: query.error.code, signal: query.error.signal, killed: query.error.killed } };
-  write("native-stack-capture-" + event.launchId + ".json", report);
-  log("native-stack-capture", { launchId: event.launchId, pid: event.pid, created, ...report.result,
-    requested: report.requested, started: report.started, ended: report.ended });
-  if (query.value?.status === "written") dumps.push({ filename, event, created });
-  else rmSync(filename, { force: true });
+  const before = await run(executable, ["identity", String(event.pid)], 1000, true);
+  if (before.value?.process?.created !== created || before.value?.process?.liveAfter !== true) return;
+  const started = Date.now();
+  const result = await new Promise((resolve) => {
+    const child = execFile(cdbExecutable, nativeStackArguments(event.pid, privateSymbols),
+      { timeout: 1000, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+        scanners.delete(child);
+        resolve({ stack: parseNativeStacks(stdout), stderrBytes: Buffer.byteLength(stderr),
+          execution: error && { code: error.code, signal: error.signal, killed: error.killed } });
+      });
+    scanners.add(child);
+  });
+  const ended = Date.now();
+  const after = await run(executable, ["identity", String(event.pid)], 1000, true);
+  const verified = verifiedNativeStack(before.value?.process, after.value?.process, created, result.stack);
+  const report = { event, expectedCreated: created, due, started, ended,
+    before: before.value?.process, after: after.value?.process, verified,
+    execution: result.execution, stderrBytes: result.stderrBytes,
+    stack: verified ? result.stack : undefined,
+    omittedFrames: verified ? 0 : result.stack.frameCount };
+  write("native-stack-" + event.launchId + ".json", report);
+  log("native-stack-capture", { launchId: event.launchId, pid: event.pid, created, verified,
+    frameCount: verified ? result.stack.frameCount : 0, started, ended, execution: result.execution });
 }
 
-async function analyzeNativeStacks() {
-  const cache = path.join(privateStacks, "symbols");
-  const symbols = `srv*${cache}*https://msdl.microsoft.com/download/symbols;srv*${cache}*https://symbols.electronjs.org`;
-  // Offline only: symbol downloads/debugger startup never suspend Electron or
-  // compete with the six-second close. Two analyzers bound the lane overhead.
-  const queue = [...dumps];
-  const analyze = async () => {
-    for (let dump; (dump = queue.shift());) {
-      const started = Date.now();
-      try {
-        const result = await new Promise((resolve) => {
-          const child = execFile(cdbExecutable, ["-y", symbols, "-z", dump.filename, "-c", ".symopt+ 0x80000;~* kn 40;q"],
-            { timeout: 90000, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
-              scanners.delete(child);
-              resolve({ stack: parseNativeStacks(stdout), stderrBytes: Buffer.byteLength(stderr),
-                execution: error && { code: error.code, signal: error.signal, killed: error.killed } });
-            });
-          scanners.add(child);
-        });
-        write("native-stack-" + dump.event.launchId + ".json", {
-          launchId: dump.event.launchId, pid: dump.event.pid, created: dump.created, started, ended: Date.now(), ...result,
-        });
-        log("native-stack-analyzed", { launchId: dump.event.launchId, frameCount: result.stack.frameCount,
-          threadCount: result.stack.threads.length, execution: result.execution, elapsedMs: Date.now() - started });
-      } finally { rmSync(dump.filename, { force: true }); }
-    }
-  };
-  try { await Promise.all([analyze(), analyze()]); }
-  finally { rmSync(privateStacks, { recursive: true, force: true }); }
+async function prepareNativeStacks() {
+  if (!cdbExecutable || !symchkExecutable) { write("native-stack-setup.json", { enabled: false, error: "Signed debugger tools unavailable." }); return; }
+  // Warm only the matching executable's symbols before launcher pipes exist.
+  mkdirSync(privateSymbols, { recursive: true });
+  const electron = createRequire(new URL("../package.json", import.meta.url))("electron");
+  const symbols = `srv*${privateSymbols}*https://msdl.microsoft.com/download/symbols;srv*${privateSymbols}*https://symbols.electronjs.org`;
+  const warmed = await run(symchkExecutable, [electron, "/s", symbols], 90000);
+  let probe;
+  let probeFailed = false;
+  try { probe = (await import("./windows-pipe-diagnostics-probe.mjs")).probeResult; }
+  catch { probeFailed = true; }
+  nativeStackEnabled = !probeFailed && probe?.noninvasiveDebuggerVerified === true;
+  write("native-stack-setup.json", { enabled: nativeStackEnabled,
+    symbolPreload: { started: warmed.started, ended: warmed.ended, code: warmed.error?.code, stdoutBytes: warmed.stdoutBytes },
+    probe, probeFailed });
 }
 
 function enqueue(task) {
@@ -353,6 +354,7 @@ async function main() {
   try {
     if (process.platform !== "win32" || process.arch !== "x64") throw new Error("Native diagnostics require Windows x64.");
     await startObserver();
+    await prepareNativeStacks();
     enabled = true;
   } catch (error) {
     watcher?.kill();
@@ -360,7 +362,8 @@ async function main() {
     log("setup-error", { error: error.message });
   }
   // Same build/test command, shards, worker count, retries and deadlines as CI.
-  // All diagnostic children belong to this controller, before launcher pipes exist.
+  // The watcher starts before launcher pipes exist. Later diagnostic queries
+  // are controller children, outside Electron's process ownership tree.
   const child = spawn(command.file, command.args, {
     stdio: "inherit", env: { ...process.env, ...(enabled ? { PWRAGENT_WINDOWS_PIPE_REQUESTS: requests } : {}) },
   });
@@ -368,15 +371,15 @@ async function main() {
   try {
     code = await new Promise((resolve, reject) => { child.once("exit", resolve); child.once("error", reject); });
   } finally {
-    try { await closeObserver(); await analyzeNativeStacks(); }
+    try { await closeObserver(); }
     catch (error) { log("controller-cleanup-error", { error: error.message }); }
-    finally { rmSync(privateStacks, { recursive: true, force: true }); }
+    finally { rmSync(privateSymbols, { recursive: true, force: true }); }
   }
   process.exitCode = code ?? 1;
 }
 process.once("exit", () => {
   watcher?.kill();
   for (const child of scanners) child.kill();
-  rmSync(privateStacks, { recursive: true, force: true });
+  rmSync(privateSymbols, { recursive: true, force: true });
 });
 await main();

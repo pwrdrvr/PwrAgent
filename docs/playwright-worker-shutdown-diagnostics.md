@@ -111,22 +111,27 @@ The three full Windows samples in CI run 41491462986 passed their jobs but
 retained two forced closes through test retries. Both roots reached `quit`;
 native exit and pipe close then occurred together, with no surviving-pipe gap.
 The barrier alone therefore does not establish complete ownership of native
-shutdown. For further attribution, the controller can capture a filtered
-minidump of a root still alive five seconds into close. It opens one
-non-inheritable query/read handle and verifies the launch's native creation
-FILETIME on that same handle before `MiniDumpWriteDump`; it never duplicates
-pipe handles or clones the target. Capture start/end and result are recorded.
-This capture can affect scheduling and is diagnostic evidence, not an unbiased
-shutdown-rate measurement.
+shutdown. For further attribution, the controller samples a root still alive
+five seconds into close using CDB's noninvasive, non-suspending `-pvr` mode.
+It also passes `-pd` to prevent target termination when the debugger exits.
+Frames are attributed only when live native creation FILETIMEs match the
+original launch before and after capture, and every debugger thread's process
+ID matches that root. A changed or exited identity omits the frames. Capture
+start/end and result are recorded. A running target can change during unwind;
+these stacks are best-effort observations, not atomic snapshots or unbiased
+shutdown-rate measurements.
 
-CI verifies the installed Microsoft CDB signature and analyzes those dumps
-only after E2E completes, using Microsoft's and Electron's symbol servers.
-The raw dumps and symbol cache stay in the ignored controller-private
-directory, outside `evidence` and `test-results`, and are deleted after
-analysis. Artifacts retain only bounded thread IDs and parsed call-site
-symbols, plus explicit missing-symbol/capture status. Debugger output,
-arguments, memory, environment and raw dumps are never uploaded. At most four
-roots are captured per lane; the owning close's deadline remains unchanged.
+CI verifies the installed Microsoft CDB and SymChk signatures. SymChk warms
+the matching Electron symbols from Microsoft's and Electron's servers before
+E2E starts; live capture uses only that private local cache, with network
+symbols disabled. A controlled child probe must produce frames and keep its
+heartbeat advancing while attached and after debugger cancellation before
+sampling is enabled. The controller never creates minidumps or clones the
+target. Artifacts retain only bounded thread IDs and parsed call-site symbols,
+plus explicit missing-symbol/capture status. Raw debugger output, arguments,
+memory and environment are never uploaded. The symbol cache stays outside
+`evidence` and `test-results` and is deleted after E2E. At most four roots are
+sampled per lane; the owning close's deadline remains unchanged.
 
 The Windows reproduction left a suspended no-op `cmd.exe` from the startup
 Job-wrapper prewarm alive after the app exited. The app no longer starts this
