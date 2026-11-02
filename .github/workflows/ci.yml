@@ -812,7 +812,10 @@ jobs:
         lane: [1, 2, 3, 4]
     # One budget for setup, build, tests, and reporting. Do not add shorter
     # step or suite deadlines that interrupt a progressing lane before this cap.
-    timeout-minutes: 10
+    # Green lanes take 6 to 9.75 minutes (15 CI runs, 2026-11-01), and a lane
+    # that was still passing tests was cancelled at 10 minutes, so the cap
+    # leaves about 5 minutes of headroom.
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
