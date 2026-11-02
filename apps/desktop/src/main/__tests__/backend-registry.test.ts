@@ -52031,6 +52031,163 @@ script = "printf setup"
     await registry.close();
   });
 
+  async function attachBarePullRequestNumberAcrossCheckouts(params: {
+    remotes: string[];
+    resolver?: (request: { url: string; cwd?: string }) => Promise<
+      { provider: string; org: string; repo: string; url: string } | undefined
+    >;
+  }) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-renamed-remotes-"));
+    try {
+      const linkedDirectories = [];
+      for (const [index, remote] of params.remotes.entries()) {
+        const checkout = path.join(root, `checkout-${index}`);
+        await mkdir(checkout, { recursive: true });
+        await git(checkout, ["init", "-b", "main"]);
+        await git(checkout, ["remote", "add", "origin", remote]);
+        linkedDirectories.push({
+          id: checkout,
+          kind: "local" as const,
+          label: `checkout-${index}`,
+          path: checkout,
+        });
+      }
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [
+          {
+            id: "target-thread",
+            title: "Checkouts from before and after a rename",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories,
+            updatedAt: 2000,
+          },
+        ],
+      });
+      const overlayStore = createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread": createAgentOverlay(),
+        },
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore,
+      });
+      try {
+        const resolver = params.resolver ? vi.fn(params.resolver) : undefined;
+        if (resolver) registry.setPullRequestReferenceResolver(resolver);
+        await registry.publishLocalEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/started",
+            params: {
+              threadId: "agent-thread",
+              turnId: "turn-1",
+              turn: { id: "turn-1" },
+            },
+          },
+        });
+        const response = await codexClient.emitRequest({
+          method: "item/tool/call",
+          params: {
+            threadId: "agent-thread",
+            turnId: "turn-1",
+            callId: "call-1",
+            requestId: "call-1",
+            namespace: "pwragent",
+            tool: "attach_thread_pull_request",
+            arguments: {
+              backend: "codex",
+              threadId: "target-thread",
+              number: 3179,
+            },
+          },
+        } as AppServerPendingRequestNotification);
+        const overlay = await overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "target-thread",
+        });
+        return { overlay, resolver, response };
+      } finally {
+        await registry.close();
+      }
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  }
+
+  it("attaches a bare PR number when checkouts name a renamed repository both ways", async () => {
+    // One checkout was cloned before pwrdrvr/PwrAgnt became pwrdrvr/PwrAgent.
+    // GitHub answers the old name with the new one, so the two remotes are
+    // one repository, not an ambiguity.
+    const { overlay, resolver, response } = await attachBarePullRequestNumberAcrossCheckouts({
+      remotes: [
+        "git@github.com:pwrdrvr/PwrAgnt.git",
+        "https://github.com/pwrdrvr/PwrAgent.git",
+      ],
+      resolver: async ({ url }) => {
+        const parsed = /\/pull\/(\d+)$/.exec(url);
+        return {
+          provider: "github.com",
+          org: "pwrdrvr",
+          repo: "PwrAgent",
+          url: `https://github.com/pwrdrvr/PwrAgent/pull/${parsed?.[1]}`,
+        };
+      },
+    });
+
+    expect(response).toMatchObject({ success: true });
+    expect(overlay?.prs).toHaveLength(1);
+    expect(overlay?.prs?.[0]).toMatchObject({
+      provider: "github.com",
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      number: 3179,
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3179",
+    });
+    // One question per inferred name; the attach does not ask again.
+    expect(resolver?.mock.calls.map(([request]) => request.url).sort()).toEqual([
+      "https://github.com/pwrdrvr/PwrAgent/pull/3179",
+      "https://github.com/pwrdrvr/PwrAgnt/pull/3179",
+    ]);
+  });
+
+  it("attaches a bare PR number when checkout remotes differ only by letter case", async () => {
+    const { overlay, response } = await attachBarePullRequestNumberAcrossCheckouts({
+      remotes: [
+        "https://github.com/pwrdrvr/pwragent.git",
+        "https://github.com/pwrdrvr/PwrAgent.git",
+      ],
+    });
+
+    expect(response).toMatchObject({ success: true });
+    expect(overlay?.prs).toHaveLength(1);
+    expect(overlay?.prs?.[0]).toMatchObject({ number: 3179 });
+    expect(overlay?.prs?.[0]?.repo.toLowerCase()).toBe("pwragent");
+  });
+
+  it("still refuses a bare PR number when the forge names two repositories", async () => {
+    const { overlay, resolver, response } = await attachBarePullRequestNumberAcrossCheckouts({
+      remotes: [
+        "https://github.com/pwrdrvr/PwrAgent.git",
+        "https://github.com/pwrdrvr/PwrGit.git",
+      ],
+      // Each repository has its own #3179.
+      resolver: async ({ url }) => {
+        const parsed = /github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)$/.exec(url);
+        return parsed
+          ? { provider: "github.com", org: parsed[1]!, repo: parsed[2]!, url }
+          : undefined;
+      },
+    });
+
+    expect(response).toMatchObject({ success: false });
+    expect(JSON.stringify(response)).toContain("multiple inferable repositories");
+    expect(overlay?.prs).toBeUndefined();
+    expect(resolver).toHaveBeenCalledTimes(2);
+  });
+
   it("routes user-invoked PR status checks through the registered handler", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
