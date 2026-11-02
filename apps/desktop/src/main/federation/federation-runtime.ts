@@ -54,6 +54,7 @@ import { CloudflareAccessRefusedError, CloudflareSignInRequiredError } from "./c
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
+import { loadViewerNavigationPins } from "../app-server/navigation-viewer-pins";
 import {
   isPeerChildOfLocalThread,
   type PeerChildSource,
@@ -3551,6 +3552,22 @@ export class DesktopFederationRuntime {
         || (archived.parentThreadBackend ?? params.backend) !== expected.backend
         || archived.parentThreadInstanceId !== expected.instanceId)) {
       throw new Error("Thread grouping changed before archive. Refresh the group and try again.");
+    }
+    // A pin's saved snapshot can trail its peer, which may already have moved
+    // the thread under another parent. Read pins the way the sidebar and
+    // sub-thread ordering do: this refreshes each snapshot a reachable peer
+    // changed and drops pins it proved archived, without waiting on a peer.
+    // The full pins read back then hold that live-or-fallback view, and they
+    // are also what this store's own promotion boundary validates against.
+    // Every local archive runs this, so a failed refresh (such as a pin over
+    // the navigation row budget) falls back to the saved snapshots instead of
+    // blocking the archive.
+    try {
+      await loadViewerNavigationPins(store, this.remoteThreadSummaries());
+    } catch (error) {
+      log.warn("archive promotion could not refresh pins from the live peer view", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
     const pins = await store.listRemoteThreadPins();
     const remoteChildren = pins.filter((pin) => pin.summary && isRemoteFederationTarget(pin.ref.target)
