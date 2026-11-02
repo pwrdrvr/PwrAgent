@@ -291,10 +291,12 @@ test("directory launchpad preserves all-pinned placement and rereads an initiall
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
 
-    await app.window
-      .getByRole("textbox", { name: "New thread" })
-      .fill("hello from launchpad");
-    await app.window.getByRole("button", { name: "Start thread" }).click();
+    const composer = app.window.getByRole("textbox", { name: "New thread" });
+    await composer.fill("hello from launchpad");
+    // Keep the sidebar frozen while sending from the composer. Clicking Start
+    // moves the pointer away and cannot reproduce the placeholder handoff.
+    await app.window.getByRole("button", { name: "Existing directory thread, pinned" }).hover();
+    await composer.press("Enter");
 
     await expect(
       app.window.getByRole("heading", { level: 2, name: "hello from launchpad" }),
@@ -305,6 +307,13 @@ test("directory launchpad preserves all-pinned placement and rereads an initiall
     await expect(
       app.window.getByRole("region", { name: "Transcript" }).getByText("No thread history yet."),
     ).toBeHidden();
+    const directory = app.window.locator(".directory-row").filter({
+      has: app.window.getByRole("button", { name: /^FixtureRepo(,|$)/ }),
+    });
+    const pinnedTitles = directory.locator('.thread-row-shell[data-thread-pin-state="pinned"] .thread-row__title');
+    await expect(pinnedTitles).toHaveCount(2);
+    await directory.screenshot({ path: testInfo.outputPath("creation-handoff.png") });
+    await expect(pinnedTitles).toHaveText(["hello from launchpad", "Existing directory thread"]);
 
     await app.advance({ stepId: "turn-started-1" });
     await expect(
@@ -323,9 +332,6 @@ test("directory launchpad preserves all-pinned placement and rereads an initiall
         .getByRole("region", { name: "Transcript" })
         .getByText("captured after refresh"),
     ).toBeVisible();
-    const directory = app.window.locator(".directory-row").filter({
-      has: app.window.getByRole("button", { name: /^FixtureRepo(,|$)/ }),
-    });
     // Capture the final state even against the regression, where the new
     // thread appears below a newly created Directory threads disclosure.
     await directory.screenshot({ path: testInfo.outputPath("all-pinned-creation.png") });
