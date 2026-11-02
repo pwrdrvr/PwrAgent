@@ -49218,6 +49218,15 @@ script = "printf setup"
         },
       });
       registry.onEvent((event) => { events.push(event); });
+      // The root is not a repository, so each branch read (thread start, and
+      // turn end before listeners see turn/completed) falls back to an owned
+      // Git process. On Windows that is PowerShell plus Git, which can outlast
+      // the wait below. Answer as Git does outside a repository.
+      const runGitCommand = gitExecutable.runGitCommand;
+      const branchRead = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+        if (cwd !== root) return await runGitCommand(cwd, args, options);
+        throw new Error("fatal: not a git repository (or any of the parent directories): .git");
+      });
       try {
         const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
         const identity = { backend: "claude" as const, threadId };
@@ -49226,8 +49235,13 @@ script = "printf setup"
         await expect(registry.steerTurn({ ...identity, expectedTurnId: started.turnId, requestId: "telegram-steer-1",
           input: [{ type: "text", text: "Course correct from Telegram" }] }, steererOrigin))
           .resolves.toMatchObject({ disposition: "steered", turnId: started.turnId });
+        branchRead.mockClear();
         finish.resolve();
         await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+        // The turn-end branch read ran, and ran without a Git process.
+        expect(branchRead).toHaveBeenCalledWith(
+          root, ["rev-parse", "--abbrev-ref", "HEAD"], expect.objectContaining({ ownProcessTree: true }),
+        );
 
         const replay = await registry.readThread(identity);
         const firstPrompt = replay.replay.messages.find((message) => message.text === "Start");
@@ -49236,7 +49250,11 @@ script = "printf setup"
         await expect(registry.readCausalMessagingContext({ ...identity, turnId: started.turnId }))
           .resolves.toEqual({ causalMessagingAmbiguous: true });
       } finally {
-        await registry.close();
+        try {
+          await registry.close();
+        } finally {
+          branchRead.mockRestore();
+        }
         await rm(root, { recursive: true, force: true });
       }
     });
