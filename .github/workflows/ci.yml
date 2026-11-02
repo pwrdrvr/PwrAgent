@@ -676,7 +676,8 @@ jobs:
     needs: [changes, macos-install-deps]
     # Exercise the release unit-test platform before a tag is cut.
     if: needs.changes.outputs.code_impacting == 'true'
-    timeout-minutes: 30
+    # Green hosted lanes take 3.5 to 11 minutes (2026-11-01).
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
