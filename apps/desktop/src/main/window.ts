@@ -416,9 +416,17 @@ export function createMainWindow(options?: {
   );
   const appearance = readBootstrapAppearance();
   const navigationPreferences = readBootstrapNavigationPreferences();
+  // Replay E2E lays out against the full default size and resizes to exact
+  // layouts such as 1280x900. A GitHub-hosted macOS runner's 1024x768 display
+  // would otherwise shrink the window to 1024x677, where notices cover
+  // dialogs, and macOS caps a later resize at the screen's visible height.
+  // Linux and Windows already allow a larger-than-screen window. Unpackaged
+  // E2E only.
+  const e2eLargerThanScreen = process.env.PWRAGENT_E2E === "1" && !app.isPackaged;
   const initialBounds = boundsForCursorDisplay(
     MAIN_WINDOW_WIDTH,
     MAIN_WINDOW_HEIGHT,
+    { fitWorkArea: !e2eLargerThanScreen },
   );
   const windowChrome = mainWindowChromeOptions(appearance);
   const window = new BrowserWindow({
@@ -428,11 +436,7 @@ export function createMainWindow(options?: {
     show: false,
     title: windowTitle,
     ...windowChrome,
-    // Replay E2E sizes this window to exact layouts such as 1280x900. macOS
-    // otherwise caps a window at the screen's visible height, and a
-    // GitHub-hosted macOS runner's 1024x768 display leaves 677px. Linux and
-    // Windows already allow a larger-than-screen window. Unpackaged E2E only.
-    enableLargerThanScreen: process.env.PWRAGENT_E2E === "1" && !app.isPackaged,
+    enableLargerThanScreen: e2eLargerThanScreen,
     // Pre-tinted so the OS window fill matches the renderer's first
     // paint and we don't flash dark before a light renderer mounts.
     //

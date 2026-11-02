@@ -459,20 +459,31 @@ describe("createMainWindow", () => {
   });
 
   it("lets only an unpackaged E2E main window grow past the screen", async () => {
+    // A GitHub-hosted macOS runner: 1024x768 less the menu bar and Dock.
+    getDisplayNearestPointMock.mockReturnValue({
+      workArea: { x: 0, y: 24, width: 1024, height: 677 },
+    });
+    const fitted = { width: 1024, height: 677, enableLargerThanScreen: false };
     const { app } = await import("electron");
     const mockedApp = app as { isPackaged?: boolean };
     const { createMainWindow } = await loadWindowModule();
     try {
       createMainWindow();
-      expect(browserWindowState.options).toMatchObject({ enableLargerThanScreen: false });
+      expect(browserWindowState.options).toMatchObject(fitted);
 
       vi.stubEnv("PWRAGENT_E2E", "1");
       createMainWindow();
-      expect(browserWindowState.options).toMatchObject({ enableLargerThanScreen: true });
+      expect(browserWindowState.options).toMatchObject({
+        x: 0,
+        y: 24,
+        width: 1440,
+        height: 960,
+        enableLargerThanScreen: true,
+      });
 
       mockedApp.isPackaged = true;
       createMainWindow();
-      expect(browserWindowState.options).toMatchObject({ enableLargerThanScreen: false });
+      expect(browserWindowState.options).toMatchObject(fitted);
     } finally {
       delete mockedApp.isPackaged;
       vi.unstubAllEnvs();

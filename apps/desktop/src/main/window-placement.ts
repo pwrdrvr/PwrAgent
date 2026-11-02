@@ -54,10 +54,12 @@ export function placementForCursorDisplay(
 export function boundsForCursorDisplay(
   width: number,
   height: number,
+  options: { fitWorkArea?: boolean } = {},
 ): WindowBounds {
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  const fittedWidth = Math.min(width, display.workArea.width);
-  const fittedHeight = Math.min(height, display.workArea.height);
+  const fit = options.fitWorkArea ?? true;
+  const fittedWidth = fit ? Math.min(width, display.workArea.width) : width;
+  const fittedHeight = fit ? Math.min(height, display.workArea.height) : height;
   return {
     ...centerWindowOnDisplay(fittedWidth, fittedHeight, display),
     width: fittedWidth,
