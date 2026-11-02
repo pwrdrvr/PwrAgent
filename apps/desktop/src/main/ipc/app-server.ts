@@ -469,7 +469,10 @@ import {
   readFederationThreadPrWatchesRequest,
   readThreadPrWatchesRemoteTarget,
 } from "../pr-status/thread-pr-watches-federation";
-import { PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE } from "../federation/federation-backend-bridge";
+import {
+  PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE,
+  type FederationRemoteBackendClient,
+} from "../federation/federation-backend-bridge";
 import {
   assertProjectHeldWakeupResolutions,
   readProjectForgeDirectoryKey,
@@ -663,16 +666,20 @@ const appServerLog = getMainLogger("pwragent:app-server");
 /**
  * The peer that owns the project a Forge Automation request names, or
  * undefined when this instance owns it. A peer that does not advertise
- * `project_forge_automation` is refused here rather than asked.
+ * `project_forge_automation`, or grants no `turn_control`, is refused here
+ * rather than asked.
  */
 function remoteProjectForgeOwner(request: {
   federationTarget?: FederationTarget;
-}): ReturnType<ReturnType<typeof getDesktopFederationRuntime>["remoteBackend"]> | undefined {
+}): FederationRemoteBackendClient | undefined {
   const target = request?.federationTarget;
   if (!target || !isRemoteFederationTarget(target)) return undefined;
   const runtime = getDesktopFederationRuntime();
   if (!runtime.remoteTargetSupportsCapability(target, "project_forge_automation")) {
     throw new Error(PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE);
+  }
+  if (!runtime.remoteTargetSupportsCapability(target, "turn_control")) {
+    throw new Error("The owning instance does not allow this machine to control its turns.");
   }
   return runtime.remoteBackend(target);
 }
@@ -10622,14 +10629,20 @@ export function registerAppServerIpcHandlers(): void {
     async (request) =>
       await appServerService.refreshOwnedThreadPullRequests(request),
   );
-  // A peer's request names no target, so the service saves it here.
-  getDesktopBackendRegistry().setProjectForgeAutomationHandler(
-    async (request) =>
-      await appServerService.setProjectForgeAutomation({
-        directoryKey: request.directoryKey,
-        automation: request.automation,
-      }),
-  );
+  // A peer's requests name no target, so the service answers them here.
+  getDesktopBackendRegistry().setProjectForgeAutomationHandler({
+    set: async (request) => await appServerService.setProjectForgeAutomation({
+      directoryKey: request.directoryKey,
+      automation: request.automation,
+    }),
+    listHeldWakeups: async (request) => await appServerService.listProjectHeldWakeups({
+      directoryKey: request.directoryKey,
+    }),
+    resolveHeldWakeups: async (request) => await appServerService.resolveProjectHeldWakeups({
+      directoryKey: request.directoryKey,
+      resolutions: request.resolutions,
+    }),
+  });
   getDesktopBackendRegistry().setThreadGitWorkingStateRefreshHandler(
     async (request) =>
       await appServerService.refreshThreadGitWorkingState(request),

@@ -827,12 +827,14 @@ function DesktopAppShell(props: {
     ],
   );
   // A peer window offers its projects' Forge Automation only when the peer
-  // can store and enforce it.
+  // can store and enforce it, and lets this machine control its turns.
   const federationOwnerForgeAutomation = useMemo(() => {
     const ownerId = readRendererFederationTarget()?.instanceId;
-    return ownerId !== undefined
-      && liveFederationHealth?.peers.find((peer) => peer.id === ownerId)
-        ?.capabilities.includes("project_forge_automation") === true;
+    const capabilities = ownerId === undefined
+      ? undefined
+      : liveFederationHealth?.peers.find((peer) => peer.id === ownerId)?.capabilities;
+    return capabilities?.includes("project_forge_automation") === true
+      && capabilities.includes("turn_control");
   }, [liveFederationHealth]);
   // Every known machine, the window's owner included, for naming one.
   const federationMachines = useMemo(

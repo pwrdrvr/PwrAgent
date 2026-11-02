@@ -759,6 +759,8 @@ const setThreadPullRequestDetachHandler = vi.fn();
 const setThreadPrWatchesPeerHandler = vi.fn();
 const setThreadPullRequestRefreshHandler = vi.fn();
 const setProjectForgeAutomationHandler = vi.fn();
+const listProjectHeldWakeupsRegistry = vi.fn((_directoryKey: string): unknown[] => []);
+const resolveProjectHeldWakeupsRegistry = vi.fn(async (_request: unknown) => ({ results: [] as unknown[] }));
 const setDirectoryForgeAutomationOverlay = vi.fn(async (params: { directoryKey: string; automation: unknown }) => ({
   directoryKey: params.directoryKey,
   forgeAutomation: params.automation,
@@ -1251,6 +1253,8 @@ vi.mock("../app-server/backend-registry", () => {
     setThreadPrWatchesPeerHandler,
     setThreadPullRequestRefreshHandler,
     setProjectForgeAutomationHandler,
+    listProjectHeldWakeups: listProjectHeldWakeupsRegistry,
+    resolveProjectHeldWakeups: resolveProjectHeldWakeupsRegistry,
     setThreadGitWorkingStateRefreshHandler,
     setDirectoryGitStatusWriter,
     setThreadPrAutoDispatchBatch,
@@ -4009,6 +4013,8 @@ describe("app server ipc", () => {
       owner.resolveProjectHeldWakeups = vi.fn(async () => ({ results: [{ entryId: "held-1", status: "sent" }] }));
       federationMock.runtime.remoteBackend.mockClear();
       publishLocalEvent.mockClear();
+      listProjectHeldWakeupsRegistry.mockClear();
+      resolveProjectHeldWakeupsRegistry.mockClear();
     });
 
     it("saves it on the owner, sending no target, and keeps nothing here", async () => {
@@ -4057,19 +4063,45 @@ describe("app server ipc", () => {
       expect(owner.setProjectForgeAutomation).not.toHaveBeenCalled();
     });
 
-    it("saves a peer's request to this instance's project here, where polling and dispatch read it", async () => {
+    it("refuses an owner that grants this machine no turn control without asking it", async () => {
+      const { appServerService } = await import("../ipc/app-server");
+      federationMock.runtime.remoteTargetSupportsCapability.mockImplementation(
+        (...args: unknown[]) => args[1] !== "turn_control",
+      );
+
+      await expect(appServerService.setProjectForgeAutomation({
+        directoryKey, automation: DEFAULT_PROJECT_FORGE_AUTOMATION, federationTarget,
+      })).rejects.toThrow("does not allow this machine to control its turns");
+
+      expect(federationMock.runtime.remoteBackend).not.toHaveBeenCalled();
+      expect(owner.setProjectForgeAutomation).not.toHaveBeenCalled();
+    });
+
+    it("answers a peer's requests for this instance's project here, where polling and dispatch read it", async () => {
       const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
       onTestFinished(() => resetProjectForgeAutomationIndexForTests());
       registerAppServerIpcHandlers();
-      const handler = setProjectForgeAutomationHandler.mock.calls.at(-1)?.[0] as (request: {
-        directoryKey: string;
-        automation: typeof DEFAULT_PROJECT_FORGE_AUTOMATION;
-      }) => Promise<unknown>;
+      const handler = setProjectForgeAutomationHandler.mock.calls.at(-1)?.[0] as {
+        set: (request: { directoryKey: string; automation: typeof DEFAULT_PROJECT_FORGE_AUTOMATION }) => Promise<unknown>;
+        listHeldWakeups: (request: { directoryKey: string }) => Promise<unknown>;
+        resolveHeldWakeups: (request: { directoryKey: string; resolutions: unknown[] }) => Promise<unknown>;
+      };
       const automation = { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 9 };
       const ownKey = "directory:/repo/PwrAgent";
+      const resolutions = [{ entryId: "held-1", backend: "codex", threadId: "thread-1", action: "discard" }];
 
-      await expect(handler({ directoryKey: ownKey, automation }))
+      await expect(handler.set({ directoryKey: ownKey, automation }))
         .resolves.toEqual({ directoryKey: ownKey, automation });
+      await expect(handler.listHeldWakeups({ directoryKey: ownKey }))
+        .resolves.toEqual({ directoryKey: ownKey, wakeups: [] });
+      await handler.resolveHeldWakeups({ directoryKey: ownKey, resolutions });
+      expect(listProjectHeldWakeupsRegistry).toHaveBeenCalledWith(ownKey);
+      expect(resolveProjectHeldWakeupsRegistry).toHaveBeenCalledWith({ directoryKey: ownKey, resolutions });
+      // The peer's request is validated as this instance's own window's is.
+      await expect(handler.listHeldWakeups({ directoryKey: "workspace:/x" })).rejects.toThrow("Directories project");
+      await expect(handler.resolveHeldWakeups({ directoryKey: ownKey, resolutions: [{ entryId: "held-1" }] }))
+        .rejects.toThrow("send or discard");
+      expect(resolveProjectHeldWakeupsRegistry).toHaveBeenCalledTimes(1);
 
       expect(setDirectoryForgeAutomationOverlay)
         .toHaveBeenCalledWith(expect.objectContaining({ directoryKey: ownKey, automation }));

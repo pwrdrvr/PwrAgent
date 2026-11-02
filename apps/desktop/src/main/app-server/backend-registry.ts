@@ -123,6 +123,8 @@ import {
   type ProjectHeldWakeupSource,
   type ResolveProjectHeldWakeupsRequest,
   type ResolveProjectHeldWakeupsResponse,
+  type ListProjectHeldWakeupsRequest,
+  type ListProjectHeldWakeupsResponse,
   type SetProjectForgeAutomationRequest,
   type SetProjectForgeAutomationResponse,
 } from "@pwragent/shared";
@@ -2227,9 +2229,18 @@ type ThreadPrWatchesPeerHandler = (
   request: import("@pwragent/shared").FederationThreadPrWatchesRequestV1,
 ) => Promise<import("@pwragent/shared").ThreadPrWatchesResponse>;
 
-type ProjectForgeAutomationHandler = (
-  request: Omit<SetProjectForgeAutomationRequest, "federationTarget">,
-) => Promise<SetProjectForgeAutomationResponse>;
+/** The desktop app-server service's owner-side Forge Automation requests. */
+type ProjectForgeAutomationHandler = {
+  set(
+    request: Omit<SetProjectForgeAutomationRequest, "federationTarget">,
+  ): Promise<SetProjectForgeAutomationResponse>;
+  listHeldWakeups(
+    request: Omit<ListProjectHeldWakeupsRequest, "federationTarget">,
+  ): Promise<ListProjectHeldWakeupsResponse>;
+  resolveHeldWakeups(
+    request: Omit<ResolveProjectHeldWakeupsRequest, "federationTarget">,
+  ): Promise<ResolveProjectHeldWakeupsResponse>;
+};
 
 type ThreadPullRequestRefreshHandler = (
   request: RefreshOwnedThreadPullRequestsRequest,
@@ -12764,19 +12775,17 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * Save one of this instance's projects' Forge Automation through the
-   * desktop app-server service, which stores it and applies the change.
+   * The desktop app-server service, which validates, stores and applies a
+   * peer's Forge Automation requests for this instance's projects.
    * Federation uses this mediator so its runtime does not import the IPC
    * module.
    */
-  async setOwnedProjectForgeAutomation(
-    request: Omit<SetProjectForgeAutomationRequest, "federationTarget">,
-  ): Promise<SetProjectForgeAutomationResponse> {
+  ownedProjectForgeAutomation(): ProjectForgeAutomationHandler {
     const handler = this.projectForgeAutomationHandler;
     if (!handler) {
       throw new Error("Forge Automation service is not available yet.");
     }
-    return await handler(request);
+    return handler;
   }
 
   setThreadPullRequestRefreshHandler(

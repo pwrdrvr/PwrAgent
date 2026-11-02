@@ -303,11 +303,6 @@ import {
   type UpdateThreadExpectedBranchRequest,
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
-import {
-  assertProjectHeldWakeupResolutions,
-  readProjectForgeDirectoryKey,
-} from "../app-server/project-forge-automation-requests";
-import { resolveProjectForgeAutomation } from "@pwragent/shared";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { threadFamilyPricingForPeer } from "../app-server/thread-family-pricing";
@@ -7474,33 +7469,17 @@ function localBackendOperations(): FederationBackendOperations {
       // The router already required the viewer's turn_control grant.
       return await getDesktopBackendRegistry().manageThreadPrWatchesForPeer(request);
     },
-    // A peer changes this instance's project, which this instance stores
-    // and enforces; the router already required turn_control.
+    // A peer's requests for this instance's projects. The router already
+    // required turn_control; the service validates and applies them exactly
+    // as it does this instance's own window's.
     async setProjectForgeAutomation(request) {
-      const directoryKey = readProjectForgeDirectoryKey(request);
-      if (!request.automation || typeof request.automation !== "object") {
-        throw new Error("Forge Automation settings are required.");
-      }
-      return await getDesktopBackendRegistry().setOwnedProjectForgeAutomation({
-        directoryKey,
-        automation: resolveProjectForgeAutomation(request.automation),
-      });
+      return await getDesktopBackendRegistry().ownedProjectForgeAutomation().set(request);
     },
     async listProjectHeldWakeups(request) {
-      const directoryKey = readProjectForgeDirectoryKey(request);
-      return {
-        directoryKey,
-        wakeups: getDesktopBackendRegistry().listProjectHeldWakeups(directoryKey),
-      };
+      return await getDesktopBackendRegistry().ownedProjectForgeAutomation().listHeldWakeups(request);
     },
-    // The registry answers not_found for an entry another project holds.
     async resolveProjectHeldWakeups(request) {
-      const directoryKey = readProjectForgeDirectoryKey(request);
-      assertProjectHeldWakeupResolutions(request.resolutions);
-      return await getDesktopBackendRegistry().resolveProjectHeldWakeups({
-        directoryKey,
-        resolutions: request.resolutions,
-      });
+      return await getDesktopBackendRegistry().ownedProjectForgeAutomation().resolveHeldWakeups(request);
     },
     async reorderThreadPins(
       request: ReorderThreadPinsRequest,

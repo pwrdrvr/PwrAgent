@@ -287,8 +287,10 @@ export class RemoteThreadSummaryCache {
       const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown };
       const sourceMethod = event.notification.method === "navigation/invalidated"
         ? params?.sourceMethod : event.notification.method;
-      // Directory Git chips are not part of pinned thread rows or membership.
-      if (sourceMethod === "navigation/directoryGitStatus/updated") return;
+      // Directory Git chips and a project's Forge Automation are not part of
+      // pinned thread rows or membership.
+      if (sourceMethod === "navigation/directoryGitStatus/updated"
+        || sourceMethod === "directory/forgeAutomation/updated") return;
       if (sourceMethod === "navigation/threadGitWorkingState/updated" && typeof params?.worktreePath === "string"
         && this.hasCompletePinnedMembership(instanceId)
         && !this.cache.get(instanceId)?.threads.some((thread) => navigationWorkingStatePath(thread) === params.worktreePath)) return;
