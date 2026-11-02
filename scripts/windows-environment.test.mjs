@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -26,6 +26,11 @@ it("uses the shared bootstrap for Windows setup and every Windows action", () =>
 
 describe.skipIf(process.platform !== "win32")("Windows environment bootstrap", () => {
   function fixture({ existingVersion, npmFailure, nvmFailure, nativePnpm = false, nodeVersion = process.versions.node, missingExecutable = false } = {}) {
+    const started = performance.now();
+    const probe = (phase, details = {}) => writeSync(2, `[windows-bootstrap] ${JSON.stringify({
+      phase, elapsedMs: Math.round(performance.now() - started), ...details,
+    })}\n`);
+    probe("fixture-setup-start", { pid: process.pid, at: new Date().toISOString(), nativePnpm, existingVersion, npmFailure, nvmFailure, missingExecutable });
     const directory = mkdtempSync(path.join(os.tmpdir(), "pwragent bootstrap "));
     directories.push(directory);
     const scripts = path.join(directory, "scripts");
@@ -33,7 +38,21 @@ describe.skipIf(process.platform !== "win32")("Windows environment bootstrap", (
     const nodeDirectory = path.join(nvmHome, `v${nodeVersion}`);
     const bin = path.join(directory, "bin");
     for (const entry of [scripts, nodeDirectory, bin]) mkdirSync(entry, { recursive: true });
-    copyFileSync(path.join(root, "scripts/windows-environment.ps1"), path.join(scripts, "windows-environment.ps1"));
+    // Instrument the copied script, retaining the actual bootstrap and its exit
+    // checks. The phase file survives a killed PowerShell process.
+    let bootstrap = readFileSync(path.join(root, "scripts/windows-environment.ps1"), "utf8");
+    for (const [needle, phase] of [
+      ["  nvm install $nodeVersion", "nvm-install"],
+      ["nvm use $nodeVersion", "nvm-use"],
+      ['$actualNodeVersion = & (Join-Path $nodeDirectory "node.exe") --version', "node-version"],
+      ["$actualPnpmVersion = if ($pnpmCommand) { & $pnpmCommand --version }", "existing-pnpm-version"],
+      ['  & $npmCommand install --global --prefix $pnpmPrefix "pnpm@$pnpmVersion"', "npm-install"],
+      ["  $actualPnpmVersion = & $pnpmCommand --version", "installed-pnpm-version"],
+    ]) {
+      if (bootstrap.split(needle).length !== 2) throw new Error(`Missing or ambiguous bootstrap probe: ${phase}`);
+      bootstrap = bootstrap.replace(needle, `Write-FixturePhase '${phase}-start'\n${needle}\nWrite-FixturePhase '${phase}-complete'`);
+    }
+    writeFileSync(path.join(scripts, "windows-environment.ps1"), bootstrap);
     try {
       linkSync(process.execPath, path.join(nodeDirectory, "node.exe"));
     } catch {
@@ -73,14 +92,27 @@ public class PnpmFixture {
   }
 }
 '@`);
+      probe("compile-start");
       const compiled = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", compileScript], { encoding: "utf8", timeout: 20_000 });
+      probe("compile-complete", { status: compiled.status, error: compiled.error?.code });
       expect(compiled.status, compiled.stderr).toBe(0);
     }
     // Execute the actual configured setup, from a path containing spaces, with
     // no Node, npm, pnpm, or Corepack inherited through PATH.
     const setup = environment.match(/\[setup\.win32\]\s*script = '''([\s\S]*?)'''/)[1];
-    writeFileSync(path.join(directory, "run.ps1"), setup);
+    const install = "& $pnpmCommand install";
+    if (setup.split(install).length !== 2) throw new Error("Missing or ambiguous setup install probe");
+    const instrumentedSetup = setup.replace(install, `Write-FixturePhase 'pnpm-install-start'\n${install}\nWrite-FixturePhase 'pnpm-install-complete'`);
+    writeFileSync(path.join(directory, "run.ps1"), `function Write-FixturePhase($phase) {
+  [IO.File]::AppendAllText($env:BOOTSTRAP_PHASES, "$([DateTime]::UtcNow.ToString('o')) $phase\`n")
+}
+Write-FixturePhase 'run-start'
+${instrumentedSetup}
+Write-FixturePhase 'run-complete'
+`);
     const trace = path.join(directory, "trace.txt");
+    const phases = path.join(directory, "phases.txt");
+    probe("powershell-start", { at: new Date().toISOString() });
     const result = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(directory, "run.ps1")], {
       cwd: directory,
       encoding: "utf8",
@@ -91,10 +123,16 @@ public class PnpmFixture {
         NVM_HOME: nvmHome,
         NVM_SYMLINK: path.join(directory, "missing symlink"),
         BOOTSTRAP_TRACE: trace,
+        BOOTSTRAP_PHASES: phases,
         BOOTSTRAP_PNPM_SOURCE: source,
         BOOTSTRAP_NPM_FAILURE: npmFailure ? "1" : "",
       },
     });
+    probe("powershell-complete", { status: result.status, signal: result.signal, error: result.error?.code });
+    for (const line of (existsSync(phases) ? readFileSync(phases, "utf8") : "").trim().split(/\r?\n/)) {
+      if (line) probe("child-phase", { record: line });
+    }
+    if (existsSync(trace)) probe("stub-trace", { trace: readFileSync(trace, "utf8") });
     if (result.error) throw result.error;
     return { ...result, trace: existsSync(trace) ? readFileSync(trace, "utf8") : "" };
   }
