@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { writeSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { GitDirectoryService } from "../app-server/git-directory-service";
 import { runGitCommand } from "../app-server/git-executable";
@@ -10,12 +11,18 @@ describe("worktree creation with bundled Git LFS", () => {
   it.each(["detached", "attached"] as const)("hydrates LFS content in a new %s worktree and rolls it back", async (worktreeBranchMode) => {
     const started = performance.now();
     const phases: Record<string, number> = {};
+    let activePhase: string | undefined;
+    const report = (event: string) => writeSync(2, `[git-worktree-lfs-phases] ${JSON.stringify({
+      mode: worktreeBranchMode, event, total: Math.round(performance.now() - started), activePhase, phases,
+    })}\n`);
     const measure = async <T>(label: string, run: () => Promise<T>): Promise<T> => {
       const start = performance.now();
+      activePhase = label;
       try {
         return await run();
       } finally {
         phases[label] = Math.round(performance.now() - start);
+        activePhase = undefined;
       }
     };
     const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-lfs-")));
@@ -34,7 +41,10 @@ describe("worktree creation with bundled Git LFS", () => {
     };
     let gitCall = 0;
     const git = async (cwd: string, args: string[]) =>
-      (await measure(`git-${++gitCall}-${args[0]}`, () => runGitCommand(cwd, args, { env }))).stdout.trim();
+      (await measure(`git-${++gitCall}-${args[0] === "-c" ? args[2] : args[0]}`, () => runGitCommand(cwd, args, { env }))).stdout.trim();
+    // Report progress before Vitest's timeout, even if a command never settles.
+    const progress = setTimeout(() => report("slow"), 4_000);
+    progress.unref();
     try {
       await mkdir(repo);
       await writeFile(env.GIT_CONFIG_GLOBAL, "");
@@ -83,8 +93,12 @@ describe("worktree creation with bundled Git LFS", () => {
       expect(await git(repo, ["status", "--porcelain"])).toBe("");
       expect(await readFile(path.join(repo, "asset.bin"))).toEqual(payload);
     } finally {
-      await rm(root, { recursive: true, force: true });
-      console.log("[git-worktree-lfs-phases]", JSON.stringify({ mode: worktreeBranchMode, total: Math.round(performance.now() - started), phases }));
+      try {
+        await measure("cleanup", () => rm(root, { recursive: true, force: true }));
+      } finally {
+        clearTimeout(progress);
+        report("complete");
+      }
     }
   });
 });
