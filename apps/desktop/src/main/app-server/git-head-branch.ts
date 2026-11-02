@@ -42,23 +42,18 @@ async function readSmallFile(
 }
 
 async function hasGitAdministrativeBoundary(directory: string, signal?: AbortSignal): Promise<boolean> {
-  const headPath = path.join(directory, "HEAD");
   signal?.throwIfAborted();
+  let head: Awaited<ReturnType<typeof lstat>>;
   try {
-    // Git accepts a symbolic-link HEAD by its link text, so even a dangling
-    // link can mark a bare repository. stat would report it missing.
-    if ((await lstat(headPath)).isSymbolicLink()) {
-      signal?.throwIfAborted();
-      return true;
-    }
+    head = await lstat(path.join(directory, "HEAD"));
   } catch (error) {
     signal?.throwIfAborted();
     return !isMissing(error);
   }
   signal?.throwIfAborted();
-  const head = await readSmallFile(headPath, 4096, signal);
-  if (!head) return true;
-  if (head.kind === "missing") return false;
+  // Git accepts a symbolic-link HEAD by its link text, so even a dangling
+  // link can mark a bare repository. stat would report it missing.
+  if (!head.isFile()) return true;
   // Bare repositories own objects here; linked-worktree administrative
   // directories point at their common repository. Neither may be skipped
   // while discovering an enclosing checkout.
