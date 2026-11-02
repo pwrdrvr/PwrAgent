@@ -244,6 +244,11 @@ type RunningTurn = {
   /** Claude turn ids are UUIDv4 and carry no time, so report the start. */
   startedAt: number;
   entries: Map<string, AppServerThreadEntry>;
+  /**
+   * A hash of each entry as it was last saved. The turn's end saves only the
+   * entries that changed since, then one record of the turn's status.
+   */
+  savedEntries: Map<string, string>;
   started?: boolean;
   /** Claude began this turn itself, answering a settled task. */
   followUp?: boolean;
@@ -433,11 +438,16 @@ function claudePromptUuid(turn: RunningTurn): NonNullable<SDKUserMessage["uuid"]
   return turn.turnId as NonNullable<SDKUserMessage["uuid"]>;
 }
 
+/** An entry's saved content, apart from the status its turn's end record supplies. */
+function claudeSavedEntryHash(entry: AppServerThreadEntry): string {
+  return createHash("sha256").update(JSON.stringify({ ...entry, turn: entry.turn?.id })).digest("base64");
+}
+
 /** A session read before the turn has no baseline yet; the caller sets it. */
 function claudeTurn(session?: ClaudeSession, followUp = false): RunningTurn {
   return {
     ended: claudeDeferred(),
-    turnId: randomUUID(), startedAt: Date.now(), entries: new Map(), pendingSteers: new Set(),
+    turnId: randomUUID(), startedAt: Date.now(), entries: new Map(), savedEntries: new Map(), pendingSteers: new Set(),
     completedMessageText: new Map(), pendingReports: new Map(), hasCompletedToolActivity: false, fileDiffs: [],
     artifactCalls: new Map(), lastResultSeq: 0,
     usageBaseline: session?.modelUsage, needsUsageBaseline: Boolean(session?.sdkSessionId) && !session?.modelUsage,
@@ -1152,7 +1162,7 @@ export class ClaudeBackend {
       } });
     }
     turn.entries.set(user.id, user);
-    await this.store.append(threadId, [user]);
+    await this.appendTurnEntries(threadId, turn, [user]);
     turn.started = true;
     await this.emit({ method: "turn/started", params: {
       threadId, turn: { id: turn.turnId, status: "in_progress", startedAt: turn.startedAt },
@@ -1166,11 +1176,12 @@ export class ClaudeBackend {
   /** Fail a turn that never reached its query. */
   private async failTurn(threadId: string, turn: RunningTurn, failure: string): Promise<void> {
     this.sessions.get(threadId)?.accountChecked.resolve();
+    const end = { turnId: turn.turnId, status: "failed" as const, startedAt: turn.startedAt };
     for (const entry of turn.entries.values()) {
       entry.turn = { id: turn.turnId, status: "failed", startedAt: turn.startedAt };
     }
     try {
-      await this.store.append(threadId, [...turn.entries.values()]);
+      await this.store.append(threadId, this.unsavedTurnEntries(turn), end);
       await this.emit({ method: "turn/failed", params: {
         threadId, turnId: turn.turnId,
         turn: { id: turn.turnId, status: "failed", startedAt: turn.startedAt, error: { message: failure } },
@@ -1178,6 +1189,22 @@ export class ClaudeBackend {
     } finally {
       turn.ended.resolve();
     }
+  }
+
+  /** Save entries of the open turn, and remember what was saved. */
+  private async appendTurnEntries(threadId: string, turn: RunningTurn, entries: AppServerThreadEntry[]): Promise<void> {
+    // Hash before the write: a change made while it runs is saved again at the turn's end.
+    const hashes = entries.map((entry) => [entry.id, claudeSavedEntryHash(entry)] as const);
+    await this.store.append(threadId, entries);
+    for (const [id, hash] of hashes) turn.savedEntries.set(id, hash);
+  }
+
+  /**
+   * The turn's entries whose latest content was never saved: a message still
+   * streaming when the turn ended, or an entry changed after its last save.
+   */
+  private unsavedTurnEntries(turn: RunningTurn): AppServerThreadEntry[] {
+    return [...turn.entries.values()].filter((entry) => turn.savedEntries.get(entry.id) !== claudeSavedEntryHash(entry));
   }
 
   private async emit(notification: AgentEvent["notification"]): Promise<void> {
@@ -1554,11 +1581,14 @@ export class ClaudeBackend {
     const cancelled = outcome.cancelled || turn.interrupted === true;
     let { failure } = outcome;
     const status = cancelled ? "cancelled" : failure ? "failed" : "completed";
+    const end = { turnId, status, startedAt: turn.startedAt, completedAt: Date.now() } as const;
+    // A live read and a task row that outlives the turn use these stamps.
     for (const entry of turn.entries.values()) {
-      entry.turn = { id: turnId, status, startedAt: turn.startedAt, completedAt: Date.now() };
+      entry.turn = { id: turnId, status, startedAt: end.startedAt, completedAt: end.completedAt };
     }
     try {
-      await this.store.append(threadId, [...turn.entries.values()]);
+      // One record carries the status; only content never saved is written again.
+      await this.store.append(threadId, this.unsavedTurnEntries(turn), end);
       await this.saveSessionMetadata(live);
     } catch (error) {
       failure = `Could not save Claude history: ${error instanceof Error ? error.message : String(error)}`;
@@ -1722,8 +1752,12 @@ export class ClaudeBackend {
         id: outputId, kind: entry.details[0].kind, label: `${entry.summary} output`, markdown: output, status: entry.status,
       }];
     }
-    if (row.turnId !== live.turn?.turnId) live.toolRows.delete(entry.id);
-    await this.store.append(threadId, [entry]);
+    if (live.turn && row.turnId === live.turn.turnId) {
+      await this.appendTurnEntries(threadId, live.turn, [entry]);
+    } else {
+      live.toolRows.delete(entry.id);
+      await this.store.append(threadId, [entry]);
+    }
     await this.emit({ method: "item/completed", params: { threadId, turnId: row.turnId, item: claudeActivityItem(entry, output) } });
   }
 
@@ -2140,7 +2174,7 @@ export class ClaudeBackend {
         type: "message", id: message.uuid, role: "assistant", text: message.content, turn: { id: turnId },
       };
       turn.entries.set(entry.id, entry);
-      await this.store.append(threadId, [entry]);
+      await this.appendTurnEntries(threadId, turn, [entry]);
       await this.emit({ method: "item/completed", params: {
         threadId, turnId, item: { id: entry.id, type: "agentMessage", text: entry.text },
       } });
@@ -2157,7 +2191,7 @@ export class ClaudeBackend {
         turn.completedMessageText.set(message.message.id, prior + text);
         const entry: AppServerThreadMessageEntry = { type: "message", id: message.message.id, role: "assistant", text: prior + text, turn: { id: turnId } };
         turn.entries.set(entry.id, entry);
-        await this.store.append(threadId, [entry]);
+        await this.appendTurnEntries(threadId, turn, [entry]);
         await this.emit({ method: "item/completed", params: { threadId, turnId, item: { id: entry.id, type: "agentMessage", text: entry.text } } });
       }
       for (const block of message.message.content) {
@@ -2197,7 +2231,7 @@ export class ClaudeBackend {
         if (CLAUDE_ARTIFACT_TOOLS.has(block.name)) turn.artifactCalls.set(block.id, claudeArtifactAction(block.name, input));
         // A task this call starts can outlive the turn.
         live.toolRows.set(block.id, { entry: activity, turnId });
-        await this.store.append(threadId, [activity]);
+        await this.appendTurnEntries(threadId, turn, [activity]);
         const item = {
           id: block.id, status: "in_progress",
           ...(command !== undefined ? { type: "commandExecution", command }
@@ -2282,7 +2316,7 @@ export class ClaudeBackend {
             status: entry.status,
           }];
         }
-        await this.store.append(threadId, [entry]);
+        await this.appendTurnEntries(threadId, turn, [entry]);
         turn.hasCompletedToolActivity = true;
         if (launchedTask) continue;
         await this.emit({ method: "item/completed", params: { threadId, turnId, item: claudeActivityItem(entry, output, images) } });
@@ -2299,7 +2333,7 @@ export class ClaudeBackend {
       type: "plan", id, createdAt: previous?.createdAt ?? Date.now(), steps, turn: { id: turn.turnId },
     };
     turn.entries.set(id, entry);
-    await this.store.append(threadId, [entry]);
+    await this.appendTurnEntries(threadId, turn, [entry]);
     await this.emit({ method: "turn/plan/updated", params: { threadId, turnId: turn.turnId, plan: { steps } } });
   }
 
@@ -2310,7 +2344,7 @@ export class ClaudeBackend {
       type: "plan", id, createdAt: Date.now(), markdown, steps: [], turn: { id: turn.turnId },
     };
     turn.entries.set(id, entry);
-    await this.store.append(threadId, [entry]);
+    await this.appendTurnEntries(threadId, turn, [entry]);
     await this.emit({ method: "item/completed", params: {
       threadId, turnId: turn.turnId, item: { id, type: "plan", text: markdown },
     } });
@@ -2336,7 +2370,7 @@ export class ClaudeBackend {
         createdAt: turn.entries.get(id)?.createdAt ?? Date.now(), turn: { id: turn.turnId },
       };
       turn.entries.set(id, entry);
-      await this.store.append(threadId, [entry]);
+      await this.appendTurnEntries(threadId, turn, [entry]);
     };
     if (message.type === "assistant" || message.type === "stream_event") {
       // An intermediate response limit can trigger the CLI's automatic
@@ -2462,7 +2496,7 @@ export class ClaudeBackend {
       turn: { id: turnId },
     };
     turn.entries.set(entry.id, entry);
-    await this.store.append(threadId, [entry]);
+    await this.appendTurnEntries(threadId, turn, [entry]);
     await this.emit({ method: "item/completed", params: { threadId, turnId, item: {
       id: entry.id, type: "exitedReviewMode", review: entry.review, createdAt: entry.createdAt,
       data: { reviewOutput: output, reviewer, ...(context ? { context } : {}) },
@@ -2872,7 +2906,7 @@ export class ClaudeBackend {
         message: { role: "user", content } });
       // The message is already sent; turn completion persists every entry,
       // so an early-write failure must not report the steer as rejected.
-      await this.store.append(params.threadId, [entry]).catch(() => {});
+      await this.appendTurnEntries(params.threadId, turn, [entry]).catch(() => {});
       await this.emit({ method: "item/completed", params: {
         threadId: params.threadId, turnId: turn.turnId,
         item: {
