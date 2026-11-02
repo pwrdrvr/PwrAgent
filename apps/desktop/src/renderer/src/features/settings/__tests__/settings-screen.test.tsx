@@ -1597,7 +1597,7 @@ describe("SettingsScreen", () => {
     });
   });
 
-  it("leaves calm motion off by default and switches it through the appearance controller", () => {
+  it("leaves calm motion off by default and switches it through the appearance controller", async () => {
     const controller: AppearanceController = {
       appearance: {
         theme: "system",
@@ -1629,7 +1629,9 @@ describe("SettingsScreen", () => {
 
     const toggle = screen.getByRole("switch", { name: "Calm motion" });
     expect(toggle).not.toBeChecked();
-    fireEvent.click(toggle);
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
     // The controller owns the write and the live `<html data-motion>`
     // flip, like every other appearance axis.
     expect(controller.setCalmMotion).toHaveBeenCalledWith(true);
