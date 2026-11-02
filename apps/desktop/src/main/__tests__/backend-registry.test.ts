@@ -49189,8 +49189,9 @@ script = "printf setup"
     it("leaves an operator-started Claude prompt without an origin and keeps the turn's routing", async () => {
       const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-registry-"));
       const finish = Promise.withResolvers<void>();
+      const firstPromptRead = Promise.withResolvers<void>();
+      const turnFinished = Promise.withResolvers<AgentEvent>();
       const prompts: Array<{ uuid?: string }> = [];
-      const events: AgentEvent[] = [];
       const registry = new DesktopBackendRegistry({
         codexClient: new MockBackendClient({}),
         overlayStore: createOverlayStoreMock(),
@@ -49206,6 +49207,7 @@ script = "printf setup"
             const input = prompt[Symbol.asyncIterator]();
             async function* messages(): AsyncGenerator<ClaudeMessage> {
               prompts.push((await input.next()).value);
+              firstPromptRead.resolve();
               yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
               await finish.promise;
               prompts.push((await input.next()).value);
@@ -49217,17 +49219,25 @@ script = "printf setup"
           },
         },
       });
-      registry.onEvent((event) => { events.push(event); });
+      // Wait on the turn's own end, not wall time. Ending it saves the
+      // session through about a dozen file operations, which took over a
+      // second on a loaded Windows runner.
+      registry.onEvent((event) => {
+        if (["turn/completed", "turn/failed", "turn/cancelled"].includes(event.notification.method)) turnFinished.resolve(event);
+      });
       try {
         const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
         const identity = { backend: "claude" as const, threadId };
         const started = await registry.startTurn({ ...identity, input: [{ type: "text", text: "Start" }] });
-        await vi.waitFor(() => expect(prompts).toHaveLength(1));
+        await firstPromptRead.promise;
+        expect(prompts).toHaveLength(1);
         await expect(registry.steerTurn({ ...identity, expectedTurnId: started.turnId, requestId: "telegram-steer-1",
           input: [{ type: "text", text: "Course correct from Telegram" }] }, steererOrigin))
           .resolves.toMatchObject({ disposition: "steered", turnId: started.turnId });
         finish.resolve();
-        await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+        await expect(turnFinished.promise).resolves.toMatchObject({
+          notification: { method: "turn/completed", params: { turnId: started.turnId } },
+        });
 
         const replay = await registry.readThread(identity);
         const firstPrompt = replay.replay.messages.find((message) => message.text === "Start");
