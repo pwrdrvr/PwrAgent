@@ -78,11 +78,10 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
     } else if (request.method === "thread/list") {
       result = { data: [...threads.values()].map(wire), nextCursor: null, backwardsCursor: null };
     } else if (request.method === "thread/name/set") {
+      // Stored and returned by reads and listings. No notification echoes it,
+      // so every name event the suite sees comes from the owner itself.
       const thread = threads.get(String(params.threadId));
-      if (thread) {
-        thread.name = String(params.name);
-        queueMicrotask(() => this.notify("thread/name/updated", { threadId: thread.id, threadName: thread.name }));
-      }
+      if (thread) thread.name = String(params.name);
     } else if (request.method === "turn/start") {
       const thread = threads.get(String(params.threadId));
       const input = params.input as Array<{ type: string; text?: string }> | undefined;

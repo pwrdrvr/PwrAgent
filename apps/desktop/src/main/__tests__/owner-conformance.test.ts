@@ -16,7 +16,12 @@ import {
 } from "../federation/federation-backend-bridge";
 import { FederationRouter } from "../federation/federation-router";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
-import { DesktopFederationRuntime, federationEventClassForMethod, unsequencedFederationEventPayload } from "../federation/federation-runtime";
+import {
+  DesktopFederationRuntime,
+  federationEventClassForMethod,
+  navigationInvalidationForLocalEvent,
+  unsequencedFederationEventPayload,
+} from "../federation/federation-runtime";
 import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../app-server/desktop-overlay-store";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -88,13 +93,16 @@ async function startDesktopOwner(): Promise<OwnerHost> {
     resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [] });
   desktopOwner.registry = registry;
   const events: AgentEvent[] = [];
-  // The federation runtime forwards these classes to a subscribed viewer in
-  // this projection; the rest of its fan-out is per-subscriber routing.
-  const stopEvents = registry.onEvent((event) => {
+  // What the federation runtime sends a viewer subscribed to every thread in
+  // these classes; the rest of its fan-out is per-subscriber routing.
+  const forward = (event: AgentEvent): void => {
+    const invalidation = navigationInvalidationForLocalEvent(event);
+    if (invalidation) forward(invalidation);
     if (EVENT_CLASSES.includes(federationEventClassForMethod(event.notification.method))) {
       events.push(unsequencedFederationEventPayload(projectThreadDisplayEvent(event)));
     }
-  });
+  };
+  const stopEvents = registry.onEvent(forward);
   const router = new FederationRouter({ localInstanceId: "desktop-owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
   const methods = new Set<string>();
   const registerHandler = router.registerHandler.bind(router);
