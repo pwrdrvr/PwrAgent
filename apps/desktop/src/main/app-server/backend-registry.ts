@@ -47503,7 +47503,7 @@ export class DesktopBackendRegistry {
       };
     }
 
-    const ref = options.forgeUrl
+    const ref = options.forgeUrl || resolved.forgeResolved
       ? resolved.ref
       : await this.resolveForgePullRequestReference(resolved.ref, summary);
     const pr: PrSummary = {
@@ -47710,7 +47710,7 @@ export class DesktopBackendRegistry {
     args: AttachThreadPullRequestToolArgs,
     summary: ThreadInspectionSummary,
   ): Promise<
-    | { ok: true; ref: PullRequestReferenceIdentity }
+    | { ok: true; ref: PullRequestReferenceIdentity; forgeResolved?: boolean }
     | { ok: false; message: string }
   > {
     const parsedUrl = parsePullRequestReferenceUrl(args.url);
@@ -47786,6 +47786,16 @@ export class DesktopBackendRegistry {
     }
 
     const inferredRepositories = await this.inferPullRequestRepositories(summary);
+    if (inferredRepositories.length > 1 && this.pullRequestReferenceResolver) {
+      const resolvedRepositories = await this.resolveInferredPullRequestRepositories(
+        inferredRepositories,
+        number,
+        summary,
+      );
+      if (resolvedRepositories.length === 1) {
+        return { ok: true, ref: resolvedRepositories[0]!, forgeResolved: true };
+      }
+    }
     if (inferredRepositories.length !== 1) {
       return {
         ok: false,
@@ -47804,6 +47814,36 @@ export class DesktopBackendRegistry {
         url: buildPullRequestReferenceUrl({ ...inferred, number }),
       },
     };
+  }
+
+  /**
+   * The PR under each inferred repository, as the forge names it. A checkout
+   * cloned before a rename keeps the old remote, and the forge answers the
+   * old name with the new one, so both names collapse to one repository.
+   * Known renames come from the alias map without a fetch. A name the forge
+   * cannot place keeps its own identity, so the ambiguity stands.
+   */
+  private async resolveInferredPullRequestRepositories(
+    repositories: readonly PullRequestRepositoryRef[],
+    number: number,
+    summary: ThreadInspectionSummary,
+  ): Promise<PullRequestReferenceIdentity[]> {
+    const answers = await Promise.all(repositories.map(async (repository) =>
+      await this.resolveForgePullRequestReference(
+        {
+          ...repository,
+          number,
+          url: buildPullRequestReferenceUrl({ ...repository, number }),
+        },
+        summary,
+      )
+    ));
+    const byKey = new Map<string, PullRequestReferenceIdentity>();
+    for (const answer of answers) {
+      const key = pullRequestRepositoryKey(answer);
+      if (!byKey.has(key)) byKey.set(key, answer);
+    }
+    return [...byKey.values()];
   }
 
   private async inferPullRequestRepositories(
