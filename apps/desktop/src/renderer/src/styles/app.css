@@ -25693,15 +25693,63 @@ a.button {
   margin-top: 12px;
 }
 
+/* Holds the top of the list while its rows scroll past, as the sidebar's
+   project headers do, so a long All list never loses which project a row
+   is in. Bleeds over the body's 12px gutters so the opaque band and its
+   hairline span the rail. */
 .thread-todos-panel__group-title {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  margin: 0 0 6px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 -12px 6px;
+  padding: 0 12px;
+  background: var(--bg-panel);
+  box-shadow: 0 1px 0 var(--border-subtle);
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 600;
   line-height: 16px;
+}
+
+.thread-todos-panel__group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.thread-todos-panel__group-toggle:hover {
+  color: var(--text-secondary);
+}
+
+.thread-todos-panel__group-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* The rail's inline disclosure chevron, as on the Edits tab's groups, sized
+   down to the 11px heading it leads. */
+.thread-todos-panel__group-toggle .live-work-rail__chevron {
+  width: 6px;
+  height: 6px;
+  margin-inline: 1px 2px;
+}
+
+.thread-todos-panel__group-toggle[aria-expanded="false"] .live-work-rail__chevron {
+  transform: rotate(-45deg);
+}
+
+.thread-todos-panel__group-toggle[aria-expanded="true"] .live-work-rail__chevron {
+  transform: rotate(45deg);
 }
 
 .thread-todos-panel__group-name {
@@ -26067,6 +26115,35 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
   align-items: center;
   gap: 6px;
   margin-top: 10px;
+}
+
+/* The To-dos tab fills the rail as a flex column, as the Edits tab does: the
+   title and lens switch stay put over a body that owns the scroll, so the
+   group headers inside it pin to its top edge. */
+.context-panel__section.context-panel__section--todos {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  padding: 0;
+  border-bottom: 0;
+}
+
+.thread-todos-panel__header {
+  flex: 0 0 auto;
+  padding: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* No top padding: a stuck group header pins flush under the lens switch.
+   The first group's own margin gives the resting list its air and scrolls
+   away with it. */
+.thread-todos-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 12px 12px;
 }
 
 .thread-todos-panel__footnote {
