@@ -302,6 +302,26 @@ function applyEventSubscription(params: {
 }
 
 describe("DesktopFederationRuntime", () => {
+  it("identifies local and disconnected navigation owners and falls back to the exact peer ID", () => {
+    const settings = vi.spyOn(desktopSettingsSingleton, "getDesktopSettingsService").mockReturnValue({
+      readFederationConfig: () => ({ instanceLabel: "Fixture Desktop" }),
+    } as unknown as ReturnType<typeof desktopSettingsSingleton.getDesktopSettingsService>);
+    const runtime = new DesktopFederationRuntime();
+    const harness = runtime as unknown as RuntimeHarness;
+    harness.localInstanceId = "pwr_local";
+    const initialized = vi.spyOn(appState, "isAppStateInitialized").mockReturnValue(false);
+    harness.remotePeerDirectory.set("pwr_remote", { id: "pwr_remote", label: "Fixture Laptop", status: "disconnected" });
+    try {
+      expect(runtime.navigationActionOwnerLabel()).toBe("Fixture Desktop (pwr_local, local)");
+      expect(runtime.navigationActionOwnerLabel({ scope: "remote", instanceId: "pwr_remote" }))
+        .toBe("Fixture Laptop (pwr_remote)");
+      expect(runtime.navigationActionOwnerLabel({ scope: "remote", instanceId: "pwr_missing" })).toBe("pwr_missing");
+    } finally {
+      initialized.mockRestore();
+      settings.mockRestore();
+    }
+  });
+
   it("advertises owner permission separately from support and enforces the disabled default", async () => {
     const config: { allowPortForwarding?: boolean } = {};
     const settings = vi.spyOn(desktopSettingsSingleton, "getDesktopSettingsService").mockReturnValue({
