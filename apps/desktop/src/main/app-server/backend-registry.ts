@@ -9242,9 +9242,11 @@ export class DesktopBackendRegistry {
   private readonly usageTurnStartTimes = new Map<string, number>();
   private codexBackendGeneration = 0;
   /**
-   * Bumped by every account or plan change, so discovery keeps the refreshed
-   * account rather than its own older account reply. Quota reads need no
-   * revision: `planLimits.clear` drops every read requested before it.
+   * Bumped whenever the Codex limits are forgotten (an account or plan
+   * change, or a refresh of an account without ChatGPT quotas), so discovery
+   * keeps the refreshed account rather than its own older account reply.
+   * Quota reads need no revision: `planLimits.clear` drops every read
+   * requested before it.
    */
   private codexAccountRevision = 0;
   private codexRateLimitBroadcastTimer?: ReturnType<typeof setTimeout>;
