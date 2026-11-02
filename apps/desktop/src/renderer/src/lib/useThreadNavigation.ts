@@ -8084,7 +8084,7 @@ export function useThreadNavigation(
           submittedFederationTarget,
           localFederationInstanceId,
         ),
-        title: input?.find((item) => item.type === "text")?.text
+        title: buildOptimisticUserMessage(input, submittedAt)?.text
           ?? launchpad.prompt ?? "New thread",
         input: input ?? [],
       };

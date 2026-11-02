@@ -919,6 +919,18 @@ export function Sidebar(props: SidebarProps) {
       order: readNavigationPresentationOrder(props.pagedNavigation?.resources ?? new Map()),
     },
   });
+  const creationRevision = JSON.stringify((props.pendingLaunchpadCreations ?? [])
+    .map((creation) => [creation.operationId, creation.threadKey]));
+  const revealedCreationRevisionRef = useRef(creationRevision);
+  const revealCreation = hoverStableSnapshot.reveal;
+  useLayoutEffect(() => {
+    if (revealedCreationRevisionRef.current === creationRevision) return;
+    revealedCreationRevisionRef.current = creationRevision;
+    // Submitting from the composer bypasses the sidebar's command wrappers.
+    // Reveal each creation/handoff before paint, then let the existing read
+    // fence freeze its landed position. Background arrivals still append.
+    revealCreation(() => undefined);
+  }, [creationRevision, revealCreation]);
   const renderedDirectories = hoverStableSnapshot.value.directories;
   const presentedThreads = hoverStableSnapshot.value.threads;
   const presentedByKey = new Map(presentedThreads.map((thread) => [threadSummaryIdentityKey(thread), thread]));

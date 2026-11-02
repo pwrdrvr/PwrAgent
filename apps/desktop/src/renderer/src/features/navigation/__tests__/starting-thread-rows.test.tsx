@@ -212,12 +212,12 @@ describe("a thread that is still starting", () => {
     { name: "archiving leaves only pins", collapsed: false, hasUnpinned: false, hasKept: true, hasOrdinary: true },
     { name: "no pin is kept at top", collapsed: true, hasUnpinned: true, hasKept: false, hasOrdinary: true },
     { name: "every pin is kept at top", collapsed: false, hasUnpinned: false, hasKept: true, hasOrdinary: false },
-  ])("keeps a starting thread in its final pin position when $name", ({ collapsed, hasUnpinned, hasKept, hasOrdinary }) => {
+  ])("keeps a starting thread in its final pin position under a resting pointer when $name", ({ collapsed, hasUnpinned, hasKept, hasOrdinary }) => {
     const pinnedDirectories = [{ ...directories[0]!, directoryThreadsCollapsed: collapsed }] as NavigationDirectorySummary[];
     const starting = creation();
     const kept = thread("Kept thread", { pinnedRank: String(-(2 ** 40)) });
     const pinned = thread("Pinned thread", { pinnedRank: "1024" });
-    const renderStage = (landed: boolean) => (
+    const renderStage = (landed: boolean, title = "Add a crop tool", ordinaryRank = "1024") => (
       <Sidebar
         backends={[]}
         browseMode="directories"
@@ -229,9 +229,9 @@ describe("a thread that is still starting", () => {
         selectedItemKey={landed ? "codex:Add a crop tool" : starting.selectionKey}
         threads={[
           ...(hasKept ? [kept] : []),
-          ...(hasOrdinary ? [pinned] : []),
+          ...(hasOrdinary ? [{ ...pinned, pinnedRank: ordinaryRank }] : []),
           ...(hasUnpinned ? [thread("Older thread")] : []),
-          ...(landed ? [thread("Add a crop tool", { pinnedRank: "0" })] : []),
+          ...(landed ? [thread("Add a crop tool", { title, pinnedRank: "0" })] : []),
         ]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
@@ -253,8 +253,19 @@ describe("a thread that is still starting", () => {
       expect(screen.queryByText("Directory threads")).not.toBeInTheDocument();
     }
 
+    fireEvent.pointerOver(within(project).getAllByRole("button")[0]!, { pointerType: "mouse" });
     view.rerender(renderStage(true));
     expect(rowNames(project)).toEqual([...before, "Add a crop tool, pinned", ...after]);
+    // A generated title and later page updates must not move the landed row.
+    view.rerender(renderStage(true, "Crop tool implementation"));
+    expect(rowNames(project)).toEqual([...before, "Crop tool implementation, pinned", ...after]);
+    if (hasOrdinary) {
+      // After the command settles, background reordering is frozen again.
+      view.rerender(renderStage(true, "Crop tool implementation", "-1024"));
+      expect(rowNames(project)).toEqual([...before, "Crop tool implementation, pinned", ...after]);
+    }
+    fireEvent.pointerLeave(project.closest<HTMLElement>(".sidebar__scroll-region")!, { pointerType: "mouse" });
+    expect(rowNames(project)).toEqual([...before, ...after, "Crop tool implementation, pinned"]);
     if (!hasUnpinned) expect(screen.queryByText("Directory threads")).not.toBeInTheDocument();
   });
 
@@ -492,6 +503,12 @@ describe("a sub-thread still being written", () => {
 });
 
 describe("pendingThreadTitleLine", () => {
+  it.each(["-", "*", "+", "---", "###", "1."])("skips a pasted Markdown marker (%s) before the title", (marker) => {
+    expect(pendingThreadTitleLine(`${marker}\n\nPrepare dependency updates\nMore context`))
+      .toBe("Prepare dependency updates");
+    expect(pendingThreadTitleLine(marker)).toBe("");
+  });
+
   it("takes the first line that has text", () => {
     expect(pendingThreadTitleLine("\n  First line \nsecond")).toBe("First line");
     expect(pendingThreadTitleLine("   ")).toBe("");
