@@ -3,10 +3,16 @@ import { ForgeReadError, repositoryKey, type ForgeReadArgs, type ForgeReadOperat
 import { parseForgePrRefFromUrl } from "./forge-pr-ref";
 import type { GitHubRepoRef } from "./git-remote";
 import type { ForgeCiClient } from "./forge-ci-client";
-import { resolveForgeArtifactDestination } from "./forge-artifact-destination";
 
 export type ForgeObservation = { pr: PrSummary; fetchedAt: number };
-export type ForgeReadScope = { remotes: GitHubRepoRef[]; attached: PrSummary[]; observations: ForgeObservation[]; branch?: string; directories?: string[] };
+export type ForgeReadScope = {
+  remotes: GitHubRepoRef[];
+  attached: PrSummary[];
+  observations: ForgeObservation[];
+  branch?: string;
+  /** The target thread's own artifact directory; removed with the thread. */
+  artifactDirectory?: string;
+};
 export function repositoryFromPr(url: string): ForgeRepository | undefined {
   const ref = parseForgePrRefFromUrl(url);
   if (ref) return { provider: ref.kind, host: ref.host, owner: ref.owner, repo: ref.repo };
@@ -67,12 +73,7 @@ export class ForgeReadService {
       if (repositories.length !== 1) throw new ForgeReadError("ambiguous_repository", `Select repository from: ${repositories.map(repositoryKey).join(", ")}.`);
       const repository = repositories[0]!;
       if (!this.options.enabled(repository.provider)) throw new ForgeReadError("provider_disabled", `${repository.provider} is disabled in Settings → Git.`);
-      if (operation === "download_ci_artifact") {
-        if (repository.provider !== "github") throw new ForgeReadError("unsupported_provider", "Artifact downloads currently support GitHub Actions only.");
-        const destination = await resolveForgeArtifactDestination(args, scope.directories ?? [], signal);
-        return this.options.ci.execute(operation, repository, args, signal, destination);
-      }
-      return this.options.ci.execute(operation, repository, args, signal);
+      return this.options.ci.execute(operation, repository, args, signal, scope.artifactDirectory);
     }
     const selected = new Set(repositories.map(repositoryKey));
     const matches = (pr: PrSummary) => {

@@ -232,6 +232,30 @@ test("ungranted mutation capabilities and wrong pinned keys fail closed", { time
   assert.deepEqual(reconnected.connection.capabilities, HEADLESS_CAPABILITIES);
 });
 
+test("owner methods require the same grants as on desktop", { timeout: 15000 }, async (t) => {
+  const h = await setup(t);
+  const listenPort = await port();
+  const enroll = async (grants) => {
+    const v = await viewer(decodeFederationInvite((await h.rpc("federation-invite", { port: listenPort })).invite), undefined, "enroll", grants);
+    t.after(() => v.connection.close());
+    return v;
+  };
+  const owner = await enroll(HEADLESS_CAPABILITIES);
+  const created = await owner.call("startThread", { backend: "codex", cwd: h.workspace });
+  const ref = { backend: "codex", threadId: created.threadId };
+  const navigation = await enroll(["thread_navigation"]);
+  assert.equal((await navigation.call("getNavigationQueryPage", { protocol: 2, query: { kind: "lens", lens: "inbox" } })).entries.length, 1);
+  for (const [method, params] of [["getNavigationSelectedDetail", { protocol: 2, ref }], ["getNavigationQueueProjection", { protocol: 2, ref }],
+    ["getNavigationLaunchpadConfig", { protocol: 2, directoryKey: h.workspace }], ["listBackends", {}]]) {
+    await assert.rejects(navigation.call(method, params), /capability/i, `${method} needs thread_detail`);
+  }
+  const detail = await enroll(["thread_navigation", "thread_detail"]);
+  assert.equal((await detail.call("getNavigationSelectedDetail", { protocol: 2, ref })).identity, "present");
+  const noEnvironment = await enroll(HEADLESS_CAPABILITIES.filter((capability) => capability !== "environment_actions"));
+  await assert.rejects(noEnvironment.call("materializeDirectoryLaunchpad", { directoryKey: h.workspace, launchpad: {} }), /capability/i);
+  assert.equal(h.calls().filter((message) => message.method === "thread/start").length, 1, "a refused launchpad creates no thread");
+});
+
 for (const relay of [false, true]) {
   test(`event classes require their own grants over encrypted ${relay ? "relayed" : "direct"} connections`, { timeout: 20000 }, async (t) => {
     const gateway = await setup(t);

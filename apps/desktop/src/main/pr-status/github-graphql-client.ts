@@ -16,6 +16,10 @@ import {
   parsePullRequestProvider,
 } from "./pr-derivations";
 import type { GithubTerminalNode } from "./pr-terminal-details";
+import {
+  hasForgeRepositoryName,
+  recordForgeRepositoryName,
+} from "./forge-repository-names";
 
 const execFileAsync = promisify(execFile);
 const graphqlLog = getMainLogger("pwragent:pr-graphql");
@@ -451,7 +455,7 @@ export function buildBranchPrQuery(refs: BranchRef[]): {
     );
     selections.push(
       `  r${index}: repository(owner: $${owner}, name: $${name}) {`
-      + ` pullRequests(headRefName: $${branch}, first: ${PRS_PER_BRANCH},`
+      + ` nameWithOwner pullRequests(headRefName: $${branch}, first: ${PRS_PER_BRANCH},`
       + ` orderBy: { field: CREATED_AT, direction: DESC },`
       + ` states: [OPEN, MERGED, CLOSED]) { nodes { ...PrStatus } } }`,
     );
@@ -504,7 +508,7 @@ export function buildCommitPrQuery(refs: CommitRef[]): {
     );
     selections.push(
       `  r${index}: repository(owner: $${owner}, name: $${name}) {`
-      + ` object(oid: $${sha}) { ... on Commit {`
+      + ` nameWithOwner object(oid: $${sha}) { ... on Commit {`
       + ` associatedPullRequests(first: ${PRS_PER_BRANCH},`
       + ` orderBy: { field: CREATED_AT, direction: DESC }) { nodes { ...PrStatus } } } } }`,
     );
@@ -520,6 +524,54 @@ ${PR_STATUS_FRAGMENT}`;
 
   return { query, variables };
 }
+
+/**
+ * Build one aliased document that asks what each repository is called now.
+ * GitHub resolves a renamed repository's old owner/name to the repository and
+ * answers with its new `nameWithOwner`.
+ */
+export function buildRepositoryNameQuery(refs: Array<Pick<BranchRef, "owner" | "repo">>): {
+  query: string;
+  variables: Record<string, string | number>;
+} {
+  const variableDecls: string[] = [];
+  const selections: string[] = [];
+  const variables: Record<string, string | number> = {};
+
+  refs.forEach((ref, index) => {
+    const owner = `o${index}`;
+    const name = `n${index}`;
+    variableDecls.push(`$${owner}: String!`, `$${name}: String!`);
+    selections.push(
+      `  r${index}: repository(owner: $${owner}, name: $${name}) { nameWithOwner }`,
+    );
+    variables[owner] = ref.owner;
+    variables[name] = ref.repo;
+  });
+
+  const query = `query ResolveRepositoryNames(${variableDecls.join(", ")}) {
+${selections.join("\n")}
+}`;
+
+  return { query, variables };
+}
+
+/** Remember the name GitHub answered for a repository it was asked about. */
+function recordAnsweredRepositoryName(
+  ref: Pick<BranchRef, "owner" | "repo">,
+  repository: object,
+): void {
+  const { nameWithOwner } = repository as { nameWithOwner?: unknown };
+  if (typeof nameWithOwner === "string") {
+    recordForgeRepositoryName(
+      { host: "github.com", owner: ref.owner, repo: ref.repo },
+      nameWithOwner,
+    );
+  }
+}
+
+/** How long a repository name lookup waits after finding no GitHub token. */
+const REPOSITORY_NAME_TOKEN_RETRY_MS = 60_000;
 
 /** Map one GraphQL PullRequest node onto our shared PrSummary. */
 export function mapGraphqlPrNode(
@@ -792,6 +844,8 @@ export class GithubGraphqlPrClient {
   private failureBackoffUntil = 0;
   private reconnectBypassAvailable = false;
   private lastNetworkReconnectAt = Number.NEGATIVE_INFINITY;
+  private readonly repositoryNameLookups = new Map<string, Promise<void>>();
+  private repositoryNameTokenRetryAt = Number.NEGATIVE_INFINITY;
 
   constructor(options: GithubGraphqlPrClientOptions = {}) {
     this.requestOverride = options.request;
@@ -947,6 +1001,71 @@ export class GithubGraphqlPrClient {
     });
   }
 
+  /**
+   * Ask GitHub what each repository is called now, for the ones it has not
+   * answered since launch. Records answers only; a repository GitHub could not
+   * answer for stays unknown, and callers must treat that as inconclusive.
+   * Concurrent callers share one request per repository, and a missing token
+   * is not retried for a minute: one refresh can repair several PR lists.
+   */
+  async resolveRepositoryNames(
+    refs: Array<Pick<BranchRef, "owner" | "repo">>,
+  ): Promise<void> {
+    const waits: Promise<void>[] = [];
+    const unknown = new Map<string, Pick<BranchRef, "owner" | "repo">>();
+    for (const ref of refs) {
+      if (hasForgeRepositoryName({ host: "github.com", ...ref })) continue;
+      const key = `${ref.owner}/${ref.repo}`.toLowerCase();
+      const pending = this.repositoryNameLookups.get(key);
+      if (pending) waits.push(pending);
+      else unknown.set(key, ref);
+    }
+    if (unknown.size > 0 && this.now() >= this.repositoryNameTokenRetryAt) {
+      const lookup = this.lookUpRepositoryNames([...unknown.values()]);
+      for (const key of unknown.keys()) this.repositoryNameLookups.set(key, lookup);
+      waits.push(lookup.finally(() => {
+        for (const key of unknown.keys()) {
+          if (this.repositoryNameLookups.get(key) === lookup) this.repositoryNameLookups.delete(key);
+        }
+      }));
+    }
+    await Promise.all(waits);
+  }
+
+  private async lookUpRepositoryNames(
+    refs: Array<Pick<BranchRef, "owner" | "repo">>,
+  ): Promise<void> {
+    if (this.deferForFailureBackoff("repository name lookup")) {
+      return;
+    }
+    const token = await this.resolveToken();
+    if (!token) {
+      this.repositoryNameTokenRetryAt = this.now() + REPOSITORY_NAME_TOKEN_RETRY_MS;
+      graphqlLog.debug("skipping repository name lookup: no GitHub token from gh");
+      return;
+    }
+    for (const batch of chunk(refs, this.batchSize)) {
+      const data = await this.runBatchQuery(
+        buildRepositoryNameQuery(batch),
+        token,
+        batch.length,
+        batch,
+      );
+      if (!data) continue;
+      batch.forEach((ref, index) => {
+        const repository = data[`r${index}`];
+        if (repository && typeof repository === "object") {
+          recordAnsweredRepositoryName(ref, repository);
+        } else if (repository === null) {
+          // GitHub answered and knows no repository by this name (deleted, or
+          // no access). It names no other repository either, so the remote's
+          // own name is all there is to match.
+          recordForgeRepositoryName({ host: "github.com", ...ref }, `${ref.owner}/${ref.repo}`);
+        }
+      });
+    }
+  }
+
   private async fetchAliasedPullRequestLists<R extends Pick<BranchRef, "owner" | "repo">>(params: {
     refs: R[];
     label: string;
@@ -999,6 +1118,7 @@ export class GithubGraphqlPrClient {
       answers.forEach(({ ref, repository }) => {
         if (repository) {
           this.notifyRepositoryAccess(ref, "available");
+          recordAnsweredRepositoryName(ref, repository);
         }
       });
       const checkResolutions = await this.resolveCheckContexts(

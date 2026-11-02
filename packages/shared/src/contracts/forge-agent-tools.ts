@@ -19,8 +19,8 @@ export type ForgeAgentToolGroup = (typeof FORGE_AGENT_TOOL_GROUPS)[number];
 
 /**
  * `allow` runs without asking. `auto` runs in a Full Access turn and, except
- * for `approve_merge`, in a Codex Auto turn; otherwise it asks. `ask` always
- * asks. `off` removes the group's tools from threads.
+ * for `approve_merge`, in a Codex or Claude Auto turn; otherwise it asks.
+ * `ask` always asks. `off` removes the group's tools from threads.
  */
 export const FORGE_AGENT_TOOL_ACCESS_LEVELS = ["allow", "auto", "ask", "off"] as const;
 

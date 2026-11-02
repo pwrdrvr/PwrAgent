@@ -53,6 +53,7 @@ const SEARCH_ALIASES: Record<string, string> = {
   merge_pull_request: "github gitlab mr merge request pr pull request merge squash rebase land",
   handoff_task: "delegate delegation child subagent split parallel tasks worktree",
   create_monitor_delegation: "job monitor polling long running command parallel tasks collect results",
+  watch_thread_pull_request: "wake notify stop cancel list watches watching",
   manage_thread_dependencies: "wait waiting prerequisite dependency dependencies dag notify notification continue after turn completion CI PR remind reminder operator todo",
   mutate_thread: "close closing archive restore rename pin lock unlock park freeze model fast priority mode settings",
   rename_current_thread: "rename name title this thread conversation self",

@@ -1,5 +1,15 @@
-import { memo, useState } from "react";
-import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
+import { memo, useEffect, useState } from "react";
+import type {
+  NavigationThreadSummary,
+  PrSummary,
+  ThreadPrWatchHistoryEntry,
+  ThreadPullRequestWatchSummary,
+} from "@pwragent/shared";
+import {
+  buildPullRequestStatusKey,
+  buildThreadIdentityKey,
+  pullRequestMatchesRepositoryKey,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
 import {
@@ -8,13 +18,34 @@ import {
 } from "../../pr-status/DetachPullRequestWarning";
 import { PrChip } from "../../pr-status/PrChip";
 import { openExternalUrl } from "../../../lib/open-external-url";
+import { PullRequestWatchList } from "../../pr-watches/PullRequestWatchList";
+import {
+  canManageThreadPrWatches,
+  canWatchPrCi,
+  resolvePrChipWatch,
+  useThreadAutoFixRepository,
+  useThreadPrWatchIndicatorsContext,
+  useThreadPrWatches,
+} from "../../pr-watches/useThreadPrWatchIndicators";
 import { RailStatusChip, type RailChipTone } from "./RailStatusChip";
 
 type PullRequestsPanelProps = {
-  desktopApi?: Pick<DesktopApi, "detachThreadPullRequest">;
+  desktopApi?: Pick<DesktopApi, "detachThreadPullRequest" | "manageThreadPrWatches">;
   onRefreshNavigation?: () => Promise<void>;
+  /** Backs the Auto-fix row's Turn Off. */
+  onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
   thread: NavigationThreadSummary;
 };
+
+type WatchHistoryState = {
+  threadKey: string;
+  /** The active watch ids it was read against; a change re-reads it. */
+  source: string;
+  /** Undefined when the read failed; the next expand reads again. */
+  entries: readonly ThreadPrWatchHistoryEntry[] | undefined;
+};
+
+const NO_WATCHES: readonly ThreadPullRequestWatchSummary[] = [];
 
 type CheckState = NonNullable<PrSummary["checkState"]>;
 
@@ -29,6 +60,97 @@ type CheckState = NonNullable<PrSummary["checkState"]>;
  */
 export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequestsPanelProps) {
   const [pendingDetachPr, setPendingDetachPr] = useState<PrSummary>();
+  const watchContext = useThreadPrWatchIndicatorsContext();
+  const threadKey = buildThreadIdentityKey(props.thread.source, props.thread.id);
+  // A peer's thread, or any thread in a federation window, runs its watches
+  // on its owner, which projects them onto selected detail. The rail stops
+  // and arms them there when the owner accepts it, else it reads only.
+  const federationWindow = Boolean(readRendererFederationTarget());
+  const ownerLabel = props.thread.federation
+    ? props.thread.federation.instanceLabel
+    : federationWindow
+      ? "the thread's own machine"
+      : undefined;
+  const manageable = canManageThreadPrWatches(watchContext, props.thread);
+  const peerManaged = ownerLabel !== undefined && manageable;
+  const localWatches = ownerLabel === undefined && watchContext
+    ? watchContext.byThreadKey.get(threadKey)?.watches ?? NO_WATCHES
+    : undefined;
+  // Undefined means unknown: no watch UI at all, rather than a false "none".
+  // An owner that accepts control projects every watch, so none sent is none.
+  const watches = ownerLabel !== undefined
+    ? props.thread.activePrWatches ?? (peerManaged ? NO_WATCHES : undefined)
+    : localWatches;
+  const watchIds = watches?.map((watch) => watch.watchId).join(",") ?? "";
+  const autoFixRepository = useThreadAutoFixRepository(props.thread);
+  // The chip reads what the sidebar's chip reads, a peer owner's CI marks
+  // included, so one PR wears one eye in both places.
+  const chipWatches = useThreadPrWatches(props.thread);
+  const canReadHistory = (localWatches !== undefined || peerManaged)
+    && Boolean(props.desktopApi?.manageThreadPrWatches);
+  const ownerTarget = props.thread.federation?.ref.target;
+  // A string, so a detail refresh that rebuilt the target re-reads nothing.
+  const ownerInstanceId = ownerTarget?.scope === "remote" ? ownerTarget.instanceId : undefined;
+  const [openHistory, setOpenHistory] = useState<ReadonlySet<string>>(() => new Set());
+  const [history, setHistory] = useState<WatchHistoryState>();
+  const [historyAttempt, setHistoryAttempt] = useState(0);
+  const historyWanted = canReadHistory
+    && [...openHistory].some((key) => key.startsWith(`${threadKey}|`));
+  const historyCurrent = history?.threadKey === threadKey
+    && history.source === watchIds
+    && history.entries !== undefined;
+  const historyFailed = history?.threadKey === threadKey && history.entries === undefined;
+  useEffect(() => {
+    // History is read on first expand, then again whenever a watch changes.
+    if (!historyWanted || historyCurrent) return;
+    let cancelled = false;
+    const source = watchIds;
+    void props.desktopApi!.manageThreadPrWatches!({
+      action: "history",
+      backend: props.thread.source,
+      threadId: props.thread.id,
+      ...(ownerInstanceId
+        ? { federationTarget: { scope: "remote" as const, instanceId: ownerInstanceId } }
+        : {}),
+      limit: 20,
+    }).then(
+      (response) => {
+        if (cancelled) return;
+        setHistory({ threadKey, source, entries: response.ok ? response.history ?? [] : undefined });
+      },
+      () => {
+        if (!cancelled) setHistory({ threadKey, source, entries: undefined });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    historyWanted,
+    historyCurrent,
+    historyAttempt,
+    watchIds,
+    ownerInstanceId,
+    props.desktopApi,
+    props.thread.source,
+    props.thread.id,
+    threadKey,
+  ]);
+  const historyEntries = history?.threadKey === threadKey ? history.entries : undefined;
+  const toggleHistory = (prKey: string): void => {
+    const key = `${threadKey}|${prKey}`;
+    // An expand after a failed read reads again.
+    if (historyFailed && !openHistory.has(key)) {
+      setHistory(undefined);
+      setHistoryAttempt((attempt) => attempt + 1);
+    }
+    setOpenHistory((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
   // Newest first. `PrSummary` carries no creation timestamp, so sort by PR
   // number (monotonic with creation within a repo); for the rare multi-repo
   // thread, group by repo first so the numbers stay comparable.
@@ -69,6 +191,9 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
             const lifecycle = resolveLifecycleState(pr);
             const isOpen = lifecycle === "open";
             const checkState = resolveCheckState(pr);
+            const statusKey = buildPullRequestStatusKey(pr);
+            const prWatches = watches?.filter((watch) => watch.prKey === statusKey) ?? NO_WATCHES;
+            const chipWatch = resolvePrChipWatch(chipWatches, pr, autoFixRepository);
             return (
               <li key={prKey(pr)} className="rail-card">
                 <p className="rail-card__status-line">
@@ -77,6 +202,7 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
                     showRepoPrefix={false}
                     onOpen={openExternalUrl}
                     withStatusPills
+                    watch={chipWatch}
                     onDetach={requestDetachPr}
                   />
                   {lifecycle === "merged" ? (
@@ -110,6 +236,30 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
                   {prTitle(pr)}
                 </p>
                 <p className="rail-card__meta">{repositoryLabel(pr)}</p>
+                {isOpen && watches !== undefined ? (
+                  <PullRequestWatchList
+                    pr={pr}
+                    watches={prWatches}
+                    autoFix={chipWatch
+                      ? chipWatch.autoFix === true
+                      : pullRequestMatchesRepositoryKey(pr, autoFixRepository)}
+                    autoFixBlocked={chipWatch?.autoFixBlocked}
+                    ownerLabel={ownerLabel}
+                    onStop={manageable && watchContext?.stop
+                      ? async (watch) => await watchContext.stop!(watch, props.thread)
+                      : undefined}
+                    onTurnOffAutoFix={props.onSetThreadPrAutoDispatch
+                      ? () => void props.onSetThreadPrAutoDispatch!(false)
+                      : undefined}
+                    onWatchCi={manageable && watchContext?.watchCi && canWatchPrCi(props.thread, pr)
+                      ? async () => await watchContext.watchCi!(props.thread, pr)
+                      : undefined}
+                    history={historyEntries?.filter((entry) => entry.prKey === statusKey)}
+                    historyFailed={historyFailed}
+                    historyOpen={openHistory.has(`${threadKey}|${statusKey}`)}
+                    onToggleHistory={canReadHistory ? () => toggleHistory(statusKey) : undefined}
+                  />
+                ) : null}
               </li>
             );
           })}

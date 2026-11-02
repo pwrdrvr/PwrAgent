@@ -28,9 +28,8 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { useThreadLinkHoverTarget } from "../../lib/thread-links";
 import { isNativeDragInteractionActive } from "../../lib/native-drag-interaction";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
-import { PrChip } from "../pr-status/PrChip";
 import { findBranchDriftPr, type PrBranchDrift } from "../pr-status/pr-branch-drift";
-import { PrRollupChip } from "../pr-status/PrRollupChip";
+import { ThreadRowPrChip, ThreadRowPrRollupChip } from "./ThreadRowPrChips";
 import { ThreadRowDensityContext } from "./thread-row-density";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
@@ -271,6 +270,8 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   // chips render instantly on app launch and stay in sync without any
   // renderer-side cache.
   const prs = props.thread.prs ?? [];
+  // PR watches reach the chips through ThreadRowPrChips, which read their
+  // context themselves: a watch change must not re-render every row body.
   const density = useContext(ThreadRowDensityContext);
   // What this row reports back to the list that owns it, so the list can keep
   // one handler for every row instead of a closure per row. See `ThreadRowRef`.
@@ -715,7 +716,8 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                 held, so a peek re-renders no row. It sits right of the pin
                 so the hover-only pin button never shifts it. */}
             {density === "minimal" && prs.length > 0 ? (
-              <PrRollupChip
+              <ThreadRowPrRollupChip
+                thread={props.thread}
                 prs={prs}
                 threadTitle={props.thread.title}
                 repoPrefixedUrls={repoPrefixedPrUrls}
@@ -802,8 +804,9 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
             includeLinkedDirectories={props.includeLinkedDirectories}
             linkedDirectoryMode={props.linkedDirectoryMode}
             prChips={prs.map((pr) => (
-              <PrChip
+              <ThreadRowPrChip
                 key={pr.url}
+                thread={props.thread}
                 pr={pr}
                 showRepoPrefix={needsRepoPrefix(props.thread, pr, prs)}
                 branchDrift={branchDrift?.url === pr.url ? branchDrift : undefined}

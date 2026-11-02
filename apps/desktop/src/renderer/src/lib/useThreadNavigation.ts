@@ -1016,6 +1016,9 @@ function threadSummariesEqual(
     left.prAutoDispatchEnabled === right.prAutoDispatchEnabled &&
     JSON.stringify(left.prAutoDispatchPending ?? null) ===
       JSON.stringify(right.prAutoDispatchPending ?? null) &&
+    // A peer row's eye comes from its owner's marks.
+    JSON.stringify(left.prCiWatches ?? null) ===
+      JSON.stringify(right.prCiWatches ?? null) &&
     JSON.stringify(left.acpRuntime ?? {}) === JSON.stringify(right.acpRuntime ?? {}) &&
     JSON.stringify(left.workspaceHandoff ?? {}) ===
       JSON.stringify(right.workspaceHandoff ?? {}) &&
@@ -1514,6 +1517,17 @@ function ungroupChildThreadsInLoadedRows(
   return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
+
+/** This machine's federation identity, or undefined when it cannot be read. */
+async function readLocalFederationInstanceId(
+  desktopApi: Pick<DesktopApi, "readFederationHealth"> | undefined,
+): Promise<string | undefined> {
+  try {
+    return (await desktopApi?.readFederationHealth?.())?.health.instanceId;
+  } catch {
+    return undefined;
+  }
+}
 
 function updateSubthreadOrderInLoadedRows(
   snapshot: NavigationLoadedRows | undefined,
@@ -8278,9 +8292,18 @@ export function useThreadNavigation(
         // card. Plain new-thread launchpads have no parent and skip this. Await
         // so the order write commits before the refresh below reads it back.
         if (materializeParentThreadId) {
-          const subthreadOrderTarget = materializeParentThreadInstanceId
-            ? { scope: "remote" as const, instanceId: materializeParentThreadInstanceId }
-            : federationTarget;
+          // The order belongs to the parent's owner. A child started on a peer
+          // names its parent's machine, which is this one when the parent is
+          // local: that write stays here, where this machine's pin of the
+          // new child places it. Federation cannot address this machine.
+          const parentOwnerIsThisMachine = materializeParentThreadInstanceId !== undefined
+            && materializeParentThreadInstanceId === (localFederationInstanceId
+              ?? await readLocalFederationInstanceId(desktopApi));
+          const subthreadOrderTarget = parentOwnerIsThisMachine
+            ? undefined
+            : materializeParentThreadInstanceId
+              ? { scope: "remote" as const, instanceId: materializeParentThreadInstanceId }
+              : federationTarget;
           await insertSubthreadBelowSource(
             materializeParentThreadBackend,
             materializeParentThreadId,

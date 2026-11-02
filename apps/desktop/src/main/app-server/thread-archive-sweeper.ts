@@ -18,6 +18,8 @@ export type ThreadArchiveCandidate = {
   overlay?: ThreadOverlayState;
   /** A sub-agent card on the thread is still pending, running or blocked. */
   activeSubAgent?: boolean;
+  /** A PR watch (watching or dispatching) will wake the thread. */
+  activePrWatch?: boolean;
 };
 
 /** Card statuses that keep housekeeping away from a thread. */
@@ -86,10 +88,12 @@ export function archiveCandidateLastActivity({ thread, overlay }: ThreadArchiveC
     ...(overlay?.worktreeSnapshots ?? []).map((snapshot) => snapshot.restoredAt ?? 0));
 }
 
-export function archiveCandidateProtectionReason({ thread, overlay, activeSubAgent }: ThreadArchiveCandidate): string | undefined {
+export function archiveCandidateProtectionReason({ thread, overlay, activeSubAgent, activePrWatch }: ThreadArchiveCandidate): string | undefined {
   if (thread.isPinned || overlay?.pinnedRank !== undefined) return "Pinned thread";
   if (overlay?.agent) return "Agent thread";
   if (overlay?.queuedAgentChange || overlay?.prAutoDispatchPending) return "Pending work";
+  // The agent asked to be woken by its PR; archiving would strand the wake.
+  if (activePrWatch) return "Watching a PR";
   if (overlay?.scheduledStart?.state === "scheduled") return "Scheduled work";
   if ((overlay?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime)?.executionTarget === "remote") return "Remote execution";
   // The Codex app owns its chat folders' threads; housekeeping leaves them alone.

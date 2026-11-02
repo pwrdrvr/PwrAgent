@@ -18,16 +18,25 @@ import {
   DEFAULT_PROJECT_FORGE_AUTOMATION,
   type BackendSummary,
   type DesktopPwrAgentProfileSummary,
+  type FederationCapability,
   type NavigationDirectorySummary,
   type NavigationThreadSummary,
   type ProjectForgeAutomation,
   type ProjectHeldWakeup,
+  type ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
 import type { FederationThreadTarget } from "../../chrome/federation-thread-targets";
-import type { FederationProjectDirectory } from "../../chrome/useFederationProjectStates";
+import type {
+  CheckFederationTargetProject,
+  FederationProjectDirectory,
+} from "../../chrome/useFederationProjectStates";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { ThreadDependencyIndicatorsContext } from "../../thread-dependencies/useThreadDependencyIndicators";
+import {
+  summarizeThreadPrWatches,
+  ThreadPrWatchIndicatorsContext,
+} from "../../pr-watches/useThreadPrWatchIndicators";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import { useState, type ComponentProps } from "react";
 import type { Editor } from "@tiptap/react";
@@ -8706,6 +8715,177 @@ describe("Sidebar", () => {
     expect(onSelectThread).not.toHaveBeenCalled();
   });
 
+  describe("PR watch menu items", () => {
+    const ciWatch: ThreadPullRequestWatchSummary = {
+      watchId: "watch-ci",
+      backend: "codex",
+      threadId: "thread-1",
+      prKey: "github.com/exampleorg/exampleapp#202",
+      prUrl: "https://github.com/ExampleOrg/ExampleApp/pull/202",
+      prNumber: 202,
+      headSha: "9f2c41a0000000000000000000000000000000000",
+      notifyOn: ["success", "failure"],
+      createdAt: 1,
+      failureHandledByAutoFix: false,
+      kind: "checks",
+      baseline: { outcome: "failure", observedAt: 1, runAttempt: 2 },
+    };
+    const terminalWatch: ThreadPullRequestWatchSummary = {
+      ...ciWatch,
+      watchId: "watch-merge",
+      notifyOn: ["merged", "closed"],
+      createdAt: 2,
+      kind: "terminal",
+      baseline: undefined,
+    };
+
+    function renderWithWatches(
+      watches: ThreadPullRequestWatchSummary[],
+      thread: NavigationThreadSummary = pullRequestThread,
+    ) {
+      const stop = vi.fn(async () => undefined);
+      const askAgentToWatchCi = vi.fn();
+      const watchCi = vi.fn(async () => undefined);
+      render(
+        <ThreadPrWatchIndicatorsContext.Provider value={{
+          byThreadKey: summarizeThreadPrWatches(watches),
+          stop,
+          watchCi,
+          askAgentToWatchCi,
+        }}>
+          <Sidebar
+            backends={backends}
+            browseMode="recents"
+            directories={directories}
+            inboxThreads={[thread]}
+            loading={false}
+            creatingThread={undefined}
+            selectedItemKey="codex:thread-1"
+            threads={[thread]}
+            onBrowseModeChange={() => undefined}
+            onCreateThread={async () => undefined}
+            onDetachPullRequest={async () => undefined}
+            onOpenLaunchpad={async () => undefined}
+            onSelectThread={() => undefined}
+          />
+        </ThreadPrWatchIndicatorsContext.Provider>,
+      );
+      const chip = screen.getByRole("button", { name: /^Open ExampleOrg\/ExampleApp#202 / });
+      fireEvent.contextMenu(chip, { clientX: 48, clientY: 64 });
+      return { chip, stop, askAgentToWatchCi, watchCi };
+    }
+
+    it("lists the stops between copying and detaching, and stops the chosen watch", async () => {
+      const { chip, stop } = renderWithWatches([ciWatch, terminalWatch]);
+      expect(chip).toHaveAccessibleName(
+        "Open ExampleOrg/ExampleApp#202 (ready for review · checks passing) in browser, waiting for CI",
+      );
+      expect(chip.querySelector(".pr-chip__watch")).not.toBeNull();
+      const labels = within(screen.getByRole("menu"))
+        .getAllByRole("menuitem")
+        .map(menuItemLabel);
+      const copy = labels.indexOf("Copy Pull Request URL");
+      expect(labels.slice(copy, copy + 4)).toEqual([
+        "Copy Pull Request URL",
+        "Stop Waiting for CIattempt 2",
+        "Stop Watching for Merge",
+        "Detach Pull Request",
+      ]);
+      expect(labels).not.toContain("Ask Agent to Watch CI");
+      expect(labels).not.toContain("Watch CI");
+
+      await clickElement(screen.getByRole("menuitem", { name: /^Stop Waiting for CI/ }));
+      expect(stop).toHaveBeenCalledWith(ciWatch, expect.objectContaining({ id: "thread-1" }));
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+
+    it("offers Watch CI before Ask Agent to Watch CI on the primary workspace's open PR", async () => {
+      const thread = { ...pullRequestThread, primaryGitRepository: "github.com/exampleorg/exampleapp" };
+      const { watchCi, askAgentToWatchCi } = renderWithWatches([terminalWatch], thread);
+      const labels = within(screen.getByRole("menu"))
+        .getAllByRole("menuitem")
+        .map(menuItemLabel);
+      const watch = labels.indexOf("Watch CI");
+      expect(labels.slice(watch, watch + 2)).toEqual(["Watch CI", "Ask Agent to Watch CI"]);
+      await clickElement(screen.getByRole("menuitem", { name: "Watch CI" }));
+      expect(watchCi).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "thread-1" }),
+        expect.objectContaining({ number: 202 }),
+      );
+      expect(askAgentToWatchCi).not.toHaveBeenCalled();
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+
+    it("offers Ask Agent to Watch CI on an open PR with no CI watch", async () => {
+      const { askAgentToWatchCi } = renderWithWatches([terminalWatch]);
+      expect(screen.queryByRole("menuitem", { name: /^Stop Waiting for CI/ })).toBeNull();
+      // Not on the thread's primary repository: main would not watch it.
+      expect(screen.queryByRole("menuitem", { name: "Watch CI" })).toBeNull();
+      await clickElement(screen.getByRole("menuitem", { name: "Ask Agent to Watch CI" }));
+      expect(askAgentToWatchCi).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "thread-1" }),
+        expect.objectContaining({ number: 202 }),
+      );
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+
+    it("shows no watch items for an older peer's thread", () => {
+      renderWithWatches([ciWatch], {
+        ...pullRequestThread,
+        federation: {
+          ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "thread-1" },
+          instanceLabel: "Laptop",
+          peerStatus: "connected",
+          capabilities: [],
+        },
+      } as NavigationThreadSummary);
+      const labels = within(screen.getByRole("menu")).getAllByRole("menuitem").map(menuItemLabel);
+      expect(labels).toContain("Copy Pull Request URL");
+      expect(labels.filter((label) => /Watch|Waiting/.test(label))).toEqual([]);
+    });
+
+    const peerThread = (capabilities: FederationCapability[]): NavigationThreadSummary => ({
+      ...pullRequestThread,
+      primaryGitRepository: "github.com/exampleorg/exampleapp",
+      // The owner's marks, not this instance's list, draw a peer row's eye.
+      prCiWatches: [{
+        prKey: ciWatch.prKey, watchId: "peer-ci", notifyOn: ["success", "failure"], createdAt: 1, runAttempt: 3,
+      }],
+      federation: {
+        ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "thread-1" },
+        instanceLabel: "Laptop",
+        peerStatus: "connected",
+        capabilities,
+      },
+    });
+
+    it("draws a peer row's eye from its owner's marks and stops the watch there", async () => {
+      const thread = peerThread(["thread_navigation", "turn_control", "thread_pr_watch_control_v1"]);
+      // A local watch with the same thread id must not reach the peer's row.
+      const { chip, stop } = renderWithWatches([terminalWatch], thread);
+      expect(chip).toHaveAccessibleName(
+        "Open ExampleOrg/ExampleApp#202 (ready for review · checks passing) in browser, waiting for CI",
+      );
+      expect(chip.querySelector(".pr-chip__watch")).not.toBeNull();
+      const labels = within(screen.getByRole("menu")).getAllByRole("menuitem").map(menuItemLabel);
+      expect(labels).toContain("Stop Waiting for CIattempt 3");
+      expect(labels).not.toContain("Stop Watching for Merge");
+      expect(labels).not.toContain("Watch CI");
+      await clickElement(screen.getByRole("menuitem", { name: /^Stop Waiting for CI/ }));
+      expect(stop).toHaveBeenCalledWith(
+        { backend: "codex", threadId: "thread-1", watchId: "peer-ci" },
+        expect.objectContaining({ federation: thread.federation }),
+      );
+    });
+
+    it("draws the eye but offers no stop when the peer grants no turn control", () => {
+      const { chip } = renderWithWatches([], peerThread(["thread_navigation", "thread_pr_watch_control_v1"]));
+      expect(chip.querySelector(".pr-chip__watch")).not.toBeNull();
+      const labels = within(screen.getByRole("menu")).getAllByRole("menuitem").map(menuItemLabel);
+      expect(labels.filter((label) => /Watch|Waiting/.test(label))).toEqual([]);
+    });
+  });
+
   it("shows compact runtime identity chips that copy full values", async () => {
     const copyText = vi.fn(async () => undefined);
     Object.defineProperty(window, "pwragent", {
@@ -8970,6 +9150,7 @@ describe("Sidebar directory pinning", () => {
       onSetProjectForgeAutomation?: ComponentProps<typeof Sidebar>["onSetProjectForgeAutomation"];
       onListProjectHeldWakeups?: ComponentProps<typeof Sidebar>["onListProjectHeldWakeups"];
       onResolveProjectHeldWakeups?: ComponentProps<typeof Sidebar>["onResolveProjectHeldWakeups"];
+      checkFederationTargetProject?: CheckFederationTargetProject;
     } = {},
   ): void {
     render(
@@ -8986,6 +9167,7 @@ describe("Sidebar directory pinning", () => {
         selectedItemKey={undefined}
         threads={overrides.threads ?? []}
         newThreadFederationTargets={overrides.newThreadFederationTargets}
+        checkFederationTargetProject={overrides.checkFederationTargetProject}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onCreateThreadOnFederationTarget={
@@ -9445,34 +9627,112 @@ describe("Sidebar directory pinning", () => {
     expect(summary).toHaveFocus();
   });
 
-  it("hides the whole launchpad cluster on a directory this instance cannot host", () => {
-    // The unconfigured guard wraps icon AND chevron. Offering "new chat on
-    // <machine>" from a row with no local launchpad would reintroduce the
-    // affordance that guard exists to remove.
-    renderSidebar(
-      [{ ...projectADirectory, localAvailability: "unconfigured" }],
-      {
-        newThreadFederationTargets: [
-          {
-            availability: "available",
-            instanceId: "studio-work",
-            label: "Studio Mac / work",
-          },
-        ],
-        onCreateThreadOnFederationTarget: async () => undefined,
-      },
-    );
+  // What main hands the renderer for a project only a peer has checked out:
+  // a label and nothing else (`remoteDirectoryPlaceholder`).
+  const remoteOnlyDirectory: NavigationDirectorySummary = {
+    key: "unconfigured-directory:projecta",
+    kind: "directory",
+    label: "ProjectA",
+    localAvailability: "unconfigured",
+    threadKeys: [],
+    needsAttentionCount: 0,
+  };
 
+  it("offers the machines that have a project this instance cannot host", async () => {
+    const onOpenLaunchpad = vi.fn(async () => undefined);
+    const onCreateThreadOnFederationTarget = vi.fn(async () => undefined);
+    const checkFederationTargetProject = vi.fn(
+      async (instanceId: string) => instanceId === "studio-work",
+    );
+    renderSidebar([remoteOnlyDirectory], {
+      onOpenLaunchpad,
+      onCreateThreadOnFederationTarget,
+      checkFederationTargetProject,
+      newThreadFederationTargets: [
+        {
+          availability: "available",
+          instanceId: "studio-work",
+          label: "Studio Mac / work",
+        },
+        {
+          availability: "available",
+          instanceId: "laptop-home",
+          label: "Laptop / home",
+        },
+      ],
+    });
+
+    // Nothing here can open a local launchpad: there is no checkout.
     expect(
       screen.queryByRole("button", {
         name: "Open new thread launchpad for ProjectA",
       }),
     ).not.toBeInTheDocument();
+
+    // One "+" whose only job is the machine menu, so it is not a split pair.
+    const start = screen.getByRole("button", {
+      name: "Start a new thread in ProjectA on another machine",
+    });
+    expect(start).toHaveAttribute("aria-haspopup", "menu");
+    expect(start).toHaveClass("directory-row__launchpad-button");
+    expect(start.parentElement).not.toHaveClass(
+      "directory-row__launchpad-cluster--split",
+    );
+    const header = directoryHeader(/ProjectA/i);
+    expect(header).toHaveClass("directory-row__header--with-launchpad");
+    expect(header).not.toHaveClass("directory-row__header--split");
+
+    await clickElement(start);
+    expect(start).toHaveAttribute("aria-expanded", "true");
+    // The menu asks each machine whether it has the project, by name.
+    expect(checkFederationTargetProject).toHaveBeenCalledWith("laptop-home", {
+      kind: "directory",
+      label: "ProjectA",
+    });
+    const laptop = await screen.findByRole("menuitem", { name: /Laptop \/ home/ });
+    await waitFor(() => expect(laptop).toHaveAttribute("aria-disabled", "true"));
+    await clickElement(
+      screen.getByRole("menuitem", { name: /Studio Mac \/ work/ }),
+    );
+
+    expect(onCreateThreadOnFederationTarget).toHaveBeenCalledWith("studio-work", {
+      kind: "directory",
+      label: "ProjectA",
+    });
+    expect(onOpenLaunchpad).not.toHaveBeenCalled();
+  });
+
+  it("points the remote-only tooltip at the + when machines can take the thread", async () => {
+    renderSidebar([remoteOnlyDirectory], {
+      onCreateThreadOnFederationTarget: async () => undefined,
+      newThreadFederationTargets: [
+        {
+          availability: "available",
+          instanceId: "studio-work",
+          label: "Studio Mac / work",
+        },
+      ],
+    });
+
+    fireEvent.mouseEnter(getDirectorySummary(/ProjectA/i));
+    expect(await screen.findByText(
+      "This project isn't set up on this machine. Use + to start a thread on a machine that has it, or Add Directory to connect it here.",
+    )).toBeInTheDocument();
+  });
+
+  it("still offers nothing on a remote-only project when no machine is connected", () => {
+    renderSidebar([remoteOnlyDirectory], { newThreadFederationTargets: [] });
+
     expect(
-      screen.queryByRole("button", {
-        name: "Start a new thread in ProjectA on another machine",
-      }),
+      screen.queryByRole("button", { name: /ProjectA on another machine/ }),
     ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /launchpad for ProjectA/ }),
+    ).not.toBeInTheDocument();
+    // No cluster, so the counts must not fade to a blank edge on hover.
+    expect(directoryHeader(/ProjectA/i)).not.toHaveClass(
+      "directory-row__header--with-launchpad",
+    );
   });
 
   it("omits the chevron entirely when the federation offers no machines", () => {

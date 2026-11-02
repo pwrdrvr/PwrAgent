@@ -5,6 +5,7 @@ import type { PrSummary } from "@pwragent/shared";
 import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { PrRollupChip } from "../PrRollupChip";
+import { summarizeThreadPrWatches } from "../../pr-watches/useThreadPrWatchIndicators";
 
 afterEach(() => {
   cleanup();
@@ -117,6 +118,56 @@ describe("PrRollupChip", () => {
     fireEvent.click(rows[1]!);
     expect(onOpen).toHaveBeenCalledWith(passing.url);
     expect(screen.queryByRole("group")).toBeNull();
+  });
+
+  it("draws the eye on the chip and on each watched PR's row", () => {
+    const prWatches = summarizeThreadPrWatches([{
+      watchId: "watch-ci",
+      backend: "codex",
+      threadId: "orbit",
+      prKey: "github.com/acme/orbit#11",
+      prUrl: failing.url,
+      prNumber: 11,
+      headSha: "abc1234",
+      notifyOn: ["success", "failure"],
+      createdAt: 1,
+      failureHandledByAutoFix: false,
+      kind: "checks",
+    }]).get("codex:orbit");
+    const { container } = render(
+      <PrRollupChip
+        prs={[passing, merged, failing]}
+        repoPrefixedUrls=""
+        threadTitle="Orbit refactor"
+        prWatches={prWatches}
+        onOpen={vi.fn()}
+      />,
+    );
+    const chip = container.querySelector<HTMLElement>("[data-pr-rollup]")!;
+    expect(chip.querySelector(".pr-chip__watch")).not.toBeNull();
+    expect(chip).toHaveAttribute(
+      "aria-label",
+      "3 pull requests, ready for review · checks failing, waiting for CI",
+    );
+    fireEvent.click(chip);
+    const rows = within(screen.getByRole("group", { name: "Pull requests for Orbit refactor" }))
+      .getAllByRole("button");
+    expect(rows[0]).toHaveAccessibleName(/^Open acme\/orbit#11, Change 11 .* in browser, waiting for CI$/);
+    expect(rows[0]!.querySelector(".pr-chip__watch")).not.toBeNull();
+    expect(rows[1]!.querySelector(".pr-chip__watch")).toBeNull();
+    cleanup();
+
+    // A lone PR is the ordinary chip, which draws the same eye.
+    const lone = render(
+      <PrRollupChip
+        prs={[failing]}
+        repoPrefixedUrls=""
+        threadTitle="Orbit refactor"
+        prWatches={prWatches}
+        onOpen={vi.fn()}
+      />,
+    );
+    expect(lone.container.querySelector("[data-pr-chip] .pr-chip__watch")).not.toBeNull();
   });
 
   it("adds the behind count to the row of the PR on the thread's branch", () => {

@@ -31,6 +31,9 @@ import type {
   SetThreadParentRequest,
   ThreadGitWorkingState,
   ThreadPullRequestWatchEvent,
+  ThreadPrWatchesResponse,
+  PwrAgentThreadInspectionResponse,
+  WatchThreadPullRequestToolArgs,
   ThreadSearchResponse,
 } from "@pwragent/shared";
 import { buildPullRequestStatusKey, DEFAULT_PROJECT_FORGE_AUTOMATION } from "@pwragent/shared";
@@ -60,16 +63,23 @@ const mockAppServerLog = vi.hoisted(() => ({
   info: vi.fn(),
   warn: vi.fn(),
 }));
-const backendRegistryLifecycle = vi.hoisted(() => ({
-  existing: true,
-  get: vi.fn(),
-}));
+const backendRegistryLifecycle = vi.hoisted(() => {
+  // The registry is built inside its vi.mock factory. `get` reads it here, so
+  // the mock's own implementation survives vi.resetAllMocks().
+  const lifecycle = {
+    existing: true,
+    registry: undefined as unknown,
+    get: vi.fn((): unknown => lifecycle.registry),
+  };
+  return lifecycle;
+});
 const withThreadLifecycleMutation = vi.hoisted(() => vi.fn(
   async (_identity: unknown, work: () => Promise<unknown>) => await work(),
 ));
 const overlayStoreFixture = vi.hoisted(() => ({ stable: undefined as unknown }));
 const federationMock = vi.hoisted(() => {
   const remoteBackend = {
+    manageThreadPrWatchesV1: vi.fn(async (): Promise<ThreadPrWatchesResponse> => ({ ok: true, cancelled: true })),
     continueThreadEnvironmentStartup: vi.fn(async (request: { backend: string; threadId: string }) => ({ ...request, turnId: "owner-turn" })),
     acknowledgeThreadEnvironmentFailure: vi.fn(async (request: { backend: string; threadId: string }) => ({ ...request, acknowledged: true })),
     setThreadAgent: vi.fn(),
@@ -253,6 +263,11 @@ const resolveGitHubReposForDirectory = vi.hoisted(() =>
       Array<{ host: string; owner: string; repo: string }>
     > => [],
   ),
+);
+// The thread's checkout head past the cached PR head, after a push. Git is
+// never run here: tests that need a pushed head set it.
+const readLocalHeadPastPrHead = vi.hoisted(() =>
+  vi.fn(async (_params: unknown): Promise<string | undefined> => undefined),
 );
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
@@ -741,6 +756,7 @@ const setThreadPullRequestWatchToolHandler = vi.fn();
 const setThreadDependencyToolHandler = vi.fn();
 const setThreadPrAutoDispatchHandler = vi.fn();
 const setThreadPullRequestDetachHandler = vi.fn();
+const setThreadPrWatchesPeerHandler = vi.fn();
 const setThreadPullRequestRefreshHandler = vi.fn();
 const setThreadGitWorkingStateRefreshHandler = vi.fn();
 const setDirectoryGitStatusWriter = vi.fn();
@@ -895,7 +911,9 @@ const readPrStatusCache = vi.fn(async () => ({}));
 const writePrStatusCacheEntries = vi.fn(async () => undefined);
 const readPrLookupCache = vi.fn(async () => ({}));
 const writePrLookupCacheEntry = vi.fn(async () => undefined);
-const syncThreadPrAutoDispatchCandidates = vi.fn(async () => undefined);
+const syncThreadPrAutoDispatchCandidates = vi.fn(
+  async (_params?: unknown): Promise<Array<{ backend: "codex"; threadId: string; prKey: string }> | undefined> => undefined,
+);
 const getPrAutoDispatchCandidateWinner = vi.fn(async () => undefined);
 const resetThreadPrAutoDispatchForOperator = vi.fn(async () => false);
 const getPrAutoDispatchBudgetStatus = vi.fn(async (params: {
@@ -947,18 +965,26 @@ const recoverOrphanedThreadPrAutoDispatches = vi.fn(async () => ({
 }));
 const registerThreadPrStatusWatch = vi.fn(async ({ watch }) => ({
   status: "watching" as const,
+  existed: false,
   watch,
 }));
-const claimThreadPrStatusWatches = vi.fn(async () => []);
+const claimThreadPrStatusWatches = vi.fn(async () => ({ claims: [], threads: [] }));
 const releaseThreadPrStatusWatch = vi.fn(async () => undefined);
 const renewThreadPrStatusWatchLease = vi.fn(async () => false);
-const finishThreadPrStatusWatch = vi.fn(async () => undefined);
-const supersedeThreadPrStatusWatches = vi.fn(async () => 0);
+const finishThreadPrStatusWatch = vi.fn(async () => []);
+const advanceThreadPrStatusWatches = vi.fn(async () => ({
+  moved: 0,
+  superseded: 0,
+  baselinesCleared: 0,
+  threads: [],
+}));
 const listActiveThreadPrStatusWatches = vi.fn(async () => []);
 const cancelThreadPrStatusWatchesForPr = vi.fn(async () => 0);
 const claimThreadPrTerminalWatches = vi.fn(async () => []);
 const finishThreadPrTerminalWatch = vi.fn(async () => undefined);
 const listPendingPrTerminalWatchPrKeys = vi.fn(async () => [] as string[]);
+const listAllActiveThreadPrStatusWatches = vi.fn(async () => []);
+const canonicalizeThreadPrStatusWatchKeys = vi.fn(async () => 0);
 const fetchPullRequestTerminalDetails = vi.fn(async (): Promise<PullRequestTerminalDetails | undefined> => undefined);
 const isGhAvailable = vi.fn(async () => true);
 const isProviderEnabled = vi.fn(() => true);
@@ -1116,6 +1142,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     syncThreadPrAutoDispatchCandidates,
     syncThreadPrAutoDispatchCandidatesBatch: vi.fn(async () => undefined),
     getPrAutoDispatchCandidateWinner,
+    listPrAutoDispatchCandidates: vi.fn(async () => []),
     resetThreadPrAutoDispatchForOperator,
     getPrAutoDispatchBudgetStatus,
     peekPrAutoDispatchBudgetStatus: (...args: Parameters<typeof getPrAutoDispatchBudgetStatus>) => getPrAutoDispatchBudgetStatus(...args),
@@ -1136,12 +1163,14 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     releaseThreadPrStatusWatch,
     renewThreadPrStatusWatchLease,
     finishThreadPrStatusWatch,
-    supersedeThreadPrStatusWatches,
+    advanceThreadPrStatusWatches,
     listActiveThreadPrStatusWatches,
     cancelThreadPrStatusWatchesForPr,
     claimThreadPrTerminalWatches,
     finishThreadPrTerminalWatch,
     listPendingPrTerminalWatchPrKeys,
+    listAllActiveThreadPrStatusWatches,
+    canonicalizeThreadPrStatusWatchKeys,
     readDirectoryGitStatusCache,
     writeDirectoryGitStatusCacheEntry,
     readThreadGitWorkingStateCache,
@@ -1213,6 +1242,7 @@ vi.mock("../app-server/backend-registry", () => {
     setThreadDependencyToolHandler,
     setThreadPrAutoDispatchHandler,
     setThreadPullRequestDetachHandler,
+    setThreadPrWatchesPeerHandler,
     setThreadPullRequestRefreshHandler,
     setThreadGitWorkingStateRefreshHandler,
     setDirectoryGitStatusWriter,
@@ -1242,7 +1272,7 @@ vi.mock("../app-server/backend-registry", () => {
     },
     sweepInactiveThreads: archiveSweepStatus.sweep,
   };
-  backendRegistryLifecycle.get.mockImplementation(() => registry);
+  backendRegistryLifecycle.registry = registry;
   return {
     disposeDesktopBackendRegistry: vi.fn(async () => undefined),
     getDesktopBackendRegistry: backendRegistryLifecycle.get,
@@ -1273,6 +1303,8 @@ vi.mock("../pr-status/pr-detection", async () => ({
   ...await vi.importActual<typeof import("../pr-status/pr-detection")>("../pr-status/pr-detection"),
   detectPullRequestsForThread,
 }));
+
+vi.mock("../pr-status/local-pr-head", () => ({ readLocalHeadPastPrHead }));
 
 vi.mock("../pr-status/git-remote", async () => {
   const actual = await vi.importActual<typeof import("../pr-status/git-remote")>(
@@ -1358,6 +1390,7 @@ describe("app server ipc", () => {
   type AppServerIpcModule = typeof import("../ipc/app-server");
   let disposeAppServerIpcHandlers: AppServerIpcModule["disposeAppServerIpcHandlers"];
   let registerAppServerIpcHandlers: AppServerIpcModule["registerAppServerIpcHandlers"];
+  let resetAppServerServiceForTests: AppServerIpcModule["resetAppServerServiceForTests"];
   // Historical owner materialization coverage is deliberately separate from IPC.
   const readLegacyOwnerMaterialization = async (_event: unknown, request?: GetNavigationSnapshotRequest) =>
     (await import("../ipc/app-server")).appServerService.getNavigationSnapshot(request);
@@ -1396,11 +1429,20 @@ describe("app server ipc", () => {
     const appServerIpc = await import("../ipc/app-server");
     disposeAppServerIpcHandlers = appServerIpc.disposeAppServerIpcHandlers;
     registerAppServerIpcHandlers = appServerIpc.registerAppServerIpcHandlers;
+    resetAppServerServiceForTests = appServerIpc.resetAppServerServiceForTests;
   });
 
   beforeEach(() => {
+    // Each test gets its own service. The last test's afterEach closed the
+    // outgoing one, so its timers and subscriptions are already gone.
+    resetAppServerServiceForTests();
+    // Restore every mock's own implementation and drop unconsumed Once
+    // values, so an override in one test cannot reach the next.
+    vi.resetAllMocks();
     getCachedThreadSummary.mockReset();
+    readLocalHeadPastPrHead.mockReset().mockResolvedValue(undefined);
     isIncompleteThreadList.mockReset().mockReturnValue(false);
+    getStartupProviderRefreshStatus.mockReset();
     federationMock.runtime.stampRemoteNavigationQueryPage.mockReset().mockImplementation((_target, page) => page);
     isProviderEnabled.mockReturnValue(true);
     backendRegistryLifecycle.existing = true;
@@ -1497,6 +1539,7 @@ describe("app server ipc", () => {
     setThreadDependencyToolHandler.mockClear();
     setThreadPrAutoDispatchHandler.mockClear();
     setThreadPullRequestDetachHandler.mockClear();
+    setThreadPrWatchesPeerHandler.mockClear();
     setThreadPullRequestRefreshHandler.mockClear();
     setThreadGitWorkingStateRefreshHandler.mockClear();
     setDirectoryGitStatusWriter.mockClear();
@@ -1548,7 +1591,7 @@ describe("app server ipc", () => {
     releaseThreadPrStatusWatch.mockClear();
     renewThreadPrStatusWatchLease.mockClear();
     finishThreadPrStatusWatch.mockClear();
-    supersedeThreadPrStatusWatches.mockClear();
+    advanceThreadPrStatusWatches.mockClear();
     listActiveThreadPrStatusWatches.mockClear();
     cancelThreadPrStatusWatchesForPr.mockClear();
     isGhAvailable.mockClear();
@@ -2028,6 +2071,10 @@ describe("app server ipc", () => {
       expect(refresh).not.toHaveBeenCalled();
       refresh.mockRestore();
     } finally {
+      // Each poll starts an unawaited dependency pass. The coordinator runs
+      // them in order, so a pass matching no PR waits for all of them; else
+      // they hit the closed database during a later test.
+      await agent.handlePrEvent("https://github.com/fixture/unrelated/pull/0");
       autoDispatch.mockRestore(); cache.mockRestore(); publish.mockRestore();
       service.prStatusRegistry = previousRegistry; service.threadDependencyCoordinator = previousCoordinator;
       db.close(); removeTempStateDbDir(fixture.tempDir); vi.unstubAllEnvs();
@@ -2352,12 +2399,50 @@ describe("app server ipc", () => {
     ["degraded", "ready", true],
   ] as const)("does not apply bulk Auto-fix changes to a %s owner inventory", async (_coverage, state, incomplete) => {
     const { NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL } = await import("../../shared/ipc");
-    getStartupProviderRefreshStatus.mockReturnValueOnce({ state });
+    // Every read: the index's reuse version reads it as well as its coverage.
+    getStartupProviderRefreshStatus.mockReturnValue({ state });
     isIncompleteThreadList.mockReturnValueOnce(incomplete);
     registerAppServerIpcHandlers();
     await expect(handlers.get(NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL)?.({}, { enabled: true }))
       .rejects.toThrow("Thread discovery is incomplete");
     expect(setThreadPrAutoDispatchBatch).not.toHaveBeenCalled();
+  });
+
+  it("tells windows to re-list Auto-fix when a thread's candidacy changes", async () => {
+    // A window that listed the thread's watches before its candidacy existed
+    // otherwise kept drawing no Auto-fix row for the session.
+    const pr = githubPr({
+      number: 3198, org: "pwrdrvr", repo: "PwrAgent", title: "Auto-fix candidacy",
+      state: "pending", url: "https://github.com/pwrdrvr/PwrAgent/pull/3198",
+    });
+    const prKey = buildPullRequestStatusKey(pr);
+    registerAppServerIpcHandlers();
+    syncThreadPrAutoDispatchCandidates.mockClear();
+    syncThreadPrAutoDispatchCandidates.mockResolvedValueOnce([{ backend: "codex", threadId: "thread-1", prKey }]);
+    publishLocalEvent.mockClear();
+    emitRegistryEvent({
+      backend: "codex",
+      notification: { method: "thread/pullRequests/updated", params: { threadId: "thread-1", prs: [pr] } },
+    });
+    await vi.waitFor(() => expect(publishLocalEvent).toHaveBeenCalledWith(expect.objectContaining({
+      notification: {
+        method: "thread/prWatches/updated",
+        params: { backend: "codex", threadId: "thread-1" },
+      },
+    })));
+    expect(syncThreadPrAutoDispatchCandidates).toHaveBeenCalledTimes(1);
+
+    // An unchanged candidacy publishes nothing.
+    publishLocalEvent.mockClear();
+    emitRegistryEvent({
+      backend: "codex",
+      notification: { method: "thread/pullRequests/updated", params: { threadId: "thread-1", prs: [pr] } },
+    });
+    await vi.waitFor(() => expect(syncThreadPrAutoDispatchCandidates).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(publishLocalEvent).not.toHaveBeenCalledWith(expect.objectContaining({
+      notification: expect.objectContaining({ method: "thread/prWatches/updated" }),
+    }));
   });
 
   it("does not advertise Auto-fix as active without a primary Git repository", async () => {
@@ -2928,16 +3013,15 @@ describe("app server ipc", () => {
     expect(claimThreadPrStatusWatches).not.toHaveBeenCalled();
   });
 
-  async function requestWatchForAttachedPr(
+  async function prepareWatchForAttachedPr(
     attached: PrSummary,
-    notifyOn: ThreadPullRequestWatchEvent[],
-    options: { autoFixEnabled?: boolean; url?: string; gitOriginUrl?: string } = {},
+    options: { autoFixEnabled?: boolean; fetchedAt?: number; gitOriginUrl?: string } = {},
   ) {
     readPrStatusCache.mockResolvedValueOnce({
       [buildPullRequestStatusKey(attached)]: {
         provider: "github.com",
         prKey: buildPullRequestStatusKey(attached),
-        fetchedAt: Date.now() - 60_000,
+        fetchedAt: options.fetchedAt ?? Date.now() - 60_000,
         pr: attached,
       },
     });
@@ -2979,14 +3063,858 @@ describe("app server ipc", () => {
       });
       expect(status?.backgroundPollingEnabled).toBe(true);
     });
-    const watchHandler = setThreadPullRequestWatchToolHandler.mock.calls.at(-1)?.[0];
-    return await watchHandler?.({
+    return setThreadPullRequestWatchToolHandler.mock.calls.at(-1)?.[0] as (
+      args: WatchThreadPullRequestToolArgs,
+    ) => Promise<PwrAgentThreadInspectionResponse>;
+  }
+
+  async function requestWatchForAttachedPr(
+    attached: PrSummary,
+    notifyOn: ThreadPullRequestWatchEvent[],
+    options: { autoFixEnabled?: boolean; url?: string; gitOriginUrl?: string } = {},
+  ) {
+    const watchHandler = await prepareWatchForAttachedPr(attached, options);
+    return await watchHandler({
       backend: "codex",
       threadId: "thread-1",
       notifyOn,
       url: options.url,
     });
   }
+
+  /** The watch tool's result, or a failure that names the error. */
+  function pullRequestWatchOf(response: PwrAgentThreadInspectionResponse | undefined) {
+    if (!response?.ok || !("pullRequestWatch" in response.data)) {
+      throw new Error(`Expected a pull request watch result: ${JSON.stringify(response)}`);
+    }
+    return response.data.pullRequestWatch;
+  }
+
+  it("arms a CI watch after rerun_failed_ci_jobs while the cache still holds the replaced failure", async () => {
+    const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
+    const { StateDb } = await import("../state/state-db");
+    const { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } = await import("../state/sqlite-write-metrics");
+    const { createTempStateDb, removeTempStateDbDir } = await import("./sqlite-test-utils");
+    const { appServerService } = await import("../ipc/app-server");
+    const headSha = "a".repeat(40);
+    const failedCheckUrl = "https://github.com/pwrdrvr/PwrAgent/actions/runs/42/job/1";
+    // Attempt 1 failed. The cache read it seconds ago, well inside the window
+    // in which a cached outcome counts as already known.
+    const failing = githubPr({
+      number: 3174, org: "pwrdrvr", repo: "PwrAgent", title: "Re-run CI", state: "failing",
+      headSha, failedCheckUrl, url: "https://github.com/pwrdrvr/PwrAgent/pull/3174",
+    });
+    const watchHandler = await prepareWatchForAttachedPr(failing, { fetchedAt: Date.now() - 2_000 });
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pr-watch-rerun-");
+    const db = StateDb.open(temp.dbPath);
+    const store = new SqliteOverlayStore(db);
+    const service = appServerService as unknown as {
+      getOverlayStore: () => typeof store;
+      forgePrToolService: () => { execute: (...args: unknown[]) => Promise<unknown> };
+      forgePrToolScope: (...args: unknown[]) => Promise<unknown>;
+      collectPrPollTargets: () => unknown[];
+      ciRerunsByPrKey?: Map<string, unknown>;
+    };
+    const execute = vi.fn(async () => ({
+      requested: true, runId: 42, runAttempt: 2, headSha,
+      repository: { provider: "github", host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" },
+    }));
+    const forge = vi.spyOn(service, "forgePrToolService").mockReturnValue({ execute });
+    const scope = vi.spyOn(service, "forgePrToolScope").mockResolvedValue({});
+    // No poll runs here: the refresh it queues is covered by the next test.
+    const pollTargets = vi.spyOn(service, "collectPrPollTargets").mockReturnValue([]);
+    const overlay = vi.spyOn(service, "getOverlayStore").mockReturnValue(store);
+    try {
+      await store.setThreadPullRequests({
+        backend: "codex", threadId: "thread-1", prs: [failing], fetchedAt: Date.now(), refreshKey: "fixture",
+      });
+      const { writes } = await measureSqliteWrites(async () => {
+        await appServerService.runForgePrToolForAgent(
+          "rerun_failed_ci_jobs",
+          { runId: 42 },
+          { backend: "codex", threadId: "thread-1", transport: "codex_dynamic_tool" },
+        );
+      });
+      // The re-run is remembered in memory; nothing is written.
+      expect(writes.commits).toBe(0);
+      expect(writes.statements).toBe(0);
+
+      // The thread's next call, within seconds: before the fix this returned
+      // currentOutcome "failure" and created no watch.
+      const first = pullRequestWatchOf(await watchHandler({
+        backend: "codex", threadId: "thread-1", notifyOn: ["success", "failure"],
+      }));
+      expect(first).toMatchObject({
+        armed: true,
+        reason: "armed",
+        coveredByAutoFix: [],
+        watch: {
+          kind: "checks",
+          headSha,
+          notifyOn: ["success", "failure"],
+          baseline: { outcome: "failure", failedCheckUrl, runAttempt: 2 },
+        },
+        message: expect.stringContaining("(attempt 2)"),
+      });
+      expect(first).not.toHaveProperty("currentOutcome");
+      expect(first.message).toContain("predates the re-run");
+      // The baseline is the outcome the watch must not fire on.
+      expect(claimThreadPrStatusWatches).not.toHaveBeenCalled();
+      const stored = await store.listActiveThreadPrStatusWatches({ backend: "codex", threadId: "thread-1" });
+      expect(stored).toEqual([expect.objectContaining({
+        watchId: first.watch!.watchId,
+        baseline: expect.objectContaining({ outcome: "failure", failedCheckUrl }),
+      })]);
+
+      const second = pullRequestWatchOf(await watchHandler({
+        backend: "codex", threadId: "thread-1", notifyOn: ["success", "failure"],
+      }));
+      expect(second).toMatchObject({
+        armed: true,
+        reason: "already_armed",
+        watch: { watchId: first.watch!.watchId },
+      });
+      expect(await store.listActiveThreadPrStatusWatches({ backend: "codex", threadId: "thread-1" }))
+        .toHaveLength(1);
+      expect(execute).toHaveBeenCalledOnce();
+    } finally {
+      overlay.mockRestore();
+      pollTargets.mockRestore();
+      scope.mockRestore();
+      forge.mockRestore();
+      service.ciRerunsByPrKey?.clear();
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("records a GitLab pipeline retry so the next watch waits past the failure it replaced", async () => {
+    const { appServerService } = await import("../ipc/app-server");
+    const headSha = "f".repeat(40);
+    const failing: PrSummary = {
+      ...githubPr({
+        number: 18, org: "pwrdrvr", repo: "PwrAgent", state: "failing", headSha,
+        url: "https://gitlab.com/pwrdrvr/PwrAgent/-/merge_requests/18",
+      }),
+      provider: "gitlab.com",
+    };
+    registerThreadPrStatusWatch.mockClear();
+    const watchHandler = await prepareWatchForAttachedPr(failing, {
+      fetchedAt: Date.now() - 2_000,
+      gitOriginUrl: "git@gitlab.com:pwrdrvr/PwrAgent.git",
+    });
+    const service = appServerService as unknown as {
+      forgePrToolService: () => { execute: (...args: unknown[]) => Promise<unknown> };
+      forgePrToolScope: (...args: unknown[]) => Promise<unknown>;
+      collectPrPollTargets: () => unknown[];
+      ciRerunsByPrKey: Map<string, unknown>;
+    };
+    // The GitLab client's retry result: a pipeline id and its head, no attempt.
+    const execute = vi.fn(async () => ({
+      requested: true, runId: 901, headSha,
+      repository: { provider: "gitlab", host: "gitlab.com", owner: "pwrdrvr", repo: "PwrAgent" },
+    }));
+    const forge = vi.spyOn(service, "forgePrToolService").mockReturnValue({ execute });
+    const scope = vi.spyOn(service, "forgePrToolScope").mockResolvedValue({});
+    const pollTargets = vi.spyOn(service, "collectPrPollTargets").mockReturnValue([]);
+    try {
+      await appServerService.runForgePrToolForAgent(
+        "rerun_failed_ci_jobs",
+        { runId: 901 },
+        { backend: "codex", threadId: "thread-1", transport: "codex_dynamic_tool" },
+      );
+      expect(service.ciRerunsByPrKey.get(buildPullRequestStatusKey(failing)))
+        .toEqual({ headSha, runId: 901, requestedAt: expect.any(Number) });
+      const result = pullRequestWatchOf(await watchHandler({
+        backend: "codex", threadId: "thread-1", notifyOn: ["success", "failure"],
+      }));
+      expect(result).toMatchObject({
+        armed: true,
+        reason: "armed",
+        watch: {
+          kind: "checks",
+          headSha,
+          runId: 901,
+          baseline: { outcome: "failure", rerunRequestedAt: expect.any(Number) },
+        },
+      });
+      expect(result).not.toHaveProperty("currentOutcome");
+      expect(result.watch).not.toHaveProperty("runAttempt");
+      expect(result.watch?.baseline).not.toHaveProperty("runAttempt");
+      expect(result.message).toContain("predates the re-run");
+    } finally {
+      pollTargets.mockRestore();
+      scope.mockRestore();
+      forge.mockRestore();
+      service.ciRerunsByPrKey.clear();
+    }
+  });
+
+  it("records a re-run only for the calling thread's open PRs at the run's head", async () => {
+    const { appServerService } = await import("../ipc/app-server");
+    const failing = githubPr({
+      number: 3176, org: "pwrdrvr", repo: "PwrAgent", state: "failing",
+      headSha: "a".repeat(40), url: "https://github.com/pwrdrvr/PwrAgent/pull/3176",
+    });
+    await prepareWatchForAttachedPr(failing, { fetchedAt: Date.now() });
+    const service = appServerService as unknown as {
+      forgePrToolService: () => { execute: (...args: unknown[]) => Promise<unknown> };
+      forgePrToolScope: (...args: unknown[]) => Promise<unknown>;
+      requestPriorityPrRefresh: (prKeys: ReadonlySet<string>) => void;
+      ciRerunsByPrKey: Map<string, unknown>;
+    };
+    const repository = { provider: "github", host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" };
+    const execute = vi.fn();
+    const forge = vi.spyOn(service, "forgePrToolService").mockReturnValue({ execute });
+    const scope = vi.spyOn(service, "forgePrToolScope").mockResolvedValue({});
+    const refresh = vi.spyOn(service, "requestPriorityPrRefresh").mockImplementation(() => undefined);
+    const context = { backend: "codex" as const, threadId: "thread-1", transport: "codex_dynamic_tool" as const };
+    try {
+      // A run at another head re-ran CI for a different commit.
+      execute.mockResolvedValueOnce({ requested: true, runId: 7, headSha: "b".repeat(40), repository });
+      await appServerService.runForgePrToolForAgent("rerun_failed_ci_jobs", { runId: 7 }, context);
+      // A run in another repository.
+      execute.mockResolvedValueOnce({ requested: true, runId: 8, headSha: "a".repeat(40),
+        repository: { ...repository, repo: "docs.pwragent.ai" } });
+      await appServerService.runForgePrToolForAgent("rerun_failed_ci_jobs", { runId: 8 }, context);
+      expect(service.ciRerunsByPrKey.size).toBe(0);
+
+      execute.mockResolvedValueOnce({ requested: true, runId: 9, repository });
+      await appServerService.runForgePrToolForAgent("rerun_failed_ci_jobs", { runId: 9 }, context);
+      // Without a known head, every attached open PR in the repository counts.
+      expect([...service.ciRerunsByPrKey.keys()]).toEqual([buildPullRequestStatusKey(failing)]);
+      // One priority refresh per re-run, for the recorded PRs only.
+      expect(refresh).toHaveBeenCalledTimes(3);
+      expect(refresh.mock.calls.map(([prKeys]) => [...prKeys])).toEqual([
+        [], [], [buildPullRequestStatusKey(failing)],
+      ]);
+    } finally {
+      refresh.mockRestore();
+      scope.mockRestore();
+      forge.mockRestore();
+      service.ciRerunsByPrKey.clear();
+    }
+  });
+
+  it("records a re-run for a thread no navigation refresh has listed, so its next watch arms", async () => {
+    // The re-run read only the attachments the navigation refresh fills in.
+    // A thread outside every snapshot recorded nothing, and its watch call
+    // then saw the replaced failure as final (#3174).
+    const { appServerService } = await import("../ipc/app-server");
+    const headSha = "4".repeat(40);
+    const failing = githubPr({
+      number: 3192, org: "pwrdrvr", repo: "PwrAgent", state: "failing", headSha,
+      headRefName: "fix/rerun-unlisted", url: "https://github.com/pwrdrvr/PwrAgent/pull/3192",
+    });
+    const prKey = buildPullRequestStatusKey(failing);
+    readPrStatusCache.mockResolvedValueOnce({
+      [prKey]: { provider: "github.com", prKey, fetchedAt: Date.now() - 2_000, pr: failing },
+    });
+    listThreads.mockResolvedValueOnce([] as never);
+    getCachedThreadSummary.mockImplementation(({ threadId }) => threadId === "thread-unlisted"
+      ? {
+          id: "thread-unlisted",
+          title: "Unlisted re-run",
+          source: "claude",
+          linkedDirectories: [{
+            id: "/repo/PwrAgent",
+            kind: "worktree",
+            label: "PwrAgent",
+            path: "/repo/PwrAgent",
+            worktreePath: "/worktrees/rerun/PwrAgent",
+          }],
+          updatedAt: 2000,
+        } as never
+      : undefined);
+    resolveGitHubRepoForDirectory.mockResolvedValue({
+      host: "github.com", owner: "pwrdrvr", repo: "PwrAgent",
+    } as never);
+    getThreadOverlayState.mockResolvedValue({
+      backend: "claude",
+      threadId: "thread-unlisted",
+      executionMode: "full-access",
+      extraLinkedDirectories: [],
+      prs: [failing],
+    });
+    registerThreadPrStatusWatch.mockClear();
+    registerAppServerIpcHandlers();
+    await refreshOwnerMetadata();
+    const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
+    await vi.waitFor(async () => {
+      const status = await autoDispatchHandlers?.inspect({ backend: "claude", threadId: "thread-unlisted" });
+      expect(status?.backgroundPollingEnabled).toBe(true);
+    });
+    const service = appServerService as unknown as {
+      forgePrToolService: () => { execute: (...args: unknown[]) => Promise<unknown> };
+      forgePrToolScope: (...args: unknown[]) => Promise<unknown>;
+      requestPriorityPrRefresh: (prKeys: ReadonlySet<string>) => void;
+      ciRerunsByPrKey: Map<string, unknown>;
+    };
+    const execute = vi.fn(async () => ({
+      requested: true, runId: 43, runAttempt: 2, headSha,
+      repository: { provider: "github", host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" },
+    }));
+    const forge = vi.spyOn(service, "forgePrToolService").mockReturnValue({ execute });
+    const scope = vi.spyOn(service, "forgePrToolScope").mockResolvedValue({});
+    const refresh = vi.spyOn(service, "requestPriorityPrRefresh").mockImplementation(() => undefined);
+    try {
+      expect(appServerService.readPrimaryGitRepository("claude", "thread-unlisted")).toBeUndefined();
+      await appServerService.runForgePrToolForAgent(
+        "rerun_failed_ci_jobs",
+        { runId: 43 },
+        { backend: "claude", threadId: "thread-unlisted", transport: "codex_dynamic_tool" },
+      );
+      expect([...service.ciRerunsByPrKey.keys()]).toEqual([prKey]);
+      expect(refresh.mock.calls.map(([prKeys]) => [...prKeys])).toEqual([[prKey]]);
+
+      const watchHandler = setThreadPullRequestWatchToolHandler.mock.calls.at(-1)?.[0];
+      const result = pullRequestWatchOf(await watchHandler?.({
+        backend: "claude", threadId: "thread-unlisted", notifyOn: ["success", "failure"],
+      }));
+      expect(result).toMatchObject({
+        armed: true,
+        reason: "armed",
+        watch: {
+          headSha,
+          runAttempt: 2,
+          runId: 43,
+          baseline: { outcome: "failure", runAttempt: 2 },
+        },
+      });
+      expect(result).not.toHaveProperty("currentOutcome");
+    } finally {
+      refresh.mockRestore();
+      scope.mockRestore();
+      forge.mockRestore();
+      service.ciRerunsByPrKey.clear();
+    }
+  });
+
+  it("names the running re-run's attempt on a watch armed after its checks started", async () => {
+    // No final outcome yet means no baseline. The attempt used to ride only
+    // on the baseline, so this watch never showed it.
+    const { appServerService } = await import("../ipc/app-server");
+    const headSha = "5".repeat(40);
+    const running = githubPr({
+      number: 3194, org: "pwrdrvr", repo: "PwrAgent", state: "pending", headSha,
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3194",
+    });
+    const watchHandler = await prepareWatchForAttachedPr(running, { fetchedAt: Date.now() - 1_000 });
+    const service = appServerService as unknown as {
+      ciRerunsByPrKey: Map<string, { headSha?: string; runId: number; runAttempt?: number; requestedAt: number }>;
+    };
+    service.ciRerunsByPrKey.set(buildPullRequestStatusKey(running), {
+      headSha, runId: 44, runAttempt: 3, requestedAt: Date.now() - 60_000,
+    });
+    try {
+      const result = pullRequestWatchOf(await watchHandler({
+        backend: "codex", threadId: "thread-1", notifyOn: ["success", "failure"],
+      }));
+      expect(result).toMatchObject({ armed: true, watch: { runAttempt: 3, runId: 44 } });
+      expect(result.watch).not.toHaveProperty("baseline");
+      expect(result.message).toContain("(attempt 3)");
+    } finally {
+      service.ciRerunsByPrKey.clear();
+    }
+  });
+
+  it("arms past a stale result when the checkout is past the cached head after a push", async () => {
+    const headSha = "6".repeat(40);
+    const pushedHead = "7".repeat(40);
+    const passing = githubPr({
+      number: 3195, org: "pwrdrvr", repo: "PwrAgent", state: "passing", headSha,
+      headRefName: "fix/push-then-watch", linkedDirectoryPaths: ["/repo/PwrAgent"],
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3195",
+    });
+    registerThreadPrStatusWatch.mockClear();
+    const watchHandler = await prepareWatchForAttachedPr(passing, { fetchedAt: Date.now() - 1_000 });
+    claimThreadPrStatusWatches.mockClear();
+    // Git cannot tell: today's answer, the fresh result is final.
+    const unknown = pullRequestWatchOf(await watchHandler({
+      backend: "codex", threadId: "thread-1", notifyOn: ["success", "failure"],
+    }));
+    expect(unknown).toMatchObject({ armed: false, reason: "outcome_already_final", currentOutcome: "success" });
+    expect(registerThreadPrStatusWatch).not.toHaveBeenCalled();
+    expect(readLocalHeadPastPrHead).toHaveBeenLastCalledWith({
+      directories: ["/repo/PwrAgent"], cachedHeadSha: headSha, headRefName: "fix/push-then-watch",
+    });
+
+    // The checkout is past the cached head: that pass was the old head's.
+    readLocalHeadPastPrHead.mockResolvedValueOnce(pushedHead);
+    const pushed = pullRequestWatchOf(await watchHandler({
+      backend: "codex", threadId: "thread-1", notifyOn: ["success", "failure"],
+    }));
+    expect(pushed).toMatchObject({
+      armed: true,
+      reason: "armed",
+      watch: { headSha, baseline: { outcome: "success" } },
+    });
+    expect(pushed).not.toHaveProperty("currentOutcome");
+    expect(pushed.watch).not.toHaveProperty("runAttempt");
+    expect(pushed.message).toContain(`checkout is at ${pushedHead.slice(0, 7)}`);
+    // The stale outcome is never offered to the new watch as a snapshot.
+    expect(claimThreadPrStatusWatches).not.toHaveBeenCalled();
+  });
+
+  it("reports a fresh final outcome without arming, and arms past it on waitForNextResult", async () => {
+    const failing = githubPr({
+      number: 3175, org: "pwrdrvr", repo: "PwrAgent", state: "failing",
+      headSha: "b".repeat(40), url: "https://github.com/pwrdrvr/PwrAgent/pull/3175",
+    });
+    registerThreadPrStatusWatch.mockClear();
+    const watchHandler = await prepareWatchForAttachedPr(failing, { fetchedAt: Date.now() - 1_000 });
+
+    const known = pullRequestWatchOf(await watchHandler({
+      backend: "codex", threadId: "thread-1", notifyOn: ["success", "failure"],
+    }));
+    expect(known).toMatchObject({
+      armed: false,
+      reason: "outcome_already_final",
+      currentOutcome: "failure",
+      message: expect.stringContaining("waitForNextResult: true"),
+    });
+    expect(known).not.toHaveProperty("watch");
+    expect(registerThreadPrStatusWatch).not.toHaveBeenCalled();
+
+    const next = pullRequestWatchOf(await watchHandler({
+      backend: "codex", threadId: "thread-1", notifyOn: ["success", "failure"], waitForNextResult: true,
+    }));
+    expect(next).toMatchObject({
+      armed: true,
+      reason: "armed",
+      watch: { kind: "checks", createdBy: "agent", baseline: { outcome: "failure" } },
+    });
+    expect(next).not.toHaveProperty("currentOutcome");
+    expect(registerThreadPrStatusWatch).toHaveBeenCalledOnce();
+    expect(claimThreadPrStatusWatches).not.toHaveBeenCalled();
+    expect(publishLocalEvent).toHaveBeenCalledWith(expect.objectContaining({
+      notification: {
+        method: "thread/prWatches/updated",
+        params: { backend: "codex", threadId: "thread-1", prKey: buildPullRequestStatusKey(failing) },
+      },
+    }));
+
+    // A merge watch armed beside a finished CI result must not read as a
+    // wait for that result.
+    registerThreadPrStatusWatch.mockClear();
+    const mixed = pullRequestWatchOf(await watchHandler({
+      backend: "codex", threadId: "thread-1", notifyOn: ["success", "failure", "merged", "closed"],
+    }));
+    expect(mixed).toMatchObject({
+      armed: false,
+      reason: "outcome_already_final",
+      currentOutcome: "failure",
+      terminalWatch: { kind: "terminal", notifyOn: ["merged", "closed"] },
+      message: expect.stringContaining("No CI watch was created"),
+    });
+    expect(mixed).not.toHaveProperty("watch");
+    expect(registerThreadPrStatusWatch).toHaveBeenCalledOnce();
+  });
+
+  it("claims Auto-fix covers a failure only when no failure baseline exists at the head", async () => {
+    const pending = githubPr({
+      number: 3177, org: "pwrdrvr", repo: "PwrAgent", state: "pending",
+      headSha: "c".repeat(40), url: "https://github.com/pwrdrvr/PwrAgent/pull/3177",
+    });
+    getPrAutoDispatchCandidateWinner.mockResolvedValue({ backend: "codex", threadId: "thread-1" } as never);
+    const covered = pullRequestWatchOf(await requestWatchForAttachedPr(pending, ["success", "failure"], {
+      autoFixEnabled: true,
+    }));
+    expect(covered).toMatchObject({
+      armed: true,
+      coveredByAutoFix: ["failure"],
+      watch: { failureHandledByAutoFix: true },
+    });
+  });
+
+  it("does not claim Auto-fix covers a failure that repeats a baseline failure at the head", async () => {
+    // A failure that repeats at the same head is an Auto-fix duplicate: it
+    // will not wake the thread, so the watch must say so and handle it.
+    const failing = githubPr({
+      number: 3178, org: "pwrdrvr", repo: "PwrAgent", state: "failing",
+      headSha: "c".repeat(40), url: "https://github.com/pwrdrvr/PwrAgent/pull/3178",
+    });
+    getPrAutoDispatchCandidateWinner.mockResolvedValue({ backend: "codex", threadId: "thread-1" } as never);
+    const watchHandler = await prepareWatchForAttachedPr(failing, { autoFixEnabled: true, fetchedAt: Date.now() });
+    const repeat = pullRequestWatchOf(await watchHandler({
+      backend: "codex", threadId: "thread-1", notifyOn: ["success", "failure"], waitForNextResult: true,
+    }));
+    expect(repeat).toMatchObject({
+      armed: true,
+      coveredByAutoFix: [],
+      watch: { failureHandledByAutoFix: false, baseline: { outcome: "failure" } },
+    });
+  });
+
+  it("lists, explains, and stops PR watches over thread:prWatches, and sends a peer's to its owner", async () => {
+    const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
+    const { appServerService } = await import("../ipc/app-server");
+    const appState = await import("../state/app-state");
+    const { openInMemoryStateDb } = await import("./sqlite-test-utils");
+    const db = openInMemoryStateDb();
+    const store = new SqliteOverlayStore(db);
+    const service = appServerService as unknown as { getOverlayStore: () => typeof store };
+    const overlay = vi.spyOn(service, "getOverlayStore").mockReturnValue(store);
+    const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
+    registerAppServerIpcHandlers();
+    const handler = handlers.get("thread:prWatches")!;
+    const base = {
+      backend: "codex" as const, threadId: "thread-1", prKey: "github.com/pwrdrvr/pwragent#3179",
+      prUrl: "https://github.com/pwrdrvr/PwrAgent/pull/3179", prNumber: 3179, headSha: "d".repeat(40),
+      createdAt: 1, failureHandledByAutoFix: false,
+    };
+    try {
+      await store.registerThreadPrStatusWatch({
+        watch: { ...base, watchId: "ci", notifyOn: ["success", "failure"], kind: "checks" }, now: 1,
+      });
+      await store.registerThreadPrStatusWatch({
+        watch: { ...base, watchId: "merge", headSha: "", notifyOn: ["merged", "closed"], kind: "terminal" }, now: 1,
+      });
+      const local = { sender: { id: 1 } };
+      await expect(handler(local, { action: "active" })).resolves.toMatchObject({
+        ok: true, active: [expect.objectContaining({ watchId: "ci" }), expect.objectContaining({ watchId: "merge" })],
+      });
+      publishLocalEvent.mockClear();
+      await expect(handler(local, { action: "cancel", backend: "codex", threadId: "thread-1", watchId: "ci" }))
+        .resolves.toEqual({ ok: true, cancelled: true });
+      expect(publishLocalEvent).toHaveBeenCalledWith({
+        backend: "codex",
+        notification: {
+          method: "thread/prWatches/updated",
+          params: { backend: "codex", threadId: "thread-1", prKey: base.prKey },
+        },
+      });
+      await expect(handler(local, { action: "cancel", backend: "codex", threadId: "thread-1", watchId: "ci" }))
+        .resolves.toMatchObject({ ok: false, error: { code: "not_found" } });
+      await expect(handler(local, { action: "active" })).resolves.toMatchObject({
+        ok: true, active: [expect.objectContaining({ watchId: "merge" })],
+      });
+      await expect(handler(local, { action: "history", backend: "codex", threadId: "thread-1" })).resolves.toEqual({
+        ok: true,
+        history: [expect.objectContaining({
+          watchId: "ci", status: "cancelled", endedReason: "cancelled_by_operator",
+        })],
+      });
+
+      // A peer's thread is stopped on its owner, never in this store.
+      const remote = { scope: "remote" as const, instanceId: "peer_watch_owner" };
+      const manageRemote = federationMock.remoteBackend.manageThreadPrWatchesV1;
+      manageRemote.mockClear();
+      await expect(handler(local, {
+        action: "cancel", backend: "codex", threadId: "thread-1", watchId: "merge", federationTarget: remote,
+      })).resolves.toEqual({ ok: true, cancelled: true });
+      expect(federationMock.runtime.remoteBackend).toHaveBeenLastCalledWith(remote);
+      expect(manageRemote).toHaveBeenCalledExactlyOnceWith({
+        action: "cancel", backend: "codex", threadId: "thread-1", watchId: "merge",
+      });
+      // A federation window stops a peer's watch the same way.
+      await expect(handler({ sender: { id: 999 } }, {
+        action: "watch", backend: "codex", threadId: "thread-1", prUrl: base.prUrl, federationTarget: remote,
+      })).resolves.toEqual({ ok: true, cancelled: true });
+      expect(manageRemote).toHaveBeenLastCalledWith({
+        action: "watch", backend: "codex", threadId: "thread-1", prUrl: base.prUrl,
+      });
+      // An owner without the capability keeps its watches read-only.
+      const supports = federationMock.runtime.remoteTargetSupportsCapability;
+      supports.mockClear();
+      supports.mockReturnValueOnce(false);
+      await expect(handler(local, {
+        action: "cancel", backend: "codex", threadId: "thread-1", watchId: "merge", federationTarget: remote,
+      })).resolves.toMatchObject({ ok: false, error: { code: "federation_unsupported" } });
+      expect(supports).toHaveBeenLastCalledWith(remote, "thread_pr_watch_control_v1");
+      // So does one that grants this instance no turn control.
+      supports.mockReturnValueOnce(true).mockReturnValueOnce(false);
+      await expect(handler(local, {
+        action: "history", backend: "codex", threadId: "thread-1", federationTarget: remote,
+      })).resolves.toMatchObject({ ok: false, error: { code: "federation_unsupported" } });
+      expect(supports).toHaveBeenLastCalledWith(remote, "turn_control");
+      expect(manageRemote).toHaveBeenCalledTimes(2);
+
+      // The owner's side: a viewer's request reaches only the named thread,
+      // with no target and no list of every watch.
+      const peerHandler = setThreadPrWatchesPeerHandler.mock.calls.at(-1)![0] as (
+        request: unknown,
+      ) => Promise<ThreadPrWatchesResponse>;
+      await expect(peerHandler({ action: "active" }))
+        .resolves.toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
+      await expect(peerHandler({
+        action: "history", backend: "codex", threadId: "thread-1", federationTarget: remote,
+      })).resolves.toEqual({
+        ok: true,
+        history: [expect.objectContaining({ watchId: "ci", endedReason: "cancelled_by_operator" })],
+      });
+      await store.registerThreadPrStatusWatch({
+        watch: { ...base, watchId: "peer-ci", notifyOn: ["success", "failure"], kind: "checks" }, now: 2,
+      });
+      await expect(peerHandler({ action: "cancel", backend: "codex", threadId: "thread-1", watchId: "peer-ci" }))
+        .resolves.toEqual({ ok: true, cancelled: true });
+      await expect(peerHandler({ action: "cancel", backend: "codex", threadId: "other-thread", watchId: "merge" }))
+        .resolves.toMatchObject({ ok: false, error: { code: "not_found" } });
+      await expect(handler({ sender: { id: 999 } }, { action: "active" }))
+        .resolves.toMatchObject({ ok: false, error: { code: "federation_unsupported" } });
+      await expect(handler({ sender: { id: 999 } }, {
+        action: "cancel", backend: "codex", threadId: "thread-1", watchId: "merge",
+      })).resolves.toMatchObject({ ok: false, error: { code: "federation_unsupported" } });
+      await expect(handler(local, { action: "cancel", backend: "codex", threadId: "thread-1", watchId: "" }))
+        .resolves.toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
+      expect(await store.listActiveThreadPrStatusWatches({ backend: "codex", threadId: "thread-1" }))
+        .toEqual([expect.objectContaining({ watchId: "merge" })]);
+    } finally {
+      mode.mockRestore();
+      overlay.mockRestore();
+      db.close();
+    }
+  });
+
+  it("lets an agent list and cancel its own thread's PR watches, ending one as stopped by the agent", async () => {
+    const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
+    const { appServerService } = await import("../ipc/app-server");
+    const { openInMemoryStateDb } = await import("./sqlite-test-utils");
+    const db = openInMemoryStateDb();
+    const store = new SqliteOverlayStore(db);
+    const service = appServerService as unknown as {
+      getOverlayStore: () => typeof store;
+      backgroundPrPollingEnabled: boolean;
+    };
+    const overlay = vi.spyOn(service, "getOverlayStore").mockReturnValue(store);
+    const polling = service.backgroundPrPollingEnabled;
+    const base = {
+      backend: "codex" as const, threadId: "thread-1", prKey: "github.com/pwrdrvr/pwragent#3191",
+      prUrl: "https://github.com/pwrdrvr/PwrAgent/pull/3191", prNumber: 3191, headSha: "e".repeat(40),
+      createdAt: 1, failureHandledByAutoFix: false,
+    };
+    try {
+      await store.registerThreadPrStatusWatch({
+        watch: { ...base, watchId: "ci", notifyOn: ["success", "failure"], kind: "checks" }, now: 1,
+      });
+      // Listed oldest first: the CI watch, then the merge/close watch.
+      await store.registerThreadPrStatusWatch({
+        watch: {
+          ...base, watchId: "merge", headSha: "", notifyOn: ["merged", "closed"], kind: "terminal", createdAt: 2,
+        },
+        now: 2,
+      });
+      await store.registerThreadPrStatusWatch({
+        watch: { ...base, threadId: "thread-2", watchId: "other", notifyOn: ["success", "failure"], kind: "checks" },
+        now: 1,
+      });
+      // Listing and stopping need no polling: they only read and end rows.
+      service.backgroundPrPollingEnabled = false;
+      const listed = await appServerService.watchThreadPullRequestForTool({
+        action: "list", backend: "codex", threadId: "thread-1",
+      });
+      expect(listed).toMatchObject({
+        ok: true,
+        data: {
+          pullRequestWatches: {
+            action: "list",
+            watches: [expect.objectContaining({ watchId: "ci" }), expect.objectContaining({ watchId: "merge" })],
+            message: expect.stringContaining("CI on PR #3191 (watchId ci)"),
+          },
+        },
+      });
+
+      publishLocalEvent.mockClear();
+      const cancelled = await appServerService.watchThreadPullRequestForTool({
+        action: "cancel", backend: "codex", threadId: "thread-1", watchId: "ci",
+      });
+      expect(cancelled).toEqual({
+        ok: true,
+        data: {
+          pullRequestWatches: {
+            action: "cancel",
+            cancelled: expect.objectContaining({ watchId: "ci", kind: "checks" }),
+            watches: [expect.objectContaining({ watchId: "merge" })],
+            message: expect.stringContaining("Stopped waiting for CI on PR #3191."),
+          },
+        },
+      });
+      expect(publishLocalEvent).toHaveBeenCalledWith({
+        backend: "codex",
+        notification: {
+          method: "thread/prWatches/updated",
+          params: { backend: "codex", threadId: "thread-1", prKey: base.prKey },
+        },
+      });
+      expect(await store.listThreadPrStatusWatchHistory({ backend: "codex", threadId: "thread-1", limit: 5 }))
+        .toEqual([expect.objectContaining({
+          watchId: "ci", status: "cancelled", endedReason: "cancelled_by_agent",
+        })]);
+
+      // Another thread's watch is not this thread's to stop.
+      await expect(appServerService.watchThreadPullRequestForTool({
+        action: "cancel", backend: "codex", threadId: "thread-1", watchId: "other",
+      })).resolves.toMatchObject({ ok: false, error: { code: "not_found" } });
+      await expect(appServerService.watchThreadPullRequestForTool({
+        action: "cancel", backend: "codex", threadId: "thread-1",
+      })).resolves.toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
+      expect(await store.listActiveThreadPrStatusWatches({ backend: "codex", threadId: "thread-2" }))
+        .toEqual([expect.objectContaining({ watchId: "other" })]);
+    } finally {
+      service.backgroundPrPollingEnabled = polling;
+      overlay.mockRestore();
+      db.close();
+    }
+  });
+
+  it("arms the operator's Watch CI with the agent tool's own logic over thread:prWatches", async () => {
+    const { appServerService } = await import("../ipc/app-server");
+    const headSha = "8".repeat(40);
+    const running = githubPr({
+      number: 3196, org: "pwrdrvr", repo: "PwrAgent", state: "pending", headSha,
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3196",
+    });
+    registerThreadPrStatusWatch.mockClear();
+    await prepareWatchForAttachedPr(running, { fetchedAt: Date.now() - 1_000 });
+    const handler = handlers.get("thread:prWatches")!;
+    const local = { sender: { id: 1 } };
+    const service = appServerService as unknown as {
+      ciRerunsByPrKey: Map<string, { headSha?: string; runId: number; runAttempt?: number; requestedAt: number }>;
+    };
+    // A re-run PwrAgent requested binds the operator's watch as it binds an agent's.
+    service.ciRerunsByPrKey.set(buildPullRequestStatusKey(running), {
+      headSha, runId: 45, runAttempt: 2, requestedAt: Date.now() - 60_000,
+    });
+    try {
+      const response = await handler(local, {
+        action: "watch", backend: "codex", threadId: "thread-1", prUrl: running.url,
+      });
+      expect(response).toMatchObject({
+        ok: true,
+        watch: {
+          armed: true,
+          reason: "armed",
+          watch: {
+            kind: "checks", createdBy: "operator", notifyOn: ["success", "failure"], runAttempt: 2, runId: 45,
+          },
+        },
+      });
+      expect(registerThreadPrStatusWatch).toHaveBeenCalledWith(expect.objectContaining({
+        watch: expect.objectContaining({ createdBy: "operator", headSha }),
+      }));
+      expect(publishLocalEvent).toHaveBeenCalledWith(expect.objectContaining({
+        notification: {
+          method: "thread/prWatches/updated",
+          params: { backend: "codex", threadId: "thread-1", prKey: buildPullRequestStatusKey(running) },
+        },
+      }));
+      await expect(handler(local, {
+        action: "watch", backend: "codex", threadId: "thread-1", prUrl: "https://github.com/pwrdrvr/PwrAgent/pull/1",
+      })).resolves.toMatchObject({ ok: false, error: { code: "not_found" } });
+      await expect(handler(local, { action: "watch", backend: "codex", threadId: "thread-1", prUrl: " " }))
+        .resolves.toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
+      await expect(handler({ sender: { id: 999 } }, {
+        action: "watch", backend: "codex", threadId: "thread-1", prUrl: running.url,
+      })).resolves.toMatchObject({ ok: false, error: { code: "federation_unsupported" } });
+    } finally {
+      service.ciRerunsByPrKey.clear();
+    }
+  });
+
+  it("tells the operator a finished CI result arms no watch, without the agent's tool argument", async () => {
+    const failing = githubPr({
+      number: 3197, org: "pwrdrvr", repo: "PwrAgent", state: "failing",
+      headSha: "9".repeat(40), url: "https://github.com/pwrdrvr/PwrAgent/pull/3197",
+    });
+    registerThreadPrStatusWatch.mockClear();
+    await prepareWatchForAttachedPr(failing, { fetchedAt: Date.now() - 1_000 });
+    const response = await handlers.get("thread:prWatches")!({ sender: { id: 1 } }, {
+      action: "watch", backend: "codex", threadId: "thread-1", prUrl: failing.url,
+    }) as ThreadPrWatchesResponse;
+    expect(response).toMatchObject({
+      ok: true,
+      watch: {
+        armed: false,
+        reason: "outcome_already_final",
+        currentOutcome: "failure",
+        message: expect.stringContaining("already finished with failure"),
+      },
+    });
+    expect(response.ok && response.watch?.message).not.toContain("waitForNextResult");
+    expect(registerThreadPrStatusWatch).not.toHaveBeenCalled();
+  });
+
+  it("projects each opted-in thread's Auto-fix state onto the active PR watch list without writing", async () => {
+    const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
+    const { StateDb } = await import("../state/state-db");
+    const { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } = await import("../state/sqlite-write-metrics");
+    const { createTempStateDb, removeTempStateDbDir } = await import("./sqlite-test-utils");
+    const { appServerService } = await import("../ipc/app-server");
+    const appState = await import("../state/app-state");
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pr-watch-auto-fix-");
+    const db = StateDb.open(temp.dbPath);
+    const store = new SqliteOverlayStore(db);
+    const service = appServerService as unknown as {
+      getOverlayStore: () => typeof store;
+      backgroundPrPollingEnabled: boolean;
+      prAutoDispatchAllowed: boolean;
+      prAutoDispatchBudgetPaused: boolean;
+    };
+    const overlay = vi.spyOn(service, "getOverlayStore").mockReturnValue(store);
+    const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
+    const previous = {
+      polling: service.backgroundPrPollingEnabled,
+      allowed: service.prAutoDispatchAllowed,
+      paused: service.prAutoDispatchBudgetPaused,
+    };
+    registerAppServerIpcHandlers();
+    const handler = handlers.get("thread:prWatches")!;
+    const local = { sender: { id: 1 } };
+    const prKey = "github.com/pwrdrvr/pwragent#3193";
+    try {
+      for (const [threadId, eligibleSince] of [["thread-owner", 1], ["thread-late", 2]] as const) {
+        await store.setThreadPrAutoDispatchEnabled({ backend: "codex", threadId, enabled: true });
+        await store.syncThreadPrAutoDispatchCandidates({
+          backend: "codex", threadId, prKeys: [prKey], now: eligibleSince,
+        });
+      }
+      getCachedThreadSummary.mockImplementation(({ threadId }) => threadId === "thread-owner"
+        ? { id: "thread-owner", title: "Owns the repairs", source: "codex", linkedDirectories: [], updatedAt: 1 } as never
+        : undefined);
+      service.backgroundPrPollingEnabled = true;
+      service.prAutoDispatchAllowed = true;
+      service.prAutoDispatchBudgetPaused = false;
+      const { result, writes } = await measureSqliteWrites(async () =>
+        await handler(local, { action: "active" }));
+      expect(writes.commits).toBe(0);
+      expect(writes.statements).toBe(0);
+      expect(result).toEqual({
+        ok: true,
+        active: [],
+        autoFix: [
+          { backend: "codex", threadId: "thread-owner", prKey, state: "active" },
+          {
+            backend: "codex", threadId: "thread-late", prKey, state: "handled_by_other_thread",
+            handledBy: { backend: "codex", threadId: "thread-owner", title: "Owns the repairs" },
+          },
+        ],
+      });
+
+      service.prAutoDispatchBudgetPaused = true;
+      await expect(handler(local, { action: "active" })).resolves.toMatchObject({
+        autoFix: [
+          { threadId: "thread-owner", state: "paused" },
+          { threadId: "thread-late", state: "paused" },
+        ],
+      });
+
+      // Git settings stop Auto-fix: windows already hide its rows.
+      service.backgroundPrPollingEnabled = false;
+      await expect(handler(local, { action: "active" })).resolves.toMatchObject({ autoFix: [] });
+    } finally {
+      service.backgroundPrPollingEnabled = previous.polling;
+      service.prAutoDispatchAllowed = previous.allowed;
+      service.prAutoDispatchBudgetPaused = previous.paused;
+      mode.mockRestore();
+      overlay.mockRestore();
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+      vi.unstubAllEnvs();
+    }
+  });
 
   it("refuses a watch, defers a PR prerequisite and stops background polling in a paused project", async () => {
     const attached = githubPr({
@@ -8626,6 +9554,7 @@ describe("app server ipc", () => {
     prefix: string,
     run: (fixture: {
       store: InstanceType<typeof import("../state/overlay-store-sqlite").SqliteOverlayStore>;
+      db: import("../state/state-db").StateDb;
       refresh: (request: RefreshThreadPullRequestsRequest) => Promise<PrSummary[]>;
     }) => Promise<T>,
   ): Promise<T> {
@@ -8651,7 +9580,7 @@ describe("app server ipc", () => {
       return response.prs;
     };
     try {
-      return await run({ store, refresh });
+      return await run({ store, db, refresh });
     } finally {
       overlay.mockRestore();
       db.close();
@@ -8728,6 +9657,110 @@ describe("app server ipc", () => {
       expectSqliteWriteBudget({ scenario: "renamed-repository-pr-collapse", writes,
         note: "Two user refreshes of a thread holding one PR under its pre-rename and renamed URLs: the lookup's own pr_lookup_cache and pr_status_cache writes plus one threads commit that collapses the rows, once per affected thread. Aliases live in memory: 0 MB/day after the collapse.",
       });
+    });
+  });
+
+  it("learns a transferred GitLab project from a status poll of its old path", async () => {
+    // GitLab follows the old path's redirect, so the poll answers under the
+    // current path. Without learning the rename, the thread that attached the
+    // MR by its old path never matched the answer and its status froze.
+    const { appServerService } = await import("../ipc/app-server");
+    const service = appServerService as unknown as {
+      prRepositoryAliases: { canonicalizeUrl: (url: string) => string; clear: () => void };
+      primaryPrThreadsByKey: { has: (prKey: string) => boolean };
+      getPrFetcher: () => unknown;
+      setThreadPrAttachment: (
+        key: string,
+        attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] } | undefined,
+      ) => void;
+      fetchForgePullRequests: (refs: Array<Record<string, unknown>>) => Promise<PrSummary[]>;
+    };
+    const oldUrl = "https://gitlab.com/team/legacy/tools/api/-/merge_requests/41";
+    const newUrl = "https://gitlab.com/platform/api/-/merge_requests/41";
+    const otherUrl = "https://gitlab.com/team/other/-/merge_requests/41";
+    const gitlabMr = (org: string, repo: string, url: string): PrSummary => ({
+      ...githubPr({ number: 41, org, repo, state: "passing", url }),
+      provider: "gitlab.com",
+    });
+    service.setThreadPrAttachment("codex:transferred-poll", {
+      backend: "codex",
+      primaryRepoKey: "gitlab.com/team/legacy/tools/api",
+      prs: [gitlabMr("team/legacy/tools", "api", oldUrl)],
+    });
+    const fetchPullRequests = vi.fn(async () => [
+      gitlabMr("platform", "api", newUrl),
+      // Another project's own !41 answers its own ref and is not a rename.
+      gitlabMr("team", "other", otherUrl),
+    ]);
+    const fetcher = vi.spyOn(service, "getPrFetcher").mockReturnValue({ fetchPullRequests });
+    try {
+      expect(service.primaryPrThreadsByKey.has("gitlab.com/platform/api#41")).toBe(false);
+
+      await service.fetchForgePullRequests([
+        { kind: "gitlab", host: "gitlab.com", owner: "team/legacy/tools", repo: "api", number: 41 },
+        { kind: "gitlab", host: "gitlab.com", owner: "team", repo: "other", number: 41 },
+      ]);
+
+      expect(service.prRepositoryAliases.canonicalizeUrl(oldUrl)).toBe(newUrl);
+      expect(service.prRepositoryAliases.canonicalizeUrl(otherUrl)).toBe(otherUrl);
+      expect(service.primaryPrThreadsByKey.has("gitlab.com/platform/api#41")).toBe(true);
+    } finally {
+      fetcher.mockRestore();
+      service.setThreadPrAttachment("codex:transferred-poll", undefined);
+      service.prRepositoryAliases.clear();
+    }
+  });
+
+  it("collapses a transferred GitLab project's duplicate MR once the forge names it", async () => {
+    // GitLab redirects an old project path to the project's ID, so the
+    // by-URL fetch answers under the current path, here a subgroup of
+    // another depth.
+    await withRenamedRepositoryStore("transferred-gitlab-mrs-", async ({ store, refresh }) => {
+      const request = {
+        backend: "codex",
+        threadId: "transferred-gitlab",
+        provider: "gitlab.com",
+        branch: "fix/transferred-project",
+        directoryPaths: ["/repo/api"],
+        trigger: "user",
+      } satisfies RefreshThreadPullRequestsRequest;
+      const oldUrl = "https://gitlab.com/team/legacy/tools/api/-/merge_requests/41";
+      const newUrl = "https://gitlab.com/platform/api/-/merge_requests/41";
+      const gitlabMr = (pr: Parameters<typeof githubPr>[0]): PrSummary => ({ ...githubPr(pr), provider: "gitlab.com" });
+      const lookupMr = gitlabMr({
+        number: 41, org: "platform", repo: "api", state: "pending",
+        headRefName: "fix/transferred-project", url: newUrl, linkedDirectoryPaths: ["/repo/api"],
+      });
+      const typedMr = gitlabMr({
+        number: 41, org: "team/legacy/tools", repo: "api", state: "pending", url: oldUrl,
+      });
+      const forgeMr = gitlabMr({
+        number: 41, org: "platform", repo: "api", state: "passing",
+        headRefName: "fix/transferred-project", url: newUrl,
+      });
+      await store.setThreadPullRequests({
+        backend: "codex", threadId: request.threadId, prs: [lookupMr],
+        fetchedAt: Date.now() - 120_000, refreshKey: buildThreadPrRequestKey(request),
+      });
+      await store.addThreadPullRequestReference({ backend: "codex", threadId: request.threadId, pr: typedMr });
+      expect((await store.getThreadOverlayState(request))?.prs?.map((pr) => pr.url)).toEqual([newUrl, oldUrl]);
+      detectPullRequestsForThread.mockResolvedValue([forgeMr]);
+      fetchPullRequestByUrl.mockImplementation(async ({ url }) => url === oldUrl ? forgeMr : undefined);
+
+      await refresh(request);
+
+      expect(fetchPullRequestByUrl).toHaveBeenCalledWith(expect.objectContaining({ url: oldUrl }));
+      const stored = (await store.getThreadOverlayState(request))?.prs ?? [];
+      expect(stored.map((pr) => pr.url)).toEqual([newUrl]);
+      expect(stored[0]).toMatchObject({
+        provider: "gitlab.com",
+        org: "platform",
+        repo: "api",
+        number: 41,
+        checkState: "passing",
+        explicitlyAttached: true,
+      });
+      expect((await refresh(request)).map((pr) => pr.url)).toEqual([newUrl]);
     });
   });
 
@@ -8936,6 +9969,233 @@ describe("app server ipc", () => {
       });
       expect(detectPullRequestsForThread).not.toHaveBeenCalled();
       expect(fetchPullRequestByUrl).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * The service with its rename state reachable, background polling on, and
+   * a registry that can start the wake turns watches and dependencies send.
+   */
+  async function renamedRepositoryService() {
+    const { appServerService } = await import("../ipc/app-server");
+    const service = appServerService as unknown as {
+      backgroundPrPollingEnabled: boolean;
+      ownerNavigationActive: boolean;
+      threadDependencyCoordinator?: unknown;
+      prStatusWatchCoordinator?: unknown;
+      setThreadPrAttachment: (
+        threadKey: string,
+        attachment: { backend: "codex"; primaryRepoKey?: string; prs: PrSummary[] } | undefined,
+      ) => void;
+      resolveRenamedPrWatchRepositories: () => Promise<void>;
+      syncPrStatusWatchKeys: () => Promise<void>;
+      getPrStatusWatchCoordinator: () => {
+        handleStatusSnapshot: (pr: PrSummary, observedAt: number) => Promise<number>;
+      };
+      getThreadDependencyCoordinator: () => {
+        handlePrEvent: (urls?: string | readonly string[]) => Promise<void>;
+      };
+    };
+    const registry = backendRegistryLifecycle.get() as Record<string, unknown>;
+    const submitTurnIfIdle = vi.fn(async () => ({ status: "started" as const, turnId: "wake" }));
+    registry.submitTurnIfIdle = submitTurnIfIdle;
+    registry.getActiveTurnForThread = () => undefined;
+    // Dependency registration reads each thread's turns through the provider.
+    const originalReadThread = readThread.getMockImplementation();
+    readThread.mockImplementation((async () => ({
+      replay: { entries: [], pagination: { hasPreviousPage: false } },
+    })) as unknown as NonNullable<typeof originalReadThread>);
+    const previous = {
+      polling: service.backgroundPrPollingEnabled,
+      navigation: service.ownerNavigationActive,
+    };
+    service.backgroundPrPollingEnabled = true;
+    service.ownerNavigationActive = true;
+    service.threadDependencyCoordinator = undefined;
+    service.prStatusWatchCoordinator = undefined;
+    const restore = () => {
+      if (originalReadThread) readThread.mockImplementation(originalReadThread);
+      delete registry.submitTurnIfIdle;
+      delete registry.getActiveTurnForThread;
+      service.backgroundPrPollingEnabled = previous.polling;
+      service.ownerNavigationActive = previous.navigation;
+      service.threadDependencyCoordinator = undefined;
+      service.prStatusWatchCoordinator = undefined;
+    };
+    return { appServerService, service, submitTurnIfIdle, restore };
+  }
+
+  it("claims a watch saved under a renamed repository's old name after a restart", async () => {
+    // The watch was registered before the duplicate rows collapsed. Status
+    // snapshots now carry the new name, and the alias that joins the two
+    // names was lost with the last launch.
+    const { measureSqliteWrites } = await import("../state/sqlite-write-metrics");
+    const { expectSqliteWriteBudget } = await import("./fixtures/sqlite-write-budget");
+    await withRenamedRepositoryStore("renamed-repo-watch-", async ({ store }) => {
+      const { service, submitTurnIfIdle, restore } = await renamedRepositoryService();
+      const threadId = "renamed-repo-watch";
+      const headSha = "a".repeat(40);
+      const storedPr = githubPr({
+        number: 3179, org: "pwrdrvr", repo: "PwrAgent", state: "pending", headSha,
+        url: RENAMED_PR_URL, linkedDirectoryPaths: ["/repo/PwrAgent"],
+      });
+      const passingPr = githubPr({ ...storedPr, state: "passing", checkState: "passing" });
+      try {
+        await store.setThreadPullRequests({
+          backend: "codex", threadId, prs: [storedPr], fetchedAt: Date.now(), refreshKey: threadId,
+        });
+        const oldWatch = {
+          backend: "codex" as const,
+          threadId,
+          prKey: "github.com/pwrdrvr/pwragnt#3179",
+          prUrl: PRE_RENAME_PR_URL,
+          prNumber: 3179,
+          createdAt: Date.now() - 60_000,
+          failureHandledByAutoFix: false,
+        };
+        await store.registerThreadPrStatusWatch({
+          watch: { ...oldWatch, watchId: "ci", headSha, notifyOn: ["success", "failure"], kind: "checks" },
+          now: Date.now(),
+        });
+        await store.registerThreadPrStatusWatch({
+          watch: { ...oldWatch, watchId: "merge", headSha: "", notifyOn: ["merged"], kind: "terminal", createdAt: oldWatch.createdAt + 1 },
+          now: Date.now(),
+        });
+        fetchPullRequestByUrl.mockImplementation(async ({ url }) => url === PRE_RENAME_PR_URL ? passingPr : undefined);
+
+        const { writes } = await measureSqliteWrites(async () => {
+          await service.resolveRenamedPrWatchRepositories();
+          await service.syncPrStatusWatchKeys();
+          await service.syncPrStatusWatchKeys();
+        });
+        expect(fetchPullRequestByUrl).toHaveBeenCalledTimes(1);
+        expect(fetchPullRequestByUrl).toHaveBeenCalledWith(expect.objectContaining({ url: PRE_RENAME_PR_URL }));
+        expect(await store.listActiveThreadPrStatusWatches({ backend: "codex", threadId })).toEqual([
+          expect.objectContaining({ watchId: "ci", prKey: "github.com/pwrdrvr/pwragent#3179", prUrl: RENAMED_PR_URL }),
+          expect.objectContaining({ watchId: "merge", prKey: "github.com/pwrdrvr/pwragent#3179", prUrl: RENAMED_PR_URL }),
+        ]);
+        expectSqliteWriteBudget({ scenario: "renamed-repository-pr-watch-keys", writes,
+          note: "Two undelivered watches saved under a renamed repository's old name move to the new name in one commit, once per learned rename; a second sync with no new rename reads only. 0 MB/day after the move.",
+        });
+
+        await expect(service.getPrStatusWatchCoordinator().handleStatusSnapshot(passingPr, Date.now()))
+          .resolves.toBe(1);
+        expect(submitTurnIfIdle).toHaveBeenCalledWith(expect.objectContaining({
+          threadId,
+          messageOrigin: expect.objectContaining({
+            prAutomation: expect.objectContaining({ prKey: "github.com/pwrdrvr/pwragent#3179", outcome: "success" }),
+          }),
+        }));
+        expect(await store.listActiveThreadPrStatusWatches({ backend: "codex", threadId }))
+          .toEqual([expect.objectContaining({ watchId: "merge" })]);
+      } finally {
+        restore();
+      }
+    });
+  });
+
+  it("satisfies a dependency saved under a renamed repository's old URL when the PR merges", async () => {
+    const appState = await import("../state/app-state");
+    const { buildThreadIdentityKey } = await import("@pwragent/shared");
+    const { ThreadDependencyStore } = await import("../state/thread-dependency-store");
+    await withRenamedRepositoryStore("renamed-repo-dependency-", async ({ store, db }) => {
+      const { service, submitTurnIfIdle, restore } = await renamedRepositoryService();
+      const stateDb = vi.spyOn(appState, "getAppStateDb").mockReturnValue(db);
+      const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
+      const openPr = githubPr({
+        number: 3179, org: "pwrdrvr", repo: "PwrAgent", state: "pending", headRefName: "fix/renamed-repo",
+        url: RENAMED_PR_URL, linkedDirectoryPaths: ["/repo/PwrAgent"],
+      });
+      const mergedPr = githubPr({ ...openPr, state: "passing", lifecycleState: "merged" });
+      const setPrerequisitePrs = async (pr: PrSummary) => {
+        await store.setThreadPullRequests({
+          backend: "codex", threadId: "prerequisite", prs: [pr], fetchedAt: Date.now(), refreshKey: "prerequisite",
+        });
+        service.setThreadPrAttachment(buildThreadIdentityKey("codex", "prerequisite"), {
+          backend: "codex", primaryRepoKey: "github.com/pwrdrvr/pwragent", prs: [pr],
+        });
+      };
+      try {
+        await setPrerequisitePrs(openPr);
+        // Saved before this change, with the URL the agent typed. A restart
+        // has since forgotten the alias that would join the two names.
+        const dependencies = new ThreadDependencyStore(db.raw);
+        dependencies.register({
+          id: "old-url", backend: "codex", threadId: "consumer",
+          conditions: [{ backend: "codex", threadId: "prerequisite", when: "pr_merged", prUrl: PRE_RENAME_PR_URL }],
+          mode: "all", onFailure: "notify", continuation: "Deploy the release.", deliver: "agent",
+          status: "waiting", evidence: [], createdAt: Date.now(), updatedAt: Date.now(),
+        });
+        fetchPullRequestByUrl.mockImplementation(async ({ url }) => url === PRE_RENAME_PR_URL ? openPr : undefined);
+
+        await setPrerequisitePrs(mergedPr);
+        await service.getThreadDependencyCoordinator().handlePrEvent(RENAMED_PR_URL);
+
+        expect(fetchPullRequestByUrl).toHaveBeenCalledWith(expect.objectContaining({ url: PRE_RENAME_PR_URL }));
+        const [dependency] = dependencies.list("codex", "consumer");
+        expect(dependency).toMatchObject({
+          status: "delivered",
+          outcome: "success",
+          conditions: [expect.objectContaining({ prUrl: RENAMED_PR_URL })],
+          evidence: [expect.objectContaining({ state: "satisfied", reason: "PR merged", prUrl: RENAMED_PR_URL })],
+        });
+        expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
+
+        // A new dependency typed with the old URL is saved under the new name.
+        const { appServerService } = await import("../ipc/app-server");
+        await appServerService.manageThreadDependencies({
+          action: "create", backend: "codex", threadId: "second-consumer",
+          conditions: [{ backend: "codex", threadId: "prerequisite", when: "pr_merged", prUrl: PRE_RENAME_PR_URL }],
+          continuation: "Announce the release.",
+        });
+        expect(dependencies.list("codex", "second-consumer")[0]?.conditions)
+          .toEqual([expect.objectContaining({ prUrl: RENAMED_PR_URL })]);
+        expect(fetchPullRequestByUrl).toHaveBeenCalledTimes(1);
+      } finally {
+        stateDb.mockRestore();
+        mode.mockRestore();
+        restore();
+      }
+    });
+  });
+
+  it("saves a new dependency's PR URL under the repository's current name", async () => {
+    const appState = await import("../state/app-state");
+    const { buildThreadIdentityKey } = await import("@pwragent/shared");
+    const { ThreadDependencyStore } = await import("../state/thread-dependency-store");
+    await withRenamedRepositoryStore("renamed-repo-dependency-create-", async ({ store, db }) => {
+      const { appServerService, service, restore } = await renamedRepositoryService();
+      const stateDb = vi.spyOn(appState, "getAppStateDb").mockReturnValue(db);
+      const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
+      const openPr = githubPr({
+        number: 3179, org: "pwrdrvr", repo: "PwrAgent", state: "pending",
+        url: RENAMED_PR_URL, linkedDirectoryPaths: ["/repo/PwrAgent"],
+      });
+      try {
+        await store.setThreadPullRequests({
+          backend: "codex", threadId: "prerequisite", prs: [openPr], fetchedAt: Date.now(), refreshKey: "prerequisite",
+        });
+        service.setThreadPrAttachment(buildThreadIdentityKey("codex", "prerequisite"), {
+          backend: "codex", primaryRepoKey: "github.com/pwrdrvr/pwragent", prs: [openPr],
+        });
+        fetchPullRequestByUrl.mockImplementation(async ({ url }) => url === PRE_RENAME_PR_URL ? openPr : undefined);
+
+        await appServerService.manageThreadDependencies({
+          action: "create", backend: "codex", threadId: "consumer",
+          conditions: [{ backend: "codex", threadId: "prerequisite", when: "ci_passed", prUrl: PRE_RENAME_PR_URL }],
+          continuation: "Deploy the release.",
+        });
+
+        expect(fetchPullRequestByUrl).toHaveBeenCalledTimes(1);
+        const [dependency] = new ThreadDependencyStore(db.raw).list("codex", "consumer");
+        expect(dependency?.conditions).toEqual([expect.objectContaining({ prUrl: RENAMED_PR_URL })]);
+        expect(dependency?.evidence[0]).toMatchObject({ prUrl: RENAMED_PR_URL });
+        expect(dependency?.evidence[0]?.reason).not.toBe("Waiting for a primary-workspace PR");
+      } finally {
+        stateDb.mockRestore();
+        mode.mockRestore();
+        restore();
+      }
     });
   });
 

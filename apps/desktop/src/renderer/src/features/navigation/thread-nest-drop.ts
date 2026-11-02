@@ -8,6 +8,15 @@ import {
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import type { PointerReorderTarget } from "./pointer-reorder-drag";
 
+/**
+ * Make `thread` a sub-thread of `parent`. Resolves false when the owner
+ * refused the link, so a drop that does more after the nest can stop.
+ */
+export type NestThreadHandler = (
+  thread: NavigationThreadSummary,
+  parent: NavigationThreadSummary,
+) => void | Promise<boolean | void>;
+
 /** Printed on the held card while a drop would nest it. */
 export const NEST_DROP_LABEL = "Make sub-thread";
 

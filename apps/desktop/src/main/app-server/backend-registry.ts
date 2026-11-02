@@ -11,7 +11,7 @@ import { ForgeReadError, repositoryKey, validateForgeReadArgs, type ForgeReadReq
 import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation, type ForgeReviewComment } from "../pr-status/forge-pr-tool-contract";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
-import { probeCurrentGitBranch } from "./git-head-branch";
+import { NOT_A_GIT_REPOSITORY, probeCurrentGitBranch } from "./git-head-branch";
 import {
   indexTokenMiserCachedReplays,
   indexTokenMiserPricingLines,
@@ -1979,6 +1979,9 @@ function resolveBranchDriftExpectedBranch(params: {
 async function readCurrentGitBranch(sourcePath: string, signal?: AbortSignal): Promise<string | undefined> {
   const head = await probeCurrentGitBranch(sourcePath, signal);
   signal?.throwIfAborted();
+  // Git would find no repository either. Skip its launch: on Windows that is
+  // PowerShell plus Git, at thread start and before every turn end.
+  if (head === NOT_A_GIT_REPOSITORY) return undefined;
   if (head) return head.branch;
   // Git for Windows can hand off to a descendant that still holds the
   // workspace open. Wait for the owned tree before allowing its removal.
@@ -2216,6 +2219,10 @@ type DirectoryGitStatusWriter = (params: {
 type ThreadPullRequestDetachHandler = (
   request: DetachThreadPullRequestRequest,
 ) => Promise<DetachThreadPullRequestResponse>;
+
+type ThreadPrWatchesPeerHandler = (
+  request: import("@pwragent/shared").FederationThreadPrWatchesRequestV1,
+) => Promise<import("@pwragent/shared").ThreadPrWatchesResponse>;
 
 type ThreadPullRequestRefreshHandler = (
   request: RefreshOwnedThreadPullRequestsRequest,
@@ -3380,6 +3387,11 @@ type TaskMonitorDelegationRecord = {
   finalizationStarted?: boolean;
   recoveryAttempted?: boolean;
   staleInterruptAttempted?: boolean;
+  /**
+   * A Claude monitor ended its turn while a background watcher ran. The
+   * watcher's notification starts the next turn, so no recovery runs.
+   */
+  awaitingClaudeTaskWake?: boolean;
   startupTimeoutSeconds: number;
   task: string;
 };
@@ -10467,6 +10479,7 @@ export class DesktopBackendRegistry {
   private threadPullRequestDetachHandler:
     | ThreadPullRequestDetachHandler
     | undefined;
+  private threadPrWatchesPeerHandler: ThreadPrWatchesPeerHandler | undefined;
   private threadPullRequestRefreshHandler:
     | ThreadPullRequestRefreshHandler
     | undefined;
@@ -12619,6 +12632,26 @@ export class DesktopBackendRegistry {
     handler: ThreadPullRequestDetachHandler | null | undefined,
   ): void {
     this.threadPullRequestDetachHandler = handler ?? undefined;
+  }
+
+  setThreadPrWatchesPeerHandler(
+    handler: ThreadPrWatchesPeerHandler | null | undefined,
+  ): void {
+    this.threadPrWatchesPeerHandler = handler ?? undefined;
+  }
+
+  /** A viewer's history, Stop or Watch CI on one of this owner's threads. */
+  async manageThreadPrWatchesForPeer(
+    request: import("@pwragent/shared").FederationThreadPrWatchesRequestV1,
+  ): Promise<import("@pwragent/shared").ThreadPrWatchesResponse> {
+    const handler = this.threadPrWatchesPeerHandler;
+    if (!handler) {
+      return {
+        ok: false,
+        error: { code: "not_found", message: "PR watches are not available on this instance yet." },
+      };
+    }
+    return await handler(request);
   }
 
   setThreadPullRequestRefreshHandler(
@@ -15950,6 +15983,11 @@ export class DesktopBackendRegistry {
           this.codexClient.listNativeSubAgentThreads?.({ all: true }, { callerReason: "auto-archive" }) ?? [],
         ])).flat();
         const threads = [...codexThreads, ...await this.listAllInstalledAcpThreads(undefined, false)];
+        // One read for every thread a PR watch will wake.
+        const watchedThreadKeys = new Set(
+          (await this.overlayStore.listAllActivePrStatusWatches()).map((watch) =>
+            buildThreadIdentityKey(watch.backend, watch.threadId)),
+        );
         const candidates: ThreadArchiveCandidate[] = [];
         for (const backend of new Set(threads.map((thread) => thread.source))) {
           const backendThreads = threads.filter((thread) => thread.source === backend);
@@ -15960,6 +15998,7 @@ export class DesktopBackendRegistry {
             candidates.push({
               thread, overlay: overlays[thread.id],
               activeSubAgent: await this.hasArchiveActiveSubAgent(backend, thread.id),
+              activePrWatch: watchedThreadKeys.has(buildThreadIdentityKey(backend, thread.id)),
             });
           }
         }
@@ -16216,6 +16255,7 @@ export class DesktopBackendRegistry {
       },
       overlay: await this.overlayStore.getThreadOverlayState({ backend, threadId }),
       activeSubAgent: await this.hasArchiveActiveSubAgent(backend, threadId),
+      activePrWatch: (await this.overlayStore.listActiveThreadPrStatusWatches({ backend, threadId })).length > 0,
     };
   }
 
@@ -18376,7 +18416,18 @@ export class DesktopBackendRegistry {
     const backend = request.backend ?? "codex";
     if (backend === "claude") {
       const storedReplay = await this.claudeBackend.readThread(request.threadId);
-      const messageIds = storedReplay.messages.flatMap((message) =>
+      // Every review imports, not only the requested page's, so a review
+      // older than the newest page still reaches To-dos. An older-page read
+      // has nothing to add to the latest read's import.
+      if (request.before === undefined) {
+        this.threadTodoHandler?.importReviews?.({ backend, threadId: request.threadId },
+          storedReplay.entries.filter((entry): entry is AppServerThreadReviewEntry => entry.type === "review"));
+      }
+      // PwrAgent's Claude transcript is read whole, so cut the requested page
+      // here, as for ACP. Without a page the renderer has no older history to
+      // ask for when its copy of the thread is missing some.
+      const pagedReplay = pageNormalizedReplay(storedReplay, { ...request, backend });
+      const messageIds = pagedReplay.messages.flatMap((message) =>
         message.role === "user" ? [message.id] : [],
       );
       const origins = await this.overlayStore.readThreadMessageOrigins?.({
@@ -18384,9 +18435,7 @@ export class DesktopBackendRegistry {
         threadId: request.threadId,
         messageIds,
       }) ?? {};
-      const replay = mergeThreadMessageOrigins(storedReplay, origins);
-      this.threadTodoHandler?.importReviews?.({ backend, threadId: request.threadId },
-        replay.entries.filter((entry): entry is AppServerThreadReviewEntry => entry.type === "review"));
+      const replay = mergeThreadMessageOrigins(pagedReplay, origins);
       const pendingRequest = this.getPendingRequestForThread({ backend, threadId: request.threadId });
       return { backend, threadId: request.threadId, fetchedAt: Date.now(), replay, pendingRequest, threadStatus: replay.threadStatus };
     }
@@ -36401,6 +36450,15 @@ export class DesktopBackendRegistry {
     }
 
     monitorRecord.lastActivityAt = Date.now();
+    // Claude answers a finished or printing watcher with a native turn of its
+    // own. That turn is now the monitor's.
+    const startedTurnId = notification.method === "turn/started"
+      ? readNonEmptyString(params?.turnId) ?? readNonEmptyString(readRecord(params?.turn)?.id)
+      : undefined;
+    if (monitorRecord.backend === "claude" && startedTurnId) {
+      monitorRecord.monitorTurnId = startedTurnId;
+      monitorRecord.awaitingClaudeTaskWake = false;
+    }
     const itemType = readNotificationItemType(notification);
     if (itemType !== "commandExecution") {
       return;
@@ -41579,16 +41637,43 @@ export class DesktopBackendRegistry {
    * only, because they cannot be taken back. A headless automation also
    * needs Full Access: nobody is watching it, and in an Auto automation no
    * reviewer would see these calls at all.
+   *
+   * A Claude thread follows the same rules. Bypass permissions is its Full
+   * Access, and its Auto mode lets Claude's classifier clear `gh` the way
+   * Codex's reviewer does.
    */
   private async forgeAutoRunsWithoutApproval(
     group: ForgeAgentToolGroup,
     context: AgentToolCallContext,
     automation?: { executionMode?: ThreadExecutionMode },
   ): Promise<boolean> {
-    if (context.backend !== "codex") return await this.isMcpGatewayFullAccess(context, automation?.executionMode);
-    const executionMode = await this.resolveCodexToolCallExecutionMode(context, automation?.executionMode);
+    if (context.backend !== "codex" && context.backend !== "claude") {
+      return await this.isMcpGatewayFullAccess(context, automation?.executionMode);
+    }
+    const executionMode = context.backend === "codex"
+      ? await this.resolveCodexToolCallExecutionMode(context, automation?.executionMode)
+      : await this.resolveClaudeToolCallExecutionMode(context.threadId, automation?.executionMode);
     if (executionMode === "full-access") return true;
     return executionMode === "auto" && group !== "approve_merge" && !automation;
+  }
+
+  /**
+   * The open Claude process's mode wins, because a permission change during
+   * the turn and a plan turn reach it before the saved thread. A thread with
+   * no open process and no readable record asks.
+   */
+  private async resolveClaudeToolCallExecutionMode(
+    threadId: string,
+    automationMode?: ThreadExecutionMode,
+  ): Promise<ThreadExecutionMode | undefined> {
+    const liveMode = this.claudeBackend.liveExecutionMode(threadId);
+    if (liveMode) return liveMode;
+    if (automationMode) return automationMode;
+    try {
+      return await this.claudeBackend.executionMode(threadId);
+    } catch {
+      return undefined;
+    }
   }
 
   private async resolveCodexToolCallExecutionMode(
@@ -41608,6 +41693,11 @@ export class DesktopBackendRegistry {
   ): Promise<boolean> {
     if (context.backend === "codex") {
       return await this.resolveCodexToolCallExecutionMode(context, automationMode) === "full-access";
+    }
+    // Bypass permissions is Claude's Full Access. Claude asks nothing under
+    // it, so the gateway card would be the only prompt.
+    if (context.backend === "claude") {
+      return await this.resolveClaudeToolCallExecutionMode(context.threadId, automationMode) === "full-access";
     }
     if (isAcpBackendId(context.backend)) {
       const session = this.acpBackend.getSession(context.backend, context.threadId);
@@ -45130,7 +45220,7 @@ export class DesktopBackendRegistry {
     });
     const prompt = buildMonitorDelegationPrompt({
       mcpConnectionIds: mcpAccess.connectionIds,
-      deferredMcpTools: monitorBackend === "claude",
+      claudeCode: monitorBackend === "claude",
       finalHandoffPrompt: args.finalHandoffPrompt,
       monitorContext: args.monitorContext,
       monitorId,
@@ -45386,6 +45476,11 @@ export class DesktopBackendRegistry {
         return await cancellation.promise;
       }
       await this.interruptManagedTaskMonitor(record);
+      // A Claude monitor waiting on its watcher has no turn to stop, so no
+      // terminal event would ever finish the cancellation.
+      if (record.awaitingClaudeTaskWake && !cancellation.finalizing) {
+        await this.finalizeTaskMonitorCancellation(record, "cancelled");
+      }
     } catch (error) {
       if (
         record.cancellation !== cancellation
@@ -46243,8 +46338,32 @@ export class DesktopBackendRegistry {
       return;
     }
 
+    const shuttingDown =
+      this.stoppingRunningTurnsForShutdown || this.shutdownRequested || this.closed;
+    const taskCount = this.claudeMonitorTaskCount(record);
+    if (
+      !record.recoveryAttempted
+      && !shuttingDown
+      && terminalStatus === "completed"
+      && taskCount > 0
+    ) {
+      // Claude Code blocks a long foreground sleep, so a Claude monitor waits
+      // in a background watcher and ends its turn. The watcher's output starts
+      // its next turn; a recovery turn now would end monitoring early.
+      record.awaitingClaudeTaskWake = true;
+      record.lastActivityAt = Date.now();
+      backendRegistryLog.info("Claude task monitor waiting on its background watcher", {
+        monitorId: record.monitorId,
+        monitorThreadId: record.monitorThreadId,
+        monitorTurnId: record.monitorTurnId,
+        parentThreadId: record.parentThreadId,
+        taskCount,
+      });
+      return;
+    }
+
     if (!record.recoveryAttempted) {
-      if (this.stoppingRunningTurnsForShutdown || this.shutdownRequested || this.closed) {
+      if (shuttingDown) {
         // Quit ends the monitor process. A recovery turn has no owner to keep
         // running and can otherwise race the closing Claude session store.
         this.taskMonitorDelegations.delete(record.monitorId);
@@ -46276,6 +46395,10 @@ export class DesktopBackendRegistry {
       if (record.activeCommandCount > 0 || (record.pendingMcpApprovalCount ?? 0) > 0) {
         continue;
       }
+      // A Claude monitor's watcher is its running command.
+      if (this.claudeMonitorTaskCount(record) > 0) {
+        continue;
+      }
 
       const staleAfterMs =
         Math.max(
@@ -46287,6 +46410,14 @@ export class DesktopBackendRegistry {
         TASK_MONITOR_STALE_GRACE_MS;
       const idleMs = now - record.lastActivityAt;
       if (idleMs < staleAfterMs) {
+        continue;
+      }
+
+      // The watcher ended and Claude never answered it, so no turn is left
+      // to interrupt.
+      if (record.awaitingClaudeTaskWake) {
+        record.awaitingClaudeTaskWake = false;
+        await this.startTaskMonitorRecoveryTurn({ record, terminalStatus: "completed" });
         continue;
       }
 
@@ -46347,6 +46478,12 @@ export class DesktopBackendRegistry {
         reason: "monitor_stale_interrupt_failed",
       });
     }
+  }
+
+  /** Background tasks a Claude monitor's session runs, such as its watcher. */
+  private claudeMonitorTaskCount(record: TaskMonitorDelegationRecord): number {
+    if (record.backend !== "claude" || !record.monitorThreadId) return 0;
+    return this.claudeBackend.listBackgroundTasks(record.monitorThreadId).terminals.length;
   }
 
   /**
@@ -47467,7 +47604,7 @@ export class DesktopBackendRegistry {
       };
     }
 
-    const ref = options.forgeUrl
+    const ref = options.forgeUrl || resolved.forgeResolved
       ? resolved.ref
       : await this.resolveForgePullRequestReference(resolved.ref, summary);
     const pr: PrSummary = {
@@ -47674,7 +47811,7 @@ export class DesktopBackendRegistry {
     args: AttachThreadPullRequestToolArgs,
     summary: ThreadInspectionSummary,
   ): Promise<
-    | { ok: true; ref: PullRequestReferenceIdentity }
+    | { ok: true; ref: PullRequestReferenceIdentity; forgeResolved?: boolean }
     | { ok: false; message: string }
   > {
     const parsedUrl = parsePullRequestReferenceUrl(args.url);
@@ -47750,6 +47887,16 @@ export class DesktopBackendRegistry {
     }
 
     const inferredRepositories = await this.inferPullRequestRepositories(summary);
+    if (inferredRepositories.length > 1 && this.pullRequestReferenceResolver) {
+      const resolvedRepositories = await this.resolveInferredPullRequestRepositories(
+        inferredRepositories,
+        number,
+        summary,
+      );
+      if (resolvedRepositories.length === 1) {
+        return { ok: true, ref: resolvedRepositories[0]!, forgeResolved: true };
+      }
+    }
     if (inferredRepositories.length !== 1) {
       return {
         ok: false,
@@ -47768,6 +47915,36 @@ export class DesktopBackendRegistry {
         url: buildPullRequestReferenceUrl({ ...inferred, number }),
       },
     };
+  }
+
+  /**
+   * The PR under each inferred repository, as the forge names it. A checkout
+   * cloned before a rename keeps the old remote, and the forge answers the
+   * old name with the new one, so both names collapse to one repository.
+   * Known renames come from the alias map without a fetch. A name the forge
+   * cannot place keeps its own identity, so the ambiguity stands.
+   */
+  private async resolveInferredPullRequestRepositories(
+    repositories: readonly PullRequestRepositoryRef[],
+    number: number,
+    summary: ThreadInspectionSummary,
+  ): Promise<PullRequestReferenceIdentity[]> {
+    const answers = await Promise.all(repositories.map(async (repository) =>
+      await this.resolveForgePullRequestReference(
+        {
+          ...repository,
+          number,
+          url: buildPullRequestReferenceUrl({ ...repository, number }),
+        },
+        summary,
+      )
+    ));
+    const byKey = new Map<string, PullRequestReferenceIdentity>();
+    for (const answer of answers) {
+      const key = pullRequestRepositoryKey(answer);
+      if (!byKey.has(key)) byKey.set(key, answer);
+    }
+    return [...byKey.values()];
   }
 
   private async inferPullRequestRepositories(
@@ -48635,6 +48812,7 @@ export class DesktopBackendRegistry {
     this.assertNotBootstrap("readThreadForContentSearch");
     const { backend, threadId, limit } = request;
     const replay = backend === "claude"
+      // The whole transcript is already in memory; search all of it.
       ? await this.claudeBackend.readThread(threadId)
       : isAcpBackendId(backend)
         ? pageNormalizedReplay(await this.acpBackend.readReplay(backend, threadId), request)

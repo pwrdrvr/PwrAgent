@@ -8,6 +8,10 @@ import { detectPullRequestsForThread, filterStoredDiscoveredPullRequests } from 
 import type { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
 import * as gitExecutable from "../app-server/git-executable";
 import { resolveForgeReposForDirectory } from "../pr-status/git-remote";
+import {
+  clearForgeRepositoryNames,
+  recordForgeRepositoryName,
+} from "../pr-status/forge-repository-names";
 
 const execFileAsync = promisify(execFile);
 
@@ -83,6 +87,89 @@ describe("detectPullRequestsForThread", () => {
       fetcher: { fetchAllPullRequestsForBranch: vi.fn(async () => [pr]) },
       branch: "fix/fork-contribution", directoryPaths: [repo],
     })).resolves.toEqual([{ ...pr, linkedDirectoryPaths: [repo] }]);
+  });
+
+  describe("a remote that still has a renamed repository's old name", () => {
+    // GitHub answers ExampleOrg/catalog-service as ExampleOrg/inventory-service.
+    const renamedPr = {
+      provider: "github.com", number: 8, org: "ExampleOrg", repo: "inventory-service",
+      headRefName: "fix/renamed", headSha: "a".repeat(40), state: "pending" as const,
+      url: "https://github.com/ExampleOrg/inventory-service/pull/8",
+    };
+    const oldRemote = { host: "github.com", owner: "ExampleOrg", repo: "catalog-service" };
+    const answerRename = vi.fn(async () => {
+      recordForgeRepositoryName(oldRemote, "ExampleOrg/inventory-service");
+    });
+
+    afterEach(() => {
+      clearForgeRepositoryNames();
+      answerRename.mockClear();
+    });
+
+    it("keeps the branch's PR once the forge has named the remote", async () => {
+      const repo = await createRepoWithRenamedTrackedBranch({
+        localBranch: "fix/renamed",
+        remoteBranch: "fix/renamed",
+      });
+      const fetcher = { fetchAllPullRequestsForBranch: vi.fn(async () => [renamedPr]) };
+      recordForgeRepositoryName(oldRemote, "ExampleOrg/inventory-service");
+
+      await expect(detectPullRequestsForThread({
+        fetcher, branch: "fix/renamed", directoryPaths: [repo],
+      })).resolves.toEqual([{ ...renamedPr, linkedDirectoryPaths: [repo] }]);
+    });
+
+    it("keeps a stored PR after asking the forge once what the remote is called", async () => {
+      const repo = await createRepoWithDefaultBranch("main");
+      const stored = { ...renamedPr, linkedDirectoryPaths: [repo] };
+
+      await expect(filterStoredDiscoveredPullRequests([stored], { resolveRepositoryNames: answerRename }))
+        .resolves.toEqual([stored]);
+      await expect(filterStoredDiscoveredPullRequests([stored], { resolveRepositoryNames: answerRename }))
+        .resolves.toEqual([stored]);
+      expect(answerRename).toHaveBeenCalledOnce();
+      expect(answerRename).toHaveBeenCalledWith([oldRemote]);
+    });
+
+    it("keeps a stored PR while the forge cannot say what the remote is called", async () => {
+      const repo = await createRepoWithDefaultBranch("main");
+      const stored = { ...renamedPr, linkedDirectoryPaths: [repo] };
+      const unanswered = vi.fn(async () => {
+        throw new Error("no GitHub token");
+      });
+
+      await expect(filterStoredDiscoveredPullRequests([stored], { resolveRepositoryNames: unanswered }))
+        .resolves.toEqual([stored]);
+      expect(unanswered).toHaveBeenCalledOnce();
+    });
+
+    it("still drops a stranger's fork once the forge says the remote was not renamed", async () => {
+      const repo = await createRepoWithDefaultBranch("main");
+      const strangerPr = {
+        ...renamedPr, repo: "catalog-service",
+        sourceRepository: { provider: "github.com", org: "stranger", repo: "catalog-service" },
+        url: "https://github.com/ExampleOrg/catalog-service/pull/9", linkedDirectoryPaths: [repo],
+      };
+      const notRenamed = vi.fn(async () => {
+        recordForgeRepositoryName(oldRemote, "ExampleOrg/catalog-service");
+      });
+
+      await expect(filterStoredDiscoveredPullRequests([strangerPr], { resolveRepositoryNames: notRenamed }))
+        .resolves.toEqual([]);
+      expect(notRenamed).toHaveBeenCalledOnce();
+    });
+
+    it("asks the forge nothing when every stored PR matches a remote by name", async () => {
+      const repo = await createRepoWithDefaultBranch("main");
+      const ownPr = {
+        ...renamedPr, repo: "catalog-service",
+        url: "https://github.com/ExampleOrg/catalog-service/pull/10", linkedDirectoryPaths: [repo],
+      };
+
+      await expect(filterStoredDiscoveredPullRequests([ownPr], { resolveRepositoryNames: answerRename }))
+        .resolves.toEqual([ownPr]);
+      expect(answerRename).not.toHaveBeenCalled();
+    });
   });
 
   it("removes legacy default-branch discoveries while preserving explicit PRs and feature history", async () => {

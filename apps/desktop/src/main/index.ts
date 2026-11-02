@@ -13,7 +13,7 @@ import {
   getExistingDesktopBackendRegistry,
 } from "./app-server/backend-registry";
 import { interruptStartupStorageMaintenance, runStartupStorageMaintenance } from "./storage-maintenance";
-import { scheduleLegacyCiArtifactCleanup } from "./pr-status/legacy-ci-artifact-cleanup";
+import { removeRetiredCiArtifactStore } from "./pr-status/forge-artifact-download";
 import { hadExistingAppStateDatabase, getAppStateDb } from "./state/app-state";
 import { observeStorageArchive } from "./state/storage-maintenance";
 import { runOneTimeArchivedWorktreeRepair } from "./state/archived-worktree-repair";
@@ -1581,7 +1581,7 @@ export function bootstrapApp(): void {
     getDesktopConfigStore();
     if (bootMode === "active-profile") {
       const registry = getDesktopBackendRegistry();
-      void scheduleLegacyCiArtifactCleanup();
+      void removeRetiredCiArtifactStore();
       registry.onEvent(async (event) => {
         const method = event.notification.method;
         if (method === "thread/archived" || method === "thread/unarchived") {

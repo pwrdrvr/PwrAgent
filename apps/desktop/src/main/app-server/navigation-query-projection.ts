@@ -270,6 +270,7 @@ function projectNavigationRow(params: {
   const reactions = limitRecords(thread.reactions);
   const prs = limitRecords(thread.prs);
   const messagingBindings = limitRecords(thread.messagingBindings);
+  const prCiWatches = limitRecords(thread.prCiWatches);
   const nativeSubAgentCount = thread.nativeSubAgentCount ?? thread.codexNativeSubAgents?.length ?? 0;
   const projected = {
     ref: navigationIdentity(thread),
@@ -381,6 +382,7 @@ function projectNavigationRow(params: {
     ...(thread.prAutoDispatchEnabled !== undefined
       ? { prAutoDispatchEnabled: thread.prAutoDispatchEnabled }
       : {}),
+    ...(prCiWatches.items ? { prCiWatches: prCiWatches.items } : {}),
     ...(thread.scheduledStart ? { scheduledStart: thread.scheduledStart } : {}),
   };
   return {

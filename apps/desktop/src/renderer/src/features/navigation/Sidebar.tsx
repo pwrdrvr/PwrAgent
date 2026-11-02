@@ -119,6 +119,7 @@ import {
   DetachPullRequestWarning,
   shouldShowDetachPullRequestWarning,
 } from "../pr-status/DetachPullRequestWarning";
+import { PullRequestWatchMenuItems } from "../pr-watches/PullRequestWatchMenuItems";
 import { SidebarSearchPopup } from "./SidebarSearchPopup";
 import {
   formatRateLimitLine,
@@ -1115,17 +1116,18 @@ export function Sidebar(props: SidebarProps) {
   );
   // A drop on a row. The tray the thread lands in opens, so the drop shows
   // where the thread went rather than making it vanish. A refused drop
-  // closes it again.
+  // closes it again. Resolves the owner's answer, so a drop can follow up.
   const nestThread = useRevealListChange(
     revealHoverStableSnapshot,
     props.onSetThreadParent
-      ? (thread: NavigationThreadSummary, parent: NavigationThreadSummary): void => {
+      ? (thread: NavigationThreadSummary, parent: NavigationThreadSummary): Promise<boolean | void> => {
           const setCollapsed = parent.subthreadsCollapsed === true
             ? props.onSetSubthreadsCollapsed
             : undefined;
           void setCollapsed?.(parent, false);
-          void props.onSetThreadParent!(thread, parent.id, parent.source, !parent.federation).then((saved) => {
+          return props.onSetThreadParent!(thread, parent.id, parent.source, !parent.federation).then((saved) => {
             if (saved === false) void setCollapsed?.(parent, true);
+            return saved;
           });
         }
       : undefined,
@@ -4048,6 +4050,11 @@ export function Sidebar(props: SidebarProps) {
                     >
                       Copy Pull Request URL
                     </button>
+                    <PullRequestWatchMenuItems
+                      thread={contextMenu.thread}
+                      pr={contextMenuPullRequest}
+                      onClose={() => setContextMenu(undefined)}
+                    />
                     {props.onDetachPullRequest ? (
                       <button
                         role="menuitem"

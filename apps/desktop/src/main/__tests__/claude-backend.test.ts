@@ -7,7 +7,7 @@ import type { Options, Query, SDKMessage, SDKUserMessage, query } from "@anthrop
 import type { AgentEvent, AppServerThreadMessageOrigin, BackendModelOption } from "@pwragent/shared";
 import { ClaudeBackend, ClaudeTurnActiveError } from "../claude/claude-backend";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
-import { createClaudePermissionHandler, claudePermissionMode } from "../claude/claude-permissions";
+import { createClaudePermissionHandler, claudePermissionMode, threadExecutionModeForClaudePermission } from "../claude/claude-permissions";
 import { createClaudeElicitationHandler } from "../claude/claude-elicitation";
 import { buildLiveToolDetails, getNotificationItem } from "../../renderer/src/features/thread-detail/live-transcript-activity";
 import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-reviews/thread-review-events";
@@ -184,6 +184,38 @@ describe("Claude SDK backend", () => {
       await starting.catch(() => {});
       await closing;
       readSpy.mockRestore();
+    }
+  });
+
+  it("waits for an ended session's last turn report before close resolves", async () => {
+    const f = await fixture();
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    // The session leaves the live set before its terminal event is reported,
+    // and the report's listeners still read the store and the workspace.
+    const reporting = Promise.withResolvers<void>();
+    const releaseReport = Promise.withResolvers<void>();
+    const emit = f.backendOptions.emit;
+    f.backendOptions.emit = async (event) => {
+      if (event.notification.method === "turn/completed") {
+        reporting.resolve();
+        await releaseReport.promise;
+      }
+      await emit(event);
+    };
+    let closing: Promise<void> | undefined;
+    try {
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+      await reporting.promise;
+      let closed = false;
+      closing = f.backend.close().then(() => { closed = true; });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closed).toBe(false);
+      releaseReport.resolve();
+      await closing;
+      expect(closed).toBe(true);
+    } finally {
+      releaseReport.resolve();
+      await closing;
     }
   });
 
@@ -1287,6 +1319,23 @@ describe("Claude SDK backend", () => {
     expect(f.backend.summary().rateLimits?.[0]).toMatchObject({ usedPercent: 35, name: "Weekly limit" });
     const restarted = new ClaudeBackend(f.backendOptions);
     expect((await restarted.readThread(threadId)).contextWindow).toEqual({ usedTokens: 1200, modelContextWindow: 200_000 });
+  });
+
+  it("reports the open process's approval mode, following a plan turn and a change during the turn", async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => { finish = resolve; });
+    const f = await fixture(async function* () {
+      await gate;
+      yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
+    }, { setPermissionMode: vi.fn().mockResolvedValue(undefined) });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "full-access" });
+    expect(f.backend.liveExecutionMode(threadId)).toBeUndefined();
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Plan the fix" }], collaborationMode: { mode: "plan" } });
+    expect(f.backend.liveExecutionMode(threadId)).toBe("default");
+    await f.backend.setExecutionMode(threadId, "auto");
+    expect(f.backend.liveExecutionMode(threadId)).toBe("auto");
+    finish();
+    await f.waitForTurn();
   });
 
   it("uses Claude's active query to inspect MCP inventory", async () => {
@@ -2634,6 +2683,12 @@ describe("Claude permission bridge", () => {
   it("maps the existing execution modes onto SDK modes", () => {
     expect(["default", "auto", "full-access"].map((mode) => claudePermissionMode(mode as "default" | "auto" | "full-access")))
       .toEqual(["default", "auto", "bypassPermissions"]);
+  });
+
+  it("counts only bypass permissions and Auto as relaxed approval modes", () => {
+    expect((["bypassPermissions", "auto", "default", "acceptEdits", "plan", "dontAsk"] as const)
+      .map((mode) => threadExecutionModeForClaudePermission(mode)))
+      .toEqual(["full-access", "auto", "default", "default", "default", "default"]);
   });
 
   it.each([

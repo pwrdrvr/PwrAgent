@@ -1066,6 +1066,79 @@ select_for_new_threads = true
     expect(internals.pendingServerRequests.size).toBe(0);
   });
 
+  describe("in a Claude thread", () => {
+    type ClaudeModes = {
+      liveExecutionMode(threadId: string): ThreadExecutionMode | undefined;
+      executionMode(threadId: string): Promise<ThreadExecutionMode>;
+    };
+    let live: ThreadExecutionMode | undefined;
+    let saved: ThreadExecutionMode;
+    let events: AgentEvent[];
+    // No annotations, so the connection's default Tool approval asks.
+    const invoke = () => approveAndInvoke(
+      { ...args, serverName: "Fixture" },
+      { backend: "claude", threadId: "thread-1", turnId: "turn-1", transport: "mcp" },
+      new AbortController().signal,
+    );
+
+    beforeEach(() => {
+      live = undefined;
+      saved = "default";
+      const claude = (registry as unknown as { claudeBackend: ClaudeModes }).claudeBackend;
+      vi.spyOn(claude, "liveExecutionMode").mockImplementation(() => live);
+      vi.spyOn(claude, "executionMode").mockImplementation(async () => saved);
+      events = [];
+      registry.onEvent(async (event) => {
+        if (event.notification.method !== "mcpServer/elicitation/request") return;
+        events.push(event);
+        await registry.submitServerRequest({
+          backend: "claude", threadId: "thread-1", turnId: "turn-1",
+          requestId: String(event.notification.params.requestId),
+          response: { action: "decline", content: null, _meta: null },
+        });
+      });
+    });
+
+    it("runs a gateway call that would ask without a card under bypass permissions", async () => {
+      live = "full-access";
+      expect(await invoke()).toBe(true);
+      expect(events).toEqual([]);
+      expect(internals.pendingServerRequests.size).toBe(0);
+    });
+
+    it.each(["default", "auto"] as const)("keeps the card for an open %s process", async (mode) => {
+      live = mode;
+      expect(await invoke()).toBe(false);
+      expect(events).toHaveLength(1);
+    });
+
+    it("follows the open process over the saved mode, and the saved mode with no process", async () => {
+      saved = "full-access";
+      live = "default";
+      expect(await invoke()).toBe(false);
+      expect(events).toHaveLength(1);
+      live = undefined;
+      expect(await invoke()).toBe(true);
+      expect(events).toHaveLength(1);
+    });
+
+    it("asks when no process is open and the thread record cannot be read", async () => {
+      const claude = (registry as unknown as { claudeBackend: ClaudeModes }).claudeBackend;
+      vi.mocked(claude.executionMode).mockRejectedValue(new Error("missing thread"));
+      expect(await invoke()).toBe(false);
+      expect(events).toHaveLength(1);
+    });
+
+    it.each(["full-access", "default", "auto"] as const)("honors %s for a headless Claude automation", async (mode) => {
+      (internals.headlessAutomationTurns as Map<string, unknown>).set("claude:thread-1:turn-1", {
+        agentThreadId: "automation-1", backend: "claude", automationRunId: "run-1",
+        executionMode: mode, executionThreadId: "thread-1", queueEntryId: "queue-1", startedAt: 1,
+      });
+      expect(await invoke()).toBe(mode === "full-access");
+      expect(events).toEqual([]);
+    });
+  });
+
   it.each([
     { label: "read-only", annotations: { readOnlyHint: true }, prompts: 0 },
     { label: "read-only but destructive", annotations: { readOnlyHint: true, destructiveHint: true }, prompts: 1 },

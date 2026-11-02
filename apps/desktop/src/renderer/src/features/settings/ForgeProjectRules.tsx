@@ -44,7 +44,7 @@ export const FORGE_TOOL_ACCESS_LABELS: Record<ForgeAgentToolAccess, string> = {
 
 const FORGE_TOOL_ACCESS_DESCRIPTIONS: Record<ForgeAgentToolAccess, string> = {
   allow: "Runs without asking.",
-  auto: "Runs in Codex Auto and Full Access threads. Asks otherwise.",
+  auto: "Runs in Codex or Claude Auto and in Full Access threads. Asks otherwise.",
   ask: "Always asks.",
   off: "Removes these tools from threads.",
 };
