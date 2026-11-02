@@ -150,13 +150,14 @@ agent receives PwrAgent's one-sentence message, never server output.
 
 ## Limitations
 
-- The bridge forwards tools, resources and prompts. Form elicitation during
-  a tool call is routed to the caller; see "Upstream MCP forms on managed
-  connections" in [mcp-gateway-tools.md](mcp-gateway-tools.md). Progress
-  reports during a tool call reach the caller and extend the call's timeout;
-  see "Upstream progress" there. Other server-to-client requests (sampling,
-  URL elicitation, roots) and log notifications from a local server are not
-  forwarded.
+- The bridge forwards tools, resources and prompts. Form and URL
+  elicitation during a tool call are routed to the caller; see "Upstream MCP
+  forms on managed connections" and "Upstream links" in
+  [mcp-gateway-tools.md](mcp-gateway-tools.md). Progress reports during a
+  tool call reach the caller and extend the call's timeout; see "Upstream
+  progress" there. `roots/list` is answered with the thread's directories;
+  see "Upstream roots" there. Sampling and log notifications from a local
+  server are not forwarded.
 - On Windows, a descendant that detaches from its parent before the server
   exits can escape `taskkill /T`. POSIX process groups do not have this gap
   unless a descendant deliberately starts its own session.

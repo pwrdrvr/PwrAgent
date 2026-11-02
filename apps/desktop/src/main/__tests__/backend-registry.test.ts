@@ -3497,7 +3497,7 @@ describe("DesktopBackendRegistry", () => {
         expect(registry.getInProgressThreadSnapshotForQuit()).toMatchObject({ count: 1, threadIds: [`claude:${threadId}`] });
         expect(registry.getActiveTurnForThread({ backend: "claude", threadId })).toMatchObject({ turnId: started.turnId });
         expect(optionsSeen[turn].permissionMode).toBe("auto");
-        expect(registerBridge).toHaveBeenCalledWith("fixture-connection", threadId);
+        expect(registerBridge).toHaveBeenCalledWith("fixture-connection", threadId, undefined, "claude");
         expect(Object.values(optionsSeen[turn].mcpServers ?? {})).toContainEqual(expect.objectContaining({ type: "stdio", command: "/fixture/bridge" }));
         const server = optionsSeen[turn].mcpServers!.pwragent;
         if (!("url" in server)) throw new Error("Expected HTTP MCP server");
@@ -18131,7 +18131,7 @@ script = "echo setup"
       mcpConnectionIds: [PWRSNAP_MCP_CONNECTION_ID],
     });
 
-    expect(registerBridge).toHaveBeenCalledWith("pwrsnap", undefined);
+    expect(registerBridge).toHaveBeenCalledWith("pwrsnap", undefined, undefined, "codex");
     expect(bindThread).toHaveBeenCalledWith("thread-1");
     const mcpServers = (
       codexClient.lastStartThreadParams!.config as {
@@ -18245,7 +18245,7 @@ script = "echo setup"
       }),
     ).rejects.toThrow("Codex thread creation failed");
 
-    expect(registerBridge).toHaveBeenCalledWith("pwrsnap", undefined);
+    expect(registerBridge).toHaveBeenCalledWith("pwrsnap", undefined, undefined, "codex");
     expect(revoke).toHaveBeenCalledTimes(1);
     await registry.close();
   });
@@ -18397,7 +18397,7 @@ script = "echo setup"
       mcpConnectionIds: [PWRGIT_MCP_CONNECTION_ID],
     });
 
-    expect(registerBridge).toHaveBeenCalledWith("pwrgit", undefined);
+    expect(registerBridge).toHaveBeenCalledWith("pwrgit", undefined, undefined, "codex");
     const servers = (codexClient.lastStartThreadParams!.config as { mcp_servers: Record<string, unknown> }).mcp_servers;
     expect(Object.keys(servers)[0]).toMatch(/^pwragent_pwrgit_/u);
     expect(Object.values(servers)).toMatchObject([{ command: process.execPath }]);

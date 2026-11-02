@@ -689,7 +689,12 @@ import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gate
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { McpGatewayToolService, type McpGatewayApproval } from "../mcp-connections/mcp-gateway-tool-service";
 import { gatewayToolRequiresApproval, type McpGatewayInvocation, type McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
-import { elicitationUnavailable, hostApprovalFormRefused } from "../mcp-connections/mcp-elicitation-relay";
+import {
+  elicitationUnavailable,
+  hostApprovalFormRefused,
+  isUrlElicitation,
+} from "../mcp-connections/mcp-elicitation-relay";
+import type { ThreadRootDirectory } from "../mcp-connections/mcp-upstream-roots";
 import type { ElicitRequestParams } from "@modelcontextprotocol/sdk/types.js";
 import {
   getTokenMiserBridgeDescriptorPath,
@@ -8292,6 +8297,8 @@ export type BackendRegistryMcpConnectionService =
       | "probeConnection"
       | "requestGatewayToolOperation"
       | "closeThreadSessions"
+      | "setThreadRootsResolver"
+      | "noteThreadDirectoriesChanged"
     >
   >;
 
@@ -10890,6 +10897,9 @@ export class DesktopBackendRegistry {
         ? undefined
         : options?.mcpConnectionService ??
           (isAppStateInitialized() ? getMcpConnectionGatewayService() : undefined);
+    this.mcpConnectionService?.setThreadRootsResolver?.(
+      async (scope) => await this.resolveThreadMcpRootDirectories(scope),
+    );
     this.providerThreadSnapshotStore =
       options?.providerThreadSnapshotStore === null
         ? undefined
@@ -11652,6 +11662,7 @@ export class DesktopBackendRegistry {
         return await this.registerAcpMcpConnections(
           overlay?.mcpConnectionIds,
           sessionId,
+          backendId,
         );
       },
       automationInspectionMcpCommand:
@@ -19963,7 +19974,7 @@ export class DesktopBackendRegistry {
       : undefined;
     const mcpConnectionRegistrations =
       backend === "codex" || isAcpBackendId(backend)
-        ? await this.registerMcpConnections(mcpConnectionIds)
+        ? await this.registerMcpConnections(mcpConnectionIds, undefined, backend)
         : [];
     const isolateFromInherited =
       backend === "codex" && mcpProviderServersEnabled === false;
@@ -22090,7 +22101,7 @@ export class DesktopBackendRegistry {
         .map((connection) => connection.id);
       const connectionIds = [...new Set([...selectedConnectionIds, ...grantedConnectionIds])];
       for (const connectionId of connectionIds) {
-        for (const registration of await this.registerMcpConnections([connectionId])) {
+        for (const registration of await this.registerMcpConnections([connectionId], undefined, "codex")) {
           registrations.push({ connectionId, registration });
         }
       }
@@ -22145,6 +22156,8 @@ export class DesktopBackendRegistry {
   private async registerMcpConnections(
     connectionIds: string[] | undefined,
     threadId?: string,
+    /** The thread's backend, so a managed local server can be given its directories. */
+    backend?: AppServerBackendKind,
   ): Promise<McpConnectionBridgeRegistration[]> {
     const selected = [
       ...new Set(
@@ -22167,7 +22180,7 @@ export class DesktopBackendRegistry {
         throw new Error("MCP connections are unavailable in this PwrAgent runtime.");
       }
       try {
-        const registration = await service.registerBridge(connectionId, threadId);
+        const registration = await service.registerBridge(connectionId, threadId, undefined, backend);
         if (registration) registrations.push(registration);
       } catch (error) {
         // A connection the operator parked, removed, or locked behind the
@@ -22215,11 +22228,13 @@ export class DesktopBackendRegistry {
 
   private async registerAcpMcpConnections(
     connectionIds: string[] | undefined,
-    threadId?: string,
+    threadId: string | undefined,
+    backend: AppServerBackendKind,
   ): Promise<AcpMcpServerRegistration | undefined> {
     const registrations = await this.registerMcpConnections(
       connectionIds,
       threadId,
+      backend,
     );
     if (registrations.length === 0) return undefined;
     return {
@@ -22354,7 +22369,7 @@ export class DesktopBackendRegistry {
       const input = await ownThreadInputAttachments(await enrichLocalFileInputs(params.input, {
         privateStorageRoots: this.localFilePrivateStorageRoots,
       }), params, this.localFilePrivateStorageRoots);
-      const registrations = await this.registerMcpConnections(overlay?.mcpConnectionIds, params.threadId);
+      const registrations = await this.registerMcpConnections(overlay?.mcpConnectionIds, params.threadId, params.backend);
       // Once handed over, the Claude session revokes them when it closes.
       let handedOver = false;
       let startingOrigin: StartingTurnOrigin | undefined;
@@ -22637,6 +22652,7 @@ export class DesktopBackendRegistry {
         const registrations = await this.registerMcpConnections(
           overlay?.mcpConnectionIds ?? [],
           params.threadId,
+          params.backend,
         );
         const inheritedNames =
           await this.readConfiguredCodexMcpServerNames(cwd);
@@ -38170,6 +38186,43 @@ export class DesktopBackendRegistry {
       .catch(() => undefined);
   }
 
+  /**
+   * The directories a managed local MCP server in this thread is given as
+   * roots: each linked directory, a worktree as its own checkout rather than
+   * its repository, with the thread's working directory first. A thread with
+   * no linked directory has none, even when its working directory falls back
+   * to something else. Only directories that exist on this machine are
+   * reported.
+   */
+  private async resolveThreadMcpRootDirectories(scope: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<ThreadRootDirectory[]> {
+    const overlay = await this.overlayStore.getThreadOverlayState(scope);
+    const summary = this.pendingStartedThreads.get(buildThreadIdentityKey(scope.backend, scope.threadId))
+      ?? await this.findThreadForWorkspaceHandoff({
+        ...scope,
+        callerReason: "turn-cwd",
+        freshness: "last-known",
+      });
+    const linked: ThreadRootDirectory[] = [
+      ...(summary?.linkedDirectories ?? []),
+      ...(overlay?.extraLinkedDirectories ?? []),
+    ].map((directory) => ({
+      path: directory.kind === "worktree" && directory.worktreePath
+        ? directory.worktreePath
+        : directory.path,
+      name: directory.label,
+    }));
+    const cwd = resolveThreadWorkspaceCwd(summary, overlay?.extraLinkedDirectories)?.trim();
+    const candidates = cwd && linked.some((directory) => directory.path === cwd)
+      ? [{ path: cwd }, ...linked]
+      : linked;
+    const present = await Promise.all(candidates.map(async (candidate) =>
+      await stat(candidate.path).then((entry) => entry.isDirectory(), () => false)));
+    return candidates.filter((_candidate, index) => present[index]);
+  }
+
   private async resolveThreadEnvironmentCwd(
     backend: AppServerBackendKind,
     threadId: string,
@@ -41740,8 +41793,10 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * Show a form that an upstream MCP server sends while a gateway call runs,
-   * on the calling thread's card, and return the person's answer.
+   * Show a form or link that an upstream MCP server sends while a gateway
+   * call runs, on the calling thread's card, and return the person's answer.
+   * A link is drawn with its host and full address, and opens only when the
+   * person chooses Open in browser; its acceptance carries no content.
    *
    * This is not invocation approval. Full Access, the connection's tool
    * approval policy and conversation grants never answer it, and nothing is
@@ -41760,12 +41815,17 @@ export class DesktopBackendRegistry {
     if (this.isTaskMonitorThread(context)) {
       throw elicitationUnavailable("A Job Monitor cannot answer an MCP server's form.");
     }
-    const requestedSchema = (request as { requestedSchema?: AppServerMcpElicitationSchema }).requestedSchema;
+    const link = isUrlElicitation(request)
+      ? request as { url: string; elicitationId: string }
+      : undefined;
+    const requestedSchema = link
+      ? undefined
+      : (request as { requestedSchema?: AppServerMcpElicitationSchema }).requestedSchema;
     const _meta = request._meta ?? null;
     // A card drawn as a host tool approval offers a grant to keep. Besides the
     // `_meta` keys the relay refuses, an empty browser form with an origin
     // draws as one; a server's own form must never be shown as one.
-    if (mcpElicitationPurpose({ mode: "form", serverName: invocation.serverName, _meta, requestedSchema }) === "tool-approval") {
+    if (!link && mcpElicitationPurpose({ mode: "form", serverName: invocation.serverName, _meta, requestedSchema }) === "tool-approval") {
       throw hostApprovalFormRefused();
     }
     const requestId = `${MCP_UPSTREAM_FORM_REQUEST_ID_PREFIX}${randomUUID()}`;
@@ -41776,9 +41836,10 @@ export class DesktopBackendRegistry {
         turnId: context.turnId,
         requestId,
         serverName: invocation.serverName,
-        mode: "form",
         message: request.message,
-        requestedSchema,
+        ...(link
+          ? { mode: "url" as const, url: link.url, elicitationId: link.elicitationId }
+          : { mode: "form" as const, requestedSchema }),
         _meta,
       },
     };
@@ -50334,6 +50395,16 @@ export class DesktopBackendRegistry {
 
   private emit(event: AgentEvent): Promise<void> {
     this.invalidateArchiveCleanupForNotification(event.backend, event.notification);
+    if (event.notification.method === "navigation/threadDirectories/updated") {
+      // Managed local MCP servers in these threads are told their roots moved.
+      const threadIds = readRecord(event.notification.params)?.threadIds;
+      if (Array.isArray(threadIds)) {
+        this.mcpConnectionService?.noteThreadDirectoriesChanged?.(
+          event.backend,
+          threadIds.filter((threadId): threadId is string => typeof threadId === "string"),
+        );
+      }
+    }
     if (event.notification.method === "thread/unarchived" || event.notification.method === "thread/deleted") {
       this.archiveCleanupQueue.cancel(buildThreadIdentityKey(event.backend, event.notification.params.threadId));
     }

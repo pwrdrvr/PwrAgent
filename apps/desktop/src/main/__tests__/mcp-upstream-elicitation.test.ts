@@ -220,7 +220,7 @@ afterEach(async () => {
 });
 
 describe.skipIf(process.platform === "win32")("upstream MCP elicitation through managed connections", () => {
-  it("declares form elicitation on thread sessions only", async () => {
+  it("declares elicitation on thread sessions only", async () => {
     const fixture = makeFixture();
     const { service, connectionId } = await createService(fixture);
     const rpc = await bridgeFor(service, connectionId, "thread-a");
@@ -232,7 +232,7 @@ describe.skipIf(process.platform === "win32")("upstream MCP elicitation through 
       .filter((entry) => entry.event === "initialize")
       .map((entry) => entry.capabilities);
     // The thread's session, then the Settings listing.
-    expect(capabilities).toEqual([{ elicitation: { form: {} } }, {}]);
+    expect(capabilities).toEqual([{ elicitation: { form: {}, url: {} }, roots: { listChanged: true } }, {}]);
   });
 
   it("forwards the server's form exactly and returns the person's accept exactly", async () => {

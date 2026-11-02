@@ -35,9 +35,10 @@ export type McpGatewayToolServiceOptions = {
   /** `annotations` are the listed tool's own hints, under its exact schema revision. */
   approve: (invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, annotations: Tool["annotations"], catalogRevision: string, consentRevision?: string) => Promise<McpGatewayApproval>;
   /**
-   * Shows a form the upstream server sends while an approved call runs, and
-   * resolves with the person's answer. Separate from `approve`: approving the
-   * invocation never answers the server's own form. Absent, forms fail closed.
+   * Shows a form or link the upstream server sends while an approved call
+   * runs, and resolves with the person's answer. Separate from `approve`:
+   * approving the invocation never answers the server's own form. Absent,
+   * forms and links fail closed.
    */
   elicit?: (request: ElicitRequestParams, invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal) => Promise<unknown>;
 };
@@ -165,7 +166,8 @@ export class McpGatewayToolService {
       const result = await this.options.connections.requestGatewayToolOperation({
         connectionId: args.connectionId, scopeKey: this.scopeKey(context),
         operation: "gateway/tools/call", invocation, signal, onProgress: extend,
-        ...(elicit ? { elicit: async (request: ElicitRequestParams, formSignal: AbortSignal) =>
+        // The thread's card shows forms and links alike.
+        ...(elicit ? { elicitUrl: true, elicit: async (request: ElicitRequestParams, formSignal: AbortSignal) =>
           await elicit(request, invocation, context, AbortSignal.any([signal, formSignal])) } : {}),
       }) as CallToolResult;
       if (typeof approval === "object") await approval.onInvoked();

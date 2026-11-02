@@ -86,9 +86,10 @@ policy and conversation grants never answer the server's form. Only the
 person's own response does.
 
 The owner broker's thread sessions, for both remote URL and local command
-connections, declare `elicitation: { form: {} }`. Settings listings and
-connection tests declare no capabilities. URL mode stays unsupported, so the
-SDK refuses it.
+connections, declare `elicitation: { form: {}, url: {} }`. Local command
+thread sessions also declare `roots: { listChanged: true }`. Settings
+listings and connection tests declare no capabilities. Links are described in
+"Upstream links" and roots in "Upstream roots" below.
 
 MCP does not link a server's request to the client request that caused it,
 and one session serves every request on a bridge grant. The owner therefore
@@ -153,6 +154,109 @@ owner checks the grant, the exact session and, for fixed gateway tools, the
 thread's selection both before it asks and before it delivers an answer.
 After a reconnect, the replacement session can be answered only by its own
 form. Nothing launches the server's desktop application to answer a form.
+
+### Upstream links
+
+A server can ask the person to open a page with a URL-mode
+`elicitation/create`, usually to sign in to a service behind it. Links use
+the same routing as forms: exactly one tool call in flight on that session,
+from a caller that can show links, or the request fails closed with
+`-32601`. A caller that can show forms but not links also fails closed.
+
+Before any person sees a link, the owner refuses it with `-32602` when:
+
+- The request has no `message`, no `elicitationId`, or no `url`.
+- The address does not parse, or carries a user name or password.
+- The address is not `https`. A local command may also send `http` to this
+  machine (`localhost`, `*.localhost`, `127.0.0.1` or `[::1]`, the hosts the
+  desktop card accepts). A remote server may not, because the link would
+  point the person's browser at whatever else listens locally.
+- `_meta` contains `codex_approval_kind` or `pwragent_approval_kind`.
+
+The routes are:
+
+- **Native bridge.** The bridge forwards the link to the agent's MCP client
+  only when that client declared `elicitation.url`. A client that declared
+  only forms is never sent a link.
+- **Fixed gateway tools.** `call_mcp_tool` shows the link on the calling
+  thread's card as a `mode: "url"` `mcpServer/elicitation/request`. The card
+  shows the host and the full address as text. Nothing opens until the
+  person chooses **Open in browser**, which hands the address to the system
+  browser. Messaging surfaces show only the host and send the person to the
+  desktop to open it.
+
+An acceptance means only that the person chose to open the page. It goes
+upstream as `{ action: "accept" }` with no content; the server learns
+whether its flow finished on its own. Decline and cancel work as for forms,
+and a pending link settles as `cancel` on every teardown path listed above.
+
+`notifications/elicitation/complete` reaches a native bridge only for a link
+that bridge's client opened, at most once, and only while the session that
+sent the link is current. The bridge passes it on only to a client that
+declared `elicitation.url`. Every other ID is ignored. A fixed gateway call
+has no card left to update, so its completions are dropped.
+
+A tool call can instead fail with `-32042` (URL elicitation required):
+
+- **Native bridge.** The error passes through unchanged, with its data. When
+  the bridge's client can show links, a later
+  `notifications/elicitation/complete` for a listed link reaches it.
+- **Fixed gateway tools.** The owner shows each listed link in turn, at most
+  three, on the calling thread's card. It then returns the original error to
+  the agent with a note saying whether the person opened the page. The call
+  is never retried: the server may have done part of the work before it
+  failed, so only the agent decides to call again.
+
+A bridge request opts in to links with `urlElicitation: "open"` beside
+`elicitation: "form"`. An owner sends a URL-mode `elicit` line only to a
+request that sent both. An older owner ignores the field, and an older
+bridge never receives a link.
+
+### Upstream roots
+
+A local command's server can ask `roots/list` for the directories it may
+work in. Its thread session answers with the directories of the thread the
+grant serves: each linked directory, with the thread's working directory
+first. A worktree is given as its own checkout, not its repository. A thread
+with no linked directory has no roots, even when its working directory falls
+back to something else.
+
+Each root is a `file://` URI. The label of a linked directory becomes the
+root's `name`. Relative paths, repeats and directories that no longer exist
+are dropped, and at most 64 roots are sent.
+
+A grant's thread comes from its scope. A fixed gateway scope names the
+backend and thread. A native bridge records the backend of its bare thread
+ID when it is registered. A grant with no thread yet, or a bare thread ID
+with no backend, answers an empty list. A Job Monitor's delegated scope gets
+its own thread's directories. Headless automation runs are answered like any
+other thread, because roots need no person.
+
+Remote URL, PwrSnap, PwrGit and Sandboxer connections never declare roots.
+A `file://` path means nothing to them, and it would expose the operator's
+home directory, user name and repository names.
+
+The instance that runs the thread reads its directories and reports them to
+the owner broker, which may be another instance on the same profile. It
+reports when a grant is registered or bound to a thread, at most once every
+10 seconds per thread, and again whenever the thread's directories change
+(`navigation/threadDirectories/updated`). Reports for one thread reach the
+owner in order. The owner keeps the latest list in memory only; nothing is
+written to SQLite. It holds at most 512 threads' lists and never drops one
+that a live grant serves. When a session's list differs
+from the one it last read, the owner sends it
+`notifications/roots/list_changed` once. A session that never asked is not
+told.
+
+PwrAgent does not pass through or intersect a native host's own roots. The
+host's working directory comes from the same thread directories, and fixed
+gateway calls have no host roots. A peer-owned thread runs on the peer, whose
+gateway answers from its own directories. Roots never cross federation.
+
+Some servers, such as `@modelcontextprotocol/server-filesystem`, replace the
+directories in their arguments with the roots a client gives them. In a
+thread with directories, such a server works in those directories. In a
+thread with none, the empty list leaves its arguments in effect.
 
 ### Upstream progress
 

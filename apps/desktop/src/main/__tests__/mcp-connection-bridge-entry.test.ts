@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { ElicitRequestSchema, ToolListChangedNotificationSchema, PromptListChangedNotificationSchema, ResourceListChangedNotificationSchema, ResourceUpdatedNotificationSchema, type ElicitRequestParams, type InitializeResult } from "@modelcontextprotocol/sdk/types.js";
+import { ElicitationCompleteNotificationSchema, ElicitRequestSchema, ToolListChangedNotificationSchema, PromptListChangedNotificationSchema, ResourceListChangedNotificationSchema, ResourceUpdatedNotificationSchema, type ElicitRequestParams, type InitializeResult } from "@modelcontextprotocol/sdk/types.js";
 import { McpInitializationTransport } from "../mcp-connections/mcp-initialization-transport";
 import type { McpBridgeEvent } from "../mcp-connections/mcp-connection-rpc-client";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -216,6 +216,98 @@ describe("native bridge upstream forms", () => {
     await client.callTool({ name: "remove", arguments: {} });
 
     expect(routes).toEqual([undefined]);
+  });
+});
+
+describe("native bridge upstream links", () => {
+  const link: ElicitRequestParams = {
+    mode: "url",
+    message: "Sign in to Fixture Files.",
+    elicitationId: "link-1",
+    url: "https://auth.fixture.test/start?state=s1",
+  };
+
+  /** The owner sends one link during the call and returns what it got back. */
+  function callThatLinks(): { options: unknown[] } {
+    const options: unknown[] = [];
+    bridge.request.mockImplementation(async (operation: string, ...rest: unknown[]) => {
+      if (operation === "describe") return { tools: true };
+      options.push(rest[7]);
+      const onElicit = rest[5] as ElicitationRoute | undefined;
+      let answer: unknown;
+      try {
+        answer = onElicit ? await onElicit(link, new AbortController().signal) : undefined;
+      } catch (error) {
+        answer = { refused: error instanceof Error ? error.message : String(error) };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(answer ?? null) }] };
+    });
+    return { options };
+  }
+
+  it("hands a link to a host that declared links, and opts in for them", async () => {
+    const { options } = callThatLinks();
+    const client = new Client(
+      { name: "native-link-fixture", version: "1.0.0" },
+      { capabilities: { elicitation: { form: {}, url: {} } } },
+    );
+    const seen: ElicitRequestParams[] = [];
+    client.setRequestHandler(ElicitRequestSchema, async (request) => {
+      seen.push(request.params);
+      return { action: "accept" };
+    });
+    await openBridge(client);
+
+    const result = await client.callTool({ name: "sign_in", arguments: {} });
+
+    expect(options).toEqual([{ urlElicitation: true }]);
+    expect(seen).toEqual([link]);
+    expect(JSON.parse((result.content as Array<{ text: string }>)[0]!.text)).toEqual({ action: "accept" });
+  });
+
+  it("refuses a link for a host that declared only forms, without asking it", async () => {
+    const { options } = callThatLinks();
+    const client = new Client(
+      { name: "native-form-only-fixture", version: "1.0.0" },
+      { capabilities: { elicitation: { form: {} } } },
+    );
+    const asked = vi.fn(async () => ({ action: "accept" as const }));
+    client.setRequestHandler(ElicitRequestSchema, asked);
+    await openBridge(client);
+
+    const result = await client.callTool({ name: "sign_in", arguments: {} });
+
+    expect(options).toEqual([{ urlElicitation: false }]);
+    expect(asked).not.toHaveBeenCalled();
+    expect(JSON.parse((result.content as Array<{ text: string }>)[0]!.text)).toMatchObject({
+      refused: expect.stringContaining("cannot show this kind"),
+    });
+  });
+
+  it.each([
+    ["declared links", { elicitation: { url: {} } }, 1],
+    ["declared only forms", { elicitation: { form: {} } }, 0],
+  ])("forwards a link's completion only to a host that %s", async (_label, capabilities, expected) => {
+    bridge.request.mockImplementation(async (operation: string) => {
+      if (operation === "describe") return { tools: true };
+      return tail;
+    });
+    const client = new Client({ name: "native-completion-fixture", version: "1.0.0" }, { capabilities });
+    const completed: string[] = [];
+    client.setNotificationHandler(ElicitationCompleteNotificationSchema, (notification) => {
+      completed.push(notification.params.elicitationId);
+    });
+    await openBridge(client);
+
+    bridge.event?.({ method: "notifications/elicitation/complete", params: { elicitationId: "link-1" } });
+    // A list change after it, so its arrival proves the completion had its chance.
+    const changed = new Promise<void>((resolve) => {
+      client.setNotificationHandler(ToolListChangedNotificationSchema, () => resolve());
+    });
+    bridge.event?.({ method: "notifications/tools/list_changed" });
+    await changed;
+
+    expect(completed).toHaveLength(expected);
   });
 });
 
