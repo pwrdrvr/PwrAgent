@@ -826,6 +826,14 @@ function DesktopAppShell(props: {
       liveFederationHealth,
     ],
   );
+  // A peer window offers its projects' Forge Automation only when the peer
+  // can store and enforce it.
+  const federationOwnerForgeAutomation = useMemo(() => {
+    const ownerId = readRendererFederationTarget()?.instanceId;
+    return ownerId !== undefined
+      && liveFederationHealth?.peers.find((peer) => peer.id === ownerId)
+        ?.capabilities.includes("project_forge_automation") === true;
+  }, [liveFederationHealth]);
   // Every known machine, the window's owner included, for naming one.
   const federationMachines = useMemo(
     () => buildFederationThreadTargets(liveFederationHealth),
@@ -4608,6 +4616,7 @@ function DesktopAppShell(props: {
           }
           onListProjectHeldWakeups={navigation.listProjectHeldWakeups}
           onResolveProjectHeldWakeups={navigation.resolveProjectHeldWakeups}
+          federationOwnerForgeAutomation={federationOwnerForgeAutomation}
           onRemoveDirectory={(directory) =>
             navigation.removeDirectory(directory.key)}
           onOpenForgePermissions={readRendererFederationTarget()

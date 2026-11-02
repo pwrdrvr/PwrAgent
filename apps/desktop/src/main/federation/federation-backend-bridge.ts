@@ -19,6 +19,14 @@ import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageA
 import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
 import type { FederationThreadPrWatchesRequestV1, ThreadPrWatchesResponse } from "@pwragent/shared";
 import type { AppServerThreadMessage } from "@pwragent/shared";
+import type {
+  ListProjectHeldWakeupsRequest,
+  ListProjectHeldWakeupsResponse,
+  ResolveProjectHeldWakeupsRequest,
+  ResolveProjectHeldWakeupsResponse,
+  SetProjectForgeAutomationRequest,
+  SetProjectForgeAutomationResponse,
+} from "@pwragent/shared";
 import { projectFederationThreadRead, materializeFederationThreadRead, type FederationThreadReadResponse } from "./federation-thread-read";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
@@ -520,6 +528,18 @@ function authenticateScheduledTurnOrigin<
 export const QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE =
   "Update PwrAgent on the owning instance to reorder its queued messages.";
 
+/** What a viewer hears when the owning instance has no project Forge Automation. */
+export const PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE =
+  "Update PwrAgent on the owning instance to change its project Forge Automation.";
+
+/** The owner's own requests: a viewer's window target is never sent on. */
+export type FederationSetProjectForgeAutomationRequest =
+  Omit<SetProjectForgeAutomationRequest, "federationTarget">;
+export type FederationListProjectHeldWakeupsRequest =
+  Omit<ListProjectHeldWakeupsRequest, "federationTarget">;
+export type FederationResolveProjectHeldWakeupsRequest =
+  Omit<ResolveProjectHeldWakeupsRequest, "federationTarget">;
+
 /** What a viewer hears when the owning instance cannot pause its queue. */
 export const QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE =
   "Update PwrAgent on the owning instance to pause its queued messages.";
@@ -703,6 +723,19 @@ export type FederationBackendOperations = {
   manageThreadPrWatchesV1?(
     request: FederationThreadPrWatchesRequestV1,
   ): Promise<ThreadPrWatchesResponse>;
+  /**
+   * Optional on owner adapters, like `moveQueuedTurn`: an owner without
+   * `project_forge_automation` answers method_not_found.
+   */
+  setProjectForgeAutomation?(
+    request: FederationSetProjectForgeAutomationRequest,
+  ): Promise<SetProjectForgeAutomationResponse>;
+  listProjectHeldWakeups?(
+    request: FederationListProjectHeldWakeupsRequest,
+  ): Promise<ListProjectHeldWakeupsResponse>;
+  resolveProjectHeldWakeups?(
+    request: FederationResolveProjectHeldWakeupsRequest,
+  ): Promise<ResolveProjectHeldWakeupsResponse>;
   archiveThread(request: ArchiveThreadRequest): Promise<ArchiveThreadResponse>;
   restoreThread(request: RestoreThreadRequest): Promise<RestoreThreadResponse>;
   startThread(request: StartThreadRequest): Promise<StartThreadResponse>;
@@ -1374,6 +1407,33 @@ export function registerFederationBackendHandlers(params: {
       async (envelope) =>
         await params.backend.manageThreadPrWatchesV1!(
           envelope.params as FederationThreadPrWatchesRequestV1,
+        ),
+    );
+  }
+  if (params.backend.setProjectForgeAutomation) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.setProjectForgeAutomation,
+      async (envelope) =>
+        await params.backend.setProjectForgeAutomation!(
+          envelope.params as FederationSetProjectForgeAutomationRequest,
+        ),
+    );
+  }
+  if (params.backend.listProjectHeldWakeups) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.listProjectHeldWakeups,
+      async (envelope) =>
+        await params.backend.listProjectHeldWakeups!(
+          envelope.params as FederationListProjectHeldWakeupsRequest,
+        ),
+    );
+  }
+  if (params.backend.resolveProjectHeldWakeups) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.resolveProjectHeldWakeups,
+      async (envelope) =>
+        await params.backend.resolveProjectHeldWakeups!(
+          envelope.params as FederationResolveProjectHeldWakeupsRequest,
         ),
     );
   }
@@ -2579,6 +2639,47 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
             message: "The owning instance does not let this one control its threads.",
           },
         };
+      }
+      throw error;
+    }
+  }
+
+  async setProjectForgeAutomation(
+    request: FederationSetProjectForgeAutomationRequest,
+  ): Promise<SetProjectForgeAutomationResponse> {
+    return await this.requestProjectForgeAutomation<SetProjectForgeAutomationResponse>(
+      FEDERATION_BACKEND_METHODS.setProjectForgeAutomation,
+      request,
+    );
+  }
+
+  async listProjectHeldWakeups(
+    request: FederationListProjectHeldWakeupsRequest,
+  ): Promise<ListProjectHeldWakeupsResponse> {
+    return await this.requestProjectForgeAutomation<ListProjectHeldWakeupsResponse>(
+      FEDERATION_BACKEND_METHODS.listProjectHeldWakeups,
+      request,
+    );
+  }
+
+  async resolveProjectHeldWakeups(
+    request: FederationResolveProjectHeldWakeupsRequest,
+  ): Promise<ResolveProjectHeldWakeupsResponse> {
+    return await this.requestProjectForgeAutomation<ResolveProjectHeldWakeupsResponse>(
+      FEDERATION_BACKEND_METHODS.resolveProjectHeldWakeups,
+      request,
+    );
+  }
+
+  private async requestProjectForgeAutomation<T>(
+    method: FederationBackendMethod,
+    params: unknown,
+  ): Promise<T> {
+    try {
+      return await this.rpc.request<T>({ method, params });
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) {
+        throw new Error(PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE);
       }
       throw error;
     }

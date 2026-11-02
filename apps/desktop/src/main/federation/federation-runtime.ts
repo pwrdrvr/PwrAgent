@@ -303,6 +303,11 @@ import {
   type UpdateThreadExpectedBranchRequest,
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
+import {
+  assertProjectHeldWakeupResolutions,
+  readProjectForgeDirectoryKey,
+} from "../app-server/project-forge-automation-requests";
+import { resolveProjectForgeAutomation } from "@pwragent/shared";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { threadFamilyPricingForPeer } from "../app-server/thread-family-pricing";
@@ -656,6 +661,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "turn_queue_reorder",
   "turn_queue_pause",
   "turn_assistant_reply",
+  "project_forge_automation",
   "thread_mcp_connections",
   "thread_todos",
   "thread_todo_feed",
@@ -748,6 +754,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "directory/pin/removed",
   "directory/pin/reordered",
   "directory/threadsCollapsed/updated",
+  "directory/forgeAutomation/updated",
   "navigation/directoryGitStatus/updated",
   "navigation/threadDirectories/updated",
   "navigation/threadGitWorkingState/updated",
@@ -7466,6 +7473,34 @@ function localBackendOperations(): FederationBackendOperations {
     async manageThreadPrWatchesV1(request) {
       // The router already required the viewer's turn_control grant.
       return await getDesktopBackendRegistry().manageThreadPrWatchesForPeer(request);
+    },
+    // A peer changes this instance's project, which this instance stores
+    // and enforces; the router already required turn_control.
+    async setProjectForgeAutomation(request) {
+      const directoryKey = readProjectForgeDirectoryKey(request);
+      if (!request.automation || typeof request.automation !== "object") {
+        throw new Error("Forge Automation settings are required.");
+      }
+      return await getDesktopBackendRegistry().setOwnedProjectForgeAutomation({
+        directoryKey,
+        automation: resolveProjectForgeAutomation(request.automation),
+      });
+    },
+    async listProjectHeldWakeups(request) {
+      const directoryKey = readProjectForgeDirectoryKey(request);
+      return {
+        directoryKey,
+        wakeups: getDesktopBackendRegistry().listProjectHeldWakeups(directoryKey),
+      };
+    },
+    // The registry answers not_found for an entry another project holds.
+    async resolveProjectHeldWakeups(request) {
+      const directoryKey = readProjectForgeDirectoryKey(request);
+      assertProjectHeldWakeupResolutions(request.resolutions);
+      return await getDesktopBackendRegistry().resolveProjectHeldWakeups({
+        directoryKey,
+        resolutions: request.resolutions,
+      });
     },
     async reorderThreadPins(
       request: ReorderThreadPinsRequest,

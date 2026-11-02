@@ -1365,7 +1365,8 @@ export type NavigationDirectorySummary = {
   directoryThreadsCollapsed?: boolean;
   /**
    * The owner's Forge Automation for this project. Absent means the
-   * defaults, and is always absent on peer and placeholder rows.
+   * defaults, and is always absent on placeholder rows. A peer window's
+   * rows carry what the peer stored.
    */
   forgeAutomation?: ProjectForgeAutomation;
 };
@@ -2136,7 +2137,7 @@ export type NavigationDirectoryRow = {
   latestUpdatedAt?: number;
   pinnedRank?: string;
   directoryThreadsCollapsed?: boolean;
-  /** The owner's Forge Automation. Absent means defaults; never set on peer or placeholder rows. */
+  /** The owner's Forge Automation. Absent means defaults; never set on placeholder rows. */
   forgeAutomation?: ProjectForgeAutomation;
   gitStatus?: {
     currentBranch?: string;

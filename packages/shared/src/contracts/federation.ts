@@ -108,6 +108,13 @@ export const FEDERATION_CAPABILITIES = [
    * owner's watches read-only.
    */
   "thread_pr_watch_control_v1",
+  /**
+   * The owner sends each of its Directories projects' Forge Automation on
+   * its rows and answers `backend.setProjectForgeAutomation`,
+   * `backend.listProjectHeldWakeups` and `backend.resolveProjectHeldWakeups`.
+   * A viewer offers no Forge Automation menu items without it.
+   */
+  "project_forge_automation",
 ] as const;
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";

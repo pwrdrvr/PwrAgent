@@ -123,6 +123,8 @@ import {
   type ProjectHeldWakeupSource,
   type ResolveProjectHeldWakeupsRequest,
   type ResolveProjectHeldWakeupsResponse,
+  type SetProjectForgeAutomationRequest,
+  type SetProjectForgeAutomationResponse,
 } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
 import {
@@ -2224,6 +2226,10 @@ type ThreadPullRequestDetachHandler = (
 type ThreadPrWatchesPeerHandler = (
   request: import("@pwragent/shared").FederationThreadPrWatchesRequestV1,
 ) => Promise<import("@pwragent/shared").ThreadPrWatchesResponse>;
+
+type ProjectForgeAutomationHandler = (
+  request: Omit<SetProjectForgeAutomationRequest, "federationTarget">,
+) => Promise<SetProjectForgeAutomationResponse>;
 
 type ThreadPullRequestRefreshHandler = (
   request: RefreshOwnedThreadPullRequestsRequest,
@@ -10569,6 +10575,9 @@ export class DesktopBackendRegistry {
     | ThreadPullRequestDetachHandler
     | undefined;
   private threadPrWatchesPeerHandler: ThreadPrWatchesPeerHandler | undefined;
+  private projectForgeAutomationHandler:
+    | ProjectForgeAutomationHandler
+    | undefined;
   private threadPullRequestRefreshHandler:
     | ThreadPullRequestRefreshHandler
     | undefined;
@@ -12744,6 +12753,28 @@ export class DesktopBackendRegistry {
         ok: false,
         error: { code: "not_found", message: "PR watches are not available on this instance yet." },
       };
+    }
+    return await handler(request);
+  }
+
+  setProjectForgeAutomationHandler(
+    handler: ProjectForgeAutomationHandler | null | undefined,
+  ): void {
+    this.projectForgeAutomationHandler = handler ?? undefined;
+  }
+
+  /**
+   * Save one of this instance's projects' Forge Automation through the
+   * desktop app-server service, which stores it and applies the change.
+   * Federation uses this mediator so its runtime does not import the IPC
+   * module.
+   */
+  async setOwnedProjectForgeAutomation(
+    request: Omit<SetProjectForgeAutomationRequest, "federationTarget">,
+  ): Promise<SetProjectForgeAutomationResponse> {
+    const handler = this.projectForgeAutomationHandler;
+    if (!handler) {
+      throw new Error("Forge Automation service is not available yet.");
     }
     return await handler(request);
   }

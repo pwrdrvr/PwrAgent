@@ -10,15 +10,18 @@ import type { NavigationDirectoryView } from "../../lib/navigation-loaded-rows";
 
 /**
  * Whether a project row offers Pause Forge Activity and Forge Automation….
- * The setting lives on the instance that owns the project's threads, so only
- * a configured local `directory:` project in this instance's own window can
- * carry it. A peer window and a placeholder row get neither.
+ * The setting lives on the instance that owns the project's threads, so
+ * only a configured `directory:` project of the window's owner can carry
+ * it: this instance's own in its window, or a peer's in that peer's window
+ * once the peer advertises `project_forge_automation`. A placeholder row
+ * gets neither.
  */
 export function canEditProjectForgeAutomation(
   directory: Pick<NavigationDirectoryView, "kind" | "localAvailability">,
   federationWindow: boolean,
+  ownerAdvertisesForgeAutomation = false,
 ): boolean {
-  return !federationWindow
+  return (!federationWindow || ownerAdvertisesForgeAutomation)
     && directory.kind === "directory"
     && directory.localAvailability !== "unconfigured";
 }

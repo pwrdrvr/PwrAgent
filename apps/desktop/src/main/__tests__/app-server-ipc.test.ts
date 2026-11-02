@@ -758,6 +758,11 @@ const setThreadPrAutoDispatchHandler = vi.fn();
 const setThreadPullRequestDetachHandler = vi.fn();
 const setThreadPrWatchesPeerHandler = vi.fn();
 const setThreadPullRequestRefreshHandler = vi.fn();
+const setProjectForgeAutomationHandler = vi.fn();
+const setDirectoryForgeAutomationOverlay = vi.fn(async (params: { directoryKey: string; automation: unknown }) => ({
+  directoryKey: params.directoryKey,
+  forgeAutomation: params.automation,
+}));
 const setThreadGitWorkingStateRefreshHandler = vi.fn();
 const setDirectoryGitStatusWriter = vi.fn();
 const setThreadPrAutoDispatchBatch = vi.fn(async () => undefined);
@@ -1185,6 +1190,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     setThreadReaction: setThreadReactionOverlay,
     setThreadPin: setThreadPinOverlay,
     setDirectoryThreadsCollapsed: setDirectoryThreadsCollapsedOverlay,
+    setDirectoryForgeAutomation: setDirectoryForgeAutomationOverlay,
     setRemoteDirectoryThreadsCollapsed:
       setRemoteDirectoryThreadsCollapsedOverlay,
     readRemoteDirectoryOverlays,
@@ -1244,6 +1250,7 @@ vi.mock("../app-server/backend-registry", () => {
     setThreadPullRequestDetachHandler,
     setThreadPrWatchesPeerHandler,
     setThreadPullRequestRefreshHandler,
+    setProjectForgeAutomationHandler,
     setThreadGitWorkingStateRefreshHandler,
     setDirectoryGitStatusWriter,
     setThreadPrAutoDispatchBatch,
@@ -3970,7 +3977,7 @@ describe("app server ipc", () => {
       .resolves.toMatchObject({ ok: false, error: { code: "forbidden", message: expect.stringContaining("PR watches are turned off") } });
   });
 
-  it("changes Forge Automation only for a local Directories project", async () => {
+  it("changes Forge Automation only for a Directories project", async () => {
     const { appServerService } = await import("../ipc/app-server");
     const automation = { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true };
     await expect(appServerService.setProjectForgeAutomation({ directoryKey: "workspace:/Users/fixture/.pwragent/projects", automation }))
@@ -3978,12 +3985,126 @@ describe("app server ipc", () => {
     await expect(appServerService.setProjectForgeAutomation({ directoryKey: "unlinked", automation }))
       .rejects.toThrow("Directories project");
     await expect(appServerService.setProjectForgeAutomation({
-      directoryKey: "directory:/repo/PwrAgent",
+      directoryKey: "workspace:/x",
       automation,
       federationTarget: { scope: "remote", instanceId: "peer-1" },
-    } as never)).rejects.toThrow("instance that owns the project");
-    expect(() => appServerService.listProjectHeldWakeups({ directoryKey: "workspace:/x" }))
-      .toThrow("Directories project");
+    })).rejects.toThrow("Directories project");
+    await expect(appServerService.listProjectHeldWakeups({ directoryKey: "workspace:/x" }))
+      .rejects.toThrow("Directories project");
+    expect(federationMock.runtime.remoteBackend).not.toHaveBeenCalled();
+  });
+
+  describe("a peer project's Forge Automation", () => {
+    const federationTarget = { scope: "remote" as const, instanceId: "peer-forge" };
+    const directoryKey = "directory:/Users/remote/repos/PwrAgent";
+    const owner = federationMock.remoteBackend as unknown as {
+      setProjectForgeAutomation?: ReturnType<typeof vi.fn>;
+      listProjectHeldWakeups?: ReturnType<typeof vi.fn>;
+      resolveProjectHeldWakeups?: ReturnType<typeof vi.fn>;
+    };
+
+    beforeEach(() => {
+      owner.setProjectForgeAutomation = vi.fn(async (request: { directoryKey: string; automation: unknown }) => request);
+      owner.listProjectHeldWakeups = vi.fn(async (request: { directoryKey: string }) => ({ ...request, wakeups: [] }));
+      owner.resolveProjectHeldWakeups = vi.fn(async () => ({ results: [{ entryId: "held-1", status: "sent" }] }));
+      federationMock.runtime.remoteBackend.mockClear();
+      publishLocalEvent.mockClear();
+    });
+
+    it("saves it on the owner, sending no target, and keeps nothing here", async () => {
+      const { appServerService } = await import("../ipc/app-server");
+      const automation = { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 5 };
+
+      const response = await appServerService.setProjectForgeAutomation({ directoryKey, automation, federationTarget });
+
+      expect(federationMock.runtime.remoteTargetSupportsCapability)
+        .toHaveBeenCalledWith(federationTarget, "project_forge_automation");
+      expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(federationTarget);
+      expect(owner.setProjectForgeAutomation).toHaveBeenCalledWith({ directoryKey, automation });
+      expect(response).toEqual({ directoryKey, automation });
+      // The owner publishes the change; the viewer stores and announces nothing.
+      expect(publishLocalEvent).not.toHaveBeenCalled();
+    });
+
+    it("lists and resolves held wake-ups on the owner", async () => {
+      const { appServerService } = await import("../ipc/app-server");
+      const resolutions = [{ entryId: "held-1", backend: "codex" as const, threadId: "thread-1", action: "send" as const }];
+
+      await expect(appServerService.listProjectHeldWakeups({ directoryKey, federationTarget }))
+        .resolves.toEqual({ directoryKey, wakeups: [] });
+      await expect(appServerService.resolveProjectHeldWakeups({ directoryKey, resolutions, federationTarget }))
+        .resolves.toEqual({ results: [{ entryId: "held-1", status: "sent" }] });
+
+      expect(owner.listProjectHeldWakeups).toHaveBeenCalledWith({ directoryKey });
+      expect(owner.resolveProjectHeldWakeups).toHaveBeenCalledWith({ directoryKey, resolutions });
+      await expect(appServerService.resolveProjectHeldWakeups({
+        directoryKey, resolutions: [{ entryId: "held-1", action: "later" }] as never, federationTarget,
+      })).rejects.toThrow("send or discard");
+      expect(owner.resolveProjectHeldWakeups).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses an owner that does not advertise project_forge_automation without asking it", async () => {
+      const { appServerService } = await import("../ipc/app-server");
+      federationMock.runtime.remoteTargetSupportsCapability.mockReturnValue(false);
+
+      await expect(appServerService.setProjectForgeAutomation({
+        directoryKey, automation: DEFAULT_PROJECT_FORGE_AUTOMATION, federationTarget,
+      })).rejects.toThrow("Update PwrAgent on the owning instance");
+      await expect(appServerService.listProjectHeldWakeups({ directoryKey, federationTarget }))
+        .rejects.toThrow("Update PwrAgent on the owning instance");
+
+      expect(federationMock.runtime.remoteBackend).not.toHaveBeenCalled();
+      expect(owner.setProjectForgeAutomation).not.toHaveBeenCalled();
+    });
+
+    it("saves a peer's request to this instance's project here, where polling and dispatch read it", async () => {
+      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+      onTestFinished(() => resetProjectForgeAutomationIndexForTests());
+      registerAppServerIpcHandlers();
+      const handler = setProjectForgeAutomationHandler.mock.calls.at(-1)?.[0] as (request: {
+        directoryKey: string;
+        automation: typeof DEFAULT_PROJECT_FORGE_AUTOMATION;
+      }) => Promise<unknown>;
+      const automation = { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 9 };
+      const ownKey = "directory:/repo/PwrAgent";
+
+      await expect(handler({ directoryKey: ownKey, automation }))
+        .resolves.toEqual({ directoryKey: ownKey, automation });
+
+      expect(setDirectoryForgeAutomationOverlay)
+        .toHaveBeenCalledWith(expect.objectContaining({ directoryKey: ownKey, automation }));
+      expect(getProjectForgeAutomationIndex().get(ownKey)).toEqual(automation);
+      expect(publishLocalEvent).toHaveBeenCalledWith({
+        backend: "codex",
+        notification: {
+          method: "directory/forgeAutomation/updated",
+          params: { directoryKey: ownKey, automation },
+        },
+      });
+      expect(federationMock.runtime.remoteBackend).not.toHaveBeenCalled();
+    });
+
+    it("sends a remote window's requests to the peer it fronts, whatever target the renderer stamped", async () => {
+      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+      const {
+        NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL,
+        NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL,
+      } = await import("../../shared/ipc");
+      registerAppServerIpcHandlers();
+      const windowOwner = { scope: "remote", instanceId: "window_owner" };
+
+      await handlers.get(NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL)?.({ sender: { id: 999 } }, {
+        directoryKey, automation: DEFAULT_PROJECT_FORGE_AUTOMATION,
+      });
+      await handlers.get(NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL)?.({ sender: { id: 999 } }, {
+        directoryKey, federationTarget,
+      });
+
+      expect(federationMock.runtime.remoteBackend.mock.calls).toEqual([[windowOwner], [windowOwner]]);
+      expect(owner.setProjectForgeAutomation).toHaveBeenCalledWith({
+        directoryKey, automation: DEFAULT_PROJECT_FORGE_AUTOMATION,
+      });
+    });
   });
 
   it("watches an explicitly attached upstream fork PR and reports active primary monitoring", async () => {
@@ -4729,8 +4850,10 @@ describe("app server ipc", () => {
     const directoryKey = "directory:/remote/project";
     readRemoteDirectoryOverlays.mockResolvedValueOnce({ [directoryKey]: { directoryKey, directoryThreadsCollapsed: true } });
     const counts = { total: 100, active: 0, unread: 0, review: 0 };
+    const forgeAutomation = { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 7 };
     const directory = { key: directoryKey, kind: "directory", label: "Project", counts,
-      pinnedRootCount: 0, unpinnedRootCount: 100, launchpadPresent: true, directoryThreadsCollapsed: false };
+      pinnedRootCount: 0, unpinnedRootCount: 100, launchpadPresent: true, directoryThreadsCollapsed: false,
+      forgeAutomation };
     federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce({ protocol: 2, queryKey: "directories", generation: "g",
       ownerEpoch: "owner", countsRevision: "r", counts, coverage: { state: "complete" }, entries: [],
       directories: [directory], selectionDirectory: directory, complete: true });
@@ -4738,12 +4861,18 @@ describe("app server ipc", () => {
     const page = await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)?.({ sender: { id: 90001, once: vi.fn() } }, {
       protocol: 2, consumer: "main-sidebar", federationTarget, query: { kind: "directory-index" },
       completeBaselineRevision: "owner-only-revision",
-    }) as { directories: Array<{ directoryThreadsCollapsed: boolean }>; selectionDirectory: { directoryThreadsCollapsed: boolean } };
+    }) as {
+      directories: Array<{ directoryThreadsCollapsed: boolean; forgeAutomation?: unknown }>;
+      selectionDirectory: { directoryThreadsCollapsed: boolean; forgeAutomation?: unknown };
+    };
     expect(federationMock.runtime.remoteNavigationQueryPage).toHaveBeenLastCalledWith(federationTarget,
       expect.objectContaining({ completeBaselineRevision: undefined }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(readRemoteDirectoryOverlays).toHaveBeenLastCalledWith({ instanceId: federationTarget.instanceId, directoryKeys: [directoryKey] });
     expect(page.directories[0]?.directoryThreadsCollapsed).toBe(true);
     expect(page.selectionDirectory.directoryThreadsCollapsed).toBe(true);
+    // The owner's Forge Automation reaches its window as the owner stored it.
+    expect(page.directories[0]?.forgeAutomation).toEqual(forgeAutomation);
+    expect(page.selectionDirectory.forgeAutomation).toEqual(forgeAutomation);
     expect(directory.directoryThreadsCollapsed).toBe(false);
     // The owner is unchanged while the viewer changes disclosure locally.
     readRemoteDirectoryOverlays.mockResolvedValueOnce({ [directoryKey]: { directoryKey, directoryThreadsCollapsed: false } });
@@ -4894,6 +5023,7 @@ describe("app server ipc", () => {
         threadKeys: [],
         needsAttentionCount: 0,
         directoryThreadsCollapsed: false,
+        forgeAutomation: { ...DEFAULT_PROJECT_FORGE_AUTOMATION, autoFixCiFailures: false },
       }],
       launchpadDefaults: {
         backend: "codex",
@@ -4906,13 +5036,15 @@ describe("app server ipc", () => {
       federationTarget,
     }) as {
       unchanged: boolean;
-      directories: Array<{ directoryThreadsCollapsed?: boolean }>;
+      directories: Array<{ directoryThreadsCollapsed?: boolean; forgeAutomation?: unknown }>;
     };
 
     expect(readRemoteDirectoryOverlays).toHaveBeenCalledWith({
       instanceId: federationTarget.instanceId,
     });
     expect(snapshot.directories[0]?.directoryThreadsCollapsed).toBe(true);
+    expect(snapshot.directories[0]?.forgeAutomation)
+      .toEqual({ ...DEFAULT_PROJECT_FORGE_AUTOMATION, autoFixCiFailures: false });
     expect(snapshot.unchanged).toBe(false);
   });
 
