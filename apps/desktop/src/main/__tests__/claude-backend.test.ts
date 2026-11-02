@@ -15,14 +15,14 @@ import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-r
 const roots: string[] = [];
 const backends: ClaudeBackend[] = [];
 afterEach(async () => {
-  try {
-    // A backend queues store writes (usage limits, session history) into the
-    // temp root without the test awaiting them. close() joins those writes, so
-    // every backend closes before its root is removed.
-    await Promise.all(backends.splice(0).map((backend) => backend.close()));
-  } finally {
-    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
-  }
+  // A backend queues usage-limit writes into the temp root without the test
+  // awaiting them, and a session can still be reporting its last turn.
+  // close() joins both, so every backend finishes closing, even when another
+  // close fails, before any root is removed.
+  const closed = await Promise.allSettled(backends.splice(0).map((backend) => backend.close()));
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  const failed = closed.find((result) => result.status === "rejected");
+  if (failed) throw failed.reason;
 });
 
 async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUserMessage>) => AsyncGenerator<SDKMessage>, controls: Partial<Query> & {
