@@ -1,5 +1,6 @@
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
 import { codexProviderIdOfModel, formatModelOptionLabel } from "@pwragent/shared";
+import { splitModelMenuOptions } from "../../lib/model-menu-options";
 import { mayContainLinearPastedImages } from "@pwragent/shared";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
@@ -10848,17 +10849,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     && (threadModelProvider || providerModelOptions.length > 0)
     ? `This thread runs on ${threadProviderLabel}. To use another provider, hand it off to a new thread.`
     : undefined;
-  const showOlderCodexModelsUnderOther = backend?.kind === "codex"
-    && !threadModelProvider
-    && ownModelOptions.some((model) => /^gpt-6(?:[.-]|$)/iu.test(model.id));
-  const otherModelOptions = backend?.kind === "claude"
-    ? ownModelOptions.filter((model) => model.other)
-    : showOlderCodexModelsUnderOther
-    ? ownModelOptions.filter((model) => /^gpt-5\.(?:5|6)(?:-|$)/iu.test(model.id))
-    : [];
-  const visibleModelOptions = otherModelOptions.length
-    ? ownModelOptions.filter((model) => !otherModelOptions.includes(model))
-    : ownModelOptions;
+  const { primary: visibleModelOptions, other: otherModelOptions } = splitModelMenuOptions(
+    backend?.kind,
+    ownModelOptions,
+  );
   const selectedModelOption =
     modelOptions.find((option) => option.id === currentSettings?.model) ??
     getDefaultModelOption(backend);

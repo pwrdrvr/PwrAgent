@@ -6247,7 +6247,7 @@ describe("Composer", () => {
     expect(screen.queryByRole("option", { name: "Other" })).not.toBeInTheDocument();
   });
 
-  it("keeps GPT-6 choices visible and puts GPT-5.6 and GPT-5.5 under Other", async () => {
+  it("shows Astra, Sol, Terra, Luna and puts superseded models under Other", async () => {
     const onUpdateLaunchpad = vi.fn(async () => undefined);
     render(
       <Composer
@@ -6257,6 +6257,7 @@ describe("Composer", () => {
               { id: "gpt-6-astra", label: "GPT-6-Astra" },
               { id: "gpt-6.1-sol", label: "GPT-6.1-Sol", current: true },
               { id: "gpt-6-sol", label: "GPT-6-Sol" },
+              { id: "gpt-6.1-terra", label: "GPT-6.1-Terra" },
               { id: "gpt-6-luna", label: "GPT-6-Luna" },
               { id: "gpt-5.6-sol", label: "GPT-5.6-Sol" },
               { id: "gpt-5.5", label: "GPT-5.5" },
@@ -6286,9 +6287,11 @@ describe("Composer", () => {
     fireEvent.click(modelButton);
     expect(screen.getAllByRole("option").map((option) =>
       option.querySelector(".composer-dropdown__option-label")?.textContent,
-    )).toEqual(["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6-Sol", "GPT-6-Luna", "Other"]);
+    )).toEqual(["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna", "Other"]);
+    expect(screen.queryByRole("option", { name: "GPT-6-Sol" })).not.toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "GPT-5.6-Sol" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("option", { name: "Other" }));
+    expect(screen.getByRole("option", { name: "GPT-6-Sol" })).toBeVisible();
     fireEvent.click(screen.getByRole("option", { name: "GPT-5.6-Sol" }));
     await waitFor(() => {
       expect(onUpdateLaunchpad).toHaveBeenCalledWith(
