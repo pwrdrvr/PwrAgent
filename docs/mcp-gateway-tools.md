@@ -23,8 +23,13 @@ another thread identity, endpoint or credential.
 
 Full Access approves gateway invocations automatically, including headless
 automations. Codex uses the active turn's applied mode, falling back to the
-automation mode or saved thread mode when no active mode is recorded. ACP uses
-its runtime mode selector when present, otherwise its session execution mode.
+automation mode or saved thread mode when no active mode is recorded. Claude's
+Full Access is bypass permissions. Claude uses its open process's permission
+mode, so a change during the turn applies to the next call, falling back to
+the automation mode or saved thread mode when no process is open. Under bypass
+permissions Claude asks for nothing itself, so the gateway card would be the
+only prompt. ACP uses its runtime mode selector when present, otherwise its
+session execution mode.
 Selection, actor permissions, connection authorization and schema validation
 still apply to every call. No permission is cached for the generic wrapper.
 
