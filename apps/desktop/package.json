@@ -58,12 +58,12 @@
     "typecheck": "node ../../node_modules/typescript-native/bin/tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@ai-markdown/engine": "3.4.2",
-    "@anthropic-ai/claude-agent-sdk": "0.3.303",
+    "@ai-markdown/engine": "3.5.0",
+    "@anthropic-ai/claude-agent-sdk": "0.3.310",
     "@fontsource/geist-mono": "^5.3.0",
     "@fontsource/geist-sans": "^5.3.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@napi-rs/canvas": "1.0.11",
+    "@napi-rs/canvas": "1.0.13",
     "@octokit/graphql": "^9.0.3",
     "@peculiar/x509": "^2.0.0",
     "@pwragent/messaging-interface": "workspace:*",
@@ -93,7 +93,7 @@
     "abort-controller": "3.0.0",
     "ajv": "8.20.0",
     "better-sqlite3": "^13.0.3",
-    "dugite": "3.2.3",
+    "dugite": "3.3.2",
     "electron-log": "^5.4.3",
     "electron-updater": "6.8.11",
     "fflate": "^0.8.3",
@@ -117,9 +117,9 @@
     "remark-math": "^6.0.0",
     "sigstore": "5.0.0",
     "tar": "^7.5.22",
-    "unist-util-visit": "5.1.0",
+    "unist-util-visit": "5.2.0",
     "ws": "8.22.0",
-    "zod": "4.6.6",
+    "zod": "4.6.7",
     "@pwragent/agent-tools": "workspace:*"
   },
   "devDependencies": {
@@ -144,8 +144,8 @@
     "vite": "^8.3.1"
   },
   "optionalDependencies": {
-    "@napi-rs/canvas-darwin-arm64": "1.0.11",
-    "@napi-rs/canvas-darwin-x64": "1.0.11",
-    "@napi-rs/canvas-win32-x64-msvc": "1.0.11"
+    "@napi-rs/canvas-darwin-arm64": "1.0.13",
+    "@napi-rs/canvas-darwin-x64": "1.0.13",
+    "@napi-rs/canvas-win32-x64-msvc": "1.0.13"
   }
 }

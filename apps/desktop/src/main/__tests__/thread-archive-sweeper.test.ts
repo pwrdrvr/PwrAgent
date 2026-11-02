@@ -321,7 +321,9 @@ describe("workspaceIsSafeForAutoArchive", () => {
     const broken = path.join(root, "broken-worktree");
     await mkdir(broken);
     await writeFile(path.join(broken, ".git"), `gitdir: ${path.join(root, "missing", ".git", "worktrees", "x")}\n`);
-    await expect(workspaceIsSafeForAutoArchive(broken, signal)).rejects.toThrow(/not a git repository/);
+    await expect(workspaceIsSafeForAutoArchive(broken, signal)).rejects.toThrow(
+      /not a git repository|gitfile does not point to a valid repository/,
+    );
   });
 });
 
