@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { PendingSpinner } from "../../components/PendingSpinner";
 
 /**
  * Extracted from Composer.tsx so surfaces beyond the composer footer (the
@@ -469,7 +470,11 @@ export function ComposerDropdown(props: {
       >
         {props.busy ? (
           <span aria-hidden="true" className="composer-dropdown__icon">
-            <span className="pending-spinner pending-spinner--sm" />
+            <PendingSpinner
+              pairing="standalone"
+              size="sm"
+              standaloneReason="The ring replaces the icon beside the environment's name, which does not say setup is running."
+            />
           </span>
         ) : Icon ? (
           <span aria-hidden="true" className="composer-dropdown__icon">

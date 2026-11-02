@@ -46935,13 +46935,14 @@ button.composer__subthread-source-parent:hover {
    `.composer__action-button-spinner` so the composer, Settings, and every
    later surface share a single definition instead of copying the ring.
    The ring reads --border-subtle and the moving arc reads --accent, per
-   docs/UI-THEME.md.
+   docs/UI-THEME.md. Render it through `components/PendingSpinner`, never as a
+   raw class; `reduced-motion-contract.test.ts` fails on one.
 
-   Always decorative — `aria-hidden` it and give the busy state to something
-   a screen reader can read: adjacent text naming the work (`.settings-pending`
-   does) or `aria-busy` on the control. A bare ring is not an accessible
-   status. Whether a ring stands alone also decides its reduced-motion
-   behavior; see the media query below. */
+   Always decorative — the component renders it `aria-hidden`. Give the busy
+   state to something a screen reader can read: adjacent text naming the work
+   (`.settings-pending` does) or `aria-busy` on the control. A bare ring is not
+   an accessible status. Whether a ring stands alone also decides its
+   reduced-motion behavior; see the media query below. */
 
 .pending-spinner {
   flex: 0 0 auto;
@@ -46976,15 +46977,15 @@ button.composer__subthread-source-parent:hover {
    paired ring goes uniformly accent-tinted and "Saving…" carries the state on
    its own.
 
-   A ring opts in itself: give it `.pending-spinner--paired` wherever it
-   renders beside visible text such as "Saving…", "Sending…" or a provider
-   row's current step. The rule is keyed to the ring rather than to each
-   surface, so a new surface cannot miss it by not knowing to add its
-   context here.
+   A ring opts in itself: `<PendingSpinner pairing="paired">` adds
+   `.pending-spinner--paired` wherever it renders beside visible text such as
+   "Saving…", "Sending…" or a provider row's current step. The rule is keyed
+   to the ring rather than to each surface, and `pairing` is a required prop,
+   so a new surface cannot miss it by not knowing to add its context here.
 
    A ring that is the only signal its surface has — the composer's Run button
    swaps the play glyph for a bare, aria-hidden ring — keeps spinning, and
-   stays unmarked. The preference asks for non-essential motion to stop, and
+   renders as `pairing="standalone"` with a `standaloneReason`. The preference asks for non-essential motion to stop, and
    motion that is the sole indication of progress is not that. `aria-busy`
    alone does not pair a ring: it tells a screen reader, not someone looking
    at a still arc. */

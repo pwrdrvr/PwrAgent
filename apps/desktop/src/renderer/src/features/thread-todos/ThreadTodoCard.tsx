@@ -77,6 +77,7 @@ import {
   threadTodoStepsMarkdown,
   threadTodosMarkdown,
 } from "./thread-todo-copy";
+import { PendingSpinner } from "../../components/PendingSpinner";
 
 const KIND_ICONS: Record<ThreadTodoKind, ComponentType<IconProps> | undefined> = {
   reminder: undefined,
@@ -323,7 +324,7 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
         onClick={() => fix(toSend)}
       >
         {sending || working
-          ? <span className="pending-spinner pending-spinner--sm pending-spinner--paired" aria-hidden="true" />
+          ? <PendingSpinner pairing="paired" size="sm" />
           : <ArrowUpIcon size={12} />}
         {sending ? "Sending…" : working ? "Working…"
           : selectedItems.length > 0 ? `Fix ${selectedItems.length} selected` : "Fix all"}
@@ -739,7 +740,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     if (props.running) {
       return (
         <span className="thread-todo-card__button thread-todo-card__button--busy" role="status">
-          <span className="pending-spinner pending-spinner--sm pending-spinner--paired" aria-hidden="true" />
+          <PendingSpinner pairing="paired" size="sm" />
           {runningLabel}
         </span>
       );
