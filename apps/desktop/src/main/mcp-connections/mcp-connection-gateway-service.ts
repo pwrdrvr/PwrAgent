@@ -11,6 +11,7 @@ import {
   type Socket,
 } from "node:net";
 import { shell } from "electron";
+import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -26,6 +27,7 @@ import {
   type ElicitResult,
   type InitializeResult,
   type Notification,
+  type Progress,
 } from "@modelcontextprotocol/sdk/types.js";
 import { McpInitializationTransport } from "./mcp-initialization-transport";
 import { McpDiscovery, McpDiscoveryError, mcpDiscoveryContext, mcpDiscoveryPhaseContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
@@ -40,7 +42,11 @@ import {
   type StdioSpawn,
 } from "./mcp-stdio-launch";
 import { McpStdioSecretVault, type McpStdioSecretSettings } from "./mcp-stdio-secret-vault";
-import { ConnectionRpcClient } from "./mcp-connection-rpc-client";
+import {
+  ConnectionRpcClient,
+  PROGRESS_WIRE_OPT_IN,
+  bridgeProgress,
+} from "./mcp-connection-rpc-client";
 import {
   ELICITATION_WIRE_OPT_IN,
   UPSTREAM_FORM_ELICITATION_CAPABILITIES,
@@ -115,6 +121,7 @@ import { probeMcpConnectionUrl } from "./mcp-connection-probe";
 import {
   MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS,
   MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS,
+  MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS,
   MCP_CONNECTION_TOOL_TIMEOUT_MS,
 } from "./mcp-connection-timeouts";
 
@@ -187,7 +194,36 @@ type BridgeRequest = {
   discoveryId?: unknown;
   /** The caller can answer the upstream server's forms on this socket. */
   elicitation?: unknown;
+  /** The caller takes the upstream server's progress reports on this socket. */
+  progress?: unknown;
 };
+
+/**
+ * Options for a tool call on the upstream session. A caller that takes
+ * progress reports makes the SDK ask the server for them. Each report
+ * restarts the call's timeout, up to an absolute cap; a server that stops
+ * reporting still times out.
+ */
+function upstreamToolCallOptions(
+  signal: AbortSignal | undefined,
+  onProgress: ((progress: Progress) => void) | undefined,
+): RequestOptions {
+  return {
+    ...(signal ? { signal } : {}),
+    timeout: MCP_CONNECTION_TOOL_TIMEOUT_MS,
+    ...(onProgress
+      ? {
+        onprogress: onProgress,
+        resetTimeoutOnProgress: true,
+        maxTotalTimeout: MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS,
+      }
+      : {}),
+  };
+}
+
+function cancelOnly(signal: AbortSignal | undefined): RequestOptions | undefined {
+  return signal ? { signal } : undefined;
+}
 
 type BridgeResponse =
   | { ok: true; result: unknown }
@@ -1724,6 +1760,8 @@ export class McpConnectionGatewayService {
     deadlineAt?: number;
     /** Shows the upstream server's forms for a call to the thread's operator. */
     elicit?: ElicitationRoute;
+    /** Called for each progress report from the upstream server during a call. */
+    onProgress?: () => void;
   }): Promise<McpGatewayTool[] | CallToolResult> {
     params.signal.throwIfAborted();
     const discovery = new McpDiscovery(params.connectionId, params.deadlineAt ?? Date.now() + MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS, params.signal);
@@ -1741,6 +1779,7 @@ export class McpConnectionGatewayService {
         params.operation, params.invocation, params.signal, discovery.deadlineAt, discovery.id,
         call ? MCP_CONNECTION_TOOL_TIMEOUT_MS : undefined,
         call ? params.elicit : undefined,
+        call && params.onProgress ? params.onProgress : undefined,
       ) as McpGatewayTool[] | CallToolResult;
     } finally {
       discovery.close();
@@ -2982,6 +3021,13 @@ export class McpConnectionGatewayService {
       listen((answer) => forms.receive(answer));
       socket.once("close", () => forms.close());
     }
+    const onProgress = request.progress === PROGRESS_WIRE_OPT_IN
+      ? (report: Progress): void => {
+        const progress = bridgeProgress(report);
+        if (!progress || socket.destroyed || socket.writableEnded) return;
+        socket.write(`${JSON.stringify({ progress })}\n`);
+      }
+      : undefined;
     try {
       const result = await this.dispatchBridgeOperation(
         request.token,
@@ -2992,6 +3038,7 @@ export class McpConnectionGatewayService {
         typeof request.deadlineAt === "number" && Number.isFinite(request.deadlineAt) ? request.deadlineAt : undefined,
         typeof request.discoveryId === "string" && /^[a-f0-9-]{36}$/.test(request.discoveryId) ? request.discoveryId : undefined,
         forms?.route,
+        onProgress,
       );
       forms?.close();
       this.respond(socket, { ok: true, result });
@@ -3413,6 +3460,8 @@ export class McpConnectionGatewayService {
     parentDiscoveryId?: string,
     /** Where the upstream server's forms for this request go, if anywhere. */
     elicit?: ElicitationRoute,
+    /** Where the upstream server's progress reports for a tool call go. */
+    onProgress?: (progress: Progress) => void,
   ): Promise<unknown> {
     // Net callbacks can inherit the registration that created the server.
     // Only this RPC owns its fetch signal; discovery phases override it locally.
@@ -3467,7 +3516,7 @@ export class McpConnectionGatewayService {
             signal?.throwIfAborted();
             discovery.close();
             const result = await client.callTool({ name: tool.toolName, arguments: values.arguments as Record<string, unknown> },
-              undefined, { signal, timeout: MCP_CONNECTION_TOOL_TIMEOUT_MS });
+              undefined, upstreamToolCallOptions(signal, onProgress));
             this.observeToolResult(grant, tool.toolName, result as CallToolResult);
             return result;
           }
@@ -3492,31 +3541,32 @@ export class McpConnectionGatewayService {
             const result = await client.callTool(
               values as Parameters<Client["callTool"]>[0],
               undefined,
-              {
-                ...(signal ? { signal } : {}),
-                timeout: MCP_CONNECTION_TOOL_TIMEOUT_MS,
-              },
+              upstreamToolCallOptions(signal, onProgress),
             );
             this.observeToolResult(grant, values.name, result as CallToolResult);
             return result;
           }
+          // The caller's cancel reaches the server; it no longer waits out
+          // the SDK's default timeout.
           case "resources/list":
-            return await client.listResources(values);
+            return await client.listResources(values, cancelOnly(signal));
           case "resources/templates/list":
-            return await client.listResourceTemplates(values);
+            return await client.listResourceTemplates(values, cancelOnly(signal));
           case "resources/read":
             return await client.readResource(
               values as Parameters<Client["readResource"]>[0],
+              cancelOnly(signal),
             );
           case "resources/subscribe":
-            return await client.subscribeResource(values as Parameters<Client["subscribeResource"]>[0]);
+            return await client.subscribeResource(values as Parameters<Client["subscribeResource"]>[0], cancelOnly(signal));
           case "resources/unsubscribe":
-            return await client.unsubscribeResource(values as Parameters<Client["unsubscribeResource"]>[0]);
+            return await client.unsubscribeResource(values as Parameters<Client["unsubscribeResource"]>[0], cancelOnly(signal));
           case "prompts/list":
-            return await client.listPrompts(values);
+            return await client.listPrompts(values, cancelOnly(signal));
           case "prompts/get":
             return await client.getPrompt(
               values as Parameters<Client["getPrompt"]>[0],
+              cancelOnly(signal),
             );
           default:
             throw new Error("unsupported MCP operation");

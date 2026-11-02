@@ -2,7 +2,13 @@ import type { CallToolResult, ElicitRequestParams, Tool } from "@modelcontextpro
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import type { McpConnectionGatewayService } from "./mcp-connection-gateway-service";
 import { gatewayCatalogRevision, validateGatewayArguments, type McpGatewayInvocation, type McpGatewayTool, type McpGatewaySource, type McpGatewayIdentity } from "./mcp-gateway-catalog";
-import { MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS, MCP_CONNECTION_TOOL_TIMEOUT_MS, MCP_DISCOVERY_RESPONSE_GRACE_MS } from "./mcp-connection-timeouts";
+import {
+  MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS,
+  MCP_CONNECTION_TOOL_TIMEOUT_MS,
+  MCP_DISCOVERY_RESPONSE_GRACE_MS,
+  MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS,
+  progressExtendedTimeout,
+} from "./mcp-connection-timeouts";
 
 export type McpGatewayCallArgs = Omit<McpGatewayInvocation, "serverName">;
 export type McpGatewaySearch = { query: string; connectionId?: string; limit?: number };
@@ -130,7 +136,7 @@ export class McpGatewayToolService {
 
   async call(args: McpGatewayCallArgs, context: AgentToolCallContext): Promise<{ source: McpGatewaySource; result: CallToolResult }> {
     if (Buffer.byteLength(JSON.stringify(args)) > 16_000) throw new Error("The MCP invocation exceeds the approval size limit. Use native MCP invocation for larger arguments.");
-    return await this.run(context, MCP_CONNECTION_TOOL_TIMEOUT_MS, async (signal) => {
+    return await this.run(context, MCP_CONNECTION_TOOL_TIMEOUT_MS, async (signal, _deadlineAt, extend) => {
       await this.requireSelected(args.connectionId, context, signal);
       const tools = await this.options.connections.requestGatewayToolOperation({
         connectionId: args.connectionId, scopeKey: this.scopeKey(context), operation: "gateway/tools/list", signal,
@@ -156,13 +162,13 @@ export class McpGatewayToolService {
       const elicit = this.options.elicit;
       const result = await this.options.connections.requestGatewayToolOperation({
         connectionId: args.connectionId, scopeKey: this.scopeKey(context),
-        operation: "gateway/tools/call", invocation, signal,
+        operation: "gateway/tools/call", invocation, signal, onProgress: extend,
         ...(elicit ? { elicit: async (request: ElicitRequestParams, formSignal: AbortSignal) =>
           await elicit(request, invocation, context, AbortSignal.any([signal, formSignal])) } : {}),
       }) as CallToolResult;
       if (typeof approval === "object") await approval.onInvoked();
       return { source, result };
-    });
+    }, MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS);
   }
 
   private scopeKey(context: AgentToolCallContext): string {
@@ -175,15 +181,29 @@ export class McpGatewayToolService {
     signal.throwIfAborted();
   }
 
-  private async run<T>(context: AgentToolCallContext, timeout: number, operation: (signal: AbortSignal, deadlineAt: number) => Promise<T>): Promise<T> {
+  /**
+   * Runs one operation under `timeout`. With `maxTotalTimeout`, `extend`
+   * restarts that timeout, as the upstream server's progress reports do,
+   * but never past the total.
+   */
+  private async run<T>(
+    context: AgentToolCallContext,
+    timeout: number,
+    operation: (signal: AbortSignal, deadlineAt: number, extend: () => void) => Promise<T>,
+    maxTotalTimeout?: number,
+  ): Promise<T> {
     const deadlineAt = Date.now() + timeout;
     const entry = { context, controller: new AbortController() };
-    const signal = AbortSignal.any([entry.controller.signal, AbortSignal.timeout(timeout + (timeout === MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS ? MCP_DISCOVERY_RESPONSE_GRACE_MS : 0)), ...(context.signal ? [context.signal] : [])]);
+    const idleMs = timeout + (timeout === MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS ? MCP_DISCOVERY_RESPONSE_GRACE_MS : 0);
+    const deadline = progressExtendedTimeout(idleMs, maxTotalTimeout ?? idleMs);
+    const extend = maxTotalTimeout === undefined ? () => undefined : deadline.extend;
+    const signal = AbortSignal.any([entry.controller.signal, deadline.signal, ...(context.signal ? [context.signal] : [])]);
     this.running.add(entry);
     try {
       signal.throwIfAborted();
-      return await operation(signal, deadlineAt);
+      return await operation(signal, deadlineAt, extend);
     } finally {
+      deadline.clear();
       this.running.delete(entry);
     }
   }

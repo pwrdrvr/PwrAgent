@@ -1,6 +1,11 @@
 import { connect, type Socket } from "node:net";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
-import { MCP_CONNECTION_TOOL_TIMEOUT_MS, MCP_DISCOVERY_RESPONSE_GRACE_MS } from "./mcp-connection-timeouts.js";
+import {
+  MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS,
+  MCP_CONNECTION_TOOL_TIMEOUT_MS,
+  MCP_DISCOVERY_RESPONSE_GRACE_MS,
+  progressExtendedTimeout,
+} from "./mcp-connection-timeouts.js";
 import { ELICITATION_WIRE_OPT_IN, type ElicitationRoute } from "./mcp-elicitation-relay.js";
 
 const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
@@ -9,6 +14,28 @@ type RpcResponse =
   | { ok: false; error: string; code?: number; data?: unknown };
 
 export type McpBridgeEvent = { method: string; params?: Record<string, unknown> };
+
+/**
+ * One progress report from the upstream server, without its token: the
+ * owner's token is not the caller's. A request opts in with
+ * `progress: "notify"`, and the owner then sends `{ progress }` lines on its
+ * socket. An owner never sends one to a request that did not, so either side
+ * may be an older build.
+ */
+export type McpBridgeProgress = { progress: number; total?: number; message?: string };
+
+export const PROGRESS_WIRE_OPT_IN = "notify";
+
+export function bridgeProgress(value: unknown): McpBridgeProgress | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const { progress, total, message } = value as Record<string, unknown>;
+  if (typeof progress !== "number" || !Number.isFinite(progress)) return undefined;
+  return {
+    progress,
+    ...(typeof total === "number" && Number.isFinite(total) ? { total } : {}),
+    ...(typeof message === "string" ? { message } : {}),
+  };
+}
 
 export class ConnectionRpcClient {
   constructor(
@@ -77,7 +104,9 @@ export class ConnectionRpcClient {
    * One request on its own socket. `onElicit` makes it interactive: the
    * owner may then send the upstream server's forms on this socket while the
    * request runs, and each is answered here. Without it the owner refuses
-   * every form for this request.
+   * every form for this request. `onProgress` asks the owner for the
+   * server's progress reports. Each one also pushes this request's timeout
+   * back, up to `MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS`.
    */
   request(
     operation: string,
@@ -87,6 +116,7 @@ export class ConnectionRpcClient {
     discoveryId?: string,
     rpcTimeoutMs?: number,
     onElicit?: ElicitationRoute,
+    onProgress?: (progress: McpBridgeProgress) => void,
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const socket: Socket = connect(this.socketPath);
@@ -97,7 +127,8 @@ export class ConnectionRpcClient {
       const finish = (error?: Error, value?: unknown): void => {
         if (settled) return;
         settled = true;
-        clearTimeout(timeout);
+        timeout.clear();
+        timeout.signal.removeEventListener("abort", onTimeout);
         signal?.removeEventListener("abort", onAbort);
         for (const form of forms.values()) {
           form.abort(new DOMException("The MCP request ended.", "AbortError"));
@@ -107,12 +138,15 @@ export class ConnectionRpcClient {
         if (error) reject(error);
         else resolve(value);
       };
-      const timeout = setTimeout(
-        () => finish(new Error("PwrAgent MCP bridge timed out.")),
-        rpcTimeoutMs ?? (deadlineAt === undefined
-          ? MCP_CONNECTION_TOOL_TIMEOUT_MS
-          : Math.max(1, deadlineAt - Date.now() + MCP_DISCOVERY_RESPONSE_GRACE_MS)),
+      const idleMs = rpcTimeoutMs ?? (deadlineAt === undefined
+        ? MCP_CONNECTION_TOOL_TIMEOUT_MS
+        : Math.max(1, deadlineAt - Date.now() + MCP_DISCOVERY_RESPONSE_GRACE_MS));
+      const timeout = progressExtendedTimeout(
+        idleMs,
+        onProgress ? MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS + MCP_DISCOVERY_RESPONSE_GRACE_MS : idleMs,
       );
+      const onTimeout = (): void => finish(new Error("PwrAgent MCP bridge timed out."));
+      timeout.signal.addEventListener("abort", onTimeout, { once: true });
       const onAbort = (): void => {
         finish(new DOMException("The MCP request was cancelled.", "AbortError"));
       };
@@ -152,7 +186,16 @@ export class ConnectionRpcClient {
         const message = JSON.parse(line) as RpcResponse & {
           elicit?: { id?: unknown; params?: unknown };
           elicitCancel?: { id?: unknown };
+          progress?: unknown;
         };
+        if (message.progress !== undefined) {
+          const progress = bridgeProgress(message.progress);
+          if (progress && onProgress) {
+            timeout.extend();
+            onProgress(progress);
+          }
+          return;
+        }
         if (message.elicit && typeof message.elicit.id === "number") {
           answerForm(message.elicit.id, message.elicit.params);
           return;
@@ -179,6 +222,7 @@ export class ConnectionRpcClient {
           ...(deadlineAt === undefined ? {} : { deadlineAt }),
           ...(discoveryId === undefined ? {} : { discoveryId }),
           ...(onElicit ? { elicitation: ELICITATION_WIRE_OPT_IN } : {}),
+          ...(onProgress ? { progress: PROGRESS_WIRE_OPT_IN } : {}),
           ...(params === undefined ? {} : { params }),
         })}\n`);
       });

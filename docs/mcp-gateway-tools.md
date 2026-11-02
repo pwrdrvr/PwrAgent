@@ -154,6 +154,31 @@ thread's selection both before it asks and before it delivers an answer.
 After a reconnect, the replacement session can be answered only by its own
 form. Nothing launches the server's desktop application to answer a form.
 
+### Upstream progress
+
+A managed thread session asks the upstream server for progress on every tool
+call. The SDK sends the server PwrAgent's own progress token, never the
+caller's.
+
+- Each report restarts the call's 12-minute timeout.
+- A call that reports progress can run for up to 60 minutes in total.
+- A call that reports nothing still fails after 12 minutes.
+
+A native bridge passes each report on to the agent's MCP client, tied to the
+call and under the token that client sent. If the client sent no token, the
+reports only keep the call alive. A fixed `call_mcp_tool` call uses the
+reports the same way, but it does not show them on the thread's card.
+
+A bridge request opts in with `progress: "notify"`. The owner can then write
+`{ "progress": { progress, total?, message? } }` lines on that socket before
+the final `{ ok }` line. Each line also restarts the requester's own socket
+timer. An owner never sends progress to a request that did not opt in. A
+request from an older bridge keeps its old behavior: its token goes to the
+server as sent, and the call has a fixed 12-minute limit.
+
+Native Codex hosts still get `tool_timeout_sec` of 12 minutes. That limit
+belongs to Codex, and progress through PwrAgent does not change it.
+
 ### Automation MCP grants
 
 An automation's saved MCP server and tool allowlists are advance approval for
@@ -220,7 +245,8 @@ search safety timers allow one additional second to deliver the owner's phase
 error; that second does not extend upstream work. Native Codex bridges set
 `startup_timeout_sec` to 75 for process overhead and preserve the discovery
 deadline from initialization through the initial catalog and its cursors.
-Tool execution keeps its separate 12-minute allowance.
+Tool execution keeps its separate 12-minute allowance, which the server's
+progress reports can extend (see "Upstream progress").
 Gateway call RPCs carry the short discovery deadline for catalog validation
 while their sockets retain the 12-minute call allowance. Completing discovery
 stops its timer before tool execution. Native catalog continuations use opaque
@@ -257,7 +283,9 @@ the catalog without invoking a tool or changing the connection's configuration.
 
 Selection changes, turn termination and shutdown cancel outstanding gateway
 work. MCP request cancellation propagates through the local socket to the
-upstream SDK signal without closing healthy sibling calls. Disabling or
+upstream SDK signal without closing healthy sibling calls. This covers tool
+calls, resource listings, reads and subscriptions, and prompt listings and
+reads. Disabling or
 disconnecting a connection closes its sessions, including invalidating sessions
 that are still opening. Cancellation cannot undo an already completed external
 effect; the gateway never automatically retries side effects.
