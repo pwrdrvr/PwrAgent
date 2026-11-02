@@ -2775,7 +2775,8 @@ function mergeHydratedThreadWithOptimisticState(
     optimisticUserMessage: thread.optimisticUserMessage ?? optimistic.optimisticUserMessage,
     // An admitted owner row with no rank is authoritatively unpinned.
     pinnedRank: thread.pinnedRank,
-    scheduledStart: thread.scheduledStart ?? optimistic.scheduledStart,
+    // Absence on an owner row means the scheduled start has cleared.
+    scheduledStart: thread.scheduledStart,
   };
 }
 
