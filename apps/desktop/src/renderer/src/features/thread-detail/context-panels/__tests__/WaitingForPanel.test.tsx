@@ -170,8 +170,7 @@ describe("WaitingForPanel", () => {
     const toggle = screen.getByRole("button", { name: "Recently ended (1)" });
     expect(screen.queryByText("PR watch woke the thread")).not.toBeInTheDocument();
     fireEvent.click(toggle);
-    expect(screen.getByText("PR watch woke the thread")).toBeInTheDocument();
-    expect(screen.getByText(" · #3174 CI failed")).toBeInTheDocument();
+    expect(screen.getByText("PR watch woke the thread")).toHaveTextContent("PR watch woke the thread · #3174 CI failed");
   });
 
   it("says nothing will wake the thread, and how to ask for a wake", () => {

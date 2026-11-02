@@ -817,7 +817,7 @@ describe("ThreadContextPanel", () => {
 
     fireEvent.keyDown(info, { key: "ArrowDown" });
     expect(document.activeElement).toBe(
-      screen.getByRole("tab", { name: "Edits" }),
+      screen.getByRole("tab", { name: "Waiting for" }),
     );
 
     fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
