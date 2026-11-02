@@ -49219,11 +49219,18 @@ script = "printf setup"
           },
         },
       });
-      // Wait on the turn's own end, not wall time. Ending it saves the
-      // session through about a dozen file operations, which took over a
-      // second on a loaded Windows runner.
+      // Wait on the turn's own end, not wall time.
       registry.onEvent((event) => {
         if (["turn/completed", "turn/failed", "turn/cancelled"].includes(event.notification.method)) turnFinished.resolve(event);
+      });
+      // The root is not a repository, so each branch read (thread start, and
+      // turn end before listeners see turn/completed) falls back to an owned
+      // Git process. On Windows that is PowerShell plus Git. Answer as Git
+      // does outside a repository.
+      const runGitCommand = gitExecutable.runGitCommand;
+      const branchRead = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+        if (cwd !== root) return await runGitCommand(cwd, args, options);
+        throw new Error("fatal: not a git repository (or any of the parent directories): .git");
       });
       try {
         const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
@@ -49234,10 +49241,15 @@ script = "printf setup"
         await expect(registry.steerTurn({ ...identity, expectedTurnId: started.turnId, requestId: "telegram-steer-1",
           input: [{ type: "text", text: "Course correct from Telegram" }] }, steererOrigin))
           .resolves.toMatchObject({ disposition: "steered", turnId: started.turnId });
+        branchRead.mockClear();
         finish.resolve();
         await expect(turnFinished.promise).resolves.toMatchObject({
           notification: { method: "turn/completed", params: { turnId: started.turnId } },
         });
+        // The turn-end branch read ran, and ran without a Git process.
+        expect(branchRead).toHaveBeenCalledWith(
+          root, ["rev-parse", "--abbrev-ref", "HEAD"], expect.objectContaining({ ownProcessTree: true }),
+        );
 
         const replay = await registry.readThread(identity);
         const firstPrompt = replay.replay.messages.find((message) => message.text === "Start");
@@ -49246,7 +49258,11 @@ script = "printf setup"
         await expect(registry.readCausalMessagingContext({ ...identity, turnId: started.turnId }))
           .resolves.toEqual({ causalMessagingAmbiguous: true });
       } finally {
-        await registry.close();
+        try {
+          await registry.close();
+        } finally {
+          branchRead.mockRestore();
+        }
         await rm(root, { recursive: true, force: true });
       }
     });
