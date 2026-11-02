@@ -168,9 +168,9 @@ Before any person sees a link, the owner refuses it with `-32602` when:
 - The request has no `message`, no `elicitationId`, or no `url`.
 - The address does not parse, or carries a user name or password.
 - The address is not `https`. A local command may also send `http` to this
-  machine (`localhost`, `*.localhost`, `127.0.0.0/8` or `[::1]`). A remote
-  server may not, because the link would point the person's browser at
-  whatever else listens locally.
+  machine (`localhost`, `*.localhost`, `127.0.0.1` or `[::1]`, the hosts the
+  desktop card accepts). A remote server may not, because the link would
+  point the person's browser at whatever else listens locally.
 - `_meta` contains `codex_approval_kind` or `pwragent_approval_kind`.
 
 The routes are:
@@ -198,7 +198,9 @@ has no card left to update, so its completions are dropped.
 
 A tool call can instead fail with `-32042` (URL elicitation required):
 
-- **Native bridge.** The error passes through unchanged, with its data.
+- **Native bridge.** The error passes through unchanged, with its data. When
+  the bridge's client can show links, a later
+  `notifications/elicitation/complete` for a listed link reaches it.
 - **Fixed gateway tools.** The owner shows each listed link in turn, at most
   three, on the calling thread's card. It then returns the original error to
   the agent with a note saying whether the person opened the page. The call
@@ -214,11 +216,10 @@ bridge never receives a link.
 
 A local command's server can ask `roots/list` for the directories it may
 work in. Its thread session answers with the directories of the thread the
-grant serves:
-
-1. The thread's working directory.
-2. Each linked directory. A worktree is given as its own checkout, not its
-   repository.
+grant serves: each linked directory, with the thread's working directory
+first. A worktree is given as its own checkout, not its repository. A thread
+with no linked directory has no roots, even when its working directory falls
+back to something else.
 
 Each root is a `file://` URI. The label of a linked directory becomes the
 root's `name`. Relative paths, repeats and directories that no longer exist
@@ -239,8 +240,10 @@ The instance that runs the thread reads its directories and reports them to
 the owner broker, which may be another instance on the same profile. It
 reports when a grant is registered or bound to a thread, at most once every
 10 seconds per thread, and again whenever the thread's directories change
-(`navigation/threadDirectories/updated`). The owner keeps the latest list in
-memory only; nothing is written to SQLite. When a session's list differs
+(`navigation/threadDirectories/updated`). Reports for one thread reach the
+owner in order. The owner keeps the latest list in memory only; nothing is
+written to SQLite. It holds at most 512 threads' lists and never drops one
+that a live grant serves. When a session's list differs
 from the one it last read, the owner sends it
 `notifications/roots/list_changed` once. A session that never asked is not
 told.

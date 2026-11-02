@@ -705,11 +705,15 @@ export class McpConnectionGatewayService {
   private readonly elicitationRoutes = new UpstreamElicitationRoutes();
   /** The owner's roots per thread identity, as the thread's instance reported them. */
   private readonly threadRoots = new Map<string, Root[]>();
-  /** The roots each session was last given, and last told had changed. */
-  private readonly rootsServed = new WeakMap<Client, string>();
-  private readonly rootsAnnounced = new WeakMap<Client, string>();
+  /**
+   * The roots each session last read or was last told had changed. Absent
+   * until the session first asks, so a session that never asked is not told.
+   */
+  private readonly rootsKnown = new WeakMap<Client, string>();
   /** Threads whose roots this instance reports because it registered their grants. */
   private readonly rootThreads = new Map<string, { scope: ThreadRootsScope; refreshedAt: number; generation: number }>();
+  /** Each thread's report in flight, so reports reach the owner in order. */
+  private readonly rootReports = new Map<string, Promise<void>>();
   private threadRootsResolver?: (scope: ThreadRootsScope) => Promise<ThreadRootDirectory[]>;
   /** Links a native host opened, per session, so the server's completion can follow. */
   private readonly openedUrlElicitations = new WeakMap<Client, Map<string, string>>();
@@ -3000,17 +3004,20 @@ export class McpConnectionGatewayService {
 
   private refreshThreadRoots(key: string, scope: ThreadRootsScope): void {
     const resolver = this.threadRootsResolver;
-    if (!resolver) return;
+    if (!resolver || !this.gatewayEnabled()) return;
     const generation = (this.rootThreads.get(key)?.generation ?? 0) + 1;
     this.rootThreads.delete(key);
     this.rootThreads.set(key, { scope, refreshedAt: Date.now(), generation });
     while (this.rootThreads.size > MAX_ROOT_THREADS) {
       this.rootThreads.delete(this.rootThreads.keys().next().value!);
     }
-    void (async () => {
+    // Reports for one thread run one after another, so an older list never
+    // reaches the owner after a newer one. A superseded report sends nothing.
+    const superseded = (): boolean => this.rootThreads.get(key)?.generation !== generation;
+    const report = (this.rootReports.get(key) ?? Promise.resolve()).then(async () => {
+      if (superseded()) return;
       const roots = buildUpstreamRoots(await resolver(scope));
-      // A later report for this thread supersedes one still resolving.
-      if (this.rootThreads.get(key)?.generation !== generation) return;
+      if (superseded()) return;
       const ownership = await this.ensureOwnerBroker();
       if (ownership.owned) {
         this.storeThreadRoots(key, roots);
@@ -3021,19 +3028,28 @@ export class McpConnectionGatewayService {
         threadId: scope.threadId,
         roots,
       });
-    })().catch((error: unknown) => {
+    }).catch((error: unknown) => {
       connectionLog.warn("MCP roots update failed", {
         error: error instanceof Error ? error.message : String(error),
       });
+    }).finally(() => {
+      if (this.rootReports.get(key) === report) this.rootReports.delete(key);
     });
+    this.rootReports.set(key, report);
   }
 
   /** The owner's copy of a thread's roots; every session of it hears a change. */
   private storeThreadRoots(key: string, roots: Root[]): void {
     this.threadRoots.delete(key);
     this.threadRoots.set(key, roots);
-    while (this.threadRoots.size > MAX_ROOT_THREADS) {
-      this.threadRoots.delete(this.threadRoots.keys().next().value!);
+    if (this.threadRoots.size > MAX_ROOT_THREADS) {
+      // Only a thread no grant serves is dropped: an empty answer to a live
+      // session would leave a server working outside the thread.
+      const live = new Set([...this.grants.values()].map(grantRootsKey));
+      for (const stale of [...this.threadRoots.keys()]) {
+        if (this.threadRoots.size <= MAX_ROOT_THREADS) break;
+        if (!live.has(stale)) this.threadRoots.delete(stale);
+      }
     }
     for (const [token, grant] of this.grants) {
       if (grantRootsKey(grant) === key) this.announceGrantRoots(token, grant);
@@ -3047,12 +3063,12 @@ export class McpConnectionGatewayService {
    */
   private announceGrantRoots(token: string, grant: BridgeGrant): void {
     const client = this.upstreamSessions.get(token)?.client;
-    const served = client ? this.rootsServed.get(client) : undefined;
-    if (!client || served === undefined) return;
+    const known = client ? this.rootsKnown.get(client) : undefined;
+    if (!client || known === undefined) return;
     const key = grantRootsKey(grant);
     const fingerprint = rootsFingerprint((key && this.threadRoots.get(key)) || []);
-    if (served === fingerprint || this.rootsAnnounced.get(client) === fingerprint) return;
-    this.rootsAnnounced.set(client, fingerprint);
+    if (known === fingerprint) return;
+    this.rootsKnown.set(client, fingerprint);
     void client.sendRootsListChanged().catch((error: unknown) => {
       connectionLog.warn("MCP roots change notification failed", {
         connectionId: grant.connectionId,
@@ -3075,9 +3091,7 @@ export class McpConnectionGatewayService {
     }
     const key = grantRootsKey(grant);
     const roots = (key && this.threadRoots.get(key)) || [];
-    const fingerprint = rootsFingerprint(roots);
-    this.rootsServed.set(client, fingerprint);
-    this.rootsAnnounced.set(client, fingerprint);
+    this.rootsKnown.set(client, rootsFingerprint(roots));
     return { roots: roots.map((root) => ({ ...root })) };
   }
 
@@ -3860,11 +3874,23 @@ export class McpConnectionGatewayService {
             return result;
           }
           case "tools/call": {
-            const result = await client.callTool(
-              values as Parameters<Client["callTool"]>[0],
-              undefined,
-              upstreamToolCallOptions(signal, onProgress),
-            );
+            let result: Awaited<ReturnType<Client["callTool"]>>;
+            try {
+              result = await client.callTool(
+                values as Parameters<Client["callTool"]>[0],
+                undefined,
+                upstreamToolCallOptions(signal, onProgress),
+              );
+            } catch (error) {
+              // The error reaches the host unchanged. A host that can show
+              // links may open them itself, so it is told when each finishes.
+              if (error instanceof McpError && error.code === ErrorCode.UrlElicitationRequired && interactive && elicitUrl) {
+                for (const elicitationId of requiredUrlElicitationIds(error)) {
+                  this.rememberOpenedUrlElicitation(token, client, elicitationId);
+                }
+              }
+              throw error;
+            }
             this.observeToolResult(grant, values.name, result as CallToolResult);
             return result;
           }
@@ -4020,6 +4046,16 @@ function threadRootsScope(
   const thread = readGrantThread(scopeKey);
   const threadBackend = (thread?.backend as AppServerBackendKind | undefined) ?? backend;
   return thread && threadBackend ? { backend: threadBackend, threadId: thread.threadId } : undefined;
+}
+
+/** The link ids a `-32042` error lists, as the server sent them. */
+function requiredUrlElicitationIds(error: McpError): string[] {
+  const listed = (error.data as { elicitations?: unknown } | undefined)?.elicitations;
+  if (!Array.isArray(listed)) return [];
+  return listed.slice(0, MAX_OPENED_URL_ELICITATIONS).flatMap((entry) => {
+    const id = entry && typeof entry === "object" ? (entry as { elicitationId?: unknown }).elicitationId : undefined;
+    return typeof id === "string" && id ? [id] : [];
+  });
 }
 
 function grantRootsKey(grant: BridgeGrant): string | undefined {

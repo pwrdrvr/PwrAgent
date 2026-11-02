@@ -38181,9 +38181,11 @@ export class DesktopBackendRegistry {
 
   /**
    * The directories a managed local MCP server in this thread is given as
-   * roots: the thread's working directory first, then each linked
-   * directory, a worktree as its own checkout rather than its repository.
-   * Only directories that exist on this machine are reported.
+   * roots: each linked directory, a worktree as its own checkout rather than
+   * its repository, with the thread's working directory first. A thread with
+   * no linked directory has none, even when its working directory falls back
+   * to something else. Only directories that exist on this machine are
+   * reported.
    */
   private async resolveThreadMcpRootDirectories(scope: {
     backend: AppServerBackendKind;
@@ -38191,18 +38193,24 @@ export class DesktopBackendRegistry {
   }): Promise<ThreadRootDirectory[]> {
     const overlay = await this.overlayStore.getThreadOverlayState(scope);
     const summary = this.pendingStartedThreads.get(buildThreadIdentityKey(scope.backend, scope.threadId))
-      ?? this.threadInfoStore.getSummary(scope);
-    const cwd = await this.resolveThreadEnvironmentCwd(scope.backend, scope.threadId, overlay);
-    const candidates: ThreadRootDirectory[] = [
-      ...(cwd ? [{ path: cwd }] : []),
-      ...[...(summary?.linkedDirectories ?? []), ...(overlay?.extraLinkedDirectories ?? [])]
-        .map((directory) => ({
-          path: directory.kind === "worktree" && directory.worktreePath
-            ? directory.worktreePath
-            : directory.path,
-          name: directory.label,
-        })),
-    ];
+      ?? await this.findThreadForWorkspaceHandoff({
+        ...scope,
+        callerReason: "turn-cwd",
+        freshness: "last-known",
+      });
+    const linked: ThreadRootDirectory[] = [
+      ...(summary?.linkedDirectories ?? []),
+      ...(overlay?.extraLinkedDirectories ?? []),
+    ].map((directory) => ({
+      path: directory.kind === "worktree" && directory.worktreePath
+        ? directory.worktreePath
+        : directory.path,
+      name: directory.label,
+    }));
+    const cwd = resolveThreadWorkspaceCwd(summary, overlay?.extraLinkedDirectories)?.trim();
+    const candidates = cwd && linked.some((directory) => directory.path === cwd)
+      ? [{ path: cwd }, ...linked]
+      : linked;
     const present = await Promise.all(candidates.map(async (candidate) =>
       await stat(candidate.path).then((entry) => entry.isDirectory(), () => false)));
     return candidates.filter((_candidate, index) => present[index]);

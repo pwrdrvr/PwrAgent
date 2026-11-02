@@ -473,10 +473,13 @@ describe.skipIf(process.platform === "win32")("MCP links on managed connections"
     ]);
   });
 
-  it("passes a native call's -32042 through unchanged", async () => {
+  it("passes a native call's -32042 through unchanged, then forwards its links' completion", async () => {
     const fixture = makeFixture();
     const { service, connectionId } = await createService(fixture);
-    const rpc = rpcFor(await service.registerBridge(connectionId, "thread-a", undefined, "codex"));
+    const registration = await service.registerBridge(connectionId, "thread-a", undefined, "codex");
+    const rpc = rpcFor(registration);
+    const events: McpBridgeEvent[] = [];
+    await rpcFor(registration).attach(5_000, (event) => events.push(event));
     const onElicit = vi.fn(async () => ({ action: "accept" }));
 
     const error = await callTool(rpc, "needs_signin", {}, { links: true, onElicit }).catch((caught: unknown) => caught);
@@ -487,6 +490,13 @@ describe.skipIf(process.platform === "win32")("MCP links on managed connections"
     expect((error as McpError).data).toEqual({ elicitations: [
       { mode: "url", elicitationId: "signin-1", url: "https://auth.fixture.test/start?state=s1", message: "Sign in to Fixture Files." },
     ] });
+
+    // The host may open the listed link itself; it is told when it finishes.
+    await callTool(rpc, "complete", { id: "signin-1" });
+    await waitFor(() => events.length > 0, "the completion event");
+    expect(events).toEqual([
+      { method: "notifications/elicitation/complete", params: { elicitationId: "signin-1" } },
+    ]);
   });
 
   it("shows a gateway call's -32042 link to the person and never retries the call", async () => {

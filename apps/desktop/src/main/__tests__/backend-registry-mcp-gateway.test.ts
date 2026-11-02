@@ -1,7 +1,7 @@
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { SandboxerConnection } from "../mcp-connections/sandboxer-connection";
 import { sandboxerStub } from "./helpers/sandboxer-stub";
-import { rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerMcpElicitationRequestNotification, AppServerPendingRequestNotification, AgentEvent, ThreadExecutionMode } from "@pwragent/shared";
@@ -867,6 +867,94 @@ select_for_new_threads = true
 
       expect(events).toEqual([]);
       expect(answers).toEqual([{ failed: expect.stringContaining("no one to answer") }]);
+    });
+
+    it("shows a link with its address and answers accept without content", async () => {
+      const link = {
+        mode: "url" as const,
+        message: "Sign in to Fixture.",
+        elicitationId: "link-1",
+        url: "https://auth.fixture.test/start?state=s1",
+      };
+      const answers: unknown[] = [];
+      const implementation = operation.getMockImplementation()!;
+      operation.mockImplementation(async (params) => {
+        if (params.operation !== "gateway/tools/call") return await implementation(params);
+        answers.push(await params.elicit!(link, new AbortController().signal));
+        return { content: [{ type: "text", text: "fixture result" }] };
+      });
+      const shown = approval();
+
+      const call = internals.handleServerRequest("codex", request("call_mcp_tool", args));
+      const event = await shown;
+
+      expect(event.notification.params).toMatchObject({
+        threadId: "thread-1", turnId: "turn-1", serverName: "Fixture", mode: "url",
+        message: link.message, url: link.url, elicitationId: "link-1",
+      });
+      expect(event.notification.params).not.toHaveProperty("requestedSchema");
+      const state = createMcpElicitationState(event.notification)!;
+      expect(state.url).toMatchObject({ host: "auth.fixture.test", fullUrl: link.url });
+      await registry.submitServerRequest({
+        backend: "codex", threadId: "thread-1", turnId: "turn-1",
+        requestId: event.notification.params.requestId,
+        response: buildMcpElicitationResponse(state, "accept"),
+      });
+
+      expect((await call).success).toBe(true);
+      expect(operation.mock.calls.find(([entry]) => entry.operation === "gateway/tools/call")?.[0].elicitUrl).toBe(true);
+      expect(answers).toEqual([{ action: "accept", content: {}, _meta: null }]);
+    });
+  });
+
+  describe("roots for a thread's managed local MCP servers", () => {
+    function rootsService() {
+      const setThreadRootsResolver = vi.fn();
+      const noteThreadDirectoriesChanged = vi.fn();
+      createRegistry({
+        registerBridge, requestGatewayToolOperation: operation, setThreadRootsResolver, noteThreadDirectoriesChanged,
+      } as unknown as McpConnectionGatewayService);
+      const resolve = setThreadRootsResolver.mock.calls[0]![0] as (scope: { backend: string; threadId: string }) =>
+        Promise<Array<{ path: string; name?: string }>>;
+      return { resolve, noteThreadDirectoriesChanged };
+    }
+
+    it("gives a thread with no linked directory no roots", async () => {
+      const { resolve } = rootsService();
+      expect(await resolve({ backend: "codex", threadId: "thread-1" })).toEqual([]);
+    });
+
+    it("reports existing linked directories, a worktree as its own checkout, working directory first", async () => {
+      const { resolve } = rootsService();
+      const checkout = path.join(directory, "checkout");
+      const worktree = path.join(directory, "worktree");
+      mkdirSync(checkout);
+      mkdirSync(worktree);
+      for (const linked of [
+        { id: "local", label: "Checkout", path: checkout, kind: "local" as const },
+        { id: "wt", label: "Worktree", path: path.join(directory, "repository"), worktreePath: worktree, kind: "worktree" as const },
+        { id: "gone", label: "Gone", path: path.join(directory, "missing"), kind: "local" as const },
+      ]) {
+        await store.addLinkedDirectory({ backend: "codex", threadId: "thread-1", directory: linked });
+      }
+
+      expect(await resolve({ backend: "codex", threadId: "thread-1" })).toEqual([
+        { path: worktree },
+        { path: checkout, name: "Checkout" },
+        { path: worktree, name: "Worktree" },
+      ]);
+    });
+
+    it("tells the gateway when a thread's directories change", async () => {
+      const { noteThreadDirectoriesChanged } = rootsService();
+      await (registry as unknown as { emit(event: AgentEvent): Promise<void> }).emit({
+        backend: "codex",
+        notification: {
+          method: "navigation/threadDirectories/updated",
+          params: { reason: "selected-thread", threadIds: ["thread-1"] },
+        },
+      });
+      expect(noteThreadDirectoriesChanged).toHaveBeenCalledWith("codex", ["thread-1"]);
     });
   });
 

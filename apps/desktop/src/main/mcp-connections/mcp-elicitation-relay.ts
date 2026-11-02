@@ -158,10 +158,14 @@ export function readRelayableElicitationUrl(value: unknown, source: ElicitationS
   );
 }
 
+/**
+ * The same hosts the desktop card treats as this machine, so a link the
+ * owner forwards is never one the card then refuses to open.
+ */
 function isLoopbackHost(host: string): boolean {
   const name = host.toLowerCase();
   return name === "localhost" || name.endsWith(".localhost")
-    || /^127(?:\.\d{1,3}){3}$/.test(name) || name === "[::1]";
+    || name === "127.0.0.1" || name === "[::1]";
 }
 
 function assertRelayableFormElicitation(params: ElicitRequestParams): void {
