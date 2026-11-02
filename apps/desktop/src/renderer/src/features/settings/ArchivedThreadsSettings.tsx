@@ -272,7 +272,7 @@ export function ArchivedThreadsSettings(props: {
   if (state.loading && !hasLoaded) {
     toolbarStatus = (
       <>
-        <span aria-hidden="true" className="pending-spinner pending-spinner--sm" />
+        <span aria-hidden="true" className="pending-spinner pending-spinner--sm pending-spinner--paired" />
         <span>Loading…</span>
       </>
     );

@@ -158,7 +158,7 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
       {busyLabel ? (
         <div className="thread-todos-panel__row-actions">
           <span className="thread-todos-panel__row-busy" role="status">
-            <span className="pending-spinner pending-spinner--sm" aria-hidden="true" />
+            <span className="pending-spinner pending-spinner--sm pending-spinner--paired" aria-hidden="true" />
             {busyLabel}
           </span>
         </div>
