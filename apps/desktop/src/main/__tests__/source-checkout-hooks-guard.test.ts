@@ -22,7 +22,8 @@ describe("source checkout hooks guard", () => {
 
   beforeEach(() => {
     savedSnapshot = process.env[SOURCE_HOOKS_SNAPSHOT_ENV];
-    root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "pwragent-hooks-guard-")));
+    // `.native` expands a Windows 8.3 temp path (RUNNER~1), as Git does.
+    root = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), "pwragent-hooks-guard-")));
     repo = path.join(root, "repo");
     execFileSync("git", ["init", "-q", repo], { stdio: "ignore" });
     git(
@@ -61,7 +62,10 @@ describe("source checkout hooks guard", () => {
   it("watches the shared hooks of a linked worktree, where E2E lanes run", () => {
     const worktree = path.join(root, "lane2");
     git(repo, "worktree", "add", "-q", "--detach", worktree);
-    expect(resolveHooksDir(worktree)).toBe(path.join(repo, ".git", "hooks"));
+    const hooksDir = resolveHooksDir(worktree);
+    expect(hooksDir && realpathSync.native(hooksDir)).toBe(
+      realpathSync.native(path.join(repo, ".git", "hooks")),
+    );
 
     recordSourceCheckoutHooks(worktree);
     writeFileSync(path.join(repo, ".git", "hooks", "post-checkout"), "#!/bin/sh\n");
