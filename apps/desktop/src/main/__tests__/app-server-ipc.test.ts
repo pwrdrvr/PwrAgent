@@ -9075,7 +9075,6 @@ describe("app server ipc", () => {
     const service = appServerService as unknown as {
       backgroundPrPollingEnabled: boolean;
       ownerNavigationActive: boolean;
-      prStatusTokenBucket: object;
       threadDependencyCoordinator?: unknown;
       prStatusWatchCoordinator?: unknown;
       setThreadPrAttachment: (
@@ -9103,11 +9102,7 @@ describe("app server ipc", () => {
     const previous = {
       polling: service.backgroundPrPollingEnabled,
       navigation: service.ownerNavigationActive,
-      bucket: service.prStatusTokenBucket,
     };
-    // By-URL resolves spend the shared refresh budget. A private bucket keeps
-    // later fake-clock tests, which cannot refill it, from finding it empty.
-    service.prStatusTokenBucket = new (previous.bucket.constructor as new () => object)();
     service.backgroundPrPollingEnabled = true;
     service.ownerNavigationActive = true;
     service.threadDependencyCoordinator = undefined;
@@ -9118,7 +9113,6 @@ describe("app server ipc", () => {
       delete registry.getActiveTurnForThread;
       service.backgroundPrPollingEnabled = previous.polling;
       service.ownerNavigationActive = previous.navigation;
-      service.prStatusTokenBucket = previous.bucket;
       service.threadDependencyCoordinator = undefined;
       service.prStatusWatchCoordinator = undefined;
     };
