@@ -219,6 +219,55 @@ describe("native bridge upstream forms", () => {
   });
 });
 
+describe("native bridge upstream progress", () => {
+  /** The owner reports progress twice during the call, then answers. */
+  function callThatReports(): { routes: Array<((progress: unknown) => void) | undefined>; params: unknown[] } {
+    const routes: Array<((progress: unknown) => void) | undefined> = [];
+    const params: unknown[] = [];
+    bridge.request.mockImplementation(async (operation: string, ...rest: unknown[]) => {
+      if (operation === "describe") return { tools: true };
+      params.push(rest[0]);
+      const onProgress = rest[6] as ((progress: unknown) => void) | undefined;
+      routes.push(onProgress);
+      onProgress?.({ progress: 1, total: 2, message: "Scanning" });
+      onProgress?.({ progress: 2, total: 2 });
+      return { content: [{ type: "text", text: "done" }] };
+    });
+    return { routes, params };
+  }
+
+  it("reports the server's progress to the agent under the agent's own token", async () => {
+    const { params } = callThatReports();
+    const client = await openBridge();
+    const seen: unknown[] = [];
+
+    await client.callTool({ name: "scan", arguments: {} }, undefined, {
+      onprogress: (progress) => seen.push(progress),
+    });
+
+    expect(seen).toEqual([
+      { progress: 1, total: 2, message: "Scanning" },
+      { progress: 2, total: 2 },
+    ]);
+    // The agent's token goes to the owner with the call; the owner swaps in
+    // its own when it asks the server.
+    expect(params[0]).toMatchObject({ _meta: { progressToken: expect.anything() } });
+  });
+
+  it("still takes progress, to keep the call alive, when the agent sent no token", async () => {
+    const { routes } = callThatReports();
+    const client = await openBridge();
+    const errors: unknown[] = [];
+    client.onerror = (error) => errors.push(error);
+
+    const result = await client.callTool({ name: "scan", arguments: {} });
+
+    expect(routes[0]).toBeTypeOf("function");
+    expect(result.content).toEqual([{ type: "text", text: "done" }]);
+    expect(errors).toEqual([]);
+  });
+});
+
 describe("desktop-owned native bridge discovery", () => {
   it("preserves desktop identity, relay metadata, instructions and advertised subscriptions", async () => {
     const metadata = { "com.pwrdrvr.pwrdisk/interface": { owner: "desktop", desktopVersion: "2.0.0", relayVersion: "0.1.0" } };

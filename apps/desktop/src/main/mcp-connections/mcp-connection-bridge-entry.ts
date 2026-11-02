@@ -19,7 +19,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS, MCP_CONNECTION_TOOL_TIMEOUT_MS } from "./mcp-connection-timeouts.js";
 import { McpInitializationTransport } from "./mcp-initialization-transport.js";
-import { ConnectionRpcClient, type McpBridgeEvent } from "./mcp-connection-rpc-client.js";
+import { ConnectionRpcClient, type McpBridgeEvent, type McpBridgeProgress } from "./mcp-connection-rpc-client.js";
 import { clientSupportsFormElicitation, type ElicitationRoute } from "./mcp-elicitation-relay.js";
 
 type BridgeDescription = {
@@ -121,8 +121,19 @@ async function main(): Promise<void> {
           { signal, timeout: MCP_CONNECTION_TOOL_TIMEOUT_MS },
         )
         : undefined;
+      // The owner always asks the server for progress, which keeps a long
+      // call alive. Reports reach the agent only under the token it sent,
+      // tied to this call.
+      const progressToken = request.params._meta?.progressToken;
+      const onProgress = (progress: McpBridgeProgress): void => {
+        if (progressToken === undefined) return;
+        void extra.sendNotification({
+          method: "notifications/progress",
+          params: { ...progress, progressToken },
+        }).catch((error: unknown) => logStderr("progress notification failed", String(error)));
+      };
       return await rpc.request(
-        "tools/call", request.params, extra.signal, undefined, undefined, undefined, onElicit,
+        "tools/call", request.params, extra.signal, undefined, undefined, undefined, onElicit, onProgress,
       ) as never;
     });
   }
