@@ -2728,6 +2728,16 @@ describe("Claude SDK backend", () => {
       expect(f.close).toHaveBeenCalled();
       expect(f.events.at(-1)?.notification.method).toBe("turn/cancelled");
       expect(f.backend.liveSessionThreadIds()).toEqual([]);
+      // The session closed the running row in memory after its last save; the
+      // turn's end must save that change, or a restart shows it running.
+      const lines = (await readFile(path.join(f.root, `${f.threadId}.jsonl`), "utf8")).trim().split("\n")
+        .map((line) => JSON.parse(line) as { id?: string; type?: string; status?: string });
+      const rows = lines.filter((line) => line.id === "tool-bash");
+      expect(rows.at(-1)).toMatchObject({ status: "cancelled" });
+      expect(lines.indexOf(rows.at(-1)!)).toBeLessThan(lines.findIndex((line) => line.type === "pwragent_turn_end"));
+      expect((await f.store.entries(f.threadId)).find((entry) => entry.id === "tool-bash")).toMatchObject({
+        status: "cancelled", turn: { id: f.turn.turnId, status: "cancelled" },
+      });
     });
   });
 

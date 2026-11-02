@@ -128,9 +128,12 @@ bytes over three turns.
 
 Files written before the change stamp every entry instead, and read the same.
 Nothing rewrites them. A fork copies the entries with their stamps applied,
-so its file has no turn-end lines. A build from before the change does not
-know the line, as with `pwragent_truncation`: after a downgrade, turns written
-by a newer build show no final status.
+so its file has no turn-end lines.
+
+A build from before the change does not know the line. After a downgrade,
+turns written by a newer build show no final status. That build also reads
+the line as one entry with no id, and its rewind undo counts it as an entry
+saved after the rewind.
 
 ## Desktop Metadata
 

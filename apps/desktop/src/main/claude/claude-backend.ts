@@ -1752,10 +1752,12 @@ export class ClaudeBackend {
         id: outputId, kind: entry.details[0].kind, label: `${entry.summary} output`, markdown: output, status: entry.status,
       }];
     }
-    const openTurn = row.turnId === live.turn?.turnId ? live.turn : undefined;
-    if (!openTurn) live.toolRows.delete(entry.id);
-    if (openTurn) await this.appendTurnEntries(threadId, openTurn, [entry]);
-    else await this.store.append(threadId, [entry]);
+    if (live.turn && row.turnId === live.turn.turnId) {
+      await this.appendTurnEntries(threadId, live.turn, [entry]);
+    } else {
+      live.toolRows.delete(entry.id);
+      await this.store.append(threadId, [entry]);
+    }
     await this.emit({ method: "item/completed", params: { threadId, turnId: row.turnId, item: claudeActivityItem(entry, output) } });
   }
 
