@@ -19,6 +19,9 @@ export const OUTPOST_PACKAGE_ROOT = path.join(process.cwd(), "packages/pwragent"
 export const OUTPOST_VIEWER_CAPABILITIES: FederationCapability[] = ["remote_window", "thread_navigation", "thread_detail",
   "turn_control", "messaging_route", "messaging_destinations", "messaging_files", "environment_actions"];
 
+/** One build serves every daemon a test file starts. */
+let outpostBuilt = false;
+
 export type OutpostDaemon = {
   client: FederationRemoteBackendClient;
   rpc: FederationRpcEndpoint;
@@ -41,7 +44,10 @@ export async function startOutpostDaemon(options: {
   workspaceKind?: "direct" | "symlink";
   capabilities?: FederationCapability[];
 } = {}): Promise<OutpostDaemon> {
-  execFileSync(process.execPath, [path.join(OUTPOST_PACKAGE_ROOT, "scripts/build.mjs")], { cwd: process.cwd(), stdio: "pipe" });
+  if (!outpostBuilt) {
+    execFileSync(process.execPath, [path.join(OUTPOST_PACKAGE_ROOT, "scripts/build.mjs")], { cwd: process.cwd(), stdio: "pipe" });
+    outpostBuilt = true;
+  }
   // The outpost listens on $PWRAGENT_HOME/profiles/t/state/headless/rpc.sock
   // and refuses a socket path over 100 bytes (the Unix sun_path limit). A
   // root inside the checkout makes that depend on where the checkout lives,

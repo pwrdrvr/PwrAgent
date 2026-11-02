@@ -7,7 +7,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent, FederationCapability } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
-import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import {
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
@@ -20,6 +19,7 @@ import {
   DesktopFederationRuntime,
   federationEventClassForMethod,
   navigationInvalidationForLocalEvent,
+  projectLocalEventForFederation,
   unsequencedFederationEventPayload,
 } from "../federation/federation-runtime";
 import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../app-server/desktop-overlay-store";
@@ -103,7 +103,7 @@ async function startDesktopOwner(): Promise<OwnerHost> {
     const invalidation = navigationInvalidationForLocalEvent(event);
     if (invalidation) forward(invalidation);
     if (EVENT_CLASSES.includes(federationEventClassForMethod(event.notification.method))) {
-      events.push(unsequencedFederationEventPayload(projectThreadDisplayEvent(event)));
+      events.push(unsequencedFederationEventPayload(projectLocalEventForFederation(event, "desktop-owner")));
     }
   };
   const stopEvents = registry.onEvent(forward);
@@ -147,12 +147,16 @@ async function startOutpostOwner(): Promise<OwnerHost> {
     events: outpost.events, workspace: outpost.workspace, close: outpost.close };
 }
 
-/** Waits until the owner has sent nothing for a while. */
+/**
+ * Waits until the owner has sent nothing for a while, so each event is
+ * counted against the step that caused it. The window allows for an Outpost
+ * event crossing its socket late on a loaded runner.
+ */
 async function settle(host: OwnerHost): Promise<void> {
   let seen = -1;
-  for (let attempt = 0; attempt < 40 && seen !== host.events.length; attempt++) {
+  for (let attempt = 0; attempt < 25 && seen !== host.events.length; attempt++) {
     seen = host.events.length;
-    await delay(150);
+    await delay(400);
   }
 }
 
@@ -192,10 +196,10 @@ const FIRST_PROMPT_SCENARIO: Step[] = [
       const turn = await host.client.startTurn({ ...ref(context), input: [{ type: "text", text: FIRST_PROMPT }] });
       // Both fixtures complete a turn with one agent message.
       for (let attempt = 0; attempt < 100; attempt++) {
-        if ((await host.client.readThread(ref(context))).replay.lastAssistantMessage === "Fixture result") break;
+        if ((await host.client.readThread(ref(context))).replay.lastAssistantMessage === "Fixture result") return turn;
         await delay(50);
       }
-      return turn;
+      throw new Error("The first turn did not complete.");
     } },
   { name: "list it in Inbox", method: "backend.getNavigationQueryPage", run: (host) => inbox(host), values: rowValues },
   { name: "rank it in Attention", method: "backend.getNavigationQueryPage",
@@ -224,12 +228,13 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
     try {
       response = await step.run(host, context);
     } catch (error) {
-      response = { error: error instanceof Error ? error.message : String(error) };
+      // A failed step is a broken owner or harness, never a difference to record.
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`${host.name} failed ${step.method} [${step.name}]: ${message}`, { cause: error });
     }
     await settle(host);
     records.push({ step: step.name, method: step.method, response,
-      values: step.values && !(response as { error?: string }).error ? step.values(response) : {},
-      events: host.events.slice(before) });
+      values: step.values ? step.values(response) : {}, events: host.events.slice(before) });
   }
   return records;
 }
@@ -266,5 +271,5 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       await outpost?.close();
       await desktop.close();
     }
-  }, 60_000);
+  }, 120_000);
 });

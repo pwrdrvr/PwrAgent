@@ -67,8 +67,12 @@ function describeShape(shape: Shape): string {
 /** Each difference between two shapes, as `<path>: desktop <x>, outpost <y>`. */
 export function diffShapes(desktop: Shape, outpost: Shape, path = "$"): string[] {
   if (Array.isArray(desktop) && Array.isArray(outpost)) {
-    // An empty array says nothing about its elements.
-    if (!desktop.length || !outpost.length) return [];
+    if (!desktop.length && !outpost.length) return [];
+    // An empty array says nothing about its elements, but one owner answering
+    // with none where the other has some is itself a difference.
+    if (!desktop.length || !outpost.length) {
+      return [`${path}: desktop ${desktop.length ? "array" : "empty array"}, outpost ${outpost.length ? "array" : "empty array"}`];
+    }
     return diffShapes(desktop[0]!, outpost[0]!, `${path}[]`);
   }
   const isObject = (shape: Shape) => typeof shape === "object" && !Array.isArray(shape);

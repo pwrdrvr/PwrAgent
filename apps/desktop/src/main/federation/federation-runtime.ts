@@ -879,6 +879,11 @@ export function navigationInvalidationForLocalEvent(event: AgentEvent): AgentEve
   };
 }
 
+/** A local event as this owner sends it to a federated viewer. */
+export function projectLocalEventForFederation(event: AgentEvent, ownerInstanceId: FederationInstanceId): AgentEvent {
+  return rewriteLiveTranscriptImagesForFederation(projectThreadDisplayEvent(event), ownerInstanceId);
+}
+
 function eventSubscriptionKey(params: {
   sourceInstanceId: FederationInstanceId;
   subscriberInstanceId: FederationInstanceId;
@@ -6711,7 +6716,7 @@ export class DesktopFederationRuntime {
       ) {
         continue;
       }
-      federatedEvent ??= rewriteLiveTranscriptImagesForFederation(projectThreadDisplayEvent(event), ownerInstanceId);
+      federatedEvent ??= projectLocalEventForFederation(event, ownerInstanceId);
       this.sendBackendEventToSubscriber(subscriberInstanceId, subscription, federatedEvent);
     }
   }

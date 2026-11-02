@@ -12,7 +12,9 @@ describe("owner conformance comparison", () => {
   it("compares structure, not data, and merges array elements", () => {
     expect(shapeOf({ id: "a", rows: [{ title: "x" }, { title: "y", pinned: true }], gone: undefined }))
       .toEqual({ id: "string", rows: [{ pinned: "boolean", title: "string" }] });
-    expect(diffShapes(shapeOf({ rows: [] }), shapeOf({ rows: [{ title: "x" }] }))).toEqual([]);
+    expect(diffShapes(shapeOf({ rows: [] }), shapeOf({ rows: [] }))).toEqual([]);
+    expect(diffShapes(shapeOf({ rows: [] }), shapeOf({ rows: [{ title: "x" }] })))
+      .toEqual(["$.rows: desktop empty array, outpost array"]);
     expect(diffShapes(shapeOf({ seenAt: 1 }), shapeOf({ seenAt: "1", extra: null }))).toEqual([
       "$.extra: desktop missing, outpost null",
       "$.seenAt: desktop number, outpost string",
