@@ -8941,9 +8941,10 @@ a.button {
 /* The count block yields to the revealed cluster: fade it on header
    hover (or keyboard focus inside the cluster), exactly like the
    thread-row timestamp yields to the kebab. Scoped to
-   `--with-launchpad` headers (set in TSX for configured directories):
-   an unconfigured directory renders NO cluster, and fading its counts
-   would leave the header's right edge simply blank while hovered.
+   `--with-launchpad` headers (set in TSX when the row has a cluster):
+   an unconfigured directory with no peer to start a thread on renders
+   NO cluster, and fading its counts would leave the header's right
+   edge simply blank while hovered.
    The TSX-computed modifier classes (`--with-launchpad`, `--split`,
    `--has-draft`) replace per-hover :has() subtree scans with plain
    class matches — DirectoriesList already knows all three booleans. */
