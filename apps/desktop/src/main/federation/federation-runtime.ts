@@ -847,6 +847,46 @@ export function unsequencedFederationEventPayload(event: AgentEvent): AgentEvent
   };
 }
 
+/**
+ * The `navigation/invalidated` a local event sends navigation subscribers,
+ * if any. Never the source payload: turn output, queue input, agent
+ * configuration and complete child orders belong to exact detail demand.
+ * Identity fields are bounded independently of the provider's payload.
+ */
+export function navigationInvalidationForLocalEvent(event: AgentEvent): AgentEvent | undefined {
+  if (!NAVIGATION_EVENT_METHODS.has(event.notification.method)
+    || (event.notification.method === "thread/subAgents/updated"
+      && !navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params))) {
+    return undefined;
+  }
+  const params = event.notification.params as Record<string, unknown>;
+  const thread = params.thread as Record<string, unknown> | undefined;
+  const action = params.action as Record<string, unknown> | undefined;
+  const identity = (value: unknown): string | undefined =>
+    typeof value === "string" && value.length <= 1_024 ? value : undefined;
+  return {
+    backend: event.backend,
+    notification: {
+      method: "navigation/invalidated",
+      params: {
+        sourceMethod: event.notification.method,
+        ...(event.notification.method === "navigation/threadGitWorkingState/updated"
+          ? { worktreePath: identity(params.worktreePath) } : {}),
+        threadId: identity(params.threadId ?? thread?.id ?? action?.threadId),
+        ...(event.notification.method === "navigation/directoryGitStatus/updated"
+          ? { directoryKey: identity(params.directoryKey) } : {}),
+        automationId: identity(params.automationId),
+        runId: identity(params.runId),
+      },
+    },
+  };
+}
+
+/** A local event as this owner sends it to a federated viewer. */
+export function projectLocalEventForFederation(event: AgentEvent, ownerInstanceId: FederationInstanceId): AgentEvent {
+  return rewriteLiveTranscriptImagesForFederation(projectThreadDisplayEvent(event), ownerInstanceId);
+}
+
 function eventSubscriptionKey(params: {
   sourceInstanceId: FederationInstanceId;
   subscriberInstanceId: FederationInstanceId;
@@ -6669,34 +6709,8 @@ export class DesktopFederationRuntime {
 
   private forwardLocalBackendEvent(event: AgentEvent): void {
     if (!this.router) return;
-    if (NAVIGATION_EVENT_METHODS.has(event.notification.method)
-      && (event.notification.method !== "thread/subAgents/updated"
-        || navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params))) {
-      // Never broadcast the source payload: turn output, queue input, agent
-      // configuration and complete child orders belong to exact detail demand.
-      // Identity fields are bounded independently of the provider's payload.
-      const params = event.notification.params as Record<string, unknown>;
-      const thread = params.thread as Record<string, unknown> | undefined;
-      const action = params.action as Record<string, unknown> | undefined;
-      const identity = (value: unknown): string | undefined =>
-        typeof value === "string" && value.length <= 1_024 ? value : undefined;
-      this.forwardLocalBackendEvent({
-        backend: event.backend,
-        notification: {
-          method: "navigation/invalidated",
-          params: {
-            sourceMethod: event.notification.method,
-            ...(event.notification.method === "navigation/threadGitWorkingState/updated"
-              ? { worktreePath: identity(params.worktreePath) } : {}),
-            threadId: identity(params.threadId ?? thread?.id ?? action?.threadId),
-            ...(event.notification.method === "navigation/directoryGitStatus/updated"
-              ? { directoryKey: identity(params.directoryKey) } : {}),
-            automationId: identity(params.automationId),
-            runId: identity(params.runId),
-          },
-        },
-      });
-    }
+    const invalidation = navigationInvalidationForLocalEvent(event);
+    if (invalidation) this.forwardLocalBackendEvent(invalidation);
     const ownerInstanceId = this.ensureLocalInstanceId();
     const eventClass = federationEventClassForMethod(event.notification.method);
     let federatedEvent: AgentEvent | undefined;
@@ -6721,7 +6735,7 @@ export class DesktopFederationRuntime {
       ) {
         continue;
       }
-      federatedEvent ??= rewriteLiveTranscriptImagesForFederation(projectThreadDisplayEvent(event), ownerInstanceId);
+      federatedEvent ??= projectLocalEventForFederation(event, ownerInstanceId);
       this.sendBackendEventToSubscriber(subscriberInstanceId, subscription, federatedEvent);
     }
   }
