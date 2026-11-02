@@ -60,10 +60,16 @@ const mockAppServerLog = vi.hoisted(() => ({
   info: vi.fn(),
   warn: vi.fn(),
 }));
-const backendRegistryLifecycle = vi.hoisted(() => ({
-  existing: true,
-  get: vi.fn(),
-}));
+const backendRegistryLifecycle = vi.hoisted(() => {
+  // The registry is built inside its vi.mock factory. `get` reads it here, so
+  // the mock's own implementation survives vi.resetAllMocks().
+  const lifecycle = {
+    existing: true,
+    registry: undefined as unknown,
+    get: vi.fn((): unknown => lifecycle.registry),
+  };
+  return lifecycle;
+});
 const withThreadLifecycleMutation = vi.hoisted(() => vi.fn(
   async (_identity: unknown, work: () => Promise<unknown>) => await work(),
 ));
@@ -1242,7 +1248,7 @@ vi.mock("../app-server/backend-registry", () => {
     },
     sweepInactiveThreads: archiveSweepStatus.sweep,
   };
-  backendRegistryLifecycle.get.mockImplementation(() => registry);
+  backendRegistryLifecycle.registry = registry;
   return {
     disposeDesktopBackendRegistry: vi.fn(async () => undefined),
     getDesktopBackendRegistry: backendRegistryLifecycle.get,
@@ -1358,6 +1364,7 @@ describe("app server ipc", () => {
   type AppServerIpcModule = typeof import("../ipc/app-server");
   let disposeAppServerIpcHandlers: AppServerIpcModule["disposeAppServerIpcHandlers"];
   let registerAppServerIpcHandlers: AppServerIpcModule["registerAppServerIpcHandlers"];
+  let resetAppServerServiceForTests: AppServerIpcModule["resetAppServerServiceForTests"];
   // Historical owner materialization coverage is deliberately separate from IPC.
   const readLegacyOwnerMaterialization = async (_event: unknown, request?: GetNavigationSnapshotRequest) =>
     (await import("../ipc/app-server")).appServerService.getNavigationSnapshot(request);
@@ -1396,9 +1403,16 @@ describe("app server ipc", () => {
     const appServerIpc = await import("../ipc/app-server");
     disposeAppServerIpcHandlers = appServerIpc.disposeAppServerIpcHandlers;
     registerAppServerIpcHandlers = appServerIpc.registerAppServerIpcHandlers;
+    resetAppServerServiceForTests = appServerIpc.resetAppServerServiceForTests;
   });
 
   beforeEach(() => {
+    // Each test gets its own service. The last test's afterEach closed the
+    // outgoing one, so its timers and subscriptions are already gone.
+    resetAppServerServiceForTests();
+    // Restore every mock's own implementation and drop unconsumed Once
+    // values, so an override in one test cannot reach the next.
+    vi.resetAllMocks();
     getCachedThreadSummary.mockReset();
     isIncompleteThreadList.mockReset().mockReturnValue(false);
     federationMock.runtime.stampRemoteNavigationQueryPage.mockReset().mockImplementation((_target, page) => page);
@@ -2028,6 +2042,10 @@ describe("app server ipc", () => {
       expect(refresh).not.toHaveBeenCalled();
       refresh.mockRestore();
     } finally {
+      // Each poll starts an unawaited dependency pass. The coordinator runs
+      // them in order, so a pass matching no PR waits for all of them; else
+      // they hit the closed database during a later test.
+      await agent.handlePrEvent("https://github.com/fixture/unrelated/pull/0");
       autoDispatch.mockRestore(); cache.mockRestore(); publish.mockRestore();
       service.prStatusRegistry = previousRegistry; service.threadDependencyCoordinator = previousCoordinator;
       db.close(); removeTempStateDbDir(fixture.tempDir); vi.unstubAllEnvs();

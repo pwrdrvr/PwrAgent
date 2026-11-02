@@ -9650,7 +9650,17 @@ async function withNavigationConsumer<T>(event: IpcMainInvokeEvent, consumerId: 
   }
 }
 /** Internal owner service; legacy materialization is retained only for unit regression coverage. */
-export const appServerService = new DesktopAppServerService();
+export let appServerService = new DesktopAppServerService();
+
+/**
+ * Test seam: swap in a fresh owner service so no test sees PR registries,
+ * caches or budgets an earlier test left behind. Run
+ * `disposeAppServerIpcHandlers` first; it closes the outgoing instance.
+ * Importers read the live binding, so the IPC handlers use the new instance.
+ */
+export function resetAppServerServiceForTests(): void {
+  appServerService = new DesktopAppServerService();
+}
 
 export async function startAppServerOwnerNavigation(): Promise<void> {
   await appServerService.startOwnerNavigation();
