@@ -185,6 +185,11 @@ type ThreadSessionEntry = {
   hydratedInitialHistoryLimit?: number;
   hydratedUpdatedAt?: number;
   hydratedStreamRecoveryVersion?: number;
+  /**
+   * A read from the thread's owner has replaced `response` at least once.
+   * Until then `response` may hold only live events that arrived first.
+   */
+  hydratedFromOwner?: true;
   initialLoadDurationMs?: number;
   interacted: boolean;
   lastTouchedAt: number;
@@ -5575,6 +5580,7 @@ export function useThreadSessionState(params: {
             hydratedEnvironmentSetupVersion:
               getEnvironmentSetupHydrationVersion(targetThread),
             hydratedInitialHistoryLimit: initialHistoryLimit,
+            hydratedFromOwner: true,
             hydratedStreamRecoveryVersion: streamRecoveryVersion,
             hydratedUpdatedAt:
               needsHydrationAfterCompletion && completionHydrationRetries < 2
@@ -5917,6 +5923,17 @@ export function useThreadSessionState(params: {
     }
 
     if (session.loading) {
+      return;
+    }
+
+    // A live event for a thread with no transcript in this window starts one
+    // from that event alone. That is not the thread's history, and the
+    // active-turn check below would hold it back until the turn ends, leaving
+    // only the current turn on screen with nothing older to scroll to.
+    if (!session.hydratedFromOwner) {
+      if (session.failedHydrationVersion !== hydrationVersion) {
+        void loadLatest(thread);
+      }
       return;
     }
 
