@@ -4071,3 +4071,121 @@ describe("Claude thread rewind", () => {
     await rewind;
   });
 });
+
+describe("Claude history turn ends", () => {
+  type HistoryLine = { type?: string; id?: string; turnId?: string; status?: string; text?: string };
+  async function historyLines(root: string, threadId: string): Promise<HistoryLine[]> {
+    return (await readFile(path.join(root, `${threadId}.jsonl`), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as HistoryLine);
+  }
+  function linesPerEntry(lines: HistoryLine[]): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const line of lines) if (line.type !== "pwragent_turn_end" && line.id) counts[line.id] = (counts[line.id] ?? 0) + 1;
+    return counts;
+  }
+  async function* toolTurn(options: Options): AsyncGenerator<SDKMessage> {
+    yield { type: "system", subtype: "init", session_id: options.sessionId } as SDKMessage;
+    for (const [index, command] of ["ls", "git status", "pnpm test"].entries()) {
+      const id = `tool-${index}`;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: `call-${index}`, content: [{ type: "tool_use", id, name: "Bash", input: { command } }],
+      } } as SDKMessage;
+      yield { type: "user", parent_tool_use_id: null, message: {
+        content: [{ type: "tool_result", tool_use_id: id, content: `${command} output\n`.repeat(20) }],
+      } } as SDKMessage;
+    }
+    yield { type: "stream_event", parent_tool_use_id: null, event: { type: "message_start", message: { id: "answer" } } } as SDKMessage;
+    yield { type: "stream_event", parent_tool_use_id: null, event: {
+      type: "content_block_delta", delta: { type: "text_delta", text: "All three ran." },
+    } } as SDKMessage;
+    yield { type: "assistant", parent_tool_use_id: null, message: { id: "answer", content: [{ type: "text", text: "All three ran." }] } } as SDKMessage;
+    yield { type: "result", subtype: "success", is_error: false, result: "All three ran." } as SDKMessage;
+  }
+
+  it("ends a completed turn with one record instead of saving its entries again", async () => {
+    const f = await fixture(toolTurn);
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "full-access" });
+    const { turnId } = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Run the checks" }] });
+    await f.waitForTurn();
+
+    const lines = await historyLines(f.root, threadId);
+    // A tool row is saved when it starts and when its output arrives; nothing is saved twice for its status.
+    expect(linesPerEntry(lines)).toEqual({ [`user:${turnId}`]: 1, "tool-0": 2, "tool-1": 2, "tool-2": 2, answer: 1 });
+    expect(lines.at(-1)).toMatchObject({ type: "pwragent_turn_end", turnId, status: "completed" });
+    expect(lines.filter((line) => line.type === "pwragent_turn_end")).toHaveLength(1);
+    const entries = await f.store.entries(threadId);
+    expect(entries).toHaveLength(5);
+    for (const entry of entries) {
+      expect(entry.turn).toEqual({ id: turnId, status: "completed", startedAt: expect.any(Number), completedAt: expect.any(Number) });
+    }
+  });
+
+  it("keeps a partly streamed answer when the turn is cancelled", async () => {
+    const f = await fixture(async function* (options) {
+      yield { type: "system", subtype: "init", session_id: options.sessionId } as SDKMessage;
+      yield { type: "stream_event", parent_tool_use_id: null, event: { type: "message_start", message: { id: "partial" } } } as SDKMessage;
+      yield { type: "stream_event", parent_tool_use_id: null, event: {
+        type: "content_block_delta", delta: { type: "text_delta", text: "Half an ans" },
+      } } as SDKMessage;
+      await new Promise<void>((resolve) => {
+        options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
+        if (options.abortController!.signal.aborted) resolve();
+      });
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const turn = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Explain" }] });
+    await vi.waitFor(() => expect(f.events.some((event) => event.notification.method === "item/agentMessage/delta")).toBe(true));
+    await f.backend.interruptTurn(turn);
+    await f.waitForTurn();
+
+    const lines = await historyLines(f.root, threadId);
+    expect(linesPerEntry(lines)).toEqual({ [`user:${turn.turnId}`]: 1, partial: 1 });
+    expect(lines.at(-1)).toMatchObject({ type: "pwragent_turn_end", turnId: turn.turnId, status: "cancelled" });
+    expect((await f.store.entries(threadId)).find((entry) => entry.id === "partial")).toMatchObject({
+      type: "message", text: "Half an ans", turn: { id: turn.turnId, status: "cancelled" },
+    });
+  });
+
+  it("records a failed turn's status", async () => {
+    const f = await fixture(async function* (options) {
+      yield { type: "system", subtype: "init", session_id: options.sessionId } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: { id: "said", content: [{ type: "text", text: "Starting." }] } } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const { turnId } = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Go" }] });
+    await f.waitForTurn();
+
+    expect(f.events.at(-1)?.notification.method).toBe("turn/failed");
+    const lines = await historyLines(f.root, threadId);
+    expect(linesPerEntry(lines)).toEqual({ [`user:${turnId}`]: 1, said: 1 });
+    expect(lines.at(-1)).toMatchObject({ type: "pwragent_turn_end", turnId, status: "failed" });
+    expect((await f.store.entries(threadId)).map((entry) => entry.turn?.status)).toEqual(["failed", "failed"]);
+  });
+
+  it("records a turn that failed before Claude started", async () => {
+    const f = await fixture();
+    f.run.mockImplementationOnce(() => { throw new Error("spawn failed"); });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await expect(f.backend.startTurn({ threadId, input: [{ type: "text", text: "Go" }] })).rejects.toThrow("spawn failed");
+
+    const lines = await historyLines(f.root, threadId);
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toMatchObject({ type: "pwragent_turn_end", status: "failed" });
+    expect((await f.store.entries(threadId))[0]).toMatchObject({
+      role: "user", text: "Go", turn: { id: lines[1].turnId, status: "failed" },
+    });
+  });
+
+  it("forks a thread with each entry's final turn status", async () => {
+    const f = await fixture(toolTurn);
+    const { threadId: sourceId } = await f.backend.startThread({ cwd: f.root, executionMode: "full-access" });
+    const { turnId } = await f.backend.startTurn({ threadId: sourceId, input: [{ type: "text", text: "Run the checks" }] });
+    await f.waitForTurn();
+
+    const { threadId } = await f.backend.forkThread({ sourceThreadId: sourceId, cwd: f.root, executionMode: "default" });
+    const forked = await f.store.entries(threadId);
+    expect(forked.map((entry) => entry.id)).toEqual((await f.store.entries(sourceId)).map((entry) => entry.id));
+    for (const entry of forked) expect(entry.turn).toMatchObject({ id: turnId, status: "completed" });
+    // The fork's copy is self-contained: each entry carries the stamp.
+    expect((await historyLines(f.root, threadId)).every((line) => line.type !== "pwragent_turn_end")).toBe(true);
+  });
+});

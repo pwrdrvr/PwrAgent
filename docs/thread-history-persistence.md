@@ -111,6 +111,27 @@ in 13 days. The latest revision of each entry was 363 MB. Another 363 MB was
 the same entries written again at turn end only to record the turn's final
 status. Tool output was 209 MB of the latest revisions.
 
+A turn now ends with one `pwragent_turn_end` line: the turn id, its status,
+and its start and end times. Reading the history gives every entry of that
+turn the status, including a task row saved after the turn ended. At turn end
+the backend writes again only an entry whose content was never saved, such as
+an answer still streaming when the turn was cancelled. It compares a hash of
+each entry, without its turn status, with the hash taken when it was last
+saved. The 1,925 turns in the measured profile need about 0.3 MB of these
+lines. A tool row is still saved when it starts, about 55 MB in that profile,
+so a crash still shows the tool as running.
+
+A scripted turn with six tool calls, each with 2.2 KB of output, and a
+480-character answer wrote 40,285 bytes before the change and 21,023 bytes
+after it, 48% less. The entries read back the same, 42 entries in 58,320
+bytes over three turns.
+
+Files written before the change stamp every entry instead, and read the same.
+Nothing rewrites them. A fork copies the entries with their stamps applied,
+so its file has no turn-end lines. A build from before the change does not
+know the line, as with `pwragent_truncation`: after a downgrade, turns written
+by a newer build show no final status.
+
 ## Desktop Metadata
 
 Desktop may persist scalar metadata derived from history when it is needed for
