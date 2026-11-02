@@ -867,7 +867,8 @@ export class ClaudeBackend {
         stderr: (data) => { current.stderr = (current.stderr + data).slice(-MAX_TURN_STDERR_LENGTH); },
         mcpServers: config.mcpServers,
         ...(config.strictMcpConfig ? { strictMcpConfig: true } : {}),
-        // PwrAgent's gateway asks for its own calls, so Claude does not ask first.
+        // PwrAgent's gateway and forge policy ask for their own calls, so Claude
+        // does not ask first.
         ...(config.allowedTools.length ? { allowedTools: config.allowedTools } : {}),
         ...(config.additionalDirectories.length ? { additionalDirectories: config.additionalDirectories } : {}),
         canUseTool: createClaudePermissionHandler({
@@ -1023,8 +1024,8 @@ export class ClaudeBackend {
         threadId: live.session.thread.id, taskCount: live.tasks.active().length,
       });
     }
-    // Without the rule Claude asks before PwrAgent's gateway does, which is
-    // safe, so running tasks keep the process until it relaunches.
+    // Without the rules Claude asks before PwrAgent's gateway or forge policy
+    // does, which is safe, so running tasks keep the process until it relaunches.
     if (config.allowedTools.join("\n") !== live.config.allowedTools.join("\n")) {
       if (!keepTasks) return false;
       claudeBackendLog.info("Deferring new Claude tool permissions until the session relaunches", {

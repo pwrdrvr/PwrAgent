@@ -1,10 +1,19 @@
 import { randomUUID } from "node:crypto";
 import type { CanUseTool, Options, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import { PWRAGENT_TOOL_NAMESPACE, type AppServerPendingRequestNotification, type ThreadExecutionMode } from "@pwragent/shared";
+import { FORGE_PR_TOOL_OPERATIONS } from "../pr-status/forge-pr-tool-contract";
+import { FORGE_READ_OPERATIONS } from "../pr-status/forge-tool-contract";
 import { CLAUDE_ARTIFACT_TOOLS } from "./claude-tool-activity";
 
 /** PwrAgent's MCP gateway invocation tool, as Claude names it. */
 export const CLAUDE_MCP_GATEWAY_TOOL = `mcp__${PWRAGENT_TOOL_NAMESPACE}__call_mcp_tool`;
+
+/**
+ * PwrAgent's forge tools, as Claude names them: the CI reads, the pull
+ * request and issue reads, and every write, merging included.
+ */
+export const CLAUDE_FORGE_TOOLS: readonly string[] = [...FORGE_READ_OPERATIONS, ...FORGE_PR_TOOL_OPERATIONS]
+  .map((operation) => `mcp__${PWRAGENT_TOOL_NAMESPACE}__${operation}`);
 
 /**
  * Tools Claude runs without asking, because PwrAgent decides them itself.
@@ -13,12 +22,24 @@ export const CLAUDE_MCP_GATEWAY_TOOL = `mcp__${PWRAGENT_TOOL_NAMESPACE}__call_mc
  * the upstream tool, the connection's Tool approval setting, the
  * conversation's earlier approvals and automation allowlists. Claude's card
  * would only name `call_mcp_tool`, and accepting it led to the gateway card.
- * The rule names one exact tool on PwrAgent's own server, so it is set only
+ *
+ * A forge tool follows `[git.agent_tools]` on every call: the group's level,
+ * the repository's project rules and the turn's mode. Allow runs, Off is
+ * refused by name, and Ask, or Auto outside the modes that run it, gets
+ * PwrAgent's card. Approve and merge keeps that card in every mode but Full
+ * Access. Claude's card came first and named only the tool, so a write
+ * asked twice and an Allow group still asked. The list is fixed, not read
+ * from the policy, so a Settings change applies to the next call without
+ * relaunching the process, and an Off tool stays unadvertised.
+ *
+ * The rules name exact tools on PwrAgent's own server, so they are set only
  * when that server is attached. Claude still applies its plan mode and the
- * operator's own `ask` and `deny` rules for the tool.
+ * operator's own `ask` and `deny` rules for these tools.
  */
 export function claudeAllowedTools(mcpServers: Options["mcpServers"]): string[] {
-  return mcpServers && Object.hasOwn(mcpServers, PWRAGENT_TOOL_NAMESPACE) ? [CLAUDE_MCP_GATEWAY_TOOL] : [];
+  return mcpServers && Object.hasOwn(mcpServers, PWRAGENT_TOOL_NAMESPACE)
+    ? [CLAUDE_MCP_GATEWAY_TOOL, ...CLAUDE_FORGE_TOOLS]
+    : [];
 }
 
 export function claudePermissionMode(mode: ThreadExecutionMode): PermissionMode {
