@@ -221,6 +221,12 @@ const LOAD_OLDER_THRESHOLD_PX = 160;
 // transcript message on an unrelated live-turn render.
 const EMPTY_SKILLS: AppServerSkillSummary[] = [];
 
+// A group that starts open records a fold under its own key, so the expanded
+// set keeps meaning "open" for every other group.
+function collapsedWorkPhaseGroupKey(groupId: string): string {
+  return `${groupId}:collapsed`;
+}
+
 function isAssistantFinalMessage(entry: AppServerThreadEntry): boolean {
   return (
     entry.type === "message" &&
@@ -1572,7 +1578,13 @@ export function TranscriptList(props: TranscriptListProps) {
                   directoryPaths={stableDirectoryPaths}
                   desktopApi={props.desktopApi}
                   entries={item.entries}
-                  expanded={expandedCommentaryGroupIds.has(item.id)}
+                  expanded={
+                    item.defaultExpanded
+                      ? !expandedCommentaryGroupIds.has(
+                          collapsedWorkPhaseGroupKey(item.id)
+                        )
+                      : expandedCommentaryGroupIds.has(item.id)
+                  }
                   expandedActivityIds={controlledExpandedActivityIds}
                   fileViewerContext={props.fileViewerContext}
                   label={item.label}
@@ -1584,7 +1596,11 @@ export function TranscriptList(props: TranscriptListProps) {
                   onActivityExpandedChange={setActivityExpanded}
                   onOpenImage={props.onOpenImage}
                   onToggle={() => {
-                    toggleCommentaryGroup(item.id);
+                    toggleCommentaryGroup(
+                      item.defaultExpanded
+                        ? collapsedWorkPhaseGroupKey(item.id)
+                        : item.id
+                    );
                   }}
                 />
               ) : isRewindMarkerEntry(item.entry) && item.entry.type === "activity" ? (

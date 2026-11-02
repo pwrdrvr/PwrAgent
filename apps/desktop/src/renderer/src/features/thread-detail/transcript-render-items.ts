@@ -21,6 +21,8 @@ export type TranscriptRenderItem =
       activeVerb?: string;
       id: string;
       collapsible: boolean;
+      /** Starts open; a click still folds it. */
+      defaultExpanded?: boolean;
       entries: AppServerThreadEntry[];
       label: string;
     };
@@ -108,6 +110,7 @@ type RenderGroup = {
   activeStartedAt?: number;
   activeVerb?: string;
   collapsible: boolean;
+  defaultExpanded?: boolean;
   entries: AppServerThreadEntry[];
   id: string;
   label: string;
@@ -298,7 +301,58 @@ function buildCompletedGroups(
   }
 
   flushCurrent();
-  return groups;
+  return openStoppedTurnTails(entries, groups);
+}
+
+/**
+ * A turn the operator stopped before it answered keeps its last work group
+ * open. That work was on screen while the turn ran, and with no reply below
+ * it, folding it left one "Worked for" line where the turn's output had been.
+ * A turn that replied after its last group folds as usual.
+ */
+function openStoppedTurnTails(
+  entries: AppServerThreadEntry[],
+  groups: RenderGroup[],
+): RenderGroup[] {
+  const stoppedTurnIds = new Set<string>();
+  for (const entry of entries) {
+    if (
+      entry.turn
+      && (entry.turn.status === "cancelled" || entry.turn.status === "interrupted")
+    ) {
+      stoppedTurnIds.add(entry.turn.id);
+    }
+  }
+  if (stoppedTurnIds.size === 0) {
+    return groups;
+  }
+
+  const groupedEntries = new Set(groups.flatMap((group) => group.entries));
+  const groupByLastEntry = new Map(
+    groups.map((group) => [group.entries[group.entries.length - 1], group]),
+  );
+  const tails = new Set<RenderGroup>();
+  const settledTurnIds = new Set<string>();
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!;
+    const turnId = entry.turn?.id;
+    if (!turnId || !stoppedTurnIds.has(turnId) || settledTurnIds.has(turnId)) {
+      continue;
+    }
+    const group = groupByLastEntry.get(entry);
+    if (group) {
+      tails.add(group);
+      settledTurnIds.add(turnId);
+    } else if (!groupedEntries.has(entry) && isAssistantMessage(entry)) {
+      settledTurnIds.add(turnId);
+    }
+  }
+
+  return tails.size === 0
+    ? groups
+    : groups.map((group) =>
+        tails.has(group) ? { ...group, defaultExpanded: true } : group
+      );
 }
 
 /**
