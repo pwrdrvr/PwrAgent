@@ -1387,15 +1387,26 @@ describe("app server ipc", () => {
     }
   });
 
+  let prStatusTokenBucket: { tokens: number; updatedAt: number };
+
   beforeAll(async () => {
     // Import after the hoisted mocks exist, but before an individual test can
     // pay the cold module-graph evaluation cost.
     const appServerIpc = await import("../ipc/app-server");
     disposeAppServerIpcHandlers = appServerIpc.disposeAppServerIpcHandlers;
     registerAppServerIpcHandlers = appServerIpc.registerAppServerIpcHandlers;
+    prStatusTokenBucket = (appServerIpc.appServerService as unknown as {
+      prStatusTokenBucket: typeof prStatusTokenBucket;
+    }).prStatusTokenBucket;
   });
 
   beforeEach(() => {
+    // The service is one instance for the whole file, so the shared PR
+    // request budget would otherwise carry what earlier tests spent. A test
+    // that needs an empty budget spends it itself. The next take refills
+    // to capacity.
+    prStatusTokenBucket.tokens = Number.POSITIVE_INFINITY;
+    prStatusTokenBucket.updatedAt = Date.now();
     getCachedThreadSummary.mockReset();
     readLocalHeadPastPrHead.mockReset().mockResolvedValue(undefined);
     isIncompleteThreadList.mockReset().mockReturnValue(false);
