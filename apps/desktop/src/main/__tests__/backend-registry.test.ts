@@ -4240,7 +4240,7 @@ describe("DesktopBackendRegistry", () => {
 
       // A thread already in the project is the work the operator is driving.
       const inside = await handoffFrom("parked");
-      expect(inside).not.toMatchObject({ isError: true });
+      expect(inside).toMatchObject({ structuredContent: { groupedUnderThreadId: "parked" } });
       expect(codexClient.lastStartThreadParams?.cwd).toBe(packagePath);
     });
 
@@ -4280,12 +4280,15 @@ describe("DesktopBackendRegistry", () => {
               arguments: args,
             },
           } as AppServerPendingRequestNotification);
-          return JSON.parse(
-            (response as { contentItems: Array<{ text: string }> }).contentItems[0]?.text ?? "{}",
-          ) as Record<string, unknown>;
+          return {
+            response,
+            payload: JSON.parse(
+              (response as { contentItems: Array<{ text: string }> }).contentItems[0]?.text ?? "{}",
+            ) as Record<string, unknown>,
+          };
         };
         await turnEvent("turn/started");
-        const created = await toolCall("parked", "create_monitor_delegation", { task: "Watch the nightly run" });
+        const { payload: created } = await toolCall("parked", "create_monitor_delegation", { task: "Watch the nightly run" });
         await turnEvent("turn/completed");
         const lock = options.lockParent
           ? (await registry.setThreadLock({
@@ -4295,11 +4298,12 @@ describe("DesktopBackendRegistry", () => {
               note: "Worktree handed to the repair thread.",
             }, { source: "operator" })).lock
           : undefined;
-        const completed = await toolCall("monitor-thread", "complete_monitoring", {
+        const { response, payload: completed } = await toolCall("monitor-thread", "complete_monitoring", {
           monitorId: created.monitorId,
           outcome: "success",
           summary: "The nightly run finished.",
         });
+        expect(response).toMatchObject({ success: true });
         return { codexClient, registry, monitorId: created.monitorId as string, completed, lock };
       };
 

@@ -3106,13 +3106,13 @@ describe("app server ipc", () => {
       backgroundPrPollingEnabled: boolean;
     };
     const previous = { scheduler: service.prPollingScheduler, polling: service.backgroundPrPollingEnabled };
-    service.prPollingScheduler = scheduler;
-    service.backgroundPrPollingEnabled = true;
     const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
     const autoDispatch = vi.spyOn(service, "getPrAutoDispatchCoordinator")
       .mockReturnValue({ cancelPendingDisallowedByProject });
     const dependencies = vi.spyOn(service, "getThreadDependencyCoordinator").mockReturnValue({ handlePrEvent });
     try {
+      service.prPollingScheduler = scheduler;
+      service.backgroundPrPollingEnabled = true;
       await appServerService.setProjectForgeAutomation({
         directoryKey: project,
         automation: { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true },
@@ -3165,11 +3165,14 @@ describe("app server ipc", () => {
       request.project.automation.wakeupPolicy === "discard"
         ? { status: "discarded" as const }
         : { status: "queued" as const, entry: { id: "held" }, position: 1 });
-    Object.assign(registry, { isThreadLocked, submitTurnIfIdle, deliverProjectPausedWakeup });
+    const stubs = { isThreadLocked, submitTurnIfIdle, deliverProjectPausedWakeup };
+    const replaced = Object.keys(stubs).map((name) => [name, name in registry, registry[name]] as const);
+    Object.assign(registry, stubs);
     onTestFinished(() => {
-      delete registry.isThreadLocked;
-      delete registry.submitTurnIfIdle;
-      delete registry.deliverProjectPausedWakeup;
+      for (const [name, had, value] of replaced) {
+        if (had) registry[name] = value;
+        else delete registry[name];
+      }
     });
     const db = StateDb.open(":memory:");
     const store = new ThreadDependencyStore(db.raw);
