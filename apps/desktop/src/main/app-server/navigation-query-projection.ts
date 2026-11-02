@@ -2,6 +2,7 @@ import { sortSubthreadSummaries } from "@pwragent/shared";
 import { createHash } from "node:crypto";
 import type {
   AppServerBackendKind,
+  LinkedDirectorySummary,
   NavigationCounts,
   NavigationStarMapFacetCounts,
   NavigationStarMapSignals,
@@ -264,11 +265,16 @@ function projectNavigationRow(params: {
   childCount: number;
   viewerChildCount?: number;
   needsInput: boolean;
+  repositories: ReadonlyMap<string, RepositoryIdentity>;
   thread: NavigationThreadSummary & { nativeSubAgentCount?: number };
   homeProject?: NavigationRowHomeProject;
 }): NavigationRow {
   const { thread } = params;
-  const linkedDirectories = limitRecords(thread.linkedDirectories);
+  const linkedDirectories = limitRecords(thread.federation
+    // A peer's thread already carries its owner's identities. Its paths name
+    // the peer's checkouts, so a local lookup could only mislabel them.
+    ? thread.linkedDirectories
+    : withRepositoryIdentities(thread.linkedDirectories, params.repositories));
   const reactions = limitRecords(thread.reactions);
   const prs = limitRecords(thread.prs);
   const messagingBindings = limitRecords(thread.messagingBindings);
@@ -434,17 +440,18 @@ function buildDirectoryRows(params: {
     const rootThreads = memberThreads.filter((thread) => !parentOf(thread));
     const pinnedRootCount = rootThreads.filter((thread) => thread.pinnedRank).length;
     const gitStatus = projectDirectoryGitStatus(directory);
+    // A checkout reads its own remotes; a placeholder carries the peer's.
+    const repositoryKey = directory.gitStatus?.originRepository ?? directory.repositoryKey;
+    const repositoryKeys = directory.gitStatus?.remoteRepositories?.length
+      ? directory.gitStatus.remoteRepositories
+      : directory.repositoryKeys;
     return {
       key: directory.key,
       kind: directory.kind,
       label: directory.label,
       ...(directory.path ? { path: directory.path } : {}),
-      ...(directory.gitStatus?.originRepository
-        ? { repositoryKey: directory.gitStatus.originRepository }
-        : {}),
-      ...(directory.gitStatus?.remoteRepositories?.length
-        ? { repositoryKeys: directory.gitStatus.remoteRepositories }
-        : {}),
+      ...(repositoryKey ? { repositoryKey } : {}),
+      ...(repositoryKeys?.length ? { repositoryKeys } : {}),
       ...(directory.localAvailability
         ? { localAvailability: directory.localAvailability }
         : {}),
@@ -482,26 +489,54 @@ function buildDirectoryRows(params: {
  * (and twice on a machine holding two clones of it). The origin is the
  * only part of a checkout that reads the same everywhere.
  */
-function repositoryKeysByPath(
+function repositoryIdentitiesByPath(
   index: NavigationQueryIndex,
-): Map<string, string> {
-  const keys = new Map<string, string>();
+): Map<string, RepositoryIdentity> {
+  const identities = new Map<string, RepositoryIdentity>();
   for (const directory of index.directories) {
-    // NOT trimmed: `buildProjectGeometry` looks these up with the same
-    // raw `path` the row carries, and normalizing on only one side is a
-    // miss that reads as a repository silently failing to pool.
+    // NOT trimmed: callers look these up with the same raw `path` the
+    // thread carries, and normalizing on only one side is a miss that reads
+    // as a repository silently failing to match.
     const path = directory.path;
-    const repository = directory.gitStatus?.originRepository;
-    if (path && repository) keys.set(path, repository);
+    const repositoryKey = directory.gitStatus?.originRepository;
+    const repositoryKeys = directory.gitStatus?.remoteRepositories;
+    if (!path || (!repositoryKey && !repositoryKeys?.length)) continue;
+    identities.set(path, {
+      ...(repositoryKey ? { repositoryKey } : {}),
+      ...(repositoryKeys?.length ? { repositoryKeys } : {}),
+    });
   }
-  return keys;
+  return identities;
+}
+
+type RepositoryIdentity = Pick<LinkedDirectorySummary, "repositoryKey" | "repositoryKeys">;
+
+/**
+ * Stamp each linked directory with the repository of the checkout it names,
+ * so a viewer that has never checked the project out can still tell it apart
+ * from an unrelated checkout with the same folder name. The collapsed path
+ * first, then the directory's own, as the Star Map's geometry looks them up.
+ */
+function withRepositoryIdentities(
+  directories: LinkedDirectorySummary[],
+  repositories: ReadonlyMap<string, RepositoryIdentity>,
+): LinkedDirectorySummary[] {
+  if (!repositories.size) return directories;
+  return directories.map((directory) => {
+    const descriptor = classifyDirectory(directory);
+    // A Workspaces scratch folder names no project; never give it one.
+    if (descriptor.kind !== "directory") return directory;
+    const identity = (descriptor.path ? repositories.get(descriptor.path) : undefined)
+      ?? repositories.get(directory.path);
+    return identity ? { ...directory, ...identity } : directory;
+  });
 }
 
 /** Project geometry counts primary membership once, independent of loaded cards. */
 function buildProjectGeometry(index: NavigationQueryIndex): NavigationDirectoryRow[] {
   const projects = new Map<string, NavigationDirectoryRow>();
   const launchpads = new Set(index.directories.filter((directory) => directory.launchpad).map((directory) => directory.key));
-  const repositoryKeys = repositoryKeysByPath(index);
+  const repositories = repositoryIdentitiesByPath(index);
   const seen = new Set<string>();
   for (const thread of index.threads) {
     if (!isStarMapOwnerThread(thread) || seen.has(threadKey(thread))) continue;
@@ -516,8 +551,8 @@ function buildProjectGeometry(index: NavigationQueryIndex): NavigationDirectoryR
       // its repository's remote, so either answers the same question and
       // only one of them may have a cached status.
       const repositoryKey =
-        (descriptor?.path ? repositoryKeys.get(descriptor.path) : undefined)
-        ?? (primary?.path ? repositoryKeys.get(primary.path) : undefined);
+        (descriptor?.path ? repositories.get(descriptor.path)?.repositoryKey : undefined)
+        ?? (primary?.path ? repositories.get(primary.path)?.repositoryKey : undefined);
       project = {
         key,
         kind: descriptor?.kind ?? "unlinked",
@@ -940,6 +975,7 @@ export function projectNavigationQuery(params: {
   );
   const threadsByLegacyKey = buildThreadsByLegacyKey(params.index);
   const parentCandidates = buildParentCandidates(params.index);
+  const repositories = repositoryIdentitiesByPath(params.index);
   const childCountByParent = new Map<string, number>();
   const viewerChildCountByParent = new Map<string, number>();
   for (const thread of params.index.threads) {
@@ -1022,6 +1058,7 @@ export function projectNavigationQuery(params: {
         ...(params.request.inventory === "viewer" && navigationIdentity(thread).ownerInstanceId
           ? { viewerChildCount: viewerChildCountByParent.get(threadKey(thread)) ?? 0 } : {}),
         needsInput: starMapSignals(thread, params.index).approval,
+        repositories,
         thread: parent?.ownerInstanceId && !thread.parentThreadInstanceId
           ? { ...thread, parentThreadInstanceId: parent.ownerInstanceId } : thread,
         homeProject: homeProjects?.get(thread),

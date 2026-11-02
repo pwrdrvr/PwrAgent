@@ -1,6 +1,12 @@
 import { expect, it, vi } from "vitest";
-import { buildFederatedThreadRef, buildThreadIdentityKey, type NavigationThreadSummary,
-  type ProjectForgeAutomation } from "@pwragent/shared";
+import {
+  buildFederatedThreadRef,
+  buildThreadIdentityKey,
+  findPeerCounterpartDirectory,
+  type NavigationDirectorySummary,
+  type NavigationThreadSummary,
+  type ProjectForgeAutomation,
+} from "@pwragent/shared";
 import { appendViewerNavigationPins, loadViewerNavigationPins } from "../app-server/navigation-viewer-pins";
 import { projectNavigationQuery } from "../app-server/navigation-query-projection";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
@@ -119,6 +125,72 @@ it("adds viewer-owned remote memberships without modifying the owner's index or 
   expect(viewer.threads.map((thread) => thread.title)).toEqual(["Local", "Remote"]);
 });
 
+
+// Peer A owns a thread in ~/src/app (fixture-org/app). Peer B has an
+// unrelated checkout also named `app`. The viewer has neither.
+it("carries the owner's repository into a remote-only placeholder so a same-named peer checkout does not match", () => {
+  const ownerThread: NavigationThreadSummary = { id: "remote", source: "codex", title: "Remote", titleSource: "explicit",
+    linkedDirectories: [{ id: "/peer-a/src/app", kind: "local", label: "app", path: "/peer-a/src/app" }],
+    inbox: { inInbox: false } };
+  const ownerDirectory: NavigationDirectorySummary = { key: "directory:/peer-a/src/app", kind: "directory", label: "app",
+    path: "/peer-a/src/app", threadKeys: ["codex:remote"], needsAttentionCount: 0,
+    gitStatus: { originRepository: "github.com/fixture-org/app",
+      remoteRepositories: ["github.com/fixture-org/app", "github.com/fixture-upstream/app"] } };
+  const served = projectNavigationQuery({ index: { threads: [ownerThread], directories: [ownerDirectory] },
+    request: { protocol: 2, consumer: "main-sidebar", query: { kind: "exact", identities: [{ backend: "codex", threadId: "remote" }] } } });
+  const linked = served.entries[0]!.row.linkedDirectories;
+  expect(linked).toEqual([{ id: "/peer-a/src/app", kind: "local", label: "app", path: "/peer-a/src/app",
+    repositoryKey: "github.com/fixture-org/app",
+    repositoryKeys: ["github.com/fixture-org/app", "github.com/fixture-upstream/app"] }]);
+
+  // The viewer mounts what the owner served.
+  const remote: NavigationThreadSummary = { ...ownerThread, linkedDirectories: linked,
+    federation: { ref: buildFederatedThreadRef({ backend: "codex", threadId: "remote", instanceId: "peer-a" }), instanceLabel: "Peer A" } };
+  const viewer = appendViewerNavigationPins({ threads: [], directories: [] }, [remote]);
+  const rows = projectNavigationQuery({ index: viewer, request: { protocol: 2, consumer: "main-sidebar",
+    inventory: "viewer", query: { kind: "directory-index" } } }).directories;
+  // The grouping key is still the name, so existing rows neither split nor merge.
+  expect(rows).toEqual([expect.objectContaining({ key: "unconfigured-directory:app", label: "app",
+    localAvailability: "unconfigured", repositoryKey: "github.com/fixture-org/app",
+    repositoryKeys: ["github.com/fixture-org/app", "github.com/fixture-upstream/app"] })]);
+
+  const peerCheckout = (instanceId: string, label: string, repositoryKey: string) => ({
+    key: `directory:/${instanceId}/${label}`, kind: "directory" as const, label, path: `/${instanceId}/${label}`, repositoryKey });
+  expect(findPeerCounterpartDirectory(rows[0]!, [peerCheckout("peer-b", "app", "github.com/fixture-other/app")]))
+    .toBeUndefined();
+  expect(findPeerCounterpartDirectory(rows[0]!, [peerCheckout("peer-c", "application", "github.com/fixture-org/app")]))
+    .toMatchObject({ path: "/peer-c/application" });
+});
+
+it("stamps only the owner's own threads, never a mounted peer thread's paths", () => {
+  // Same path on both machines (same user name), different repositories.
+  const peerThread: NavigationThreadSummary = { id: "peer", source: "codex", title: "Peer", titleSource: "explicit",
+    linkedDirectories: [{ id: "/Users/me/app", kind: "local", label: "app", path: "/Users/me/app" }], inbox: { inInbox: false },
+    federation: { ref: buildFederatedThreadRef({ backend: "codex", threadId: "peer", instanceId: "peer-b" }), instanceLabel: "Peer B" } };
+  const localDirectory: NavigationDirectorySummary = { key: "directory:/Users/me/app", kind: "directory", label: "app",
+    path: "/Users/me/app", threadKeys: [], needsAttentionCount: 0, gitStatus: { originRepository: "github.com/fixture-org/app" } };
+  const served = projectNavigationQuery({ index: { threads: [peerThread], directories: [localDirectory] },
+    request: { protocol: 2, consumer: "main-sidebar", inventory: "viewer",
+      query: { kind: "exact", identities: [{ backend: "codex", threadId: "peer", ownerInstanceId: "peer-b" }] } } });
+  expect(served.entries[0]!.row.linkedDirectories).toEqual(peerThread.linkedDirectories);
+});
+
+it("keeps one placeholder for two same-named repositories and lets it stand for both", () => {
+  const remote = (id: string, instanceId: string, repositoryKey?: string): NavigationThreadSummary => ({
+    id, source: "codex", title: id, titleSource: "explicit", inbox: { inInbox: false },
+    linkedDirectories: [{ id: `/${instanceId}/app`, kind: "local", label: "app", path: `/${instanceId}/app`,
+      ...(repositoryKey ? { repositoryKey } : {}) }],
+    federation: { ref: buildFederatedThreadRef({ backend: "codex", threadId: id, instanceId }), instanceLabel: instanceId } });
+  const viewer = appendViewerNavigationPins({ threads: [], directories: [] }, [
+    remote("older-owner", "peer-z"),
+    remote("org", "peer-a", "github.com/fixture-org/app"),
+    remote("other", "peer-b", "github.com/fixture-other/app"),
+  ]);
+  expect(viewer.directories).toHaveLength(1);
+  expect(viewer.directories[0]).toMatchObject({ key: "unconfigured-directory:app", repositoryKey: "github.com/fixture-org/app",
+    repositoryKeys: ["github.com/fixture-other/app"] });
+  expect(viewer.directories[0]!.threadKeys).toHaveLength(3);
+});
 
 it("groups a remote parent with its local child across checkout paths and resolves the selected home", () => {
   const child: NavigationThreadSummary = { id: "child-m4", source: "codex", title: "Finish 2001", titleSource: "explicit",
