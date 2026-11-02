@@ -17,6 +17,8 @@ function initOwnedRepository(repoDir: string): void {
       "user.name=PwrAgent Tests",
       "-c",
       "user.email=pwragent-tests@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
       "commit",
       "--allow-empty",
       "-q",

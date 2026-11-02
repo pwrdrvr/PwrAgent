@@ -31,6 +31,8 @@ describe("source checkout hooks guard", () => {
       "user.name=PwrAgent Tests",
       "-c",
       "user.email=pwragent-tests@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
       "commit",
       "--allow-empty",
       "-q",
