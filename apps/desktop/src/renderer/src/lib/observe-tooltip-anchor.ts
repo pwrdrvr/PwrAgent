@@ -26,6 +26,11 @@ export function anchorRectsMatch(current: AnchorRect, remembered: AnchorRect): b
  * IntersectionObserver supplies post-layout rectangles for movement caused by
  * sibling layout, stylesheets and transforms; ResizeObserver covers its size.
  * DOM invalidations coalesce into one cancellable geometry check per frame.
+ *
+ * With both native observers running, a change inside the anchor's own
+ * subtree schedules no frame. It can only resize or move the anchor's box,
+ * and those observers report both after layout. Without this, a live trigger
+ * such as the context meter forced one layout per streamed token.
  */
 export function observeTooltipAnchor(
   target: HTMLElement,
@@ -34,6 +39,8 @@ export function observeTooltipAnchor(
   check: (rect?: DOMRectReadOnly) => void,
 ): () => void {
   let disposed = false;
+  // Set once both native observers are watching the anchor's box.
+  let nativeGeometry = false;
   let frame: number | undefined;
   const schedule = (): void => {
     if (disposed || frame !== undefined) return;
@@ -63,6 +70,9 @@ export function observeTooltipAnchor(
     const portal = tooltip();
     const relevant = records.some((record) => {
       if (portal?.contains(record.target)) return false;
+      // Removal and reparenting were handled above. Ancestor records still
+      // take the frame: they are rare, and a class there can restyle the path.
+      if (nativeGeometry && target.contains(record.target)) return false;
       if (record.type !== "childList" || !portal) return true;
       return [...record.addedNodes, ...record.removedNodes]
         .some((node) => node !== portal);
@@ -128,6 +138,7 @@ export function observeTooltipAnchor(
     };
     observe(1);
   }
+  nativeGeometry = resize !== undefined && intersection !== undefined;
   return () => {
     disposed = true;
     mutations.disconnect();
