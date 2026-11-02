@@ -359,6 +359,45 @@ describe("PrAutoDispatchCoordinator", () => {
     });
   });
 
+  it("leaves a locked thread out of the election, and an unlock rejoins behind the new owner", async () => {
+    const prKey = buildPullRequestStatusKey(pr());
+    await store.setThreadPrAutoDispatchEnabled({
+      backend: "codex",
+      threadId: "thread-2",
+      enabled: true,
+    });
+    for (const [threadId, now] of [["thread-1", clock], ["thread-2", clock + 1]] as const) {
+      await store.syncThreadPrAutoDispatchCandidates({ backend: "codex", threadId, prKeys: [prKey], now });
+    }
+    expect(await store.getPrAutoDispatchCandidateWinner({ prKey })).toMatchObject({ threadId: "thread-1" });
+
+    await store.setThreadLock({
+      backend: "codex",
+      threadId: "thread-1",
+      lock: { lockedAt: clock + 2, source: "operator" },
+    });
+    // The older thread's row has not been resynced yet; the lock alone hands
+    // the PR on.
+    expect(await store.getPrAutoDispatchCandidateWinner({ prKey })).toMatchObject({ threadId: "thread-2" });
+    expect((await store.listPrAutoDispatchCandidates()).map((candidate) => candidate.threadId))
+      .toEqual(["thread-2"]);
+    await expect(store.syncThreadPrAutoDispatchCandidates({
+      backend: "codex",
+      threadId: "thread-1",
+      prKeys: [prKey],
+      now: clock + 2,
+    })).resolves.toEqual([{ backend: "codex", threadId: "thread-1", prKey }]);
+
+    await store.setThreadLock({ backend: "codex", threadId: "thread-1", lock: undefined });
+    await expect(store.syncThreadPrAutoDispatchCandidates({
+      backend: "codex",
+      threadId: "thread-1",
+      prKeys: [prKey],
+      now: clock + 3,
+    })).resolves.toEqual([{ backend: "codex", threadId: "thread-1", prKey }]);
+    expect(await store.getPrAutoDispatchCandidateWinner({ prKey })).toMatchObject({ threadId: "thread-2" });
+  });
+
   it("creates only one durable repair claim when the same PR reaches many threads", async () => {
     await store.setThreadPrAutoDispatchEnabled({
       backend: "codex",

@@ -4523,6 +4523,14 @@ describe("DesktopBackendRegistry", () => {
       if (event.notification.method === "thread/lock/updated") events.push(event);
     });
     onTestFinished(unsubscribe);
+    // Each change also moves the thread out of or back into the Auto-fix election.
+    const lockChanged = vi.fn(async () => {});
+    registry.setThreadPrAutoDispatchHandler({
+      preferenceChanged: vi.fn(),
+      cancelPending: vi.fn(),
+      sendPendingNow: vi.fn(),
+      lockChanged,
+    });
     const thread = { backend: "codex" as const, threadId: "parked" };
 
     const locked = await registry.setThreadLock({ ...thread, locked: true }, { source: "agent_tool" });
@@ -4539,6 +4547,11 @@ describe("DesktopBackendRegistry", () => {
       locked.lock,
       renoted.lock,
       undefined,
+    ]);
+    expect(lockChanged.mock.calls).toEqual([
+      [{ ...thread, locked: true }],
+      [{ ...thread, locked: true }],
+      [{ ...thread, locked: false }],
     ]);
     expect(await overlayStore.getThreadOverlayState(thread)).not.toHaveProperty("lock");
   });
