@@ -30,6 +30,13 @@ the automation mode or saved thread mode when no process is open. Under bypass
 permissions Claude asks for nothing itself, so the gateway card would be the
 only prompt. ACP uses its runtime mode selector when present, otherwise its
 session execution mode.
+
+In Default and Auto the gateway card is the only prompt for a gateway call,
+whichever backend runs the thread. Codex does not review PwrAgent's dynamic
+tools. A Claude query pre-allows `mcp__pwragent__call_mcp_tool` through
+`allowedTools`, so Claude does not ask through `canUseTool` before the gateway
+does. Claude's `plan` mode and the operator's own Claude `ask` and `deny`
+rules for the tool still apply. See [Claude provider](claude-provider.md).
 Selection, actor permissions, connection authorization and schema validation
 still apply to every call. No permission is cached for the generic wrapper.
 

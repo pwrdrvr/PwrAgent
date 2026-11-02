@@ -7,7 +7,9 @@ import type { Options, Query, SDKMessage, SDKUserMessage, query } from "@anthrop
 import type { AgentEvent, AppServerThreadMessageOrigin, BackendModelOption } from "@pwragent/shared";
 import { ClaudeBackend, ClaudeTurnActiveError } from "../claude/claude-backend";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
-import { createClaudePermissionHandler, claudePermissionMode, threadExecutionModeForClaudePermission } from "../claude/claude-permissions";
+import {
+  CLAUDE_MCP_GATEWAY_TOOL, claudeAllowedTools, createClaudePermissionHandler, claudePermissionMode, threadExecutionModeForClaudePermission,
+} from "../claude/claude-permissions";
 import { createClaudeElicitationHandler } from "../claude/claude-elicitation";
 import { buildLiveToolDetails, getNotificationItem } from "../../renderer/src/features/thread-detail/live-transcript-activity";
 import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-reviews/thread-review-events";
@@ -92,6 +94,56 @@ describe("Claude SDK backend", () => {
     await f.waitForTurn();
     expect(f.queries[0]).toMatchObject({ strictMcpConfig: true, mcpServers: {} });
     await f.backend.close();
+  });
+
+  it("lets PwrAgent's gateway ask for its own calls when PwrAgent's server is attached", async () => {
+    const f = await fixture();
+    const pwragent = { type: "http" as const, url: "http://127.0.0.1:9/mcp" };
+    const withGateway = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId: withGateway.threadId, input: [{ type: "text", text: "Hi" }], mcpServers: { pwragent } });
+    await f.waitForTurn();
+    const without = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId: without.threadId, input: [{ type: "text", text: "Hi" }], mcpServers: { crm: pwragent } });
+    await f.waitForTurn();
+    expect(f.queries[0].allowedTools).toEqual([CLAUDE_MCP_GATEWAY_TOOL]);
+    expect(CLAUDE_MCP_GATEWAY_TOOL).toBe("mcp__pwragent__call_mcp_tool");
+    expect(f.queries[1]).not.toHaveProperty("allowedTools");
+    await f.backend.close();
+  });
+
+  it("relaunches an idle live session to add the gateway rule, and defers it while a task runs", async () => {
+    const pwragent = { type: "http" as const, url: "http://127.0.0.1:9/mcp" };
+    const controls = { setMcpServers: vi.fn().mockResolvedValue({ added: [], removed: [], errors: {} }) };
+    const conversation = (withTask: boolean) => async function* (_options: Options, prompt: AsyncIterable<SDKUserMessage>) {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      if (withTask) {
+        yield { type: "system", subtype: "task_started", task_id: "task-1", description: "pnpm dev", task_type: "local_bash", is_backgrounded: true } as SDKMessage;
+      }
+      let answers = 0;
+      for await (const message of prompt) {
+        answers += 1;
+        yield { type: "assistant", parent_tool_use_id: null, message: { id: `answer-${answers}`, content: [{ type: "text", text: "OK" }] } } as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "OK",
+          ...(message.uuid ? { user_message_uuids: [message.uuid] } : {}) } as unknown as SDKMessage;
+      }
+    };
+    for (const withTask of [false, true]) {
+      const f = await fixture(conversation(withTask), controls);
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Start" }], mcpServers: {} });
+      await f.waitForTurn();
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Next" }], mcpServers: { pwragent } });
+      await f.waitForTurn();
+      expect(f.queries[0]).not.toHaveProperty("allowedTools");
+      if (withTask) {
+        expect(f.run).toHaveBeenCalledOnce();
+        expect(controls.setMcpServers).toHaveBeenCalledWith({ pwragent });
+      } else {
+        expect(f.run).toHaveBeenCalledTimes(2);
+        expect(f.queries[1].allowedTools).toEqual([CLAUDE_MCP_GATEWAY_TOOL]);
+      }
+      await f.backend.close();
+    }
   });
 
   it("completes a monitor turn whose thread was released before the turn ended", async () => {
@@ -2683,6 +2735,15 @@ describe("Claude permission bridge", () => {
   it("maps the existing execution modes onto SDK modes", () => {
     expect(["default", "auto", "full-access"].map((mode) => claudePermissionMode(mode as "default" | "auto" | "full-access")))
       .toEqual(["default", "auto", "bypassPermissions"]);
+  });
+
+  it("pre-allows only the gateway's invocation tool, and only on PwrAgent's own server", () => {
+    const server = { type: "http" as const, url: "http://127.0.0.1:9/mcp" };
+    expect(claudeAllowedTools({ pwragent: server, crm: server })).toEqual(["mcp__pwragent__call_mcp_tool"]);
+    // A connection server is named pwragent_<name>_<hash>, never pwragent itself.
+    expect(claudeAllowedTools({ pwragent_crm: server })).toEqual([]);
+    expect(claudeAllowedTools({})).toEqual([]);
+    expect(claudeAllowedTools(undefined)).toEqual([]);
   });
 
   it("counts only bypass permissions and Auto as relaxed approval modes", () => {

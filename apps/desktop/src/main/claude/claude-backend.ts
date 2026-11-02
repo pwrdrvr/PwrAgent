@@ -21,7 +21,8 @@ import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, type ClaudeInstallation } from "./claude-executable";
 import {
-  CLAUDE_EXIT_PLAN_TOOL, createClaudePermissionHandler, claudePermissionMode, threadExecutionModeForClaudePermission,
+  CLAUDE_EXIT_PLAN_TOOL, claudeAllowedTools, createClaudePermissionHandler, claudePermissionMode,
+  threadExecutionModeForClaudePermission,
 } from "./claude-permissions";
 import { createClaudeElicitationHandler } from "./claude-elicitation";
 import { claudeHarnessOptions, discoverClaudeModels, readClaudeMcpServerStatus, readClaudeMetadata } from "./claude-models";
@@ -253,6 +254,8 @@ type ClaudeSessionConfig = {
   mcpServers?: Options["mcpServers"];
   mcpKey: string;
   strictMcpConfig?: boolean;
+  /** Tools Claude runs without asking, fixed when the process starts. */
+  allowedTools: string[];
   /** The thread's other linked directories, fixed when the process starts. */
   additionalDirectories: string[];
   /** The thread environment's captured toolchain variables. */
@@ -364,6 +367,7 @@ function claudeSessionConfig(params: ClaudeTurnParams, session: ClaudeSession): 
     mcpServers: params.mcpServers,
     mcpKey: JSON.stringify(params.mcpServers ?? {}),
     strictMcpConfig: params.strictMcpConfig,
+    allowedTools: claudeAllowedTools(params.mcpServers),
     additionalDirectories: claudeAdditionalDirectories(session, params.attachedDirectories),
     shellEnvironment: params.shellEnvironment,
     shellEnvironmentKey: JSON.stringify(
@@ -863,6 +867,8 @@ export class ClaudeBackend {
         stderr: (data) => { current.stderr = (current.stderr + data).slice(-MAX_TURN_STDERR_LENGTH); },
         mcpServers: config.mcpServers,
         ...(config.strictMcpConfig ? { strictMcpConfig: true } : {}),
+        // PwrAgent's gateway asks for its own calls, so Claude does not ask first.
+        ...(config.allowedTools.length ? { allowedTools: config.allowedTools } : {}),
         ...(config.additionalDirectories.length ? { additionalDirectories: config.additionalDirectories } : {}),
         canUseTool: createClaudePermissionHandler({
           threadId, turnId: () => current.turn?.turnId ?? current.lastTurnId,
@@ -1014,6 +1020,14 @@ export class ClaudeBackend {
     if (config.shellEnvironmentKey !== live.config.shellEnvironmentKey) {
       if (!keepTasks) return false;
       claudeBackendLog.info("Deferring a new Claude environment until the session relaunches", {
+        threadId: live.session.thread.id, taskCount: live.tasks.active().length,
+      });
+    }
+    // Without the rule Claude asks before PwrAgent's gateway does, which is
+    // safe, so running tasks keep the process until it relaunches.
+    if (config.allowedTools.join("\n") !== live.config.allowedTools.join("\n")) {
+      if (!keepTasks) return false;
+      claudeBackendLog.info("Deferring new Claude tool permissions until the session relaunches", {
         threadId: live.session.thread.id, taskCount: live.tasks.active().length,
       });
     }
