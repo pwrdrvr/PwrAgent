@@ -350,7 +350,7 @@ describe("sqlite write metrics", () => {
       const pricing = await store.readThreadPricing(target);
       expect(pricing.lines).toHaveLength(1);
       expect(pricing.lines[0]).toMatchObject({ totalCostMicros: 400_000, outputTokens: 80 });
-      expectSqliteWriteBudget({ scenario: "claude-live-turn-usage", note: "Three live usage reports and the result's, each in its own flush window: one commit per report. Reports run at most every 30 s and only while Claude streams, so ~120 commits per streaming hour (~6.6 MB at ~55 KB each); 0 MB/day idle", writes });
+      expectSqliteWriteBudget({ scenario: "claude-live-turn-usage", note: "Three live usage reports and the result's, each in its own flush window: one commit per report. Reports run at most every 30 s and only while Claude streams, so ~120 commits per streaming hour (~6.8 MB at ~57 KB each); 0 MB/day idle", writes });
     } finally { await registry.close(); }
   });
 
