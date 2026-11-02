@@ -116,7 +116,7 @@ export async function serve({ directory, workspace, home, command, profile }) {
     });
     if (shutdown) { server.close(); return await done; }
     server.on("error", (error) => { void stop(error); });
-    console.log(JSON.stringify({ ready: true, socket: socketPath, pid: process.pid }));
+    console.log(JSON.stringify({ ready: true, socket: socketPath, pid: process.pid, version: runtime.running.version }));
     return await done;
   } catch (error) {
     await stop(error);
