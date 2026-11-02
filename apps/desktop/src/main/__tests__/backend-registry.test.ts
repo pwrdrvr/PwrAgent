@@ -168,6 +168,7 @@ import gitSubprocessBudgets from "./fixtures/git-subprocess-budgets.json";
 import navigationListingBudgets from "./fixtures/navigation-listing-budgets.json";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { ProjectHeldWakeupStore } from "../state/project-held-wakeup-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -4127,6 +4128,156 @@ describe("DesktopBackendRegistry", () => {
       expect(JSON.stringify(codexClient.injectedThreadItems)).toContain(
         "because forge activity in openclaw is paused",
       );
+    });
+
+    describe("across a restart", () => {
+      // The monitor and the dependency are consumed when the wake is held,
+      // so the durable row is the only copy a restart can bring back.
+      const durableStore = () => {
+        vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+        const temp = createTempStateDb("pwragent-project-held-wakeups-");
+        const db = StateDb.open(temp.dbPath);
+        onTestFinished(() => {
+          db.close();
+          removeTempStateDbDir(temp.tempDir);
+          vi.unstubAllEnvs();
+        });
+        const rows = () => db.raw.prepare(
+          "SELECT entry_id, owner_instance_id FROM project_held_wakeups",
+        ).all() as { entry_id: string; owner_instance_id: string }[];
+        return { rows, store: new ProjectHeldWakeupStore(db.raw, { processId: 4_242, processAlive: () => false }) };
+      };
+      const launch = (store: ProjectHeldWakeupStore, instanceId: string, live: string[] = []) => {
+        const codexClient = new MockBackendClient({});
+        const registry = new DesktopBackendRegistry({
+          codexClient,
+          overlayStore: createOverlayStoreMock(),
+          projectHeldWakeupStore: store,
+          runtimeInstanceId: instanceId,
+          resolveLiveProfileRuntimeInstanceIds: () => live,
+        });
+        onTestFinished(() => registry.close());
+        return { codexClient, registry };
+      };
+      const resolve = (registry: DesktopBackendRegistry, action: "send" | "discard") =>
+        registry.resolveProjectHeldWakeups({
+          directoryKey: PROJECT,
+          resolutions: [{ entryId: "task-monitor:nightly", backend: "codex", threadId: "parked", action }],
+        });
+
+      it("holds the wake-up again after a restart, and Send starts it and drops the durable copy", async () => {
+        pauseProject();
+        const { rows, store } = durableStore();
+        const { writes } = await measureSqliteWrites(async () => {
+          const first = launch(store, "instance-a");
+          await first.registry.deliverProjectPausedWakeup(wake());
+          expect(rows()).toEqual([{ entry_id: "task-monitor:nightly", owner_instance_id: "instance-a" }]);
+          await first.registry.close();
+
+          const second = launch(store, "instance-b", ["instance-b"]);
+          expect(rows()).toEqual([{ entry_id: "task-monitor:nightly", owner_instance_id: "instance-b" }]);
+          expect(second.registry.listProjectHeldWakeups(PROJECT)).toEqual([expect.objectContaining({
+            entryId: "task-monitor:nightly",
+            backend: "codex",
+            threadId: "parked",
+            source: "monitor",
+            summary: "Monitor finished: \"Watch the nightly run\"",
+          })]);
+          expect(second.registry.getQueuedTurnsForThread({ backend: "codex", threadId: "parked" })[0])
+            .toMatchObject({ paused: true, holdReason: expect.stringContaining("openclaw is paused") });
+          expect(second.codexClient.startTurnCallCount).toBe(0);
+
+          await expect(resolve(second.registry, "send")).resolves.toEqual({ results: [
+            { entryId: "task-monitor:nightly", status: "sent" },
+          ] });
+          await vi.waitFor(() => expect(second.codexClient.startTurnCallCount).toBe(1));
+          expect(JSON.stringify(second.codexClient.startTurnCalls[0])).toContain("Monitor finished");
+          await vi.waitFor(() => expect(rows()).toEqual([]));
+          expect(second.registry.listProjectHeldWakeups(PROJECT)).toEqual([]);
+        });
+        expectSqliteWriteBudget({
+          scenario: "project-held-wakeup-restart-send",
+          note: "one held wake-up through a restart and Send: one hold insert, one startup claim, one delete when its turn starts. ~20 KB per cycle; holds are rare, so even 20 cycles/day is ~0.4 MB/day. Idle and per-turn writes are 0.",
+          writes,
+        });
+      });
+
+      it("discards a restored wake-up and removes its durable copy", async () => {
+        pauseProject();
+        const { rows, store } = durableStore();
+        const { writes } = await measureSqliteWrites(async () => {
+          const first = launch(store, "instance-a");
+          await first.registry.deliverProjectPausedWakeup(wake());
+          await first.registry.close();
+
+          const second = launch(store, "instance-b", ["instance-b"]);
+          expect(second.registry.listProjectHeldWakeups(PROJECT)).toHaveLength(1);
+          await expect(resolve(second.registry, "discard")).resolves.toEqual({ results: [
+            { entryId: "task-monitor:nightly", status: "discarded" },
+          ] });
+          expect(rows()).toEqual([]);
+          expect(second.registry.listProjectHeldWakeups(PROJECT)).toEqual([]);
+          expect(second.codexClient.startTurnCallCount).toBe(0);
+        });
+        expectSqliteWriteBudget({
+          scenario: "project-held-wakeup-restart-discard",
+          note: "one held wake-up through a restart and Discard: one hold insert, one startup claim, one delete. ~20 KB per cycle; holds are rare, so even 20 cycles/day is ~0.4 MB/day. Idle and per-turn writes are 0.",
+          writes,
+        });
+
+        // Nothing is left for a later launch to hold.
+        const third = launch(store, "instance-c", ["instance-c"]);
+        expect(third.registry.listProjectHeldWakeups(PROJECT)).toEqual([]);
+      });
+
+      it("leaves a live sibling instance's held wake-up with that instance", async () => {
+        pauseProject();
+        const { rows, store } = durableStore();
+        const first = launch(store, "instance-a");
+        await first.registry.deliverProjectPausedWakeup(wake());
+
+        const sibling = launch(store, "instance-b", ["instance-a", "instance-b"]);
+        expect(sibling.registry.listProjectHeldWakeups(PROJECT)).toEqual([]);
+        expect(rows()).toEqual([{ entry_id: "task-monitor:nightly", owner_instance_id: "instance-a" }]);
+        expect(first.registry.listProjectHeldWakeups(PROJECT)).toHaveLength(1);
+      });
+
+      it("drops the durable copy when the operator pauses a sent wake-up again", async () => {
+        pauseProject();
+        const { rows, store } = durableStore();
+        const first = launch(store, "instance-a");
+        await first.registry.deliverProjectPausedWakeup(wake());
+        // The operator's own turn keeps the thread busy, so Send waits.
+        await expect(first.registry.submitTurn({
+          backend: "codex",
+          threadId: "parked",
+          input: [{ type: "text", text: "Operator reply" }],
+        })).resolves.toMatchObject({ status: "started" });
+        await expect(resolve(first.registry, "send")).resolves.toEqual({ results: [
+          { entryId: "task-monitor:nightly", status: "sent" },
+        ] });
+        expect(rows()).toHaveLength(1);
+
+        await first.registry.setQueuedTurnPaused({ queueEntryId: "task-monitor:nightly", paused: true });
+        expect(rows()).toEqual([]);
+        await first.registry.close();
+
+        const second = launch(store, "instance-b", ["instance-b"]);
+        expect(second.registry.listProjectHeldWakeups(PROJECT)).toEqual([]);
+      });
+
+      it("keeps an operator's edit to a held wake-up across a restart", async () => {
+        pauseProject();
+        const { store } = durableStore();
+        const first = launch(store, "instance-a");
+        await first.registry.deliverProjectPausedWakeup(wake());
+        first.registry.updateQueuedTurnInput("task-monitor:nightly", [{ type: "text", text: "Edited wake" }]);
+        await first.registry.close();
+
+        const second = launch(store, "instance-b", ["instance-b"]);
+        expect(second.registry.getQueuedTurnsForThread({ backend: "codex", threadId: "parked" })[0])
+          .toMatchObject({ displayText: "Edited wake", paused: true });
+      });
     });
   });
 

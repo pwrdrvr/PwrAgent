@@ -71,6 +71,7 @@ import type {
 import { ArchiveCleanupReadPool } from "./archive-cleanup-read-pool";
 import { ArchiveCleanupQueue, ArchiveCleanupCancelledError, ARCHIVE_CLEANUP_SLICE_SIZE, ARCHIVE_CLEANUP_PAUSE_MS, ARCHIVE_CLEANUP_QUEUE_LIMIT, type ArchiveCleanupContext } from "./archive-cleanup-queue";
 import { ArchiveCleanupCheckpointStore, type ArchiveCleanupIntent } from "../state/archive-cleanup-checkpoint";
+import { ProjectHeldWakeupStore, type StoredProjectHeldWakeup } from "../state/project-held-wakeup-store";
 import { supportsNativeVoice, type NativeVoiceBackend, type NativeVoiceToolCall } from "../codex-app-server/native-voice-protocol";
 import type { NativeVoiceCapability } from "../../shared/native-voice";
 import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activity-analysis";
@@ -2265,6 +2266,10 @@ type WorktreeArchiveCandidate = {
   repositoryPath: string;
   worktreePath: string;
 };
+
+type ProjectHeldWakeupStoreLike = Pick<ProjectHeldWakeupStore, "save" | "update" | "remove" | "claimOrphaned">;
+
+const THREAD_TURN_QUEUE_ORIGINS: readonly string[] = ["manual", "automation", "messaging", "scheduled"] satisfies ThreadTurnQueueOrigin[];
 
 type ArchiveCleanupMetadata = {
   activeThreads: AppServerThreadSummary[];
@@ -9384,6 +9389,9 @@ export class DesktopBackendRegistry {
   private readonly archiveCleanupReads = new ArchiveCleanupReadPool(THREAD_LIST_REUSE_WINDOW_MS);
   private readonly archiveCleanupQueue = new ArchiveCleanupQueue<ArchiveThreadResponse>();
   private readonly archiveCleanupCheckpointStore?: Pick<ArchiveCleanupCheckpointStore, "save" | "recover">;
+  private readonly projectHeldWakeupStore?: ProjectHeldWakeupStoreLike;
+  /** Project-held entries with a durable copy, by queue entry id, as stored. */
+  private readonly durableProjectHeldWakeups = new Map<string, StoredProjectHeldWakeup>();
   private readonly pendingArchiveCleanupIntents = new Map<string, ArchiveCleanupIntent>();
   private archiveCleanupResumeStarted = false;
   private archiveCleanupInventories = new WeakMap<object, {
@@ -10861,6 +10869,8 @@ export class DesktopBackendRegistry {
     ) => () => void;
     runtimeInstanceId?: string;
     archiveCleanupCheckpointStore?: Pick<ArchiveCleanupCheckpointStore, "save" | "recover"> | null;
+    /** `null` keeps held wake-ups in memory only. */
+    projectHeldWakeupStore?: ProjectHeldWakeupStoreLike | null;
     registrySessionId?: string;
     resolveLiveProfileRuntimeInstanceIds?: () => string[];
     runningTurnShutdownStopTimeoutMs?: number;
@@ -10880,6 +10890,8 @@ export class DesktopBackendRegistry {
       options?.runtimeInstanceId ?? processRuntimeIdentity.instanceId;
     this.archiveCleanupCheckpointStore = options?.archiveCleanupCheckpointStore === null ? undefined
       : options?.archiveCleanupCheckpointStore ?? (isAppStateInitialized() ? new ArchiveCleanupCheckpointStore(getAppStateDb().raw) : undefined);
+    this.projectHeldWakeupStore = options?.projectHeldWakeupStore === null ? undefined
+      : options?.projectHeldWakeupStore ?? (isAppStateInitialized() ? new ProjectHeldWakeupStore(getAppStateDb().raw) : undefined);
     this.registrySessionId = options?.registrySessionId ?? randomUUID();
     this.runningTurnShutdownStopTimeoutMs =
       options?.runningTurnShutdownStopTimeoutMs
@@ -11854,6 +11866,7 @@ export class DesktopBackendRegistry {
         || this.threadHasBlockingWorkspaceMove({ backend, threadId }),
       onLifecycle: async (event) => await this.emitTurnQueueLifecycle(event),
     });
+    this.restoreProjectHeldWakeups();
     this.taskMonitorWatchdogTimer = setInterval(() => {
       void this.checkStaleTaskMonitors().catch((error) => {
         backendRegistryLog.warn("task monitor stale watchdog failed", {
@@ -13129,6 +13142,7 @@ export class DesktopBackendRegistry {
   private async emitTurnQueueLifecycle(
     event: ThreadTurnQueueLifecycleEvent,
   ): Promise<void> {
+    this.trackDurableProjectHeldWakeup(event);
     if (event.type === "queued" || event.type === "held") {
       // Re-queued entries (a release that put the queue back) keep the
       // title they already have. A grouped steer that took another message
@@ -20952,6 +20966,113 @@ export class DesktopBackendRegistry {
       }, { onAdmission }));
   }
 
+  /**
+   * Puts back the wake-ups that exited instances held. Their sources were
+   * consumed when they were held, so the durable copy is all that is left.
+   * Runs in the constructor, before any window reads the queue.
+   */
+  private restoreProjectHeldWakeups(): void {
+    if (!this.projectHeldWakeupStore) return;
+    let claimed: StoredProjectHeldWakeup[];
+    try {
+      claimed = this.projectHeldWakeupStore.claimOrphaned(
+        this.runtimeInstanceId,
+        this.resolveLiveProfileRuntimeInstanceIdsFn,
+      );
+    } catch (error) {
+      backendRegistryLog.warn("project held wake-ups could not be restored", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    if (claimed.length === 0) return;
+    for (const wakeup of claimed) this.durableProjectHeldWakeups.set(wakeup.id, wakeup);
+    const restored = this.threadTurnQueue.restoreProjectHeld(claimed.map((wakeup) => ({
+      ...wakeup,
+      origin: THREAD_TURN_QUEUE_ORIGINS.includes(wakeup.origin)
+        ? wakeup.origin as ThreadTurnQueueOrigin
+        : "automation",
+    })));
+    backendRegistryLog.info("project held wake-ups restored", {
+      count: restored.length,
+      entryIds: restored.map((entry) => entry.id),
+    });
+  }
+
+  /**
+   * Keeps one durable copy per project-held entry: written when the hold
+   * is queued, deleted when the entry leaves the queue. A Send keeps the
+   * copy until its turn starts, so a restart before then holds it again
+   * rather than losing it.
+   */
+  private trackDurableProjectHeldWakeup(event: ThreadTurnQueueLifecycleEvent): void {
+    const store = this.projectHeldWakeupStore;
+    if (!store) return;
+    const { entry } = event;
+    try {
+      if (event.type === "queued") {
+        if (!entry.projectHold || this.durableProjectHeldWakeups.has(entry.id)) return;
+        const wakeup: StoredProjectHeldWakeup = {
+          id: entry.id,
+          backend: entry.backend,
+          threadId: entry.threadId,
+          origin: entry.origin,
+          ...(entry.messageOrigin ? { messageOrigin: entry.messageOrigin } : {}),
+          input: entry.input,
+          createdAt: entry.createdAt,
+          holdReason: entry.holdReason ?? "",
+          projectHold: entry.projectHold,
+        };
+        store.save(this.runtimeInstanceId, wakeup);
+        this.durableProjectHeldWakeups.set(entry.id, wakeup);
+        return;
+      }
+      if (event.type === "started" || event.type === "failed" || event.type === "cancelled") {
+        this.forgetDurableProjectHeldWakeup(entry.id);
+      }
+    } catch (error) {
+      backendRegistryLog.warn("project held wake-up durability failed", {
+        entryId: entry.id,
+        event: event.type,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** Deletes the row before untracking it, so a failed delete stays visible. */
+  private forgetDurableProjectHeldWakeup(entryId: string): void {
+    if (!this.projectHeldWakeupStore || !this.durableProjectHeldWakeups.has(entryId)) return;
+    try {
+      this.projectHeldWakeupStore.remove(entryId);
+      this.durableProjectHeldWakeups.delete(entryId);
+    } catch (error) {
+      backendRegistryLog.warn("project held wake-up could not be forgotten", {
+        entryId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** An operator edit to a held wake-up replaces its durable input too. */
+  private refreshDurableProjectHeldWakeup(entry: ThreadTurnQueueEntry): void {
+    const stored = this.durableProjectHeldWakeups.get(entry.id);
+    if (!stored || !this.projectHeldWakeupStore) return;
+    const wakeup: StoredProjectHeldWakeup = {
+      ...stored,
+      input: entry.input,
+      ...(entry.messageOrigin ? { messageOrigin: entry.messageOrigin } : {}),
+    };
+    try {
+      this.projectHeldWakeupStore.update(wakeup);
+      this.durableProjectHeldWakeups.set(entry.id, wakeup);
+    } catch (error) {
+      backendRegistryLog.warn("project held wake-up edit was not saved", {
+        entryId: entry.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   /** Every wake-up a paused project holds, across its threads. */
   listProjectHeldWakeups(directoryKey: string): ProjectHeldWakeup[] {
     return this.threadTurnQueue.getAllQueuedEntries()
@@ -21160,6 +21281,11 @@ export class DesktopBackendRegistry {
       request.paused,
     );
     const entry = result.entry;
+    if (result.disposition === "updated" && entry?.paused && !entry.projectHold) {
+      // A sent wake-up the operator pauses again is an ordinary queued
+      // message now; a restart must not bring it back as a project hold.
+      this.forgetDurableProjectHeldWakeup(entry.id);
+    }
     if (result.disposition === "updated" && entry) {
       await this.emit({
         backend: entry.backend,
@@ -21261,6 +21387,7 @@ export class DesktopBackendRegistry {
   }
 
   private emitQueuedTurnInputUpdated(entry: ThreadTurnQueueEntry): void {
+    this.refreshDurableProjectHeldWakeup(entry);
     this.requestQueuedMessageTitle(entry);
     // This is an input refresh, not another queue admission. In particular,
     // do not replay sender correspondence lifecycle transitions.
