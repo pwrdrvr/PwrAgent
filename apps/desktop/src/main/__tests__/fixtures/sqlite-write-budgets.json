@@ -163,6 +163,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "codex-task-monitor-recovery": {"commits":0,"note":"A Codex monitor recovery turn with no messaging origin writes nothing.","observedWalBytes":0,"rowsChanged":0,"statements":0},
   "codex-turn-end-with-token-miser-gates": {
     "commits": 3,
     "note": "one Codex turn end on a 2,000-turn thread with 2,000 stored gate cards and 5 new gates: the final usage line, 5 keyed gate-card rows, and the gate usage lines; the overlay row is not rewritten. ~206 KB WAL, ~21 MB/day at 100 such turn ends (was ~3.6 MB and ~360 MB/day while the cards lived in the overlay row)",
@@ -587,6 +588,7 @@
     "rowsChanged": 9,
     "statements": 11
   },
+  "messaging-causal-codex-monitor-recovery": {"commits":1,"note":"One Codex monitor recovery turn delegated from a messaging turn writes its prompt origin in one commit; at most one recovery per monitor. ~12 KB each: ~1.2 MB/day at 100 recovered messaging monitors/day, 0 MB/day idle.","observedWalBytes":12392,"rowsChanged":1,"statements":1},
   "messaging-causal-monitor-lifecycle": {"commits":5,"note":"One attributed ACP monitor origin plus lifecycle and final usage; 120 heartbeats add no commits. Provenance is one fixed reference captured at delegation.","observedWalBytes":160680,"rowsChanged":7,"statements":7},
   "messaging-causal-request-and-attachment": {"commits":3,"note":"One accepted human request (immutable source plus latest-human pointer in one transaction), one attachment claim/outcome, 100 duplicate/bot/read retries. No stream, poll or idle writes.","observedWalBytes":32960,"rowsChanged":4,"statements":4},
   "messaging-causal-steer": {"commits":2,"note":"One attributed Claude steer updates its current turn's causal reference once; one idempotent retry adds no writes. No history traversal or timer writes.","observedWalBytes":20600,"rowsChanged":2,"statements":2},

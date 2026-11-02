@@ -46148,32 +46148,48 @@ export class DesktopBackendRegistry {
       }
 
       const client = this.getClient("codex", executionMode);
-      const turn = await client.startTurn({
-        threadId: record.monitorThreadId,
-        parentTurnId: record.parentTurnId,
-        ...(record.rootTurnId ? { rootTurnId: record.rootTurnId } : {}),
-        input: [
-          {
-            type: "text",
-            text: buildTaskMonitorRecoveryPrompt({
-              monitorId: record.monitorId,
-              task: record.task,
-              terminalStatus: params.terminalStatus,
-            }),
-          },
-        ],
-        ...(record.cwd ? { cwd: record.cwd } : {}),
-        approvalPolicy: modeSettings.approvalPolicy,
-        model: record.preferredModel,
-        reasoningEffort: record.preferredReasoningEffort,
-        approvalsReviewer: modeSettings.approvalsReviewer,
-        sandbox: modeSettings.sandbox,
-        ...(overlay?.codexEnvironmentRuntime
-          ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
-          : {}),
-      });
+      // Like the monitor's first turn, a recovery turn delegated from a
+      // messaging turn carries that turn's origin, so its tool calls stay
+      // gated by the messaging user's role.
+      const causalContext = record.causalContext ?? {};
+      const startingOrigin = causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous
+        ? this.beginStartingTurnOrigin({ backend: "codex", threadId: record.monitorThreadId,
+          origin: buildTaskMonitorPromptOrigin(causalContext) })
+        : undefined;
+      let turn: { threadId: string; turnId: string };
+      try {
+        turn = await client.startTurn({
+          threadId: record.monitorThreadId,
+          parentTurnId: record.parentTurnId,
+          ...(record.rootTurnId ? { rootTurnId: record.rootTurnId } : {}),
+          input: [
+            {
+              type: "text",
+              text: buildTaskMonitorRecoveryPrompt({
+                monitorId: record.monitorId,
+                task: record.task,
+                terminalStatus: params.terminalStatus,
+              }),
+            },
+          ],
+          ...(record.cwd ? { cwd: record.cwd } : {}),
+          approvalPolicy: modeSettings.approvalPolicy,
+          model: record.preferredModel,
+          reasoningEffort: record.preferredReasoningEffort,
+          approvalsReviewer: modeSettings.approvalsReviewer,
+          sandbox: modeSettings.sandbox,
+          ...(overlay?.codexEnvironmentRuntime
+            ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
+            : {}),
+        });
+        this.bindStartingTurnOrigin(startingOrigin, turn);
+      } catch (error) {
+        this.dropStartingTurnOrigin(startingOrigin);
+        throw error;
+      }
       record.monitorTurnId = turn.turnId;
       record.lastActivityAt = Date.now();
+      await this.persistStartingTurnOrigin(startingOrigin);
       backendRegistryLog.warn("started task monitor recovery turn", {
         monitorId: record.monitorId,
         monitorThreadId: record.monitorThreadId,
