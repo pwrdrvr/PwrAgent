@@ -909,16 +909,58 @@
     "statements": 3
   },
   "pr-terminal-watch-open-polls": {
-    "commits": 10,
-    "note": "ten polls of an open PR that has a merge/close watch: 0 rows and 0 WAL; the 10 commits are the pre-existing per-poll supersede statement, which changes no row, so the watch adds 0 MB/day",
+    "commits": 0,
+    "note": "ten polls of an open PR that has a merge/close watch: 0 commits, 0 rows and 0 WAL; the per-poll head/baseline advance only reads when nothing moved, so the watch adds 0 MB/day",
     "observedWalBytes": 0,
     "rowsChanged": 0,
-    "statements": 10
+    "statements": 0
   },
   "pr-terminal-watch-register": {
     "commits": 1,
     "note": "one merge/close watch requested by an agent tool call: 1 commit/~16.5 KB WAL; ~0.8 MB/day at 50 requests/day, zero idle writes",
     "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "pr-watch-agent-cancel": {
+    "commits": 1,
+    "note": "an agent stops one PR watch through watch_thread_pull_request: 1 commit per call, 0 idle writes",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "pr-watch-autofix-hold": {
+    "commits": 1,
+    "note": "ten polls of one CI failure that Auto-fix covers, one success and failure watch: 1 commit holds the failure as its baseline, the other 9 polls only read; at most 1 commit per failure",
+    "observedWalBytes": 4120,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "pr-watch-baseline-clear": {
+    "commits": 1,
+    "note": "ten polls while re-run checks run, one baselined watch: 1 commit clears the baseline once, the other 9 polls only read; at most 1 commit per watch lifetime",
+    "observedWalBytes": 4120,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "pr-watch-follow-head": {
+    "commits": 1,
+    "note": "one poll that sees a pushed head: the CI watch's copy and the old row's end share 1 commit; only on pushes, well under 1 MB/day",
+    "observedWalBytes": 16480,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "pr-watch-operator-cancel": {
+    "commits": 1,
+    "note": "the operator stops one PR watch: 1 commit per click, 0 idle writes",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "pr-watch-operator-register": {
+    "commits": 1,
+    "note": "the operator arms one CI watch with Watch CI: 1 commit per click, 0 idle writes",
+    "observedWalBytes": 16512,
     "rowsChanged": 1,
     "statements": 1
   },

@@ -1,9 +1,19 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
+import type {
+  NavigationThreadSummary,
+  PrSummary,
+  ThreadPullRequestWatchSummary,
+} from "@pwragent/shared";
+import { buildPullRequestStatusKey } from "@pwragent/shared";
 import { ThreadRow } from "../ThreadRow";
 import { PrChip } from "../../pr-status/PrChip";
+import {
+  ThreadPrWatchIndicatorsContext,
+  summarizeThreadPrWatches,
+} from "../../pr-watches/useThreadPrWatchIndicators";
 import { memoRenderObserver } from "../../../test/memo-render-observer";
 
 /**
@@ -100,6 +110,49 @@ describe("thread row render cost", () => {
     rerender(row(thread([{ ...pr(2116), state: "merged" }])));
 
     expect(renders).toBe(2);
+  });
+
+  it("re-renders no row body when one thread's PR watch changes", () => {
+    // Rows used to read the watch context themselves, so every watch change
+    // re-rendered every memoized row body in the sidebar.
+    const rowRenders = new Map<string, number>();
+    const rows = memoRenderObserver<{ thread: NavigationThreadSummary }>(ThreadRow, "ThreadRow");
+    rows.install((props) => {
+      rowRenders.set(props.thread.id, (rowRenders.get(props.thread.id) ?? 0) + 1);
+    });
+    try {
+      const first = { ...thread([pr(2201)]), id: "thread-a" };
+      const second = { ...thread([pr(2202)]), id: "thread-b" };
+      const watch: ThreadPullRequestWatchSummary = {
+        watchId: "watch-a", backend: "codex", threadId: first.id,
+        prKey: buildPullRequestStatusKey(pr(2201)), prUrl: pr(2201).url, prNumber: 2201,
+        headSha: "a".repeat(40), notifyOn: ["success", "failure"], createdAt: 1,
+        failureHandledByAutoFix: false, kind: "checks",
+      };
+      const select = () => undefined;
+      let setWatches!: (watches: ThreadPullRequestWatchSummary[]) => void;
+      function Harness() {
+        const [watches, update] = useState<ThreadPullRequestWatchSummary[]>([]);
+        setWatches = update;
+        return (
+          <ThreadPrWatchIndicatorsContext.Provider value={{ byThreadKey: summarizeThreadPrWatches(watches) }}>
+            <ThreadRow thread={first} onSelectThread={select} onOpenContextMenu={select} />
+            <ThreadRow thread={second} onSelectThread={select} onOpenContextMenu={select} />
+          </ThreadPrWatchIndicatorsContext.Provider>
+        );
+      }
+      render(<Harness />);
+      expect(rowRenders).toEqual(new Map([["thread-a", 1], ["thread-b", 1]]));
+      expect(renders).toBe(2);
+
+      act(() => setWatches([watch]));
+
+      // Only thread A's chip re-renders, to draw its eye.
+      expect(rowRenders).toEqual(new Map([["thread-a", 1], ["thread-b", 1]]));
+      expect(renders).toBe(3);
+    } finally {
+      rows.restore();
+    }
   });
 
   it("keeps the detach handler wired to the newest parent callback", () => {

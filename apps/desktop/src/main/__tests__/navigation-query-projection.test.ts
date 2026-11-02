@@ -191,6 +191,23 @@ describe("navigation query projection", () => {
     expect(inbox.entries.find(({ row }) => row.id === "finished")?.row).not.toHaveProperty("hasAgentCommands");
   });
 
+  it("carries a row's CI watch marks and moves its revision when they change", () => {
+    const mark = {
+      prKey: "github.com/pwrdrvr/pwragent#3174", watchId: "watch-ci",
+      notifyOn: ["success" as const, "failure" as const], createdAt: 10, runAttempt: 2,
+    };
+    const read = (patch: Partial<NavigationThreadSummary>) => projectNavigationQuery({
+      index: snapshot([thread("watched", patch)]),
+      request: request({ kind: "lens", lens: "inbox" }),
+    }).entries[0]!.row;
+    const unwatched = read({});
+    const watched = read({ prCiWatches: [mark] });
+    expect(unwatched).not.toHaveProperty("prCiWatches");
+    expect(watched.prCiWatches).toEqual([mark]);
+    expect(watched.rowRevision).not.toBe(unwatched.rowRevision);
+    expect(read({ prCiWatches: [] })).not.toHaveProperty("prCiWatches");
+  });
+
   it.each(["active", "unread"])("shows an Attention child whose parent is outside the lens (%s)", (signal) => {
     const child = thread("child", {
       parentThreadId: "parent", parentThreadBackend: "codex",

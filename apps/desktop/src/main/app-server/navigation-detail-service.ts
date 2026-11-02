@@ -280,6 +280,12 @@ export class NavigationDetailService {
     configuration.activeSubAgents = projectActiveThreadSubAgents(summary.source === "codex"
       ? this.registry.mergeLiveTokenMiserSubAgents(summary.id, activeCards)
       : activeCards);
+    // The owner's watches, so a peer viewer reads the same list. Detail only:
+    // it is projected per read and never stored with the navigation row.
+    const activePrWatches = await getDesktopOverlayStore().listActiveThreadPrStatusWatches({
+      backend: summary.source, threadId: summary.id,
+    });
+    if (activePrWatches.length > 0) configuration.activePrWatches = activePrWatches;
     let workspaceDirectories: NavigationSelectedDetailResponse["workspaceDirectories"];
     if (request.includeWorkspaceConfiguration) {
       if (thread.linkedDirectories.length > 100) {

@@ -119,6 +119,7 @@ import {
   DetachPullRequestWarning,
   shouldShowDetachPullRequestWarning,
 } from "../pr-status/DetachPullRequestWarning";
+import { PullRequestWatchMenuItems } from "../pr-watches/PullRequestWatchMenuItems";
 import { SidebarSearchPopup } from "./SidebarSearchPopup";
 import {
   formatRateLimitLine,
@@ -4048,6 +4049,11 @@ export function Sidebar(props: SidebarProps) {
                     >
                       Copy Pull Request URL
                     </button>
+                    <PullRequestWatchMenuItems
+                      thread={contextMenu.thread}
+                      pr={contextMenuPullRequest}
+                      onClose={() => setContextMenu(undefined)}
+                    />
                     {props.onDetachPullRequest ? (
                       <button
                         role="menuitem"

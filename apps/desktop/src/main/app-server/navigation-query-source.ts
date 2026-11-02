@@ -12,6 +12,7 @@ import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
 import { buildNavigationIndexMessagingBindings } from "../messaging/messaging-bindings-snapshot";
+import { attachNavigationPrCiWatchMarks } from "./navigation-pr-watch-marks";
 import { NavigationIndexReadPool, type NavigationIndexCheckpoint } from "./navigation-index-read-pool";
 import { nextNavigationObservation } from "./navigation-observation-clock";
 import {
@@ -35,7 +36,8 @@ function sourceId(value: object): number {
  * reads. This intentionally does not hydrate queue entries, launchpad
  * environments, or any other selected-thread collection. Messaging bindings
  * are the exception: every row draws its binding chips and Unbind items from
- * them, so they come from one read of the active bindings.
+ * them, so they come from one read of the active bindings. CI watch marks
+ * come from one read of the active watches the same way.
  */
 export async function loadLocalNavigationQueryIndex(params: {
   backend?: AppServerBackendScope;
@@ -53,7 +55,12 @@ export async function loadLocalNavigationQueryIndex(params: {
   // in-flight index that predates it, nor overtake other readers' scans.
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
     ...(params.refreshProviders ? ["refresh-providers"] : [])]);
-  const version = overlayStore.readNavigationSourceVersion?.();
+  // An index's coverage reads the startup refresh state, so an index built
+  // while startup was checking must not serve a reader after it finishes.
+  // The refreshed event invalidates the read too, but a listener that runs
+  // before the pool's (owner PR metadata) would join the stale index.
+  const version = `${overlayStore.readNavigationSourceVersion?.() ?? ""}|${
+    registry.getStartupProviderRefreshStatus?.()?.state ?? ""}`;
   return indexReads.read(key, async (signal, checkpoint) => {
     let navigationChanged = false;
     // An event during a scan stops later readers from joining it; they share
@@ -161,8 +168,14 @@ async function buildLocalNavigationQueryIndex(params: {
     const messagingBindings = bindings.get(buildThreadIdentityKey(thread.source, thread.id));
     return messagingBindings ? { ...thread, messagingBindings } : thread;
   });
-  const canonicalThreads = await registry.canonicalizeNavigationThreadPullRequests(
+  // One read of every active watch, for the rows' CI watch marks.
+  const watchedThreads = await attachNavigationPrCiWatchMarks(
     boundThreads,
+    async () => await overlayStore.listAllActivePrStatusWatches(),
+  );
+  params.signal?.throwIfAborted();
+  const canonicalThreads = await registry.canonicalizeNavigationThreadPullRequests(
+    watchedThreads,
   );
   params.signal?.throwIfAborted();
   const threads = await registry.hydrateThreadGitWorkingStates(canonicalThreads, {

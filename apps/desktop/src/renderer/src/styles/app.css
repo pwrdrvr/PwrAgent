@@ -8143,15 +8143,20 @@ a.button {
   color: var(--text-muted);
 }
 
-.pr-chip__detach:hover,
-.pr-chip__detach:focus-visible {
+/* Pointer-only: it takes no focus (see PrChip), so it has no focus ring. */
+.pr-chip__detach:hover {
   background: var(--danger-soft);
   color: var(--danger-text);
 }
 
-.pr-chip__detach:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
+/* A CI watch waits to wake the thread. Muted, and not a target: the dot
+   carries status, the row keeps one accent, and the card explains it. */
+.pr-chip__watch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  margin-left: -2px;
+  color: var(--text-muted);
 }
 
 /* Portal-rendered hover card for a PR chip (rendered by useViewportTooltip).
@@ -8383,6 +8388,11 @@ a.button {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+/* Auto-fix is a standing setting, not a pending wait. */
+.pr-status-card__row-value--muted {
+  color: var(--text-muted);
 }
 
 .pr-detach-warning-modal {
@@ -9687,6 +9697,12 @@ a.button {
 .thread-context-menu button:hover:not(:disabled) .thread-context-menu__aside,
 .thread-context-menu button:focus-visible:not(:disabled) .thread-context-menu__aside {
   color: var(--accent-bright);
+}
+
+/* A run attempt, set in the PR chip's own face. */
+.thread-context-menu__aside--mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 
 /* Checkable items (Pinned, Keep at Top). The labels never change; the box
@@ -26323,7 +26339,8 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
 }
 
 /* The rail tab's count. Sits where the actions tab's activity dot does. */
-.context-rail__activity--todos {
+.context-rail__activity--todos,
+.context-rail__activity--watches {
   display: inline-grid;
   min-width: 14px;
   height: 14px;
@@ -26341,8 +26358,10 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
 }
 
 /* Nothing unread: this thread's open count, outlined so it reads as a
-   tally rather than news. */
-.context-rail__activity--todos.context-rail__activity--quiet {
+   tally rather than news. The Pull requests tab's watch count is always a
+   tally: a watch waiting is not news. */
+.context-rail__activity--todos.context-rail__activity--quiet,
+.context-rail__activity--watches {
   border: 1px solid var(--border-strong);
   background: var(--bg-panel-elevated);
   color: var(--text-secondary);
@@ -32576,6 +32595,13 @@ div.composer-error-row__toggle {
   font-size: 11px;
 }
 
+.transcript-pr-watch__message {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 /* Inside the accent-framed card the toggle must sit ON the card's text
    grid — the bare rows' negative margin (which aligns the chevron with
    the transcript's left edge) would bleed the toggle chrome into the
@@ -38235,6 +38261,170 @@ div.composer-error-row__toggle {
   font-size: 11px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+/* A Pull requests card's "Wakes this thread" list: each watch, Auto-fix, and
+   the hint to ask for a CI watch. Neutral throughout; the PR's status pills
+   above carry the tone. */
+.pr-watch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.pr-watch-list__eyebrow {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pr-watch-list__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.pr-watch-list__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  height: 16px;
+  color: var(--text-muted);
+}
+
+.pr-watch-list__text {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.pr-watch-list__title {
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.pr-watch-list__sub {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+/* Auto-fix is on for the thread but will not wake it for this PR. */
+.pr-watch-list__row--muted .pr-watch-list__title {
+  color: var(--text-secondary);
+}
+
+.pr-watch-list__action,
+.pr-watch-list__hint-action {
+  flex: 0 0 auto;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.pr-watch-list__action:hover:not(:disabled),
+.pr-watch-list__hint-action:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.pr-watch-list__action:focus-visible,
+.pr-watch-list__hint-action:focus-visible,
+.pr-watch-list__history-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.pr-watch-list__action:disabled,
+.pr-watch-list__hint-action:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* Nothing waits for CI: dashed, because it describes an absence. */
+.pr-watch-list__hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 6px 5px 8px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 6px;
+}
+
+.pr-watch-list__hint-text,
+.pr-watch-list__owner {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.pr-watch-list__history-toggle {
+  align-self: flex-start;
+  min-height: 20px;
+  padding: 0 4px;
+  margin-left: -4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.pr-watch-list__history-toggle:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.pr-watch-list__history {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.pr-watch-list__history-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.pr-watch-list__history-text {
+  min-width: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.pr-watch-list__history-time {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .rail-card__message,

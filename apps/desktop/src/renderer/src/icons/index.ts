@@ -26,6 +26,7 @@ export { DiscordIcon } from "./DiscordIcon";
 export { DraftIcon } from "./DraftIcon";
 export { EditorIcon } from "./EditorIcon";
 export { EditsIcon } from "./EditsIcon";
+export { EyeIcon } from "./EyeIcon";
 export { FeishuIcon } from "./FeishuIcon";
 export { FileCodeIcon } from "./FileCodeIcon";
 export { FileIcon } from "./FileIcon";

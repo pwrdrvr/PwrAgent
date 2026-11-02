@@ -18,16 +18,22 @@ import {
   DEFAULT_PROJECT_FORGE_AUTOMATION,
   type BackendSummary,
   type DesktopPwrAgentProfileSummary,
+  type FederationCapability,
   type NavigationDirectorySummary,
   type NavigationThreadSummary,
   type ProjectForgeAutomation,
   type ProjectHeldWakeup,
+  type ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
 import type { FederationThreadTarget } from "../../chrome/federation-thread-targets";
 import type { FederationProjectDirectory } from "../../chrome/useFederationProjectStates";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { ThreadDependencyIndicatorsContext } from "../../thread-dependencies/useThreadDependencyIndicators";
+import {
+  summarizeThreadPrWatches,
+  ThreadPrWatchIndicatorsContext,
+} from "../../pr-watches/useThreadPrWatchIndicators";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import { useState, type ComponentProps } from "react";
 import type { Editor } from "@tiptap/react";
@@ -8704,6 +8710,177 @@ describe("Sidebar", () => {
       "https://github.com/ExampleOrg/ExampleApp/pull/202",
     );
     expect(onSelectThread).not.toHaveBeenCalled();
+  });
+
+  describe("PR watch menu items", () => {
+    const ciWatch: ThreadPullRequestWatchSummary = {
+      watchId: "watch-ci",
+      backend: "codex",
+      threadId: "thread-1",
+      prKey: "github.com/exampleorg/exampleapp#202",
+      prUrl: "https://github.com/ExampleOrg/ExampleApp/pull/202",
+      prNumber: 202,
+      headSha: "9f2c41a0000000000000000000000000000000000",
+      notifyOn: ["success", "failure"],
+      createdAt: 1,
+      failureHandledByAutoFix: false,
+      kind: "checks",
+      baseline: { outcome: "failure", observedAt: 1, runAttempt: 2 },
+    };
+    const terminalWatch: ThreadPullRequestWatchSummary = {
+      ...ciWatch,
+      watchId: "watch-merge",
+      notifyOn: ["merged", "closed"],
+      createdAt: 2,
+      kind: "terminal",
+      baseline: undefined,
+    };
+
+    function renderWithWatches(
+      watches: ThreadPullRequestWatchSummary[],
+      thread: NavigationThreadSummary = pullRequestThread,
+    ) {
+      const stop = vi.fn(async () => undefined);
+      const askAgentToWatchCi = vi.fn();
+      const watchCi = vi.fn(async () => undefined);
+      render(
+        <ThreadPrWatchIndicatorsContext.Provider value={{
+          byThreadKey: summarizeThreadPrWatches(watches),
+          stop,
+          watchCi,
+          askAgentToWatchCi,
+        }}>
+          <Sidebar
+            backends={backends}
+            browseMode="recents"
+            directories={directories}
+            inboxThreads={[thread]}
+            loading={false}
+            creatingThread={undefined}
+            selectedItemKey="codex:thread-1"
+            threads={[thread]}
+            onBrowseModeChange={() => undefined}
+            onCreateThread={async () => undefined}
+            onDetachPullRequest={async () => undefined}
+            onOpenLaunchpad={async () => undefined}
+            onSelectThread={() => undefined}
+          />
+        </ThreadPrWatchIndicatorsContext.Provider>,
+      );
+      const chip = screen.getByRole("button", { name: /^Open ExampleOrg\/ExampleApp#202 / });
+      fireEvent.contextMenu(chip, { clientX: 48, clientY: 64 });
+      return { chip, stop, askAgentToWatchCi, watchCi };
+    }
+
+    it("lists the stops between copying and detaching, and stops the chosen watch", async () => {
+      const { chip, stop } = renderWithWatches([ciWatch, terminalWatch]);
+      expect(chip).toHaveAccessibleName(
+        "Open ExampleOrg/ExampleApp#202 (ready for review · checks passing) in browser, waiting for CI",
+      );
+      expect(chip.querySelector(".pr-chip__watch")).not.toBeNull();
+      const labels = within(screen.getByRole("menu"))
+        .getAllByRole("menuitem")
+        .map(menuItemLabel);
+      const copy = labels.indexOf("Copy Pull Request URL");
+      expect(labels.slice(copy, copy + 4)).toEqual([
+        "Copy Pull Request URL",
+        "Stop Waiting for CIattempt 2",
+        "Stop Watching for Merge",
+        "Detach Pull Request",
+      ]);
+      expect(labels).not.toContain("Ask Agent to Watch CI");
+      expect(labels).not.toContain("Watch CI");
+
+      await clickElement(screen.getByRole("menuitem", { name: /^Stop Waiting for CI/ }));
+      expect(stop).toHaveBeenCalledWith(ciWatch, expect.objectContaining({ id: "thread-1" }));
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+
+    it("offers Watch CI before Ask Agent to Watch CI on the primary workspace's open PR", async () => {
+      const thread = { ...pullRequestThread, primaryGitRepository: "github.com/exampleorg/exampleapp" };
+      const { watchCi, askAgentToWatchCi } = renderWithWatches([terminalWatch], thread);
+      const labels = within(screen.getByRole("menu"))
+        .getAllByRole("menuitem")
+        .map(menuItemLabel);
+      const watch = labels.indexOf("Watch CI");
+      expect(labels.slice(watch, watch + 2)).toEqual(["Watch CI", "Ask Agent to Watch CI"]);
+      await clickElement(screen.getByRole("menuitem", { name: "Watch CI" }));
+      expect(watchCi).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "thread-1" }),
+        expect.objectContaining({ number: 202 }),
+      );
+      expect(askAgentToWatchCi).not.toHaveBeenCalled();
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+
+    it("offers Ask Agent to Watch CI on an open PR with no CI watch", async () => {
+      const { askAgentToWatchCi } = renderWithWatches([terminalWatch]);
+      expect(screen.queryByRole("menuitem", { name: /^Stop Waiting for CI/ })).toBeNull();
+      // Not on the thread's primary repository: main would not watch it.
+      expect(screen.queryByRole("menuitem", { name: "Watch CI" })).toBeNull();
+      await clickElement(screen.getByRole("menuitem", { name: "Ask Agent to Watch CI" }));
+      expect(askAgentToWatchCi).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "thread-1" }),
+        expect.objectContaining({ number: 202 }),
+      );
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+
+    it("shows no watch items for an older peer's thread", () => {
+      renderWithWatches([ciWatch], {
+        ...pullRequestThread,
+        federation: {
+          ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "thread-1" },
+          instanceLabel: "Laptop",
+          peerStatus: "connected",
+          capabilities: [],
+        },
+      } as NavigationThreadSummary);
+      const labels = within(screen.getByRole("menu")).getAllByRole("menuitem").map(menuItemLabel);
+      expect(labels).toContain("Copy Pull Request URL");
+      expect(labels.filter((label) => /Watch|Waiting/.test(label))).toEqual([]);
+    });
+
+    const peerThread = (capabilities: FederationCapability[]): NavigationThreadSummary => ({
+      ...pullRequestThread,
+      primaryGitRepository: "github.com/exampleorg/exampleapp",
+      // The owner's marks, not this instance's list, draw a peer row's eye.
+      prCiWatches: [{
+        prKey: ciWatch.prKey, watchId: "peer-ci", notifyOn: ["success", "failure"], createdAt: 1, runAttempt: 3,
+      }],
+      federation: {
+        ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "thread-1" },
+        instanceLabel: "Laptop",
+        peerStatus: "connected",
+        capabilities,
+      },
+    });
+
+    it("draws a peer row's eye from its owner's marks and stops the watch there", async () => {
+      const thread = peerThread(["thread_navigation", "turn_control", "thread_pr_watch_control_v1"]);
+      // A local watch with the same thread id must not reach the peer's row.
+      const { chip, stop } = renderWithWatches([terminalWatch], thread);
+      expect(chip).toHaveAccessibleName(
+        "Open ExampleOrg/ExampleApp#202 (ready for review · checks passing) in browser, waiting for CI",
+      );
+      expect(chip.querySelector(".pr-chip__watch")).not.toBeNull();
+      const labels = within(screen.getByRole("menu")).getAllByRole("menuitem").map(menuItemLabel);
+      expect(labels).toContain("Stop Waiting for CIattempt 3");
+      expect(labels).not.toContain("Stop Watching for Merge");
+      expect(labels).not.toContain("Watch CI");
+      await clickElement(screen.getByRole("menuitem", { name: /^Stop Waiting for CI/ }));
+      expect(stop).toHaveBeenCalledWith(
+        { backend: "codex", threadId: "thread-1", watchId: "peer-ci" },
+        expect.objectContaining({ federation: thread.federation }),
+      );
+    });
+
+    it("draws the eye but offers no stop when the peer grants no turn control", () => {
+      const { chip } = renderWithWatches([], peerThread(["thread_navigation", "thread_pr_watch_control_v1"]));
+      expect(chip.querySelector(".pr-chip__watch")).not.toBeNull();
+      const labels = within(screen.getByRole("menu")).getAllByRole("menuitem").map(menuItemLabel);
+      expect(labels.filter((label) => /Watch|Waiting/.test(label))).toEqual([]);
+    });
   });
 
   it("shows compact runtime identity chips that copy full values", async () => {

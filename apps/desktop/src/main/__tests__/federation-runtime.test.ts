@@ -2334,16 +2334,26 @@ describe("DesktopFederationRuntime", () => {
       },
     });
     expect(JSON.stringify(ownerFrames.at(-1))).not.toContain("private-entry");
+    // A watch change tells viewers to re-read that row's CI watch marks.
+    owner.forwardLocalBackendEvent({ backend: "codex", notification: {
+      method: "thread/prWatches/updated", params: { backend: "codex", threadId: "A", prKey: "github.com/a/b#1" },
+    } } as AgentEvent);
+    expect(ownerFrames).toHaveLength(beforeLarge + 3);
+    expect(published.at(-1)?.notification).toEqual({
+      method: "navigation/invalidated", params: {
+        sourceMethod: "thread/prWatches/updated", threadId: "A", automationId: undefined, runId: undefined,
+      },
+    });
     owner.forwardLocalBackendEvent({ backend: "codex", notification: {
       method: "turn/completed", params: { threadId: "B", turnId: "completed-turn", turn: { id: "completed-turn", status: "completed", output: [{ type: "text", text: hugeOutput }] } },
     } } as AgentEvent);
-    expect(ownerFrames).toHaveLength(beforeLarge + 4);
+    expect(ownerFrames).toHaveLength(beforeLarge + 5);
     expect(published.at(-1)?.notification).toMatchObject({
       method: "turn/completed", params: { threadId: "B", turnId: "completed-turn", turn: { id: "completed-turn", status: "completed", output: [{ type: "text", text: hugeOutput }] } },
     });
     viewer.setEventSubscriptions("chat", []);
     emit("item/agentMessage/delta", "B");
-    expect(ownerFrames).toHaveLength(beforeLarge + 4);
+    expect(ownerFrames).toHaveLength(beforeLarge + 5);
   });
 
   it("fails closed for missing or malformed per-class selectors", () => {
@@ -4735,6 +4745,10 @@ describe("advertised capabilities", () => {
 
   it("advertises turn reply reads, which messaging gateways need before they skip the page", () => {
     expect(DEFAULT_CAPABILITIES).toContain("turn_assistant_reply");
+  });
+
+  it("advertises PR watch control, which viewers need before they offer Stop or Watch CI", () => {
+    expect(DEFAULT_CAPABILITIES).toContain("thread_pr_watch_control_v1");
   });
 });
 

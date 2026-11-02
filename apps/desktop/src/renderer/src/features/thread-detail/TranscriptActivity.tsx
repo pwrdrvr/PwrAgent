@@ -12,8 +12,10 @@ import type { ThreadLinkSource } from "../../lib/thread-links";
 import { formatActivityText } from "./activity-path-display";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import {
+  describePullRequestWatchTool,
   isThreadReferenceToolDetail,
   TranscriptCommandOutput,
+  TranscriptPullRequestWatchActivity,
   TranscriptThreadToolActivity,
 } from "./TranscriptCommandOutput";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
@@ -57,6 +59,27 @@ export const TranscriptActivity = memo(function TranscriptActivity(props: Transc
     entry.tone === "warning"
       ? "transcript-activity transcript-activity--warning"
       : "transcript-activity";
+
+  const prWatch = directDetail && !entry.detailsRef
+    ? describePullRequestWatchTool(directDetail)
+    : undefined;
+  if (directDetail && prWatch) {
+    return (
+      <TranscriptPullRequestWatchActivity
+        createdAt={entry.createdAt}
+        detail={directDetail}
+        expanded={isExpanded}
+        presentation={prWatch}
+        onExpandedChange={(expanded) => {
+          if (props.expanded !== undefined) {
+            props.onExpandedChange?.(entry.id, expanded);
+            return;
+          }
+          setUncontrolledExpanded(expanded);
+        }}
+      />
+    );
+  }
 
   if (directDetail && !entry.detailsRef && isThreadReferenceToolDetail(directDetail)) {
     return (

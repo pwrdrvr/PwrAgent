@@ -67,6 +67,7 @@ import { ThreadInfoPanel } from "./context-panels/ThreadInfoPanel";
 import { ProviderStatusPanel } from "./context-panels/ProviderStatusPanel";
 import { SubAgentsPanel } from "./context-panels/SubAgentsPanel";
 import { PullRequestsPanel } from "./context-panels/PullRequestsPanel";
+import { useThreadPrWatches } from "../pr-watches/useThreadPrWatchIndicators";
 import { LinkedProjectsPanel } from "./context-panels/LinkedProjectsPanel";
 import { EditsPanel } from "./context-panels/EditsPanel";
 import { PricingPanel } from "./context-panels/PricingPanel";
@@ -149,6 +150,8 @@ type ThreadContextPanelProps = {
   initialLoadDurationMs?: number;
   onOpenAutomations?: () => void;
   onRefreshNavigation?: () => Promise<void>;
+  /** Backs Turn Off on the Pull requests tab's Auto-fix row. */
+  onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
   onResizingChange?: (resizing: boolean) => void;
   onWidthChange?: (width: number) => void;
   /**
@@ -244,6 +247,14 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     [props.editedFileGroups],
   );
   const actionRuns = useMemo(() => props.actionRuns ?? [], [props.actionRuns]);
+  // The Pull requests tab counts what wakes this thread: this instance's own
+  // list for a local thread, the owner's projection for a peer's.
+  const localPrWatches = useThreadPrWatches(props.thread);
+  const prWatchCount = props.thread
+    ? props.thread.federation || readRendererFederationTarget()
+      ? props.thread.activePrWatches?.length ?? 0
+      : localPrWatches?.watches.length ?? 0
+    : 0;
   const toolCallsFederationTarget = props.thread?.federation?.ref.target
     ?? readRendererFederationTarget();
   const toolCallsInstanceId = toolCallsFederationTarget?.scope === "remote"
@@ -736,9 +747,12 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     const todoBadge = tab.id === "todos" && props.todos
       ? readTodoTabBadge(props.todos.view, props.todos.threadKey)
       : undefined;
+    const watchCount = tab.id === "prs" ? prWatchCount : 0;
     const label = commandCount
       ? `${tab.label} · ${commandCount} agent command${commandCount === 1 ? "" : "s"} running`
-      : todoBadge?.unread
+      : watchCount
+        ? `${tab.label} · ${watchCount} watch${watchCount === 1 ? "" : "es"} waking this thread`
+        : todoBadge?.unread
         ? `${tab.label} · ${todoBadge.count} unread`
         : todoBadge
           ? `${tab.label} · ${todoBadge.count} open for this thread`
@@ -771,6 +785,14 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             aria-hidden="true"
           >
             {todoBadge.count > 9 ? "9+" : todoBadge.count}
+          </span>
+        ) : null}
+        {watchCount > 0 ? (
+          <span
+            className="context-rail__activity context-rail__activity--watches"
+            aria-hidden="true"
+          >
+            {watchCount > 9 ? "9+" : watchCount}
           </span>
         ) : null}
       </button>
@@ -977,6 +999,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           <PullRequestsPanel
             desktopApi={props.desktopApi}
             onRefreshNavigation={props.onRefreshNavigation}
+            onSetThreadPrAutoDispatch={props.onSetThreadPrAutoDispatch}
             thread={props.thread}
           />
         );

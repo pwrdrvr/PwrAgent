@@ -42,6 +42,13 @@ function open(): HTMLElement {
   return screen.getByRole("dialog", { name: "Detach pull request?" });
 }
 
+describe("DetachPullRequestWarning", () => {
+  it("says detaching also stops the PR's watches", () => {
+    const dialog = open();
+    expect(dialog).toHaveTextContent("Detaching also stops watching this pull request.");
+  });
+});
+
 describe("DetachPullRequestWarning, keyboard", () => {
   it("opens with focus on Cancel, the action that changes nothing", () => {
     open();

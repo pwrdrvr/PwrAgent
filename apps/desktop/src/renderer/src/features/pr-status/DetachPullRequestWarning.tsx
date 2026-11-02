@@ -66,6 +66,7 @@ export function DetachPullRequestWarning(props: DetachPullRequestWarningProps) {
           This removes {prLabel} from this thread's PR list. It does not close,
           archive, or modify the pull request on its provider.
         </p>
+        <p>Detaching also stops watching this pull request.</p>
         <label className="composer__checkbox pr-detach-warning-dialog__checkbox">
           <input
             checked={dontShowAgain}

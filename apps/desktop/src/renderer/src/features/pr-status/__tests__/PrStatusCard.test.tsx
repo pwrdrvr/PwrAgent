@@ -44,6 +44,56 @@ function text(container: HTMLElement, selector: string): string | undefined {
 }
 
 describe("PrStatusCard", () => {
+  it("lists what wakes the thread: the CI attempt, merge or close, and Auto-fix", () => {
+    const { container } = render(
+      <div className="pr-status-card">
+        <PrStatusCard
+          pr={basePr()}
+          now={NOW}
+          watch={{
+            ci: { runAttempt: 2, createdAt: NOW, notifyOn: ["success", "failure"] },
+            terminal: { createdAt: NOW },
+            autoFix: true,
+          }}
+          watchStopHint
+        />
+      </div>,
+    );
+    const section = [...container.querySelectorAll(".pr-status-card__section")]
+      .find((element) => element.textContent?.startsWith("Wakes this thread")) as HTMLElement;
+    const rows = [...section.querySelectorAll(".pr-status-card__row")].map((row) => [
+      row.querySelector(".pr-status-card__row-label")?.textContent,
+      row.querySelector(".pr-status-card__row-value")?.textContent,
+    ]);
+    expect(rows).toEqual([
+      ["Waiting for CI", "attempt 2"],
+      ["Merge or close", "watching"],
+      ["Auto-fix", "on"],
+    ]);
+    expect(section.querySelector(".pr-status-card__row-value--muted")?.textContent).toBe("on");
+    expect(section.textContent).toContain("Right-click the chip to stop a watch.");
+  });
+
+  it("names the outcomes a CI watch waits for when no attempt is known", () => {
+    const { container } = render(
+      <div className="pr-status-card">
+        <PrStatusCard
+          pr={basePr()}
+          now={NOW}
+          watch={{ ci: { createdAt: NOW, notifyOn: ["success", "failure"] }, autoFix: true }}
+        />
+      </div>,
+    );
+    expect(container.textContent).toContain("Waiting for CIpass or fail");
+    // Without a menu that can stop it, the card does not promise one.
+    expect(container.textContent).not.toContain("Right-click");
+  });
+
+  it("draws no watch section without a watch", () => {
+    const container = renderCard(basePr());
+    expect(container.textContent).not.toContain("Wakes this thread");
+  });
+
   it("renders the full card when every field is present", () => {
     const container = renderCard(basePr({
       additions: 412,

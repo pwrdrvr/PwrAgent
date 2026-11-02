@@ -11,6 +11,7 @@ import { buildPullRequestStatusKey } from "@pwragent/shared";
 import type {
   OverlayStoreLike,
   PrStatusWatchClaim,
+  PrStatusWatchThreadRef,
 } from "../state/overlay-store-sqlite.js";
 import {
   fallbackTerminalDetails,
@@ -28,7 +29,7 @@ type PrStatusWatchStore = Pick<
   | "finishThreadPrStatusWatch"
   | "releaseThreadPrStatusWatch"
   | "renewThreadPrStatusWatchLease"
-  | "supersedeThreadPrStatusWatches"
+  | "advanceThreadPrStatusWatches"
   | "claimThreadPrTerminalWatches"
   | "finishThreadPrTerminalWatch"
 >;
@@ -74,6 +75,11 @@ export class PrStatusWatchCoordinator {
         watch: ThreadPullRequestWatchSummary;
         pr: PrSummary;
       }) => Promise<string[]>;
+      /**
+       * A thread's watches changed: one woke it, gave up, moved to a new
+       * head, or lost its baseline. A throw is ignored.
+       */
+      onWatchesChanged?: (threads: PrStatusWatchThreadRef[]) => void | Promise<void>;
       now?: () => number;
     },
   ) {}
@@ -92,17 +98,23 @@ export class PrStatusWatchCoordinator {
     if (!headSha) return dispatched;
 
     const prKey = buildPullRequestStatusKey(pr);
-    await this.options.store.supersedeThreadPrStatusWatches({
+    const outcome = getPrStatusWatchOutcome(pr);
+    const advanced = await this.options.store.advanceThreadPrStatusWatches({
       prKey,
       headSha,
+      checksRunning: outcome === undefined,
       now: observedAt,
     });
-
-    const outcome = getPrStatusWatchOutcome(pr);
+    await this.notifyWatchesChanged(advanced.threads);
     if (!outcome) return dispatched;
 
     const now = this.now();
-    const claims = await this.options.store.claimThreadPrStatusWatches({
+    const failedCheckUrl = outcome === "failure" ? pr.failedCheckUrl : undefined;
+    // Auto-fix handles a covered thread's failure, so the claim never hands
+    // it a covered watch. That watch keeps waiting when it also asked for
+    // success, so a later pass still wakes it; a failure-only one ends.
+    const skipThreadKeys = outcome === "failure" ? failureCoveredThreadKeys : undefined;
+    const { claims, threads: settled } = await this.options.store.claimThreadPrStatusWatches({
       prKey,
       headSha,
       outcome,
@@ -111,7 +123,10 @@ export class PrStatusWatchCoordinator {
       leaseExpiresAt: now + PR_STATUS_WATCH_LEASE_MS,
       maxAttempts: PR_STATUS_WATCH_MAX_DISPATCH_ATTEMPTS,
       skipThreadsWithTerminalWatch: terminal,
+      ...(failedCheckUrl ? { failedCheckUrl } : {}),
+      ...(skipThreadKeys?.size ? { skipThreadKeys } : {}),
     });
+    await this.notifyWatchesChanged(settled);
     for (const claim of claims) {
       await this.dispatchClaim(
         claim,
@@ -252,13 +267,7 @@ export class PrStatusWatchCoordinator {
     extraLines: string[],
   ): Promise<void> {
     const release = async (spendAttempt: boolean) =>
-      await this.options.store.releaseThreadPrStatusWatch({
-        watchId: claim.watch.watchId,
-        ownerId: this.ownerId,
-        now: this.now(),
-        spendAttempt,
-        maxAttempts: PR_STATUS_WATCH_MAX_DISPATCH_ATTEMPTS,
-      });
+      await this.releaseClaim(claim, spendAttempt);
     const outcome = terminalOutcomeOf(pr);
     if (
       !details
@@ -299,8 +308,10 @@ export class PrStatusWatchCoordinator {
       await this.options.store.finishThreadPrTerminalWatch({
         watchId: claim.watch.watchId,
         ownerId: this.ownerId,
+        outcome,
         now: this.now(),
       });
+      await this.notifyWatchesChanged([watchThreadRef(claim.watch)]);
     } catch {
       await release(true);
     }
@@ -317,29 +328,25 @@ export class PrStatusWatchCoordinator {
       this.options.isBackgroundPollingEnabled?.() === false
       || this.options.allowsWatchDispatch?.(claim.watch) === false
     ) {
-      await this.options.store.releaseThreadPrStatusWatch({
-        watchId: claim.watch.watchId,
-        ownerId: this.ownerId,
-        now: this.now(),
-        spendAttempt: false,
-        maxAttempts: PR_STATUS_WATCH_MAX_DISPATCH_ATTEMPTS,
-      });
+      await this.releaseClaim(claim, false);
       return;
     }
-    if (
-      outcome === "failure"
-      && failureCoveredThreadKeys.size > 0
-    ) {
-      await this.options.store.finishThreadPrStatusWatch({
+    const failedCheckUrl = outcome === "failure" ? pr.failedCheckUrl : undefined;
+    const finish = async () => {
+      const threads = await this.options.store.finishThreadPrStatusWatch({
         watchId: claim.watch.watchId,
         ownerId: this.ownerId,
         prKey: claim.watch.prKey,
         headSha: claim.watch.headSha,
         outcome,
         now: this.now(),
+        ...(failedCheckUrl ? { failedCheckUrl } : {}),
+        ...(outcome === "failure" && failureCoveredThreadKeys.size > 0
+          ? { skipThreadKeys: failureCoveredThreadKeys }
+          : {}),
       });
-      return;
-    }
+      await this.notifyWatchesChanged(threads);
+    };
     const stopHeartbeat = this.startLeaseHeartbeat(claim.watch.watchId);
     try {
       const submission = await this.options.registry.submitTurnIfIdle({
@@ -370,33 +377,41 @@ export class PrStatusWatchCoordinator {
         },
       });
       if (submission.status === "busy") {
-        await this.options.store.releaseThreadPrStatusWatch({
-          watchId: claim.watch.watchId,
-          ownerId: this.ownerId,
-          now: this.now(),
-          spendAttempt: false,
-          maxAttempts: PR_STATUS_WATCH_MAX_DISPATCH_ATTEMPTS,
-        });
+        await this.releaseClaim(claim, false);
         return;
       }
-      await this.options.store.finishThreadPrStatusWatch({
-        watchId: claim.watch.watchId,
-        ownerId: this.ownerId,
-        prKey: claim.watch.prKey,
-        headSha: claim.watch.headSha,
-        outcome,
-        now: this.now(),
-      });
+      await finish();
     } catch {
-      await this.options.store.releaseThreadPrStatusWatch({
-        watchId: claim.watch.watchId,
-        ownerId: this.ownerId,
-        now: this.now(),
-        spendAttempt: true,
-        maxAttempts: PR_STATUS_WATCH_MAX_DISPATCH_ATTEMPTS,
-      });
+      await this.releaseClaim(claim, true);
     } finally {
       stopHeartbeat();
+    }
+  }
+
+  private async releaseClaim(
+    claim: PrStatusWatchClaim,
+    spendAttempt: boolean,
+  ): Promise<void> {
+    const status = await this.options.store.releaseThreadPrStatusWatch({
+      watchId: claim.watch.watchId,
+      ownerId: this.ownerId,
+      now: this.now(),
+      spendAttempt,
+      maxAttempts: PR_STATUS_WATCH_MAX_DISPATCH_ATTEMPTS,
+    });
+    if (status === "failed") {
+      await this.notifyWatchesChanged([watchThreadRef(claim.watch)]);
+    }
+  }
+
+  private async notifyWatchesChanged(
+    threads: PrStatusWatchThreadRef[],
+  ): Promise<void> {
+    if (threads.length === 0 || !this.options.onWatchesChanged) return;
+    try {
+      await this.options.onWatchesChanged(threads);
+    } catch {
+      // Indicators re-read on the next change; a missed refresh is harmless.
     }
   }
 
@@ -417,6 +432,16 @@ export class PrStatusWatchCoordinator {
   private now(): number {
     return this.options.now?.() ?? Date.now();
   }
+}
+
+function watchThreadRef(
+  watch: ThreadPullRequestWatchSummary,
+): PrStatusWatchThreadRef {
+  return {
+    backend: watch.backend,
+    threadId: watch.threadId,
+    prKey: watch.prKey,
+  };
 }
 
 export function getPrStatusWatchOutcome(

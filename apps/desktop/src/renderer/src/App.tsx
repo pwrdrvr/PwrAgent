@@ -81,6 +81,12 @@ import {
   useThreadDependencyIndicators,
 } from "./features/thread-dependencies/useThreadDependencyIndicators";
 import {
+  buildWatchCiRequestText,
+  ThreadPrWatchIndicatorsContext,
+  useThreadPrWatchIndicators,
+  type PrWatchStopTarget,
+} from "./features/pr-watches/useThreadPrWatchIndicators";
+import {
   ThreadProvidersContext,
   useStableThreadProviders,
 } from "./features/navigation/provider-chip-visibility";
@@ -124,6 +130,7 @@ import {
 import { ThreadPlaceholderHeader } from "./features/thread-detail/ThreadPlaceholderHeader";
 import { handoffLaunchpadComposer } from "./features/composer/launchpad-composer-handoff";
 import { hasComposerDraftContent } from "./features/composer/useComposerDraftStore";
+import { usePendingComposerInsert } from "./features/composer/usePendingComposerInsert";
 import { useRecoverableState, useRecoverableComposerDraftStore } from "./lib/RendererRecoveryState";
 import { readBootstrapLayoutPreferences } from "./lib/layout-preferences";
 import { useAppearance, type AppearanceController } from "./lib/useAppearance";
@@ -3268,6 +3275,118 @@ function DesktopAppShell(props: {
     }),
     [threadDependencyIndicators, canContinueAfter],
   );
+  // PR watches that wake threads. A federation window lists none of this
+  // instance's. A peer's thread is stopped and armed on its owner, where
+  // `canManageThreadPrWatches` says the owner accepts it.
+  const threadPrWatchIndicators = useThreadPrWatchIndicators(desktopApi);
+  const canManagePrWatches = Boolean(desktopApi?.manageThreadPrWatches);
+  const canAskAgentToWatchCi = canManagePrWatches && !readRendererFederationTarget();
+  const stopPrWatch = useEventCallback(async (
+    watch: PrWatchStopTarget,
+    thread?: Pick<NavigationThreadSummary, "federation">,
+  ) => {
+    const failed = (message: string) => showAppNotice({
+      id: `pr-watch-stop:${watch.watchId}`,
+      title: "The watch is still running",
+      message,
+    });
+    try {
+      const federationTarget = thread?.federation?.ref.target;
+      const response = await desktopApi?.manageThreadPrWatches?.({
+        action: "cancel",
+        backend: watch.backend,
+        threadId: watch.threadId,
+        ...(federationTarget ? { federationTarget } : {}),
+        watchId: watch.watchId,
+      });
+      // The list refreshes from `thread/prWatches/updated`.
+      if (response && !response.ok) {
+        // The watch ended, or is waking its thread, before the click landed.
+        if (response.error.code === "not_found") {
+          showAppNotice({
+            id: `pr-watch-stop:${watch.watchId}`,
+            title: "The watch already ended",
+            message: response.error.message,
+          });
+        } else {
+          failed(response.error.message);
+        }
+      }
+    } catch (error) {
+      failed(error instanceof Error ? error.message : String(error));
+    }
+  });
+  // Watch CI arms the watch in main, as the agent tool would. The list
+  // refreshes from `thread/prWatches/updated`; only a wait that did not
+  // start is worth a notice.
+  const watchPrCi = useEventCallback(async (thread: NavigationThreadSummary, pr: PrSummary) => {
+    const id = `pr-watch-ci:${threadSummaryIdentityKey(thread)}:${pr.url}`;
+    try {
+      const federationTarget = thread.federation?.ref.target;
+      const response = await desktopApi?.manageThreadPrWatches?.({
+        action: "watch",
+        backend: thread.source,
+        threadId: thread.id,
+        ...(federationTarget ? { federationTarget } : {}),
+        prUrl: pr.url,
+      });
+      if (!response) return;
+      if (!response.ok) {
+        showAppNotice({ id, title: "Couldn't watch CI", message: response.error.message });
+      } else if (response.watch && !response.watch.armed) {
+        showAppNotice({ id, title: "Not waiting for CI", message: response.watch.message });
+      }
+    } catch (error) {
+      showAppNotice({
+        id,
+        title: "Couldn't watch CI",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+  // "Ask Agent to Watch CI" drafts into the thread's composer and never
+  // sends. It first shows the thread; the composer takes the request once
+  // it shows that thread. Showing anything else drops it, so it never lands
+  // in a draft the operator comes back to later.
+  const {
+    request: composerInsertRequest,
+    issue: issueComposerInsertRequest,
+    handled: handleComposerInsertRequestHandled,
+  } = usePendingComposerInsert(mainView === "thread" ? navigation.selectedItemKey : undefined);
+  const askAgentToWatchCi = useEventCallback((thread: NavigationThreadSummary, pr: PrSummary) => {
+    const threadKey = threadSummaryIdentityKey(thread);
+    // Issued with the switch, not before it: Settings may ask to keep
+    // editing, and then nothing waits.
+    setMainView("thread", () => {
+      issueComposerInsertRequest(threadKey, buildWatchCiRequestText(pr));
+      if (navigation.selectedItemKey !== threadKey) {
+        selectThreadNavigation(thread);
+      }
+    });
+  });
+  // Auto-fix rows claim a wake only where main can dispatch one. Until the
+  // settings load, or in a federation window, this is unknown.
+  const prAutoFixAvailable = settings.snapshot && !readRendererFederationTarget()
+    ? (settings.snapshot.git?.backgroundPrPolling?.value ?? DEFAULT_BACKGROUND_PR_POLLING)
+      && (settings.snapshot.git?.prAutoDispatchAllowed?.value ?? DEFAULT_PR_AUTO_DISPATCH_ALLOWED)
+    : undefined;
+  const threadPrWatchContext = useMemo(
+    () => ({
+      byThreadKey: threadPrWatchIndicators,
+      ...(prAutoFixAvailable !== undefined ? { autoFixAvailable: prAutoFixAvailable } : {}),
+      ...(canManagePrWatches ? { stop: stopPrWatch, watchCi: watchPrCi } : {}),
+      ...(canAskAgentToWatchCi ? { askAgentToWatchCi } : {}),
+    }),
+    [
+      threadPrWatchIndicators,
+      prAutoFixAvailable,
+      canManagePrWatches,
+      canAskAgentToWatchCi,
+      stopPrWatch,
+      watchPrCi,
+      askAgentToWatchCi,
+    ],
+  );
   const threadHandoffTargets = useMemo(
     () =>
       desktopApi?.handoffThreadToInstance && !readRendererFederationTarget()
@@ -4064,6 +4183,8 @@ function DesktopAppShell(props: {
     launchpadCancelRequest,
     composerFocusRequest,
     onComposerFocusRequestHandled: handleComposerFocusRequestHandled,
+    composerInsertRequest,
+    onComposerInsertRequestHandled: handleComposerInsertRequestHandled,
     onDetachLaunchpadParent: handleDetachLaunchpadParent,
     onSelectLaunchpadParent: handleSelectLaunchpadParent,
     // The composer's 5th argument is `extraDirectoryPaths` (draft
@@ -4204,6 +4325,7 @@ function DesktopAppShell(props: {
     >
     <OperatorWaitsContext.Provider value={operatorWaitsContext}>
     <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
+    <ThreadPrWatchIndicatorsContext.Provider value={threadPrWatchContext}>
     <ThreadProvidersContext.Provider value={threadProviders}>
     <TranscriptLinkProvider
       localInstanceId={liveFederationHealth?.instanceId}
@@ -4851,6 +4973,7 @@ function DesktopAppShell(props: {
       {todoFullAccessRiskDialog}
     </TranscriptLinkProvider>
     </ThreadProvidersContext.Provider>
+    </ThreadPrWatchIndicatorsContext.Provider>
     </ThreadDependencyIndicatorsContext.Provider>
     </OperatorWaitsContext.Provider>
     </TodoDispatchProvider>

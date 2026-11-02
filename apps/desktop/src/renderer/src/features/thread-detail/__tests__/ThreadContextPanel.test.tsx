@@ -15,11 +15,16 @@ import type {
   AppServerThreadEntry,
   NavigationThreadSummary,
   ThreadPricingSummary,
+  ThreadPullRequestWatchSummary,
   ThreadSubAgentSummary,
   ThreadToolAccounting,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { ThreadContextPanel } from "../ThreadContextPanel";
+import {
+  summarizeThreadPrWatches,
+  ThreadPrWatchIndicatorsContext,
+} from "../../pr-watches/useThreadPrWatchIndicators";
 import type { ContextTabId } from "../context-panels/context-tab";
 import { collectEditedFileGroups } from "../edited-file-groups";
 import {
@@ -288,6 +293,58 @@ describe("ThreadContextPanel", () => {
 
     expect(screen.getByText(REVEALED_SIGNAL)).toBeInTheDocument();
     expect(onActiveTabChange).toHaveBeenCalledWith("info");
+  });
+
+  it("counts the watches that wake this thread on the Pull requests tab", () => {
+    const watch: ThreadPullRequestWatchSummary = {
+      watchId: "watch-ci",
+      backend: "codex",
+      threadId: "thread-1",
+      prKey: "github.com/pwrdrvr/pwragent#3174",
+      prUrl: "https://github.com/pwrdrvr/PwrAgent/pull/3174",
+      prNumber: 3174,
+      headSha: "9f2c41a",
+      notifyOn: ["success", "failure"],
+      createdAt: 1,
+      failureHandledByAutoFix: false,
+      kind: "checks",
+    };
+    const terminal = { ...watch, watchId: "watch-merge", kind: "terminal" as const };
+    render(
+      <ThreadPrWatchIndicatorsContext.Provider value={{ byThreadKey: summarizeThreadPrWatches([watch, terminal]) }}>
+        <ThreadContextPanel
+          activeTab="info"
+          backends={[baseBackend]}
+          pinned={false}
+          thread={baseThread}
+          onActiveTabChange={() => undefined}
+        />
+      </ThreadPrWatchIndicatorsContext.Provider>,
+    );
+    const tab = screen.getByRole("tab", { name: "Pull requests · 2 watches waking this thread" });
+    expect(tab.querySelector(".context-rail__activity--watches")).toHaveTextContent("2");
+    cleanup();
+
+    // A peer's thread counts the owner's projection, not this instance's list.
+    renderPanel({
+      thread: {
+        ...baseThread,
+        activePrWatches: [watch],
+        federation: {
+          ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "thread-1" },
+          instanceLabel: "Laptop",
+          peerStatus: "connected",
+          capabilities: [],
+        },
+      } as NavigationThreadSummary,
+    });
+    expect(screen.getByRole("tab", { name: "Pull requests · 1 watch waking this thread" }))
+      .toBeInTheDocument();
+    cleanup();
+
+    renderPanel();
+    expect(screen.getByRole("tab", { name: "Pull requests" })
+      .querySelector(".context-rail__activity--watches")).toBeNull();
   });
 
   it("wires the tabs to a labelled tabpanel when the rail is open", () => {

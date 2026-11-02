@@ -1,0 +1,86 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "a11y-pr-watches",
+    "threadId": "thread-a11y-pr-watches"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-a11y-pr-watches",
+          "title": "PR watch audit thread",
+          "titleSource": "explicit",
+          "summary": "A thread whose pull requests wake it on CI, merge, and Auto-fix.",
+          "source": "codex",
+          "executionMode": "default",
+          "gitOriginUrl": "https://github.com/pwragent-fixtures/watch-audit.git",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000000000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Wake me when the preview banner fix passes CI."
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "text": "I re-ran the failed job and I am waiting for attempt 2."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Wake me when the preview banner fix passes CI."
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "text": "I re-ran the failed job and I am waiting for attempt 2."
+          }
+        ],
+        "lastUserMessage": "Wake me when the preview banner fix passes CI.",
+        "lastAssistantMessage": "I re-ran the failed job and I am waiting for attempt 2.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}

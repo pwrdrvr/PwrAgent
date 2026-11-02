@@ -115,6 +115,7 @@ import type {
   TaskMonitorResponse,
   ThreadExecutionMode,
   ThreadOverlayState,
+  ThreadPullRequestWatchSummary,
   ThreadSubAgentSummary,
   ThreadToolAccounting,
   ThreadToolInvocationAlert,
@@ -639,6 +640,11 @@ function createOverlayStoreMock(params?: {
   }
 
   return {
+    listAllActivePrStatusWatches: async (): Promise<ThreadPullRequestWatchSummary[]> => [],
+    listActiveThreadPrStatusWatches: async (_params: {
+      backend: string;
+      threadId: string;
+    }): Promise<ThreadPullRequestWatchSummary[]> => [],
     ...mockSubAgentReads((backend, threadId) =>
       overlays.get(`${backend}:${threadId}`)),
     ...mockUsageActivityReads((backend, threadId) =>
@@ -52471,6 +52477,9 @@ script = "printf setup"
             createdAt: 1_000,
             failureHandledByAutoFix: true,
           },
+          armed: true,
+          reason: "armed" as const,
+          message: "Watching PR #1105 at aaaaaaa for the next success.",
         },
       },
     }));
@@ -60402,6 +60411,37 @@ script = "printf setup"
       expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: thread.id }))?.archiveRestoredAt).toEqual(expect.any(Number));
       await registry.sweepInactiveThreads();
       expect(archive).toHaveBeenCalledTimes(1);
+    } finally { await registry.close(); }
+  });
+
+  it("keeps a thread that a PR watch will wake out of the inactive sweep", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "watched-thread", title: "Waiting on CI", titleSource: "explicit", source: "codex",
+      threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
+    };
+    const watch: ThreadPullRequestWatchSummary = {
+      watchId: "watch-1", backend: "codex", threadId: thread.id, prKey: "github.com/pwrdrvr/pwragent#3191",
+      prUrl: "https://github.com/pwrdrvr/PwrAgent/pull/3191", prNumber: 3191, headSha: "a".repeat(40),
+      notifyOn: ["success", "failure"], createdAt: 1, failureHandledByAutoFix: false, kind: "checks",
+    };
+    const client = Object.assign(new MockBackendClient({ threads: [thread] }), {
+      readThreadSummary: vi.fn(async () => thread),
+    });
+    const overlayStore = Object.assign(createOverlayStoreMock(), {
+      listAllActivePrStatusWatches: vi.fn(async () => [watch]),
+      listActiveThreadPrStatusWatches: vi.fn(async () => [watch]),
+    });
+    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }), codexClient: client, overlayStore });
+    const archive = vi.spyOn(client, "archiveThread");
+    try {
+      await registry.sweepInactiveThreads();
+      expect(overlayStore.listAllActivePrStatusWatches).toHaveBeenCalled();
+      expect(archive).not.toHaveBeenCalled();
+      // Once the watch ends, the same thread is swept.
+      overlayStore.listAllActivePrStatusWatches.mockResolvedValue([]);
+      overlayStore.listActiveThreadPrStatusWatches.mockResolvedValue([]);
+      await registry.sweepInactiveThreads();
+      expect(archive).toHaveBeenCalledExactlyOnceWith({ threadId: thread.id });
     } finally { await registry.close(); }
   });
 
