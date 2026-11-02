@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { appCss as css } from "./css-rule-body";
-import { appStyleRules, hasMotionQuery } from "./css-style-rules";
+import { appStyleRules as rules, hasMotionQuery } from "./css-style-rules";
 
 /**
  * The renderer's `prefers-reduced-motion` contract.
@@ -27,7 +27,6 @@ import { appStyleRules, hasMotionQuery } from "./css-style-rules";
  * in `app.css` and are not worth a blanket gate.
  */
 const testDir = path.dirname(fileURLToPath(import.meta.url));
-const rules = appStyleRules;
 
 /**
  * Selectors whose ANIMATION is settled by name inside a `reduce` query.
@@ -72,7 +71,7 @@ const MOTION_EXEMPTIONS: Record<string, string> = {
   // .pending-spinner` — ARE stopped, which is why the bare selector cannot
   // inherit that rule's coverage.
   ".pending-spinner":
-    "standalone busy ring with no text companion; the reduce rules cover the paired `.settings-pending .pending-spinner` and `.composer__send-split-pill .pending-spinner` instead",
+    "standalone busy ring with no text companion; the reduce rules cover the paired rings, such as `.settings-pending .pending-spinner`, by their context instead",
 };
 
 describe("app.css reduced-motion contract", () => {

@@ -83,8 +83,8 @@ export function parseStyleRules(source: string): StyleRule[] {
   return rules;
 }
 
-// Hoisted: `hasMotionQuery` runs once per rule while the reduce selectors are
-// built, and recompiling a constant pattern thousands of times buys nothing.
+// Hoisted: callers run `hasMotionQuery` once per rule across the whole sheet,
+// and recompiling a constant pattern thousands of times buys nothing.
 const MOTION_QUERY_PATTERNS = {
   "no-preference": /prefers-reduced-motion:\s*no-preference\b/,
   "reduce": /prefers-reduced-motion:\s*reduce\b/,
