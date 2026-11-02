@@ -90,11 +90,12 @@ export class PrStatusWatchCoordinator {
     failureCoveredThreadKeys: ReadonlySet<string> = new Set(),
   ): Promise<number> {
     if (this.options.isBackgroundPollingEnabled?.() === false) return 0;
-    await this.options.prepareClaims?.();
     const terminal = terminalOutcomeOf(pr) !== undefined;
+    // The terminal branch prepares claims itself.
     const dispatched = terminal
       ? await this.handleTerminalSnapshot(pr, observedAt)
       : 0;
+    if (!terminal) await this.options.prepareClaims?.();
     const headSha = pr.headSha?.trim();
     if (!headSha) return dispatched;
 

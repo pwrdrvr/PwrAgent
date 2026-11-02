@@ -1591,6 +1591,8 @@ class DesktopAppServerService {
   private prRepositoryAliasGeneration = 0;
   private prWatchKeysGeneration = 0;
   private prWatchKeySync: Promise<void> = Promise.resolve();
+  /** One terminal-watch retry covers every rename learned in the same tick. */
+  private prRenameRetryQueued = false;
   /**
    * By-URL resolves asked for stored references, by URL. An answer is kept
    * for the session; a failure is asked again after `PR_REFERENCE_RETRY_MS`.
@@ -6030,12 +6032,19 @@ class DesktopAppServerService {
       this.setThreadPrAttachment(threadKey, attachment);
     }
     // The poller no longer fetches a merged or closed PR, so a merge watch
-    // saved under the old name needs its cached status offered again.
-    void this.retryPendingPrTerminalWatches().catch((error) => {
-      appServerLog.warn("pr terminal watch retry after a repository rename failed", {
-        error: error instanceof Error ? error.message : String(error),
+    // saved under the old name needs its cached status offered again. A poll
+    // can learn several renames at once; one retry scan covers them all.
+    if (!this.prRenameRetryQueued) {
+      this.prRenameRetryQueued = true;
+      queueMicrotask(() => {
+        this.prRenameRetryQueued = false;
+        void this.retryPendingPrTerminalWatches().catch((error) => {
+          appServerLog.warn("pr terminal watch retry after a repository rename failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
       });
-    });
+    }
     const requested = parsePullRequestReferenceUrl(requestedUrl);
     appServerLog.info("forge answered a pull request under another repository name", {
       requested: requested ? `${requested.provider}/${requested.org}/${requested.repo}` : requestedUrl,
@@ -6141,11 +6150,18 @@ class DesktopAppServerService {
     if (watches.length === 0) return;
     await this.loadPrStatusRegistry();
     const asked = new Set<string>();
+    // A thread usually holds a CI watch and a merge watch for the same PR.
+    const rowsByThread = new Map<string, PrSummary[]>();
     for (const watch of watches) {
       if (asked.has(watch.prUrl)) continue;
       const prKey = this.prRepositoryAliases.canonicalizeKey(watch.prKey);
-      const overlay = await store.getThreadOverlayState({ backend: watch.backend, threadId: watch.threadId });
-      const rows = this.canonicalizePrs(overlay?.prs ?? []);
+      const threadKey = buildThreadIdentityKey(watch.backend, watch.threadId);
+      let rows = rowsByThread.get(threadKey);
+      if (!rows) {
+        const overlay = await store.getThreadOverlayState({ backend: watch.backend, threadId: watch.threadId });
+        rows = this.canonicalizePrs(overlay?.prs ?? []);
+        rowsByThread.set(threadKey, rows);
+      }
       if (rows.some((pr) => getPrStatusKey(pr) === prKey)) continue;
       const renamed = rows.find((pr) =>
         isSameNumberInAnotherRepository(pr.url, this.prRepositoryAliases.canonicalizeUrl(watch.prUrl))
@@ -9230,6 +9246,7 @@ class DesktopAppServerService {
     this.prRepositoryAliasGeneration = 0;
     this.prWatchKeysGeneration = 0;
     this.prWatchKeySync = Promise.resolve();
+    this.prRenameRetryQueued = false;
     this.prReferenceResolutions.clear();
     this.lastPrObservationTimestamp = 0;
     this.prLookupRegistry.clear();
