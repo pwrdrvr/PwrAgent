@@ -3252,6 +3252,7 @@ describe("DesktopSettingsService", () => {
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
+      calmMotion: false,
     });
 
     // Write non-default values. The byte-preserving patch path should
@@ -3264,6 +3265,7 @@ describe("DesktopSettingsService", () => {
           lightTheme: "catppuccin-latte",
           themedDockIcon: false,
           terminalMinimumContrast: true,
+          calmMotion: true,
           density: "compact",
           sidebarTextSize: "lg",
         },
@@ -3277,6 +3279,7 @@ describe("DesktopSettingsService", () => {
     expect(writtenFile).toContain('light_theme = "catppuccin-latte"');
     expect(writtenFile).toContain("themed_dock_icon = false");
     expect(writtenFile).toContain("terminal_minimum_contrast = true");
+    expect(writtenFile).toContain("calm_motion = true");
     expect(writtenFile).toContain('density = "compact"');
     expect(writtenFile).toContain('sidebar_text_size = "lg"');
 
@@ -3301,6 +3304,10 @@ describe("DesktopSettingsService", () => {
       value: true,
       source: "config",
     });
+    expect(afterWrite.general.appearance.calmMotion).toEqual({
+      value: true,
+      source: "config",
+    });
     expect(afterWrite.general.appearance.density).toEqual({
       value: "compact",
       source: "config",
@@ -3316,6 +3323,7 @@ describe("DesktopSettingsService", () => {
       density: "compact",
       sidebarTextSize: "lg",
       transcriptTextSize: "md",
+      calmMotion: true,
     });
 
     // Restore to defaults: the patch path should DELETE the keys
@@ -3328,6 +3336,7 @@ describe("DesktopSettingsService", () => {
           lightTheme: "tangerine-light",
           themedDockIcon: true,
           terminalMinimumContrast: false,
+          calmMotion: false,
           density: "mission-control",
           sidebarTextSize: "md",
         },
@@ -3340,6 +3349,7 @@ describe("DesktopSettingsService", () => {
     expect(restoredFile).not.toContain("light_theme");
     expect(restoredFile).not.toContain("themed_dock_icon");
     expect(restoredFile).not.toContain("terminal_minimum_contrast");
+    expect(restoredFile).not.toContain("calm_motion");
     expect(restoredFile).not.toContain('density = "');
     expect(restoredFile).not.toContain('sidebar_text_size = "');
 
@@ -3355,6 +3365,10 @@ describe("DesktopSettingsService", () => {
       value: false,
       source: "default",
     });
+    expect(afterRestore.general.appearance.calmMotion).toEqual({
+      value: false,
+      source: "default",
+    });
     expect(afterRestore.general.appearance.density.source).toBe("default");
     expect(afterRestore.general.appearance.sidebarTextSize.source).toBe(
       "default",
@@ -3366,6 +3380,7 @@ describe("DesktopSettingsService", () => {
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
+      calmMotion: false,
     });
   });
 
@@ -3437,6 +3452,7 @@ describe("DesktopSettingsService", () => {
       density: "compact",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
+      calmMotion: false,
     });
 
     // Patch that restores defaults still fires (the renderer needs to
@@ -3460,6 +3476,7 @@ describe("DesktopSettingsService", () => {
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
+      calmMotion: false,
     });
 
     // Patch with `general` but only developerMode (not appearance) must
@@ -3486,6 +3503,7 @@ describe("DesktopSettingsService", () => {
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
+      calmMotion: false,
     });
 
     // A theme-only patch is an appearance change too: every window has to
@@ -3503,6 +3521,25 @@ describe("DesktopSettingsService", () => {
       density: "mission-control",
       sidebarTextSize: "md",
       transcriptTextSize: "md",
+      calmMotion: false,
+    });
+
+    // Calm motion is an appearance axis: every window re-applies
+    // `<html data-motion>`.
+    await service.writeConfigPatchTargeted({
+      general: {
+        appearance: { calmMotion: true },
+      },
+    });
+    expect(onAppearanceChange).toHaveBeenCalledTimes(5);
+    expect(onAppearanceChange).toHaveBeenLastCalledWith({
+      theme: "dark",
+      darkTheme: "tangerine-dark",
+      lightTheme: "blue-light",
+      density: "mission-control",
+      sidebarTextSize: "md",
+      transcriptTextSize: "md",
+      calmMotion: true,
     });
   });
 

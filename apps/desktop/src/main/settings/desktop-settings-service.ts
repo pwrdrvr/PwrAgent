@@ -348,6 +348,7 @@ type DesktopSettingsServiceOptions = {
     density: DesktopAppearanceDensity;
     sidebarTextSize: DesktopTextSize;
     transcriptTextSize: DesktopTextSize;
+    calmMotion: boolean;
   }) => void;
   onManagedCodexRuntimeSwitchComplete?: () => void;
   /**
@@ -1102,6 +1103,10 @@ export class DesktopSettingsService {
           ),
           terminalMinimumContrast: this.resolveConfigBoolean(
             config.general?.appearance?.terminalMinimumContrast,
+            false,
+          ),
+          calmMotion: this.resolveConfigBoolean(
+            config.general?.appearance?.calmMotion,
             false,
           ),
           density: this.resolveAppearanceDensity(
@@ -2394,7 +2399,8 @@ export class DesktopSettingsService {
         || appearancePatch.lightTheme !== undefined
         || appearancePatch.density !== undefined
         || appearancePatch.sidebarTextSize !== undefined
-        || appearancePatch.transcriptTextSize !== undefined)
+        || appearancePatch.transcriptTextSize !== undefined
+        || appearancePatch.calmMotion !== undefined)
     ) {
       const next = update.values.general?.appearance;
       this.options.onAppearanceChange?.({
@@ -2406,6 +2412,7 @@ export class DesktopSettingsService {
           next?.sidebarTextSize ?? DESKTOP_TEXT_SIZE_DEFAULT,
         transcriptTextSize:
           next?.transcriptTextSize ?? DESKTOP_TEXT_SIZE_DEFAULT,
+        calmMotion: next?.calmMotion ?? false,
       });
     }
     // Any successful write notifies generic listeners so main-process services

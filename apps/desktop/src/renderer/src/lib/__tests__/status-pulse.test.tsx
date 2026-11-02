@@ -143,6 +143,33 @@ describe("status pulse", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("dips each dot twice under Calm motion, and again once it starts pulsing anew", () => {
+    document.documentElement.dataset.motion = "calm";
+    try {
+      const [first] = mountDots("status-dot status-dot--blink");
+      act(() => { vi.advanceTimersByTime(PERIOD * 4); });
+      expect(calls.map((call) => call.dot)).toEqual([first, first]);
+
+      // A dot mounted later gets its own two; an offscreen tick spends none.
+      vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue(OFF_SCREEN);
+      const [second] = mountDots("status-dot status-dot--blink");
+      act(() => { vi.advanceTimersByTime(PERIOD); });
+      vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue(ON_SCREEN);
+      act(() => { vi.advanceTimersByTime(PERIOD * 3); });
+      expect(calls.slice(2).map((call) => call.dot)).toEqual([second, second]);
+
+      // The ref runs again when a dot starts pulsing again, which restarts it.
+      pulse.statusPulseRef(first!);
+      act(() => { vi.advanceTimersByTime(PERIOD * 3); });
+      expect(calls.slice(4).map((call) => call.dot)).toEqual([first, first]);
+
+      // The timer keeps running, so a dot that comes into view still gets its two.
+      expect(vi.getTimerCount()).toBe(1);
+    } finally {
+      delete document.documentElement.dataset.motion;
+    }
+  });
+
   it("starts no pulse under reduced motion and cancels one already moving", () => {
     stubReducedMotion(false);
     const cancel = vi.fn();

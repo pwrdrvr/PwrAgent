@@ -397,6 +397,7 @@ export function App() {
           settings.snapshot.general.appearance.sidebarTextSize.value,
         transcriptTextSize:
           settings.snapshot.general.appearance.transcriptTextSize.value,
+        calmMotion: settings.snapshot.general.appearance.calmMotion.value,
       }
       : undefined,
     writeConfig: settings.writeConfig,

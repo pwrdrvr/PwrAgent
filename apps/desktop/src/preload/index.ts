@@ -3358,6 +3358,7 @@ const desktopApi = Object.freeze({
       density: DesktopAppearanceDensity;
       sidebarTextSize: DesktopTextSize;
       transcriptTextSize: DesktopTextSize;
+      calmMotion: boolean;
     }) => void,
   ): (() => void) => {
     const listener = (
@@ -3369,6 +3370,7 @@ const desktopApi = Object.freeze({
         density: DesktopAppearanceDensity;
         sidebarTextSize: DesktopTextSize;
         transcriptTextSize: DesktopTextSize;
+        calmMotion: boolean;
       },
     ) => callback(payload);
     ipcRenderer.on(APPEARANCE_CHANGED_EVENT_CHANNEL, listener);
@@ -3579,6 +3581,7 @@ function readBootstrapAppearance(): {
   density: DesktopAppearanceDensity;
   sidebarTextSize: DesktopTextSize;
   transcriptTextSize: DesktopTextSize;
+  calmMotion: boolean;
 } {
   for (const arg of process.argv) {
     if (!arg.startsWith(APPEARANCE_ARG_PREFIX)) continue;
@@ -3616,6 +3619,7 @@ function readBootstrapAppearance(): {
           && isDesktopTextSize(raw.transcriptTextSize)
           ? raw.transcriptTextSize
           : DESKTOP_TEXT_SIZE_DEFAULT;
+      const calmMotion = raw?.calmMotion === true;
       return {
         theme,
         darkTheme,
@@ -3623,6 +3627,7 @@ function readBootstrapAppearance(): {
         density,
         sidebarTextSize,
         transcriptTextSize,
+        calmMotion,
       };
     } catch {
       break;
@@ -3635,6 +3640,7 @@ function readBootstrapAppearance(): {
     density: "mission-control",
     sidebarTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
     transcriptTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
+    calmMotion: false,
   };
 }
 const bootstrapAppearance = readBootstrapAppearance();
