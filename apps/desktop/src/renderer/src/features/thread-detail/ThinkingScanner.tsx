@@ -1,4 +1,5 @@
 import type { AnimationEvent } from "react";
+import { isCalmMotion } from "../../lib/appearance";
 
 type ThinkingScannerProps = {
   compact?: boolean;
@@ -9,17 +10,10 @@ type ThinkingScannerProps = {
 // ref has already pinned it, while a replacement animation still gets pinned.
 const pinnedAnimations = new WeakMap<Element, Animation>();
 
-/**
- * Calm motion (Settings → General → Appearance) sets `data-motion="calm"` on
- * `<html>`, and `app.css` then runs the sweep twice from when it starts. An
- * animation pinned to the timeline's origin would count as finished long ago,
- * so a calm beam keeps its own start time and sweeps twice from its mount.
- */
-function isCalmMotion(): boolean {
-  return document.documentElement.dataset.motion === "calm";
-}
-
 function pinToSharedEpoch(element: Element): void {
+  // Under Calm motion `app.css` runs the sweep twice from when it starts. An
+  // animation pinned to the timeline's origin would count as finished long
+  // ago, so a calm beam keeps its own start time and sweeps twice from mount.
   if (isCalmMotion() || pinnedAnimations.get(element)?.startTime === 0) {
     return;
   }

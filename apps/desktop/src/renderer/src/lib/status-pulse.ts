@@ -1,3 +1,5 @@
+import { isCalmMotion } from "./appearance";
+
 /**
  * The gentle "still moving" pulse on a status dot: a running background
  * terminal, sub-agent, environment action or automation run, a PR whose
@@ -139,16 +141,18 @@ function runPulse(): void {
   // A hidden window, or an offscreen dot, would tick for frames that are never
   // drawn. The next pulse finds any dot that has come back into view.
   if (document.visibilityState === "visible" && !readReducedMotion()?.matches) {
-    const calm = document.documentElement.dataset.motion === "calm";
+    const calm = isCalmMotion();
     for (const dot of dots) {
-      if (typeof dot.animate !== "function" || !isOnScreen(dot)) {
+      // A calm dot that has had its dips is skipped before it is measured.
+      const count = calm ? calmPulseCounts.get(dot) ?? 0 : 0;
+      if (
+        count >= STATUS_PULSE_CALM_LIMIT
+        || typeof dot.animate !== "function"
+        || !isOnScreen(dot)
+      ) {
         continue;
       }
       if (calm) {
-        const count = calmPulseCounts.get(dot) ?? 0;
-        if (count >= STATUS_PULSE_CALM_LIMIT) {
-          continue;
-        }
         calmPulseCounts.set(dot, count + 1);
       }
       dot.animate(PULSE_KEYFRAMES, {

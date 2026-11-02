@@ -150,6 +150,12 @@ export function applyAppearanceAttributes(
   }
 }
 
+/** Whether `applyAppearanceAttributes` (or the pre-paint bootstrap) has
+ *  turned Calm motion on for this window. */
+export function isCalmMotion(): boolean {
+  return document.documentElement.dataset.motion === "calm";
+}
+
 /**
  * Read the appearance hint that the preload bridged in from main. This
  * mirrors the inline bootstrap script in index.html and is used by the
