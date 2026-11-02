@@ -1779,7 +1779,7 @@ export class McpConnectionGatewayService {
         params.operation, params.invocation, params.signal, discovery.deadlineAt, discovery.id,
         call ? MCP_CONNECTION_TOOL_TIMEOUT_MS : undefined,
         call ? params.elicit : undefined,
-        call && params.onProgress ? params.onProgress : undefined,
+        call ? params.onProgress : undefined,
       ) as McpGatewayTool[] | CallToolResult;
     } finally {
       discovery.close();

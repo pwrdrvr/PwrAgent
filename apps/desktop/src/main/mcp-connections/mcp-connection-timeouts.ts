@@ -18,20 +18,26 @@ export function progressExtendedTimeout(
   maxTotalMs: number = idleMs,
 ): { signal: AbortSignal; extend: () => void; clear: () => void } {
   const controller = new AbortController();
-  const totalDeadlineAt = Date.now() + Math.max(idleMs, maxTotalMs);
+  const startedAt = Date.now();
+  const totalDeadlineAt = startedAt + Math.max(idleMs, maxTotalMs);
+  let extendedAt = startedAt;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const arm = (): void => {
-    clearTimeout(timer);
-    timer = setTimeout(
-      () => controller.abort(new DOMException("The MCP request timed out.", "TimeoutError")),
-      Math.max(1, Math.min(idleMs, totalDeadlineAt - Date.now())),
-    );
+  // `extend` only records the time; the timer re-arms when it fires, so a
+  // server that reports often costs no timer work per report.
+  const fire = (): void => {
+    const dueAt = Math.min(extendedAt + idleMs, totalDeadlineAt);
+    const now = Date.now();
+    if (now >= dueAt) {
+      controller.abort(new DOMException("The MCP request timed out.", "TimeoutError"));
+      return;
+    }
+    timer = setTimeout(fire, dueAt - now);
   };
-  arm();
+  timer = setTimeout(fire, Math.max(1, Math.min(idleMs, totalDeadlineAt - startedAt)));
   return {
     signal: controller.signal,
     extend: () => {
-      if (!controller.signal.aborted) arm();
+      extendedAt = Date.now();
     },
     clear: () => clearTimeout(timer),
   };

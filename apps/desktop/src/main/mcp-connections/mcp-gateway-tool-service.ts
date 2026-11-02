@@ -136,6 +136,8 @@ export class McpGatewayToolService {
 
   async call(args: McpGatewayCallArgs, context: AgentToolCallContext): Promise<{ source: McpGatewaySource; result: CallToolResult }> {
     if (Buffer.byteLength(JSON.stringify(args)) > 16_000) throw new Error("The MCP invocation exceeds the approval size limit. Use native MCP invocation for larger arguments.");
+    // The call's own cap starts after approval, which can take up to one
+    // idle timeout, so the outer cap allows for it.
     return await this.run(context, MCP_CONNECTION_TOOL_TIMEOUT_MS, async (signal, _deadlineAt, extend) => {
       await this.requireSelected(args.connectionId, context, signal);
       const tools = await this.options.connections.requestGatewayToolOperation({
@@ -168,7 +170,7 @@ export class McpGatewayToolService {
       }) as CallToolResult;
       if (typeof approval === "object") await approval.onInvoked();
       return { source, result };
-    }, MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS);
+    }, MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS + MCP_CONNECTION_TOOL_TIMEOUT_MS + MCP_DISCOVERY_RESPONSE_GRACE_MS);
   }
 
   private scopeKey(context: AgentToolCallContext): string {

@@ -1,6 +1,7 @@
 import { connect, type Socket } from "node:net";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import {
+  MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS,
   MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS,
   MCP_CONNECTION_TOOL_TIMEOUT_MS,
   MCP_DISCOVERY_RESPONSE_GRACE_MS,
@@ -141,9 +142,15 @@ export class ConnectionRpcClient {
       const idleMs = rpcTimeoutMs ?? (deadlineAt === undefined
         ? MCP_CONNECTION_TOOL_TIMEOUT_MS
         : Math.max(1, deadlineAt - Date.now() + MCP_DISCOVERY_RESPONSE_GRACE_MS));
+      // The owner's cap starts when it calls the server, after it has
+      // opened the session. Allow for that, so the owner's cap fires first.
       const timeout = progressExtendedTimeout(
         idleMs,
-        onProgress ? MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS + MCP_DISCOVERY_RESPONSE_GRACE_MS : idleMs,
+        onProgress
+          ? MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS
+            + MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS
+            + MCP_DISCOVERY_RESPONSE_GRACE_MS
+          : idleMs,
       );
       const onTimeout = (): void => finish(new Error("PwrAgent MCP bridge timed out."));
       timeout.signal.addEventListener("abort", onTimeout, { once: true });
