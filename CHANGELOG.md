@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.3.9 - 2026-11-02
+
+- Forge Tool Rules - Set project-specific permissions for each agent or model, covering PRs, comments, issues, CI reruns, and merges. Claude Auto and Full Access turns honor the configured policies.
+- Forge Automation - Pause a project's PR activity or independently disable automatic conflict repairs, CI repairs, and PR-watch wake-ups. Review held wake-ups when resuming; held work survives restarts. Manage these controls from a connected project's window too.
+- Claude Artifacts - Enable Claude Code's artifact tools in Claude threads, including design and slide workflows. Show named activity rows and links to published pages without automatically opening a browser.
+- MCP Forms and Approvals - Route supported forms from managed MCP servers to the requesting thread, preserve discovery through reconnects, and avoid duplicate Claude gateway approvals while honoring connection consent.
+- Claude Usage and History - Report usage during running turns, prevent stale readings from moving plan limits backward, and show each provider's own allowance in the Pricing rail. Page long Claude transcripts and load history when opening a thread mid-turn.
+- Task Monitors - Let Claude monitors wait through watchers, preserve their brief and last observed state during recovery, and prevent unrelated turns from entering monitor recovery.
+- Pull Requests and Auto-fix - Find and attach PRs after GitHub or GitLab repository renames, including from checkouts with old remote names or moved workspaces. Restore CI watches after reruns and give new Auto-fix problems their own repair attempts.
+- Remote Thread Families - Reorder and nest peer-owned sub-threads in local trays, including moving grandchildren in one drop. Preserve live ordering and children when archiving across machines.
+- Navigation and To-dos - Show recent activity in the thread jump palette, keep To-do group headers and lens controls visible, and offer new-thread actions on peer-only projects. Sidebar actions use the owning machine's providers and refreshed capabilities.
+- Prompt Attribution - Clearly label monitor, To-do, and other PwrAgent-originated prompts. Preserve message origins through steering and recovery without attributing them to an operator's own prompt.
+- Reviews and Messaging - Start and report agent-scheduled reviews on Claude threads, require a pushed head before offering PR creation, and expose Grok's Default and Full Access permissions in messaging.
+- Transcript and Terminal Polish - Keep a stopped turn's last work expanded when no final reply follows. Initialize terminal renderers when first shown, reuse idle terminal snapshots on reattachment, and reduce tooltip observation overhead.
+
 ## v1.3.8 - 2026-11-01
 
 - Scheduled Sends - Schedule a message for after the selected model's short-term rate limit resets, with a buffer before sending.
