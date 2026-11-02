@@ -13,11 +13,15 @@ export const CLAUDE_MCP_GATEWAY_TOOL = `mcp__${PWRAGENT_TOOL_NAMESPACE}__call_mc
  * request and issue reads, and every write, merging included.
  */
 export const CLAUDE_FORGE_TOOLS: readonly string[] = [...FORGE_READ_OPERATIONS, ...FORGE_PR_TOOL_OPERATIONS]
-  .map((operation) => `mcp__${PWRAGENT_TOOL_NAMESPACE}__${operation}`);
+  .map(claudePwragentToolName);
 
-/** The forge tools that change the forge, as Claude names them. */
-const CLAUDE_FORGE_WRITE_TOOLS: ReadonlySet<string> = new Set(FORGE_PR_WRITE_OPERATIONS
-  .map((operation) => `mcp__${PWRAGENT_TOOL_NAMESPACE}__${operation}`));
+/** The forge tools that change the forge, as Claude names them, to their operations. */
+const CLAUDE_FORGE_WRITE_OPERATIONS: ReadonlyMap<string, string> = new Map(FORGE_PR_WRITE_OPERATIONS
+  .map((operation) => [claudePwragentToolName(operation), operation]));
+
+function claudePwragentToolName(operation: string): string {
+  return `mcp__${PWRAGENT_TOOL_NAMESPACE}__${operation}`;
+}
 
 /**
  * Tools Claude runs without asking, because PwrAgent decides them itself.
@@ -85,8 +89,7 @@ const CLAUDE_PLAN_HANDOFF = "The operator has your plan and will reply when it s
  * that card led to the forge policy's card for the same call. The forge
  * reads are read-only tools, which plan mode runs without asking.
  */
-function claudePlanForgeWriteRefusal(toolName: string): string {
-  const operation = toolName.slice(`mcp__${PWRAGENT_TOOL_NAMESPACE}__`.length);
+function claudePlanForgeWriteRefusal(operation: string): string {
   return `This is a plan turn, which is read-only, so PwrAgent did not run ${operation}. `
     + "Put this step in your plan. The operator will reply when the plan should be implemented.";
 }
@@ -143,9 +146,8 @@ export function createClaudePermissionHandler(options: {
   return async (toolName, input, context) => {
     if (context.signal.aborted) return { behavior: "deny", message: "Turn cancelled.", interrupt: true };
     if (toolName === CLAUDE_EXIT_PLAN_TOOL && options.planTurn?.()) return { behavior: "deny", message: CLAUDE_PLAN_HANDOFF };
-    if (CLAUDE_FORGE_WRITE_TOOLS.has(toolName) && options.planTurn?.()) {
-      return { behavior: "deny", message: claudePlanForgeWriteRefusal(toolName) };
-    }
+    const forgeWrite = CLAUDE_FORGE_WRITE_OPERATIONS.get(toolName);
+    if (forgeWrite && options.planTurn?.()) return { behavior: "deny", message: claudePlanForgeWriteRefusal(forgeWrite) };
     const requestId = randomUUID();
     const turnId = options.turnId();
     const request: AppServerPendingRequestNotification = toolName === "AskUserQuestion"
