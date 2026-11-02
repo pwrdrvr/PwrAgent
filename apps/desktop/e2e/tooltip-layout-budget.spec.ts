@@ -69,7 +69,7 @@ async function capturePerformance(session: CDPSession, output: string) {
   };
 }
 
-test("tooltip ignores sibling streaming and still detects sibling layout movement", async () => {
+test("tooltip ignores sibling and own-anchor streaming and still detects sibling layout movement", async () => {
   const testInfo = test.info();
   const app = await launchElectronApp({
     fixturePath: path.resolve(import.meta.dirname, "fixtures/context-rail-linked-directory-tooltips/replay.fixture.json"),
@@ -92,6 +92,13 @@ test("tooltip ignores sibling streaming and still detects sibling layout movemen
       const text = document.createElement("p");
       stream.append(text);
       document.body.append(stream);
+      // A live region inside the anchor, like a meter's streamed count. It is
+      // out of flow and zero-size, so its text never changes the anchor's box.
+      const live = document.createElement("span");
+      live.id = "tooltip-budget-anchor-stream";
+      live.style.cssText = "position:absolute;width:0;height:0;overflow:hidden;white-space:nowrap";
+      live.textContent = "0 tokens";
+      target.append(live);
       // Own the actual finite mount animations; two frames alone can still
       // leave the rail's 220 ms slide and its rebaseline outstanding.
       const animations: Animation[] = [];
@@ -153,6 +160,30 @@ test("tooltip ignores sibling streaming and still detects sibling layout movemen
       ) }));
     }
     expect(reads).toBe(0);
+    await expect(app.window.getByRole("tooltip")).toBeVisible();
+    // The anchor's own text, children and attributes update per token. Its
+    // box is unchanged, so the native observers report nothing to read.
+    const anchorReads = await anchor.evaluate(async (target) => {
+      const live = target.querySelector<HTMLElement>("#tooltip-budget-anchor-stream")!;
+      const before = (window as unknown as { tooltipBudgetReads: () => number }).tooltipBudgetReads();
+      const marker = document.createElement("span");
+      for (let index = 0; index < 100; index += 1) {
+        live.firstChild!.textContent = `${index * 128} tokens`;
+        if (index % 2 === 0) live.append(marker);
+        else marker.remove();
+        target.dataset.streamSequence = String(index);
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      return (window as unknown as { tooltipBudgetReads: () => number }).tooltipBudgetReads() - before;
+    });
+    console.log(JSON.stringify({ tooltipAnchorStreaming: { deliveries: 100, anchorGeometryReads: anchorReads } }));
+    if (anchorReads !== 0) {
+      console.log(JSON.stringify({ tooltipReadEvidence: await app.window.evaluate(() =>
+        (window as unknown as { tooltipBudgetEvidence: () => unknown }).tooltipBudgetEvidence(),
+      ) }));
+    }
+    expect(anchorReads).toBe(0);
     await expect(app.window.getByRole("tooltip")).toBeVisible();
     // A sibling's descendants resize without mutating any observed ancestor
     // or resizing the anchor itself. Native intersection must detect the shift.
