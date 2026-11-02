@@ -1096,7 +1096,11 @@ select_for_new_threads = true
       internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
     });
 
-    it("shows the form exactly and waits for the person, even in Full Access", async () => {
+    it.each(["full-access", "auto"] as const)("shows the form exactly and waits for the person in %s", async (executionMode) => {
+      await store.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode });
+      internals.activeCodexTurnModes.set("thread-1:turn-1", executionMode);
+      review.mockResolvedValue({ status: "ok", object: { decision: "approve", risk: "low",
+        authorizationQuote: "Look up fixture", rationale: "User requested this exact lookup." } });
       const answers = serverAsksDuringCall();
       const shown = approval();
 
@@ -1112,6 +1116,7 @@ select_for_new_threads = true
       expect(state.purpose).toBe("form");
       expect(readMcpApprovalPersistence(state)).toEqual([]);
       expect(answers).toEqual([]);
+      expect(review).toHaveBeenCalledTimes(executionMode === "auto" ? 1 : 0);
       await registry.submitServerRequest({
         backend: "codex", threadId: "thread-1", turnId: "turn-1",
         requestId: event.notification.params.requestId,
