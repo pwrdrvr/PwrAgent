@@ -655,4 +655,31 @@ describe("owner index coverage", () => {
     await expect(readCoverage({ startup: { state: "checking" }, incomplete: false }))
       .resolves.toEqual({ state: "checking" });
   });
+
+  it("does not serve an index built while startup was checking once startup finishes", async () => {
+    // Owner PR metadata reads the index from the refreshed event's first
+    // listener, before the read pool's own listener can invalidate it.
+    // Serving the retained checking index then left Auto-fix with no
+    // candidates for the session.
+    let startup: { state: "checking" | "ready" } = { state: "checking" };
+    const listThreads = vi.fn(async (): Promise<NavigationThreadSummary[]> => []);
+    const registry = {
+      listThreads,
+      isIncompleteThreadList: () => false,
+      getStartupProviderRefreshStatus: () => startup,
+      onEvent: () => () => {},
+      canonicalizeNavigationThreadPullRequests: async (threads: []) => threads,
+      hydrateThreadGitWorkingStates: async (threads: []) => threads,
+      withNavigationSubAgentActivity: (threads: []) => threads,
+      getNavigationInputRequestThreadKeys: () => new Set<string>(),
+    } as unknown as DesktopBackendRegistry;
+    const read = () => loadLocalNavigationQueryIndex({ registry, callerReason: "coverage-regression" });
+
+    expect((await read()).coverage).toEqual({ state: "checking" });
+    expect((await read()).coverage).toEqual({ state: "checking" });
+    expect(listThreads).toHaveBeenCalledTimes(1);
+    startup = { state: "ready" };
+    expect((await read()).coverage).toEqual({ state: "complete" });
+    expect(listThreads).toHaveBeenCalledTimes(2);
+  });
 });

@@ -55,7 +55,12 @@ export async function loadLocalNavigationQueryIndex(params: {
   // in-flight index that predates it, nor overtake other readers' scans.
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
     ...(params.refreshProviders ? ["refresh-providers"] : [])]);
-  const version = overlayStore.readNavigationSourceVersion?.();
+  // An index's coverage reads the startup refresh state, so an index built
+  // while startup was checking must not serve a reader after it finishes.
+  // The refreshed event invalidates the read too, but a listener that runs
+  // before the pool's (owner PR metadata) would join the stale index.
+  const version = `${overlayStore.readNavigationSourceVersion?.() ?? ""}|${
+    registry.getStartupProviderRefreshStatus?.()?.state ?? ""}`;
   return indexReads.read(key, async (signal, checkpoint) => {
     let navigationChanged = false;
     // An event during a scan stops later readers from joining it; they share
