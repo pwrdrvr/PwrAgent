@@ -7162,10 +7162,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           return { status: "pending" };
         }
       }
+      // A kind the spent attempts never targeted is a new problem. The usual
+      // case is main moving under a PR whose CI repairs ran out: the merge
+      // conflict gets its own attempts instead of inheriting the exhausted
+      // count. Kinds leave the incident only when they definitively resolve.
+      const incidentKinds = parsePrAutoDispatchKinds(incident?.active_kinds ?? "[]");
+      const addsKind = params.pending.eventKinds.some(
+        (kind) => !incidentKinds.includes(kind),
+      );
+      const attemptCount = addsKind ? 0 : (incident?.attempt_count ?? 0);
       // A dispatching claim reserves an attempt until submission returns.
       // Observe its ownership before reporting a limit that a busy or failed
       // submission may still refund.
-      if ((incident?.attempt_count ?? 0) >= params.maxAttempts) {
+      if (attemptCount >= params.maxAttempts) {
         return { status: "attempt-limit" };
       }
       if (activeClaim) {
@@ -7209,7 +7218,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
 
       const activeKinds = [
         ...new Set([
-          ...parsePrAutoDispatchKinds(incident?.active_kinds ?? "[]"),
+          ...incidentKinds,
           ...params.pending.eventKinds,
         ]),
       ];
@@ -7219,6 +7228,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
              backend, thread_id, pr_key, attempt_count, active_kinds, updated_at
            ) VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(backend, thread_id, pr_key) DO UPDATE SET
+             attempt_count = excluded.attempt_count,
              active_kinds = excluded.active_kinds,
              updated_at = excluded.updated_at`,
         )
@@ -7226,7 +7236,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           params.backend,
           params.threadId,
           params.pending.prKey,
-          incident?.attempt_count ?? 0,
+          attemptCount,
           JSON.stringify(activeKinds),
           params.pending.createdAt,
         );
