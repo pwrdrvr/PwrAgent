@@ -21,7 +21,10 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { FederationThreadTarget } from "../../chrome/federation-thread-targets";
-import type { FederationProjectDirectory } from "../../chrome/useFederationProjectStates";
+import type {
+  CheckFederationTargetProject,
+  FederationProjectDirectory,
+} from "../../chrome/useFederationProjectStates";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { ThreadDependencyIndicatorsContext } from "../../thread-dependencies/useThreadDependencyIndicators";
@@ -8964,6 +8967,7 @@ describe("Sidebar directory pinning", () => {
         directory?: FederationProjectDirectory,
       ) => Promise<void>;
       newThreadFederationTargets?: readonly FederationThreadTarget[];
+      checkFederationTargetProject?: CheckFederationTargetProject;
     } = {},
   ): void {
     render(
@@ -8977,6 +8981,7 @@ describe("Sidebar directory pinning", () => {
         selectedItemKey={undefined}
         threads={overrides.threads ?? []}
         newThreadFederationTargets={overrides.newThreadFederationTargets}
+        checkFederationTargetProject={overrides.checkFederationTargetProject}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onCreateThreadOnFederationTarget={
@@ -9436,34 +9441,112 @@ describe("Sidebar directory pinning", () => {
     expect(summary).toHaveFocus();
   });
 
-  it("hides the whole launchpad cluster on a directory this instance cannot host", () => {
-    // The unconfigured guard wraps icon AND chevron. Offering "new chat on
-    // <machine>" from a row with no local launchpad would reintroduce the
-    // affordance that guard exists to remove.
-    renderSidebar(
-      [{ ...projectADirectory, localAvailability: "unconfigured" }],
-      {
-        newThreadFederationTargets: [
-          {
-            availability: "available",
-            instanceId: "studio-work",
-            label: "Studio Mac / work",
-          },
-        ],
-        onCreateThreadOnFederationTarget: async () => undefined,
-      },
-    );
+  // What main hands the renderer for a project only a peer has checked out:
+  // a label and nothing else (`remoteDirectoryPlaceholder`).
+  const remoteOnlyDirectory: NavigationDirectorySummary = {
+    key: "unconfigured-directory:projecta",
+    kind: "directory",
+    label: "ProjectA",
+    localAvailability: "unconfigured",
+    threadKeys: [],
+    needsAttentionCount: 0,
+  };
 
+  it("offers the machines that have a project this instance cannot host", async () => {
+    const onOpenLaunchpad = vi.fn(async () => undefined);
+    const onCreateThreadOnFederationTarget = vi.fn(async () => undefined);
+    const checkFederationTargetProject = vi.fn(
+      async (instanceId: string) => instanceId === "studio-work",
+    );
+    renderSidebar([remoteOnlyDirectory], {
+      onOpenLaunchpad,
+      onCreateThreadOnFederationTarget,
+      checkFederationTargetProject,
+      newThreadFederationTargets: [
+        {
+          availability: "available",
+          instanceId: "studio-work",
+          label: "Studio Mac / work",
+        },
+        {
+          availability: "available",
+          instanceId: "laptop-home",
+          label: "Laptop / home",
+        },
+      ],
+    });
+
+    // Nothing here can open a local launchpad: there is no checkout.
     expect(
       screen.queryByRole("button", {
         name: "Open new thread launchpad for ProjectA",
       }),
     ).not.toBeInTheDocument();
+
+    // One "+" whose only job is the machine menu, so it is not a split pair.
+    const start = screen.getByRole("button", {
+      name: "Start a new thread in ProjectA on another machine",
+    });
+    expect(start).toHaveAttribute("aria-haspopup", "menu");
+    expect(start).toHaveClass("directory-row__launchpad-button");
+    expect(start.parentElement).not.toHaveClass(
+      "directory-row__launchpad-cluster--split",
+    );
+    const header = directoryHeader(/ProjectA/i);
+    expect(header).toHaveClass("directory-row__header--with-launchpad");
+    expect(header).not.toHaveClass("directory-row__header--split");
+
+    await clickElement(start);
+    expect(start).toHaveAttribute("aria-expanded", "true");
+    // The menu asks each machine whether it has the project, by name.
+    expect(checkFederationTargetProject).toHaveBeenCalledWith("laptop-home", {
+      kind: "directory",
+      label: "ProjectA",
+    });
+    const laptop = await screen.findByRole("menuitem", { name: /Laptop \/ home/ });
+    await waitFor(() => expect(laptop).toHaveAttribute("aria-disabled", "true"));
+    await clickElement(
+      screen.getByRole("menuitem", { name: /Studio Mac \/ work/ }),
+    );
+
+    expect(onCreateThreadOnFederationTarget).toHaveBeenCalledWith("studio-work", {
+      kind: "directory",
+      label: "ProjectA",
+    });
+    expect(onOpenLaunchpad).not.toHaveBeenCalled();
+  });
+
+  it("points the remote-only tooltip at the + when machines can take the thread", async () => {
+    renderSidebar([remoteOnlyDirectory], {
+      onCreateThreadOnFederationTarget: async () => undefined,
+      newThreadFederationTargets: [
+        {
+          availability: "available",
+          instanceId: "studio-work",
+          label: "Studio Mac / work",
+        },
+      ],
+    });
+
+    fireEvent.mouseEnter(getDirectorySummary(/ProjectA/i));
+    expect(await screen.findByText(
+      "This project isn't set up on this machine. Use + to start a thread on a machine that has it, or Add Directory to connect it here.",
+    )).toBeInTheDocument();
+  });
+
+  it("still offers nothing on a remote-only project when no machine is connected", () => {
+    renderSidebar([remoteOnlyDirectory], { newThreadFederationTargets: [] });
+
     expect(
-      screen.queryByRole("button", {
-        name: "Start a new thread in ProjectA on another machine",
-      }),
+      screen.queryByRole("button", { name: /ProjectA on another machine/ }),
     ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /launchpad for ProjectA/ }),
+    ).not.toBeInTheDocument();
+    // No cluster, so the counts must not fade to a blank edge on hover.
+    expect(directoryHeader(/ProjectA/i)).not.toHaveClass(
+      "directory-row__header--with-launchpad",
+    );
   });
 
   it("omits the chevron entirely when the federation offers no machines", () => {
