@@ -51,6 +51,7 @@ import {
   it,
   onTestFinished,
   vi,
+  type MockInstance,
 } from "vitest";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
@@ -44622,6 +44623,7 @@ script = "printf setup"
     const remotePath = path.join(root, "origin.git");
     const unpublishedBaseReason =
       "Worktrees are unavailable because this repository has no published base branch yet. Create the initial commit in the Local checkout and publish the default branch. Worktrees will be enabled once a remote base branch is available.";
+    let ownedGitLaunch: MockInstance<typeof gitExecutable.runGitCommand> | undefined;
     try {
       trace.phase("initialize-repositories");
       await git(root, ["init", "--bare", "-b", "main", remotePath]);
@@ -44765,20 +44767,18 @@ script = "printf setup"
       });
       expect(codexClient.lastStartThreadParams).toBe(projectLocalStartParams);
 
-      trace.phase("publish-and-fetch-initial-commit");
-      const seedPath = path.join(root, "seed");
-      await mkdir(seedPath, { recursive: true });
-      await git(seedPath, ["init", "-b", "main"]);
-      await writeFile(path.join(seedPath, "README.md"), "seed\n", "utf8");
-      await git(seedPath, ["add", "README.md"]);
-      await git(seedPath, ["commit", "-m", "initial"]);
-      await git(seedPath, ["remote", "add", "origin", remotePath]);
-      await git(seedPath, ["push", "origin", "main"]);
-      await git(repoPath, [
-        "fetch",
-        "origin",
-        "main:refs/remotes/origin/main",
-      ]);
+      trace.phase("create-remote-base");
+      // The gate reads local refs only, so write the remote-tracking ref a
+      // fetch would leave. Each command is one Git process. A seed commit,
+      // push, and fetch cost about ten Git for Windows processes, which took
+      // 8.9s of this test's 15s budget on a stalled Windows runner. Git knows
+      // its empty tree without storing it.
+      const emptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+      const baseCommit = await git(repoPath, ["commit-tree", emptyTree, "-m", "initial"]);
+      await git(repoPath, ["update-ref", "refs/remotes/origin/main", baseCommit]);
+      expect(await git(repoPath, ["status", "--short", "--branch"])).toContain(
+        "No commits yet on main...origin/main",
+      );
 
       trace.phase("fetched-project-local-handoff");
       const fetchedProjectLocalResponse = await codexClient.emitRequest({
@@ -44818,6 +44818,7 @@ script = "printf setup"
       );
 
       trace.phase("fetched-worktree-handoff");
+      ownedGitLaunch = vi.spyOn(gitExecutable, "runGitCommand");
       const remoteWorktreeResponse = await codexClient.emitRequest({
         method: "item/tool/call",
         params: {
@@ -44840,6 +44841,12 @@ script = "printf setup"
       const createdWorktree = codexClient.lastStartThreadParams?.cwd;
       expect(createdWorktree).toBeDefined();
       expect(createdWorktree).not.toBe(expectedDir(repoPath));
+      // The worktree is detached at origin/main. Its branch reads must come
+      // from HEAD, not an owned Git process: on Windows that is a PowerShell
+      // Job host, 0.6-1.3s per launch on a hosted runner.
+      expect(
+        ownedGitLaunch.mock.calls.filter(([, , options]) => options?.ownProcessTree),
+      ).toEqual([]);
       trace.phase("verify-worktree-head");
       expect(await git(createdWorktree!, ["rev-parse", "HEAD"])).toBe(
         await git(repoPath, ["rev-parse", "origin/main"]),
@@ -44848,6 +44855,7 @@ script = "printf setup"
       trace.phase("registry-close");
       await registry.close();
     } finally {
+      ownedGitLaunch?.mockRestore();
       trace.phase("filesystem-cleanup");
       await rm(root, { recursive: true, force: true });
       trace.phase("finished");

@@ -261,7 +261,67 @@ describe("probeCurrentGitBranch", () => {
       expect(await probeCurrentGitBranch(linked)).toEqual({ branch: "feature/probe" });
       await git(linked, ["switch", "--detach", "HEAD"]);
       expect(await git(linked, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
-      expect(await probeCurrentGitBranch(linked)).toBeUndefined();
+      expect(await probeCurrentGitBranch(linked)).toEqual({ branch: "HEAD" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a detached HEAD as Git abbreviates it, and defers when another HEAD ref is ambiguous", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-detached-head-"));
+    try {
+      await git(root, ["init", "-b", "main"]);
+      await git(root, ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "seed"]);
+      const oid = await git(root, ["rev-parse", "HEAD"]);
+      await git(root, ["switch", "--detach", "HEAD"]);
+      const gitDir = path.join(root, ".git");
+      const head = path.join(gitDir, "HEAD");
+      const abbreviated = async () => await git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
+
+      // Git reads no object to abbreviate a detached HEAD, so neither may the probe.
+      for (const text of [
+        oid + "\n",
+        oid.toUpperCase(),
+        oid + "\r\n",
+        "1234567890".repeat(4) + "\n",
+      ]) {
+        await writeFile(head, text);
+        expect(await abbreviated()).toBe("HEAD");
+        expect(await probeCurrentGitBranch(root)).toEqual({ branch: "HEAD" });
+      }
+
+      // A SHA-256 length object ID is not a SHA-1 repository's HEAD.
+      await writeFile(head, oid + "0".repeat(24) + "\n");
+      await expect(abbreviated()).rejects.toThrow();
+      expect(await probeCurrentGitBranch(root)).toBeUndefined();
+      await writeFile(head, oid + "\n");
+
+      // Any other ref Git would also expand `HEAD` to leaves its stdout empty.
+      for (const ref of [
+        "refs/HEAD",
+        "refs/heads/HEAD",
+        "refs/tags/HEAD",
+        "refs/remotes/HEAD",
+        "refs/remotes/HEAD/HEAD",
+      ]) {
+        const refPath = path.join(gitDir, ...ref.split("/"));
+        await mkdir(path.dirname(refPath), { recursive: true });
+        await writeFile(refPath, oid + "\n");
+        expect(await abbreviated()).toBe("");
+        expect(await probeCurrentGitBranch(root)).toBeUndefined();
+        await rm(refPath);
+        // An empty refs/remotes/HEAD directory would defer the packed case
+        // below on its own.
+        await rm(path.join(gitDir, "refs", "remotes"), { recursive: true, force: true });
+        expect(await probeCurrentGitBranch(root)).toEqual({ branch: "HEAD" });
+
+        await writeFile(path.join(gitDir, "packed-refs"), oid + " " + ref + "\n");
+        expect(await abbreviated()).toBe("");
+        expect(await probeCurrentGitBranch(root)).toBeUndefined();
+        await rm(path.join(gitDir, "packed-refs"));
+      }
+      expect(await abbreviated()).toBe("HEAD");
+      expect(await probeCurrentGitBranch(root)).toEqual({ branch: "HEAD" });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
