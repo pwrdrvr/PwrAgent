@@ -1,7 +1,25 @@
 import { randomUUID } from "node:crypto";
-import type { CanUseTool, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
-import type { AppServerPendingRequestNotification, ThreadExecutionMode } from "@pwragent/shared";
+import type { CanUseTool, Options, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
+import { PWRAGENT_TOOL_NAMESPACE, type AppServerPendingRequestNotification, type ThreadExecutionMode } from "@pwragent/shared";
 import { CLAUDE_ARTIFACT_TOOLS } from "./claude-tool-activity";
+
+/** PwrAgent's MCP gateway invocation tool, as Claude names it. */
+export const CLAUDE_MCP_GATEWAY_TOOL = `mcp__${PWRAGENT_TOOL_NAMESPACE}__call_mcp_tool`;
+
+/**
+ * Tools Claude runs without asking, because PwrAgent decides them itself.
+ *
+ * A gateway call gets PwrAgent's own card when it needs one. That card knows
+ * the upstream tool, the connection's Tool approval setting, the
+ * conversation's earlier approvals and automation allowlists. Claude's card
+ * would only name `call_mcp_tool`, and accepting it led to the gateway card.
+ * The rule names one exact tool on PwrAgent's own server, so it is set only
+ * when that server is attached. Claude still applies its plan mode and the
+ * operator's own `ask` and `deny` rules for the tool.
+ */
+export function claudeAllowedTools(mcpServers: Options["mcpServers"]): string[] {
+  return mcpServers && Object.hasOwn(mcpServers, PWRAGENT_TOOL_NAMESPACE) ? [CLAUDE_MCP_GATEWAY_TOOL] : [];
+}
 
 export function claudePermissionMode(mode: ThreadExecutionMode): PermissionMode {
   switch (mode) {

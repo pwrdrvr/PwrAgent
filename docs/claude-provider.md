@@ -116,6 +116,19 @@ and runs `auto` forge groups without one, as it does for Codex. A forge group
 set to `ask` still asks. See [MCP gateway tools](mcp-gateway-tools.md) and
 [forge agent tools](forge-agent-tools.md).
 
+A gateway call has one prompt, the gateway's own. When PwrAgent's own MCP
+server is attached, the query passes
+`allowedTools: ["mcp__pwragent__call_mcp_tool"]`, so Default and Auto do not
+reach `canUseTool` for it. Without the rule, Claude showed a generic card
+for `call_mcp_tool`, and accepting it led to the gateway card for the same
+call. The gateway card names the upstream tool and follows the connection's
+Tool approval setting, conversation approvals and automation allowlists.
+Claude still decides the tool in `plan` mode and applies the operator's own
+`ask` and `deny` rules for it. The rule is fixed when the process starts. A
+live session that lacks it relaunches for it, or keeps asking until its
+next launch while a task runs. Other PwrAgent tools still ask through
+`canUseTool`.
+
 The composer's **Plan** toggle runs one turn in Claude's `plan` permission
 mode, which keeps Claude read-only while it investigates; the next turn
 returns to the thread's mode. Claude ends a plan by calling `ExitPlanMode`
@@ -345,7 +358,8 @@ a turn runs, inventory comes from `Query.mcpServerStatus()`. An idle thread
 reports that inventory is unavailable instead of querying Codex. The CLI's own
 MCP configuration remains enabled. Auto is Claude's native `auto` mode on both
 query creation and live permission changes; a callback that reaches PwrAgent
-still requires explicit approval. Host gateway connection policies also apply.
+still requires explicit approval. Host gateway connection policies also apply,
+and the gateway's `call_mcp_tool` is pre-allowed so its card is the only one.
 
 The additional SQLite budget is one commit for a result usage observation and
 ledger flush, independent of 100 context updates: measured 65,920 WAL bytes.
