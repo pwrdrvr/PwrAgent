@@ -286,15 +286,13 @@ describe("paired busy rings under reduced motion", () => {
   const COMPONENT_FILE = "components/PendingSpinner.tsx";
 
   /** Renderer source files, relative to `renderer/src`, tests excluded. */
-  function rendererSources(): Array<{ file: string; source: string }> {
-    return readdirSync(rendererRoot, { recursive: true, encoding: "utf8" })
-      .filter((file) => /\.tsx?$/.test(file))
-      .filter((file) => !/(?:^|[\\/])(?:__tests__|test)[\\/]/.test(file))
-      .map((file) => ({
-        file: file.split(path.sep).join("/"),
-        source: readFileSync(path.join(rendererRoot, file), "utf8"),
-      }));
-  }
+  const sources = readdirSync(rendererRoot, { recursive: true, encoding: "utf8" })
+    .filter((file) => /\.tsx?$/.test(file))
+    .filter((file) => !/(?:^|[\\/])(?:__tests__|test)[\\/]/.test(file))
+    .map((file) => ({
+      file: file.split(path.sep).join("/"),
+      source: readFileSync(path.join(rendererRoot, file), "utf8"),
+    }));
 
   it("stops a ring by its own modifier, not by the surface around it", () => {
     // A context selector such as `.settings-pending .pending-spinner` coming
@@ -312,7 +310,6 @@ describe("paired busy rings under reduced motion", () => {
   });
 
   it("renders every busy ring through PendingSpinner", () => {
-    const sources = rendererSources();
     // Any `pending-spinner` class, modifiers included. A raw ring skips the
     // component's `pairing` decision, which is the gap this gate closes.
     const ringClass = /(?<![\w-])pending-spinner(?![\w])/;
@@ -333,9 +330,10 @@ describe("paired busy rings under reduced motion", () => {
   });
 
   it("gives every standalone ring a reason", () => {
-    // The type requires `standaloneReason`, but an empty string satisfies it.
-    const empty = rendererSources()
-      .filter(({ source }) => /standaloneReason=(?:""|\{\s*(?:""|''|``)\s*\})/.test(source))
+    // The type requires `standaloneReason`, but an empty or blank string
+    // satisfies it.
+    const empty = sources
+      .filter(({ source }) => /standaloneReason=(?:"\s*"|\{\s*(?:"\s*"|'\s*'|`\s*`)\s*\})/.test(source))
       .map(({ file }) => file);
     expect(empty).toEqual([]);
   });

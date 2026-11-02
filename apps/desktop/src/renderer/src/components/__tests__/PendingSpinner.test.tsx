@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { cssRuleBodies } from "../../styles/__tests__/css-rule-body";
 import { reducedMotionPairedRingSelectors } from "../../styles/__tests__/css-style-rules";
 import { PendingSpinner } from "../PendingSpinner";
 
@@ -48,5 +49,17 @@ describe("PendingSpinner", () => {
   it("draws the large ring for a preview tile", () => {
     const { container } = render(<PendingSpinner pairing="paired" size="lg" />);
     expect(container.querySelector(".pending-spinner")).toHaveClass("pending-spinner--lg");
+  });
+
+  it("emits only size classes that app.css defines", () => {
+    // The component builds the size class from a template, so a renamed
+    // modifier in app.css would leave every ring at the default size.
+    for (const size of ["sm", "lg"] as const) {
+      const { container } = render(<PendingSpinner pairing="paired" size={size} />);
+      const sizeClass = [...(container.querySelector(".pending-spinner")?.classList ?? [])]
+        .find((name) => name === `pending-spinner--${size}`);
+      expect(sizeClass).toBeDefined();
+      expect(cssRuleBodies(`.${sizeClass}`).join("")).toMatch(/width:/);
+    }
   });
 });

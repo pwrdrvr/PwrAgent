@@ -20,19 +20,22 @@
  * See the comments above `.pending-spinner` and its reduced-motion query in
  * `styles/app.css`.
  */
-export type PendingSpinnerProps =
+type PendingSpinnerSize = {
+  /** 12px beside 12px text, or 18px in a preview tile. Default 14px. */
+  size?: "sm" | "lg";
+};
+
+export type PendingSpinnerProps = PendingSpinnerSize & (
   | {
       pairing: "paired";
-      /** 12px beside 12px text, or 18px in a preview tile. Default 14px. */
-      size?: "sm" | "lg";
       standaloneReason?: never;
     }
   | {
       pairing: "standalone";
-      size?: "sm" | "lg";
       /** Why motion is the only progress signal here. Not rendered. */
       standaloneReason: string;
-    };
+    }
+);
 
 export function PendingSpinner(props: PendingSpinnerProps) {
   const className = [
