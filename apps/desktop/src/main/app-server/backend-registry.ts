@@ -45010,6 +45010,11 @@ export class DesktopBackendRegistry {
         return await cancellation.promise;
       }
       await this.interruptManagedTaskMonitor(record);
+      // A Claude monitor waiting on its watcher has no turn to stop, so no
+      // terminal event would ever finish the cancellation.
+      if (record.awaitingClaudeTaskWake && !cancellation.finalizing) {
+        await this.finalizeTaskMonitorCancellation(record, "cancelled");
+      }
     } catch (error) {
       if (
         record.cancellation !== cancellation
@@ -45845,11 +45850,12 @@ export class DesktopBackendRegistry {
 
     const shuttingDown =
       this.stoppingRunningTurnsForShutdown || this.shutdownRequested || this.closed;
+    const taskCount = this.claudeMonitorTaskCount(record);
     if (
       !record.recoveryAttempted
       && !shuttingDown
       && terminalStatus === "completed"
-      && this.claudeMonitorTaskCount(record) > 0
+      && taskCount > 0
     ) {
       // Claude Code blocks a long foreground sleep, so a Claude monitor waits
       // in a background watcher and ends its turn. The watcher's output starts
@@ -45861,7 +45867,7 @@ export class DesktopBackendRegistry {
         monitorThreadId: record.monitorThreadId,
         monitorTurnId: record.monitorTurnId,
         parentThreadId: record.parentThreadId,
-        taskCount: this.claudeMonitorTaskCount(record),
+        taskCount,
       });
       return;
     }

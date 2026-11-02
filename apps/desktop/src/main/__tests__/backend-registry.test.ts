@@ -55746,6 +55746,38 @@ script = "printf setup"
       }
     });
 
+    it("cancels a monitor that is waiting on its watcher", async () => {
+      const { close, queries, registry, release } = await createClaudeMonitorRegistry({
+        script: async function* (options) {
+          yield { type: "system", subtype: "init", session_id: options.sessionId } as ClaudeMessage;
+          yield* watcherStarted;
+          yield nativeResult;
+          await new Promise<void>(() => {});
+        },
+      });
+      try {
+        const response = await callRegistryMcpTool({
+          registry, backend: "claude", threadId: parentThreadId, turnId: "parent-turn",
+          tool: "create_monitor_delegation", args: { task: "Watch PR #8 checks until they finish." },
+        });
+        const monitorId = String(response.structuredContent?.monitorId);
+        await vi.waitFor(() => expect(monitorRecord(registry, monitorId)?.awaitingClaudeTaskWake).toBe(true));
+
+        // No turn is running, so no terminal event can finish the cancel.
+        const cancelled = await callRegistryMcpTool({
+          registry, backend: "claude", threadId: parentThreadId, turnId: "parent-turn",
+          tool: "cancel_monitor_delegation", args: { monitorId },
+        });
+        expect(cancelled.isError).not.toBe(true);
+        expect(cancelled.structuredContent).toMatchObject({ monitorId, outcome: "cancelled" });
+        expect(monitorRecord(registry, monitorId)).toBeUndefined();
+        await vi.waitFor(() => expect(queries[0]!.close).toHaveBeenCalled());
+      } finally {
+        release();
+        await close();
+      }
+    });
+
     it.each([
       { name: "without causal context", causalContext: {} },
       {
