@@ -138,7 +138,7 @@ export function ProviderCatalogRefreshControl(props: {
             <span className="settings-pending" role="status">
               <span
                 aria-hidden="true"
-                className="pending-spinner pending-spinner--sm"
+                className="pending-spinner pending-spinner--sm pending-spinner--paired"
               />
               {`Refreshing… ${answered} of ${total} done`}
             </span>
@@ -200,7 +200,7 @@ function ProviderRefreshRow(props: {
     <li className="provider-refresh__row" data-status={provider.status}>
       <span className="provider-refresh__mark" aria-hidden="true">
         {provider.status === "running" ? (
-          <span className="pending-spinner pending-spinner--sm" />
+          <span className="pending-spinner pending-spinner--sm pending-spinner--paired" />
         ) : (
           <span className={`status-dot ${STATUS_DOT_CLASS[provider.status]}`} />
         )}

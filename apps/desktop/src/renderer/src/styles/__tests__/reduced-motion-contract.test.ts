@@ -1,9 +1,14 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { appCss as css } from "./css-rule-body";
-import { appStyleRules as rules, hasMotionQuery } from "./css-style-rules";
+import {
+  appStyleRules as rules,
+  hasMotionQuery,
+  PAIRED_RING_CLASS,
+  reducedMotionPairedRingSelectors,
+} from "./css-style-rules";
 
 /**
  * The renderer's `prefers-reduced-motion` contract.
@@ -67,11 +72,11 @@ const MOTION_EXEMPTIONS: Record<string, string> = {
   // ONLY signal its surface has (the composer's Run button swaps the play
   // glyph for a bare, aria-hidden ring) keeps spinning, because motion that is
   // the sole indication of progress is not the non-essential motion the
-  // preference asks to stop. Rings that sit beside text — `.settings-pending
-  // .pending-spinner` — ARE stopped, which is why the bare selector cannot
-  // inherit that rule's coverage.
+  // preference asks to stop. Rings that sit beside text wear
+  // `.pending-spinner--paired` and ARE stopped, which is why the bare
+  // selector cannot inherit that rule's coverage.
   ".pending-spinner":
-    "standalone busy ring with no text companion; the reduce rules cover the paired rings, such as `.settings-pending .pending-spinner`, by their context instead",
+    "standalone busy ring with no text companion; the reduce rule stops the paired rings by their `.pending-spinner--paired` modifier instead",
 };
 
 describe("app.css reduced-motion contract", () => {
@@ -97,7 +102,7 @@ describe("app.css reduced-motion contract", () => {
     expect(reducedSelectors.has(".automations-table__disclosure")).toBe(false);
     expect(reducedSelectors.has(".settings-nav__sublist")).toBe(false);
     // While a rule that does settle the animation still registers.
-    expect(reducedSelectors.has(".settings-pending .pending-spinner")).toBe(true);
+    expect(reducedSelectors.has(".pending-spinner--paired")).toBe(true);
     expect(reducedSelectors.has(".thinking-scanner__beam")).toBe(true);
   });
 
@@ -261,5 +266,112 @@ describe("thinking scanner under reduced motion", () => {
     // gradient, neither of which mentions the scanner's tint variable at all.
     expect(dormant?.body).toMatch(/background:\s*var\(--bg-panel-hover\);/);
     expect(dormant?.body).not.toMatch(/gradient|--accent/);
+  });
+});
+
+/**
+ * Busy rings that sit beside text naming the work stop under reduced motion;
+ * a ring that is its surface's only signal keeps spinning (see the media query
+ * beside `.pending-spinner` in `app.css`).
+ *
+ * The reduce rule used to list each paired surface by its context, and the
+ * review card's Fix button was missed until #3193 added it. So the ring opts
+ * in itself with `.pending-spinner--paired`, and this gate makes every ring in
+ * renderer source take a side: wear the modifier, or appear in
+ * `STANDALONE_RINGS` with the reason it keeps spinning.
+ *
+ * A source scan rather than a rendered-DOM check, because "beside text" is
+ * not something the DOM can judge: the upload chip's ring sits beside a file
+ * name, which says nothing about the copy in progress, while the provider
+ * row's ring sits in an empty mark span and its step text is two siblings
+ * over. And the scan covers a ring that no test renders in its busy state.
+ */
+describe("paired busy rings under reduced motion", () => {
+  const rendererRoot = path.resolve(testDir, "../..");
+
+  /**
+   * Rings that keep spinning under reduced motion, by file relative to
+   * `renderer/src`, one reason per ring in source order. Each is a decision
+   * that the motion is the ring's surface's only progress signal.
+   */
+  const STANDALONE_RINGS: Record<string, string[]> = {
+    "features/composer/Composer.tsx": [
+      "the Run button swaps its play glyph for a bare ring; its only text is the aria-label",
+      "an upload chip with no percent yet shows the ring beside the file name, and the copy state is only in its tooltip",
+    ],
+    "features/composer/ComposerDropdown.tsx": [
+      "a busy environment picker swaps its icon for the ring beside the environment's name, which does not say setup is running",
+    ],
+  };
+
+  /**
+   * Busy rings in renderer source, counted per file by the class token on
+   * each line. Each ring's className is one line naming `pending-spinner`, so
+   * a line that also names the modifier is a paired ring. Comment lines are
+   * skipped so prose about the ring does not count as one. A className split
+   * across lines counts as unpaired, which fails loudly rather than hiding a
+   * ring.
+   */
+  function ringCounts(): Map<string, { paired: number; unpaired: number }> {
+    const ringToken = /(?<![\w-])pending-spinner(?![\w-])/g;
+    const pairedToken = new RegExp(`(?<![\\w-])${PAIRED_RING_CLASS}(?![\\w-])`, "g");
+    const counts = new Map<string, { paired: number; unpaired: number }>();
+    const files = readdirSync(rendererRoot, { recursive: true, encoding: "utf8" })
+      .filter((file) => /\.tsx?$/.test(file))
+      .filter((file) => !/(?:^|[\\/])(?:__tests__|test)[\\/]/.test(file));
+    for (const file of files) {
+      let paired = 0;
+      let unpaired = 0;
+      for (const line of readFileSync(path.join(rendererRoot, file), "utf8").split("\n")) {
+        if (/^\s*(?:\/\/|\/\*|\*)/.test(line)) continue;
+        const rings = line.match(ringToken)?.length ?? 0;
+        const pairedRings = Math.min(rings, line.match(pairedToken)?.length ?? 0);
+        paired += pairedRings;
+        unpaired += rings - pairedRings;
+      }
+      if (paired + unpaired > 0) {
+        counts.set(file.split(path.sep).join("/"), { paired, unpaired });
+      }
+    }
+    return counts;
+  }
+
+  it("stops a ring by its own modifier, not by the surface around it", () => {
+    // A context selector such as `.settings-pending .pending-spinner` coming
+    // back would cover one surface and not the next, which is the gap the
+    // modifier exists to close.
+    expect(reducedMotionPairedRingSelectors).toEqual([`.${PAIRED_RING_CLASS}`]);
+    const pairedRule = rules.find(
+      (rule) =>
+        hasMotionQuery(rule.atRules, "reduce")
+        && rule.selectors.includes(`.${PAIRED_RING_CLASS}`),
+    );
+    // Uniformly accent-tinted, so the still ring does not read as a stalled
+    // arc.
+    expect(pairedRule?.body).toMatch(/border-color:\s*var\(--accent\);/);
+  });
+
+  it("makes every ring in renderer source either paired or a listed standalone", () => {
+    const counts = ringCounts();
+    // Non-vacuous: the scan has to find the rings this gate is about.
+    const pairedTotal = [...counts.values()].reduce((sum, count) => sum + count.paired, 0);
+    expect(pairedTotal).toBeGreaterThanOrEqual(10);
+    expect(counts.get("features/settings/SettingsLayout.tsx")?.paired).toBeGreaterThan(0);
+
+    const unpaired = Object.fromEntries(
+      [...counts]
+        .filter(([, count]) => count.unpaired > 0)
+        .map(([file, count]) => [file, count.unpaired]),
+    );
+    const listed = Object.fromEntries(
+      Object.entries(STANDALONE_RINGS).map(([file, reasons]) => [file, reasons.length]),
+    );
+    // A new ring fails here, named by file. If it sits beside text naming the
+    // work, give it `pending-spinner--paired`. If motion is its surface's only
+    // progress signal, add a reason to STANDALONE_RINGS.
+    expect(unpaired).toEqual(listed);
+    for (const reasons of Object.values(STANDALONE_RINGS)) {
+      for (const reason of reasons) expect(reason.trim().length).toBeGreaterThan(0);
+    }
   });
 });

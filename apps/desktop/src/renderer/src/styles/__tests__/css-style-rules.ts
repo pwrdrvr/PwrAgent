@@ -102,6 +102,13 @@ export function hasMotionQuery(
 export const appStyleRules = parseStyleRules(appCss);
 
 /**
+ * The modifier a busy ring wears when it sits beside text naming the work.
+ * `app.css` stops a ring with it under reduced motion; a ring without it
+ * keeps spinning.
+ */
+export const PAIRED_RING_CLASS = "pending-spinner--paired";
+
+/**
  * Selectors that stop a `.pending-spinner` under reduced motion: the rings
  * that sit beside text naming the work. A component test can assert a busy
  * ring it renders matches one of these, so a ring that falls outside the
@@ -114,4 +121,4 @@ export const reducedMotionPairedRingSelectors = appStyleRules
       && /(?:^|[;\s])animation:\s*none\b/.test(rule.body),
   )
   .flatMap((rule) => rule.selectors)
-  .filter((selector) => /\.pending-spinner$/.test(selector));
+  .filter((selector) => /\.pending-spinner(?:--paired)?$/.test(selector));

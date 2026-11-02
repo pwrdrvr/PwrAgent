@@ -771,7 +771,7 @@ export function SettingsPendingIndicator(props: {
 
   return (
     <span className="settings-pending" role="status">
-      <span aria-hidden="true" className="pending-spinner pending-spinner--sm" />
+      <span aria-hidden="true" className="pending-spinner pending-spinner--sm pending-spinner--paired" />
       {props.label ?? "Saving…"}
     </span>
   );
