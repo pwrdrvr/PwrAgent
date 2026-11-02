@@ -47,6 +47,7 @@ import {
 } from "./thread-action-hotkeys";
 import { useDropIndicatorController } from "./drag-drop";
 import { beginPointerReorderDrag, type Point, type PointerReorderTarget } from "./pointer-reorder-drag";
+import type { NestThreadHandler } from "./thread-nest-drop";
 import { useSubthreadReorderDrag } from "./useSubthreadReorderDrag";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import {
@@ -213,10 +214,7 @@ type DirectoriesListProps = {
     move: NavigationRelativeChildMove,
   ) => Promise<void>;
   /** A thread dropped on another row becomes its sub-thread. */
-  onNestThread?: (
-    thread: NavigationThreadSummary,
-    parent: NavigationThreadSummary,
-  ) => void;
+  onNestThread?: NestThreadHandler;
   onSetSubthreadsCollapsed?: (
     parent: NavigationThreadSummary,
     collapsed: boolean,

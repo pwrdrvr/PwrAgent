@@ -3,7 +3,14 @@ import type { NavigationRelativeChildMove, NavigationThreadSummary } from "@pwra
 import { useEventCallback } from "../../lib/useEventCallback";
 import { useDropIndicatorController } from "./drag-drop";
 import { beginPointerReorderDrag, type Point, type PointerReorderTarget } from "./pointer-reorder-drag";
-import { isInNestBand, nestDropTarget, resolveThreadNestTarget, threadDragLane } from "./thread-nest-drop";
+import {
+  canNestThread,
+  isInNestBand,
+  nestDropTarget,
+  resolveThreadNestTarget,
+  threadDragLane,
+  type NestThreadHandler,
+} from "./thread-nest-drop";
 import type { ThreadRowRef } from "./ThreadRow";
 
 /** How far above or below its tray the pointer can stray and still drop. */
@@ -21,12 +28,15 @@ type SubthreadDrop =
  * row `data-nested-depth`, so one stable callback serves every row and the
  * memoized rows keep their props. Only direct children reorder: a parent's
  * `subthreadOrder` ranks its own children, and a grandchild travels with the
- * child that owns it, so the line is drawn between whole subtrees. A deeper
- * row is not among `siblings()`, so it only nests.
+ * child that owns it, so the line is drawn between whole subtrees.
+ *
+ * A deeper row is not among `siblings()`. Dropped in a gap between them, it
+ * moves up to the tray's owner and lands in that gap: the owner takes the new
+ * parent first, then the move anchored on the gap's neighbour.
  *
  * A child dropped on another row becomes that row's sub-thread instead:
- * anywhere on a row outside its tray, or on the middle third of a sibling,
- * whose edges keep the reorder line.
+ * anywhere on a row outside its tray, on a deeper row in it, or on the middle
+ * third of a direct child, whose edges keep the reorder line.
  */
 export function useSubthreadReorderDrag(params: {
   threadByKey: ReadonlyMap<string, NavigationThreadSummary>;
@@ -34,7 +44,7 @@ export function useSubthreadReorderDrag(params: {
     parent: NavigationThreadSummary,
     move: NavigationRelativeChildMove,
   ) => Promise<void>;
-  onNestThread?: (thread: NavigationThreadSummary, parent: NavigationThreadSummary) => void;
+  onNestThread?: NestThreadHandler;
 }) {
   const dropIndicator = useDropIndicatorController();
   const disposeDragRef = useRef<(() => void) | undefined>(undefined);
@@ -50,6 +60,10 @@ export function useSubthreadReorderDrag(params: {
     if (event.button !== 0 || (!update && !nestThread) || !tray || !parent || !child) return;
     disposeDragRef.current?.();
 
+    // A deeper row lands in a gap only when it can move up to the owner.
+    const movesUp = source.dataset.nestedDepth !== "1";
+    const reachesGaps = Boolean(update)
+      && (!movesUp || (Boolean(nestThread) && canNestThread(child, parent, params.threadByKey)));
     const lane = threadDragLane(source);
     const nestRoot = lane ?? tray;
     const siblings = (): HTMLElement[] =>
@@ -74,16 +88,23 @@ export function useSubthreadReorderDrag(params: {
         && (nest.element.dataset.nestedDepth !== "1" || isInNestBand(nest.element, point.y))) {
         return nest;
       }
-      if (!update) return undefined;
+      if (!reachesGaps) return undefined;
       const rows = siblings();
       const keys = rows.map((element) => element.dataset.threadKey ?? "");
-      const sourceIndex = keys.indexOf(row.threadKey);
       const before = rows.findIndex((element) => {
         const rect = element.getBoundingClientRect();
         return point.y < rect.top + rect.height / 2;
       });
       const insertAt = before < 0 ? rows.length : before;
-      if (sourceIndex < 0 || insertAt === sourceIndex || insertAt === sourceIndex + 1) return undefined;
+      if (movesUp) {
+        // Over its own row, a deeper thread is still where it was: no line,
+        // so a drag that wanders back is a cancel, not a move up.
+        const own = source.getBoundingClientRect();
+        if (rows.length === 0 || (point.y >= own.top && point.y <= own.bottom)) return undefined;
+      } else {
+        const sourceIndex = keys.indexOf(row.threadKey);
+        if (sourceIndex < 0 || insertAt === sourceIndex || insertAt === sourceIndex + 1) return undefined;
+      }
       if (before >= 0) {
         return { element: rows[before], key: `subthread:${keys[before]}`, position: "before",
           value: { kind: "reorder", anchorKey: keys[before], placement: "before" } };
@@ -111,7 +132,17 @@ export function useSubthreadReorderDrag(params: {
         }
         const anchor = params.threadByKey.get(value.anchorKey);
         if (!anchor || !update) return;
-        void update(parent, { threadId: child.id, anchorThreadId: anchor.id, placement: value.placement });
+        const move = { threadId: child.id, anchorThreadId: anchor.id, placement: value.placement };
+        if (!movesUp) {
+          void update(parent, move);
+          return;
+        }
+        // The owner orders only its own children, so the new parent must
+        // land before the move can name the thread.
+        void (async () => {
+          if (await nestThread?.(child, parent) === false) return;
+          await update(parent, move);
+        })();
       },
     });
   });
