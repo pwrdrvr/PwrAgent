@@ -65312,7 +65312,7 @@ script = "printf setup"
         await registry.close();
         await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       });
-      return { registry, threadId, cwd, repo, pr };
+      return { registry, threadId, cwd, repo, pr, store };
     }
 
     it("publishes a review card naming the workspace, branch, and attached pull request", async () => {
@@ -65352,6 +65352,46 @@ script = "printf setup"
       expect(importReviews).toHaveBeenCalledExactlyOnceWith({ backend: "claude", threadId }, [
         expect.objectContaining({ type: "review", id: "toolu_review", turn: expect.objectContaining({ status: "completed" }) }),
       ]);
+    });
+
+    it("pages a Claude transcript newest turn first and still imports older reviews", async () => {
+      const { registry, threadId, store } = await fixture();
+      const importReviews = vi.fn();
+      registry.setPwrAgentThreadTodoHandler({ importReviews } as unknown as PwrAgentThreadTodoHandler);
+      const review: AppServerThreadEntry = {
+        type: "review", id: "toolu_old_review", review: "1 finding", createdAt: 2,
+        turn: { id: "turn-1", status: "completed" },
+      };
+      await store.append(threadId, [
+        { type: "message", id: "user:turn-1", role: "user", text: "Review it", createdAt: 1, turn: { id: "turn-1" } },
+        review,
+        { type: "message", id: "user:turn-2", role: "user", text: "Fix it", createdAt: 3, turn: { id: "turn-2" } },
+        { type: "message", id: "msg-2", role: "assistant", text: "Fixed", createdAt: 4, turn: { id: "turn-2" } },
+        { type: "message", id: "user:turn-3", role: "user", text: "Ship it", createdAt: 5, turn: { id: "turn-3" } },
+        { type: "message", id: "msg-3", role: "assistant", text: "Shipped", createdAt: 6, turn: { id: "turn-3" } },
+      ]);
+
+      const newest = await registry.readThread({ backend: "claude", threadId, limit: 1 });
+      expect(newest.replay.entries.map((entry) => entry.id)).toEqual(["user:turn-3", "msg-3"]);
+      expect(newest.replay.pagination).toEqual({
+        supportsPagination: true, hasPreviousPage: true, previousCursor: "user:turn-3",
+      });
+      // The review is two pages back and must reach To-dos anyway.
+      expect(importReviews).toHaveBeenCalledExactlyOnceWith({ backend: "claude", threadId }, [
+        expect.objectContaining({ id: "toolu_old_review" }),
+      ]);
+
+      const middle = await registry.readThread({ backend: "claude", threadId, limit: 1, before: "user:turn-3" });
+      expect(middle.replay.entries.map((entry) => entry.id)).toEqual(["user:turn-2", "msg-2"]);
+      const oldest = await registry.readThread({
+        backend: "claude", threadId, limit: 1, before: middle.replay.pagination.previousCursor,
+      });
+      expect(oldest.replay.entries.map((entry) => entry.id)).toEqual(["user:turn-1", "toolu_old_review"]);
+      expect(oldest.replay.pagination.hasPreviousPage).toBe(false);
+
+      // A read without a page size is the whole thread, as before.
+      const whole = await registry.readThread({ backend: "claude", threadId });
+      expect(whole.replay.entries).toHaveLength(6);
     });
   });
 

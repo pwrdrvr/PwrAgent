@@ -41,6 +41,11 @@ test("restores a native Claude transcript after switching threads", async () => 
     };
     await openThread("Claude scroll restoration");
     await expect.poll(() => distanceFromTranscriptBottom(list)).toBeLessThanOrEqual(1);
+    // A Claude read returns the newest page. Scrolling to the top loads the
+    // rest, so the viewport saved below is in the whole transcript and not
+    // inside the load-older zone, where the prepended page would move it.
+    await setTranscriptScrollTop(list, 0);
+    await expect(list.locator('[data-entry-id="long-message-165"]')).toBeAttached();
     const metrics = await readScrollMetrics(list);
     expect(metrics.maxScrollTop).toBeGreaterThan(400);
     const saved = await setTranscriptScrollTop(list, metrics.maxScrollTop - 250);
