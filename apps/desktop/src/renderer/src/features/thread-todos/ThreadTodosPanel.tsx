@@ -1,11 +1,17 @@
 import { threadTodoThreadKey } from "@pwragent/shared";
 import {
+  useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
+  useRef,
   useState,
   type ComponentType,
   type KeyboardEvent,
+  type MouseEvent,
+  type RefObject,
 } from "react";
+import { createPortal } from "react-dom";
 import type { FederationRemoteTarget, ThreadTodo, ThreadTodoKind } from "@pwragent/shared";
 import {
   THREAD_TODO_BUSY_RETRY_MS,
@@ -28,6 +34,8 @@ import { keepBusyThreadTodos } from "./busy-thread-todos";
 import { consumeThreadTodoReveal, type ThreadTodoRevealRequest } from "./thread-todo-reveal";
 import { operatorWaitMatchesFilter, threadTodoMatchesFilter, type ThreadTodoFilter } from "./thread-todo-filters";
 import { tooltipHandlers, useViewportTooltip } from "../../lib/useViewportTooltip";
+import { useMenuNavigation } from "../../lib/useMenuNavigation";
+import { useCloseOnOutsidePointer } from "./TodoFactMenu";
 import { isNavigationBusy } from "../../../../shared/navigation-ipc-result";
 
 export type ThreadTodoScope = "thread" | "project" | "all";
@@ -60,6 +68,17 @@ const RESOLUTION_RESULTS: ReadonlySet<string> = new Set(
  * keeps it; a reload starts again from Project.
  */
 let rememberedScope: ThreadTodoScope = "project";
+
+/**
+ * Groups the operator folded, as `scope NUL group key`. Module scope like the
+ * lens, so a folded project stays folded across thread switches and the rail
+ * tab closing; a reload opens every group again.
+ */
+const rememberedCollapsed = new Set<string>();
+
+function collapseKey(scope: ThreadTodoScope, groupKey: string): string {
+  return `${scope}\0${groupKey}`;
+}
 
 /** A row in the panel: something a thread waits on, or a to-do card. */
 type PanelItem =
@@ -113,6 +132,15 @@ export type ThreadTodosPanelProps = {
 export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
   const { view, threadKey, projectKey } = props;
   const [scope, setScopeState] = useState<ThreadTodoScope>(rememberedScope);
+  const [collapsed, setCollapsedState] = useState<ReadonlySet<string>>(() => new Set(rememberedCollapsed));
+  const setCollapsed = useCallback((keys: readonly string[], fold: boolean): void => {
+    for (const key of keys) {
+      if (fold) rememberedCollapsed.add(key);
+      else rememberedCollapsed.delete(key);
+    }
+    setCollapsedState(new Set(rememberedCollapsed));
+  }, []);
+  const [groupMenu, setGroupMenu] = useState<{ x: number; y: number }>();
   const [showResolved, setShowResolved] = useState(false);
   const [actionError, setActionError] = useState<string>();
   // A Done-list owner failure, apart from card actions so neither clears
@@ -136,7 +164,9 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
     if (!consumeThreadTodoReveal(revealRequest, threadKey)) return;
     rememberedScope = "thread";
     setScopeState("thread");
-  }, [revealRequest, threadKey]);
+    // The chip asked to see these cards; a folded group would hide them.
+    setCollapsed([collapseKey("thread", threadKey)], false);
+  }, [revealRequest, threadKey, setCollapsed]);
 
   useEffect(() => {
     if (!showResolved || !listResolved) {
@@ -211,12 +241,18 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
       .map((todo) => ({ type: "todo", key: operatorTodoItemKey(todo.id), todo }))
     : openItemsIn(activeScope);
   const groups = items ? groupItems(items, activeScope, props) : undefined;
+  const isCollapsed = (group: TodoGroup): boolean => collapsed.has(collapseKey(activeScope, group.key));
 
   // Rows on screen in a focused window are seen. The panel is mounted only
-  // while the rail shows it, so being rendered here is being on screen.
-  const unseenKeys = showResolved || !items
+  // while the rail shows it, so being rendered here is being on screen. A
+  // folded group's rows are not, so they stay unread until it opens.
+  const unseenKeys = showResolved || !groups
     ? []
-    : items.filter((item) => !view.seenKeys.has(item.key)).map((item) => item.key);
+    : groups
+      .filter((group) => !isCollapsed(group))
+      .flatMap((group) => group.items)
+      .filter((item) => !view.seenKeys.has(item.key))
+      .map((item) => item.key);
   const unseenSignature = unseenKeys.join("\n");
   const [freshKeys, setFreshKeys] = useState<ReadonlySet<string>>(() => new Set());
   const markSeen = view.markSeen;
@@ -274,205 +310,313 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
     `${instance.label} — ${instance.reason === "disconnected" ? "Disconnected" : "To-dos unavailable; update PwrAgent on this instance"}`,
   ).join("\n");
 
+  const groupKeys = (groups ?? []).map((group) => collapseKey(activeScope, group.key));
+  const allCollapsed = groupKeys.length > 0 && groupKeys.every((key) => collapsed.has(key));
+  const noneCollapsed = groupKeys.every((key) => !collapsed.has(key));
+  const toggleGroup = (event: MouseEvent<HTMLButtonElement>, group: TodoGroup): void => {
+    const fold = !isCollapsed(group);
+    // Option-click folds or opens every group, as a Finder disclosure does.
+    setCollapsed(event.altKey ? groupKeys : [collapseKey(activeScope, group.key)], fold);
+  };
+  const groupMenuTrigger = useRef<HTMLElement | null>(null);
+  const openGroupMenu = (event: MouseEvent<HTMLButtonElement>): void => {
+    event.preventDefault();
+    groupMenuTrigger.current = event.currentTarget;
+    setGroupMenu({ x: event.clientX, y: event.clientY });
+  };
+
   // One peer can fail both the open queue and the Done list; say it once.
   const alertText = [...new Set([actionError, listingError, view.queueError]
     .flatMap((error) => error?.split("\n") ?? []))].join("\n");
 
   return (
-    <section className="context-panel__section thread-todos-panel">
-      <h3>To-dos</h3>
-      {alertText ? <p className="thread-todo-card__error" role="alert">{alertText}</p> : null}
-      <div className="thread-todos-panel__controls">
-        <div
-          aria-label="To-do scope"
-          aria-orientation="horizontal"
-          className="subagent-lens-switch"
-          role="tablist"
-          onKeyDown={handleScopeKeyDown}
-        >
-          {scopes.map((entry) => (
-            <button
-              aria-controls={`${controlId}-panel`}
-              aria-label={`${entry.label}, ${lensCounts[entry.id].open} open${
-                lensCounts[entry.id].unread > 0 ? `, ${lensCounts[entry.id].unread} unread` : ""
-              }`}
-              aria-selected={activeScope === entry.id}
-              className="subagent-lens-switch__button"
-              id={`${controlId}-${entry.id}`}
-              key={entry.id}
-              role="tab"
-              tabIndex={activeScope === entry.id ? 0 : -1}
-              type="button"
-              onClick={() => setScope(entry.id)}
-            >
-              <span>{entry.label}</span>
-              {/* Filled when something is unread, plain otherwise, as on the
-                  rail tab: the rail is too narrow for both counts. */}
-              {lensCounts[entry.id].unread > 0 ? (
-                <span className="thread-todos-panel__unread-count">
-                  {lensCounts[entry.id].unread}
-                </span>
-              ) : (
-                <span className="subagent-lens-switch__count">{lensCounts[entry.id].open}</span>
-              )}
-            </button>
-          ))}
-        </div>
-        <button
-          type="button"
-          className={`thread-todos-panel__resolved-toggle${showResolved ? " is-active" : ""}`}
-          aria-pressed={showResolved}
-          onClick={() => {
-            setShowResolved((current) => !current);
-            // Opening Done again earns its own re-list.
-            setBusyRelistedRevision(undefined);
-          }}
-        >
-          Resolved
-        </button>
-      </div>
-      <div
-        aria-labelledby={`${controlId}-${activeScope}`}
-        id={`${controlId}-panel`}
-        role="tabpanel"
-      >
-        {!groups ? (
-          <p className="context-empty">Loading to-dos…</p>
-        ) : groups.length === 0 ? (
-          <p className="context-empty">{emptyText}</p>
-        ) : (
-          groups.map((group) => (
-            <section
-              key={group.key}
-              className="thread-todos-panel__group"
-              aria-label={group.title}
-            >
-              <h4 className="thread-todos-panel__group-title">
-                <span className="thread-todos-panel__group-name">{group.title}</span>
-                <span className="thread-todos-panel__group-count">{group.items.length}</span>
-                {group.paused ? (
-                  <span className="thread-todos-panel__group-paused">turn paused</span>
-                ) : null}
-              </h4>
-              <ul className="thread-todos-panel__list">
-                {group.items.map((item) => {
-                  if (item.type === "wait") {
-                    const { wait } = item;
-                    const mine = wait.threadKey === threadKey;
-                    const asked = wait.question;
-                    const answerOffscreen = view.answerQuestion;
-                    // The thread on screen answers through its composer, which
-                    // also draws the reply in its transcript. Any other local
-                    // thread answers through its owner's turn FIFO.
-                    const answerQuestion = !asked
-                      ? undefined
-                      : mine
-                        ? props.onAnswerQuestion
-                        : answerOffscreen
-                          ? (text: string) => answerOffscreen(wait, text)
-                          : undefined;
-                    // Any reply closes all of a message's questions. The
-                    // composer's answers include the panel's for its thread.
-                    const questionSent = asked?.questions.some((_, index) => {
-                      const itemId = codexAsyncQuestionItemId(asked.messageId, index);
-                      return mine
-                        ? props.sentQuestionAnswers?.has(itemId)
-                        : view.sentQuestionAnswers?.has(`${wait.threadKey}\0${itemId}`);
-                    }) ?? false;
-                    return (
-                      <li key={item.key}>
-                        <OperatorWaitRow
-                          wait={wait}
-                          current={mine}
-                          unread={isUnread(item.key)}
-                          threadName={activeScope === "all" && !mine
-                            ? view.threadTitleForKey(wait.threadKey)
-                            : undefined}
-                          respond={view.respond}
-                          dismissQuestion={(target) => {
-                            const question = target.question;
-                            return question ? view.dismissQuestion(question) : Promise.resolve();
-                          }}
-                          openWait={view.openWait}
-                          answerQuestion={answerQuestion}
-                          questionSent={questionSent}
-                        />
-                      </li>
-                    );
-                  }
-                  const { todo } = item;
-                  const mine = threadTodoThreadKey(todo) === threadKey;
-                  return (
-                    <li key={todo.id}>
-                      {mine && todo.status === "open" ? (
-                        <ThreadTodoCard
-                          todo={todo}
-                          copyAllTodos={threadOpenCards(group.items, threadKey)}
-                          running={view.runningIds.has(todo.id)}
-                          threadRunning={props.threadRunning}
-                          mergeMethods={view.mergeMethods}
-                          instances={view.instances}
-                          localMachine={view.localMachine}
-                          projectMenu={view.projectMenu}
-                          onResolve={(target, status, resolution, options) => {
-                            setActionError(undefined);
-                            void view.resolve(target, status, resolution, options).catch(
-                              (error: unknown) => {
-                                setActionError(String(error));
-                              },
-                            );
-                          }}
-                          onRun={(target, options) => {
-                            setActionError(undefined);
-                            void view.run(target, options).catch((error: unknown) => {
-                              setActionError(String(error));
-                            });
-                          }}
-                          onStartReview={props.onStartReview}
-                          onDoHere={props.onDoHere}
-                          onSetItemChecked={(target, item, checked) => {
-                            setActionError(undefined);
-                            void view.setItemChecked(target, item.id, checked).catch(
-                              (error: unknown) => {
-                                setActionError(String(error));
-                              },
-                            );
-                          }}
-                        />
-                      ) : (
-                        <TodoRow
-                          todo={todo}
-                          current={mine}
-                          scope={activeScope}
-                          projectKey={projectKey}
-                          unread={todo.status === "open" && isUnread(item.key)}
-                          view={view}
-                        />
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            </section>
-          ))
-        )}
-      </div>
-      {unavailableInstances.length > 0 ? (
-        <footer className="thread-todos-panel__footnote">
+    <section className="context-panel__section context-panel__section--todos thread-todos-panel">
+      {/* The title and lens switch hold the top; only the list below scrolls. */}
+      <div className="thread-todos-panel__header">
+        <h3>To-dos</h3>
+        {alertText ? <p className="thread-todo-card__error" role="alert">{alertText}</p> : null}
+        <div className="thread-todos-panel__controls">
+          <div
+            aria-label="To-do scope"
+            aria-orientation="horizontal"
+            className="subagent-lens-switch"
+            role="tablist"
+            onKeyDown={handleScopeKeyDown}
+          >
+            {scopes.map((entry) => (
+              <button
+                aria-controls={`${controlId}-panel`}
+                aria-label={`${entry.label}, ${lensCounts[entry.id].open} open${
+                  lensCounts[entry.id].unread > 0 ? `, ${lensCounts[entry.id].unread} unread` : ""
+                }`}
+                aria-selected={activeScope === entry.id}
+                className="subagent-lens-switch__button"
+                id={`${controlId}-${entry.id}`}
+                key={entry.id}
+                role="tab"
+                tabIndex={activeScope === entry.id ? 0 : -1}
+                type="button"
+                onClick={() => setScope(entry.id)}
+              >
+                <span>{entry.label}</span>
+                {/* Filled when something is unread, plain otherwise, as on the
+                    rail tab: the rail is too narrow for both counts. */}
+                {lensCounts[entry.id].unread > 0 ? (
+                  <span className="thread-todos-panel__unread-count">
+                    {lensCounts[entry.id].unread}
+                  </span>
+                ) : (
+                  <span className="subagent-lens-switch__count">{lensCounts[entry.id].open}</span>
+                )}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
-            className="thread-todos-panel__coverage-note"
-            aria-label={`${coverageNote} Show affected instances`}
-            aria-describedby={coverageTooltip.visible ? coverageTooltip.tooltipId : undefined}
-            {...tooltipHandlers(coverageTooltip, coverageDetails)}
-            onClick={(event) => coverageTooltip.show(event.currentTarget, coverageDetails)}
+            className={`thread-todos-panel__resolved-toggle${showResolved ? " is-active" : ""}`}
+            aria-pressed={showResolved}
+            onClick={() => {
+              setShowResolved((current) => !current);
+              // Opening Done again earns its own re-list.
+              setBusyRelistedRevision(undefined);
+            }}
           >
-            {coverageNote}
+            Resolved
           </button>
-          {coverageTooltip.tooltipNode}
-        </footer>
+        </div>
+      </div>
+      <div className="thread-todos-panel__body">
+        <div
+          aria-labelledby={`${controlId}-${activeScope}`}
+          id={`${controlId}-panel`}
+          role="tabpanel"
+        >
+          {!groups ? (
+            <p className="context-empty">Loading to-dos…</p>
+          ) : groups.length === 0 ? (
+            <p className="context-empty">{emptyText}</p>
+          ) : (
+            groups.map((group, index) => {
+              const folded = isCollapsed(group);
+              const listId = `${controlId}-group-${index}`;
+              // A folded header still says what is new in it.
+              const unread = folded && !showResolved
+                ? group.items.filter((item) =>
+                  (item.type === "wait" || item.todo.status === "open") && isUnread(item.key)).length
+                : 0;
+              const count = group.items.length;
+              return (
+                <section
+                  key={group.key}
+                  className="thread-todos-panel__group"
+                  aria-label={group.title}
+                >
+                  <h4 className="thread-todos-panel__group-title">
+                    <button
+                      type="button"
+                      className="thread-todos-panel__group-toggle"
+                      aria-expanded={!folded}
+                      aria-controls={folded ? undefined : listId}
+                      aria-label={`${group.title}, ${count} ${count === 1 ? "item" : "items"}${
+                        unread > 0 ? `, ${unread} unread` : ""
+                      }${group.paused ? ", turn paused" : ""}`}
+                      onClick={(event) => toggleGroup(event, group)}
+                      onContextMenu={openGroupMenu}
+                    >
+                      <span className="live-work-rail__chevron" aria-hidden="true" />
+                      <span className="thread-todos-panel__group-name">{group.title}</span>
+                      <span className="thread-todos-panel__group-count">{count}</span>
+                      {unread > 0 ? (
+                        <span className="thread-todos-panel__unread-count">{unread}</span>
+                      ) : null}
+                      {group.paused ? (
+                        <span className="thread-todos-panel__group-paused">turn paused</span>
+                      ) : null}
+                    </button>
+                  </h4>
+                  {folded ? null : (
+                    <ul className="thread-todos-panel__list" id={listId}>
+                      {group.items.map((item) => {
+                        if (item.type === "wait") {
+                          const { wait } = item;
+                          const mine = wait.threadKey === threadKey;
+                          const asked = wait.question;
+                          const answerOffscreen = view.answerQuestion;
+                          // The thread on screen answers through its composer, which
+                          // also draws the reply in its transcript. Any other local
+                          // thread answers through its owner's turn FIFO.
+                          const answerQuestion = !asked
+                            ? undefined
+                            : mine
+                              ? props.onAnswerQuestion
+                              : answerOffscreen
+                                ? (text: string) => answerOffscreen(wait, text)
+                                : undefined;
+                          // Any reply closes all of a message's questions. The
+                          // composer's answers include the panel's for its thread.
+                          const questionSent = asked?.questions.some((_, index) => {
+                            const itemId = codexAsyncQuestionItemId(asked.messageId, index);
+                            return mine
+                              ? props.sentQuestionAnswers?.has(itemId)
+                              : view.sentQuestionAnswers?.has(`${wait.threadKey}\0${itemId}`);
+                          }) ?? false;
+                          return (
+                            <li key={item.key}>
+                              <OperatorWaitRow
+                                wait={wait}
+                                current={mine}
+                                unread={isUnread(item.key)}
+                                threadName={activeScope === "all" && !mine
+                                  ? view.threadTitleForKey(wait.threadKey)
+                                  : undefined}
+                                respond={view.respond}
+                                dismissQuestion={(target) => {
+                                  const question = target.question;
+                                  return question ? view.dismissQuestion(question) : Promise.resolve();
+                                }}
+                                openWait={view.openWait}
+                                answerQuestion={answerQuestion}
+                                questionSent={questionSent}
+                              />
+                            </li>
+                          );
+                        }
+                        const { todo } = item;
+                        const mine = threadTodoThreadKey(todo) === threadKey;
+                        return (
+                          <li key={todo.id}>
+                            {mine && todo.status === "open" ? (
+                              <ThreadTodoCard
+                                todo={todo}
+                                copyAllTodos={threadOpenCards(group.items, threadKey)}
+                                running={view.runningIds.has(todo.id)}
+                                threadRunning={props.threadRunning}
+                                mergeMethods={view.mergeMethods}
+                                instances={view.instances}
+                                localMachine={view.localMachine}
+                                projectMenu={view.projectMenu}
+                                onResolve={(target, status, resolution, options) => {
+                                  setActionError(undefined);
+                                  void view.resolve(target, status, resolution, options).catch(
+                                    (error: unknown) => {
+                                      setActionError(String(error));
+                                    },
+                                  );
+                                }}
+                                onRun={(target, options) => {
+                                  setActionError(undefined);
+                                  void view.run(target, options).catch((error: unknown) => {
+                                    setActionError(String(error));
+                                  });
+                                }}
+                                onStartReview={props.onStartReview}
+                                onDoHere={props.onDoHere}
+                                onSetItemChecked={(target, item, checked) => {
+                                  setActionError(undefined);
+                                  void view.setItemChecked(target, item.id, checked).catch(
+                                    (error: unknown) => {
+                                      setActionError(String(error));
+                                    },
+                                  );
+                                }}
+                              />
+                            ) : (
+                              <TodoRow
+                                todo={todo}
+                                current={mine}
+                                scope={activeScope}
+                                projectKey={projectKey}
+                                unread={todo.status === "open" && isUnread(item.key)}
+                                view={view}
+                              />
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </section>
+              );
+            })
+          )}
+        </div>
+        {unavailableInstances.length > 0 ? (
+          <footer className="thread-todos-panel__footnote">
+            <button
+              type="button"
+              className="thread-todos-panel__coverage-note"
+              aria-label={`${coverageNote} Show affected instances`}
+              aria-describedby={coverageTooltip.visible ? coverageTooltip.tooltipId : undefined}
+              {...tooltipHandlers(coverageTooltip, coverageDetails)}
+              onClick={(event) => coverageTooltip.show(event.currentTarget, coverageDetails)}
+            >
+              {coverageNote}
+            </button>
+            {coverageTooltip.tooltipNode}
+          </footer>
+        ) : null}
+      </div>
+      {groupMenu ? createPortal(
+        <TodoGroupMenu
+          at={groupMenu}
+          triggerRef={groupMenuTrigger}
+          allCollapsed={allCollapsed}
+          noneCollapsed={noneCollapsed}
+          onClose={() => setGroupMenu(undefined)}
+          onCollapseAll={() => setCollapsed(groupKeys, true)}
+          onExpandAll={() => setCollapsed(groupKeys, false)}
+        />,
+        document.body,
       ) : null}
     </section>
+  );
+}
+
+/** A group header's right-click menu: fold or open every group in the lens. */
+function TodoGroupMenu(props: {
+  at: { x: number; y: number };
+  triggerRef: RefObject<HTMLElement | null>;
+  allCollapsed: boolean;
+  noneCollapsed: boolean;
+  onClose: () => void;
+  onCollapseAll: () => void;
+  onExpandAll: () => void;
+}) {
+  const { onClose } = props;
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState(props.at);
+  // Opens at the pointer, kept inside the window.
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!menu) return;
+    const margin = 8;
+    setPosition({
+      x: Math.max(margin, Math.min(props.at.x, window.innerWidth - menu.offsetWidth - margin)),
+      y: Math.max(margin, Math.min(props.at.y, window.innerHeight - menu.offsetHeight - margin)),
+    });
+  }, [props.at]);
+  useMenuNavigation({ open: true, menuRef, triggerRef: props.triggerRef, onClose });
+  useCloseOnOutsidePointer({ open: true, triggerRef: props.triggerRef, menuRef, onClose });
+  const choose = (run: () => void) => () => {
+    onClose();
+    run();
+  };
+  return (
+    <div
+      ref={menuRef}
+      className="thread-context-menu"
+      role="menu"
+      aria-label="To-do groups"
+      tabIndex={-1}
+      style={{ left: position.x, top: position.y }}
+    >
+      <button type="button" role="menuitem" disabled={props.allCollapsed} onClick={choose(props.onCollapseAll)}>
+        Collapse all groups
+      </button>
+      <button type="button" role="menuitem" disabled={props.noneCollapsed} onClick={choose(props.onExpandAll)}>
+        Expand all groups
+      </button>
+    </div>
   );
 }
 

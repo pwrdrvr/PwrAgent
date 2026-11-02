@@ -1419,3 +1419,129 @@ describe("federated To-do project scope", () => {
     expect(groups.map((group) => group.querySelector(".thread-todos-panel__group-count")?.textContent)).toEqual(["1", "1", "1"]);
   });
 });
+
+describe("ThreadTodosPanel group disclosure", () => {
+  // Collapsed groups are remembered for the window, like the lens, so each
+  // test uses projects and threads no other test groups by.
+  const ALPHA: ThreadTodoProject = { key: "directory:/src/disclosure-alpha", label: "Disclosure Alpha", path: "/src/disclosure-alpha" };
+  const BRAVO: ThreadTodoProject = { key: "directory:/src/disclosure-bravo", label: "Disclosure Bravo", path: "/src/disclosure-bravo" };
+  const CHARLIE: ThreadTodoProject = { key: "directory:/src/disclosure-charlie", label: "Disclosure Charlie", path: "/src/disclosure-charlie" };
+
+  function renderAll(cards: ThreadTodo[], overrides: Partial<ThreadTodosView> = {}) {
+    const view = createView(cards, overrides);
+    const result = render(<ThreadTodosPanel view={view} threadKey="codex:disclosure-here" onStartReview={vi.fn()} />);
+    fireEvent.click(screen.getByRole("tab", { name: /^All,/ }));
+    return { ...result, view };
+  }
+
+  const toggle = (project: ThreadTodoProject): HTMLElement =>
+    screen.getByRole("button", { name: new RegExp(`^${project.label},`) });
+
+  it("keeps the lens switch above the list that scrolls", () => {
+    const { container } = renderAll([todo({ id: "d-1", threadId: "d-t1", sourceProject: ALPHA })]);
+    const panel = container.querySelector(".thread-todos-panel")!;
+    // The panel fills the rail tab and scrolls its own body, so the lens
+    // switch and Resolved never scroll away with the cards.
+    expect(panel.classList.contains("context-panel__section--todos")).toBe(true);
+    const body = panel.querySelector(".thread-todos-panel__body")!;
+    expect(body).toBeTruthy();
+    expect(body.contains(screen.getByRole("tabpanel"))).toBe(true);
+    expect(body.contains(screen.getByRole("tablist", { name: "To-do scope" }))).toBe(false);
+    expect(body.contains(screen.getByRole("button", { name: "Resolved" }))).toBe(false);
+  });
+
+  it("collapses one group from its header and keeps the others open", () => {
+    renderAll([
+      todo({ id: "d-a1", threadId: "d-t1", title: "Alpha one", sourceProject: ALPHA }),
+      todo({ id: "d-b1", threadId: "d-t2", title: "Bravo one", sourceProject: BRAVO }),
+    ]);
+    const alpha = toggle(ALPHA);
+    expect(alpha.getAttribute("aria-expanded")).toBe("true");
+    expect(alpha.closest("h4")).toBeTruthy();
+    expect(alpha.querySelector(".live-work-rail__chevron")).toBeTruthy();
+
+    fireEvent.click(alpha);
+    expect(toggle(ALPHA).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("Alpha one")).toBeNull();
+    expect(screen.getByText("Bravo one")).toBeTruthy();
+    // The header still counts what it holds.
+    const group = screen.getByRole("region", { name: ALPHA.label });
+    expect(group.querySelector(".thread-todos-panel__group-count")?.textContent).toBe("1");
+
+    fireEvent.click(toggle(ALPHA));
+    expect(screen.getByText("Alpha one")).toBeTruthy();
+  });
+
+  it("keeps unread work visible on a collapsed header", () => {
+    const unread = todo({ id: "d-u1", threadId: "d-t3", title: "Unread card", sourceProject: CHARLIE });
+    renderAll([unread], { seenKeys: new Set() });
+    fireEvent.click(toggle(CHARLIE));
+    const header = toggle(CHARLIE);
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    expect(header.getAttribute("aria-label")).toMatch(/1 unread/);
+    expect(header.querySelector(".thread-todos-panel__unread-count")?.textContent).toBe("1");
+    fireEvent.click(header);
+  });
+
+  it("collapses and expands every group from a header's context menu", () => {
+    renderAll([
+      todo({ id: "d-a2", threadId: "d-t1", title: "Alpha two", sourceProject: ALPHA }),
+      todo({ id: "d-b2", threadId: "d-t2", title: "Bravo two", sourceProject: BRAVO }),
+    ]);
+    fireEvent.contextMenu(toggle(BRAVO), { clientX: 40, clientY: 60 });
+    const menu = screen.getByRole("menu", { name: "To-do groups" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Collapse all groups" }));
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(toggle(ALPHA).getAttribute("aria-expanded")).toBe("false");
+    expect(toggle(BRAVO).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("Alpha two")).toBeNull();
+
+    fireEvent.contextMenu(toggle(ALPHA), { clientX: 40, clientY: 60 });
+    const again = screen.getByRole("menu", { name: "To-do groups" });
+    // Everything is already collapsed: only expanding does anything.
+    expect(within(again).getByRole("menuitem", { name: "Collapse all groups" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(within(again).getByRole("menuitem", { name: "Expand all groups" }));
+    expect(toggle(ALPHA).getAttribute("aria-expanded")).toBe("true");
+    expect(toggle(BRAVO).getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("toggles every group with an Option-click, as Finder does", () => {
+    renderAll([
+      todo({ id: "d-a3", threadId: "d-t1", sourceProject: ALPHA }),
+      todo({ id: "d-b3", threadId: "d-t2", sourceProject: BRAVO }),
+    ]);
+    fireEvent.click(toggle(ALPHA), { altKey: true });
+    expect(toggle(ALPHA).getAttribute("aria-expanded")).toBe("false");
+    expect(toggle(BRAVO).getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(toggle(BRAVO), { altKey: true });
+    expect(toggle(ALPHA).getAttribute("aria-expanded")).toBe("true");
+    expect(toggle(BRAVO).getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("remembers a collapsed group when the panel mounts again", () => {
+    const cards = [todo({ id: "d-a4", threadId: "d-t1", title: "Alpha four", sourceProject: ALPHA })];
+    renderAll(cards);
+    fireEvent.click(toggle(ALPHA));
+    cleanup();
+    // The rail unmounts the panel on a thread switch or tab change.
+    renderAll(cards);
+    expect(toggle(ALPHA).getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(toggle(ALPHA));
+  });
+
+  it("opens the thread's group when a thread row's chip reveals it", () => {
+    const card = todo({ id: "d-r1", threadId: "disclosure-reveal", title: "Revealed card" });
+    const view = createView([card], { threadTitle: () => "Reveal thread", threadTitleForKey: () => "Reveal thread" });
+    const { rerender } = render(<ThreadTodosPanel view={view} threadKey="codex:disclosure-reveal" onStartReview={vi.fn()} />);
+    fireEvent.click(screen.getByRole("tab", { name: /^Thread,/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Reveal thread,/ }));
+    expect(screen.queryByRole("heading", { level: 3, name: "Revealed card" })).toBeNull();
+
+    rerender(
+      <ThreadTodosPanel view={view} threadKey="codex:disclosure-reveal" onStartReview={vi.fn()}
+        revealRequest={{ threadKey: "codex:disclosure-reveal" }} />,
+    );
+    expect(screen.getByRole("button", { name: /^Reveal thread,/ }).getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("heading", { level: 3, name: "Revealed card" })).toBeTruthy();
+  });
+});

@@ -182,10 +182,11 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
       path: testInfo.outputPath("todo-dispatch-panel-narrow.png"), animations: "disabled",
     });
     await panel.locator(".thread-todos-panel").evaluate((element) => { element.style.width = ""; });
-    await panel.locator(".thread-todos-panel").evaluate((element) => { element.style.paddingTop = "900px"; });
+    // The panel's body scrolls under its fixed lens switch.
+    await panel.locator(".thread-todos-panel__body").evaluate((element) => { element.style.paddingTop = "900px"; });
     const panelChip = panel.getByRole("button", { name: /^Model for the new thread:/ }).first();
     await panelChip.evaluate((element) => {
-      const scroller = element.closest<HTMLElement>(".context-panel__scroll");
+      const scroller = element.closest<HTMLElement>(".thread-todos-panel__body");
       if (!scroller) throw new Error("Missing To-dos scroll container");
       scroller.scrollTop += element.getBoundingClientRect().top - (window.innerHeight - 50);
     });
