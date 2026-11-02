@@ -3322,6 +3322,11 @@ function readNotificationItemType(notification: AppServerNotification): string |
 
 const TASK_MONITOR_STALE_CHECK_INTERVAL_MS = 15_000;
 const TASK_MONITOR_STALE_GRACE_MS = 15_000;
+/** Progress reports a recovery turn is shown. */
+const TASK_MONITOR_RECOVERY_PROGRESS_LIMIT = 5;
+/** Transcript items, and characters of each, a recovery turn is shown. */
+const TASK_MONITOR_RECOVERY_ACTIVITY_LIMIT = 6;
+const TASK_MONITOR_RECOVERY_ACTIVITY_CHARS = 1_500;
 
 function taskMonitorThreadKey(
   backend: AppServerBackendKind,
@@ -3354,6 +3359,11 @@ type TaskMonitorDelegationRecord = {
   causalContext?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
   activeCommandCount: number;
   backend: AppServerBackendKind;
+  /**
+   * The prompt that started the monitor. A Claude recovery turn can start in
+   * a fresh session, so it repeats the brief.
+   */
+  brief?: string;
   createdAt: number;
   cwd?: string;
   executionMode?: ThreadExecutionMode;
@@ -3375,6 +3385,8 @@ type TaskMonitorDelegationRecord = {
   preferredModel: string;
   preferredReasoningEffort: string;
   persistedStatus?: ThreadSubAgentSummary["status"];
+  /** The latest progress the monitor reported, oldest first. */
+  recentProgress?: string[];
   runtimeModel?: string;
   cancellation?: TaskMonitorCancellationState;
   finalizationStarted?: boolean;
@@ -4104,11 +4116,78 @@ function buildTaskMonitorFinalHandoffInput(params: {
     .join("\n");
 }
 
+/**
+ * What a monitor last saw: its latest messages and tool results, oldest
+ * first. Each keeps its end, where a status check prints its result.
+ */
+function taskMonitorRecentActivity(entries: AppServerThreadEntry[]): string[] {
+  const tail = (text: string) => {
+    const trimmed = text.trim();
+    return trimmed.length > TASK_MONITOR_RECOVERY_ACTIVITY_CHARS
+      ? `…${trimmed.slice(-TASK_MONITOR_RECOVERY_ACTIVITY_CHARS)}`
+      : trimmed;
+  };
+  const items: string[] = [];
+  for (const entry of entries.toReversed()) {
+    if (items.length >= TASK_MONITOR_RECOVERY_ACTIVITY_LIMIT) break;
+    if (entry.type === "message") {
+      // The user messages are the brief and earlier recovery prompts.
+      if (entry.role === "assistant" && entry.text.trim()) items.push(`Monitor said:\n${tail(entry.text)}`);
+      continue;
+    }
+    if (entry.type !== "activity") continue;
+    for (const detail of entry.details.toReversed()) {
+      if (items.length >= TASK_MONITOR_RECOVERY_ACTIVITY_LIMIT) break;
+      const command = detail.command;
+      const output = command?.output ?? detail.markdown;
+      const exit = command?.exitCode === undefined ? "" : ` (exit ${command.exitCode})`;
+      items.push([
+        `${command?.displayCommand ?? detail.label}${exit}`,
+        output?.trim() ? tail(output) : undefined,
+      ].filter(Boolean).join("\n"));
+    }
+  }
+  return items.toReversed();
+}
+
 function buildTaskMonitorRecoveryPrompt(params: {
   monitorId: string;
   task: string;
   terminalStatus: "completed" | "failed" | "cancelled";
+  /**
+   * A Claude monitor's recovery turn can start in a new session that has
+   * none of the monitor's earlier context, so PwrAgent supplies it.
+   */
+  memory?: { brief?: string; recentActivity: string[]; recentProgress: string[] };
 }): string {
+  const { memory } = params;
+  if (memory) {
+    return [
+      "PwrAgent monitor recovery instruction:",
+      "",
+      `The previous monitor turn ended with status "${params.terminalStatus}" before it called pwragent.complete_monitoring.`,
+      "You must now report the final monitor result. This turn may run in a new session without your earlier messages, so PwrAgent repeats your brief and what you last observed below.",
+      "",
+      `Monitor id: ${params.monitorId}`,
+      `Task: ${params.task}`,
+      ...(memory.brief?.trim()
+        ? ["", "<original_monitor_brief>", memory.brief.trim(), "</original_monitor_brief>"]
+        : []),
+      "",
+      "<last_progress_reports>",
+      memory.recentProgress.length ? memory.recentProgress.join("\n") : "None reported.",
+      "</last_progress_reports>",
+      "",
+      "<last_observed_activity>",
+      memory.recentActivity.length ? memory.recentActivity.join("\n\n") : "None recorded.",
+      "</last_observed_activity>",
+      "",
+      "If the last observed state is not terminal, run the brief's status check once, without waiting or starting a watcher, to read the current state.",
+      "Call pwragent.complete_monitoring exactly once, and include the last state you observed in its summary or details.",
+      "If the task is still running or the state cannot be determined, use outcome \"failure\" and say that monitoring stopped before the task finished.",
+      "Do not sleep, poll repeatedly, or do unrelated work in this recovery turn.",
+    ].join("\n");
+  }
   return [
     "PwrAgent monitor recovery instruction:",
     "",
@@ -45221,6 +45300,7 @@ export class DesktopBackendRegistry {
       // The monitor thread's provider. A Claude parent's monitor may run on
       // Codex, and every lookup by monitor thread matches this backend.
       backend: monitorBackend,
+      brief: prompt,
       createdAt: Date.now(),
       finalHandoffPrompt: args.finalHandoffPrompt?.trim() || undefined,
       heartbeatIntervalSeconds,
@@ -45994,6 +46074,10 @@ export class DesktopBackendRegistry {
     }
 
     bound.record.lastActivityAt = Date.now();
+    bound.record.recentProgress = [
+      ...(bound.record.recentProgress ?? []),
+      args.status ? `[${args.status}] ${message}` : message,
+    ].slice(-TASK_MONITOR_RECOVERY_PROGRESS_LIMIT);
     const nextStatus = args.status ?? "running";
     if (nextStatus !== bound.record.persistedStatus) {
       await this.persistTaskMonitorSubAgent(bound.record, {
@@ -46456,6 +46540,35 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * A Claude monitor's process exits after each settled turn, and an
+   * ephemeral session cannot be resumed, so its recovery turn starts with no
+   * memory. Its transcript is still held in memory until the delegation ends.
+   */
+  private async claudeTaskMonitorMemory(
+    record: TaskMonitorDelegationRecord,
+  ): Promise<{ brief?: string; recentActivity: string[]; recentProgress: string[] }> {
+    let recentActivity: string[] = [];
+    try {
+      if (record.monitorThreadId) {
+        recentActivity = taskMonitorRecentActivity(
+          (await this.claudeBackend.readThread(record.monitorThreadId)).entries,
+        );
+      }
+    } catch (error) {
+      backendRegistryLog.warn("could not read Claude task monitor transcript for recovery", {
+        error: error instanceof Error ? error.message : String(error),
+        monitorId: record.monitorId,
+        monitorThreadId: record.monitorThreadId,
+      });
+    }
+    return {
+      ...(record.brief ? { brief: record.brief } : {}),
+      recentActivity,
+      recentProgress: record.recentProgress ?? [],
+    };
+  }
+
   private async startTaskMonitorRecoveryTurn(params: {
     record: TaskMonitorDelegationRecord;
     terminalStatus: "completed" | "failed" | "cancelled";
@@ -46492,6 +46605,7 @@ export class DesktopBackendRegistry {
               monitorId: record.monitorId,
               task: record.task,
               terminalStatus: params.terminalStatus,
+              memory: await this.claudeTaskMonitorMemory(record),
             }),
           }],
           executionMode,

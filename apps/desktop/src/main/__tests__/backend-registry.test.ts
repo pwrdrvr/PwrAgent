@@ -56044,6 +56044,81 @@ script = "printf setup"
       }
     });
 
+    it("gives a recovery turn in a new process the brief and the last observed state", async () => {
+      let endFirstTurn!: () => void;
+      const firstTurnRunning = new Promise<void>((resolve) => { endFirstTurn = resolve; });
+      let launches = 0;
+      const { close, prompts, registry } = await createClaudeMonitorRegistry({
+        script: async function* (options) {
+          launches += 1;
+          yield { type: "system", subtype: "init", session_id: options.sessionId } as ClaudeMessage;
+          if (launches > 1) {
+            // The recovery turn stays open while the test reads its prompt.
+            await new Promise<void>(() => {});
+          }
+          yield { type: "assistant", parent_tool_use_id: null, message: {
+            id: "poll", content: [{ type: "tool_use", id: "tool-poll", name: "Bash",
+              input: { command: "gh run view 42 --json jobs" } }],
+          } } as ClaudeMessage;
+          yield { type: "user", parent_tool_use_id: null, message: { content: [{
+            type: "tool_result", tool_use_id: "tool-poll", content: "E2E job: in_progress (3 of 5 shards done)",
+          }] } } as ClaudeMessage;
+          yield { type: "assistant", parent_tool_use_id: null, message: {
+            id: "said", content: [{ type: "text", text: "Run 42 is still running; E2E has 3 of 5 shards done." }],
+          } } as ClaudeMessage;
+          await firstTurnRunning;
+          // The turn ends with no watcher and no complete_monitoring.
+          yield nativeResult;
+        },
+      });
+      try {
+        const response = await callRegistryMcpTool({
+          registry, backend: "claude", threadId: parentThreadId, turnId: "parent-turn",
+          tool: "create_monitor_delegation",
+          args: {
+            task: "Watch CI run 42 until the E2E job finishes.",
+            monitorContext: "Poll `gh run view 42 --json jobs`. The E2E job is terminal at DONE or FAILURE.",
+          },
+        });
+        expect(response.isError).not.toBe(true);
+        const monitorId = String(response.structuredContent?.monitorId);
+        const monitorThreadId = String(response.structuredContent?.monitorThreadId);
+        const progress = await callRegistryMcpTool({
+          registry, backend: "claude", threadId: monitorThreadId,
+          turnId: String(response.structuredContent?.monitorTurnId),
+          tool: "inject_progress",
+          args: { monitorId, status: "running", message: "E2E job: 3 of 5 shards done." },
+        });
+        expect(progress.isError).not.toBe(true);
+        await vi.waitFor(async () => {
+          const { replay } = await registry.readThread({ backend: "claude", threadId: monitorThreadId });
+          expect(replay.lastAssistantMessage).toContain("3 of 5 shards");
+        });
+
+        endFirstTurn();
+        await vi.waitFor(() => expect(userMessageCount(registry, monitorThreadId)).resolves.toBe(2));
+        // An ephemeral session cannot be resumed: the recovery is a new one.
+        expect(prompts).toHaveLength(2);
+        expect(prompts[1]!.resume).toBeUndefined();
+        expect(prompts[1]!.sessionId).not.toBe(prompts[0]!.sessionId);
+        const recovery = (await registry.readThread({ backend: "claude", threadId: monitorThreadId }))
+          .replay.lastUserMessage ?? "";
+        expect(recovery).toContain("PwrAgent monitor recovery instruction");
+        // The procedure the monitor was given.
+        expect(recovery).toContain("<original_monitor_brief>");
+        expect(recovery).toContain("Poll `gh run view 42 --json jobs`. The E2E job is terminal at DONE or FAILURE.");
+        // What it last reported and observed.
+        expect(recovery).toContain("[running] E2E job: 3 of 5 shards done.");
+        expect(recovery).toContain("gh run view 42 --json jobs");
+        expect(recovery).toContain("E2E job: in_progress (3 of 5 shards done)");
+        expect(recovery).toContain("Run 42 is still running; E2E has 3 of 5 shards done.");
+        expect(recovery).not.toContain("Use only the monitor task context you already have");
+      } finally {
+        endFirstTurn();
+        await close();
+      }
+    });
+
     it("ends a finished monitor's watcher with its process", async () => {
       const { close, queries, registry, release } = await createClaudeMonitorRegistry({
         script: async function* (options) {
