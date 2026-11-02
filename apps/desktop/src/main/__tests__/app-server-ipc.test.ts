@@ -1410,6 +1410,7 @@ describe("app server ipc", () => {
     getCachedThreadSummary.mockReset();
     readLocalHeadPastPrHead.mockReset().mockResolvedValue(undefined);
     isIncompleteThreadList.mockReset().mockReturnValue(false);
+    getStartupProviderRefreshStatus.mockReset();
     federationMock.runtime.stampRemoteNavigationQueryPage.mockReset().mockImplementation((_target, page) => page);
     isProviderEnabled.mockReturnValue(true);
     backendRegistryLifecycle.existing = true;
@@ -2362,7 +2363,8 @@ describe("app server ipc", () => {
     ["degraded", "ready", true],
   ] as const)("does not apply bulk Auto-fix changes to a %s owner inventory", async (_coverage, state, incomplete) => {
     const { NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL } = await import("../../shared/ipc");
-    getStartupProviderRefreshStatus.mockReturnValueOnce({ state });
+    // Every read: the index's reuse version reads it as well as its coverage.
+    getStartupProviderRefreshStatus.mockReturnValue({ state });
     isIncompleteThreadList.mockReturnValueOnce(incomplete);
     registerAppServerIpcHandlers();
     await expect(handlers.get(NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL)?.({}, { enabled: true }))
