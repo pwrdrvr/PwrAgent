@@ -1,10 +1,10 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { probeCurrentGitBranch } from "../app-server/git-head-branch";
+import { NOT_A_GIT_REPOSITORY, probeCurrentGitBranch } from "../app-server/git-head-branch";
 
 const execFile = promisify(execFileCallback);
 
@@ -61,6 +61,60 @@ async function git(cwd: string, args: string[]): Promise<string> {
 }
 
 describe("probeCurrentGitBranch", () => {
+  it("proves no repository up to the filesystem root, and defers at every marker Git would honor", async (context) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-no-repo-head-"));
+    const parent = path.join(root, "parent");
+    const nested = path.join(parent, "nested");
+    try {
+      await mkdir(nested, { recursive: true });
+      // The walk reaches the filesystem root, so a repository that encloses
+      // this machine's temp directory makes the case unreachable here.
+      if (await git(nested, ["rev-parse", "--git-dir"]).then(() => true, () => false)) context.skip();
+      await expect(git(nested, ["rev-parse", "--abbrev-ref", "HEAD"])).rejects.toThrow(/not a git repository/);
+      expect(await probeCurrentGitBranch(nested)).toBe(NOT_A_GIT_REPOSITORY);
+
+      // A HEAD file without objects is not a bare repository to Git.
+      await writeFile(path.join(parent, "HEAD"), "ref: refs/heads/main\n");
+      await expect(git(nested, ["rev-parse", "--git-dir"])).rejects.toThrow(/not a git repository/);
+      expect(await probeCurrentGitBranch(nested)).toBe(NOT_A_GIT_REPOSITORY);
+
+      // With objects and refs beside it, Git discovers a bare repository.
+      await mkdir(path.join(parent, "objects"));
+      await mkdir(path.join(parent, "refs"));
+      await expect(git(nested, ["rev-parse", "--git-dir"])).resolves.toBeTruthy();
+      expect(await probeCurrentGitBranch(nested)).toBeUndefined();
+
+      if (process.platform !== "win32") {
+        // Git accepts a symbolic-link HEAD by its link text, even dangling.
+        await rm(path.join(parent, "HEAD"));
+        await symlink("refs/heads/unborn", path.join(parent, "HEAD"));
+        await expect(git(nested, ["rev-parse", "--git-dir"])).resolves.toBeTruthy();
+        expect(await probeCurrentGitBranch(nested)).toBeUndefined();
+      }
+
+      await rm(parent, { recursive: true, force: true });
+      await mkdir(nested, { recursive: true });
+      expect(await probeCurrentGitBranch(nested)).toBe(NOT_A_GIT_REPOSITORY);
+      // Any .git entry ends the walk, even one Git would reject.
+      await writeFile(path.join(parent, ".git"), "gitdir: missing\n");
+      expect(await probeCurrentGitBranch(nested)).toBeUndefined();
+      await rm(path.join(parent, ".git"));
+
+      // These can change what Git discovers. Leave the answer to Git.
+      for (const key of ["GIT_CEILING_DIRECTORIES", "GIT_OBJECT_DIRECTORY", "GIT_DIR"]) {
+        process.env[key] = root;
+        try {
+          expect(await probeCurrentGitBranch(nested)).toBeUndefined();
+        } finally {
+          delete process.env[key];
+        }
+      }
+      expect(await probeCurrentGitBranch(nested)).toBe(NOT_A_GIT_REPOSITORY);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a committed HEAD when Git packs its loose ref during the probe", async () => {
     const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-packing-head-")));
     try {
