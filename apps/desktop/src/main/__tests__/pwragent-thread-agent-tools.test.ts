@@ -161,7 +161,16 @@ describe("PwrAgent thread agent tools", () => {
       .toMatchObject({
         name: "watch_thread_pull_request",
         description: expect.stringContaining("After creation, end the turn"),
+        // List and cancel are optional actions, so an older call still arms.
+        inputSchema: expect.objectContaining({
+          properties: expect.objectContaining({
+            action: expect.objectContaining({ enum: ["watch", "list", "cancel"] }),
+            watchId: expect.objectContaining({ type: "string" }),
+          }),
+        }),
       });
+    expect(tools.find((tool) => tool.name === "watch_thread_pull_request")?.inputSchema)
+      .not.toHaveProperty("required");
     expect(tools.find((tool) => tool.name === "read_thread")).toMatchObject({
       description: expect.stringContaining("bounded aggregate pricing"),
       inputSchema: expect.objectContaining({

@@ -1,7 +1,19 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
+import type {
+  NavigationThreadSummary,
+  PrSummary,
+  ThreadPrAutoFixState,
+  ThreadPrWatchHistoryEntry,
+  ThreadPullRequestWatchSummary,
+} from "@pwragent/shared";
+import type { DesktopApi } from "../../../../lib/desktop-api";
+import {
+  summarizeThreadPrWatches,
+  ThreadPrWatchIndicatorsContext,
+  type ThreadPrWatchIndicatorsValue,
+} from "../../../pr-watches/useThreadPrWatchIndicators";
 import { PullRequestsPanel } from "../PullRequestsPanel";
 
 afterEach(() => {
@@ -217,5 +229,375 @@ describe("PullRequestsPanel", () => {
     expect(
       screen.getByText("No pull requests linked to this thread yet."),
     ).toBeInTheDocument();
+  });
+
+  describe("Wakes this thread", () => {
+    const openPr: PrSummary = {
+      provider: "github.com",
+      number: 3174,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "fix(desktop): arm CI watches after re-runs",
+      state: "pending",
+      checkState: "pending",
+      lifecycleState: "open",
+      reviewState: "ready_for_review",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3174",
+    };
+    const ciWatch: ThreadPullRequestWatchSummary = {
+      watchId: "watch-ci",
+      backend: "codex",
+      threadId: "thread-1",
+      prKey: "github.com/pwrdrvr/pwragent#3174",
+      prUrl: openPr.url,
+      prNumber: 3174,
+      headSha: "9f2c41a0000000000000000000000000000000000",
+      notifyOn: ["success", "failure"],
+      createdAt: Date.now(),
+      failureHandledByAutoFix: false,
+      kind: "checks",
+      baseline: { outcome: "failure", observedAt: Date.now(), runAttempt: 2 },
+    };
+    const terminalWatch: ThreadPullRequestWatchSummary = {
+      ...ciWatch,
+      watchId: "watch-merge",
+      notifyOn: ["merged", "closed"],
+      kind: "terminal",
+      baseline: undefined,
+    };
+
+    function autoFixThread(prs: PrSummary[]): NavigationThreadSummary {
+      return { ...threadWithPrs(prs), prAutoDispatchEnabled: true, primaryGitRepository: "github.com/pwrdrvr/pwragent" };
+    }
+
+    function renderPanel(options: {
+      thread?: NavigationThreadSummary;
+      watches?: ThreadPullRequestWatchSummary[];
+      autoFix?: ThreadPrAutoFixState[];
+      context?: Partial<ThreadPrWatchIndicatorsValue>;
+      desktopApi?: Pick<DesktopApi, "manageThreadPrWatches">;
+    } = {}) {
+      const stop = vi.fn(async () => undefined);
+      const askAgentToWatchCi = vi.fn();
+      const onSetThreadPrAutoDispatch = vi.fn(async () => undefined);
+      const thread = options.thread ?? autoFixThread([openPr]);
+      render(
+        <ThreadPrWatchIndicatorsContext.Provider value={{
+          byThreadKey: summarizeThreadPrWatches(options.watches ?? [], options.autoFix),
+          stop,
+          askAgentToWatchCi,
+          ...options.context,
+        }}>
+          <PullRequestsPanel
+            desktopApi={options.desktopApi}
+            onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+            thread={thread}
+          />
+        </ThreadPrWatchIndicatorsContext.Provider>,
+      );
+      return { stop, askAgentToWatchCi, onSetThreadPrAutoDispatch, thread };
+    }
+
+    it("lists each watch and Auto-fix with a way to stop each", async () => {
+      const { stop, onSetThreadPrAutoDispatch, thread } = renderPanel({ watches: [ciWatch, terminalWatch] });
+      const card = screen.getByRole("listitem");
+      expect(within(card).getByText("Wakes this thread")).toBeInTheDocument();
+      expect(within(card).getByText("Waiting for CI · attempt 2")).toBeInTheDocument();
+      const ciSub = within(card).getByText(/^On pass or fail\. Agent, /);
+      expect(ciSub).toHaveTextContent("Attempt 1's failure will not wake it.");
+      expect(within(card).getByText("Waiting for merge or close")).toBeInTheDocument();
+      expect(within(card).getByText("Starts a repair turn when a new push fails CI.")).toBeInTheDocument();
+      expect(within(card).queryByText("Not waiting for CI.")).toBeNull();
+      // The chip in the card wears the eye too.
+      expect(card.querySelector(".pr-chip .pr-chip__watch")).not.toBeNull();
+
+      // Each Stop disables itself until the stop settles.
+      await act(async () => {
+        fireEvent.click(within(card).getByRole("button", { name: "Stop waiting for CI on #3174" }));
+      });
+      expect(stop).toHaveBeenCalledWith(ciWatch, thread);
+      await act(async () => {
+        fireEvent.click(within(card).getByRole("button", { name: "Stop watching #3174 for merge" }));
+      });
+      expect(stop).toHaveBeenCalledWith(terminalWatch, thread);
+      // The setting is the thread's, so the button says so.
+      fireEvent.click(within(card).getByRole("button", { name: "Turn off Auto-fix for this thread" }));
+      expect(onSetThreadPrAutoDispatch).toHaveBeenCalledWith(false);
+    });
+
+    it("lists Auto-fix only where it can wake the thread", () => {
+      const linkedPr: PrSummary = {
+        ...openPr,
+        number: 12,
+        repo: "docs.pwragent.ai",
+        url: "https://github.com/pwrdrvr/docs.pwragent.ai/pull/12",
+      };
+      renderPanel({ thread: autoFixThread([openPr, linkedPr]), context: { autoFixAvailable: true } });
+      const cards = screen.getAllByRole("listitem");
+      const docsCard = cards.find((card) => card.textContent?.includes("docs.pwragent.ai"))!;
+      const primaryCard = cards.find((card) => card !== docsCard)!;
+      expect(within(primaryCard).getByText("Auto-fix")).toBeInTheDocument();
+      // Auto-fix never polls a linked directory's PR.
+      expect(within(docsCard).queryByText("Auto-fix")).toBeNull();
+      cleanup();
+
+      // Git settings turned Auto-fix off: the thread's saved opt-in wakes nothing.
+      renderPanel({ context: { autoFixAvailable: false } });
+      expect(within(screen.getByRole("listitem")).queryByText("Auto-fix")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Turn off Auto-fix for this thread" })).toBeNull();
+    });
+
+    it("says Auto-fix is paused or handled by another thread instead of claiming a wake", () => {
+      const state: ThreadPrAutoFixState = {
+        backend: "codex", threadId: "thread-1", prKey: ciWatch.prKey, state: "paused",
+      };
+      const paused = renderPanel({ autoFix: [state], context: { autoFixAvailable: true } });
+      let card = screen.getByRole("listitem");
+      expect(within(card).getByText("Auto-fix paused")).toBeInTheDocument();
+      expect(within(card).queryByText("Starts a repair turn when a new push fails CI.")).toBeNull();
+      // Paused, the opt-in still resumes here, so it can still be turned off.
+      fireEvent.click(within(card).getByRole("button", { name: "Turn off Auto-fix for this thread" }));
+      expect(paused.onSetThreadPrAutoDispatch).toHaveBeenCalledWith(false);
+      cleanup();
+
+      renderPanel({
+        autoFix: [{
+          ...state, state: "handled_by_other_thread",
+          handledBy: { backend: "codex", threadId: "thread-2", title: "Owns the repairs" },
+        }],
+        context: { autoFixAvailable: true },
+      });
+      card = screen.getByRole("listitem");
+      expect(within(card).getByText("Auto-fix handled by Owns the repairs")).toBeInTheDocument();
+      expect(within(card).queryByText("Starts a repair turn when a new push fails CI.")).toBeNull();
+      expect(within(card).queryByRole("button", { name: "Turn off Auto-fix for this thread" })).toBeNull();
+    });
+
+    it("arms a CI watch from the hint when nothing waits for CI on a primary PR", async () => {
+      let finish!: () => void;
+      const watchCi = vi.fn(() => new Promise<void>((resolve) => {
+        finish = resolve;
+      }));
+      const thread = { ...threadWithPrs([openPr]), primaryGitRepository: "github.com/pwrdrvr/pwragent" };
+      renderPanel({ thread, watches: [terminalWatch], context: { watchCi } });
+      let card = screen.getByRole("listitem");
+      expect(within(card).getByText("Not waiting for CI.")).toBeInTheDocument();
+      expect(within(card).queryByText("Auto-fix")).toBeNull();
+      // The rail arms the watch itself; asking the agent stays in the chip menu.
+      expect(within(card).queryByRole("button", { name: "Ask Agent to Watch CI" })).toBeNull();
+      const watchButton = within(card).getByRole("button", { name: "Watch CI on #3174" });
+      await act(async () => {
+        fireEvent.click(watchButton);
+      });
+      expect(watchCi).toHaveBeenCalledWith(thread, openPr);
+      expect(watchButton).toBeDisabled();
+      await act(async () => {
+        finish();
+      });
+      expect(watchButton).not.toBeDisabled();
+      cleanup();
+
+      // Main watches only the primary workspace's PRs.
+      renderPanel({ thread: threadWithPrs([openPr]), watches: [terminalWatch], context: { watchCi } });
+      card = screen.getByRole("listitem");
+      expect(within(card).getByText("Not waiting for CI.")).toBeInTheDocument();
+      expect(within(card).queryByRole("button", { name: /Watch CI/ })).toBeNull();
+    });
+
+    it("names who armed a watch and who stopped one", async () => {
+      const operatorWatch: ThreadPullRequestWatchSummary = { ...ciWatch, createdBy: "operator", baseline: undefined };
+      const history: ThreadPrWatchHistoryEntry[] = [
+        { ...ciWatch, watchId: "ended-agent", status: "cancelled", updatedAt: Date.now(), endedReason: "cancelled_by_agent" },
+        { ...ciWatch, watchId: "ended-you", status: "cancelled", updatedAt: Date.now() - 1, endedReason: "cancelled_by_operator" },
+      ];
+      const manageThreadPrWatches = vi.fn(async () => ({ ok: true as const, history }));
+      renderPanel({ watches: [operatorWatch], desktopApi: { manageThreadPrWatches } });
+      const card = screen.getByRole("listitem");
+      expect(within(card).getByText(/^On pass or fail\. You, /)).toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "History" }));
+      });
+      expect(screen.getByText("Stopped by the agent")).toBeInTheDocument();
+      expect(screen.getByText("Stopped by you")).toBeInTheDocument();
+    });
+
+    it("loads the history on first expand and counts this PR's ended watches", async () => {
+      const history: ThreadPrWatchHistoryEntry[] = [
+        { ...ciWatch, watchId: "ended-1", status: "dispatched", updatedAt: Date.now(), endedReason: "woke", wokeOn: "failure" },
+        { ...ciWatch, watchId: "ended-2", status: "superseded", updatedAt: Date.now() - 1, endedReason: "moved", movedTo: "watch-ci" },
+        { ...ciWatch, watchId: "other-pr", prKey: "github.com/pwrdrvr/pwragent#1", status: "cancelled", updatedAt: 1 },
+      ];
+      const manageThreadPrWatches = vi.fn(async () => ({ ok: true as const, history }));
+      renderPanel({ watches: [ciWatch], desktopApi: { manageThreadPrWatches } });
+      expect(manageThreadPrWatches).not.toHaveBeenCalled();
+      const toggle = screen.getByRole("button", { name: "History" });
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+      await act(async () => {
+        fireEvent.click(toggle);
+      });
+      expect(manageThreadPrWatches).toHaveBeenCalledWith({
+        action: "history",
+        backend: "codex",
+        threadId: "thread-1",
+        limit: 20,
+      });
+      expect(screen.getByRole("button", { name: "History (2)" })).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getByText("Woke the thread · CI failed")).toBeInTheDocument();
+      expect(screen.getByText("Moved to new head · 9f2c41a")).toBeInTheDocument();
+      expect(screen.queryByText("Stopped")).toBeNull();
+    });
+
+    it("says the history could not load instead of claiming none ended, and retries on the next expand", async () => {
+      const manageThreadPrWatches = vi.fn()
+        .mockResolvedValueOnce({ ok: false, error: { code: "invalid_arguments", message: "state is closing" } })
+        .mockResolvedValueOnce({ ok: true, history: [
+          { ...ciWatch, watchId: "ended-1", status: "dispatched", updatedAt: Date.now(), endedReason: "another_thread_woke", wokeOn: "success" },
+        ] });
+      renderPanel({ watches: [ciWatch], desktopApi: { manageThreadPrWatches } });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "History" }));
+      });
+      expect(screen.getByText("Couldn't load history.")).toBeInTheDocument();
+      expect(screen.queryByText("No watch has ended yet.")).toBeNull();
+      expect(screen.queryByRole("button", { name: /History \(/ })).toBeNull();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "History" }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "History" }));
+      });
+      expect(manageThreadPrWatches).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("button", { name: "History (1)" })).toBeInTheDocument();
+      expect(screen.getByText("Another thread was woken · CI passed")).toBeInTheDocument();
+    });
+
+    it("shows a peer's watches read-only and names where to stop them", () => {
+      renderPanel({
+        thread: {
+          ...threadWithPrs([openPr]),
+          prAutoDispatchEnabled: true,
+          // The peer's operator armed it, who need not be this window's.
+          activePrWatches: [{ ...ciWatch, createdBy: "operator" }],
+          federation: {
+            ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "thread-1" },
+            instanceLabel: "Laptop",
+            peerStatus: "connected",
+            capabilities: [],
+          },
+        } as NavigationThreadSummary,
+        // A local list for the same id must not leak onto the peer's card.
+        watches: [terminalWatch],
+      });
+      const card = screen.getByRole("listitem");
+      expect(within(card).getByText("Waiting for CI · attempt 2")).toBeInTheDocument();
+      expect(within(card).getByText(/^On pass or fail\. Operator, /)).toBeInTheDocument();
+      expect(within(card).queryByText("Waiting for merge or close")).toBeNull();
+      expect(within(card).getByText("Watches run on Laptop. Stop them there.")).toBeInTheDocument();
+      expect(within(card).queryByRole("button", { name: /^Stop|^Turn off|History|Ask Agent|Watch CI/ })).toBeNull();
+    });
+
+    it("puts a peer owner's CI watch mark on the rail chip, as the sidebar does", () => {
+      renderPanel({
+        thread: {
+          ...threadWithPrs([openPr]),
+          activePrWatches: [ciWatch],
+          prCiWatches: [{
+            prKey: ciWatch.prKey,
+            watchId: ciWatch.watchId,
+            notifyOn: ["success", "failure"],
+            createdAt: ciWatch.createdAt,
+            runAttempt: 2,
+          }],
+          federation: {
+            ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "thread-1" },
+            instanceLabel: "Laptop",
+            peerStatus: "connected",
+            capabilities: [],
+          },
+        } as NavigationThreadSummary,
+      });
+      const card = screen.getByRole("listitem");
+      expect(within(card).getByRole("button", {
+        name: /^Open pwrdrvr\/PwrAgent#3174 \(.+\) in browser, waiting for CI$/,
+      })).toBeInTheDocument();
+      expect(within(card).getByText("Waiting for CI · attempt 2")).toBeInTheDocument();
+    });
+
+    const capablePeer = {
+      ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "thread-1" },
+      instanceLabel: "Laptop",
+      peerStatus: "connected",
+      capabilities: ["thread_navigation", "turn_control", "thread_pr_watch_control_v1"],
+    } as NonNullable<NavigationThreadSummary["federation"]>;
+
+    it("stops a peer's watch and reads its history on the owner that accepts it", async () => {
+      const manageThreadPrWatches = vi.fn(async () => ({ ok: true as const, history: [] }));
+      const { stop, thread } = renderPanel({
+        thread: {
+          ...autoFixThread([openPr]),
+          activePrWatches: [{ ...ciWatch, createdBy: "operator" }],
+          federation: capablePeer,
+        },
+        desktopApi: { manageThreadPrWatches },
+      });
+      const card = screen.getByRole("listitem");
+      expect(within(card).getByText(/^On pass or fail\. Operator, /)).toBeInTheDocument();
+      expect(within(card).queryByText("Watches run on Laptop. Stop them there.")).toBeNull();
+      await act(async () => {
+        fireEvent.click(within(card).getByRole("button", { name: "Stop waiting for CI on #3174" }));
+      });
+      expect(stop).toHaveBeenCalledWith({ ...ciWatch, createdBy: "operator" }, thread);
+      await act(async () => {
+        fireEvent.click(within(card).getByRole("button", { name: "History" }));
+      });
+      expect(manageThreadPrWatches).toHaveBeenCalledExactlyOnceWith({
+        action: "history",
+        backend: "codex",
+        threadId: "thread-1",
+        federationTarget: { scope: "remote", instanceId: "peer" },
+        limit: 20,
+      });
+      expect(within(card).getByText("No watch has ended yet.")).toBeInTheDocument();
+    });
+
+    it("offers Watch CI on a peer that accepts it and sent no watch", async () => {
+      const watchCi = vi.fn(async () => undefined);
+      const { thread } = renderPanel({
+        thread: { ...autoFixThread([openPr]), federation: capablePeer },
+        context: { watchCi },
+      });
+      const card = screen.getByRole("listitem");
+      expect(within(card).getByText("Not waiting for CI.")).toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(within(card).getByRole("button", { name: "Watch CI on #3174" }));
+      });
+      expect(watchCi).toHaveBeenCalledWith(thread, openPr);
+    });
+
+    it("keeps an owner's watches read-only when it predates control or grants no turn control", () => {
+      for (const capabilities of [["turn_control"], ["thread_pr_watch_control_v1"]] as const) {
+        renderPanel({
+          thread: {
+            ...autoFixThread([openPr]),
+            activePrWatches: [ciWatch],
+            federation: { ...capablePeer, capabilities: [...capabilities] },
+          },
+          context: { watchCi: vi.fn(async () => undefined) },
+        });
+        const card = screen.getByRole("listitem");
+        expect(within(card).getByText("Watches run on Laptop. Stop them there.")).toBeInTheDocument();
+        expect(within(card).queryByRole("button", { name: /^Stop|History|Watch CI/ })).toBeNull();
+        cleanup();
+      }
+    });
+
+    it("draws no watch list on a merged PR", () => {
+      renderPanel({
+        thread: threadWithPrs([{ ...openPr, lifecycleState: "merged", state: "merged" }]),
+        watches: [terminalWatch],
+      });
+      expect(screen.queryByText("Wakes this thread")).toBeNull();
+    });
   });
 });

@@ -1326,7 +1326,7 @@ describe("Composer", () => {
 
     expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
       "data-tooltip",
-      "Auto-fix PR — handle new CI failures or merge conflicts",
+      "Auto-fix PR — starts a repair turn when a new push fails CI or hits a merge conflict. To hear about a pass or a re-run, ask the agent to watch CI.",
     );
   });
 
@@ -1471,7 +1471,7 @@ describe("Composer", () => {
 
     expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
       "data-tooltip",
-      "Auto-fix PR — handle new CI failures or merge conflicts",
+      "Auto-fix PR — starts a repair turn when a new push fails CI or hits a merge conflict. To hear about a pass or a re-run, ask the agent to watch CI.",
     );
   });
 
@@ -4491,6 +4491,64 @@ describe("Composer", () => {
     expect(
       within(listbox).getByRole("option", { name: /#Bob's Best Thread 3000/ }),
     ).toBeInTheDocument();
+  });
+
+  it("appends an insert request to the draft on a new line, focuses, and never sends", async () => {
+    const thread: NavigationThreadSummary = {
+      id: "thread-watch",
+      title: "Watch thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const otherThread: NavigationThreadSummary = { ...thread, id: "thread-other", title: "Other thread" };
+    const startTurn = vi.fn();
+    const onComposerInsertRequestHandled = vi.fn();
+    const props = {
+      desktopApi: { onAgentEvent: () => () => undefined, startTurn },
+      disabled: false,
+      skills: [],
+      threads: [thread, otherThread],
+      onComposerInsertRequestHandled,
+    };
+    const request = {
+      id: 1,
+      threadKey: "codex:thread-watch",
+      text: "Watch CI on #3174 and wake this thread when it finishes, pass or fail.",
+    };
+    // Another thread's composer leaves the request for the composer it names.
+    const { rerender } = render(
+      <Composer {...props} thread={otherThread} composerInsertRequest={request} />,
+    );
+    expect(onComposerInsertRequestHandled).not.toHaveBeenCalled();
+
+    rerender(<Composer {...props} thread={thread} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), {
+      target: { value: "The flaky test is fixed." },
+    });
+    rerender(<Composer {...props} thread={thread} composerInsertRequest={request} />);
+
+    await waitFor(() => {
+      expect(onComposerInsertRequestHandled).toHaveBeenCalledWith(1);
+    });
+    const reply = screen.getByRole("textbox", { name: "Reply" }) as HTMLElement & { value?: string };
+    // The request starts a line of its own after the operator's text.
+    await waitFor(() => {
+      expect(reply.value).toBe(
+        "The flaky test is fixed.\nWatch CI on #3174 and wake this thread when it finishes, pass or fail.",
+      );
+    });
+    expect(reply).toHaveTextContent("Watch CI on #3174 and wake this thread when it finishes, pass or fail.");
+    await waitFor(() => expect(reply).toHaveFocus());
+    expect(startTurn).not.toHaveBeenCalled();
+
+    // The same request does not apply twice.
+    rerender(<Composer {...props} thread={thread} composerInsertRequest={{ ...request }} />);
+    expect(onComposerInsertRequestHandled).toHaveBeenCalledTimes(1);
+    expect(reply.value).toBe(
+      "The flaky test is fixed.\nWatch CI on #3174 and wake this thread when it finishes, pass or fail.",
+    );
   });
 
   it("marks a rewound prompt with a chip until the composer is cleared", async () => {

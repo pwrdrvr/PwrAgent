@@ -7,6 +7,7 @@ import {
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
 export { authenticateMessageOrigin } from "@pwragent/federation/federation-message-origin";
 import { ForgeReadError, type ForgeReadRequest } from "../pr-status/forge-tool-contract";
+import { THREAD_PR_WATCHES_UNSUPPORTED_MESSAGE } from "../pr-status/thread-pr-watches-federation";
 import { HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE } from "@pwragent/shared";
 import type {
   ListBackgroundTerminalsRequest,
@@ -16,6 +17,7 @@ import type {
 } from "@pwragent/shared";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
+import type { FederationThreadPrWatchesRequestV1, ThreadPrWatchesResponse } from "@pwragent/shared";
 import type { AppServerThreadMessage } from "@pwragent/shared";
 import { projectFederationThreadRead, materializeFederationThreadRead, type FederationThreadReadResponse } from "./federation-thread-read";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
@@ -694,6 +696,13 @@ export type FederationBackendOperations = {
   sendThreadPrAutoDispatchNow(
     request: SendThreadPrAutoDispatchNowRequest,
   ): Promise<SendThreadPrAutoDispatchNowResponse>;
+  /**
+   * Optional on owner adapters so a viewer of an older owner receives
+   * method_not_found and keeps the watches read-only.
+   */
+  manageThreadPrWatchesV1?(
+    request: FederationThreadPrWatchesRequestV1,
+  ): Promise<ThreadPrWatchesResponse>;
   archiveThread(request: ArchiveThreadRequest): Promise<ArchiveThreadResponse>;
   restoreThread(request: RestoreThreadRequest): Promise<RestoreThreadResponse>;
   startThread(request: StartThreadRequest): Promise<StartThreadResponse>;
@@ -1359,6 +1368,15 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as SendThreadPrAutoDispatchNowRequest,
       ),
   );
+  if (params.backend.manageThreadPrWatchesV1) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.manageThreadPrWatchesV1,
+      async (envelope) =>
+        await params.backend.manageThreadPrWatchesV1!(
+          envelope.params as FederationThreadPrWatchesRequestV1,
+        ),
+    );
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.archiveThread,
     async (envelope) =>
@@ -2536,6 +2554,34 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       method: FEDERATION_BACKEND_METHODS.sendThreadPrAutoDispatchNow,
       params: request,
     });
+  }
+
+  async manageThreadPrWatchesV1(
+    request: FederationThreadPrWatchesRequestV1,
+  ): Promise<ThreadPrWatchesResponse> {
+    try {
+      return await this.rpc.request<ThreadPrWatchesResponse>({
+        method: FEDERATION_BACKEND_METHODS.manageThreadPrWatchesV1,
+        params: request,
+      });
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) {
+        return {
+          ok: false,
+          error: { code: "federation_unsupported", message: THREAD_PR_WATCHES_UNSUPPORTED_MESSAGE },
+        };
+      }
+      if (hasFederationErrorCode(error, "capability_denied")) {
+        return {
+          ok: false,
+          error: {
+            code: "forbidden",
+            message: "The owning instance does not let this one control its threads.",
+          },
+        };
+      }
+      throw error;
+    }
   }
 
   async startThread(request: StartThreadRequest): Promise<StartThreadResponse> {

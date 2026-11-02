@@ -54,6 +54,8 @@ export const FEDERATION_BACKEND_METHODS = {
   setThreadPrAutoDispatch: "backend.setThreadPrAutoDispatch",
   cancelThreadPrAutoDispatch: "backend.cancelThreadPrAutoDispatch",
   sendThreadPrAutoDispatchNow: "backend.sendThreadPrAutoDispatchNow",
+  // A new method, so an owner that predates it answers method_not_found.
+  manageThreadPrWatchesV1: "backend.manageThreadPrWatchesV1",
   archiveThread: "backend.archiveThread",
   restoreThread: "backend.restoreThread",
   startThread: "backend.startThread",
@@ -202,6 +204,9 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.setThreadPrAutoDispatch]: "turn_control",
   [FEDERATION_BACKEND_METHODS.cancelThreadPrAutoDispatch]: "turn_control",
   [FEDERATION_BACKEND_METHODS.sendThreadPrAutoDispatchNow]: "turn_control",
+  // A watch wakes the thread with an agent turn, and stopping one cancels
+  // that wake, so both sit with Auto-fix under turn control.
+  [FEDERATION_BACKEND_METHODS.manageThreadPrWatchesV1]: "turn_control",
   [FEDERATION_BACKEND_METHODS.archiveThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.restoreThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startThread]: "turn_control",

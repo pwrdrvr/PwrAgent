@@ -2220,6 +2220,10 @@ type ThreadPullRequestDetachHandler = (
   request: DetachThreadPullRequestRequest,
 ) => Promise<DetachThreadPullRequestResponse>;
 
+type ThreadPrWatchesPeerHandler = (
+  request: import("@pwragent/shared").FederationThreadPrWatchesRequestV1,
+) => Promise<import("@pwragent/shared").ThreadPrWatchesResponse>;
+
 type ThreadPullRequestRefreshHandler = (
   request: RefreshOwnedThreadPullRequestsRequest,
 ) => Promise<RefreshThreadPullRequestsResponse>;
@@ -10475,6 +10479,7 @@ export class DesktopBackendRegistry {
   private threadPullRequestDetachHandler:
     | ThreadPullRequestDetachHandler
     | undefined;
+  private threadPrWatchesPeerHandler: ThreadPrWatchesPeerHandler | undefined;
   private threadPullRequestRefreshHandler:
     | ThreadPullRequestRefreshHandler
     | undefined;
@@ -12627,6 +12632,26 @@ export class DesktopBackendRegistry {
     handler: ThreadPullRequestDetachHandler | null | undefined,
   ): void {
     this.threadPullRequestDetachHandler = handler ?? undefined;
+  }
+
+  setThreadPrWatchesPeerHandler(
+    handler: ThreadPrWatchesPeerHandler | null | undefined,
+  ): void {
+    this.threadPrWatchesPeerHandler = handler ?? undefined;
+  }
+
+  /** A viewer's history, Stop or Watch CI on one of this owner's threads. */
+  async manageThreadPrWatchesForPeer(
+    request: import("@pwragent/shared").FederationThreadPrWatchesRequestV1,
+  ): Promise<import("@pwragent/shared").ThreadPrWatchesResponse> {
+    const handler = this.threadPrWatchesPeerHandler;
+    if (!handler) {
+      return {
+        ok: false,
+        error: { code: "not_found", message: "PR watches are not available on this instance yet." },
+      };
+    }
+    return await handler(request);
   }
 
   setThreadPullRequestRefreshHandler(
@@ -15958,6 +15983,11 @@ export class DesktopBackendRegistry {
           this.codexClient.listNativeSubAgentThreads?.({ all: true }, { callerReason: "auto-archive" }) ?? [],
         ])).flat();
         const threads = [...codexThreads, ...await this.listAllInstalledAcpThreads(undefined, false)];
+        // One read for every thread a PR watch will wake.
+        const watchedThreadKeys = new Set(
+          (await this.overlayStore.listAllActivePrStatusWatches()).map((watch) =>
+            buildThreadIdentityKey(watch.backend, watch.threadId)),
+        );
         const candidates: ThreadArchiveCandidate[] = [];
         for (const backend of new Set(threads.map((thread) => thread.source))) {
           const backendThreads = threads.filter((thread) => thread.source === backend);
@@ -15968,6 +15998,7 @@ export class DesktopBackendRegistry {
             candidates.push({
               thread, overlay: overlays[thread.id],
               activeSubAgent: await this.hasArchiveActiveSubAgent(backend, thread.id),
+              activePrWatch: watchedThreadKeys.has(buildThreadIdentityKey(backend, thread.id)),
             });
           }
         }
@@ -16224,6 +16255,7 @@ export class DesktopBackendRegistry {
       },
       overlay: await this.overlayStore.getThreadOverlayState({ backend, threadId }),
       activeSubAgent: await this.hasArchiveActiveSubAgent(backend, threadId),
+      activePrWatch: (await this.overlayStore.listActiveThreadPrStatusWatches({ backend, threadId })).length > 0,
     };
   }
 

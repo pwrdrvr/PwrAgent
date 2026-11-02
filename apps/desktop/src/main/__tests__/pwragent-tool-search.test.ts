@@ -110,6 +110,8 @@ describe("PwrAgent tool discovery", () => {
     ["feishu send file", "send_messaging_file"],
     ["read star map", "read_star_map_view"],
     ["watch pull request", "watch_thread_pull_request"],
+    ["cancel pr watch", "watch_thread_pull_request"],
+    ["list my watches", "watch_thread_pull_request"],
     ["manage mcp connections", "manage_mcp_connections"],
   ])("finds %s in its bounded results", (query, name) => {
     const results = searchPwrAgentTools(catalog, query);

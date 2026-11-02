@@ -1943,6 +1943,15 @@ export type AppServerNotification =
       method: "thread/dependencies/updated";
       params: { threadId: string; dependencyId: string };
     }
+  | {
+      /**
+       * A thread's PR watches changed: one was armed, stopped, woke the
+       * thread, gave up, moved to a new head, or lost its baseline. Readers
+       * re-list watches; the event carries no watch rows.
+       */
+      method: "thread/prWatches/updated";
+      params: { backend: AppServerBackendKind; threadId: string; prKey?: string };
+    }
   | NavigationThreadGitWorkingStateUpdatedNotification
   | {
       /**
