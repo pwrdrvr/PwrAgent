@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.3.10 - 2026-11-02
+
+- Managed MCP Connections - Forward tool progress and cancellation, support browser-link requests with explicit consent, and provide thread directory roots to local-command servers. Codex MCP calls can report progress too.
+- Plan Limits - Keep quota readings in one forward-only store across providers so stale updates do not roll usage backward.
+- Claude Session Recovery - Explain when Claude Code has deleted a conversation needed for resume, fork, or rewind. Preserve the PwrAgent transcript and distinguish this from other session errors.
+- Forge Automation - Release a locked thread's Auto-fix ownership, honor configured Claude forge-tool approvals without duplicate prompts, and show Forge Automation on peer-only project rows.
+- Thread Navigation - Keep starting-thread titles and pins stable, clear scheduled badges after startup, and allow marking a directory read while its threads are active.
+- CI Downloads - Store downloaded CI artifacts with their owning thread and replace repeat downloads safely. Older unowned CI downloads are cleared and can be downloaded again.
+- Outpost Versions and Sync - Show CLI and running-daemon versions, identify when an update requires a daemon restart, and align remote titles, read marks, and refreshes with desktop behavior.
+- UI and Messaging - Make busy indicators consistently respect reduced motion, avoid unnecessary messaging-settings refreshes, and order current and superseded models consistently.
+- Minor - Dependency updates and test-infrastructure improvements.
+
 ## v1.3.9 - 2026-11-02
 
 - Forge Tool Rules - Set project-specific permissions for each agent or model, covering PRs, comments, issues, CI reruns, and merges. Claude Auto and Full Access turns honor the configured policies.
