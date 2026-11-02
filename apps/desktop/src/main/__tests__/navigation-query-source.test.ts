@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentEvent, AppServerBackendScope, NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  AgentEvent,
+  AppServerBackendScope,
+  NavigationQueryRequest,
+  NavigationThreadSummary,
+  ThreadPullRequestWatchSummary,
+} from "@pwragent/shared";
 import { buildPrependPinRank } from "@pwragent/shared";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -13,6 +19,7 @@ const mocks = vi.hoisted(() => {
       readNavigationSourceVersion: vi.fn(() => "unchanged"),
       readNavigationQueryIndex: vi.fn((_params: { threads: NavigationThreadSummary[] }): NavigationQueryIndex => ({ threads: [], directories: [] })),
       readDirectoryGitStatusCache: async () => ({}),
+      listAllActivePrStatusWatches: vi.fn(async (): Promise<ThreadPullRequestWatchSummary[]> => []),
     },
     messaging: {
       findActiveBindings,
@@ -337,6 +344,54 @@ describe("owner index source event admission", () => {
     }
   });
 
+  it("marks each local row's CI watches from one read, and leaves a peer's row its owner's marks", async () => {
+    const row = (id: string): NavigationThreadSummary => ({
+      id, source: "codex", title: id, titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false },
+    });
+    const ownerMarks = [{ prKey: "github.com/a/b#2", watchId: "owner-ci", notifyOn: ["failure" as const], createdAt: 3 }];
+    const remote = { ...row("watched"), prCiWatches: ownerMarks, federation: { ref: { target: { scope: "remote", instanceId: "peer" },
+      backend: "codex", threadId: "watched" }, instanceLabel: "Peer" } } as NavigationThreadSummary;
+    const watch = (watchId: string, threadId: string, extra: Partial<ThreadPullRequestWatchSummary> = {}): ThreadPullRequestWatchSummary => ({
+      watchId, backend: "codex", threadId, prKey: "github.com/a/b#1", prUrl: "https://github.com/a/b/pull/1", prNumber: 1,
+      headSha: "a".repeat(40), notifyOn: ["success", "failure"], createdAt: 1, failureHandledByAutoFix: false, kind: "checks",
+      ...extra,
+    });
+    const original = mocks.store.readNavigationQueryIndex.getMockImplementation();
+    mocks.store.readNavigationQueryIndex.mockImplementation(() => ({
+      threads: [row("watched"), row("merge-only"), remote], directories: [],
+    }));
+    mocks.store.listAllActivePrStatusWatches.mockResolvedValue([
+      // A re-run's attempt survives on the baseline of an older row.
+      watch("ci", "watched", { baseline: { outcome: "failure", observedAt: 1, runAttempt: 2 } }),
+      // A merge/close watch draws no eye.
+      watch("merge", "merge-only", { kind: "terminal", notifyOn: ["merged", "closed"] }),
+    ]);
+    const source = createSource();
+    source.finish();
+    try {
+      const index = await source.read();
+      const local = index.threads.filter((thread) => !thread.federation);
+      expect(local.find((thread) => thread.id === "watched")?.prCiWatches).toEqual([{
+        prKey: "github.com/a/b#1", watchId: "ci", notifyOn: ["success", "failure"], createdAt: 1, runAttempt: 2,
+      }]);
+      expect(local.find((thread) => thread.id === "merge-only")?.prCiWatches).toBeUndefined();
+      expect(index.threads.find((thread) => thread.federation)?.prCiWatches).toBe(ownerMarks);
+      expect(mocks.store.listAllActivePrStatusWatches).toHaveBeenCalledTimes(1);
+
+      // A failed read serves the rows without marks.
+      mocks.store.listAllActivePrStatusWatches.mockRejectedValueOnce(new Error("state is closing"));
+      source.emit("thread/prWatches/updated");
+      const degraded = await source.read();
+      expect(degraded.threads.filter((thread) => !thread.federation).map((thread) => thread.prCiWatches))
+        .toEqual([undefined, undefined]);
+    } finally {
+      mocks.store.readNavigationQueryIndex.mockImplementation(original!);
+      mocks.store.listAllActivePrStatusWatches.mockResolvedValue([]);
+      mocks.store.listAllActivePrStatusWatches.mockClear();
+      source.emit("thread/name/updated");
+    }
+  });
+
   it("shares one replacement scan across consumers admitted between related events", async () => {
     const source = createSource();
     const reads = [source.read()];
@@ -599,5 +654,32 @@ describe("owner index coverage", () => {
   it("keeps an index checking until the startup provider refresh settles", async () => {
     await expect(readCoverage({ startup: { state: "checking" }, incomplete: false }))
       .resolves.toEqual({ state: "checking" });
+  });
+
+  it("does not serve an index built while startup was checking once startup finishes", async () => {
+    // Owner PR metadata reads the index from the refreshed event's first
+    // listener, before the read pool's own listener can invalidate it.
+    // Serving the retained checking index then left Auto-fix with no
+    // candidates for the session.
+    let startup: { state: "checking" | "ready" } = { state: "checking" };
+    const listThreads = vi.fn(async (): Promise<NavigationThreadSummary[]> => []);
+    const registry = {
+      listThreads,
+      isIncompleteThreadList: () => false,
+      getStartupProviderRefreshStatus: () => startup,
+      onEvent: () => () => {},
+      canonicalizeNavigationThreadPullRequests: async (threads: []) => threads,
+      hydrateThreadGitWorkingStates: async (threads: []) => threads,
+      withNavigationSubAgentActivity: (threads: []) => threads,
+      getNavigationInputRequestThreadKeys: () => new Set<string>(),
+    } as unknown as DesktopBackendRegistry;
+    const read = () => loadLocalNavigationQueryIndex({ registry, callerReason: "coverage-regression" });
+
+    expect((await read()).coverage).toEqual({ state: "checking" });
+    expect((await read()).coverage).toEqual({ state: "checking" });
+    expect(listThreads).toHaveBeenCalledTimes(1);
+    startup = { state: "ready" };
+    expect((await read()).coverage).toEqual({ state: "complete" });
+    expect(listThreads).toHaveBeenCalledTimes(2);
   });
 });

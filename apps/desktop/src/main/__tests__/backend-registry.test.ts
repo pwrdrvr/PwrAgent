@@ -23,6 +23,7 @@ import { stageTurnInputAttachment } from "../app-server/turn-input-attachment-fi
 import * as turnInputAttachmentFiles from "../app-server/turn-input-attachment-files";
 import * as transcriptImageProtocol from "../transcript-image-protocol";
 import * as gitExecutable from "../app-server/git-executable";
+import * as gitHeadBranch from "../app-server/git-head-branch";
 import { resolveActiveProfilePath } from "../profile";
 import { execFile as execFileCallback } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -115,6 +116,7 @@ import type {
   TaskMonitorResponse,
   ThreadExecutionMode,
   ThreadOverlayState,
+  ThreadPullRequestWatchSummary,
   ThreadSubAgentSummary,
   ThreadToolAccounting,
   ThreadToolInvocationAlert,
@@ -166,6 +168,7 @@ import gitSubprocessBudgets from "./fixtures/git-subprocess-budgets.json";
 import navigationListingBudgets from "./fixtures/navigation-listing-budgets.json";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { ProjectHeldWakeupStore } from "../state/project-held-wakeup-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -639,6 +642,11 @@ function createOverlayStoreMock(params?: {
   }
 
   return {
+    listAllActivePrStatusWatches: async (): Promise<ThreadPullRequestWatchSummary[]> => [],
+    listActiveThreadPrStatusWatches: async (_params: {
+      backend: string;
+      threadId: string;
+    }): Promise<ThreadPullRequestWatchSummary[]> => [],
     ...mockSubAgentReads((backend, threadId) =>
       overlays.get(`${backend}:${threadId}`)),
     ...mockUsageActivityReads((backend, threadId) =>
@@ -4351,6 +4359,156 @@ describe("DesktopBackendRegistry", () => {
           threadId: "parked",
           input: [{ type: "text", text: expect.stringContaining("The nightly run finished.") }],
         });
+      });
+    });
+
+    describe("across a restart", () => {
+      // The monitor and the dependency are consumed when the wake is held,
+      // so the durable row is the only copy a restart can bring back.
+      const durableStore = () => {
+        vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+        const temp = createTempStateDb("pwragent-project-held-wakeups-");
+        const db = StateDb.open(temp.dbPath);
+        onTestFinished(() => {
+          db.close();
+          removeTempStateDbDir(temp.tempDir);
+          vi.unstubAllEnvs();
+        });
+        const rows = () => db.raw.prepare(
+          "SELECT entry_id, owner_instance_id FROM project_held_wakeups",
+        ).all() as { entry_id: string; owner_instance_id: string }[];
+        return { rows, store: new ProjectHeldWakeupStore(db.raw, { processId: 4_242, processAlive: () => false }) };
+      };
+      const launch = (store: ProjectHeldWakeupStore, instanceId: string, live: string[] = []) => {
+        const codexClient = new MockBackendClient({});
+        const registry = new DesktopBackendRegistry({
+          codexClient,
+          overlayStore: createOverlayStoreMock(),
+          projectHeldWakeupStore: store,
+          runtimeInstanceId: instanceId,
+          resolveLiveProfileRuntimeInstanceIds: () => live,
+        });
+        onTestFinished(() => registry.close());
+        return { codexClient, registry };
+      };
+      const resolve = (registry: DesktopBackendRegistry, action: "send" | "discard") =>
+        registry.resolveProjectHeldWakeups({
+          directoryKey: PROJECT,
+          resolutions: [{ entryId: "task-monitor:nightly", backend: "codex", threadId: "parked", action }],
+        });
+
+      it("holds the wake-up again after a restart, and Send starts it and drops the durable copy", async () => {
+        pauseProject();
+        const { rows, store } = durableStore();
+        const { writes } = await measureSqliteWrites(async () => {
+          const first = launch(store, "instance-a");
+          await first.registry.deliverProjectPausedWakeup(wake());
+          expect(rows()).toEqual([{ entry_id: "task-monitor:nightly", owner_instance_id: "instance-a" }]);
+          await first.registry.close();
+
+          const second = launch(store, "instance-b", ["instance-b"]);
+          expect(rows()).toEqual([{ entry_id: "task-monitor:nightly", owner_instance_id: "instance-b" }]);
+          expect(second.registry.listProjectHeldWakeups(PROJECT)).toEqual([expect.objectContaining({
+            entryId: "task-monitor:nightly",
+            backend: "codex",
+            threadId: "parked",
+            source: "monitor",
+            summary: "Monitor finished: \"Watch the nightly run\"",
+          })]);
+          expect(second.registry.getQueuedTurnsForThread({ backend: "codex", threadId: "parked" })[0])
+            .toMatchObject({ paused: true, holdReason: expect.stringContaining("openclaw is paused") });
+          expect(second.codexClient.startTurnCallCount).toBe(0);
+
+          await expect(resolve(second.registry, "send")).resolves.toEqual({ results: [
+            { entryId: "task-monitor:nightly", status: "sent" },
+          ] });
+          await vi.waitFor(() => expect(second.codexClient.startTurnCallCount).toBe(1));
+          expect(JSON.stringify(second.codexClient.startTurnCalls[0])).toContain("Monitor finished");
+          await vi.waitFor(() => expect(rows()).toEqual([]));
+          expect(second.registry.listProjectHeldWakeups(PROJECT)).toEqual([]);
+        });
+        expectSqliteWriteBudget({
+          scenario: "project-held-wakeup-restart-send",
+          note: "one held wake-up through a restart and Send: one hold insert, one startup claim, one delete when its turn starts. ~20 KB per cycle; holds are rare, so even 20 cycles/day is ~0.4 MB/day. Idle and per-turn writes are 0.",
+          writes,
+        });
+      });
+
+      it("discards a restored wake-up and removes its durable copy", async () => {
+        pauseProject();
+        const { rows, store } = durableStore();
+        const { writes } = await measureSqliteWrites(async () => {
+          const first = launch(store, "instance-a");
+          await first.registry.deliverProjectPausedWakeup(wake());
+          await first.registry.close();
+
+          const second = launch(store, "instance-b", ["instance-b"]);
+          expect(second.registry.listProjectHeldWakeups(PROJECT)).toHaveLength(1);
+          await expect(resolve(second.registry, "discard")).resolves.toEqual({ results: [
+            { entryId: "task-monitor:nightly", status: "discarded" },
+          ] });
+          expect(rows()).toEqual([]);
+          expect(second.registry.listProjectHeldWakeups(PROJECT)).toEqual([]);
+          expect(second.codexClient.startTurnCallCount).toBe(0);
+        });
+        expectSqliteWriteBudget({
+          scenario: "project-held-wakeup-restart-discard",
+          note: "one held wake-up through a restart and Discard: one hold insert, one startup claim, one delete. ~20 KB per cycle; holds are rare, so even 20 cycles/day is ~0.4 MB/day. Idle and per-turn writes are 0.",
+          writes,
+        });
+
+        // Nothing is left for a later launch to hold.
+        const third = launch(store, "instance-c", ["instance-c"]);
+        expect(third.registry.listProjectHeldWakeups(PROJECT)).toEqual([]);
+      });
+
+      it("leaves a live sibling instance's held wake-up with that instance", async () => {
+        pauseProject();
+        const { rows, store } = durableStore();
+        const first = launch(store, "instance-a");
+        await first.registry.deliverProjectPausedWakeup(wake());
+
+        const sibling = launch(store, "instance-b", ["instance-a", "instance-b"]);
+        expect(sibling.registry.listProjectHeldWakeups(PROJECT)).toEqual([]);
+        expect(rows()).toEqual([{ entry_id: "task-monitor:nightly", owner_instance_id: "instance-a" }]);
+        expect(first.registry.listProjectHeldWakeups(PROJECT)).toHaveLength(1);
+      });
+
+      it("drops the durable copy when the operator pauses a sent wake-up again", async () => {
+        pauseProject();
+        const { rows, store } = durableStore();
+        const first = launch(store, "instance-a");
+        await first.registry.deliverProjectPausedWakeup(wake());
+        // The operator's own turn keeps the thread busy, so Send waits.
+        await expect(first.registry.submitTurn({
+          backend: "codex",
+          threadId: "parked",
+          input: [{ type: "text", text: "Operator reply" }],
+        })).resolves.toMatchObject({ status: "started" });
+        await expect(resolve(first.registry, "send")).resolves.toEqual({ results: [
+          { entryId: "task-monitor:nightly", status: "sent" },
+        ] });
+        expect(rows()).toHaveLength(1);
+
+        await first.registry.setQueuedTurnPaused({ queueEntryId: "task-monitor:nightly", paused: true });
+        expect(rows()).toEqual([]);
+        await first.registry.close();
+
+        const second = launch(store, "instance-b", ["instance-b"]);
+        expect(second.registry.listProjectHeldWakeups(PROJECT)).toEqual([]);
+      });
+
+      it("keeps an operator's edit to a held wake-up across a restart", async () => {
+        pauseProject();
+        const { store } = durableStore();
+        const first = launch(store, "instance-a");
+        await first.registry.deliverProjectPausedWakeup(wake());
+        first.registry.updateQueuedTurnInput("task-monitor:nightly", [{ type: "text", text: "Edited wake" }]);
+        await first.registry.close();
+
+        const second = launch(store, "instance-b", ["instance-b"]);
+        expect(second.registry.getQueuedTurnsForThread({ backend: "codex", threadId: "parked" })[0])
+          .toMatchObject({ displayText: "Edited wake", paused: true });
       });
     });
   });
@@ -49455,15 +49613,11 @@ script = "printf setup"
       registry.onEvent((event) => {
         if (["turn/completed", "turn/failed", "turn/cancelled"].includes(event.notification.method)) turnFinished.resolve(event);
       });
-      // The root is not a repository, so each branch read (thread start, and
-      // turn end before listeners see turn/completed) falls back to an owned
-      // Git process. On Windows that is PowerShell plus Git. Answer as Git
-      // does outside a repository.
-      const runGitCommand = gitExecutable.runGitCommand;
-      const branchRead = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
-        if (cwd !== root) return await runGitCommand(cwd, args, options);
-        throw new Error("fatal: not a git repository (or any of the parent directories): .git");
-      });
+      // The root is not a repository. Each branch read (thread start, and
+      // turn end before listeners see turn/completed) must prove that without
+      // an owned Git process, which on Windows is PowerShell plus Git.
+      const branchProbe = vi.spyOn(gitHeadBranch, "probeCurrentGitBranch");
+      const gitLaunch = vi.spyOn(gitExecutable, "runGitCommand");
       try {
         const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
         const identity = { backend: "claude" as const, threadId };
@@ -49473,15 +49627,15 @@ script = "printf setup"
         await expect(registry.steerTurn({ ...identity, expectedTurnId: started.turnId, requestId: "telegram-steer-1",
           input: [{ type: "text", text: "Course correct from Telegram" }] }, steererOrigin))
           .resolves.toMatchObject({ disposition: "steered", turnId: started.turnId });
-        branchRead.mockClear();
+        branchProbe.mockClear();
         finish.resolve();
         await expect(turnFinished.promise).resolves.toMatchObject({
           notification: { method: "turn/completed", params: { turnId: started.turnId } },
         });
-        // The turn-end branch read ran, and ran without a Git process.
-        expect(branchRead).toHaveBeenCalledWith(
-          root, ["rev-parse", "--abbrev-ref", "HEAD"], expect.objectContaining({ ownProcessTree: true }),
-        );
+        // The turn-end branch read ran, and no read launched Git for the root.
+        expect(branchProbe).toHaveBeenCalledWith(root, expect.any(AbortSignal));
+        await expect(branchProbe.mock.results.at(-1)?.value).resolves.toBe(gitHeadBranch.NOT_A_GIT_REPOSITORY);
+        expect(gitLaunch.mock.calls.filter(([cwd]) => cwd === root)).toEqual([]);
 
         const replay = await registry.readThread(identity);
         const firstPrompt = replay.replay.messages.find((message) => message.text === "Start");
@@ -49493,7 +49647,8 @@ script = "printf setup"
         try {
           await registry.close();
         } finally {
-          branchRead.mockRestore();
+          branchProbe.mockRestore();
+          gitLaunch.mockRestore();
         }
         await rm(root, { recursive: true, force: true });
       }
@@ -52886,6 +53041,9 @@ script = "printf setup"
             createdAt: 1_000,
             failureHandledByAutoFix: true,
           },
+          armed: true,
+          reason: "armed" as const,
+          message: "Watching PR #1105 at aaaaaaa for the next success.",
         },
       },
     }));
@@ -56276,6 +56434,83 @@ script = "printf setup"
       }
     });
 
+    it("gives a recovery turn in a new process the brief and the last observed state", async () => {
+      let endFirstTurn!: () => void;
+      const firstTurnRunning = new Promise<void>((resolve) => { endFirstTurn = resolve; });
+      let launches = 0;
+      const { close, prompts, registry } = await createClaudeMonitorRegistry({
+        script: async function* (options) {
+          launches += 1;
+          yield { type: "system", subtype: "init", session_id: options.sessionId } as ClaudeMessage;
+          if (launches > 1) {
+            // The recovery turn stays open while the test reads its prompt.
+            await new Promise<void>(() => {});
+          }
+          yield { type: "assistant", parent_tool_use_id: null, message: {
+            id: "poll", content: [{ type: "tool_use", id: "tool-poll", name: "Bash",
+              input: { command: "gh run view 42 --json jobs" } }],
+          } } as ClaudeMessage;
+          yield { type: "user", parent_tool_use_id: null, message: { content: [{
+            type: "tool_result", tool_use_id: "tool-poll", content: "E2E job: in_progress (3 of 5 shards done)",
+          }] } } as ClaudeMessage;
+          yield { type: "assistant", parent_tool_use_id: null, message: {
+            id: "said", content: [{ type: "text", text: "Run 42 is still running; E2E has 3 of 5 shards done." }],
+          } } as ClaudeMessage;
+          await firstTurnRunning;
+          // The turn ends with no watcher and no complete_monitoring.
+          yield nativeResult;
+        },
+      });
+      try {
+        const response = await callRegistryMcpTool({
+          registry, backend: "claude", threadId: parentThreadId, turnId: "parent-turn",
+          tool: "create_monitor_delegation",
+          args: {
+            task: "Watch CI run 42 until the E2E job finishes.",
+            monitorContext: "Poll `gh run view 42 --json jobs`. The E2E job is terminal at DONE or FAILURE.",
+          },
+        });
+        expect(response.isError).not.toBe(true);
+        const monitorId = String(response.structuredContent?.monitorId);
+        const monitorThreadId = String(response.structuredContent?.monitorThreadId);
+        const progress = await callRegistryMcpTool({
+          registry, backend: "claude", threadId: monitorThreadId,
+          turnId: String(response.structuredContent?.monitorTurnId),
+          tool: "inject_progress",
+          args: { monitorId, status: "running", message: "E2E job: 3 of 5 shards done." },
+        });
+        expect(progress.isError).not.toBe(true);
+        await vi.waitFor(async () => {
+          const { replay } = await registry.readThread({ backend: "claude", threadId: monitorThreadId });
+          expect(replay.lastAssistantMessage).toContain("3 of 5 shards");
+        });
+
+        endFirstTurn();
+        await vi.waitFor(() => expect(userMessageCount(registry, monitorThreadId)).resolves.toBe(2));
+        // An ephemeral session cannot be resumed: the recovery is a new one.
+        expect(prompts).toHaveLength(2);
+        expect(prompts[1]!.resume).toBeUndefined();
+        expect(prompts[1]!.sessionId).not.toBe(prompts[0]!.sessionId);
+        const recovery = (await registry.readThread({ backend: "claude", threadId: monitorThreadId }))
+          .replay.lastUserMessage ?? "";
+        expect(recovery).toContain("PwrAgent monitor recovery instruction");
+        // The procedure the monitor was given.
+        expect(recovery).toContain("<original_monitor_brief>");
+        expect(recovery).toContain("Poll `gh run view 42 --json jobs`. The E2E job is terminal at DONE or FAILURE.");
+        // What it last reported and observed.
+        expect(recovery).toContain("[running] E2E job: 3 of 5 shards done.");
+        expect(recovery).toContain("gh run view 42 --json jobs");
+        expect(recovery).toContain("E2E job: in_progress (3 of 5 shards done)");
+        expect(recovery).toContain("Run 42 is still running; E2E has 3 of 5 shards done.");
+        expect(recovery).not.toContain("Use only the monitor task context you already have");
+        // The brief's watcher steps would end the recovery without a result.
+        expect(recovery).toContain("do not start a watcher or a background command");
+      } finally {
+        endFirstTurn();
+        await close();
+      }
+    });
+
     it("ends a finished monitor's watcher with its process", async () => {
       const { close, queries, registry, release } = await createClaudeMonitorRegistry({
         script: async function* (options) {
@@ -56470,6 +56705,8 @@ script = "printf setup"
 
     it("owns the branch read until the monitor workspace can be removed", async () => {
       const { close, registry, root } = await createClaudeMonitorRegistry({});
+      // An unproven layout reads its branch through the owned Git process.
+      const unproven = vi.spyOn(gitHeadBranch, "probeCurrentGitBranch").mockResolvedValue(undefined);
       const runGitCommand = gitExecutable.runGitCommand;
       let releaseBranch!: () => void;
       const heldBranch = new Promise<void>((resolve) => { releaseBranch = resolve; });
@@ -56501,6 +56738,7 @@ script = "printf setup"
           await (closing ?? close());
         } finally {
           branchRead.mockRestore();
+          unproven.mockRestore();
         }
       }
     });
@@ -61029,6 +61267,37 @@ script = "printf setup"
       expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: thread.id }))?.archiveRestoredAt).toEqual(expect.any(Number));
       await registry.sweepInactiveThreads();
       expect(archive).toHaveBeenCalledTimes(1);
+    } finally { await registry.close(); }
+  });
+
+  it("keeps a thread that a PR watch will wake out of the inactive sweep", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "watched-thread", title: "Waiting on CI", titleSource: "explicit", source: "codex",
+      threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
+    };
+    const watch: ThreadPullRequestWatchSummary = {
+      watchId: "watch-1", backend: "codex", threadId: thread.id, prKey: "github.com/pwrdrvr/pwragent#3191",
+      prUrl: "https://github.com/pwrdrvr/PwrAgent/pull/3191", prNumber: 3191, headSha: "a".repeat(40),
+      notifyOn: ["success", "failure"], createdAt: 1, failureHandledByAutoFix: false, kind: "checks",
+    };
+    const client = Object.assign(new MockBackendClient({ threads: [thread] }), {
+      readThreadSummary: vi.fn(async () => thread),
+    });
+    const overlayStore = Object.assign(createOverlayStoreMock(), {
+      listAllActivePrStatusWatches: vi.fn(async () => [watch]),
+      listActiveThreadPrStatusWatches: vi.fn(async () => [watch]),
+    });
+    const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }), codexClient: client, overlayStore });
+    const archive = vi.spyOn(client, "archiveThread");
+    try {
+      await registry.sweepInactiveThreads();
+      expect(overlayStore.listAllActivePrStatusWatches).toHaveBeenCalled();
+      expect(archive).not.toHaveBeenCalled();
+      // Once the watch ends, the same thread is swept.
+      overlayStore.listAllActivePrStatusWatches.mockResolvedValue([]);
+      overlayStore.listActiveThreadPrStatusWatches.mockResolvedValue([]);
+      await registry.sweepInactiveThreads();
+      expect(archive).toHaveBeenCalledExactlyOnceWith({ threadId: thread.id });
     } finally { await registry.close(); }
   });
 
@@ -66080,6 +66349,8 @@ script = "printf setup"
     const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
     const probeStarted = createDeferred<AbortSignal>();
     const releaseProbe = createDeferred<{ stdout: string; stderr: string }>();
+    // An unproven layout reads its branch through the owned Git process.
+    const unproven = vi.spyOn(gitHeadBranch, "probeCurrentGitBranch").mockResolvedValue(undefined);
     const branchProbe = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation((_cwd, _args, options) => {
       const signal = options!.signal!;
       probeStarted.resolve(signal);
@@ -66108,6 +66379,7 @@ script = "printf setup"
       releaseProbe.resolve({ stdout: "feature/late", stderr: "" });
       await terminal;
       branchProbe.mockRestore();
+      unproven.mockRestore();
       await registry.close();
     }
   });

@@ -1074,6 +1074,7 @@ select_for_new_threads = true
     let live: ThreadExecutionMode | undefined;
     let saved: ThreadExecutionMode;
     let events: AgentEvent[];
+    let reply: { action: "accept" | "decline"; content: Record<string, never> | null; _meta: { persist: "session" } | null };
     // No annotations, so the connection's default Tool approval asks.
     const invoke = () => approveAndInvoke(
       { ...args, serverName: "Fixture" },
@@ -1084,6 +1085,7 @@ select_for_new_threads = true
     beforeEach(() => {
       live = undefined;
       saved = "default";
+      reply = { action: "decline", content: null, _meta: null };
       const claude = (registry as unknown as { claudeBackend: ClaudeModes }).claudeBackend;
       vi.spyOn(claude, "liveExecutionMode").mockImplementation(() => live);
       vi.spyOn(claude, "executionMode").mockImplementation(async () => saved);
@@ -1094,7 +1096,7 @@ select_for_new_threads = true
         await registry.submitServerRequest({
           backend: "claude", threadId: "thread-1", turnId: "turn-1",
           requestId: String(event.notification.params.requestId),
-          response: { action: "decline", content: null, _meta: null },
+          response: reply,
         });
       });
     });
@@ -1109,6 +1111,16 @@ select_for_new_threads = true
     it.each(["default", "auto"] as const)("keeps the card for an open %s process", async (mode) => {
       live = mode;
       expect(await invoke()).toBe(false);
+      expect(events).toHaveLength(1);
+    });
+
+    // Claude launches with call_mcp_tool pre-allowed, so this card is the
+    // call's only prompt, and its conversation approval must hold.
+    it.each(["default", "auto"] as const)("remembers a conversation approval for an open %s process", async (mode) => {
+      live = mode;
+      reply = { action: "accept", content: {}, _meta: { persist: "session" } };
+      expect(await invoke()).toBe(true);
+      expect(await invoke()).toBe(true);
       expect(events).toHaveLength(1);
     });
 

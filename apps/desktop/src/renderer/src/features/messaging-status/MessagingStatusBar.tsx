@@ -26,7 +26,12 @@ const HEALTH_LABEL: Record<MessagingPlatformHealth, string> = {
   degraded: "Degraded",
   suspended: "Suspended",
   errored: "Errored",
-  unknown: "Loading",
+  unknown: "Connecting",
+};
+
+type DisplayPlatformStatus = MessagingPlatformStatus & {
+  /** Settings alone cannot establish that an adapter is connecting. */
+  runtimeStatusMissing?: boolean;
 };
 
 type ConfigurableMessagingPlatform = Extract<
@@ -134,21 +139,23 @@ export function MessagingStatusBar(props: {
   const messagingOn = sessionOverride
     ?? runtimeMessagingEnabled
     ?? inferMessagingEnabled(displayStatuses);
+  const forcedOffLabel = settingsSnapshot?.runtime.disabledReasonKind === "lease_held"
+    ? "Active elsewhere"
+    : "Off";
+  const disabledReason = settingsSnapshot?.runtime.disabledReason;
   const activePlatforms = displayStatuses.filter((status) =>
     hasRecentActivity(status, activeAtByPlatform[status.platform])
   );
   const hasDegradation = displayStatuses.some(
     (status) => (status.degradationReasons ?? []).length > 0,
   );
-  const summary = buildStatusSummary(
-    displayStatuses,
-    messagingOn,
-    activePlatforms.length,
-  );
+  const summary = !messagingOn && disabledReason
+    ? disabledReason
+    : buildStatusSummary(displayStatuses, messagingOn, activePlatforms.length);
   const controllerLabel = displayStatuses
     .map(
       (status) =>
-        `${formatMessagingPlatformName(status.platform)}: ${HEALTH_LABEL[status.health]}`,
+        `${formatMessagingPlatformName(status.platform)}: ${!messagingOn ? forcedOffLabel : platformHealthLabel(status)}`,
     )
     .join("; ");
   const showActivityFooter =
@@ -177,7 +184,7 @@ export function MessagingStatusBar(props: {
     return () => {
       cancelled = true;
     };
-  }, [desktopApi, statuses.length]);
+  }, [desktopApi, statuses]);
 
   useEffect(() => {
     if (
@@ -451,6 +458,8 @@ export function MessagingStatusBar(props: {
                   active={hasRecentActivity(status, activeAtByPlatform[status.platform])}
                   activity={activityByPlatform[status.platform]}
                   forcedOff={!messagingOn}
+                  forcedOffLabel={forcedOffLabel}
+                  disabledReason={disabledReason}
                   platformEnabled={platformEnabledFromSnapshot(
                     settingsSnapshot,
                     status.platform,
@@ -494,14 +503,14 @@ export function MessagingStatusBar(props: {
 }
 
 function PlatformGlyph(props: {
-  status: MessagingPlatformStatus;
+  status: DisplayPlatformStatus;
   active: boolean;
   forcedOff?: boolean;
 }) {
   const { status, active, forcedOff = false } = props;
   const Icon = MESSAGING_PLATFORM_ICONS[status.platform];
   const effectiveHealth = forcedOff ? "suspended" : status.health;
-  const blink = !forcedOff && (active || status.health === "unknown");
+  const blink = !forcedOff && (active || isConnecting(status));
   return (
     <span
       className={`messaging-status-chip messaging-status-chip--${effectiveHealth}${
@@ -529,10 +538,12 @@ function PlatformGlyph(props: {
 }
 
 function PlatformStatusRow(props: {
-  status: MessagingPlatformStatus;
+  status: DisplayPlatformStatus;
   active: boolean;
   activity?: PlatformActivitySummary;
   forcedOff: boolean;
+  forcedOffLabel: string;
+  disabledReason?: string;
   platformEnabled?: boolean;
   platformToggleDisabled: boolean;
   platformTogglePending: boolean;
@@ -550,17 +561,17 @@ function PlatformStatusRow(props: {
       ? status.platform
       : undefined;
   const platformEnabled = props.platformEnabled ?? status.health !== "suspended";
-  const statusLabel = forcedOff || platformEnabled === false
-    ? "Off"
-    : HEALTH_LABEL[status.health];
+  const statusLabel = forcedOff
+    ? props.forcedOffLabel
+    : platformEnabled === false ? "Off" : platformHealthLabel(status);
   const stateHealth = forcedOff || platformEnabled === false
     ? "suspended"
     : status.health;
   const subline = forcedOff
-    ? "Globally disabled"
+    ? props.disabledReason ?? "Globally disabled"
     : formatPlatformSubline(status, now);
   const labelLines = [
-    `${formatMessagingPlatformName(status.platform)}: ${HEALTH_LABEL[status.health]}`,
+    `${formatMessagingPlatformName(status.platform)}: ${statusLabel}`,
     status.account && status.account !== subline
       ? `Bot: ${status.account}`
       : undefined,
@@ -568,7 +579,7 @@ function PlatformStatusRow(props: {
       ? `Account detail: ${status.detail}`
       : undefined,
     ...formatPlatformActivity(props.activity, now),
-    status.reason,
+    status.reason !== subline ? status.reason : undefined,
     ...formatDegradationReasons(status.degradationReasons ?? [], now),
   ]
     .filter((line): line is string => Boolean(line));
@@ -628,17 +639,23 @@ function PlatformStatusRow(props: {
 function withConfiguredSettingsStatuses(
   runtimeStatuses: readonly MessagingPlatformStatus[],
   snapshot: DesktopMessagingSettingsProjection | null,
-): MessagingPlatformStatus[] {
+): DisplayPlatformStatus[] {
   if (!snapshot) return [...runtimeStatuses];
   const seen = new Set(runtimeStatuses.map((status) => status.platform));
   const configuredFromSettings = CONFIGURABLE_MESSAGING_PLATFORMS
     .filter((platform) => !seen.has(platform))
     .filter((platform) => platformConfiguredFromSnapshot(snapshot, platform))
-    .map((platform): MessagingPlatformStatus => ({
+    .map((platform): DisplayPlatformStatus => ({
       platform,
       health: platformEnabledFromSnapshot(snapshot, platform)
-        ? "unknown"
+        ? snapshot.runtime.disabledReasonKind === "startup_error"
+          ? "errored"
+          : snapshot.runtime.disabled || snapshot.runtime.disabledReasonKind
+            ? "suspended"
+            : "unknown"
         : "suspended",
+      runtimeStatusMissing: true,
+      reason: snapshot.runtime.disabledReason,
       changedAt: snapshot.fetchedAt ?? Date.now(),
       ...platformIdentityFromSnapshot(snapshot, platform),
     }));
@@ -746,6 +763,16 @@ function hasRecentActivity(
   return Boolean(observedAt);
 }
 
+function isConnecting(status: DisplayPlatformStatus): boolean {
+  return status.health === "unknown" && !status.runtimeStatusMissing;
+}
+
+function platformHealthLabel(status: DisplayPlatformStatus): string {
+  return status.health === "unknown" && status.runtimeStatusMissing
+    ? "Status unavailable"
+    : HEALTH_LABEL[status.health];
+}
+
 function dotTone(
   health: MessagingPlatformHealth,
 ): "ok" | "warning" | "error" | "suspended" {
@@ -770,7 +797,7 @@ function inferMessagingEnabled(
 }
 
 function buildStatusSummary(
-  statuses: readonly MessagingPlatformStatus[],
+  statuses: readonly DisplayPlatformStatus[],
   messagingOn: boolean,
   activeCount: number,
 ): string {
@@ -789,13 +816,17 @@ function buildStatusSummary(
     counts.degraded > 0 ? `${counts.degraded} degraded` : undefined,
     counts.errored > 0 ? `${counts.errored} errored` : undefined,
     counts.suspended > 0 ? `${counts.suspended} suspended` : undefined,
+    statuses.some(isConnecting) ? "Connecting" : undefined,
+    statuses.some((status) => status.health === "unknown" && status.runtimeStatusMissing)
+      ? "Status unavailable"
+      : undefined,
     activeCount > 0 ? `${activeCount} active` : undefined,
   ].filter((part): part is string => Boolean(part));
-  return parts.length > 0 ? parts.join(", ") : "Messaging starting";
+  return parts.length > 0 ? parts.join(", ") : "Status unavailable";
 }
 
 function formatPlatformSubline(
-  status: MessagingPlatformStatus,
+  status: DisplayPlatformStatus,
   now: number,
 ): string {
   if (status.health === "enabled") {
@@ -813,9 +844,9 @@ function formatPlatformSubline(
     return status.reason ?? "Connection error";
   }
   if (status.health === "suspended") {
-    return "Configured, currently suspended";
+    return status.reason ?? "Configured, currently suspended";
   }
-  return "Starting";
+  return status.runtimeStatusMissing ? "No runtime status reported" : "Connecting";
 }
 
 function formatDegradationReasons(

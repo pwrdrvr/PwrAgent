@@ -128,6 +128,9 @@ async function createDirectoryLaunchpadTranscriptFixture(): Promise<{
             id: "thread-list-2",
             kind: "response",
             method: "thread/list",
+            // A startup refresh must not list the new thread before the
+            // launchpad creates it. Unpinned, it opens Directory threads.
+            afterResponseId: "thread-start-1",
             result: [
               {
                 id: "thread-new",
@@ -169,6 +172,9 @@ async function createDirectoryLaunchpadTranscriptFixture(): Promise<{
             id: "thread-read-2",
             kind: "response",
             method: "thread/read",
+            // The empty first read belongs to the new thread, not to a
+            // startup reread of the existing one.
+            afterResponseId: "thread-start-1",
             result: {
               entries: [],
               messages: [],

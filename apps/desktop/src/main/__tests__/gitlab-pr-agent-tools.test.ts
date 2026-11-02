@@ -45,11 +45,49 @@ describe("GitLab merge request tools", () => {
   });
 
   it("requests failed and canceled pipeline jobs through the nested project's write transport", async () => {
-    const { client, readCalls, writeCalls } = harness(() => { throw new Error("Unexpected read"); });
+    const { client, readCalls, writeCalls } = harness(
+      () => { throw new Error("Unexpected read"); },
+      () => ({ id: 42, iid: 7, sha: "c".repeat(40), status: "running" }),
+    );
     const result = await client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx());
     expect(writeCalls).toEqual([{ method: "POST", endpoint: `${projectPath}/pipelines/42/retry`, body: {} }]);
     expect(readCalls).toEqual([]);
-    expect(result).toMatchObject({ requested: true, runId: 42, providerRequests: 1, scope: "failed_and_canceled_jobs", url: "https://gitlab.example.test/group/sub/project/-/pipelines/42" });
+    // GitLab counts no attempts: the retried pipeline keeps its id, and the
+    // head lets a later watch tell the retry's result from the old one.
+    expect(result).toMatchObject({ requested: true, runId: 42, headSha: "c".repeat(40), providerRequests: 1, scope: "failed_and_canceled_jobs", url: "https://gitlab.example.test/group/sub/project/-/pipelines/42" });
+    expect(result).not.toHaveProperty("runAttempt");
+  });
+
+  it("reads the retried pipeline's head when the retry response omits it, and keeps the retry when that read fails", async () => {
+    const { client, readCalls } = harness(() => ({ id: 42, sha: "d".repeat(40) }));
+    await expect(client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx())).resolves.toMatchObject({
+      requested: true, runId: 42, headSha: "d".repeat(40), providerRequests: 2,
+    });
+    expect(readCalls).toEqual([`${projectPath}/pipelines/42`]);
+
+    const failing = harness(() => { throw new GitLabReadError(500); });
+    const result = await failing.client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx());
+    expect(result).toMatchObject({ requested: true, runId: 42 });
+    expect(result).not.toHaveProperty("headSha");
+  });
+
+  it("reports no head for a retried merged-results or merge-train pipeline", async () => {
+    // Its sha is the merge commit GitLab made, not the merge request's head,
+    // so a re-run recorded against it would match no merge request.
+    for (const ref of ["refs/merge-requests/7/merge", "refs/merge-requests/7/train"]) {
+      const { client, readCalls } = harness(
+        () => { throw new Error("Unexpected read"); },
+        () => ({ id: 42, ref, sha: "e".repeat(40), status: "running" }),
+      );
+      const result = await client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx());
+      expect(result).toMatchObject({ requested: true, runId: 42, providerRequests: 1 });
+      expect(result).not.toHaveProperty("headSha");
+      expect(readCalls).toEqual([]);
+    }
+    // A detached merge request pipeline runs on the head itself.
+    const detached = harness(() => ({ id: 42, ref: "refs/merge-requests/7/head", sha: "f".repeat(40) }));
+    await expect(detached.client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx())).resolves
+      .toMatchObject({ headSha: "f".repeat(40), providerRequests: 2 });
   });
 
   it("finds the thread's merge request by source branch and reads it back", async () => {

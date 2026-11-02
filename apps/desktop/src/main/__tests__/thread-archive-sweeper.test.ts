@@ -170,6 +170,16 @@ describe("ThreadArchiveSweeper", () => {
     }
   });
 
+  it("never archives a thread that an active PR watch will wake", async () => {
+    const watched = { ...candidate("watched"), activePrWatch: true };
+    expect(archiveCandidateProtectionReason(watched)).toBe("Watching a PR");
+    expect(isStaleArchiveCandidate(watched, Date.now())).toBe(false);
+    const { deps, sweeper } = harness([watched, candidate()]);
+    await sweeper.sweep();
+    expect(deps.archive.mock.calls.map(([item]) => item.thread.id)).toEqual(["old"]);
+    await sweeper.stop();
+  });
+
   it("uses the 30-day boundary and protects recent views and restores", () => {
     const item = candidate();
     item.thread.updatedAt = Date.now() - THREAD_AUTO_ARCHIVE_AGE_MS;

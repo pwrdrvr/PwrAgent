@@ -54,6 +54,7 @@ import { CloudflareAccessRefusedError, CloudflareSignInRequiredError } from "./c
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
+import { loadViewerNavigationPins } from "../app-server/navigation-viewer-pins";
 import {
   isPeerChildOfLocalThread,
   type PeerChildSource,
@@ -664,6 +665,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "operator_questions",
   "operator_requests",
   "thread_display_bulk_reads",
+  "thread_pr_watch_control_v1",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -775,6 +777,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "thread/reactions/updated",
   "thread/prAutoDispatch/pendingUpdated",
   "thread/prAutoDispatch/updated",
+  "thread/prWatches/updated",
   "thread/pullRequests/updated",
   "thread/started",
   "thread/status/changed",
@@ -842,6 +845,46 @@ export function unsequencedFederationEventPayload(event: AgentEvent): AgentEvent
       ? { errorNoticeContext: event.errorNoticeContext }
       : {}),
   };
+}
+
+/**
+ * The `navigation/invalidated` a local event sends navigation subscribers,
+ * if any. Never the source payload: turn output, queue input, agent
+ * configuration and complete child orders belong to exact detail demand.
+ * Identity fields are bounded independently of the provider's payload.
+ */
+export function navigationInvalidationForLocalEvent(event: AgentEvent): AgentEvent | undefined {
+  if (!NAVIGATION_EVENT_METHODS.has(event.notification.method)
+    || (event.notification.method === "thread/subAgents/updated"
+      && !navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params))) {
+    return undefined;
+  }
+  const params = event.notification.params as Record<string, unknown>;
+  const thread = params.thread as Record<string, unknown> | undefined;
+  const action = params.action as Record<string, unknown> | undefined;
+  const identity = (value: unknown): string | undefined =>
+    typeof value === "string" && value.length <= 1_024 ? value : undefined;
+  return {
+    backend: event.backend,
+    notification: {
+      method: "navigation/invalidated",
+      params: {
+        sourceMethod: event.notification.method,
+        ...(event.notification.method === "navigation/threadGitWorkingState/updated"
+          ? { worktreePath: identity(params.worktreePath) } : {}),
+        threadId: identity(params.threadId ?? thread?.id ?? action?.threadId),
+        ...(event.notification.method === "navigation/directoryGitStatus/updated"
+          ? { directoryKey: identity(params.directoryKey) } : {}),
+        automationId: identity(params.automationId),
+        runId: identity(params.runId),
+      },
+    },
+  };
+}
+
+/** A local event as this owner sends it to a federated viewer. */
+export function projectLocalEventForFederation(event: AgentEvent, ownerInstanceId: FederationInstanceId): AgentEvent {
+  return rewriteLiveTranscriptImagesForFederation(projectThreadDisplayEvent(event), ownerInstanceId);
 }
 
 function eventSubscriptionKey(params: {
@@ -3549,6 +3592,22 @@ export class DesktopFederationRuntime {
         || (archived.parentThreadBackend ?? params.backend) !== expected.backend
         || archived.parentThreadInstanceId !== expected.instanceId)) {
       throw new Error("Thread grouping changed before archive. Refresh the group and try again.");
+    }
+    // A pin's saved snapshot can trail its peer, which may already have moved
+    // the thread under another parent. Read pins the way the sidebar and
+    // sub-thread ordering do: this refreshes each snapshot a reachable peer
+    // changed and drops pins it proved archived, without waiting on a peer.
+    // The full pins read back then hold that live-or-fallback view, and they
+    // are also what this store's own promotion boundary validates against.
+    // Every local archive runs this, so a failed refresh (such as a pin over
+    // the navigation row budget) falls back to the saved snapshots instead of
+    // blocking the archive.
+    try {
+      await loadViewerNavigationPins(store, this.remoteThreadSummaries());
+    } catch (error) {
+      log.warn("archive promotion could not refresh pins from the live peer view", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
     const pins = await store.listRemoteThreadPins();
     const remoteChildren = pins.filter((pin) => pin.summary && isRemoteFederationTarget(pin.ref.target)
@@ -6650,34 +6709,8 @@ export class DesktopFederationRuntime {
 
   private forwardLocalBackendEvent(event: AgentEvent): void {
     if (!this.router) return;
-    if (NAVIGATION_EVENT_METHODS.has(event.notification.method)
-      && (event.notification.method !== "thread/subAgents/updated"
-        || navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params))) {
-      // Never broadcast the source payload: turn output, queue input, agent
-      // configuration and complete child orders belong to exact detail demand.
-      // Identity fields are bounded independently of the provider's payload.
-      const params = event.notification.params as Record<string, unknown>;
-      const thread = params.thread as Record<string, unknown> | undefined;
-      const action = params.action as Record<string, unknown> | undefined;
-      const identity = (value: unknown): string | undefined =>
-        typeof value === "string" && value.length <= 1_024 ? value : undefined;
-      this.forwardLocalBackendEvent({
-        backend: event.backend,
-        notification: {
-          method: "navigation/invalidated",
-          params: {
-            sourceMethod: event.notification.method,
-            ...(event.notification.method === "navigation/threadGitWorkingState/updated"
-              ? { worktreePath: identity(params.worktreePath) } : {}),
-            threadId: identity(params.threadId ?? thread?.id ?? action?.threadId),
-            ...(event.notification.method === "navigation/directoryGitStatus/updated"
-              ? { directoryKey: identity(params.directoryKey) } : {}),
-            automationId: identity(params.automationId),
-            runId: identity(params.runId),
-          },
-        },
-      });
-    }
+    const invalidation = navigationInvalidationForLocalEvent(event);
+    if (invalidation) this.forwardLocalBackendEvent(invalidation);
     const ownerInstanceId = this.ensureLocalInstanceId();
     const eventClass = federationEventClassForMethod(event.notification.method);
     let federatedEvent: AgentEvent | undefined;
@@ -6702,7 +6735,7 @@ export class DesktopFederationRuntime {
       ) {
         continue;
       }
-      federatedEvent ??= rewriteLiveTranscriptImagesForFederation(projectThreadDisplayEvent(event), ownerInstanceId);
+      federatedEvent ??= projectLocalEventForFederation(event, ownerInstanceId);
       this.sendBackendEventToSubscriber(subscriberInstanceId, subscription, federatedEvent);
     }
   }
@@ -7429,6 +7462,10 @@ function localBackendOperations(): FederationBackendOperations {
       return await getDesktopBackendRegistry().sendThreadPrAutoDispatchNow(
         request,
       );
+    },
+    async manageThreadPrWatchesV1(request) {
+      // The router already required the viewer's turn_control grant.
+      return await getDesktopBackendRegistry().manageThreadPrWatchesForPeer(request);
     },
     async reorderThreadPins(
       request: ReorderThreadPinsRequest,

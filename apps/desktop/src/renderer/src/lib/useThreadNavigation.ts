@@ -1016,6 +1016,9 @@ function threadSummariesEqual(
     left.prAutoDispatchEnabled === right.prAutoDispatchEnabled &&
     JSON.stringify(left.prAutoDispatchPending ?? null) ===
       JSON.stringify(right.prAutoDispatchPending ?? null) &&
+    // A peer row's eye comes from its owner's marks.
+    JSON.stringify(left.prCiWatches ?? null) ===
+      JSON.stringify(right.prCiWatches ?? null) &&
     JSON.stringify(left.acpRuntime ?? {}) === JSON.stringify(right.acpRuntime ?? {}) &&
     JSON.stringify(left.workspaceHandoff ?? {}) ===
       JSON.stringify(right.workspaceHandoff ?? {}) &&

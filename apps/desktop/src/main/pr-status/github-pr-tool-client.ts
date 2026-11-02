@@ -130,7 +130,19 @@ export class GithubPrToolClient {
 
     if (operation === "rerun_failed_ci_jobs") {
       await call("POST", `/actions/runs/${args.runId}/rerun-failed-jobs`);
-      return done({ requested: true, runId: args.runId, scope: "failed_jobs_and_dependents", url: `${repositoryUrl(r)}/actions/runs/${args.runId}` });
+      // The re-run keeps the head. Its attempt number and head let a later
+      // watch tell its result from the attempt it replaced. Best effort: the
+      // re-run was accepted either way.
+      let attempt: { runAttempt?: number; headSha?: string } = {};
+      try {
+        const run = object(await call("GET", `/actions/runs/${args.runId}`));
+        const runAttempt = num(run.run_attempt);
+        const headSha = str(run.head_sha, 64);
+        attempt = { ...(runAttempt !== undefined ? { runAttempt } : {}), ...(headSha ? { headSha } : {}) };
+      } catch (error) {
+        if (ctx.signal?.aborted) throw error;
+      }
+      return done({ requested: true, runId: args.runId, ...attempt, scope: "failed_jobs_and_dependents", url: `${repositoryUrl(r)}/actions/runs/${args.runId}` });
     }
 
     const resolvePullRequestNumber = async (): Promise<number> => {
