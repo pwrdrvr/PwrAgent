@@ -54,7 +54,11 @@ import { CloudflareAccessRefusedError, CloudflareSignInRequiredError } from "./c
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
-import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
+import {
+  isPeerChildOfLocalThread,
+  type PeerChildSource,
+  updateLocalSubthreadOrder,
+} from "../app-server/subthread-order-actions";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
 import { randomBytes, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
@@ -3370,6 +3374,14 @@ export class DesktopFederationRuntime {
       : [...(visiblePeer?.capabilities ?? [])];
   }
 
+  /** How this instance's sub-thread groups count a peer's threads as children. */
+  peerChildSource(): PeerChildSource {
+    return {
+      localInstanceId: async () => (await this.health()).instanceId,
+      summaries: this.remoteThreadSummaries(),
+    };
+  }
+
   /**
    * Stamped peer navigation summaries for bounded Cmd+K search and
    * the pinned-remote-thread merge. Unsupported full reads reject.
@@ -3539,10 +3551,9 @@ export class DesktopFederationRuntime {
       throw new Error("Thread grouping changed before archive. Refresh the group and try again.");
     }
     const pins = await store.listRemoteThreadPins();
-    const remoteChildren = pins.filter((pin) => pin.summary?.parentThreadId === params.parentThreadId
-      && (pin.summary.parentThreadBackend ?? pin.summary.source) === params.backend
-      && pin.summary.parentThreadInstanceId === localInstanceId
-      && isRemoteFederationTarget(pin.ref.target) && pin.summary.archivedAt === undefined);
+    const remoteChildren = pins.filter((pin) => pin.summary && isRemoteFederationTarget(pin.ref.target)
+      && isPeerChildOfLocalThread({ ownerInstanceId: pin.ref.target.instanceId, summary: pin.summary,
+        parent: { backend: params.backend, threadId: params.parentThreadId }, localInstanceId }));
     // The local SQLite boundary already handles an entirely local branch.
     const savedRemoteChildren = pins.filter((pin) => archived?.subthreadOrder?.includes(pin.ref.threadId));
     if (!archived?.parentThreadInstanceId && remoteChildren.length === 0 && savedRemoteChildren.length === 0) return;
@@ -7553,7 +7564,7 @@ function localBackendOperations(): FederationBackendOperations {
       // A viewer sends relative moves; the owner validates them against its
       // complete child order, the same as a local drag.
       return await updateLocalSubthreadOrder(request, {
-        resolveLocalInstanceId: async () => (await getDesktopFederationRuntime().health()).instanceId,
+        peers: getDesktopFederationRuntime().peerChildSource(),
       });
     },
     async setSubthreadsCollapsed(
