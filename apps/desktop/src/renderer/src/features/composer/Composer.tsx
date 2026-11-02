@@ -339,6 +339,7 @@ import {
 import { useComposerPopoverClamp } from "./useComposerPopoverClamp";
 import { useOwnedComposerDraftStore } from "./useOwnedComposerDraftStore";
 import { useComposerTip } from "./useComposerTip";
+import { PendingSpinner } from "../../components/PendingSpinner";
 
 export type ComposerProps = {
   activeTurnId?: string;
@@ -13224,10 +13225,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       role="status"
                     >
                       {previewState?.status === "loading" ? (
-                        <span
-                          aria-hidden="true"
-                          className="pending-spinner pending-spinner--lg pending-spinner--paired"
-                        />
+                        <PendingSpinner pairing="paired" size="lg" />
                       ) : (
                         <FileCodeIcon size={22} aria-hidden="true" />
                       )}
@@ -15047,9 +15045,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   }}
                 >
                   {currentThreadEnvActionStarting ? (
-                    <span
-                      aria-hidden="true"
-                      className="pending-spinner"
+                    <PendingSpinner
+                      pairing="standalone"
+                      standaloneReason="The Run button swaps its play glyph for a bare ring; its only text is the aria-label."
                     />
                   ) : (
                     <PlayIcon size={13} aria-hidden="true" />
@@ -15263,10 +15261,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 type="submit"
               >
                 {preparingSend ? (
-                  <span
-                    aria-hidden="true"
-                    className="pending-spinner pending-spinner--sm pending-spinner--paired"
-                  />
+                  <PendingSpinner pairing="paired" size="sm" />
                 ) : null}
                 {submitButtonLabel}
               </button>
@@ -15560,9 +15555,10 @@ function RemoteFileUploadPill({
       {failed ? (
         <FileCodeIcon size={13} aria-hidden="true" />
       ) : percent === undefined ? (
-        <span
-          aria-hidden="true"
-          className="pending-spinner pending-spinner--sm"
+        <PendingSpinner
+          pairing="standalone"
+          size="sm"
+          standaloneReason="With no percent yet, the ring sits beside the file name; the copy state is only in the tooltip."
         />
       ) : (
         <svg

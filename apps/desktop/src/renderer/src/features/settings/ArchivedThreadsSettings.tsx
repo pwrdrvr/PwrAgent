@@ -25,6 +25,7 @@ import {
   SettingsSection,
   SettingsSectionStack,
 } from "./SettingsLayout";
+import { PendingSpinner } from "../../components/PendingSpinner";
 
 type ArchivedThreadsState = {
   error?: string;
@@ -272,7 +273,7 @@ export function ArchivedThreadsSettings(props: {
   if (state.loading && !hasLoaded) {
     toolbarStatus = (
       <>
-        <span aria-hidden="true" className="pending-spinner pending-spinner--sm pending-spinner--paired" />
+        <PendingSpinner pairing="paired" size="sm" />
         <span>Loading…</span>
       </>
     );
