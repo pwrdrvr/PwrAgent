@@ -95,7 +95,7 @@
     "better-sqlite3": "^13.0.3",
     "dugite": "3.2.3",
     "electron-log": "^5.4.3",
-    "electron-updater": "6.8.10",
+    "electron-updater": "6.8.11",
     "fflate": "^0.8.3",
     "hast-util-to-jsx-runtime": "2.3.6",
     "katex": "^0.19.0",
@@ -138,7 +138,7 @@
     "@vitejs/plugin-react": "^6.1.2",
     "axe-core": "^4.11.4",
     "electron": "^44.9.3",
-    "electron-builder": "26.17.0",
+    "electron-builder": "26.18.0",
     "electron-vite": "^6.0.0",
     "tsx": "^4.20.6",
     "vite": "^8.3.1"
