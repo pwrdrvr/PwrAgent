@@ -2470,7 +2470,12 @@ describe("app server ipc", () => {
     const service = appServerService as unknown as {
       setThreadPrAttachment: (key: string, attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] }) => void;
       rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+      backgroundPrPollingEnabled: boolean;
+      prAutoDispatchAllowed: boolean;
     };
+    // Owner startup reads both gates from settings; this test skips startup.
+    service.backgroundPrPollingEnabled = true;
+    service.prAutoDispatchAllowed = true;
     service.setThreadPrAttachment("codex:parent", {
       backend: "codex", primaryRepoKey: "github.com/pwrdrvr/pwragent", prs: [pr],
     });
