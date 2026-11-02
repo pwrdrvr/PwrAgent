@@ -4203,7 +4203,9 @@ describe("DesktopBackendRegistry", () => {
         codexClient,
         // Full access, so the allowed handoff does not wait on an approval for the new path.
         overlayStore: createOverlayStoreMock({
-          overlays: { "codex:parked": { backend: "codex", threadId: "parked", executionMode: "full-access" } },
+          overlays: {
+            "codex:parked": { backend: "codex", threadId: "parked", executionMode: "full-access", extraLinkedDirectories: [] },
+          },
         }),
         threadTitleGenerationService: null,
       });
