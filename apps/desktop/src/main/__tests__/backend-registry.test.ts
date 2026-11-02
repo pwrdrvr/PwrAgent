@@ -55407,6 +55407,8 @@ script = "printf setup"
       taskMonitorModels?: Record<string, DesktopTaskMonitorModelChoice>;
       /** Holds every query after the first until it settles. */
       laterQueriesHeld?: Promise<void>;
+      /** Replaces each query's messages, for a monitor that runs tasks. */
+      script?: (options: ClaudeOptions) => AsyncGenerator<ClaudeMessage>;
     }) {
       const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-monitor-"));
       const store = new ClaudeSessionStore(path.join(root, "sessions"));
@@ -55415,6 +55417,7 @@ script = "printf setup"
         linkedDirectories: [{ id: root, kind: "local", label: "repo", path: root }],
       } });
       const prompts: ClaudeOptions[] = [];
+      const queries: { close: ReturnType<typeof vi.fn> }[] = [];
       let release!: () => void;
       const held = new Promise<void>((resolve) => { release = resolve; });
       const codexClient = new MockBackendClient({
@@ -55452,7 +55455,20 @@ script = "printf setup"
               await (prompts.length > 1 && params.laterQueriesHeld ? params.laterQueriesHeld : held);
               yield { type: "result", subtype: "success", is_error: false, result: "Done" } as ClaudeMessage;
             }
-            return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+            let endStream!: () => void;
+            const closed = new Promise<undefined>((resolve) => { endStream = () => resolve(undefined); });
+            const query = { close: vi.fn(endStream), setPermissionMode: vi.fn() };
+            queries.push(query);
+            // Closing a real query ends its process, and with it the stream.
+            async function* scripted(source: AsyncGenerator<ClaudeMessage>): AsyncGenerator<ClaudeMessage> {
+              for (;;) {
+                const step = await Promise.race([source.next(), closed]);
+                if (!step || step.done) return;
+                yield step.value;
+              }
+            }
+            const stream = params.script ? scripted(params.script(options)) : messages();
+            return Object.assign(stream, query) as unknown as ClaudeQuery;
           },
         },
       });
@@ -55479,7 +55495,7 @@ script = "printf setup"
         await registry.close();
         await rm(root, { recursive: true, force: true });
       };
-      return { close, codexClient, overlayStore, prompts, registry, release, root, store };
+      return { close, codexClient, overlayStore, prompts, queries, registry, release, root, store };
     }
 
     it("runs on Claude's lightweight model in an ephemeral thread, and can complete", async () => {
@@ -55562,6 +55578,170 @@ script = "printf setup"
         });
       } finally {
         releaseRecovery();
+        await close();
+      }
+    });
+
+    // Claude Code blocks a long foreground sleep, so a Claude monitor waits in
+    // a Monitor watcher and ends its native turn; the watcher's notification
+    // starts its next one. These are the messages the CLI sends for that.
+    const watcherStarted = [
+      { type: "system", subtype: "background_tasks_changed",
+        tasks: [{ task_id: "watch-1", task_type: "local_bash", description: "Watch PR #8 checks" }] },
+      { type: "system", subtype: "task_started", task_id: "watch-1", tool_use_id: "toolu-watch",
+        task_type: "local_bash", description: "Watch PR #8 checks", is_backgrounded: true },
+    ] as ClaudeMessage[];
+    const watcherEnded = [
+      { type: "system", subtype: "task_notification", task_id: "watch-1", tool_use_id: "toolu-watch",
+        status: "completed", output_file: "", summary: "PR #8 checks: pass" },
+      { type: "system", subtype: "background_tasks_changed", tasks: [] },
+    ] as ClaudeMessage[];
+    const nativeResult = {
+      type: "result", subtype: "success", is_error: false, result: "Watching.", num_turns: 8, stop_reason: "end_turn",
+    } as ClaudeMessage;
+    const monitorRecord = (registry: DesktopBackendRegistry, monitorId: string) =>
+      (registry as unknown as {
+        taskMonitorDelegations: Map<string, { awaitingClaudeTaskWake?: boolean }>;
+      }).taskMonitorDelegations.get(monitorId);
+    const userMessageCount = async (registry: DesktopBackendRegistry, threadId: string) =>
+      (await registry.readThread({ backend: "claude", threadId })).replay.messages
+        .filter((message) => message.role === "user").length;
+
+    it("waits for its background watcher instead of starting a recovery turn", async () => {
+      let endWatcher!: () => void;
+      const watcherRunning = new Promise<void>((resolve) => { endWatcher = resolve; });
+      let endFollowUp!: () => void;
+      const followUpRunning = new Promise<void>((resolve) => { endFollowUp = resolve; });
+      const { close, prompts, registry, store } = await createClaudeMonitorRegistry({
+        script: async function* (options) {
+          yield { type: "system", subtype: "init", session_id: options.sessionId } as ClaudeMessage;
+          yield* watcherStarted;
+          yield nativeResult;
+          await watcherRunning;
+          yield* watcherEnded;
+          // Claude answers the notification with a native turn of its own.
+          yield { type: "system", subtype: "init", session_id: options.sessionId } as ClaudeMessage;
+          await followUpRunning;
+          yield nativeResult;
+        },
+      });
+      const monitorTurnStarts: string[] = [];
+      try {
+        const response = await callRegistryMcpTool({
+          registry, backend: "claude", threadId: parentThreadId, turnId: "parent-turn",
+          tool: "create_monitor_delegation", args: { task: "Watch PR #8 checks until they finish." },
+        });
+        expect(response.isError).not.toBe(true);
+        const monitorId = String(response.structuredContent?.monitorId);
+        const monitorThreadId = String(response.structuredContent?.monitorThreadId);
+        const monitorTurnId = String(response.structuredContent?.monitorTurnId);
+        registry.onEvent((event) => {
+          if (event.notification.method === "turn/started" && event.notification.params.threadId === monitorThreadId) {
+            monitorTurnStarts.push((event.notification.params as { turn: { id: string } }).turn.id);
+          }
+        });
+
+        // The first turn ends with the watcher running: no recovery prompt.
+        await vi.waitFor(() => expect(monitorRecord(registry, monitorId)?.awaitingClaudeTaskWake).toBe(true));
+        await expect(userMessageCount(registry, monitorThreadId)).resolves.toBe(1);
+
+        // The watcher's notification wakes the monitor, which reports.
+        endWatcher();
+        await vi.waitFor(() => expect(monitorTurnStarts.filter((id) => id !== monitorTurnId)).toHaveLength(1));
+        const followUpTurnId = monitorTurnStarts.find((id) => id !== monitorTurnId)!;
+        expect(monitorRecord(registry, monitorId)?.awaitingClaudeTaskWake).toBe(false);
+        const completed = await callRegistryMcpTool({
+          registry, backend: "claude", threadId: monitorThreadId, turnId: followUpTurnId,
+          tool: "complete_monitoring",
+          args: { monitorId, outcome: "success", summary: "PR #8 checks passed.", triggerParentTurn: false },
+        });
+        expect(completed.isError).not.toBe(true);
+        expect(completed.structuredContent).toMatchObject({ monitorId });
+        endFollowUp();
+        await vi.waitFor(async () => {
+          await expect(store.read(monitorThreadId)).rejects.toBeDefined();
+        });
+        // One process, one brief, and no recovery turn.
+        expect(prompts).toHaveLength(1);
+      } finally {
+        endWatcher();
+        endFollowUp();
+        await close();
+      }
+    });
+
+    it("recovers a monitor whose watcher ended without Claude answering it", async () => {
+      let endWatcher!: () => void;
+      const watcherRunning = new Promise<void>((resolve) => { endWatcher = resolve; });
+      const { close, registry, release } = await createClaudeMonitorRegistry({
+        script: async function* (options) {
+          yield { type: "system", subtype: "init", session_id: options.sessionId } as ClaudeMessage;
+          yield* watcherStarted;
+          yield nativeResult;
+          await watcherRunning;
+          yield* watcherEnded;
+          // Claude never starts a turn for the notification.
+          await new Promise<void>(() => {});
+        },
+      });
+      const checkStale = (now: number) =>
+        (registry as unknown as { checkStaleTaskMonitors(now: number): Promise<void> }).checkStaleTaskMonitors(now);
+      const tasks = async (threadId: string) =>
+        (await registry.listBackgroundTerminals({ backend: "claude", threadId })).terminals;
+      try {
+        const response = await callRegistryMcpTool({
+          registry, backend: "claude", threadId: parentThreadId, turnId: "parent-turn",
+          tool: "create_monitor_delegation", args: { task: "Watch PR #8 checks until they finish." },
+        });
+        const monitorId = String(response.structuredContent?.monitorId);
+        const monitorThreadId = String(response.structuredContent?.monitorThreadId);
+        await vi.waitFor(() => expect(monitorRecord(registry, monitorId)?.awaitingClaudeTaskWake).toBe(true));
+
+        // A running watcher is the monitor's running command: never stale.
+        await checkStale(Date.now() + 24 * 60 * 60 * 1000);
+        await expect(userMessageCount(registry, monitorThreadId)).resolves.toBe(1);
+        expect(monitorRecord(registry, monitorId)?.awaitingClaudeTaskWake).toBe(true);
+
+        endWatcher();
+        await vi.waitFor(async () => expect(await tasks(monitorThreadId)).toHaveLength(0));
+        await checkStale(Date.now() + 24 * 60 * 60 * 1000);
+        await vi.waitFor(() => expect(userMessageCount(registry, monitorThreadId)).resolves.toBe(2));
+      } finally {
+        endWatcher();
+        release();
+        await close();
+      }
+    });
+
+    it("ends a finished monitor's watcher with its process", async () => {
+      const { close, queries, registry, release } = await createClaudeMonitorRegistry({
+        script: async function* (options) {
+          yield { type: "system", subtype: "init", session_id: options.sessionId } as ClaudeMessage;
+          yield* watcherStarted;
+          yield nativeResult;
+          await new Promise<void>(() => {});
+        },
+      });
+      try {
+        const response = await callRegistryMcpTool({
+          registry, backend: "claude", threadId: parentThreadId, turnId: "parent-turn",
+          tool: "create_monitor_delegation", args: { task: "Watch PR #8 checks until they finish." },
+        });
+        const monitorId = String(response.structuredContent?.monitorId);
+        const monitorThreadId = String(response.structuredContent?.monitorThreadId);
+        await vi.waitFor(() => expect(monitorRecord(registry, monitorId)?.awaitingClaudeTaskWake).toBe(true));
+        expect(queries[0]!.close).not.toHaveBeenCalled();
+
+        const completed = await callRegistryMcpTool({
+          registry, backend: "claude", threadId: monitorThreadId,
+          turnId: String(response.structuredContent?.monitorTurnId), tool: "complete_monitoring",
+          args: { monitorId, outcome: "success", summary: "Done.", triggerParentTurn: false },
+        });
+        expect(completed.isError).not.toBe(true);
+        // A watcher left running would wake a monitor nothing owns.
+        await vi.waitFor(() => expect(queries[0]!.close).toHaveBeenCalled());
+      } finally {
+        release();
         await close();
       }
     });

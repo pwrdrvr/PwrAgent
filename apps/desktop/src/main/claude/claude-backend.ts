@@ -279,6 +279,8 @@ type LiveSession = {
   onClosed: (() => void)[];
   closing?: boolean;
   closed?: boolean;
+  /** Its owner released the thread: the process ends with the turn, tasks and all. */
+  released?: boolean;
   contextWindow?: ClaudeSession["contextWindow"];
   /** One background context probe at a time; a request while it runs reruns it once. */
   contextRefresh?: { promise: Promise<void>; again: boolean };
@@ -619,9 +621,15 @@ export class ClaudeBackend {
   /**
    * Ends an ephemeral thread. Its process exits after every settled turn, and
    * a monitor may still need a recovery turn, so its owner ends it instead.
+   * A process kept open for a background task, such as a monitor's watcher,
+   * ends now, or with the turn that is running.
    */
   releaseEphemeralThread(threadId: string): void {
     this.store.forgetEphemeral(threadId);
+    const live = this.sessions.get(threadId);
+    if (!live) return;
+    live.released = true;
+    if (!live.turn) live.wake.wake();
   }
 
   async readThread(threadId: string): Promise<AppServerThreadReplay> {
@@ -1320,6 +1328,7 @@ export class ClaudeBackend {
    */
   private sessionSettled(live: LiveSession, ignoreTurn = false): boolean {
     if (live.turn && !ignoreTurn) return false;
+    if (live.released) return true;
     if (live.tasks.active().length > 0) return false;
     if (live.sessionState !== undefined && live.sessionState !== "idle") return false;
     return live.lastNotificationSeq < live.lastResultSeq || live.followUpWaivedAt === live.messageSeq;

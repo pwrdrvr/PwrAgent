@@ -3351,6 +3351,11 @@ type TaskMonitorDelegationRecord = {
   finalizationStarted?: boolean;
   recoveryAttempted?: boolean;
   staleInterruptAttempted?: boolean;
+  /**
+   * A Claude monitor ended its turn while a background watcher ran. The
+   * watcher's notification starts the next turn, so no recovery runs.
+   */
+  awaitingClaudeTaskWake?: boolean;
   startupTimeoutSeconds: number;
   task: string;
 };
@@ -36069,6 +36074,15 @@ export class DesktopBackendRegistry {
     }
 
     monitorRecord.lastActivityAt = Date.now();
+    // Claude answers a finished or printing watcher with a native turn of its
+    // own. That turn is now the monitor's.
+    const startedTurnId = notification.method === "turn/started"
+      ? readNonEmptyString(params?.turnId) ?? readNonEmptyString(readRecord(params?.turn)?.id)
+      : undefined;
+    if (monitorRecord.backend === "claude" && startedTurnId) {
+      monitorRecord.monitorTurnId = startedTurnId;
+      monitorRecord.awaitingClaudeTaskWake = false;
+    }
     const itemType = readNotificationItemType(notification);
     if (itemType !== "commandExecution") {
       return;
@@ -44740,7 +44754,7 @@ export class DesktopBackendRegistry {
     });
     const prompt = buildMonitorDelegationPrompt({
       mcpConnectionIds: mcpAccess.connectionIds,
-      deferredMcpTools: monitorBackend === "claude",
+      claudeCode: monitorBackend === "claude",
       finalHandoffPrompt: args.finalHandoffPrompt,
       monitorContext: args.monitorContext,
       monitorId,
@@ -45829,8 +45843,31 @@ export class DesktopBackendRegistry {
       return;
     }
 
+    const shuttingDown =
+      this.stoppingRunningTurnsForShutdown || this.shutdownRequested || this.closed;
+    if (
+      !record.recoveryAttempted
+      && !shuttingDown
+      && terminalStatus === "completed"
+      && this.claudeMonitorTaskCount(record) > 0
+    ) {
+      // Claude Code blocks a long foreground sleep, so a Claude monitor waits
+      // in a background watcher and ends its turn. The watcher's output starts
+      // its next turn; a recovery turn now would end monitoring early.
+      record.awaitingClaudeTaskWake = true;
+      record.lastActivityAt = Date.now();
+      backendRegistryLog.info("Claude task monitor waiting on its background watcher", {
+        monitorId: record.monitorId,
+        monitorThreadId: record.monitorThreadId,
+        monitorTurnId: record.monitorTurnId,
+        parentThreadId: record.parentThreadId,
+        taskCount: this.claudeMonitorTaskCount(record),
+      });
+      return;
+    }
+
     if (!record.recoveryAttempted) {
-      if (this.stoppingRunningTurnsForShutdown || this.shutdownRequested || this.closed) {
+      if (shuttingDown) {
         // Quit ends the monitor process. A recovery turn has no owner to keep
         // running and can otherwise race the closing Claude session store.
         this.taskMonitorDelegations.delete(record.monitorId);
@@ -45862,6 +45899,10 @@ export class DesktopBackendRegistry {
       if (record.activeCommandCount > 0 || (record.pendingMcpApprovalCount ?? 0) > 0) {
         continue;
       }
+      // A Claude monitor's watcher is its running command.
+      if (this.claudeMonitorTaskCount(record) > 0) {
+        continue;
+      }
 
       const staleAfterMs =
         Math.max(
@@ -45873,6 +45914,14 @@ export class DesktopBackendRegistry {
         TASK_MONITOR_STALE_GRACE_MS;
       const idleMs = now - record.lastActivityAt;
       if (idleMs < staleAfterMs) {
+        continue;
+      }
+
+      // The watcher ended and Claude never answered it, so no turn is left
+      // to interrupt.
+      if (record.awaitingClaudeTaskWake) {
+        record.awaitingClaudeTaskWake = false;
+        await this.startTaskMonitorRecoveryTurn({ record, terminalStatus: "completed" });
         continue;
       }
 
@@ -45933,6 +45982,12 @@ export class DesktopBackendRegistry {
         reason: "monitor_stale_interrupt_failed",
       });
     }
+  }
+
+  /** Background tasks a Claude monitor's session runs, such as its watcher. */
+  private claudeMonitorTaskCount(record: TaskMonitorDelegationRecord): number {
+    if (record.backend !== "claude" || !record.monitorThreadId) return 0;
+    return this.claudeBackend.listBackgroundTasks(record.monitorThreadId).terminals.length;
   }
 
   /**
