@@ -6,7 +6,7 @@ import { bundledGitFiles, verifyBundledGit } from "./verify-bundled-git.mjs";
 import { pruneMacCredentialManager } from "./beforepack-bundled-git.mjs";
 
 describe("packaged Git distribution", () => {
-  it.each([["x64", "mingw64"], ["arm64", "clangarm64"], ["ia32", "mingw32"]])(
+  it.each([["x64", "ucrt64"], ["arm64", "clangarm64"], ["ia32", "mingw32"]])(
     "verifies the Windows %s LFS helper in its own distribution", (arch, prefix) => {
       expect(bundledGitFiles("root", "win32", arch)).toEqual({
         git: join("root", "cmd/git.exe"),
@@ -15,13 +15,20 @@ describe("packaged Git distribution", () => {
     },
   );
 
-  it("fails before probing system Git when packaged LFS is missing", () => {
+  it.each(["darwin", "linux"])("preserves the %s Git and LFS layout", (platform) => {
+    expect(bundledGitFiles("root", platform, "x64")).toEqual({
+      git: join("root", "bin/git"),
+      lfs: join("root", "libexec/git-core/git-lfs"),
+    });
+  });
+
+  it.each(["linux", "win32"])("fails before probing system Git when packaged %s LFS is missing", (platform) => {
     const root = mkdtempSync(join(tmpdir(), "pwragent-git-package-"));
     try {
-      const files = bundledGitFiles(join(root, "git"), "linux", "x64");
+      const files = bundledGitFiles(join(root, "git"), platform, "x64");
       mkdirSync(dirname(files.git), { recursive: true });
       writeFileSync(files.git, "not an executable");
-      expect(() => verifyBundledGit(root, { platform: "linux", arch: "x64" })).toThrow(files.lfs);
+      expect(() => verifyBundledGit(root, { platform, arch: "x64" })).toThrow(files.lfs);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

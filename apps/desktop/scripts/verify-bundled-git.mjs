@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 export function bundledGitFiles(root, platform, arch) {
-  const prefix = arch === "arm64" ? "clangarm64" : arch === "ia32" ? "mingw32" : "mingw64";
+  const prefix = arch === "arm64" ? "clangarm64" : arch === "ia32" ? "mingw32" : "ucrt64";
   return {
     git: join(root, platform === "win32" ? "cmd/git.exe" : "bin/git"),
     lfs: join(root, platform === "win32" ? `${prefix}/libexec/git-core/git-lfs.exe` : "libexec/git-core/git-lfs"),
