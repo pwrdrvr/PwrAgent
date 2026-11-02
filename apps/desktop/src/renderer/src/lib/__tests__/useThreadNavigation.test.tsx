@@ -9732,6 +9732,71 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedLaunchpad?.parentThreadInstanceId).toBeUndefined();
   });
 
+  it("orders a sub-thread started on a peer under this machine's parent here, after pinning it", async () => {
+    const parent: NavigationThreadSummary = {
+      id: "workspace-parent", title: "Research", titleSource: "explicit", source: "codex", executionMode: "default",
+      projectKey: "/scratch/research", linkedDirectories: [
+        { id: "scratch", label: "Research", path: "/scratch/research", kind: "local" },
+      ], inbox: { inInbox: true },
+    };
+    const defaults = { backend: "codex" as const, executionMode: "default" as const };
+    const ensureDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["ensureDirectoryLaunchpad"]>>(async (request) => ({
+      launchpad: { ...request, ...defaults, prompt: "Check the Windows build", workMode: "local", createdAt: 1, updatedAt: 1 },
+      defaults,
+    }));
+    const updateDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>(async (request) => ({
+      launchpad: {
+        ...defaults, prompt: "Check the Windows build", workMode: "local", createdAt: 1, updatedAt: 2,
+        directoryKey: request.directoryKey, directoryKind: "workspace", directoryLabel: "New Workspace",
+        ...request.patch,
+      },
+      defaults,
+    }));
+    const materializeDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["materializeDirectoryLaunchpad"]>>(async () => ({
+      backend: "codex", threadId: "peer-child", executionMode: "default", workMode: "local",
+    }));
+    const addRemoteThreadPin = vi.fn<NonNullable<DesktopApi["addRemoteThreadPin"]>>(async (request) => ({
+      pin: { ref: request.ref, instanceLabel: "studio", pinnedVia: "explicit", addedAt: 1 },
+    }));
+    const updateSubthreadOrder = vi.fn<NonNullable<DesktopApi["updateSubthreadOrder"]>>(async (request) => ({
+      backend: "codex", parentThreadId: request.parentThreadId,
+    }));
+    const api: DesktopApi = {
+      ...actionDetailApi(parent), ensureDirectoryLaunchpad, updateDirectoryLaunchpad, materializeDirectoryLaunchpad,
+      addRemoteThreadPin, updateSubthreadOrder,
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false,
+        inboxThreadKeys: ["codex:workspace-parent"], threads: [parent], directories: [], launchpadDefaults: defaults }),
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(api, { localFederationInstanceId: "harbor" }));
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.createSubthread(parent, "new-workspace", { instanceId: "studio" });
+    });
+    const directoryKey = result.current.selectedLaunchpad!.directoryKey;
+    await act(async () => {
+      await result.current.materializeDirectoryLaunchpad(directoryKey);
+    });
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+      federationTarget: { scope: "remote", instanceId: "studio" },
+      parentThreadId: parent.id, parentThreadInstanceId: "harbor",
+    }));
+    // The parent is this machine's, so its order is written here, not sent
+    // to "harbor" over federation, and only after the pin that places the
+    // new child in this machine's group.
+    expect(updateSubthreadOrder).toHaveBeenCalledWith({
+      backend: "codex",
+      federationTarget: undefined,
+      parentThreadId: parent.id,
+      insertAfter: { threadId: "peer-child", sourceThreadId: parent.id },
+    });
+    expect(addRemoteThreadPin.mock.invocationCallOrder[0]).toBeLessThan(
+      updateSubthreadOrder.mock.invocationCallOrder[0]!,
+    );
+  });
+
   it("takes the peer's provider for a sub-thread when the peer cannot run the parent's", async () => {
     const parent: NavigationThreadSummary = {
       id: "claude-parent", title: "Research", titleSource: "explicit", source: "claude", executionMode: "full-access",

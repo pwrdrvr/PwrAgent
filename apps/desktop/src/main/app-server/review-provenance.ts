@@ -20,6 +20,11 @@ import {
   resolveGitHubReposForDirectory,
   type GitHubRepoRef,
 } from "../pr-status/git-remote";
+import {
+  forgeRepositoryName,
+  repositoryKey,
+  withForgeRepositoryNames,
+} from "../pr-status/forge-repository-names";
 
 /**
  * Git reports a detached HEAD as the literal string "HEAD" rather than
@@ -282,15 +287,21 @@ async function resolveUnattachedPullRequest(params: {
   if (attachedRepositories.size > 1) {
     return undefined;
   }
-  const remotes = repositories.filter((remote) =>
-    sameRepositoryName(named.provider, remote.host)
-    && sameRepositoryName(named.org, remote.owner)
-    && sameRepositoryName(named.repo, remote.repo)
-  );
-  if (remotes.length !== 1) {
+  // A renamed repository's remote can still carry the old name. Match either
+  // name, and name the PR the way the forge does, so two remotes spelling the
+  // same repository two ways are still one repository.
+  const remotes = new Map(repositories
+    .filter((remote) => withForgeRepositoryNames([remote]).some((name) =>
+      sameRepositoryName(named.provider, name.host)
+      && sameRepositoryName(named.org, name.owner)
+      && sameRepositoryName(named.repo, name.repo)
+    ))
+    .map(forgeRepositoryName)
+    .map((remote) => [repositoryKey(remote), remote]));
+  if (remotes.size !== 1) {
     return undefined;
   }
-  const [remote] = remotes;
+  const [remote] = remotes.values();
   return {
     provider: remote.host,
     org: remote.owner,

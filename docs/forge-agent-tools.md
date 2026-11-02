@@ -27,9 +27,13 @@ Agent forge tools**:
 | `ci` | same | `auto` | `rerun_failed_ci_jobs` |
 | `approve_merge` | same | `ask` | `merge_pull_request`, an `APPROVE` or `REQUEST_CHANGES` review |
 
-- `allow` runs without asking. `auto` asks unless the turn has Full Access,
-  the same rule as an MCP connection's Auto tool approval. `ask` always asks.
-  `off` removes the tools.
+- `allow` runs without asking. `ask` always asks. `off` removes the tools.
+- `auto` follows the thread's own approval mode:
+  - Full Access runs every group. For Claude, that is bypass permissions.
+  - A Codex or Claude Auto turn runs every group except `approve_merge`.
+  - Any other mode asks, including Claude's plan and accept-edits modes.
+  - A Claude thread's mode is read from its open Claude process, so a change
+    during the turn applies to the next call.
 - A group that is off, or the family switched off, is not advertised to new
   turns. The main process also checks the policy on every call, so a turn that
   still holds an older schema gets `tools_disabled` naming the setting.

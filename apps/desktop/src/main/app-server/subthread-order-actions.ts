@@ -3,6 +3,37 @@ import type { NavigationThreadSummary, UpdateSubthreadOrderRequest, UpdateSubthr
 import { getDesktopBackendRegistry } from "./backend-registry";
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import { loadLocalNavigationQueryIndex } from "./navigation-query-source";
+import { loadViewerNavigationPins } from "./navigation-viewer-pins";
+
+/**
+ * Whether a peer's thread names one of this machine's threads as its parent.
+ * The peer stores that link and names this machine as the parent's owner, as
+ * a sub-thread started here on that peer does. Sub-thread ordering and
+ * archive promotion share this one definition of the group.
+ */
+export function isPeerChildOfLocalThread(params: {
+  ownerInstanceId: string;
+  summary: Pick<NavigationThreadSummary, "archivedAt" | "codexNativeSubAgent" | "parentThreadBackend"
+    | "parentThreadId" | "parentThreadInstanceId" | "source">;
+  parent: { backend: NavigationThreadSummary["source"]; threadId: string };
+  localInstanceId: string;
+}): boolean {
+  const { summary } = params;
+  return params.ownerInstanceId !== params.localInstanceId
+    && summary.parentThreadId === params.parent.threadId
+    && (summary.parentThreadBackend ?? summary.source) === params.parent.backend
+    && summary.parentThreadInstanceId === params.localInstanceId
+    && summary.archivedAt === undefined
+    && summary.codexNativeSubAgent === undefined;
+}
+
+/** What the owner needs to count a peer's threads into this machine's groups. */
+export type PeerChildSource = {
+  /** This machine's federation identity. Without one, no peer can link a child here. */
+  localInstanceId: () => Promise<string | undefined>;
+  /** The live peer summaries the sidebar reads its mounted peer threads through. */
+  summaries: Parameters<typeof loadViewerNavigationPins>[1];
+};
 
 /**
  * Apply a sub-thread order change on the instance that owns the parent. The
@@ -16,17 +47,16 @@ import { loadLocalNavigationQueryIndex } from "./navigation-query-source";
  * cross-provider link that names only the parent id is a child here exactly
  * when the sidebar shows it as one.
  *
- * A peer's thread started from this machine's tray (or moved under one of
- * its threads) keeps its link on the peer, naming this machine as the
- * parent's owner. This machine's pin of that thread is what places it here,
- * so its cached link makes it a child too, and its id ranks in the same
- * order as the local children. `resolveLocalInstanceId` reads this machine's
- * federation identity, only for a relative move; without one no peer can
- * have linked a child here.
+ * A peer's thread can be a child too (`isPeerChildOfLocalThread`). This
+ * machine's pin of it is what places it here, and its link lives on the peer,
+ * so a pin's saved snapshot can trail the peer. Membership therefore reads
+ * pins the way the sidebar does: through the live peer summaries when the
+ * peer is reachable, else the saved snapshot. That read never waits on a
+ * peer, and it writes a pin only when its snapshot really changed.
  */
 export async function updateLocalSubthreadOrder(
   request: Omit<UpdateSubthreadOrderRequest, "federationTarget">,
-  options: { resolveLocalInstanceId?: () => Promise<string | undefined> } = {},
+  options: { peers?: PeerChildSource } = {},
 ): Promise<UpdateSubthreadOrderResponse> {
   const backend = request.backend ?? "codex";
   const relative = Boolean(request.move || request.insertAfter);
@@ -57,17 +87,15 @@ export async function updateLocalSubthreadOrder(
       && !thread.parentThreadInstanceId && !thread.archivedAt && !thread.codexNativeSubAgent
       && resolveThreadParentKey(thread, byKey) === parentKey)
       .map(({ source, id, createdAt }) => ({ backend: source, id, createdAt }));
-    const localInstanceId = await options.resolveLocalInstanceId?.();
-    if (localInstanceId) {
-      for (const pin of await store.listRemoteThreadPins()) {
-        const summary = pin.summary;
-        if (!summary || !isRemoteFederationTarget(pin.ref.target) || pin.ref.target.instanceId === localInstanceId
-          || summary.parentThreadId !== request.parentThreadId
-          || (summary.parentThreadBackend ?? summary.source) !== backend
-          || summary.parentThreadInstanceId !== localInstanceId
-          || summary.archivedAt !== undefined || summary.codexNativeSubAgent !== undefined) continue;
-        children.push({ backend: pin.ref.backend, id: pin.ref.threadId, createdAt: summary.createdAt,
-          ownerInstanceId: pin.ref.target.instanceId });
+    const localInstanceId = await options.peers?.localInstanceId();
+    if (options.peers && localInstanceId) {
+      for (const thread of await loadViewerNavigationPins(store, options.peers.summaries)) {
+        const ref = thread.federation?.ref;
+        if (!ref || !isRemoteFederationTarget(ref.target) || thread.federation?.derivedFromMountedParent
+          || !isPeerChildOfLocalThread({ ownerInstanceId: ref.target.instanceId, summary: thread,
+            parent: { backend, threadId: request.parentThreadId }, localInstanceId })) continue;
+        children.push({ backend: ref.backend, id: ref.threadId, createdAt: thread.createdAt,
+          ownerInstanceId: ref.target.instanceId });
       }
     }
   }
