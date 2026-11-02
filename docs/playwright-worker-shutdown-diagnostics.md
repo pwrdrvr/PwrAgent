@@ -79,14 +79,15 @@ holds `Local Storage/leveldb/LOCK`; the Electron main process then keeps the
 launcher alive after `quit`. The fixture removes the Chromium directories only
 after closing the app and cleaning up its profile helpers.
 
-On Windows, fixture close also drains each live Electron session before asking
-Playwright to quit: it closes connections, awaits the cookie store flush, and
+On Windows, fixture close also drains each live Electron session during
+graceful close: it closes connections, awaits the cookie store flush, and
 disposes the fixture session cache with `clearData({ dataTypes: ["cache"] })`.
 This preparation shares the existing six-second graceful-close deadline.
-The fixture awaits the entire drain through its live main-process RPC before
-calling Playwright close. The owner therefore remains reachable until every
-session callback finishes. Entering quit concurrently and holding `will-quit`
-allowed session cleanup to race Chromium's native context shutdown. In CI run
+An app-owned `before-quit` barrier retains Chromium's contexts until every
+session callback finishes, including after Playwright detaches its inspector.
+Application resource disposal and session preparation run concurrently inside
+that deadline. Holding `will-quit` instead allowed session cleanup to race
+Chromium's native context shutdown. In CI run
 41482286163, the stalled-close snapshot verified that Electron main PID 7876
 still held all four launcher pipe names while cache cleanup was pending; its
 two observed Chromium children held none of them. An unfinished drain still

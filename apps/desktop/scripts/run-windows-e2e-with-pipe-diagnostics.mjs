@@ -119,7 +119,7 @@ async function capture(event) {
   write(prefix + event.launchId + ".json", { event, observedAt: Date.now(), watcherAvailable });
   log(stalled ? "close-stalled" : "natural-exit-open-pipes", { ...event, observedAt: Date.now() });
   if ((stalled ? ++stalledCaptures : ++captures) > 4) {
-    write("match-" + event.launchId + ".json", { event, error: "Per-run scan limit reached.", omittedScan: true });
+    write((stalled ? "stalled-match-" : "match-") + event.launchId + ".json", { event, error: "Per-run scan limit reached.", omittedScan: true });
     return;
   }
   const launch = await launches.get(event.launchId);
