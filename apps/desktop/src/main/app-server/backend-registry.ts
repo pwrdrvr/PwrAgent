@@ -46515,6 +46515,12 @@ export class DesktopBackendRegistry {
     });
     this.bindTaskMonitorMcpThread(params.monitorId, thread.threadId, executionMode);
     this.reservedCodexStartThreadIds.add(thread.threadId);
+    let ownsStartReservation = true;
+    const releaseStartReservation = () => {
+      if (!ownsStartReservation) return;
+      ownsStartReservation = false;
+      this.reservedCodexStartThreadIds.delete(thread.threadId);
+    };
     let turn: { threadId: string; turnId: string };
     try {
       turn = await this.startCodexTaskMonitorTurn({
@@ -46546,7 +46552,7 @@ export class DesktopBackendRegistry {
             buildActiveTurnModeKey(startedTurn.threadId, startedTurn.turnId),
             executionMode,
           );
-          this.reservedCodexStartThreadIds.delete(thread.threadId);
+          releaseStartReservation();
           backendRegistryLog.info("managed task monitor turn started", {
             executionMode,
             hasCodexEnvironmentRuntime: Boolean(sourceOverlay?.codexEnvironmentRuntime),
@@ -46558,7 +46564,7 @@ export class DesktopBackendRegistry {
         },
       });
     } finally {
-      this.reservedCodexStartThreadIds.delete(thread.threadId);
+      releaseStartReservation();
     }
 
     return {
