@@ -615,6 +615,7 @@ describe("operator dispatch choices", () => {
     const registry = {
       readThreadHandoffSettings: vi.fn(async () => FULL_ACCESS_SOL),
       startThread: vi.fn(), renameThread: vi.fn(), startTurn: vi.fn(),
+      buildThreadTodoMessageOrigin: buildThreadTodoMessageOrigin(),
     };
     const federation = vi.fn(async (request: { operation: string }) =>
       request.operation === "list_instance_projects"
@@ -631,6 +632,7 @@ describe("operator dispatch choices", () => {
     await runners.startThreadOnInstance!({
       instanceId: "win", sourceBackend: "codex", sourceThreadId: "source",
       project: { key: "local-repo", label: "repo", path: "/repo" }, crossProject: false,
+      todo: CARD,
       action: { type: "start_thread", prompt: "Rewrite the CLI", workMode: "worktree" },
     });
     const created = federation.mock.calls
