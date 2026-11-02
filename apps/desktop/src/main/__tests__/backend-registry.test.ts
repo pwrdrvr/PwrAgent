@@ -56113,6 +56113,8 @@ script = "printf setup"
         expect(recovery).toContain("E2E job: in_progress (3 of 5 shards done)");
         expect(recovery).toContain("Run 42 is still running; E2E has 3 of 5 shards done.");
         expect(recovery).not.toContain("Use only the monitor task context you already have");
+        // The brief's watcher steps would end the recovery without a result.
+        expect(recovery).toContain("do not start a watcher or a background command");
       } finally {
         endFirstTurn();
         await close();
