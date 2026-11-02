@@ -2378,8 +2378,8 @@ describe("app server ipc", () => {
     // A window that listed the thread's watches before its candidacy existed
     // otherwise kept drawing no Auto-fix row for the session.
     const pr = githubPr({
-      number: 3198, org: "pwrdrvr", repo: "PwrAgent",
-      url: "https://github.com/pwrdrvr/PwrAgent/pull/3198",
+      number: 3198, org: "pwrdrvr", repo: "PwrAgent", title: "Auto-fix candidacy",
+      state: "pending", url: "https://github.com/pwrdrvr/PwrAgent/pull/3198",
     });
     const prKey = buildPullRequestStatusKey(pr);
     registerAppServerIpcHandlers();
