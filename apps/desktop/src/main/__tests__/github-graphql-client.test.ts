@@ -863,6 +863,44 @@ describe("GithubGraphqlPrClient", () => {
       expect(forgeRepositoryName(oldName).repo).toBe("PwrAgent");
     });
 
+    it("takes a repository GitHub does not know by name at its own name", async () => {
+      const request = vi.fn(async () => ({ r0: null }));
+      await client(request).resolveRepositoryNames([{ owner: "pwrdrvr", repo: "PwrAgnt" }]);
+
+      expect(hasForgeRepositoryName(oldName)).toBe(true);
+      expect(forgeRepositoryName(oldName).repo).toBe("PwrAgnt");
+    });
+
+    it("shares one request between concurrent lookups of the same repository", async () => {
+      const request = vi.fn(async () => ({ r0: { nameWithOwner: "pwrdrvr/PwrAgent" } }));
+      const graphqlClient = client(request);
+
+      await Promise.all(Array.from({ length: 5 }, () =>
+        graphqlClient.resolveRepositoryNames([{ owner: "pwrdrvr", repo: "PwrAgnt" }])));
+
+      expect(request).toHaveBeenCalledOnce();
+      expect(forgeRepositoryName(oldName).repo).toBe("PwrAgent");
+    });
+
+    it("waits a minute before asking gh for a token again", async () => {
+      let now = 1_000_000;
+      const getToken = vi.fn(async () => null);
+      const graphqlClient = new GithubGraphqlPrClient({
+        request: vi.fn(),
+        getToken,
+        sleep: async () => {},
+        now: () => now,
+      });
+
+      await graphqlClient.resolveRepositoryNames([{ owner: "pwrdrvr", repo: "PwrAgnt" }]);
+      await graphqlClient.resolveRepositoryNames([{ owner: "pwrdrvr", repo: "PwrAgnt" }]);
+      expect(getToken).toHaveBeenCalledOnce();
+
+      now += 60_000;
+      await graphqlClient.resolveRepositoryNames([{ owner: "pwrdrvr", repo: "PwrAgnt" }]);
+      expect(getToken).toHaveBeenCalledTimes(2);
+    });
+
     it("records nothing when GitHub cannot answer, so callers stay inconclusive", async () => {
       const request = vi.fn(async () => {
         throw Object.assign(new Error("unauthorized"), { status: 401 });

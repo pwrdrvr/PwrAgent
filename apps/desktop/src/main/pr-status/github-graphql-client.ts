@@ -570,6 +570,9 @@ function recordAnsweredRepositoryName(
   }
 }
 
+/** How long a repository name lookup waits after finding no GitHub token. */
+const REPOSITORY_NAME_TOKEN_RETRY_MS = 60_000;
+
 /** Map one GraphQL PullRequest node onto our shared PrSummary. */
 export function mapGraphqlPrNode(
   node: GraphqlPrNode,
@@ -841,6 +844,8 @@ export class GithubGraphqlPrClient {
   private failureBackoffUntil = 0;
   private reconnectBypassAvailable = false;
   private lastNetworkReconnectAt = Number.NEGATIVE_INFINITY;
+  private readonly repositoryNameLookups = new Map<string, Promise<void>>();
+  private repositoryNameTokenRetryAt = Number.NEGATIVE_INFINITY;
 
   constructor(options: GithubGraphqlPrClientOptions = {}) {
     this.requestOverride = options.request;
@@ -1000,38 +1005,62 @@ export class GithubGraphqlPrClient {
    * Ask GitHub what each repository is called now, for the ones it has not
    * answered since launch. Records answers only; a repository GitHub could not
    * answer for stays unknown, and callers must treat that as inconclusive.
+   * Concurrent callers share one request per repository, and a missing token
+   * is not retried for a minute: one refresh can repair several PR lists.
    */
   async resolveRepositoryNames(
     refs: Array<Pick<BranchRef, "owner" | "repo">>,
   ): Promise<void> {
-    const byKey = new Map<string, Pick<BranchRef, "owner" | "repo">>();
+    const waits: Promise<void>[] = [];
+    const unknown = new Map<string, Pick<BranchRef, "owner" | "repo">>();
     for (const ref of refs) {
       if (hasForgeRepositoryName({ host: "github.com", ...ref })) continue;
-      byKey.set(`${ref.owner}/${ref.repo}`.toLowerCase(), ref);
+      const key = `${ref.owner}/${ref.repo}`.toLowerCase();
+      const pending = this.repositoryNameLookups.get(key);
+      if (pending) waits.push(pending);
+      else unknown.set(key, ref);
     }
-    const unknown = [...byKey.values()];
-    if (unknown.length === 0) {
-      return;
+    if (unknown.size > 0 && this.now() >= this.repositoryNameTokenRetryAt) {
+      const lookup = this.lookUpRepositoryNames([...unknown.values()]);
+      for (const key of unknown.keys()) this.repositoryNameLookups.set(key, lookup);
+      waits.push(lookup.finally(() => {
+        for (const key of unknown.keys()) {
+          if (this.repositoryNameLookups.get(key) === lookup) this.repositoryNameLookups.delete(key);
+        }
+      }));
     }
+    await Promise.all(waits);
+  }
+
+  private async lookUpRepositoryNames(
+    refs: Array<Pick<BranchRef, "owner" | "repo">>,
+  ): Promise<void> {
     if (this.deferForFailureBackoff("repository name lookup")) {
       return;
     }
     const token = await this.resolveToken();
     if (!token) {
+      this.repositoryNameTokenRetryAt = this.now() + REPOSITORY_NAME_TOKEN_RETRY_MS;
       graphqlLog.debug("skipping repository name lookup: no GitHub token from gh");
       return;
     }
-    for (const batch of chunk(unknown, this.batchSize)) {
+    for (const batch of chunk(refs, this.batchSize)) {
       const data = await this.runBatchQuery(
         buildRepositoryNameQuery(batch),
         token,
         batch.length,
         batch,
       );
+      if (!data) continue;
       batch.forEach((ref, index) => {
-        const repository = data?.[`r${index}`];
+        const repository = data[`r${index}`];
         if (repository && typeof repository === "object") {
           recordAnsweredRepositoryName(ref, repository);
+        } else if (repository === null) {
+          // GitHub answered and knows no repository by this name (deleted, or
+          // no access). It names no other repository either, so the remote's
+          // own name is all there is to match.
+          recordForgeRepositoryName({ host: "github.com", ...ref }, `${ref.owner}/${ref.repo}`);
         }
       });
     }

@@ -254,18 +254,19 @@ export async function filterStoredDiscoveredPullRequests(
   const contexts = new Map(await Promise.all(directories.map(async (cwd) =>
     [cwd, await readStoredDiscoveryContext(cwd)] as const,
   )));
-  const candidates = prs.flatMap((pr) => pr.explicitlyAttached
-    ? []
-    : uniqueNonEmpty(pr.linkedDirectoryPaths ?? []).flatMap((cwd) => {
-        const context = contexts.get(cwd)!;
-        return context.repos.length === 0 || context.defaults.remotes.size === 0
-          || context.defaults.names.has(pr.headRefName ?? "")
-          ? []
-          : [{ pr, repos: context.repos }];
-      }));
-  const unnamed = new Map(candidates
-    .filter(({ pr, repos }) => isGitHubSource(pr) && !prMatchesSourceRepository(pr, repos))
-    .flatMap(({ repos }) => unnamedGitHubRepositories(repos))
+  // The repositories that decide each automatic PR, one list per linked
+  // checkout; null where the checkout cannot say (missing, failed probe).
+  const repairContexts = (pr: PrSummary): Array<GitHubRepoRef[] | null> =>
+    uniqueNonEmpty(pr.linkedDirectoryPaths ?? []).map((cwd) => {
+      const context = contexts.get(cwd)!;
+      if (context.repos.length === 0 || context.defaults.remotes.size === 0) return null;
+      return context.defaults.names.has(pr.headRefName ?? "") ? [] : context.repos;
+    });
+  const unnamed = new Map(prs
+    .filter((pr) => !pr.explicitlyAttached && isGitHubSource(pr))
+    .flatMap((pr) => repairContexts(pr)
+      .filter((repos): repos is GitHubRepoRef[] => Boolean(repos?.length) && !prMatchesSourceRepository(pr, repos!)))
+    .flatMap(unnamedGitHubRepositories)
     .map((repo) => [`${repo.owner}/${repo.repo}`.toLowerCase(), repo] as const));
   const resolveRepositoryNames = options.resolveRepositoryNames;
   if (resolveRepositoryNames && unnamed.size > 0) {
@@ -273,15 +274,14 @@ export async function filterStoredDiscoveredPullRequests(
   }
   return prs.filter((pr) => {
     if (pr.explicitlyAttached) return true;
-    const paths = uniqueNonEmpty(pr.linkedDirectoryPaths ?? []);
-    return paths.length === 0 || paths.some((cwd) => {
-      const context = contexts.get(cwd)!;
-      if (context.repos.length === 0 || context.defaults.remotes.size === 0) return true;
-      if (context.defaults.names.has(pr.headRefName ?? "")) return false;
-      return prMatchesSourceRepository(pr, context.repos)
+    const decisions = repairContexts(pr);
+    return decisions.length === 0 || decisions.some((repos) => {
+      if (repos === null) return true;
+      if (repos.length === 0) return false;
+      return prMatchesSourceRepository(pr, repos)
         || (Boolean(resolveRepositoryNames)
           && isGitHubSource(pr)
-          && unnamedGitHubRepositories(context.repos).length > 0);
+          && unnamedGitHubRepositories(repos).length > 0);
     });
   });
 }

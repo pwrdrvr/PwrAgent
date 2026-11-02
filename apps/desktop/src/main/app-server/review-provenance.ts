@@ -22,6 +22,7 @@ import {
 } from "../pr-status/git-remote";
 import {
   forgeRepositoryName,
+  repositoryKey,
   withForgeRepositoryNames,
 } from "../pr-status/forge-repository-names";
 
@@ -296,7 +297,7 @@ async function resolveUnattachedPullRequest(params: {
       && sameRepositoryName(named.repo, name.repo)
     ))
     .map(forgeRepositoryName)
-    .map((remote) => [`${remote.host}/${remote.owner}/${remote.repo}`.toLowerCase(), remote]));
+    .map((remote) => [repositoryKey(remote), remote]));
   if (remotes.size !== 1) {
     return undefined;
   }

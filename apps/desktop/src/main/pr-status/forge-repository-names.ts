@@ -16,7 +16,8 @@ import type { GitHubRepoRef } from "./git-remote";
 const MAX_REMEMBERED_REPOSITORIES = 512;
 const forgeNames = new Map<string, GitHubRepoRef>();
 
-function repositoryKey(repo: GitHubRepoRef): string {
+/** One key per repository: host, owner and name, case-insensitively. */
+export function repositoryKey(repo: GitHubRepoRef): string {
   return `${repo.host}/${repo.owner}/${repo.repo}`.toLowerCase();
 }
 
