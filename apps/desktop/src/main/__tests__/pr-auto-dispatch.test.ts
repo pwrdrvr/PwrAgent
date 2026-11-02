@@ -1176,6 +1176,48 @@ describe("PrAutoDispatchCoordinator", () => {
     );
   });
 
+  it("gives a merge conflict its own attempts after CI repairs run out", async () => {
+    const harness = createHarness();
+    const prKey = buildPullRequestStatusKey(pr());
+    const heads = ["a", "b"].map((value) => value.repeat(40));
+
+    for (const head of heads) {
+      const failing = pr({ headSha: head });
+      harness.setCurrentPr(failing);
+      await observe(harness.coordinator, failing);
+      await runCountdown();
+    }
+    const failingB = pr({ headSha: heads[1] });
+    expect((await observe(harness.coordinator, failingB))[0]?.status).toBe(
+      "attempt-limit",
+    );
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(
+      MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT,
+    );
+
+    // Main moves while CI is still red on the exhausted head.
+    const conflicting = pr({ headSha: heads[1], mergeState: "conflicting" });
+    harness.setCurrentPr(conflicting);
+    expect((await observe(harness.coordinator, conflicting))[0]?.status).toBe(
+      "scheduled",
+    );
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(
+      MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT + 1,
+    );
+    expect(await store.getThreadPrAutoDispatchAttemptCount({
+      backend: "codex",
+      threadId: "thread-1",
+      prKey,
+    })).toBe(1);
+
+    // The conflict joined the incident, so seeing it again spends nothing new.
+    const conflictingAgain = pr({ headSha: heads[1], mergeState: "conflicting" });
+    expect(
+      (await observe(harness.coordinator, conflictingAgain))[0]?.status,
+    ).not.toBe("scheduled");
+  });
+
   it("uses a unique SQLite claim across two app instances", async () => {
     const dbPath = await useFileStateDb();
     const secondDb = StateDb.open(dbPath);
