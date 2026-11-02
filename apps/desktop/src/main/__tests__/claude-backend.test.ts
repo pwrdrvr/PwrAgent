@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Options, Query, SDKMessage, SDKUserMessage, query } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent, AppServerThreadMessageOrigin, BackendModelOption } from "@pwragent/shared";
-import { ClaudeBackend, ClaudeTurnActiveError } from "../claude/claude-backend";
+import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { createClaudePermissionHandler, claudePermissionMode, threadExecutionModeForClaudePermission } from "../claude/claude-permissions";
 import { createClaudeElicitationHandler } from "../claude/claude-elicitation";
@@ -13,8 +13,16 @@ import { buildLiveToolDetails, getNotificationItem } from "../../renderer/src/fe
 import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-reviews/thread-review-events";
 
 const roots: string[] = [];
+const backends: ClaudeBackend[] = [];
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  try {
+    // A backend queues store writes (usage limits, session history) into the
+    // temp root without the test awaiting them. close() joins those writes, so
+    // every backend closes before its root is removed.
+    await Promise.all(backends.splice(0).map((backend) => backend.close()));
+  } finally {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  }
 });
 
 async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUserMessage>) => AsyncGenerator<SDKMessage>, controls: Partial<Query> & {
@@ -72,7 +80,13 @@ async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUs
     cancelRequest: async () => {},
     resolveEnv: async (): Promise<NodeJS.ProcessEnv> => ({ PATH: "/fixture", ANTHROPIC_API_KEY: "must-not-reach-child", CLAUDE_CODE_OAUTH_TOKEN: "must-not-reach-child" }),
   };
-  const backend = new ClaudeBackend(backendOptions);
+  /** Every backend over this root goes through here, so cleanup can close it. */
+  function openBackend(options: ClaudeBackendOptions = backendOptions) {
+    const opened = new ClaudeBackend(options);
+    backends.push(opened);
+    return opened;
+  }
+  const backend = openBackend();
   async function waitForTurn() {
     // Join the current turn's persisted terminal event. The test timeout
     // bounds a stuck turn; a separate polling deadline races filesystem I/O
@@ -81,7 +95,7 @@ async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUs
     if (!completion) throw new Error("No Claude turn has started in this fixture.");
     await completion.promise;
   }
-  return { backend, backendOptions, store, events, queries, run, close, waitForTurn, root };
+  return { backend, backendOptions, openBackend, store, events, queries, run, close, waitForTurn, root };
 }
 
 describe("Claude SDK backend", () => {
@@ -355,7 +369,7 @@ describe("Claude SDK backend", () => {
     expect(f.events.find((event) => event.notification.method === "thread/tokenUsage/updated")?.notification)
       .toMatchObject({ params: { tokenUsage: { claudeCostUSD: 0.002 } } });
     f.events.length = 0;
-    const resumed = new ClaudeBackend(f.backendOptions);
+    const resumed = f.openBackend();
     await resumed.startTurn({ threadId, input: [{ type: "text", text: "Follow up" }] });
     await f.waitForTurn();
     expect(generateSessionTitle).toHaveBeenCalledTimes(1);
@@ -572,7 +586,7 @@ describe("Claude SDK backend", () => {
     await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hello" }] });
     await f.waitForTurn();
     expect((await f.backend.readThread(threadId)).lastAssistantMessage).toBe("First block\nSecond block");
-    const restarted = new ClaudeBackend(f.backendOptions);
+    const restarted = f.openBackend();
     expect((await restarted.readThread(threadId)).lastAssistantMessage).toBe("First block\nSecond block");
     expect(f.events.filter((event) => event.notification.method === "item/completed"
       && getNotificationItem(event.notification.params)?.id === "multi").at(-1)?.notification)
@@ -588,7 +602,7 @@ describe("Claude SDK backend", () => {
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
     await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/usage" }] });
     await f.waitForTurn();
-    expect((await new ClaudeBackend(f.backendOptions).readThread(threadId)).lastAssistantMessage).toBe("Weekly usage: 25%");
+    expect((await f.openBackend().readThread(threadId)).lastAssistantMessage).toBe("Weekly usage: 25%");
     expect(f.events).toContainEqual(expect.objectContaining({ notification: {
       method: "item/completed", params: expect.objectContaining({
         item: expect.objectContaining({ type: "agentMessage", text: "Weekly usage: 25%" }),
@@ -632,7 +646,7 @@ describe("Claude SDK backend", () => {
       const f = await fixture(turns(report("review-1", { level: "high", findings })));
       const context = { workspacePath: f.root, gitBranch: "feature" };
       const resolveReviewContext = vi.fn().mockResolvedValue(context);
-      const backend = new ClaudeBackend({ ...f.backendOptions, resolveReviewContext });
+      const backend = f.openBackend({ ...f.backendOptions, resolveReviewContext });
       const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
       await backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review high" }] });
       await f.waitForTurn();
@@ -657,7 +671,7 @@ describe("Claude SDK backend", () => {
       // No generic tool row: neither a started item nor a stored activity.
       expect(f.events.some((candidate) => candidate.notification.method === "item/started"
         && getNotificationItem(candidate.notification.params)?.id === "review-1")).toBe(false);
-      const entries = (await new ClaudeBackend(f.backendOptions).readThread(threadId)).entries;
+      const entries = (await f.openBackend().readThread(threadId)).entries;
       expect(entries.filter((entry) => entry.id === "review-1")).toEqual([expect.objectContaining({
         type: "review", output: data.reviewOutput, context,
         reviewer: { backend: "claude", model: "claude-opus-5-5", reasoningEffort: "high" },
@@ -669,7 +683,7 @@ describe("Claude SDK backend", () => {
     it("resolves the card's context from the pull requests the /code-review named", async () => {
       const f = await fixture(turns(report("review-1", { level: "medium", findings })));
       const resolveReviewContext = vi.fn().mockResolvedValue({ workspacePath: f.root });
-      const backend = new ClaudeBackend({ ...f.backendOptions, resolveReviewContext });
+      const backend = f.openBackend({ ...f.backendOptions, resolveReviewContext });
       const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
       await backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review medium --fix 2947,2948" }] });
       await f.waitForTurn();
@@ -742,7 +756,7 @@ describe("Claude SDK backend", () => {
 
     it("still shows the review when its context cannot be resolved", async () => {
       const f = await fixture(turns(report("review-1", { findings })));
-      const backend = new ClaudeBackend({ ...f.backendOptions, resolveReviewContext: vi.fn().mockRejectedValue(new Error("git failed")) });
+      const backend = f.openBackend({ ...f.backendOptions, resolveReviewContext: vi.fn().mockRejectedValue(new Error("git failed")) });
       const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
       await backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review" }] });
       await f.waitForTurn();
@@ -934,7 +948,7 @@ describe("Claude SDK backend", () => {
     });
     const envHeld = Promise.withResolvers<void>();
     let holdEnv = false;
-    const backend = new ClaudeBackend({ ...f.backendOptions,
+    const backend = f.openBackend({ ...f.backendOptions,
       emit: async (event: AgentEvent) => {
         await f.backendOptions.emit(event);
         if (event.notification.method === "turn/started") holdEnv = true;
@@ -1066,7 +1080,7 @@ describe("Claude SDK backend", () => {
     ];
     expect(f.backend.summary().rateLimits).toEqual(expected);
 
-    const restarted = new ClaudeBackend(f.backendOptions);
+    const restarted = f.openBackend();
     expect(restarted.summary().rateLimits).toBeUndefined();
     await vi.waitFor(async () => expect((await f.store.readRateLimits()).limits).toHaveLength(3));
     await restarted.discover({ models: false });
@@ -1100,7 +1114,7 @@ describe("Claude SDK backend", () => {
 
     // A restart reads back when the limits were reported, and for which plan.
     await vi.waitFor(async () => expect((await f.store.readRateLimits()).plan).toBe("max"));
-    const restarted = new ClaudeBackend(f.backendOptions);
+    const restarted = f.openBackend();
     await restarted.discover({ models: false });
     expect(await restarted.usageAccountKey()).toBe(account);
     expect(restarted.limitObservation()).toMatchObject({ accountKey: account, planType: "max",
@@ -1317,7 +1331,7 @@ describe("Claude SDK backend", () => {
     expect(context).toHaveBeenCalledWith({ detail: "summary" });
     expect(usage).toHaveBeenCalledWith({ skipBehaviors: true });
     expect(f.backend.summary().rateLimits?.[0]).toMatchObject({ usedPercent: 35, name: "Weekly limit" });
-    const restarted = new ClaudeBackend(f.backendOptions);
+    const restarted = f.openBackend();
     expect((await restarted.readThread(threadId)).contextWindow).toEqual({ usedTokens: 1200, modelContextWindow: 200_000 });
   });
 
@@ -1360,7 +1374,7 @@ describe("Claude SDK backend", () => {
     // Once the turn ends there is no session, so Claude Code's own config is
     // read through a probe instead.
     const readMcpServers = vi.fn().mockResolvedValue([{ name: "acme-docs", status: "pending" }]);
-    const idle = new ClaudeBackend({ ...f.backendOptions, readMcpServers });
+    const idle = f.openBackend({ ...f.backendOptions, readMcpServers });
     expect(await idle.listMcpServers(threadId)).toEqual([{ name: "acme-docs", authStatus: "unsupported", startupStatus: "starting", tools: [] }]);
     expect(readMcpServers).toHaveBeenCalledWith(expect.objectContaining({ cwd: f.root }));
   });
@@ -1369,7 +1383,7 @@ describe("Claude SDK backend", () => {
     const f = await fixture();
     const models = [{ id: "fable", label: "Fable 5.1", current: true }];
     const discoverModels = vi.fn().mockResolvedValue(models);
-    const backend = new ClaudeBackend({ ...f.backendOptions, discoverModels });
+    const backend = f.openBackend({ ...f.backendOptions, discoverModels });
     await backend.startThread({ cwd: f.root, executionMode: "default" });
     expect(discoverModels).not.toHaveBeenCalled();
     await backend.discover();
@@ -1393,7 +1407,7 @@ describe("Claude SDK backend", () => {
     const f = await fixture(undefined, { supportedModels });
     let resolveDiscovery!: (models: BackendModelOption[]) => void;
     const discoverModels = vi.fn(() => new Promise<BackendModelOption[]>((resolve) => { resolveDiscovery = resolve; }));
-    const backend = new ClaudeBackend({ ...f.backendOptions, discoverModels });
+    const backend = f.openBackend({ ...f.backendOptions, discoverModels });
     const discovery = backend.discover();
     await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledTimes(1));
     const directories = [path.join(f.root, "project-a"), path.join(f.root, "project-b")];
@@ -1435,7 +1449,7 @@ describe("Claude SDK backend", () => {
     const inspectInstallation = vi.fn()
       .mockResolvedValueOnce({ executable: "/fixture/claude", authStatus: startup === "signed-out" ? "sign-in-required" : "signed-in" })
       .mockResolvedValue({ executable: "/fixture/claude", authStatus: "signed-in" });
-    const backend = new ClaudeBackend({ ...f.backendOptions, inspectInstallation, discoverModels });
+    const backend = f.openBackend({ ...f.backendOptions, inspectInstallation, discoverModels });
     if (startup === "failed") await expect(backend.discover()).rejects.toThrow("Startup discovery unavailable");
     else await backend.discover();
     expect(backend.summary().launchpadOptions?.models?.map((model) => model.label)).toEqual(["Sonnet", "Opus", "Haiku"]);
@@ -1456,7 +1470,7 @@ describe("Claude SDK backend", () => {
     let resolveModels!: (models: BackendModelOption[]) => void;
     const discoverModels = vi.fn().mockImplementationOnce(() => new Promise<BackendModelOption[]>((resolve) => { resolveModels = resolve; }))
       .mockRejectedValueOnce(new Error("Metadata unavailable")).mockResolvedValue([]);
-    const backend = new ClaudeBackend({ ...f.backendOptions, discoverModels });
+    const backend = f.openBackend({ ...f.backendOptions, discoverModels });
     let now = Date.now();
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     try {
@@ -1552,7 +1566,7 @@ describe("Claude SDK backend", () => {
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
     await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Inspect" }] });
     await f.waitForTurn();
-    for (const backend of [f.backend, new ClaudeBackend(f.backendOptions)]) {
+    for (const backend of [f.backend, f.openBackend()]) {
       const replay = await backend.readThread(threadId);
       expect(replay.entries.map((entry) => entry.type)).toEqual(["message", "activity", "message", "activity"]);
       expect(replay.entries[1]).toMatchObject({
@@ -1604,7 +1618,7 @@ describe("Claude SDK backend", () => {
       { type: "localFile", path: path.join(f.root, "report.txt"), name: "Report.txt", mimeType: "text/plain", sizeBytes: 12, textPreview: "Hello report" },
     ] });
     await f.waitForTurn();
-    const restarted = new ClaudeBackend({ ...f.backendOptions, store: new ClaudeSessionStore(f.root) });
+    const restarted = f.openBackend({ ...f.backendOptions, store: new ClaudeSessionStore(f.root) });
     const replay = await restarted.readThread(threadId);
     const parts = [
       { type: "text", text: "Read these" },
@@ -1646,7 +1660,7 @@ describe("Claude SDK backend", () => {
     expect(replay.messages.map((message) => message.text)).toEqual(["Hi", "Hello world"]);
     expect((await f.store.read(threadId)).sdkSessionId).toBe("5a85c1ad-85c1-4930-ae19-50f721ad13dd");
     f.events.length = 0;
-    const restarted = new ClaudeBackend(f.backendOptions);
+    const restarted = f.openBackend();
     await restarted.startTurn({ threadId, input: [{ type: "text", text: "Continue" }] });
     await f.waitForTurn();
     expect(f.queries[1].resume).toBe("5a85c1ad-85c1-4930-ae19-50f721ad13dd");
@@ -1660,7 +1674,7 @@ describe("Claude SDK backend", () => {
       { authStatus: "unknown" as const },
       { executable: "/fixture/claude", authStatus: "sign-in-required" as const, message: "Run claude auth login" },
     ]) {
-      const backend = new ClaudeBackend({ ...f.backendOptions, inspectInstallation: async () => installation });
+      const backend = f.openBackend({ ...f.backendOptions, inspectInstallation: async () => installation });
       await expect(backend.startThread({ cwd: f.root, executionMode: "default" })).rejects.toThrow(/claude auth login/);
     }
     expect(f.run).not.toHaveBeenCalled();
@@ -1700,7 +1714,7 @@ describe("Claude SDK backend", () => {
         { notification: { method: "turn/started" } },
         { notification: { method: "turn/failed", params: { turn: { id: turn.turnId, error: { message: expected } } } } },
       ]);
-    const restarted = new ClaudeBackend(f.backendOptions);
+    const restarted = f.openBackend();
     const replay = await restarted.readThread(threadId);
     expect(replay.entries?.find((entry) => entry.type === "message")?.turn?.status).toBe("failed");
     expect((await f.backend.readThread(threadId)).threadStatus).toBe("idle");
@@ -2197,7 +2211,7 @@ describe("Claude SDK backend", () => {
         options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
       });
     });
-    const backend = new ClaudeBackend({ ...f.backendOptions, taskFollowUpGraceMs: 60_000 });
+    const backend = f.openBackend({ ...f.backendOptions, taskFollowUpGraceMs: 60_000 });
     const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
     await backend.startTurn({ threadId, input: [{ type: "text", text: "Sleep" }], onSessionClosed: firstGrants });
     await f.waitForTurn();
@@ -2233,7 +2247,7 @@ describe("Claude SDK backend", () => {
         options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
       });
     });
-    const backend = new ClaudeBackend({ ...f.backendOptions, taskFollowUpGraceMs: 60_000 });
+    const backend = f.openBackend({ ...f.backendOptions, taskFollowUpGraceMs: 60_000 });
     const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
     await backend.startTurn({ threadId, input: [{ type: "text", text: "Sleep" }] });
     await f.waitForTurn();
@@ -2314,7 +2328,7 @@ describe("Claude SDK backend", () => {
         options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
       });
     });
-    const backend = new ClaudeBackend({ ...f.backendOptions, taskFollowUpGraceMs: 60_000 });
+    const backend = f.openBackend({ ...f.backendOptions, taskFollowUpGraceMs: 60_000 });
     const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
     await backend.startTurn({ threadId, input: [{ type: "text", text: "Sleep" }] });
     await f.waitForTurn();
@@ -2423,7 +2437,7 @@ describe("Claude SDK backend", () => {
         }
         await aborted;
       }, { interrupt });
-      const backend = new ClaudeBackend({ ...f.backendOptions, interruptGraceMs: params.interruptGraceMs ?? 5_000 });
+      const backend = f.openBackend({ ...f.backendOptions, interruptGraceMs: params.interruptGraceMs ?? 5_000 });
       const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
       const turn = await backend.startTurn({ threadId, input: [{ type: "text", text: "Start the dev server" }] });
       await vi.waitFor(() => expect(backend.listBackgroundTasks(threadId).terminals).toHaveLength(1));
@@ -2484,7 +2498,7 @@ describe("Claude SDK backend", () => {
           options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
         });
       }, { interrupt });
-      const backend = new ClaudeBackend({ ...f.backendOptions, interruptGraceMs: 60_000 });
+      const backend = f.openBackend({ ...f.backendOptions, interruptGraceMs: 60_000 });
       const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
       await backend.startTurn({ threadId, input: [{ type: "text", text: "Start the dev server" }] });
       await f.waitForTurn();
@@ -2637,7 +2651,7 @@ describe("Claude SDK backend", () => {
       // The CLI stays connected; nothing else arrives.
       await new Promise<void>(() => {});
     });
-    const backend = new ClaudeBackend({ ...f.backendOptions, taskFollowUpGraceMs: 50 });
+    const backend = f.openBackend({ ...f.backendOptions, taskFollowUpGraceMs: 50 });
     const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
     const started = Date.now();
     await backend.startTurn({ threadId, input: [{ type: "text", text: "Sleep" }] });
