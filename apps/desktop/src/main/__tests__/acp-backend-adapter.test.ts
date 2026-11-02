@@ -3428,7 +3428,7 @@ describe("AcpBackendAdapter", () => {
         ...(rateLimits ? { rateLimits } : {}),
       };
     });
-    const emit = vi.fn(async () => undefined);
+    const emit = vi.fn(async (_event: { notification: { method: string } }) => undefined);
     const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
@@ -3455,8 +3455,7 @@ describe("AcpBackendAdapter", () => {
     let elapsed = 0;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => realNow() + elapsed);
     const statusUpdates = () => emit.mock.calls
-      .filter(([event]) => (event as { notification: { method: string } }).notification.method
-        === "backend/providerStatus/updated").length;
+      .filter(([event]) => event.notification.method === "backend/providerStatus/updated").length;
     const read = async () => {
       // Billing reads are throttled to one a minute.
       elapsed += 61_000;
