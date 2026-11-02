@@ -1164,6 +1164,20 @@ describe("tooltip observation budgets", () => {
     expect(request).toHaveBeenCalledTimes(0);
   });
 
+  it("falls back to a frame for an inline anchor, which ResizeObserver cannot measure", async () => {
+    stubNativeGeometryObservers();
+    mockAnchorRectangleFromLayout();
+    const { rerender } = render(<AnchorLifecycleFixture />);
+    const anchor = screen.getByRole("button");
+    anchor.style.display = "inline";
+    fireEvent.mouseEnter(anchor);
+    await deliverMutations();
+    const { request } = runFramesAfterDelivery();
+    rerender(<AnchorLifecycleFixture anchorLabel="Streamed label" />);
+    await deliverMutations();
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to a frame for anchor content updates without native geometry observers", async () => {
     mockAnchorRectangleFromLayout();
     const { rerender } = render(<AnchorLifecycleFixture />);

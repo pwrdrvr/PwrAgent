@@ -138,7 +138,10 @@ export function observeTooltipAnchor(
     };
     observe(1);
   }
-  nativeGeometry = resize !== undefined && intersection !== undefined;
+  // ResizeObserver reports no box for an inline element, so its content could
+  // shrink it unseen. Such an anchor keeps the frame for its own updates.
+  nativeGeometry = resize !== undefined && intersection !== undefined
+    && getComputedStyle(target).display !== "inline";
   return () => {
     disposed = true;
     mutations.disconnect();
