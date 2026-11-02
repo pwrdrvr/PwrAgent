@@ -3999,15 +3999,19 @@ describe("DesktopBackendRegistry", () => {
   describe("project Forge Automation", () => {
     const PROJECT = "directory:/Users/fixture/src/openclaw";
     const paused: ProjectForgeAutomation = { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 1_000 };
-    const pauseProject = (automation: ProjectForgeAutomation = paused): void => {
+    const pauseProject = (
+      automation: ProjectForgeAutomation = paused,
+      projectPath = "/Users/fixture/src/openclaw",
+    ): void => {
       onTestFinished(() => resetProjectForgeAutomationIndexForTests());
       const index = getProjectForgeAutomationIndex();
-      index.set(PROJECT, automation);
+      const key = `directory:${projectPath}`;
+      index.set(key, automation);
       index.rememberDirectories([{
-        key: PROJECT,
+        key,
         kind: "directory",
         label: "openclaw",
-        path: "/Users/fixture/src/openclaw",
+        path: projectPath,
         threadKeys: ["codex:parked"],
         needsAttentionCount: 0,
       }]);
@@ -4128,6 +4132,234 @@ describe("DesktopBackendRegistry", () => {
       expect(JSON.stringify(codexClient.injectedThreadItems)).toContain(
         "because forge activity in openclaw is paused",
       );
+    });
+
+    it("refuses an agent's steer_thread into the paused project and still lets it stop the turn", async () => {
+      pauseProject();
+      const codexClient = new MockBackendClient({
+        interruptEndsTurn: true,
+        initializeResult: { methods: ["thread/resume", "turn/interrupt", "turn/steer"] },
+        threads: [{
+          id: "parked",
+          title: "parked",
+          titleSource: "fallback",
+          source: "codex",
+          linkedDirectories: [],
+        }],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock(),
+        threadTitleGenerationService: null,
+      });
+      onTestFinished(() => registry.close());
+      await discoverCodexBackendForTest(registry);
+      for (const [threadId, turnId] of [["parked", "parked-turn"], ["orchestrator", "orchestrator-turn"]] as const) {
+        await registry.publishLocalEvent({
+          backend: "codex",
+          notification: { method: "turn/started", params: { threadId, turnId, turn: { id: turnId } } },
+        });
+      }
+      const callFromOrchestrator = async (tool: "steer_thread" | "stop_thread", args: Record<string, unknown>) =>
+        await callRegistryMcpTool({
+          registry,
+          backend: "codex",
+          threadId: "orchestrator",
+          turnId: "orchestrator-turn",
+          tool,
+          args: { backend: "codex", threadId: "parked", ...args },
+        });
+
+      await expect(callFromOrchestrator("steer_thread", {
+        requestId: "steer-paused",
+        expectedTurnId: "parked-turn",
+        prompt: "Rebase onto main now.",
+      })).resolves.toMatchObject({
+        isError: true,
+        structuredContent: {
+          code: "project_paused",
+          message: expect.stringContaining("openclaw, where forge activity is paused"),
+        },
+      });
+      expect(codexClient.lastSteerTurnParams).toBeUndefined();
+      expect(codexClient.startTurnCallCount).toBe(0);
+
+      // Stopping starts nothing, so the pause allows it.
+      await expect(callFromOrchestrator("stop_thread", { requestId: "stop-paused", expectedTurnId: "parked-turn" })).resolves.toMatchObject({
+        structuredContent: { threadId: "parked", turnId: "parked-turn", disposition: "interrupted" },
+      });
+      expect(codexClient.interruptTurnCallCount).toBe(1);
+
+      // A steer into the now idle thread would start a turn; it is refused too.
+      await expect(callFromOrchestrator("steer_thread", {
+        requestId: "steer-idle-paused",
+        prompt: "Rebase onto main now.",
+      })).resolves.toMatchObject({ isError: true, structuredContent: { code: "project_paused" } });
+      expect(codexClient.startTurnCallCount).toBe(0);
+    });
+
+    it("refuses a handoff into the paused project from another thread, and allows one from inside it", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-paused-handoff-"));
+      onTestFinished(() => rm(root, { recursive: true, force: true }));
+      const packagePath = path.join(root, "packages", "core");
+      await mkdir(packagePath, { recursive: true });
+      pauseProject(paused, root);
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        // Full access, so the allowed handoff does not wait on an approval for the new path.
+        overlayStore: createOverlayStoreMock({
+          overlays: {
+            "codex:parked": { backend: "codex", threadId: "parked", executionMode: "full-access", extraLinkedDirectories: [] },
+          },
+        }),
+        threadTitleGenerationService: null,
+      });
+      onTestFinished(() => registry.close());
+      for (const threadId of ["orchestrator", "parked"]) {
+        await registry.publishLocalEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/started",
+            params: { threadId, turnId: `${threadId}-turn`, turn: { id: `${threadId}-turn` } },
+          },
+        });
+      }
+      const handoffFrom = async (threadId: string) => await callRegistryMcpTool({
+        registry,
+        backend: "codex",
+        threadId,
+        turnId: `${threadId}-turn`,
+        tool: "handoff_task",
+        // A folder inside the project counts as the project.
+        args: { task: "Rebase the release branch.", title: "Rebase", workspaceMode: "project_local", cwd: packagePath },
+      });
+
+      await expect(handoffFrom("orchestrator")).resolves.toMatchObject({
+        isError: true,
+        structuredContent: {
+          code: "project_paused",
+          message: expect.stringContaining("openclaw, where forge activity is paused"),
+        },
+      });
+      expect(codexClient.lastStartThreadParams).toBeUndefined();
+
+      // A thread already in the project is the work the operator is driving.
+      const inside = await handoffFrom("parked");
+      expect(inside).toMatchObject({ structuredContent: { groupedUnderThreadId: "parked" } });
+      expect(codexClient.lastStartThreadParams?.cwd).toBe(packagePath);
+    });
+
+    describe("a monitor finishing into a paused parent", () => {
+      const runMonitor = async (options: { lockParent?: boolean } = {}) => {
+        const codexClient = new MockBackendClient({
+          initializeResult: { methods: ["turn/start"] },
+          models: TEST_TASK_MONITOR_MODELS,
+          startThreadResult: { threadId: "monitor-thread" },
+        });
+        const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+        onTestFinished(() => registry.close());
+        const turnEvent = async (method: "turn/started" | "turn/completed") =>
+          await registry.publishLocalEvent({
+            backend: "codex",
+            notification: {
+              method,
+              params: {
+                threadId: "parked",
+                turnId: "parent-turn",
+                turn: method === "turn/started"
+                  ? { id: "parent-turn" }
+                  : { id: "parent-turn", status: "completed", output: [] },
+              },
+            },
+          } as AgentEvent);
+        const toolCall = async (threadId: string, tool: string, args: Record<string, unknown>) => {
+          const response = await codexClient.emitRequest({
+            method: "item/tool/call",
+            params: {
+              threadId,
+              turnId: threadId === "parked" ? "parent-turn" : "turn-1",
+              callId: `call-${tool}`,
+              requestId: `call-${tool}`,
+              namespace: "pwragent_task_monitors",
+              tool,
+              arguments: args,
+            },
+          } as AppServerPendingRequestNotification);
+          return {
+            response,
+            payload: JSON.parse(
+              (response as { contentItems: Array<{ text: string }> }).contentItems[0]?.text ?? "{}",
+            ) as Record<string, unknown>,
+          };
+        };
+        await turnEvent("turn/started");
+        const { payload: created } = await toolCall("parked", "create_monitor_delegation", { task: "Watch the nightly run" });
+        await turnEvent("turn/completed");
+        const lock = options.lockParent
+          ? (await registry.setThreadLock({
+              backend: "codex",
+              threadId: "parked",
+              locked: true,
+              note: "Worktree handed to the repair thread.",
+            }, { source: "operator" })).lock
+          : undefined;
+        const { response, payload: completed } = await toolCall("monitor-thread", "complete_monitoring", {
+          monitorId: created.monitorId,
+          outcome: "success",
+          summary: "The nightly run finished.",
+        });
+        expect(response).toMatchObject({ success: true });
+        return { codexClient, registry, monitorId: created.monitorId as string, completed, lock };
+      };
+
+      it("holds the result as a project-held wake-up under the hold policy", async () => {
+        pauseProject();
+        const { codexClient, registry, monitorId, completed } = await runMonitor();
+
+        expect(completed).toMatchObject({ parentTurn: { status: "queued" } });
+        expect(registry.listProjectHeldWakeups(PROJECT)).toEqual([expect.objectContaining({
+          entryId: `task-monitor:${monitorId}`,
+          threadId: "parked",
+          source: "monitor",
+          summary: "Monitor finished: \"Watch the nightly run\"",
+        })]);
+        // Only the monitor's own turn has started.
+        expect(codexClient.startTurnCallCount).toBe(1);
+      });
+
+      it("drops the result and leaves a note under the discard policy", async () => {
+        pauseProject({ ...paused, wakeupPolicy: "discard" });
+        const { codexClient, registry, completed } = await runMonitor();
+
+        expect(completed).not.toHaveProperty("parentTurn");
+        expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId: "parked" })).toEqual([]);
+        expect(codexClient.startTurnCallCount).toBe(1);
+        expect(JSON.stringify(codexClient.injectedThreadItems)).toContain(
+          "because forge activity in openclaw is paused",
+        );
+      });
+
+      it("lets the parent's Lock hold the result, and delivers it on unlock", async () => {
+        pauseProject({ ...paused, wakeupPolicy: "discard" });
+        const { codexClient, registry, completed, lock } = await runMonitor({ lockParent: true });
+
+        expect(completed).toMatchObject({ parentTurn: { status: "queued", position: 1 } });
+        expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId: "parked" })).toEqual([
+          expect.objectContaining({ holdReason: threadLockRefusalMessage(lock!) }),
+        ]);
+        expect(registry.listProjectHeldWakeups(PROJECT)).toEqual([]);
+        expect(codexClient.startTurnCallCount).toBe(1);
+
+        await registry.setThreadLock({ backend: "codex", threadId: "parked", locked: false }, { source: "operator" });
+        await expect.poll(() => codexClient.startTurnCallCount).toBe(2);
+        expect(codexClient.lastStartTurnParams).toMatchObject({
+          threadId: "parked",
+          input: [{ type: "text", text: expect.stringContaining("The nightly run finished.") }],
+        });
+      });
     });
 
     describe("across a restart", () => {
