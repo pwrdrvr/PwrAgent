@@ -3374,12 +3374,6 @@ export class DesktopFederationRuntime {
       : [...(visiblePeer?.capabilities ?? [])];
   }
 
-  /**
-   * Stamped peer navigation summaries for bounded Cmd+K search and
-   * the pinned-remote-thread merge. Unsupported full reads reject.
-   * Navigation-based (not `listThreads`) so remote rows carry PR chips and
-   * share local matching semantics without sending a full snapshot per query.
-   */
   /** How this instance's sub-thread groups count a peer's threads as children. */
   peerChildSource(): PeerChildSource {
     return {
@@ -3388,6 +3382,12 @@ export class DesktopFederationRuntime {
     };
   }
 
+  /**
+   * Stamped peer navigation summaries for bounded Cmd+K search and
+   * the pinned-remote-thread merge. Unsupported full reads reject.
+   * Navigation-based (not `listThreads`) so remote rows carry PR chips and
+   * share local matching semantics without sending a full snapshot per query.
+   */
   remoteThreadSummaries(): RemoteThreadSummaryCache {
     this.remoteThreadSummaryCache ??= new RemoteThreadSummaryCache({
       peers: () => this.connectedPeerTargets(),
