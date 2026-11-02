@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -94,11 +94,23 @@ try {
     exactPipes = 4;
   }
 
+  const dump = path.join(directory, "private.dmp");
+  const rejected = JSON.parse((await exec(executable, ["dump", String(child.pid), String(BigInt(result.process.created) + 1n), dump],
+    { timeout: 3000, windowsHide: true })).stdout);
+  assert.equal(rejected.status, "identity-not-live");
+  assert.equal(existsSync(dump), false);
+  const captured = JSON.parse((await exec(executable, ["dump", String(child.pid), result.process.created, dump],
+    { timeout: 5000, windowsHide: true })).stdout);
+  assert.equal(captured.status, "written");
+  assert.equal(captured.created, result.process.created);
+  assert.equal(readFileSync(dump).subarray(0, 4).toString(), "MDMP");
+  rmSync(dump);
+
   writeFileSync(stopSource, "stop");
   await bounded(sourceClosed, 3000, "Controlled source did not finish");
   await waitFor(() => records.some((row) => row.kind === "gone" && row.pid === child.pid
     && row.created === result.process.created && BigInt(row.nativeExit) > 0n), "Native source exit FILETIME was not retained");
-  console.log(JSON.stringify({ creationIdentityVerified: true, nativeExitTimeVerified: true, exactPipes }));
+  console.log(JSON.stringify({ creationIdentityVerified: true, nativeExitTimeVerified: true, dumpIdentityVerified: true, exactPipes }));
 } finally {
   try { await stopOwned(child, sourceClosed, stopSource); }
   finally {

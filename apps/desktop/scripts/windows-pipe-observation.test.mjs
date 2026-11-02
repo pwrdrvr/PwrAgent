@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, normalizePipeName, parseHandleOutput, observeWindowsLauncher, packageManagerCommand } from "./windows-pipe-observation.mjs";
+import { parseNativeStacks } from "./windows-native-stack.mjs";
 
 const roots = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -14,6 +15,36 @@ const names = [1, 2, 3, 4].map((n) => "\\Device\\NamedPipe\\uv\\" + n + "-123");
 const inventory = () => ({ verified: true, liveAfter: true, pipes: names.map((name) => ({ name })) });
 
 describe("Windows natural pipe evidence", () => {
+  it("retains native stack symbols without debugger paths, arguments or memory", () => {
+    const parsed = parseNativeStacks([
+      "CommandLine: C:\\private\\secret-command.exe secret-token",
+      "*** ERROR: Symbol file could not be found. C:\\private\\secret.pdb",
+      ".  0  Id: 1abc.2def Suspend: 0 Teb: 0000000011111111 Unfrozen",
+      " # Child-SP          RetAddr           Call Site",
+      "00 00000000`11111111 00000000`22222222 ntdll!NtWaitForSingleObject+0x14",
+      "01 00000000`11111111 00000000`22222222 electron!base::Thread::Stop+0x73 [C:\\private\\secret.cc @ 15]",
+      "02 00000000`11111111 00000000`22222222 electron+0x1234 secret-token",
+      "03 00000000`11111111 00000000`22222222 C:\\private\\secret.cc",
+      "04 00000000`11111111 00000000`22222222 00000000`33333333",
+      "   1  Id: 1abc.3fed Suspend: 0 Teb: 0000000011111111 Unfrozen",
+      "00 00000000`11111111 00000000`22222222 KERNELBASE!WaitForMultipleObjectsEx+0xf0",
+      "rax=0000000011111111 rbx=secret-token",
+    ].join("\n"));
+    expect(parsed).toMatchObject({ frameCount: 4, omittedFrames: 2, symbolWarnings: 1, threads: [
+      { index: 0, pid: "1abc", tid: "2def", frames: [
+        { index: 0, symbol: "ntdll!NtWaitForSingleObject+0x14" },
+        { index: 1, symbol: "electron!base::Thread::Stop+0x73" },
+        { index: 2, symbol: "electron+0x1234" },
+      ] },
+      { index: 1, tid: "3fed", frames: [{ index: 0, symbol: "KERNELBASE!WaitForMultipleObjectsEx+0xf0" }] },
+    ] });
+    expect(JSON.stringify(parsed)).not.toMatch(/private|secret|11111111|22222222|33333333/);
+    const bounded = parseNativeStacks(Array.from({ length: 130 }, (_, index) =>
+      `   ${index} Id: 1abc.2def Suspend: 0\n` + "00 11111111 22222222 ntdll!Wait+0x1\n".repeat(45)).join("\n"));
+    expect(bounded).toMatchObject({ omittedThreads: 2, frameCount: 128 * 40, omittedFrames: 128 * 5 });
+    expect(parseNativeStacks("unknown debugger format secret-token").frameCount).toBe(0);
+  });
+
   it("launches pnpm native executables directly and JavaScript entries through Node", () => {
     const args = ["--filter", "@pwragent/desktop", "test:e2e", "--shard=4/4"];
     const native = path.resolve("pnpm-native.exe");
@@ -171,6 +202,8 @@ describe("Windows natural pipe evidence", () => {
     const result = await promisify(execFile)(process.execPath, [path.join(import.meta.dirname, "windows-pipe-diagnostics-probe.mjs")], {
       windowsHide: true, timeout: 35000,
     });
-    expect(JSON.parse(result.stdout)).toEqual(expect.objectContaining({ creationIdentityVerified: true, nativeExitTimeVerified: true }));
+    expect(JSON.parse(result.stdout)).toEqual(expect.objectContaining({
+      creationIdentityVerified: true, nativeExitTimeVerified: true, dumpIdentityVerified: true,
+    }));
   }, 40000);
 });

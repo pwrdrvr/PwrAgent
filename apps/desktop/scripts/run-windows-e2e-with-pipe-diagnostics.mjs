@@ -1,9 +1,10 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, packageManagerCommand, parseHandleOutput } from "./windows-pipe-observation.mjs";
+import { parseNativeStacks } from "./windows-native-stack.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
 const root = path.join(desktop, ".local", "windows-pipe-diagnostics", randomUUID());
@@ -13,6 +14,10 @@ const artifact = path.join(desktop, "test-results", "worker-shutdown", "native-c
 const stopFile = path.join(root, "stop");
 const executable = path.join(root, "windows-pipe-diagnostics.exe");
 const handleExecutable = process.env.PWRAGENT_WINDOWS_HANDLE_EXE;
+const cdbExecutable = process.env.PWRAGENT_WINDOWS_CDB_EXE;
+// Never copy this directory into evidence/test-results or print its contents.
+const privateStacks = path.join(root, "private-stacks");
+const dumps = [];
 const rows = new Map();
 const launches = new Map();
 const launchEvents = new Map();
@@ -22,6 +27,7 @@ const scanners = new Set();
 let watcher, requestWatcher, poll, liveArtifacts = false;
 let nativeBytes = 0, omittedNativeRecords = 0, captures = 0, watcherAvailable = false;
 let stalledCaptures = 0;
+let nativeCaptures = 0;
 
 // Raw tool output may contain unrelated file paths; persist only parsed pipe names.
 const json = (data) => JSON.stringify(data, (key, value) => key === "toolText" ? undefined : value);
@@ -191,6 +197,59 @@ async function capture(event) {
     })) });
 }
 
+async function captureNativeStack(event) {
+  if (!cdbExecutable || !Number.isFinite(event.closeStartedAt)) return;
+  const due = event.closeStartedAt + 5000;
+  if (Date.now() < due) await new Promise((resolve) => setTimeout(resolve, due - Date.now()));
+  const launch = await launches.get(event.launchId);
+  if (!launch?.source?.verified || !launch.source.liveAfter) return;
+  const created = launch.source.created;
+  const row = rows.get(event.pid + ":" + created);
+  if (!row || row.ppid !== event.workerPid || row.name.toLowerCase() !== "electron.exe" || row.goneAt || nativeCaptures >= 4) return;
+  nativeCaptures++;
+  mkdirSync(privateStacks, { recursive: true });
+  const filename = path.join(privateStacks, event.launchId + ".dmp");
+  const query = await run(executable, ["dump", String(event.pid), created, filename], 2000, true);
+  const report = { event, expectedCreated: created, due, requested: query.requested, started: query.started, ended: query.ended,
+    result: query.value, execution: query.error && { code: query.error.code, signal: query.error.signal, killed: query.error.killed } };
+  write("native-stack-capture-" + event.launchId + ".json", report);
+  log("native-stack-capture", { launchId: event.launchId, pid: event.pid, created, ...report.result,
+    requested: report.requested, started: report.started, ended: report.ended });
+  if (query.value?.status === "written") dumps.push({ filename, event, created });
+  else rmSync(filename, { force: true });
+}
+
+async function analyzeNativeStacks() {
+  const cache = path.join(privateStacks, "symbols");
+  const symbols = `srv*${cache}*https://msdl.microsoft.com/download/symbols;srv*${cache}*https://symbols.electronjs.org`;
+  // Offline only: symbol downloads/debugger startup never suspend Electron or
+  // compete with the six-second close. Two analyzers bound the lane overhead.
+  const queue = [...dumps];
+  const analyze = async () => {
+    for (let dump; (dump = queue.shift());) {
+      const started = Date.now();
+      try {
+        const result = await new Promise((resolve) => {
+          const child = execFile(cdbExecutable, ["-y", symbols, "-z", dump.filename, "-c", ".symopt+ 0x80000;~* kn 40;q"],
+            { timeout: 90000, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+              scanners.delete(child);
+              resolve({ stack: parseNativeStacks(stdout), stderrBytes: Buffer.byteLength(stderr),
+                execution: error && { code: error.code, signal: error.signal, killed: error.killed } });
+            });
+          scanners.add(child);
+        });
+        write("native-stack-" + dump.event.launchId + ".json", {
+          launchId: dump.event.launchId, pid: dump.event.pid, created: dump.created, started, ended: Date.now(), ...result,
+        });
+        log("native-stack-analyzed", { launchId: dump.event.launchId, frameCount: result.stack.frameCount,
+          threadCount: result.stack.threads.length, execution: result.execution, elapsedMs: Date.now() - started });
+      } finally { rmSync(dump.filename, { force: true }); }
+    }
+  };
+  try { await Promise.all([analyze(), analyze()]); }
+  finally { rmSync(privateStacks, { recursive: true, force: true }); }
+}
+
 function enqueue(task) {
   const operation = task.catch((error) => log("capture-error", { error: error.message }));
   pending.add(operation);
@@ -214,7 +273,7 @@ function scanRequests() {
       enqueue(operation);
     }
     if (event.kind === "trigger") enqueue(capture(event));
-    if (event.kind === "stalled") enqueue(capture(event));
+    if (event.kind === "stalled") { enqueue(capture(event)); enqueue(captureNativeStack(event)); }
   }
 }
 async function startObserver() {
@@ -222,6 +281,7 @@ async function startObserver() {
   mkdirSync(evidence, { recursive: true });
   if (!handleExecutable || !path.isAbsolute(handleExecutable) || !existsSync(handleExecutable)) throw new Error("Official Handle utility is unavailable.");
   write("tools.json", { handleSha256: createHash("sha256").update(readFileSync(handleExecutable)).digest("hex"),
+    cdbSha256: cdbExecutable && createHash("sha256").update(readFileSync(cdbExecutable)).digest("hex"),
     nativeSourceSha256: createHash("sha256").update(readFileSync(path.join(desktop, "scripts", "windows-pipe-diagnostics.cs"))).digest("hex") });
   const compiler = path.join(process.env.SystemRoot, "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe");
   const compiled = await run(compiler, ["/nologo", "/platform:x64", "/r:System.Web.Extensions.dll", "/out:" + executable,
@@ -275,7 +335,7 @@ async function closeObserver() {
       await Promise.race([new Promise((resolve) => watcher.once("exit", resolve)), new Promise((resolve) => setTimeout(resolve, 1000))]);
       if (watcher.exitCode === null && watcher.signalCode === null) watcher.kill();
     }
-    write("summary.json", { captures, omittedNativeRecords, watcherAvailable, processIdentities: rows.size,
+    write("summary.json", { captures, stalledCaptures, nativeCaptures, omittedNativeRecords, watcherAvailable, processIdentities: rows.size,
       requestCount: processed.size, limitation: "50ms polling can miss short processes. Query/report work affects scheduling; timing alone is not attribution." });
     cpSync(evidence, artifact, { recursive: true });
   } finally {
@@ -308,9 +368,15 @@ async function main() {
   try {
     code = await new Promise((resolve, reject) => { child.once("exit", resolve); child.once("error", reject); });
   } finally {
-    try { await closeObserver(); } catch (error) { log("controller-cleanup-error", { error: error.message }); }
+    try { await closeObserver(); await analyzeNativeStacks(); }
+    catch (error) { log("controller-cleanup-error", { error: error.message }); }
+    finally { rmSync(privateStacks, { recursive: true, force: true }); }
   }
   process.exitCode = code ?? 1;
 }
-process.once("exit", () => { watcher?.kill(); for (const child of scanners) child.kill(); });
+process.once("exit", () => {
+  watcher?.kill();
+  for (const child of scanners) child.kill();
+  rmSync(privateStacks, { recursive: true, force: true });
+});
 await main();

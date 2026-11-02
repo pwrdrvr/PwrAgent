@@ -107,6 +107,27 @@ cache completion keeps its main-process owner alive until the write finishes. Ca
 disposal applies only to the Playwright-owned fixture sessions. A failed or
 stalled completion still fails teardown under the existing close deadline.
 
+The three full Windows samples in CI run 41491462986 passed their jobs but
+retained two forced closes through test retries. Both roots reached `quit`;
+native exit and pipe close then occurred together, with no surviving-pipe gap.
+The barrier alone therefore does not establish complete ownership of native
+shutdown. For further attribution, the controller can capture a filtered
+minidump of a root still alive five seconds into close. It opens one
+non-inheritable query/read handle and verifies the launch's native creation
+FILETIME on that same handle before `MiniDumpWriteDump`; it never duplicates
+pipe handles or clones the target. Capture start/end and result are recorded.
+This capture can affect scheduling and is diagnostic evidence, not an unbiased
+shutdown-rate measurement.
+
+CI verifies the installed Microsoft CDB signature and analyzes those dumps
+only after E2E completes, using Microsoft's and Electron's symbol servers.
+The raw dumps and symbol cache stay in the ignored controller-private
+directory, outside `evidence` and `test-results`, and are deleted after
+analysis. Artifacts retain only bounded thread IDs and parsed call-site
+symbols, plus explicit missing-symbol/capture status. Debugger output,
+arguments, memory, environment and raw dumps are never uploaded. At most four
+roots are captured per lane; the owning close's deadline remains unchanged.
+
 The Windows reproduction left a suspended no-op `cmd.exe` from the startup
 Job-wrapper prewarm alive after the app exited. The app no longer starts this
 fire-and-forget prewarm. Vitest's separate prewarm setup still awaits its

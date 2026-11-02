@@ -1232,7 +1232,7 @@ export async function closeElectronApplication(
         mkdirSync(snapshotDirectory, { recursive: true });
         const filename = path.join(snapshotDirectory, `${randomUUID()}-stalled`);
         writeFileSync(`${filename}.tmp`, JSON.stringify({
-          kind: "stalled", workerPid: process.pid, pid: child.pid, at: Date.now(),
+          kind: "stalled", workerPid: process.pid, pid: child.pid, at: Date.now(), closeStartedAt: quitStartedAt,
         }));
         renameSync(`${filename}.tmp`, `${filename}.json`);
       } catch {
