@@ -271,6 +271,15 @@ export type PrAutoDispatchCandidate = {
   threadId: string;
 };
 
+/**
+ * Whether a thread can win the Auto-fix election. A locked thread cannot: the
+ * lock hands its PRs to another agent. The candidate rows already leave a
+ * locked thread out; this also covers a row written before the lock landed.
+ */
+function isPrAutoDispatchCandidateEligible(thread: ThreadOverlayState | undefined): boolean {
+  return thread?.prAutoDispatchEnabled === true && !thread.lock;
+}
+
 /** A thread's Auto-fix candidacy for one PR that a sync added or removed. */
 export type PrAutoDispatchCandidateChange = Omit<PrAutoDispatchCandidate, "eligibleSince">;
 
@@ -6940,9 +6949,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           key: encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(thread.backend, thread.threadId)) }));
         // Only eligibility and election membership are inputs. Never parse a
         // full history or pending dispatch prompt to read this one boolean.
+        // A locked thread has handed its PRs to another agent, so it stands
+        // out of the election as if they were not attached.
         const rows = this.stateDb.raw.prepare(`
           SELECT json_extract(requested.value, '$.index') AS ordinal,
-            json_type(threads.payload, '$.prAutoDispatchEnabled') = 'true' AS enabled,
+            (json_type(threads.payload, '$.prAutoDispatchEnabled') = 'true'
+              AND json_type(threads.payload, '$.lock') IS NULL) AS enabled,
             candidates.pr_key
           FROM json_each(?) AS requested
           LEFT JOIN threads ON threads.thread_id = json_extract(requested.value, '$.key')
@@ -7009,9 +7021,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         thread_id: string;
       }>;
     for (const row of rows) {
-      const threadKey = buildThreadIdentityKey(row.backend, row.thread_id);
       if (
-        this.getThread(threadKey)?.prAutoDispatchEnabled === true
+        isPrAutoDispatchCandidateEligible(this.getThread(buildThreadIdentityKey(row.backend, row.thread_id)))
         && (params.accepts?.({ backend: row.backend, threadId: row.thread_id }) ?? true)
       ) {
         return {
@@ -7043,8 +7054,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         thread_id: string;
       }>;
     return rows.flatMap((row) =>
-      this.getThread(buildThreadIdentityKey(row.backend, row.thread_id))
-        ?.prAutoDispatchEnabled === true
+      isPrAutoDispatchCandidateEligible(this.getThread(buildThreadIdentityKey(row.backend, row.thread_id)))
         ? [{
             backend: row.backend,
             eligibleSince: row.eligible_since,

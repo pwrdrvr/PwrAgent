@@ -2262,6 +2262,12 @@ type ThreadPrAutoDispatchHandler = {
     requests: SetThreadPrAutoDispatchRequest[],
   ) => Promise<void>;
   cancelPending: (request: CancelThreadPrAutoDispatchRequest) => Promise<boolean>;
+  /** A lock or unlock moves the thread out of or back into the Auto-fix election. */
+  lockChanged?: (request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    locked: boolean;
+  }) => Promise<void>;
   sendPendingNow: (
     request: SendThreadPrAutoDispatchNowRequest,
   ) => Promise<boolean>;
@@ -27140,6 +27146,7 @@ export class DesktopBackendRegistry {
         },
       },
     });
+    await this.threadPrAutoDispatchHandler?.lockChanged?.({ ...identity, locked: Boolean(lock) });
   }
 
   async setThreadPrAutoDispatch(

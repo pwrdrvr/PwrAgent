@@ -3347,7 +3347,7 @@ class DesktopAppServerService {
   private async syncThreadPrAutoDispatchCandidates(params: {
     backend: AppServerBackendKind;
     threadId: string;
-  }): Promise<void> {
+  }): Promise<PrAutoDispatchCandidateChange[]> {
     const attachment = this.attachedPrsByThreadKey.get(
       buildThreadIdentityKey(params.backend, params.threadId),
     );
@@ -3358,13 +3358,13 @@ class DesktopAppServerService {
           )
           .map(getPrStatusKey)
       : [];
-    this.publishPrAutoFixCandidateChanges(
-      await this.getOverlayStore().syncThreadPrAutoDispatchCandidates({
-        ...params,
-        prKeys,
-        now: Date.now(),
-      }),
-    );
+    const changes = await this.getOverlayStore().syncThreadPrAutoDispatchCandidates({
+      ...params,
+      prKeys,
+      now: Date.now(),
+    });
+    this.publishPrAutoFixCandidateChanges(changes);
+    return changes;
   }
 
   /**
@@ -7940,6 +7940,57 @@ class DesktopAppServerService {
     }
   }
 
+  /**
+   * A lock hands the thread's PRs to another agent, so the thread leaves the
+   * Auto-fix election as if its PRs were not attached, and its pending repair
+   * is cancelled. The next eligible thread is elected now rather than at the
+   * next poll. An unlock re-enters the election behind the threads that hold
+   * the PRs by then, so it never takes a repair back from the agent that
+   * picked it up. The lock has already landed when this runs, so a failure
+   * here is logged rather than failing the lock; the next poll re-elects.
+   */
+  async handleThreadLockChanged(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    locked: boolean;
+  }): Promise<void> {
+    try {
+      await this.applyThreadLockToPrAutoDispatch(request);
+    } catch (error) {
+      appServerLog.warn("failed to move Auto-fix after a thread lock change", {
+        threadKey: buildThreadIdentityKey(request.backend, request.threadId),
+        locked: request.locked,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async applyThreadLockToPrAutoDispatch(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    locked: boolean;
+  }): Promise<void> {
+    const identity = { backend: request.backend, threadId: request.threadId };
+    if (request.locked) {
+      await this.getPrAutoDispatchCoordinator().cancelAllPendingForThread(identity);
+    }
+    const changes = await this.syncThreadPrAutoDispatchCandidates(identity);
+    if (changes.length === 0 || !this.isPrAutoDispatchAvailable()) return;
+    const attachment = this.attachedPrsByThreadKey.get(
+      buildThreadIdentityKey(request.backend, request.threadId),
+    );
+    const changedPrKeys = new Set(changes.map((change) => change.prKey));
+    const prs = this.canonicalizePrs(attachment?.prs ?? [])
+      .filter((pr) => changedPrKeys.has(getPrStatusKey(pr)));
+    if (prs.length === 0) return;
+    // Not operator-initiated: a repair the operator cancelled on the newly
+    // elected thread stays cancelled.
+    await this.handlePrAutoDispatchSnapshots(
+      dedupePrsByStatusKey(prs),
+      this.nextPrObservationTimestamp(),
+    );
+  }
+
   private async applyThreadPrAutoDispatchPreferences(
     requests: SetThreadPrAutoDispatchRequest[],
   ): Promise<void> {
@@ -10660,6 +10711,8 @@ export function registerAppServerIpcHandlers(): void {
       await appServerService.handleThreadPrAutoDispatchPreferences(requests),
     cancelPending: async (request) =>
       await appServerService.cancelThreadPrAutoDispatch(request),
+    lockChanged: async (request) =>
+      await appServerService.handleThreadLockChanged(request),
     sendPendingNow: async (request) =>
       await appServerService.sendThreadPrAutoDispatchNow(request),
     inspect: async (request, context) =>
