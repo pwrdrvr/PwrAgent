@@ -142,9 +142,10 @@ function hasOrdinaryFilesConfig(text: string): boolean {
 /**
  * Read only ordinary files-backend branch metadata. An undefined result means
  * the layout is unproven and the caller must use its owned Git subprocess.
- * A result with no branch proves an unborn local HEAD, even when remote refs
- * exist in the common repository. NOT_A_GIT_REPOSITORY proves that Git's
- * discovery finds no repository from this directory.
+ * A branch is what `git rev-parse --abbrev-ref HEAD` prints, so a detached
+ * HEAD reports `HEAD`. A result with no branch proves an unborn local HEAD,
+ * even when remote refs exist in the common repository. NOT_A_GIT_REPOSITORY
+ * proves that Git's discovery finds no repository from this directory.
  */
 export async function probeCurrentGitBranch(
   cwd: string,
@@ -228,14 +229,18 @@ export async function probeCurrentGitBranch(
 
   const head = await readSmallFile(path.join(gitDir, "HEAD"), 4096, signal);
   if (head?.kind !== "text") return undefined;
+  // Format version 0 with no extensions is SHA-1. Git abbreviates a detached
+  // HEAD to `HEAD` without reading its object, unless another `HEAD` ref makes
+  // the name ambiguous, which the scan below defers to Git.
+  const detached = /^[0-9a-fA-F]{40}\r?\n?$/.test(head.text);
   const headRef = /^ref: refs\/heads\/([^\r\n]+)\r?\n?$/.exec(head.text);
-  // Detached HEAD and unusual symrefs retain Git's own validation of their
-  // target object and abbreviation semantics.
-  if (!headRef || !safeBranchName(headRef[1])) return undefined;
-  const branch = headRef[1];
-  const ref = "refs/heads/" + branch;
+  // Unusual symrefs retain Git's own abbreviation semantics.
+  if (!detached && (!headRef || !safeBranchName(headRef[1]))) return undefined;
+  const branch = headRef ? headRef[1] : "HEAD";
+  const ref = detached ? undefined : "refs/heads/" + branch;
   const ambiguousRefs = [
     "refs/" + branch,
+    ...(detached ? ["refs/heads/HEAD"] : []),
     "refs/remotes/" + branch,
     "refs/remotes/" + branch + "/HEAD",
   ];
@@ -257,7 +262,11 @@ export async function probeCurrentGitBranch(
 
   // Packing publishes packed-refs before pruning loose refs. Read the loose
   // ref first so concurrent packing cannot make a committed HEAD look unborn.
-  const loose = await readSmallFile(path.join(commonDir, ...ref.split("/")), 4096, signal);
+  // A detached HEAD has no branch ref, only names packed-refs could make
+  // ambiguous.
+  const loose: SmallFile | undefined = ref
+    ? await readSmallFile(path.join(commonDir, ...ref.split("/")), 4096, signal)
+    : { kind: "missing" };
   if (!loose) return undefined;
   const packed = await readSmallFile(path.join(commonDir, "packed-refs"), 1024 * 1024, signal);
   if (!packed) return undefined;
@@ -287,5 +296,5 @@ export async function probeCurrentGitBranch(
       ? { branch }
       : undefined;
   }
-  return found ? { branch } : {};
+  return found || detached ? { branch } : {};
 }
