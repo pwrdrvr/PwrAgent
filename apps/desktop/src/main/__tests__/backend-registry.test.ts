@@ -4190,7 +4190,7 @@ describe("DesktopBackendRegistry", () => {
         });
         expectSqliteWriteBudget({
           scenario: "project-held-wakeup-restart-send",
-          note: "one held wake-up through a restart and Send: one hold insert, one startup claim, one delete when its turn starts. Holds are rare; at 20 cycles/day and ~16 KiB/commit, about 1 MB/day. Idle and per-turn writes are 0.",
+          note: "one held wake-up through a restart and Send: one hold insert, one startup claim, one delete when its turn starts. ~20 KB per cycle; holds are rare, so even 20 cycles/day is ~0.4 MB/day. Idle and per-turn writes are 0.",
           writes,
         });
       });
@@ -4214,7 +4214,7 @@ describe("DesktopBackendRegistry", () => {
         });
         expectSqliteWriteBudget({
           scenario: "project-held-wakeup-restart-discard",
-          note: "one held wake-up through a restart and Discard: one hold insert, one startup claim, one delete. Holds are rare; at 20 cycles/day and ~16 KiB/commit, about 1 MB/day. Idle and per-turn writes are 0.",
+          note: "one held wake-up through a restart and Discard: one hold insert, one startup claim, one delete. ~20 KB per cycle; holds are rare, so even 20 cycles/day is ~0.4 MB/day. Idle and per-turn writes are 0.",
           writes,
         });
 
