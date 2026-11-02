@@ -115,6 +115,8 @@ async function createNewThreadTranscriptFixture(): Promise<{
             id: "thread-read-2",
             kind: "response",
             method: "thread/read",
+            // The empty read belongs to the new thread, not to a startup reread.
+            afterResponseId: "thread-start-1",
             result: {
               entries: [],
               messages: [],
@@ -374,6 +376,8 @@ async function createNewThreadFocusFixture(): Promise<{
             id: "thread-read-2",
             kind: "response",
             method: "thread/read",
+            // The empty read belongs to the new thread, not to a startup reread.
+            afterResponseId: "thread-start-1",
             result: {
               entries: [],
               messages: [],
