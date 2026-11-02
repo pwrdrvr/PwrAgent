@@ -487,21 +487,28 @@ describe("MessagingStatusBar", () => {
     ["feishu", "Feishu / Lark"],
     ["line", "LINE"],
   ] as const)("keeps a configured %s without runtime status still and unavailable", async (platform, name) => {
+    const snapshot = messagingSettingsSnapshot(
+      { [platform]: true },
+      { configured: { [platform]: true } },
+    );
+    let resolveOpenRead!: (response: { snapshot: DesktopMessagingSettingsProjection }) => void;
+    const readMessagingSettings = vi.fn()
+      .mockResolvedValueOnce({ snapshot })
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveOpenRead = resolve;
+      }));
     const desktopApi: DesktopApi = {
       getMessagingPlatformStatuses: vi.fn(async () => []),
       onMessagingPlatformStatusEvent: vi.fn(() => () => {}),
-      readMessagingSettings: vi.fn(async () => ({
-        snapshot: messagingSettingsSnapshot(
-          { [platform]: true },
-          { configured: { [platform]: true } },
-        ),
-      })),
+      readMessagingSettings,
     };
     const { container } = render(<MessagingStatusBar desktopApi={desktopApi} />);
     const controller = await screen.findByRole("button", {
       name: new RegExp(`${name}: Status unavailable`),
     });
     fireEvent.click(controller);
+    expect(readMessagingSettings).toHaveBeenCalledTimes(2);
+    await act(async () => resolveOpenRead({ snapshot }));
     expect(screen.getByText("No runtime status reported")).toBeInTheDocument();
     expect(screen.queryByText(/Connecting|Starting|Loading/)).not.toBeInTheDocument();
     expect(container.querySelectorAll(".status-dot")).toHaveLength(2);
