@@ -546,6 +546,13 @@ export type AppServerBackgroundTask = {
   agentType?: string;
   /** The task's latest progress line, as its backend reported it. */
   progress?: string;
+  /**
+   * Claude only: the task runs after the call that started it, and Claude
+   * continues the thread when it ends. A foreground task ends with its turn.
+   */
+  background?: boolean;
+  /** When this process first saw the task. */
+  startedAt?: number;
 };
 
 /** Provider provenance carried by a native Codex `spawn_agent` thread. */

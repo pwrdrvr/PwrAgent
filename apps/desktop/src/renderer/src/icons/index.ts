@@ -93,3 +93,6 @@ export { ContinueAfterIcon } from "./ContinueAfterIcon";
 export { MergeIcon } from "./MergeIcon";
 export { ReviewIcon } from "./ReviewIcon";
 export { HandoffIcon } from "./HandoffIcon";
+export { HourglassIcon } from "./HourglassIcon";
+export { ClockIcon } from "./ClockIcon";
+export { RadarIcon } from "./RadarIcon";

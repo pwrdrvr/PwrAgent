@@ -38678,6 +38678,246 @@ div.composer-error-row__toggle {
   white-space: nowrap;
 }
 
+/* The Waiting for tab: every pending wake on the thread, in the Pull
+   requests card's watch-list rows. Neutral throughout; a wake is not a
+   status, so nothing here carries tone. */
+.waiting-for-panel__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.waiting-for-panel__count {
+  min-width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.waiting-for-panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.waiting-for-panel__group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.waiting-for-panel__group + .waiting-for-panel__group {
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.waiting-for-panel__eyebrow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* The PR number beside a group label reads as data, not a label. */
+.waiting-for-panel__eyebrow-aside {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.waiting-for-panel__row.is-open {
+  margin: 0 -8px;
+  padding: 7px 8px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+}
+
+.waiting-for-panel__title-button {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.waiting-for-panel__title-button:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
+}
+
+.waiting-for-panel__title-button:focus-visible,
+.waiting-for-panel__link:focus-visible,
+.waiting-for-panel__ended-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.waiting-for-panel__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.waiting-for-panel__when,
+.waiting-for-panel__mono {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.waiting-for-panel__when {
+  color: var(--accent-bright);
+}
+
+.waiting-for-panel__quote {
+  color: var(--text-secondary);
+}
+
+.waiting-for-panel__detail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.waiting-for-panel__cond {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.waiting-for-panel__cond-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-suspended);
+}
+
+.waiting-for-panel__cond.is-met {
+  color: var(--text-muted);
+}
+
+.waiting-for-panel__cond.is-met .waiting-for-panel__cond-dot {
+  background: var(--status-ok);
+}
+
+.waiting-for-panel__cond.is-failed .waiting-for-panel__cond-dot {
+  background: var(--status-error);
+}
+
+.waiting-for-panel__prompt {
+  padding: 4px 8px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.waiting-for-panel__facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 3px 8px;
+  margin: 0;
+  font-size: 11px;
+  line-height: 15px;
+}
+
+.waiting-for-panel__facts dt {
+  color: var(--text-muted);
+}
+
+.waiting-for-panel__facts dd {
+  margin: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.waiting-for-panel__link {
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.waiting-for-panel__link:hover {
+  text-decoration: underline;
+}
+
+.waiting-for-panel__empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+}
+
+.waiting-for-panel__empty-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.waiting-for-panel__error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.waiting-for-panel__ended {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.waiting-for-panel__ended-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.waiting-for-panel__ended-toggle svg {
+  transition: transform 120ms ease;
+}
+
+.waiting-for-panel__ended-toggle[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.waiting-for-panel__ended-detail {
+  color: var(--text-muted);
+}
+
 .rail-card__message,
 .rail-card__usage {
   margin: 0;
