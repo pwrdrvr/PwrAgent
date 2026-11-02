@@ -59,6 +59,7 @@
       "id": "thread-read-1",
       "kind": "response",
       "method": "thread/read",
+      "threadId": "thread-long-scroll",
       "result": {
         "entries": [
           {
@@ -2056,6 +2057,7 @@
       "id": "thread-read-2",
       "kind": "response",
       "method": "thread/read",
+      "threadId": "thread-short-companion",
       "result": {
         "entries": [
           {

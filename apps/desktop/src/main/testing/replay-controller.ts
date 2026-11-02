@@ -7,20 +7,21 @@ import type {
   ReplayStep,
   ReplayStepOverride,
 } from "./replay-fixture";
-import { validateReplayFixture } from "./replay-fixture";
+import {
+  REUSABLE_RESPONSE_METHODS,
+  responseReuseKey,
+  validateReplayFixture,
+} from "./replay-fixture";
 
 type ReplayLiveStep = Exclude<ReplayStep, ReplayResponseStep>;
-
-const REUSABLE_RESPONSE_METHODS = new Set<ReplayResponseMethod>([
-  "initialize",
-  "thread/list",
-  "thread/read",
-  "skills/list",
-]);
 
 export type ReplayResponseSelector = {
   /** Select a `thread/list` step that answers archived listings. */
   archived?: boolean;
+  /** Select a `thread/read` step scripted for this thread, or an unkeyed one. */
+  threadId?: string;
+  /** Select a `thread/read` step scripted for this older-page cursor. */
+  before?: string;
 };
 
 export class ReplayController {
@@ -44,7 +45,7 @@ export class ReplayController {
       return response;
     }
 
-    const requested = selector.archived ? `${method} (archived)` : method;
+    const requested = describeResponse(method, selector);
     const nextStep = this.steps[this.index];
     if (!nextStep) {
       throw new Error(`Replay fixture exhausted before ${requested}`);
@@ -57,7 +58,7 @@ export class ReplayController {
     }
 
     throw new Error(
-      `Replay fixture expected ${nextStep.method}${nextStep.archived ? " (archived)" : ""} before ${requested}`
+      `Replay fixture expected ${describeResponse(nextStep.method, nextStep)} before ${requested}`
     );
   }
 
@@ -67,8 +68,8 @@ export class ReplayController {
     selector: ReplayResponseSelector = {}
   ): ReplayResponseStep | undefined {
     const archived = selector.archived === true;
-    const reuseKey = archived ? `${method}#archived` : method;
-    const matchIndex = this.findResponseIndex(method, archived);
+    const reuseKey = responseReuseKey({ method, archived });
+    const matchIndex = this.findResponseIndex(method, archived, selector);
     if (matchIndex !== -1) {
       const [matchedStep] = this.steps.splice(matchIndex, 1);
       if (!matchedStep || matchedStep.kind !== "response") {
@@ -76,7 +77,9 @@ export class ReplayController {
       }
 
       if (REUSABLE_RESPONSE_METHODS.has(method)) {
-        this.reusableResponses.set(reuseKey, matchedStep);
+        this.reusableResponses.set(responseReuseKey(matchedStep), matchedStep);
+        // An older page never answers a request for the newest one.
+        if (matchedStep.before === undefined) this.reusableResponses.set(reuseKey, matchedStep);
       }
 
       if (matchedStep.error) {
@@ -91,6 +94,17 @@ export class ReplayController {
       return matchedStep;
     }
 
+    // The most specific answer wins: this thread's page, then any thread's
+    // page, then this thread's newest page, then the last newest-page read.
+    const { threadId, before } = selector;
+    for (const key of [
+      responseReuseKey({ method, archived, threadId, before }),
+      responseReuseKey({ method, archived, before }),
+      responseReuseKey({ method, archived, threadId }),
+    ]) {
+      const reused = this.reusableResponses.get(key);
+      if (reused) return reused;
+    }
     return this.reusableResponses.get(reuseKey);
   }
 
@@ -149,20 +163,31 @@ export class ReplayController {
     return current;
   }
 
-  private findResponseIndex(method: ReplayResponseMethod, archived: boolean): number {
+  private findResponseIndex(
+    method: ReplayResponseMethod,
+    archived: boolean,
+    selector: ReplayResponseSelector
+  ): number {
     for (let candidateIndex = this.index; candidateIndex < this.steps.length; candidateIndex += 1) {
       const step = this.steps[candidateIndex];
       if (step.kind !== "response") {
         break;
       }
-      if (step.method === method && (step.archived === true) === archived) {
-        if (step.afterResponseId && !this.completedResponses.has(step.afterResponseId)) return -1;
-        return candidateIndex;
-      }
+      if (step.method !== method || (step.archived === true) !== archived) continue;
+      if (step.threadId !== undefined && step.threadId !== selector.threadId) continue;
+      if (step.before !== undefined && step.before !== selector.before) continue;
+      if (step.afterResponseId && !this.completedResponses.has(step.afterResponseId)) return -1;
+      return candidateIndex;
     }
 
     return -1;
   }
+}
+
+function describeResponse(method: ReplayResponseMethod, selector: ReplayResponseSelector): string {
+  if (selector.archived) return `${method} (archived)`;
+  const scope = [selector.threadId, selector.before && `before ${selector.before}`].filter(Boolean);
+  return scope.length ? `${method} (${scope.join(", ")})` : method;
 }
 
 function applyOverride(
