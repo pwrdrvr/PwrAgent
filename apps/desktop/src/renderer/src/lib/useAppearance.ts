@@ -28,6 +28,7 @@ export type AppearanceController = {
   setDensity(density: DensityPreference): void;
   setSidebarTextSize(sidebarTextSize: TextSizePreference): void;
   setTranscriptTextSize(transcriptTextSize: TextSizePreference): void;
+  setCalmMotion(calmMotion: boolean): void;
   setAppearance(preference: AppearancePreference): void;
 };
 
@@ -66,6 +67,7 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
   const snapshotLightTheme = snapshotPreference?.lightTheme;
   const snapshotSidebarTextSize = snapshotPreference?.sidebarTextSize;
   const snapshotTranscriptTextSize = snapshotPreference?.transcriptTextSize;
+  const snapshotCalmMotion = snapshotPreference?.calmMotion;
 
   const [appearance, setAppearanceState] = useState<AppearanceState>(() => {
     const initial = snapshotPreference ?? readBridgedAppearance();
@@ -87,6 +89,7 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
       || !snapshotLightTheme
       || !snapshotSidebarTextSize
       || !snapshotTranscriptTextSize
+      || snapshotCalmMotion === undefined
     ) {
       return;
     }
@@ -98,10 +101,12 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
         && current.density === snapshotDensity
         && current.sidebarTextSize === snapshotSidebarTextSize
         && current.transcriptTextSize === snapshotTranscriptTextSize
+        && current.calmMotion === snapshotCalmMotion
       ) {
         return current;
       }
       return {
+        calmMotion: snapshotCalmMotion,
         density: snapshotDensity,
         darkTheme: snapshotDarkTheme,
         lightTheme: snapshotLightTheme,
@@ -118,6 +123,7 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
     snapshotLightTheme,
     snapshotSidebarTextSize,
     snapshotTranscriptTextSize,
+    snapshotCalmMotion,
   ]);
 
   // Apply DOM attributes whenever the resolved appearance changes. No
@@ -131,6 +137,7 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
       appearance.density,
       appearance.sidebarTextSize,
       appearance.transcriptTextSize,
+      appearance.calmMotion,
     );
   }, [
     appearance.resolvedTheme,
@@ -139,6 +146,7 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
     appearance.density,
     appearance.sidebarTextSize,
     appearance.transcriptTextSize,
+    appearance.calmMotion,
   ]);
 
   // Subscribe to prefers-color-scheme changes so `theme: "system"` flips
@@ -239,6 +247,11 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
     [updateAxis],
   );
 
+  const setCalmMotion = useCallback(
+    (calmMotion: boolean) => updateAxis("calmMotion", calmMotion),
+    [updateAxis],
+  );
+
   const setAppearance = useCallback(
     (preference: AppearancePreference) => {
       setAppearanceState((current) => {
@@ -249,6 +262,7 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
           && current.density === preference.density
           && current.sidebarTextSize === preference.sidebarTextSize
           && current.transcriptTextSize === preference.transcriptTextSize
+          && current.calmMotion === preference.calmMotion
         ) {
           return current;
         }
@@ -272,6 +286,7 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
     setDensity,
     setSidebarTextSize,
     setTranscriptTextSize,
+    setCalmMotion,
     setAppearance,
   };
 }

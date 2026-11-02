@@ -101,6 +101,7 @@ describe("desktop settings contracts", () => {
           lightTheme: { value: "tangerine-light", source: "default" },
           themedDockIcon: { value: true, source: "default" },
           terminalMinimumContrast: { value: false, source: "default" },
+          calmMotion: { value: false, source: "default" },
           density: { value: "mission-control", source: "default" },
           sidebarTextSize: { value: "md", source: "default" },
           transcriptTextSize: { value: "md", source: "default" },

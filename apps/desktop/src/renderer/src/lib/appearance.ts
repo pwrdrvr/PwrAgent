@@ -53,6 +53,8 @@ export type AppearancePreference = {
   density: DensityPreference;
   sidebarTextSize: TextSizePreference;
   transcriptTextSize: TextSizePreference;
+  /** Looping status animations settle after two runs. */
+  calmMotion: boolean;
 };
 
 export const DEFAULT_APPEARANCE: AppearancePreference = {
@@ -62,6 +64,7 @@ export const DEFAULT_APPEARANCE: AppearancePreference = {
   density: DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   sidebarTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
   transcriptTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
+  calmMotion: false,
 };
 
 /** Resolve `"system"` to either `"dark"` or `"light"` by querying the
@@ -104,6 +107,7 @@ export function applyAppearanceAttributes(
   density: DensityPreference,
   sidebarTextSize: TextSizePreference,
   transcriptTextSize: TextSizePreference,
+  calmMotion: boolean,
 ): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
@@ -138,6 +142,12 @@ export function applyAppearanceAttributes(
   } else {
     root.removeAttribute("data-transcript-text");
   }
+  // Full motion is the bare :root; calm motion is the only value written.
+  if (calmMotion) {
+    root.setAttribute("data-motion", "calm");
+  } else {
+    root.removeAttribute("data-motion");
+  }
 }
 
 /**
@@ -159,6 +169,7 @@ export function readBridgedAppearance(): AppearancePreference {
     density: normalizeDensity(bridged?.density),
     sidebarTextSize: normalizeTextSize(bridged?.sidebarTextSize),
     transcriptTextSize: normalizeTextSize(bridged?.transcriptTextSize),
+    calmMotion: bridged?.calmMotion === true,
   };
 }
 

@@ -175,6 +175,7 @@ function createSnapshot(
         lightTheme: { value: "tangerine-light", source: "default" },
         themedDockIcon: { value: true, source: "default" },
         terminalMinimumContrast: { value: false, source: "default" },
+        calmMotion: { value: false, source: "default" },
         density: { value: "mission-control", source: "default" },
         sidebarTextSize: { value: "md", source: "default" },
         transcriptTextSize: { value: "md", source: "default" },
@@ -712,6 +713,7 @@ describe("SettingsScreen color themes", () => {
         density: "mission-control",
         sidebarTextSize: "md",
         transcriptTextSize: "md",
+        calmMotion: false,
         resolvedTheme: "dark",
       },
       setTheme: vi.fn(),
@@ -720,6 +722,7 @@ describe("SettingsScreen color themes", () => {
       setDensity: vi.fn(),
       setSidebarTextSize: vi.fn(),
       setTranscriptTextSize: vi.fn(),
+      setCalmMotion: vi.fn(),
       setAppearance: vi.fn(),
     };
     render(
@@ -768,6 +771,7 @@ describe("SettingsScreen color themes", () => {
         density: "mission-control",
         sidebarTextSize: "md",
         transcriptTextSize: "md",
+        calmMotion: false,
         resolvedTheme: "dark",
       },
       setTheme: vi.fn(),
@@ -776,6 +780,7 @@ describe("SettingsScreen color themes", () => {
       setDensity: vi.fn(),
       setSidebarTextSize: vi.fn(),
       setTranscriptTextSize: vi.fn(),
+      setCalmMotion: vi.fn(),
       setAppearance: vi.fn(),
     };
     render(
@@ -1558,6 +1563,7 @@ describe("SettingsScreen", () => {
         density: "mission-control",
         sidebarTextSize: "md",
         transcriptTextSize: "md",
+        calmMotion: false,
         resolvedTheme: "dark",
       },
       setTheme: vi.fn(),
@@ -1566,6 +1572,7 @@ describe("SettingsScreen", () => {
       setDensity: vi.fn(),
       setSidebarTextSize: vi.fn(),
       setTranscriptTextSize: vi.fn(),
+      setCalmMotion: vi.fn(),
       setAppearance: vi.fn(),
     };
     const settings = createSettingsState();
@@ -1588,6 +1595,44 @@ describe("SettingsScreen", () => {
         general: { appearance: { terminalMinimumContrast: true } },
       });
     });
+  });
+
+  it("leaves calm motion off by default and switches it through the appearance controller", () => {
+    const controller: AppearanceController = {
+      appearance: {
+        theme: "system",
+        darkTheme: "tangerine-dark",
+        lightTheme: "tangerine-light",
+        density: "mission-control",
+        sidebarTextSize: "md",
+        transcriptTextSize: "md",
+        calmMotion: false,
+        resolvedTheme: "dark",
+      },
+      setTheme: vi.fn(),
+      setDarkTheme: vi.fn(),
+      setLightTheme: vi.fn(),
+      setDensity: vi.fn(),
+      setSidebarTextSize: vi.fn(),
+      setTranscriptTextSize: vi.fn(),
+      setCalmMotion: vi.fn(),
+      setAppearance: vi.fn(),
+    };
+    render(
+      <SettingsScreen
+        appearanceController={controller}
+        initialSection="general"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const toggle = screen.getByRole("switch", { name: "Calm motion" });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    // The controller owns the write and the live `<html data-motion>`
+    // flip, like every other appearance axis.
+    expect(controller.setCalmMotion).toHaveBeenCalledWith(true);
   });
 
   it("saves the HTML preview scripts setting", async () => {

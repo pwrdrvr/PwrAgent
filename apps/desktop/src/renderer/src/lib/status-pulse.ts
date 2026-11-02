@@ -27,11 +27,19 @@
  *
  * Reduced motion: no pulses. The resting pose is the still state, and a dip
  * already moving is cancelled back to it when the preference turns on.
+ *
+ * Calm motion (Settings → General → Appearance, `data-motion="calm"` on
+ * `<html>`): each dot dips twice, then rests. The count is per element and
+ * restarts when a dot starts pulsing again (`statusPulseRef`), so a state that
+ * comes back is announced again. Only dips that ran count: an offscreen dot or
+ * a hidden window keeps its two for when it is seen.
  */
 export const STATUS_PULSE_PERIOD_MS = 4500;
 export const STATUS_PULSE_DURATION_MS = 1600;
 /** Named for the rendering capture's animation allowlist. */
 export const STATUS_PULSE_ANIMATION_ID = "status-blink";
+/** Dips per dot under Calm motion. */
+export const STATUS_PULSE_CALM_LIMIT = 2;
 
 /**
  * Every element that pulses. A site that renders one of these classes calls
@@ -53,6 +61,7 @@ const PULSE_KEYFRAMES: Keyframe[] = [
 ];
 
 let pulseTimer: ReturnType<typeof setTimeout> | undefined;
+const calmPulseCounts = new WeakMap<Element, number>();
 let reducedMotion: MediaQueryList | null | undefined;
 
 function readReducedMotion(): MediaQueryList | null {
@@ -95,6 +104,7 @@ export function ensureStatusPulse(): void {
  */
 export function statusPulseRef(element: Element | null): void {
   if (element) {
+    calmPulseCounts.delete(element);
     ensureStatusPulse();
   }
 }
@@ -129,9 +139,17 @@ function runPulse(): void {
   // A hidden window, or an offscreen dot, would tick for frames that are never
   // drawn. The next pulse finds any dot that has come back into view.
   if (document.visibilityState === "visible" && !readReducedMotion()?.matches) {
+    const calm = document.documentElement.dataset.motion === "calm";
     for (const dot of dots) {
       if (typeof dot.animate !== "function" || !isOnScreen(dot)) {
         continue;
+      }
+      if (calm) {
+        const count = calmPulseCounts.get(dot) ?? 0;
+        if (count >= STATUS_PULSE_CALM_LIMIT) {
+          continue;
+        }
+        calmPulseCounts.set(dot, count + 1);
       }
       dot.animate(PULSE_KEYFRAMES, {
         duration: STATUS_PULSE_DURATION_MS,

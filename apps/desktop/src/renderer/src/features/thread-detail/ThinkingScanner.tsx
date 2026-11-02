@@ -9,8 +9,18 @@ type ThinkingScannerProps = {
 // ref has already pinned it, while a replacement animation still gets pinned.
 const pinnedAnimations = new WeakMap<Element, Animation>();
 
+/**
+ * Calm motion (Settings → General → Appearance) sets `data-motion="calm"` on
+ * `<html>`, and `app.css` then runs the sweep twice from when it starts. An
+ * animation pinned to the timeline's origin would count as finished long ago,
+ * so a calm beam keeps its own start time and sweeps twice from its mount.
+ */
+function isCalmMotion(): boolean {
+  return document.documentElement.dataset.motion === "calm";
+}
+
 function pinToSharedEpoch(element: Element): void {
-  if (pinnedAnimations.get(element)?.startTime === 0) {
+  if (isCalmMotion() || pinnedAnimations.get(element)?.startTime === 0) {
     return;
   }
 
@@ -89,6 +99,28 @@ function watchReducedMotionForRepin(): void {
 }
 
 watchReducedMotionForRepin();
+
+/**
+ * Re-pins every beam on screen when Calm motion turns off. Calm beams keep
+ * their mount-time start, so turning it off would leave each one looping on
+ * its own phase. Turning it on needs nothing: a pinned beam is two sweeps past
+ * its start, so `app.css`'s two-sweep limit ends it at once.
+ */
+function watchCalmMotionForRepin(): void {
+  if (typeof document === "undefined" || typeof MutationObserver === "undefined") {
+    return;
+  }
+  new MutationObserver(() => {
+    if (isCalmMotion()) {
+      return;
+    }
+    for (const beam of document.querySelectorAll(".thinking-scanner__beam")) {
+      pinToSharedEpoch(beam);
+    }
+  }).observe(document.documentElement, { attributeFilter: ["data-motion"] });
+}
+
+watchCalmMotionForRepin();
 
 export function ThinkingScanner(props: ThinkingScannerProps = {}) {
   return (

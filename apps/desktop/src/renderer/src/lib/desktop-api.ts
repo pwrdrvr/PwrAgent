@@ -1811,6 +1811,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
       density: DesktopAppearanceDensity;
       sidebarTextSize: DesktopTextSize;
       transcriptTextSize: DesktopTextSize;
+      calmMotion: boolean;
     }) => void,
   ) => () => void;
   onSettingsRuntimeChanged?: (
