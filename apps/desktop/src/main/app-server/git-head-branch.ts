@@ -1,7 +1,13 @@
-import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 export type GitHeadBranchProbe = { branch?: string };
+
+/**
+ * Discovery reached the filesystem root and found no repository. Git's own
+ * discovery would fail too, so the caller need not launch it.
+ */
+export const NOT_A_GIT_REPOSITORY = "not-a-repository";
 
 type SmallFile = { kind: "missing" } | { kind: "text"; text: string };
 
@@ -36,7 +42,21 @@ async function readSmallFile(
 }
 
 async function hasGitAdministrativeBoundary(directory: string, signal?: AbortSignal): Promise<boolean> {
-  const head = await readSmallFile(path.join(directory, "HEAD"), 4096, signal);
+  const headPath = path.join(directory, "HEAD");
+  signal?.throwIfAborted();
+  try {
+    // Git accepts a symbolic-link HEAD by its link text, so even a dangling
+    // link can mark a bare repository. stat would report it missing.
+    if ((await lstat(headPath)).isSymbolicLink()) {
+      signal?.throwIfAborted();
+      return true;
+    }
+  } catch (error) {
+    signal?.throwIfAborted();
+    return !isMissing(error);
+  }
+  signal?.throwIfAborted();
+  const head = await readSmallFile(headPath, 4096, signal);
   if (!head) return true;
   if (head.kind === "missing") return false;
   // Bare repositories own objects here; linked-worktree administrative
@@ -58,7 +78,7 @@ async function hasGitAdministrativeBoundary(directory: string, signal?: AbortSig
 function hasGitEnvironmentOverride(): boolean {
   const env = new Map(Object.entries(process.env).map(([key, value]) => [key.toUpperCase(), value]));
   if ([...env.keys()].some((key) =>
-    /^(?:PWRAGENT_GIT_PATH|GIT_(?:DIR|WORK_TREE|COMMON_DIR|NAMESPACE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM))$/.test(key)
+    /^(?:PWRAGENT_GIT_PATH|GIT_(?:DIR|WORK_TREE|COMMON_DIR|OBJECT_DIRECTORY|NAMESPACE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM))$/.test(key)
   )) return true;
 
   const configKeys = [...env.keys()].filter((key) => key.startsWith("GIT_CONFIG"));
@@ -128,12 +148,13 @@ function hasOrdinaryFilesConfig(text: string): boolean {
  * Read only ordinary files-backend branch metadata. An undefined result means
  * the layout is unproven and the caller must use its owned Git subprocess.
  * A result with no branch proves an unborn local HEAD, even when remote refs
- * exist in the common repository.
+ * exist in the common repository. NOT_A_GIT_REPOSITORY proves that Git's
+ * discovery finds no repository from this directory.
  */
 export async function probeCurrentGitBranch(
   cwd: string,
   signal?: AbortSignal,
-): Promise<GitHeadBranchProbe | undefined> {
+): Promise<GitHeadBranchProbe | typeof NOT_A_GIT_REPOSITORY | undefined> {
   signal?.throwIfAborted();
   if (hasGitEnvironmentOverride()) return undefined;
   let current: string;
@@ -161,7 +182,12 @@ export async function probeCurrentGitBranch(
       if (!isMissing(error)) return undefined;
       if (await hasGitAdministrativeBoundary(current, signal)) return undefined;
       const parent = path.dirname(current);
-      if (parent === current) return undefined;
+      // Git checks the same two places at each level: a .git entry, then the
+      // directory itself as a bare repository. With no environment override
+      // this walk is a superset of Git's: a ceiling or a filesystem boundary
+      // only stops Git earlier. safe.directory and safe.bareRepository only
+      // reject a repository that discovery already found.
+      if (parent === current) return NOT_A_GIT_REPOSITORY;
       current = parent;
     }
   }

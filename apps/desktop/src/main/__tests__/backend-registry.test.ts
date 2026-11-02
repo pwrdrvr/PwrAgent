@@ -23,6 +23,7 @@ import { stageTurnInputAttachment } from "../app-server/turn-input-attachment-fi
 import * as turnInputAttachmentFiles from "../app-server/turn-input-attachment-files";
 import * as transcriptImageProtocol from "../transcript-image-protocol";
 import * as gitExecutable from "../app-server/git-executable";
+import * as gitHeadBranch from "../app-server/git-head-branch";
 import { resolveActiveProfilePath } from "../profile";
 import { execFile as execFileCallback } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -49223,15 +49224,11 @@ script = "printf setup"
       registry.onEvent((event) => {
         if (["turn/completed", "turn/failed", "turn/cancelled"].includes(event.notification.method)) turnFinished.resolve(event);
       });
-      // The root is not a repository, so each branch read (thread start, and
-      // turn end before listeners see turn/completed) falls back to an owned
-      // Git process. On Windows that is PowerShell plus Git. Answer as Git
-      // does outside a repository.
-      const runGitCommand = gitExecutable.runGitCommand;
-      const branchRead = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
-        if (cwd !== root) return await runGitCommand(cwd, args, options);
-        throw new Error("fatal: not a git repository (or any of the parent directories): .git");
-      });
+      // The root is not a repository. Each branch read (thread start, and
+      // turn end before listeners see turn/completed) must prove that without
+      // an owned Git process, which on Windows is PowerShell plus Git.
+      const branchProbe = vi.spyOn(gitHeadBranch, "probeCurrentGitBranch");
+      const gitLaunch = vi.spyOn(gitExecutable, "runGitCommand");
       try {
         const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
         const identity = { backend: "claude" as const, threadId };
@@ -49241,15 +49238,15 @@ script = "printf setup"
         await expect(registry.steerTurn({ ...identity, expectedTurnId: started.turnId, requestId: "telegram-steer-1",
           input: [{ type: "text", text: "Course correct from Telegram" }] }, steererOrigin))
           .resolves.toMatchObject({ disposition: "steered", turnId: started.turnId });
-        branchRead.mockClear();
+        branchProbe.mockClear();
         finish.resolve();
         await expect(turnFinished.promise).resolves.toMatchObject({
           notification: { method: "turn/completed", params: { turnId: started.turnId } },
         });
-        // The turn-end branch read ran, and ran without a Git process.
-        expect(branchRead).toHaveBeenCalledWith(
-          root, ["rev-parse", "--abbrev-ref", "HEAD"], expect.objectContaining({ ownProcessTree: true }),
-        );
+        // The turn-end branch read ran, and no read launched Git for the root.
+        expect(branchProbe).toHaveBeenCalledWith(root, expect.any(AbortSignal));
+        await expect(branchProbe.mock.results.at(-1)?.value).resolves.toBe(gitHeadBranch.NOT_A_GIT_REPOSITORY);
+        expect(gitLaunch.mock.calls.filter(([cwd]) => cwd === root)).toEqual([]);
 
         const replay = await registry.readThread(identity);
         const firstPrompt = replay.replay.messages.find((message) => message.text === "Start");
@@ -49261,7 +49258,8 @@ script = "printf setup"
         try {
           await registry.close();
         } finally {
-          branchRead.mockRestore();
+          branchProbe.mockRestore();
+          gitLaunch.mockRestore();
         }
         await rm(root, { recursive: true, force: true });
       }
@@ -56026,6 +56024,8 @@ script = "printf setup"
 
     it("owns the branch read until the monitor workspace can be removed", async () => {
       const { close, registry, root } = await createClaudeMonitorRegistry({});
+      // An unproven layout reads its branch through the owned Git process.
+      const unproven = vi.spyOn(gitHeadBranch, "probeCurrentGitBranch").mockResolvedValue(undefined);
       const runGitCommand = gitExecutable.runGitCommand;
       let releaseBranch!: () => void;
       const heldBranch = new Promise<void>((resolve) => { releaseBranch = resolve; });
@@ -56057,6 +56057,7 @@ script = "printf setup"
           await (closing ?? close());
         } finally {
           branchRead.mockRestore();
+          unproven.mockRestore();
         }
       }
     });
@@ -65636,6 +65637,8 @@ script = "printf setup"
     const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
     const probeStarted = createDeferred<AbortSignal>();
     const releaseProbe = createDeferred<{ stdout: string; stderr: string }>();
+    // An unproven layout reads its branch through the owned Git process.
+    const unproven = vi.spyOn(gitHeadBranch, "probeCurrentGitBranch").mockResolvedValue(undefined);
     const branchProbe = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation((_cwd, _args, options) => {
       const signal = options!.signal!;
       probeStarted.resolve(signal);
@@ -65664,6 +65667,7 @@ script = "printf setup"
       releaseProbe.resolve({ stdout: "feature/late", stderr: "" });
       await terminal;
       branchProbe.mockRestore();
+      unproven.mockRestore();
       await registry.close();
     }
   });

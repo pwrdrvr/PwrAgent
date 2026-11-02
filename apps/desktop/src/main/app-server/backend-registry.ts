@@ -11,7 +11,7 @@ import { ForgeReadError, repositoryKey, validateForgeReadArgs, type ForgeReadReq
 import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation, type ForgeReviewComment } from "../pr-status/forge-pr-tool-contract";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
-import { probeCurrentGitBranch } from "./git-head-branch";
+import { NOT_A_GIT_REPOSITORY, probeCurrentGitBranch } from "./git-head-branch";
 import {
   indexTokenMiserCachedReplays,
   indexTokenMiserPricingLines,
@@ -1979,6 +1979,9 @@ function resolveBranchDriftExpectedBranch(params: {
 async function readCurrentGitBranch(sourcePath: string, signal?: AbortSignal): Promise<string | undefined> {
   const head = await probeCurrentGitBranch(sourcePath, signal);
   signal?.throwIfAborted();
+  // Git would find no repository either. Skip its launch: on Windows that is
+  // PowerShell plus Git, at thread start and before every turn end.
+  if (head === NOT_A_GIT_REPOSITORY) return undefined;
   if (head) return head.branch;
   // Git for Windows can hand off to a descendant that still holds the
   // workspace open. Wait for the owned tree before allowing its removal.
