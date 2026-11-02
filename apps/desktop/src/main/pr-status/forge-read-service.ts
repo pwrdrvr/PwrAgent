@@ -73,7 +73,10 @@ export class ForgeReadService {
       if (repositories.length !== 1) throw new ForgeReadError("ambiguous_repository", `Select repository from: ${repositories.map(repositoryKey).join(", ")}.`);
       const repository = repositories[0]!;
       if (!this.options.enabled(repository.provider)) throw new ForgeReadError("provider_disabled", `${repository.provider} is disabled in Settings → Git.`);
-      return this.options.ci.execute(operation, repository, args, signal, scope.artifactDirectory);
+      if (operation === "download_ci_artifact") {
+        return this.options.ci.execute(operation, repository, args, signal, scope.artifactDirectory);
+      }
+      return this.options.ci.execute(operation, repository, args, signal);
     }
     const selected = new Set(repositories.map(repositoryKey));
     const matches = (pr: PrSummary) => {
