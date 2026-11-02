@@ -8,7 +8,7 @@ import { startOutpostDaemon } from "./helpers/outpost-daemon";
 describe.skipIf(process.platform === "win32")("desktop client against the standalone outpost", () => {
   it.each(["direct", "symlink"] as const)("uses the current navigation, composer, transcript and project contracts (%s workspace)", async (workspaceKind) => {
     const outpost = await startOutpostDaemon({ workspaceKind });
-    const { client, workspace, cli, env } = outpost;
+    const { client, workspace, cli, env, viewerId } = outpost;
     try {
       const providers = await client.listBackends({});
       expect(providers.backends[0].launchpadOptions?.models?.[0].id).toBe("fixture-model");
