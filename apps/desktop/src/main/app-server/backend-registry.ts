@@ -20911,13 +20911,27 @@ export class DesktopBackendRegistry {
         this.durableProjectHeldWakeups.set(entry.id, wakeup);
         return;
       }
-      if (event.type !== "started" && event.type !== "failed" && event.type !== "cancelled") return;
-      if (!this.durableProjectHeldWakeups.delete(entry.id)) return;
-      store.remove(entry.id);
+      if (event.type === "started" || event.type === "failed" || event.type === "cancelled") {
+        this.forgetDurableProjectHeldWakeup(entry.id);
+      }
     } catch (error) {
       backendRegistryLog.warn("project held wake-up durability failed", {
         entryId: entry.id,
         event: event.type,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** Deletes the row before untracking it, so a failed delete stays visible. */
+  private forgetDurableProjectHeldWakeup(entryId: string): void {
+    if (!this.projectHeldWakeupStore || !this.durableProjectHeldWakeups.has(entryId)) return;
+    try {
+      this.projectHeldWakeupStore.remove(entryId);
+      this.durableProjectHeldWakeups.delete(entryId);
+    } catch (error) {
+      backendRegistryLog.warn("project held wake-up could not be forgotten", {
+        entryId,
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -21151,6 +21165,11 @@ export class DesktopBackendRegistry {
       request.paused,
     );
     const entry = result.entry;
+    if (result.disposition === "updated" && entry?.paused && !entry.projectHold) {
+      // A sent wake-up the operator pauses again is an ordinary queued
+      // message now; a restart must not bring it back as a project hold.
+      this.forgetDurableProjectHeldWakeup(entry.id);
+    }
     if (result.disposition === "updated" && entry) {
       await this.emit({
         backend: entry.backend,

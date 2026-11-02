@@ -4235,6 +4235,30 @@ describe("DesktopBackendRegistry", () => {
         expect(first.registry.listProjectHeldWakeups(PROJECT)).toHaveLength(1);
       });
 
+      it("drops the durable copy when the operator pauses a sent wake-up again", async () => {
+        pauseProject();
+        const { rows, store } = durableStore();
+        const first = launch(store, "instance-a");
+        await first.registry.deliverProjectPausedWakeup(wake());
+        // The operator's own turn keeps the thread busy, so Send waits.
+        await expect(first.registry.submitTurn({
+          backend: "codex",
+          threadId: "parked",
+          input: [{ type: "text", text: "Operator reply" }],
+        })).resolves.toMatchObject({ status: "started" });
+        await expect(resolve(first.registry, "send")).resolves.toEqual({ results: [
+          { entryId: "task-monitor:nightly", status: "sent" },
+        ] });
+        expect(rows()).toHaveLength(1);
+
+        await first.registry.setQueuedTurnPaused({ queueEntryId: "task-monitor:nightly", paused: true });
+        expect(rows()).toEqual([]);
+        await first.registry.close();
+
+        const second = launch(store, "instance-b", ["instance-b"]);
+        expect(second.registry.listProjectHeldWakeups(PROJECT)).toEqual([]);
+      });
+
       it("keeps an operator's edit to a held wake-up across a restart", async () => {
         pauseProject();
         const { store } = durableStore();
