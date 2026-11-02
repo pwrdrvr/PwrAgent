@@ -676,7 +676,8 @@ jobs:
     needs: [changes, macos-install-deps]
     # Exercise the release unit-test platform before a tag is cut.
     if: needs.changes.outputs.code_impacting == 'true'
-    timeout-minutes: 30
+    # Green hosted lanes take 3.5 to 11 minutes (2026-11-01).
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -736,7 +737,10 @@ jobs:
       fail-fast: false
       matrix:
         lane: [1, 2, 3, 4]
-    timeout-minutes: 30
+    # One budget for setup, build, tests, and reporting. Green hosted lanes
+    # take 5 to 10.5 minutes (2026-11-01), so the cap leaves about 4.5 minutes
+    # of headroom.
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -759,7 +763,6 @@ jobs:
         # E2E keeps GPU coverage. test:e2e builds apps/desktop/out first.
         # The shutdown circuit is macOS-lane-only: two consecutive closes at
         # or above 4s (or requiring force-kill) stop this shard after cleanup.
-        timeout-minutes: 25
         env:
           PWRAGENT_E2E_DISABLE_GPU: "1"
           PWRAGENT_E2E_SHUTDOWN_CIRCUIT_BREAKER: "1"
@@ -812,7 +815,10 @@ jobs:
         lane: [1, 2, 3, 4]
     # One budget for setup, build, tests, and reporting. Do not add shorter
     # step or suite deadlines that interrupt a progressing lane before this cap.
-    timeout-minutes: 10
+    # Green lanes take 6 to 9.75 minutes (15 CI runs, 2026-11-01), and a lane
+    # that was still passing tests was cancelled at 10 minutes, so the cap
+    # leaves about 5 minutes of headroom.
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7

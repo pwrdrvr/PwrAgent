@@ -1282,6 +1282,25 @@ vi.mock("../pr-status/git-remote", async () => {
   };
 });
 
+// The service is one module singleton for the whole file, and the file runs
+// in far less than the minute its PR request budget needs to refill. Every
+// lookup or by-URL fetch spends a token, so with the real bucket a test only
+// passes while fewer than PR_STATUS_TOKEN_BUCKET_CAPACITY spends precede it.
+// No test here is about the budget; pr-status-token-bucket.test.ts covers it.
+vi.mock("../pr-status/pr-status-token-bucket", async () => {
+  const actual = await vi.importActual<typeof import("../pr-status/pr-status-token-bucket")>(
+    "../pr-status/pr-status-token-bucket",
+  );
+  return {
+    ...actual,
+    PrStatusTokenBucket: class UnlimitedPrStatusTokenBucket extends actual.PrStatusTokenBucket {
+      override tryTake(): boolean {
+        return true;
+      }
+    },
+  };
+});
+
 describe("app server ipc", () => {
   it("reads exact persisted peer membership without repinning or listing navigation rows", async () => {
     const { NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL } = await import("../../shared/ipc");
