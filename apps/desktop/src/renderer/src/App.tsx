@@ -836,6 +836,17 @@ function DesktopAppShell(props: {
     return capabilities?.includes("project_forge_automation") === true
       && capabilities.includes("turn_control");
   }, [liveFederationHealth]);
+  // This instance's windows offer the same items on a placeholder row
+  // standing for a connected peer's project, under the same rule.
+  const peerForgeAutomationInstanceIds = useMemo(() => new Set(
+    readRendererFederationTarget()
+      ? []
+      : (liveFederationHealth?.peers ?? [])
+        .filter((peer) => peer.status === "connected"
+          && peer.capabilities?.includes("project_forge_automation") === true
+          && peer.capabilities.includes("turn_control"))
+        .map((peer) => peer.id),
+  ), [liveFederationHealth]);
   // Every known machine, the window's owner included, for naming one.
   const federationMachines = useMemo(
     () => buildFederationThreadTargets(liveFederationHealth),
@@ -4619,6 +4630,7 @@ function DesktopAppShell(props: {
           onListProjectHeldWakeups={navigation.listProjectHeldWakeups}
           onResolveProjectHeldWakeups={navigation.resolveProjectHeldWakeups}
           federationOwnerForgeAutomation={federationOwnerForgeAutomation}
+          peerForgeAutomationInstanceIds={peerForgeAutomationInstanceIds}
           onRemoveDirectory={(directory) =>
             navigation.removeDirectory(directory.key)}
           onOpenForgePermissions={readRendererFederationTarget()

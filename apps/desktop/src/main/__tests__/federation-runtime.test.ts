@@ -1883,11 +1883,12 @@ describe("DesktopFederationRuntime", () => {
     } as AgentEvent);
 
     // The viewer re-reads the owner's rows, which carry the stored settings.
+    // The project's key lets it skip the read when no held row is in it.
     expect(forwarded).toHaveLength(1);
     expect(forwarded[0]).toMatchObject({
       params: { notification: {
         method: "navigation/invalidated",
-        params: { sourceMethod: "directory/forgeAutomation/updated" },
+        params: { sourceMethod: "directory/forgeAutomation/updated", directoryKey: "directory:/repo" },
       } },
     });
   });

@@ -1,6 +1,6 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "../../test/phase-probes";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { DEFAULT_PROJECT_FORGE_AUTOMATION, type AgentEvent, type NavigationQueryPage, type NavigationRow, type NavigationSelectedDetailResponse, type PrSummary, type ProjectForgeAutomation } from "@pwragent/shared";
+import { DEFAULT_PROJECT_FORGE_AUTOMATION, type AgentEvent, type NavigationDirectoryRow, type NavigationQueryPage, type NavigationRow, type NavigationSelectedDetailResponse, type PrSummary, type ProjectForgeAutomation } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadNavigation } from "../useThreadNavigation";
 import { Sidebar } from "../../features/navigation/Sidebar";
@@ -769,15 +769,15 @@ it.each([
 });
 
 /** An owner with one local project whose Forge Automation the test can change. */
-function forgeAutomationOwner() {
+function forgeAutomationOwner(row: Partial<NavigationDirectoryRow> = {}) {
   const f = fixture();
   const originalRead = f.read.getMockImplementation()!;
-  const key = "directory:/openclaw";
+  const key = row.key ?? "directory:/openclaw";
   const owner: { automation?: ProjectForgeAutomation } = {};
   f.read.mockImplementation(async (request) => {
     const page = await originalRead(request);
     return request.query.kind === "directory-index" ? { ...page, directories: [{ key, kind: "directory", label: "openclaw",
-      path: "/openclaw", counts, pinnedRootCount: 0, unpinnedRootCount: 1, launchpadPresent: false,
+      path: "/openclaw", counts, pinnedRootCount: 0, unpinnedRootCount: 1, launchpadPresent: false, ...row,
       ...(owner.automation ? { forgeAutomation: owner.automation } : {}) }] } : page;
   });
   return { f, key, owner };
@@ -832,6 +832,35 @@ it("names a peer window's owner on every Forge Automation request", async () => 
   expect(setProjectForgeAutomation).toHaveBeenCalledWith({ directoryKey: key, automation: PAUSED, federationTarget: target });
   expect(listProjectHeldWakeups).toHaveBeenCalledWith({ directoryKey: key, federationTarget: target });
   expect(resolveProjectHeldWakeups).toHaveBeenCalledWith({ directoryKey: key, resolutions: [], federationTarget: target });
+  unmount();
+});
+
+it("sends a placeholder's Forge Automation to the peer that owns its project, and updates the placeholder", async () => {
+  const target = { scope: "remote" as const, instanceId: "peer-owner" };
+  const peerKey = "directory:/peer/openclaw";
+  const { f, key } = forgeAutomationOwner({ key: "unconfigured-directory:openclaw",
+    localAvailability: "unconfigured", peerProject: { target, directoryKey: peerKey } });
+  const setProjectForgeAutomation = vi.fn<NonNullable<DesktopApi["setProjectForgeAutomation"]>>(async (request) => ({
+    directoryKey: request.directoryKey, automation: request.automation,
+  }));
+  const listProjectHeldWakeups = vi.fn<NonNullable<DesktopApi["listProjectHeldWakeups"]>>(async (request) => ({
+    directoryKey: request.directoryKey, wakeups: [],
+  }));
+  const resolveProjectHeldWakeups = vi.fn<NonNullable<DesktopApi["resolveProjectHeldWakeups"]>>(async () => ({ results: [] }));
+  const api = { ...f.api, setProjectForgeAutomation, listProjectHeldWakeups, resolveProjectHeldWakeups };
+  const { result, unmount } = renderHook(() => useThreadNavigation(api));
+  const project = () => result.current.directories.find((directory) => directory.key === key);
+  await waitFor(() => expect(project()?.peerProject).toEqual({ target, directoryKey: peerKey }));
+
+  await act(() => result.current.setProjectForgeAutomation(project()!, PAUSED));
+  await act(async () => { await result.current.listProjectHeldWakeups(project()!); });
+  await act(async () => { await result.current.resolveProjectHeldWakeups(project()!, []); });
+
+  expect(setProjectForgeAutomation).toHaveBeenCalledWith({ directoryKey: peerKey, automation: PAUSED, federationTarget: target });
+  expect(listProjectHeldWakeups).toHaveBeenCalledWith({ directoryKey: peerKey, federationTarget: target });
+  expect(resolveProjectHeldWakeups).toHaveBeenCalledWith({ directoryKey: peerKey, resolutions: [], federationTarget: target });
+  // The owner answers with its key; the placeholder row is the one shown.
+  expect(project()?.forgeAutomation).toEqual(PAUSED);
   unmount();
 });
 

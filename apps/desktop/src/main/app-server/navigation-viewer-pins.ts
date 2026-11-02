@@ -1,7 +1,8 @@
 import path from "node:path";
 import { buildFederatedThreadRef, buildThreadIdentityKey, classifyDirectory, federatedThreadIdentityKey,
   orderByHomePreference } from "@pwragent/shared";
-import type { LinkedDirectorySummary, NavigationDirectorySummary, NavigationIdentity, NavigationThreadSummary } from "@pwragent/shared";
+import type { FederationRemoteTarget, LinkedDirectorySummary, NavigationDirectorySummary, NavigationIdentity,
+  NavigationThreadSummary } from "@pwragent/shared";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
 import type { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
 import type { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -209,6 +210,7 @@ export function attachRemoteThreadsToLocalDirectories(
     number,
     Array<{ threadKey: string; inInbox: boolean }>
   >();
+  const placeholderThreads = new Map<number, NavigationThreadSummary[]>();
   for (const thread of remoteThreads) {
     const threadKey = thread.federation?.ref
       ? federatedThreadIdentityKey(thread.federation.ref)
@@ -228,6 +230,9 @@ export function attachRemoteThreadsToLocalDirectories(
       if (homeIndex === -1) {
         homeIndex = mergedDirectories.push(placeholder) - 1;
       }
+      const members = placeholderThreads.get(homeIndex) ?? [];
+      members.push(thread);
+      placeholderThreads.set(homeIndex, members);
     }
     const added = addedByDirectoryIndex.get(homeIndex) ?? [];
     added.push({ threadKey, inInbox: Boolean(thread.inbox?.inInbox) });
@@ -243,8 +248,10 @@ export function attachRemoteThreadsToLocalDirectories(
     if (!added?.length) {
       return directory;
     }
+    const peerProject = placeholderPeerProject(directory, placeholderThreads.get(index));
     return {
       ...directory,
+      ...peerProject,
       threadKeys: [
         ...directory.threadKeys,
         ...added.map((entry) => entry.threadKey),
@@ -258,3 +265,34 @@ export function attachRemoteThreadsToLocalDirectories(
   });
 }
 
+
+/**
+ * The one peer project a placeholder's threads live in, with that project's
+ * Forge Automation as its owner reported it on the rows. None when the
+ * threads come from more than one peer or project, or no row names its
+ * project (an owner that predates `homeProject`): the row then shows no
+ * setting rather than one that covers only some of its threads.
+ */
+function placeholderPeerProject(
+  directory: NavigationDirectorySummary,
+  threads: readonly NavigationThreadSummary[] | undefined,
+): Pick<NavigationDirectorySummary, "peerProject" | "forgeAutomation"> {
+  if (directory.kind !== "directory" || directory.localAvailability !== "unconfigured" || !threads?.length) {
+    return {};
+  }
+  let target: FederationRemoteTarget | undefined;
+  let home: NavigationThreadSummary["homeProject"];
+  for (const thread of threads) {
+    const owner = thread.federation?.ref.target;
+    if (owner?.scope !== "remote" || (target && owner.instanceId !== target.instanceId)) return {};
+    target ??= owner;
+    if (!thread.homeProject) continue;
+    if (home && home.directoryKey !== thread.homeProject.directoryKey) return {};
+    home ??= thread.homeProject;
+  }
+  if (!target || !home) return {};
+  return {
+    peerProject: { target: { scope: "remote", instanceId: target.instanceId }, directoryKey: home.directoryKey },
+    ...(home.forgeAutomation ? { forgeAutomation: home.forgeAutomation } : {}),
+  };
+}

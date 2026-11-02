@@ -876,6 +876,7 @@ export function navigationInvalidationForLocalEvent(event: AgentEvent): AgentEve
           ? { worktreePath: identity(params.worktreePath) } : {}),
         threadId: identity(params.threadId ?? thread?.id ?? action?.threadId),
         ...(event.notification.method === "navigation/directoryGitStatus/updated"
+          || event.notification.method === "directory/forgeAutomation/updated"
           ? { directoryKey: identity(params.directoryKey) } : {}),
         automationId: identity(params.automationId),
         runId: identity(params.runId),
