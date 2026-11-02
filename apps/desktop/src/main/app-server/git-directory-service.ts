@@ -8,6 +8,7 @@ import type {
   ArchiveThreadCleanupResult,
   DesktopWorktreeStorageLocation,
   LaunchpadWorkMode,
+  LaunchpadWorktreeBase,
   NavigationDirectoryGitStatus,
   NavigationDirectorySummary,
   NavigationGitBranchDetail,
@@ -623,7 +624,7 @@ function isProtectedBranch(branch?: string): boolean {
  * `default_branch` skips it: a source worktree's branch can hold another
  * thread's unpublished work, which a standalone follow-up must not inherit.
  */
-export type WorktreeBaseSource = "current_branch" | "default_branch";
+export type WorktreeBaseSource = LaunchpadWorktreeBase;
 
 async function resolveVerifiedWorktreeBaseBranch(params: {
   repoRoot: string;

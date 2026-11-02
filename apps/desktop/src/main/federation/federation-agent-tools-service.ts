@@ -685,6 +685,7 @@ async function createInstanceThread(
       ...(environment.selector
         ? { codexEnvironmentSelector: environment.selector }
         : {}),
+      ...(args.worktreeBase ? { worktreeBase: args.worktreeBase } : {}),
     },
     { messageOrigin },
   );
@@ -1078,7 +1079,10 @@ function buildLaunchpadDraft(params: {
   const fastMode = stored?.fastMode ?? defaults.fastMode;
   const acpRuntime = stored?.acpRuntime ?? defaults.acpRuntime;
   const providerSettings = stored?.providerSettings ?? defaults.providerSettings;
-  const branchName = args.branchName ?? stored?.branchName;
+  // A default-branch request skips the base saved on the launchpad. That
+  // base belongs to the operator's unsent draft for this project.
+  const branchName = args.branchName
+    ?? (args.worktreeBase === "default_branch" ? undefined : stored?.branchName);
   const tokenMiserEnabled = (args.backend ?? backend) === "codex"
     ? args.tokenMiserEnabled ?? stored?.tokenMiserEnabled
     : undefined;
