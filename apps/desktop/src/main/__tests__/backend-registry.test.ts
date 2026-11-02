@@ -8847,7 +8847,7 @@ describe("DesktopBackendRegistry", () => {
           name: "5h limit",
           usedPercent: 15,
           remaining: 85,
-          resetAt: new Date("2026-04-29T14:00:00-04:00").getTime(),
+          resetAt: new Date("2099-04-29T14:00:00-04:00").getTime(),
           windowSeconds: 18_000,
           windowMinutes: 300,
         },
@@ -8855,7 +8855,7 @@ describe("DesktopBackendRegistry", () => {
           name: "Weekly limit",
           usedPercent: 9,
           remaining: 91,
-          resetAt: new Date("2026-05-01T14:00:00-04:00").getTime(),
+          resetAt: new Date("2099-05-01T14:00:00-04:00").getTime(),
           windowSeconds: 604_800,
           windowMinutes: 10_080,
         },
@@ -9497,7 +9497,7 @@ describe("DesktopBackendRegistry", () => {
           windowKey: "primary",
           usedPercent: 77,
           remaining: 23,
-          resetAt: 1_788_748_108_000,
+          resetAt: 4_088_748_108_000,
           windowSeconds: 18_000,
           windowMinutes: 300,
         },
@@ -9508,7 +9508,7 @@ describe("DesktopBackendRegistry", () => {
           windowKey: "secondary",
           usedPercent: 9,
           remaining: 91,
-          resetAt: 1_788_888_108_000,
+          resetAt: 4_088_888_108_000,
           windowSeconds: 604_800,
           windowMinutes: 10_080,
         },
@@ -9519,7 +9519,7 @@ describe("DesktopBackendRegistry", () => {
           windowKey: "secondary",
           usedPercent: 0,
           remaining: 100,
-          resetAt: 1_789_090_523_000,
+          resetAt: 4_089_090_523_000,
           windowSeconds: 604_800,
           windowMinutes: 10_080,
         },
@@ -9591,7 +9591,7 @@ describe("DesktopBackendRegistry", () => {
           windowKey: "primary",
           usedPercent: 85,
           remaining: 15,
-          resetAt: 1_788_748_108_000,
+          resetAt: 4_088_748_108_000,
           windowMinutes: 300,
         }),
         expect.objectContaining({
@@ -9619,6 +9619,100 @@ describe("DesktopBackendRegistry", () => {
 
     unsubscribe();
     await registry.close();
+  });
+
+  it("moves Codex limits only forward across out-of-order, sparse and next-window updates", async () => {
+    const hour = 3_600_000;
+    // Codex reports resets in whole seconds.
+    const fiveHourReset = Math.floor((Date.now() + 3 * hour) / 1000) * 1000;
+    const weeklyReset = Math.floor((Date.now() + 72 * hour) / 1000) * 1000;
+    const window = (windowKey: "primary" | "secondary", usedPercent: number, resetAt: number) => ({
+      name: windowKey === "primary" ? "5h limit" : "Weekly limit",
+      limitId: "codex",
+      limitName: "Codex",
+      windowKey,
+      usedPercent,
+      remaining: 100 - usedPercent,
+      resetAt,
+      windowSeconds: windowKey === "primary" ? 18_000 : 604_800,
+      windowMinutes: windowKey === "primary" ? 300 : 10_080,
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/read", "thread/start", "turn/start"] },
+      account: { type: "chatgpt", email: "user@example.com", planType: "pro" },
+      rateLimits: [window("primary", 40, fiveHourReset), window("secondary", 10, weeklyReset)],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(async () => { await registry.close(); });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    const update = (
+      windowKey: "primary" | "secondary",
+      usedPercent: number,
+      resetAt: number,
+    ): AppServerNotification => ({
+      method: "account/rateLimits/updated",
+      params: {
+        rateLimits: {
+          limitId: "codex",
+          limitName: "Codex",
+          [windowKey]: { usedPercent, windowDurationMins: null, resetsAt: resetAt / 1000 },
+          ...(windowKey === "primary" ? { secondary: null } : { primary: null }),
+          individualLimit: null,
+          credits: null,
+          planType: null,
+          rateLimitReachedType: null,
+        } as never,
+      },
+    });
+    const shown = async () => (await registry.listBackends()).backends[0];
+
+    await codexClient.emit(update("primary", 50, fiveHourReset));
+    const atFifty = await shown();
+    expect(atFifty.rateLimits).toEqual([window("primary", 50, fiveHourReset), window("secondary", 10, weeklyReset)]);
+    // A turn whose request started earlier reports after the 50%.
+    await codexClient.emit(update("primary", 49, fiveHourReset));
+    expect(await shown()).toBe(atFifty);
+
+    // A sparse update keeps the window it leaves out, and its name.
+    await codexClient.emit(update("secondary", 12, weeklyReset));
+    expect((await shown()).rateLimits).toEqual([
+      window("primary", 50, fiveHourReset), window("secondary", 12, weeklyReset),
+    ]);
+
+    // The window reset early and a new one began; a late report from the
+    // window before it cannot bring the old usage back.
+    const nextReset = fiveHourReset + 4 * hour;
+    await codexClient.emit(update("primary", 2, nextReset));
+    await codexClient.emit(update("primary", 60, fiveHourReset));
+    expect((await shown()).rateLimits?.[0]).toEqual(window("primary", 2, nextReset));
+
+    // A plan change has a new allowance: limits start over from a fresh read.
+    vi.spyOn(codexClient, "readAccount").mockResolvedValue(
+      { type: "chatgpt", email: "user@example.com", planType: "plus" },
+    );
+    vi.spyOn(codexClient, "readRateLimits").mockResolvedValueOnce([window("primary", 30, nextReset)]);
+    const replanned = await registry.listBackends({ refreshRateLimits: true });
+    expect(replanned.backends[0].account?.planType).toBe("plus");
+    expect(replanned.backends[0].rateLimits).toEqual([window("primary", 30, nextReset)]);
+  });
+
+  it("lets the newest Codex quota read lower a window, as a reset credit does", async () => {
+    const resetAt = Math.floor((Date.now() + 3 * 3_600_000) / 1000) * 1000;
+    const fiveHour = (usedPercent: number): BackendRateLimitSummary => ({
+      name: "5h limit", limitId: "codex", limitName: "Codex", windowKey: "primary",
+      usedPercent, remaining: 100 - usedPercent, resetAt, windowSeconds: 18_000, windowMinutes: 300,
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      account: { type: "chatgpt", email: "user@example.com", planType: "pro" },
+      rateLimits: [fiveHour(98)],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(async () => { await registry.close(); });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    vi.spyOn(codexClient, "readRateLimits").mockResolvedValue([fiveHour(0)]);
+    const response = await registry.listBackends({ refreshRateLimits: true });
+    expect(response.backends[0].rateLimits).toEqual([fiveHour(0)]);
   });
 
   it("applies each sparse Codex rate-limit update that arrives during an account read", async () => {
