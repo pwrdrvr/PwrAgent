@@ -23,6 +23,11 @@ export function ownerMethodCapabilities(methods, contract = FEDERATION_BACKEND_M
 }
 export const METHOD_CAPABILITIES = ownerMethodCapabilities(OWNER_METHODS);
 
+// The placeholder title desktop gives a new thread. Viewers recognize this
+// exact text as "no name yet".
+export const PLACEHOLDER_THREAD_TITLE = "Untitled thread";
+const LEGACY_PLACEHOLDER_THREAD_TITLE = "New outpost thread";
+
 function mode(sandbox) { return sandbox === "workspace-write" ? "auto" : "default"; }
 function sandboxFor(params, fallback = "read-only") {
   if (params.executionMode && !["default", "auto", "full-access"].includes(params.executionMode)) throw new Error("Unsupported execution mode");
@@ -51,7 +56,9 @@ export class HeadlessBackend {
     try {
       const data = JSON.parse(readFileSync(this.file, "utf8"));
       if (data.version !== 1 || !Array.isArray(data.threads)) throw new Error("Invalid headless thread registry");
-      this.threads = new Map(data.threads.map((thread) => [thread.id, thread]));
+      this.threads = new Map(data.threads.map((thread) => [thread.id,
+        thread.titleSource === "fallback" && thread.title === LEGACY_PLACEHOLDER_THREAD_TITLE
+          ? { ...thread, title: PLACEHOLDER_THREAD_TITLE } : thread]));
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
       this.threads = new Map();
@@ -219,13 +226,18 @@ export class HeadlessBackend {
         for (const key of ["seenAt", "seenUpdatedAt"]) {
           if (params[key] !== undefined && (!Number.isFinite(params[key]) || params[key] < 0)) throw new Error(`Invalid ${key}`);
         }
-        const seenUpdatedAt = params.seenUpdatedAt ?? this.summary(thread).updatedAt;
+        // An omitted watermark keeps the stored one (see MarkThreadSeenRequest).
+        // A thread never given one is pinned to the seenAt it was judged by,
+        // so recording a new seenAt cannot change its unread state.
+        thread.seenUpdatedAt = params.seenUpdatedAt ?? thread.seenUpdatedAt ?? thread.seenAt ?? 0;
         thread.seenAt = params.seenAt ?? Date.now();
-        thread.seenUpdatedAt = seenUpdatedAt;
         this.persist();
         this.forgetSeenAttentionMember(thread.id);
-        this.invalidate(thread.id);
-        return { backend: "codex", threadId: thread.id, seenAt: thread.seenAt, seenUpdatedAt };
+        this.publish({ backend: "codex", notification: { method: "navigation/thread/seen",
+          params: { threadId: thread.id, ...(params.seenUpdatedAt !== undefined ? { seenUpdatedAt: params.seenUpdatedAt } : {}) } } }, "transcript");
+        this.invalidate(thread.id, "navigation/thread/seen");
+        return { backend: "codex", threadId: thread.id, seenAt: thread.seenAt,
+          ...(params.seenUpdatedAt !== undefined ? { seenUpdatedAt: params.seenUpdatedAt } : {}) };
       }
       case "setThreadExecutionMode": {
         const thread = this.owned(params.threadId);
@@ -315,11 +327,11 @@ export class HeadlessBackend {
       const result = await this.runtime.codex.request("thread/start", { cwd, dynamicTools: this.runtime.messagingTools.buildDynamicToolSpecs(), approvalPolicy: "never", sandbox, ...(params.model ? { model: params.model } : {}), ephemeral: false });
       if (!result?.thread?.id || typeof result.thread.id !== "string" || result.thread.id.length > 256) throw new Error("Invalid thread/start response");
       this.runtime.loadedThreads.add(result.thread.id);
-      const thread = { id: result.thread.id, messagingFileTools: true, title: "New outpost thread", titleSource: "fallback", createdAt: Date.now(), cwd, sandbox,
+      const thread = { id: result.thread.id, messagingFileTools: true, title: PLACEHOLDER_THREAD_TITLE, titleSource: "fallback", createdAt: Date.now(), cwd, sandbox,
         model: params.model, reasoningEffort: params.reasoningEffort, serviceTier: params.serviceTier };
       this.threads.set(thread.id, thread);
       this.persist();
-      this.invalidate(thread.id);
+      this.invalidate(thread.id, "thread/started");
       return { backend: "codex", threadId: thread.id, executionMode: mode(sandbox) };
     } finally { this.creating = false; }
   }

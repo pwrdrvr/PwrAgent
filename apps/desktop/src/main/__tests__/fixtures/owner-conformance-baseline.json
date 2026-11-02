@@ -48,7 +48,7 @@
     "backend.listBackends [list providers] response $.backends[].runtimeBuild: desktop object, outpost missing",
     "backend.listBackends [list providers] response $.backends[].serverVersion: desktop string, outpost missing",
     "backend.listBackends [list providers] response $.backends[].tokenMiser: desktop object, outpost missing",
-    "backend.startThread [start a thread] event navigation/invalidated: outpost sends it, desktop does not",
+    "backend.startThread [start a thread] event thread/started: desktop sends it, outpost does not",
     "backend.getNavigationQueryPage [list it before its first turn] response $.collectionSize: desktop missing, outpost number",
     "backend.getNavigationQueryPage [list it before its first turn] response $.counts.pinned: desktop missing, outpost number",
     "backend.getNavigationQueryPage [list it before its first turn] response $.entries[].row.model: desktop string, outpost missing",
@@ -57,9 +57,7 @@
     "backend.getNavigationQueryPage [list it before its first turn] response $.entries[].row.reasoningEffort: desktop string, outpost missing",
     "backend.getNavigationQueryPage [list it before its first turn] response $.entries[].row.workspaceHandoff: desktop missing, outpost object",
     "backend.getNavigationQueryPage [list it before its first turn] response $.rangeStart: desktop missing, outpost number",
-    "backend.getNavigationQueryPage [list it before its first turn] value title: desktop \"Untitled thread\", outpost \"New outpost thread\"",
     "backend.startTurn [start its first turn] response $.queueEntryId: desktop string, outpost missing",
-    "backend.startTurn [start its first turn] event thread/name/updated: outpost sends it, desktop does not",
     "backend.startTurn [start its first turn] event thread/turnQueue/updated: desktop sends it, outpost does not",
     "backend.startTurn [start its first turn] event turn/started: desktop sends it, outpost does not",
     "backend.getNavigationQueryPage [list it in Inbox] response $.collectionSize: desktop missing, outpost number",
@@ -97,9 +95,6 @@
     "backend.readThread [read its transcript] response $.toolAccounting: desktop object, outpost missing",
     "backend.renameThread [rename it] response $.renamedAt: desktop number, outpost missing",
     "backend.renameThread [rename it] response $.title: desktop missing, outpost string",
-    "backend.renameThread [rename it] event thread/name/updated params $.titleSource: desktop missing, outpost string",
-    "backend.markThreadSeen [mark it seen] response $.seenUpdatedAt: desktop missing, outpost number",
-    "backend.markThreadSeen [mark it seen] event navigation/invalidated: outpost sends it, desktop does not",
     "backend.getNavigationQueryPage [list it renamed] response $.collectionSize: desktop missing, outpost number",
     "backend.getNavigationQueryPage [list it renamed] response $.counts.pinned: desktop missing, outpost number",
     "backend.getNavigationQueryPage [list it renamed] response $.entries[].row.inbox.lastSeenAt: desktop number, outpost missing",
@@ -108,7 +103,6 @@
     "backend.getNavigationQueryPage [list it renamed] response $.entries[].row.prAutoDispatchEnabled: desktop boolean, outpost missing",
     "backend.getNavigationQueryPage [list it renamed] response $.entries[].row.reasoningEffort: desktop string, outpost missing",
     "backend.getNavigationQueryPage [list it renamed] response $.entries[].row.workspaceHandoff: desktop missing, outpost object",
-    "backend.getNavigationQueryPage [list it renamed] response $.rangeStart: desktop missing, outpost number",
-    "backend.getNavigationQueryPage [list it renamed] value inInbox: desktop true, outpost false"
+    "backend.getNavigationQueryPage [list it renamed] response $.rangeStart: desktop missing, outpost number"
   ]
 }

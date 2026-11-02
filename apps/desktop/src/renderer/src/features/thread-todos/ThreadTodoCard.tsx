@@ -323,7 +323,7 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
         onClick={() => fix(toSend)}
       >
         {sending || working
-          ? <span className="pending-spinner pending-spinner--sm" aria-hidden="true" />
+          ? <span className="pending-spinner pending-spinner--sm pending-spinner--paired" aria-hidden="true" />
           : <ArrowUpIcon size={12} />}
         {sending ? "Sending…" : working ? "Working…"
           : selectedItems.length > 0 ? `Fix ${selectedItems.length} selected` : "Fix all"}
@@ -739,7 +739,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     if (props.running) {
       return (
         <span className="thread-todo-card__button thread-todo-card__button--busy" role="status">
-          <span className="pending-spinner pending-spinner--sm" aria-hidden="true" />
+          <span className="pending-spinner pending-spinner--sm pending-spinner--paired" aria-hidden="true" />
           {runningLabel}
         </span>
       );

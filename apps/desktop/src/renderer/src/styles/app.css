@@ -46971,31 +46971,25 @@ button.composer__subthread-source-parent:hover {
   }
 }
 
-/* Reduced motion is scoped to the rings that sit beside text. A stopped arc
-   reads as a stalled spinner rather than a still one, so the paired ring goes
-   uniformly accent-tinted and "Saving…" carries the state on its own.
+/* Reduced motion is scoped to the rings that sit beside text naming the work.
+   A stopped arc reads as a stalled spinner rather than a still one, so the
+   paired ring goes uniformly accent-tinted and "Saving…" carries the state on
+   its own.
+
+   A ring opts in itself: give it `.pending-spinner--paired` wherever it
+   renders beside visible text such as "Saving…", "Sending…" or a provider
+   row's current step. The rule is keyed to the ring rather than to each
+   surface, so a new surface cannot miss it by not knowing to add its
+   context here.
 
    A ring that is the only signal its surface has — the composer's Run button
-   swaps the play glyph for a bare, aria-hidden ring — keeps spinning. The
-   preference asks for non-essential motion to stop, and motion that is the
-   sole indication of progress is not that. Give a standalone ring a text or
-   `aria-busy` companion and it belongs in the selector below. */
+   swaps the play glyph for a bare, aria-hidden ring — keeps spinning, and
+   stays unmarked. The preference asks for non-essential motion to stop, and
+   motion that is the sole indication of progress is not that. `aria-busy`
+   alone does not pair a ring: it tells a screen reader, not someone looking
+   at a still arc. */
 @media (prefers-reduced-motion: reduce) {
-  .settings-pending .pending-spinner,
-  /* A provider row's ring sits beside the step it is on ("Opening a
-     session"), which states the running state without motion. */
-  .provider-refresh .pending-spinner,
-  /* The composer's pre-send ring qualifies under the same rule: it sits
-     beside the word "Preparing…" and the form carries `aria-busy`, so the
-     state survives the ring going still. */
-  .composer__send-split-pill .pending-spinner,
-  /* A to-do's running ring sits beside "Merging…" or "Starting…". */
-  .thread-todo-card__button--busy .pending-spinner,
-  /* A review card's Fix button swaps its arrow for a ring beside "Sending…"
-     or "Working…" and carries `aria-busy`, so it qualifies too. Keyed to the
-     busy attribute rather than the button class, which the idle Fix and
-     Mark handled buttons share. */
-  .thread-todo-card__button[aria-busy="true"] .pending-spinner {
+  .pending-spinner--paired {
     border-color: var(--accent);
     animation: none;
   }

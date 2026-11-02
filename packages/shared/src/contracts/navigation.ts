@@ -2501,7 +2501,19 @@ export type MarkThreadSeenRequest = {
   backend?: AppServerBackendKind;
   federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
+  /** When the thread was seen. The owner's clock when omitted. */
   seenAt?: number;
+  /**
+   * The seen watermark: the thread's `updatedAt` as the caller saw it. The
+   * thread is unread while its `updatedAt` is newer. Build it with
+   * `threadSeenWatermark`.
+   *
+   * When omitted, every owner keeps the watermark it already stores and
+   * records only `seenAt`, so the thread's unread state does not change.
+   * Omission never means "read up to now". A caller that cannot know the
+   * thread's `updatedAt` must not move the watermark; marking such a thread
+   * unread would otherwise mark it read.
+   */
   seenUpdatedAt?: number;
 };
 

@@ -13232,7 +13232,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       {previewState?.status === "loading" ? (
                         <span
                           aria-hidden="true"
-                          className="pending-spinner pending-spinner--lg"
+                          className="pending-spinner pending-spinner--lg pending-spinner--paired"
                         />
                       ) : (
                         <FileCodeIcon size={22} aria-hidden="true" />
@@ -15271,7 +15271,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 {preparingSend ? (
                   <span
                     aria-hidden="true"
-                    className="pending-spinner pending-spinner--sm"
+                    className="pending-spinner pending-spinner--sm pending-spinner--paired"
                   />
                 ) : null}
                 {submitButtonLabel}

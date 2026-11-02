@@ -3999,15 +3999,19 @@ describe("DesktopBackendRegistry", () => {
   describe("project Forge Automation", () => {
     const PROJECT = "directory:/Users/fixture/src/openclaw";
     const paused: ProjectForgeAutomation = { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 1_000 };
-    const pauseProject = (automation: ProjectForgeAutomation = paused): void => {
+    const pauseProject = (
+      automation: ProjectForgeAutomation = paused,
+      projectPath = "/Users/fixture/src/openclaw",
+    ): void => {
       onTestFinished(() => resetProjectForgeAutomationIndexForTests());
       const index = getProjectForgeAutomationIndex();
-      index.set(PROJECT, automation);
+      const key = `directory:${projectPath}`;
+      index.set(key, automation);
       index.rememberDirectories([{
-        key: PROJECT,
+        key,
         kind: "directory",
         label: "openclaw",
-        path: "/Users/fixture/src/openclaw",
+        path: projectPath,
         threadKeys: ["codex:parked"],
         needsAttentionCount: 0,
       }]);
@@ -4128,6 +4132,234 @@ describe("DesktopBackendRegistry", () => {
       expect(JSON.stringify(codexClient.injectedThreadItems)).toContain(
         "because forge activity in openclaw is paused",
       );
+    });
+
+    it("refuses an agent's steer_thread into the paused project and still lets it stop the turn", async () => {
+      pauseProject();
+      const codexClient = new MockBackendClient({
+        interruptEndsTurn: true,
+        initializeResult: { methods: ["thread/resume", "turn/interrupt", "turn/steer"] },
+        threads: [{
+          id: "parked",
+          title: "parked",
+          titleSource: "fallback",
+          source: "codex",
+          linkedDirectories: [],
+        }],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock(),
+        threadTitleGenerationService: null,
+      });
+      onTestFinished(() => registry.close());
+      await discoverCodexBackendForTest(registry);
+      for (const [threadId, turnId] of [["parked", "parked-turn"], ["orchestrator", "orchestrator-turn"]] as const) {
+        await registry.publishLocalEvent({
+          backend: "codex",
+          notification: { method: "turn/started", params: { threadId, turnId, turn: { id: turnId } } },
+        });
+      }
+      const callFromOrchestrator = async (tool: "steer_thread" | "stop_thread", args: Record<string, unknown>) =>
+        await callRegistryMcpTool({
+          registry,
+          backend: "codex",
+          threadId: "orchestrator",
+          turnId: "orchestrator-turn",
+          tool,
+          args: { backend: "codex", threadId: "parked", ...args },
+        });
+
+      await expect(callFromOrchestrator("steer_thread", {
+        requestId: "steer-paused",
+        expectedTurnId: "parked-turn",
+        prompt: "Rebase onto main now.",
+      })).resolves.toMatchObject({
+        isError: true,
+        structuredContent: {
+          code: "project_paused",
+          message: expect.stringContaining("openclaw, where forge activity is paused"),
+        },
+      });
+      expect(codexClient.lastSteerTurnParams).toBeUndefined();
+      expect(codexClient.startTurnCallCount).toBe(0);
+
+      // Stopping starts nothing, so the pause allows it.
+      await expect(callFromOrchestrator("stop_thread", { requestId: "stop-paused", expectedTurnId: "parked-turn" })).resolves.toMatchObject({
+        structuredContent: { threadId: "parked", turnId: "parked-turn", disposition: "interrupted" },
+      });
+      expect(codexClient.interruptTurnCallCount).toBe(1);
+
+      // A steer into the now idle thread would start a turn; it is refused too.
+      await expect(callFromOrchestrator("steer_thread", {
+        requestId: "steer-idle-paused",
+        prompt: "Rebase onto main now.",
+      })).resolves.toMatchObject({ isError: true, structuredContent: { code: "project_paused" } });
+      expect(codexClient.startTurnCallCount).toBe(0);
+    });
+
+    it("refuses a handoff into the paused project from another thread, and allows one from inside it", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-paused-handoff-"));
+      onTestFinished(() => rm(root, { recursive: true, force: true }));
+      const packagePath = path.join(root, "packages", "core");
+      await mkdir(packagePath, { recursive: true });
+      pauseProject(paused, root);
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        // Full access, so the allowed handoff does not wait on an approval for the new path.
+        overlayStore: createOverlayStoreMock({
+          overlays: {
+            "codex:parked": { backend: "codex", threadId: "parked", executionMode: "full-access", extraLinkedDirectories: [] },
+          },
+        }),
+        threadTitleGenerationService: null,
+      });
+      onTestFinished(() => registry.close());
+      for (const threadId of ["orchestrator", "parked"]) {
+        await registry.publishLocalEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/started",
+            params: { threadId, turnId: `${threadId}-turn`, turn: { id: `${threadId}-turn` } },
+          },
+        });
+      }
+      const handoffFrom = async (threadId: string) => await callRegistryMcpTool({
+        registry,
+        backend: "codex",
+        threadId,
+        turnId: `${threadId}-turn`,
+        tool: "handoff_task",
+        // A folder inside the project counts as the project.
+        args: { task: "Rebase the release branch.", title: "Rebase", workspaceMode: "project_local", cwd: packagePath },
+      });
+
+      await expect(handoffFrom("orchestrator")).resolves.toMatchObject({
+        isError: true,
+        structuredContent: {
+          code: "project_paused",
+          message: expect.stringContaining("openclaw, where forge activity is paused"),
+        },
+      });
+      expect(codexClient.lastStartThreadParams).toBeUndefined();
+
+      // A thread already in the project is the work the operator is driving.
+      const inside = await handoffFrom("parked");
+      expect(inside).toMatchObject({ structuredContent: { groupedUnderThreadId: "parked" } });
+      expect(codexClient.lastStartThreadParams?.cwd).toBe(packagePath);
+    });
+
+    describe("a monitor finishing into a paused parent", () => {
+      const runMonitor = async (options: { lockParent?: boolean } = {}) => {
+        const codexClient = new MockBackendClient({
+          initializeResult: { methods: ["turn/start"] },
+          models: TEST_TASK_MONITOR_MODELS,
+          startThreadResult: { threadId: "monitor-thread" },
+        });
+        const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+        onTestFinished(() => registry.close());
+        const turnEvent = async (method: "turn/started" | "turn/completed") =>
+          await registry.publishLocalEvent({
+            backend: "codex",
+            notification: {
+              method,
+              params: {
+                threadId: "parked",
+                turnId: "parent-turn",
+                turn: method === "turn/started"
+                  ? { id: "parent-turn" }
+                  : { id: "parent-turn", status: "completed", output: [] },
+              },
+            },
+          } as AgentEvent);
+        const toolCall = async (threadId: string, tool: string, args: Record<string, unknown>) => {
+          const response = await codexClient.emitRequest({
+            method: "item/tool/call",
+            params: {
+              threadId,
+              turnId: threadId === "parked" ? "parent-turn" : "turn-1",
+              callId: `call-${tool}`,
+              requestId: `call-${tool}`,
+              namespace: "pwragent_task_monitors",
+              tool,
+              arguments: args,
+            },
+          } as AppServerPendingRequestNotification);
+          return {
+            response,
+            payload: JSON.parse(
+              (response as { contentItems: Array<{ text: string }> }).contentItems[0]?.text ?? "{}",
+            ) as Record<string, unknown>,
+          };
+        };
+        await turnEvent("turn/started");
+        const { payload: created } = await toolCall("parked", "create_monitor_delegation", { task: "Watch the nightly run" });
+        await turnEvent("turn/completed");
+        const lock = options.lockParent
+          ? (await registry.setThreadLock({
+              backend: "codex",
+              threadId: "parked",
+              locked: true,
+              note: "Worktree handed to the repair thread.",
+            }, { source: "operator" })).lock
+          : undefined;
+        const { response, payload: completed } = await toolCall("monitor-thread", "complete_monitoring", {
+          monitorId: created.monitorId,
+          outcome: "success",
+          summary: "The nightly run finished.",
+        });
+        expect(response).toMatchObject({ success: true });
+        return { codexClient, registry, monitorId: created.monitorId as string, completed, lock };
+      };
+
+      it("holds the result as a project-held wake-up under the hold policy", async () => {
+        pauseProject();
+        const { codexClient, registry, monitorId, completed } = await runMonitor();
+
+        expect(completed).toMatchObject({ parentTurn: { status: "queued" } });
+        expect(registry.listProjectHeldWakeups(PROJECT)).toEqual([expect.objectContaining({
+          entryId: `task-monitor:${monitorId}`,
+          threadId: "parked",
+          source: "monitor",
+          summary: "Monitor finished: \"Watch the nightly run\"",
+        })]);
+        // Only the monitor's own turn has started.
+        expect(codexClient.startTurnCallCount).toBe(1);
+      });
+
+      it("drops the result and leaves a note under the discard policy", async () => {
+        pauseProject({ ...paused, wakeupPolicy: "discard" });
+        const { codexClient, registry, completed } = await runMonitor();
+
+        expect(completed).not.toHaveProperty("parentTurn");
+        expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId: "parked" })).toEqual([]);
+        expect(codexClient.startTurnCallCount).toBe(1);
+        expect(JSON.stringify(codexClient.injectedThreadItems)).toContain(
+          "because forge activity in openclaw is paused",
+        );
+      });
+
+      it("lets the parent's Lock hold the result, and delivers it on unlock", async () => {
+        pauseProject({ ...paused, wakeupPolicy: "discard" });
+        const { codexClient, registry, completed, lock } = await runMonitor({ lockParent: true });
+
+        expect(completed).toMatchObject({ parentTurn: { status: "queued", position: 1 } });
+        expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId: "parked" })).toEqual([
+          expect.objectContaining({ holdReason: threadLockRefusalMessage(lock!) }),
+        ]);
+        expect(registry.listProjectHeldWakeups(PROJECT)).toEqual([]);
+        expect(codexClient.startTurnCallCount).toBe(1);
+
+        await registry.setThreadLock({ backend: "codex", threadId: "parked", locked: false }, { source: "operator" });
+        await expect.poll(() => codexClient.startTurnCallCount).toBe(2);
+        expect(codexClient.lastStartTurnParams).toMatchObject({
+          threadId: "parked",
+          input: [{ type: "text", text: expect.stringContaining("The nightly run finished.") }],
+        });
+      });
     });
 
     describe("across a restart", () => {
@@ -8615,7 +8847,7 @@ describe("DesktopBackendRegistry", () => {
           name: "5h limit",
           usedPercent: 15,
           remaining: 85,
-          resetAt: new Date("2026-04-29T14:00:00-04:00").getTime(),
+          resetAt: new Date("2099-04-29T14:00:00-04:00").getTime(),
           windowSeconds: 18_000,
           windowMinutes: 300,
         },
@@ -8623,7 +8855,7 @@ describe("DesktopBackendRegistry", () => {
           name: "Weekly limit",
           usedPercent: 9,
           remaining: 91,
-          resetAt: new Date("2026-05-01T14:00:00-04:00").getTime(),
+          resetAt: new Date("2099-05-01T14:00:00-04:00").getTime(),
           windowSeconds: 604_800,
           windowMinutes: 10_080,
         },
@@ -9265,7 +9497,7 @@ describe("DesktopBackendRegistry", () => {
           windowKey: "primary",
           usedPercent: 77,
           remaining: 23,
-          resetAt: 1_788_748_108_000,
+          resetAt: 4_088_748_108_000,
           windowSeconds: 18_000,
           windowMinutes: 300,
         },
@@ -9276,7 +9508,7 @@ describe("DesktopBackendRegistry", () => {
           windowKey: "secondary",
           usedPercent: 9,
           remaining: 91,
-          resetAt: 1_788_888_108_000,
+          resetAt: 4_088_888_108_000,
           windowSeconds: 604_800,
           windowMinutes: 10_080,
         },
@@ -9287,7 +9519,7 @@ describe("DesktopBackendRegistry", () => {
           windowKey: "secondary",
           usedPercent: 0,
           remaining: 100,
-          resetAt: 1_789_090_523_000,
+          resetAt: 4_089_090_523_000,
           windowSeconds: 604_800,
           windowMinutes: 10_080,
         },
@@ -9359,7 +9591,7 @@ describe("DesktopBackendRegistry", () => {
           windowKey: "primary",
           usedPercent: 85,
           remaining: 15,
-          resetAt: 1_788_748_108_000,
+          resetAt: 4_088_748_108_000,
           windowMinutes: 300,
         }),
         expect.objectContaining({
@@ -9387,6 +9619,100 @@ describe("DesktopBackendRegistry", () => {
 
     unsubscribe();
     await registry.close();
+  });
+
+  it("moves Codex limits only forward across out-of-order, sparse and next-window updates", async () => {
+    const hour = 3_600_000;
+    // Codex reports resets in whole seconds.
+    const fiveHourReset = Math.floor((Date.now() + 3 * hour) / 1000) * 1000;
+    const weeklyReset = Math.floor((Date.now() + 72 * hour) / 1000) * 1000;
+    const window = (windowKey: "primary" | "secondary", usedPercent: number, resetAt: number) => ({
+      name: windowKey === "primary" ? "5h limit" : "Weekly limit",
+      limitId: "codex",
+      limitName: "Codex",
+      windowKey,
+      usedPercent,
+      remaining: 100 - usedPercent,
+      resetAt,
+      windowSeconds: windowKey === "primary" ? 18_000 : 604_800,
+      windowMinutes: windowKey === "primary" ? 300 : 10_080,
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/read", "thread/start", "turn/start"] },
+      account: { type: "chatgpt", email: "user@example.com", planType: "pro" },
+      rateLimits: [window("primary", 40, fiveHourReset), window("secondary", 10, weeklyReset)],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(async () => { await registry.close(); });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    const update = (
+      windowKey: "primary" | "secondary",
+      usedPercent: number,
+      resetAt: number,
+    ): AppServerNotification => ({
+      method: "account/rateLimits/updated",
+      params: {
+        rateLimits: {
+          limitId: "codex",
+          limitName: "Codex",
+          [windowKey]: { usedPercent, windowDurationMins: null, resetsAt: resetAt / 1000 },
+          ...(windowKey === "primary" ? { secondary: null } : { primary: null }),
+          individualLimit: null,
+          credits: null,
+          planType: null,
+          rateLimitReachedType: null,
+        } as never,
+      },
+    });
+    const shown = async () => (await registry.listBackends()).backends[0];
+
+    await codexClient.emit(update("primary", 50, fiveHourReset));
+    const atFifty = await shown();
+    expect(atFifty.rateLimits).toEqual([window("primary", 50, fiveHourReset), window("secondary", 10, weeklyReset)]);
+    // A turn whose request started earlier reports after the 50%.
+    await codexClient.emit(update("primary", 49, fiveHourReset));
+    expect(await shown()).toBe(atFifty);
+
+    // A sparse update keeps the window it leaves out, and its name.
+    await codexClient.emit(update("secondary", 12, weeklyReset));
+    expect((await shown()).rateLimits).toEqual([
+      window("primary", 50, fiveHourReset), window("secondary", 12, weeklyReset),
+    ]);
+
+    // The window reset early and a new one began; a late report from the
+    // window before it cannot bring the old usage back.
+    const nextReset = fiveHourReset + 4 * hour;
+    await codexClient.emit(update("primary", 2, nextReset));
+    await codexClient.emit(update("primary", 60, fiveHourReset));
+    expect((await shown()).rateLimits?.[0]).toEqual(window("primary", 2, nextReset));
+
+    // A plan change has a new allowance: limits start over from a fresh read.
+    vi.spyOn(codexClient, "readAccount").mockResolvedValue(
+      { type: "chatgpt", email: "user@example.com", planType: "plus" },
+    );
+    vi.spyOn(codexClient, "readRateLimits").mockResolvedValueOnce([window("primary", 30, nextReset)]);
+    const replanned = await registry.listBackends({ refreshRateLimits: true });
+    expect(replanned.backends[0].account?.planType).toBe("plus");
+    expect(replanned.backends[0].rateLimits).toEqual([window("primary", 30, nextReset)]);
+  });
+
+  it("lets the newest Codex quota read lower a window, as a reset credit does", async () => {
+    const resetAt = Math.floor((Date.now() + 3 * 3_600_000) / 1000) * 1000;
+    const fiveHour = (usedPercent: number): BackendRateLimitSummary => ({
+      name: "5h limit", limitId: "codex", limitName: "Codex", windowKey: "primary",
+      usedPercent, remaining: 100 - usedPercent, resetAt, windowSeconds: 18_000, windowMinutes: 300,
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      account: { type: "chatgpt", email: "user@example.com", planType: "pro" },
+      rateLimits: [fiveHour(98)],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(async () => { await registry.close(); });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    vi.spyOn(codexClient, "readRateLimits").mockResolvedValue([fiveHour(0)]);
+    const response = await registry.listBackends({ refreshRateLimits: true });
+    expect(response.backends[0].rateLimits).toEqual([fiveHour(0)]);
   });
 
   it("applies each sparse Codex rate-limit update that arrives during an account read", async () => {
@@ -54505,7 +54831,7 @@ script = "printf setup"
       expect(codexClient.lastRenameThreadParams).toEqual({ threadId: "ordinary-thread", name: "Investigate rename feedback" });
       expect(events).toContainEqual({ backend: "codex", notification: {
         method: "thread/name/updated", params: {
-          threadId: "ordinary-thread", threadName: "Investigate rename feedback",
+          threadId: "ordinary-thread", threadName: "Investigate rename feedback", titleSource: "explicit",
           renameOrigin: "agent_tool", previousThreadName: "Original title",
         },
       } });
@@ -54540,7 +54866,7 @@ script = "printf setup"
       expect(await call({ title: "Investigate rename feedback" })).toMatchObject({ success: true });
       expect(events).toContainEqual({ backend: "codex", notification: {
         method: "thread/name/updated", params: {
-          threadId: "ordinary-thread", threadName: "Investigate rename feedback",
+          threadId: "ordinary-thread", threadName: "Investigate rename feedback", titleSource: "explicit",
           renameOrigin: "agent_tool", previousThreadName: "Please fix the parser",
         },
       } });

@@ -514,6 +514,24 @@ describe("MessagingStatusBar", () => {
     expect(container.querySelector(".status-dot--blink")).toBeNull();
   });
 
+  it("reads settings once when the initial status snapshot reports no health", async () => {
+    let resolveStatuses!: (statuses: MessagingPlatformStatus[]) => void;
+    const desktopApi: DesktopApi = {
+      getMessagingPlatformStatuses: vi.fn(() => new Promise<MessagingPlatformStatus[]>((resolve) => {
+        resolveStatuses = resolve;
+      })),
+      onMessagingPlatformStatusEvent: vi.fn(() => () => {}),
+      readMessagingSettings: vi.fn(async () => ({
+        snapshot: messagingSettingsSnapshot({ line: true }, { configured: { line: true } }),
+      })),
+    };
+    render(<MessagingStatusBar desktopApi={desktopApi} />);
+    await screen.findByRole("button", { name: /LINE: Status unavailable/ });
+    // A second read started here would resolve after the test stops awaiting.
+    await act(async () => resolveStatuses([]));
+    expect(desktopApi.readMessagingSettings).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ["lease_held", true, "Active elsewhere", "Messaging is already active in another PwrAgent instance for this profile."],
     ["runtime_stopped", false, "Suspended", "Messaging is stopped for this app instance."],
