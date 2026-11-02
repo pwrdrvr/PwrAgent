@@ -322,6 +322,38 @@ describe("sqlite write metrics", () => {
     } finally { await registry.close(); }
   });
 
+  it("budgets a Claude turn's live usage reports at one commit each", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+    });
+    const internal = registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+      flushLiveThreadUsageLines(): Promise<void>;
+    };
+    const target = { backend: "claude" as const, threadId: "claude-live-usage-fixture" };
+    const report = (step: number) => internal.emit({ backend: "claude", notification: {
+      method: "thread/tokenUsage/updated", params: {
+        threadId: target.threadId, turnId: "turn", model: "claude-opus-5-5",
+        tokenUsage: { last: { inputTokens: 350 * step, cachedInputTokens: 200 * step, cacheWriteInputTokens: 50,
+          outputTokens: 20 * step, totalTokens: 370 * step }, claudeCostUSD: 0.1 * step },
+      },
+    } });
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        // Three reports 30 seconds apart while the turn runs, then the result's.
+        for (let step = 1; step <= 4; step += 1) {
+          await report(step);
+          await internal.flushLiveThreadUsageLines();
+        }
+      });
+      const pricing = await store.readThreadPricing(target);
+      expect(pricing.lines).toHaveLength(1);
+      expect(pricing.lines[0]).toMatchObject({ totalCostMicros: 400_000, outputTokens: 80 });
+      expectSqliteWriteBudget({ scenario: "claude-live-turn-usage", note: "Three live usage reports and the result's, each in its own flush window: one commit per report. Reports run at most every 30 s and only while Claude streams, so ~120 commits per streaming hour (~6.8 MB at ~57 KB each); 0 MB/day idle", writes });
+    } finally { await registry.close(); }
+  });
+
   it("budgets Claude creation and operator mode changes without repeat-selection writes", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: createStubBackendClient(), overlayStore: store,

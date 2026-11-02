@@ -39,6 +39,10 @@ export function useBackendSummaries(
   suspendedRef.current = suspended;
   const acpRefreshPromiseRef =
     useRef<Promise<BackendSummary[]> | undefined>(undefined);
+  // Reads overlap: an event refresh and a slower rate-limit refresh can
+  // resolve in either order. Each response says when main assembled it, and
+  // only a newer one replaces what is shown, so a value never steps back.
+  const appliedRef = useRef<{ source: FederationTarget | undefined; fetchedAt: number } | undefined>(undefined);
 
   const readSummaries = useCallback(async (refreshRateLimits = false): Promise<BackendSummary[]> => {
     if (!enabled) {
@@ -69,6 +73,30 @@ export function useBackendSummaries(
         ...(refreshRateLimits ? { refreshRateLimits: true } : {}),
         ...(federationTarget ? { federationTarget } : {}),
       });
+      const applied = appliedRef.current;
+      const sameSource = applied !== undefined
+        && federationTargetsEqual(applied.source, federationTarget);
+      if (
+        sameSource
+        && typeof response.fetchedAt === "number"
+        && response.fetchedAt < applied.fetchedAt
+      ) {
+        return stateRef.current.backends;
+      }
+      if (typeof response.fetchedAt === "number") {
+        appliedRef.current = { source: federationTarget, fetchedAt: response.fetchedAt };
+      }
+      // Most refreshes find nothing new. Keep the same objects so nothing
+      // that reads them renders again.
+      const current = stateRef.current;
+      if (
+        current.loaded
+        && current.error === undefined
+        && sameSource
+        && JSON.stringify(current.backends) === JSON.stringify(response.backends)
+      ) {
+        return current.backends;
+      }
       setState({
         backends: response.backends,
         error: undefined,

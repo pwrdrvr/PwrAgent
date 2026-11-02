@@ -965,6 +965,42 @@ describe("Claude SDK backend", () => {
     expect((await f.store.read(threadId)).modelUsage?.opus.costUSD).toBe(0.30);
   });
 
+  it("reports a running turn's usage before its result, with the result's totals last", async () => {
+    const model = { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+      costUSD: 0.1, contextWindow: 200_000, maxOutputTokens: 32_000, webSearchRequests: 0 };
+    const resetsAt = Date.now() + 86_400_000;
+    // Every probe is an older reading of the weekly window than the stream's 50%.
+    const probe = vi.fn().mockResolvedValue({ session: { model_usage: { opus: model } }, rate_limits_available: true,
+      rate_limits: { seven_day: { utilization: 49.4, resets_at: new Date(resetsAt).toISOString() } } });
+    const reported = Promise.withResolvers<void>();
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "seven_day",
+        utilization: 0.5, resetsAt: Math.round(resetsAt / 1000) } } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "answer", content: [{ type: "text", text: "Working" }],
+      } } as SDKMessage;
+      await reported.promise;
+      yield { type: "result", subtype: "success", is_error: false, result: "Done",
+        modelUsage: { opus: { ...model, inputTokens: 30, costUSD: 0.3 } } } as unknown as SDKMessage;
+    }, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: probe });
+    const backend = new ClaudeBackend({ ...f.backendOptions, liveUsageIntervalMs: 0, emit: async (event: AgentEvent) => {
+      await f.backendOptions.emit(event);
+      if (event.notification.method === "thread/tokenUsage/updated") reported.resolve();
+    } });
+    const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    const methods = f.events.map((event) => event.notification.method);
+    const costs = f.events.flatMap((event) => event.notification.method === "thread/tokenUsage/updated"
+      ? [(event.notification.params.tokenUsage as { claudeCostUSD: number }).claudeCostUSD] : []);
+    expect(costs[0]).toBeCloseTo(0.1);
+    expect(costs.at(-1)).toBeCloseTo(0.3);
+    expect(methods.indexOf("thread/tokenUsage/updated")).toBeLessThan(methods.indexOf("turn/completed"));
+    expect(backend.summary().rateLimits).toEqual([expect.objectContaining({ limitId: "seven_day", usedPercent: 50 })]);
+    await backend.close();
+  });
+
   it("retains streamed limits when the optional usage probe returns no windows", async () => {
     const f = await fixture(async function* () {
       yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
