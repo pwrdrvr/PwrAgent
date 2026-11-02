@@ -11,6 +11,24 @@ const require = createRequire(import.meta.url);
 const directories = [];
 const fixtureProbes = new Map();
 
+// The native typed backend takes ~0.2 s on Linux and ~0.3 s on Windows, but
+// 0.1-17 s on loaded macOS runners (median 2.1 s across 193 probed runs, Oct 31
+// to Nov 1 2026). That is real blocking work, not a hang. The child limit sits
+// near twice the slowest observed run, so a real hang is killed and reported.
+// The test limit adds headroom for fixture setup and the JSON assertions.
+const NATIVE_TYPED_LINT_SPAWN_TIMEOUT_MS = 30_000;
+const NATIVE_TYPED_LINT_TEST_TIMEOUT_MS = 40_000;
+
+function runOxlint(root, args) {
+  const packageFile = require.resolve("oxlint/package.json");
+  const { bin } = JSON.parse(readFileSync(packageFile, "utf8"));
+  return spawnSync(process.execPath, [resolve(dirname(packageFile), bin.oxlint), ...args], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: NATIVE_TYPED_LINT_SPAWN_TIMEOUT_MS,
+  });
+}
+
 // Write each boundary immediately: spawnSync blocks the worker, including its
 // timers. A final test timeout alone cannot locate a slow native invocation.
 function nativeLintProbe() {
@@ -109,13 +127,9 @@ describe("native typed lint correctness", () => {
       "export const unsafe = new Service().read;",
       "export const safe = new Service().safe;",
     ].join("\n"));
-    const packageFile = require.resolve("oxlint/package.json");
-    const { bin } = JSON.parse(readFileSync(packageFile, "utf8"));
     probe("fixture-setup-complete");
     probe("node-native-launch");
-    const result = spawnSync(process.execPath, [resolve(dirname(packageFile), bin.oxlint),
-      "--config", join(root, "oxlint.typed.json"), "--format=json", file,
-    ], { cwd: root, encoding: "utf8" });
+    const result = runOxlint(root, ["--config", join(root, "oxlint.typed.json"), "--format=json", file]);
     probe("node-native-complete", {
       pid: result.pid,
       status: result.status,
@@ -131,7 +145,7 @@ describe("native typed lint correctness", () => {
     expect(diagnostics[0].code).toBe("typescript(unbound-method)");
     expect(diagnostics[0].labels[0].span.line).toBe(2);
     probe("assertions-complete");
-  });
+  }, NATIVE_TYPED_LINT_TEST_TIMEOUT_MS);
 
   it("preserves unused-binding exemptions and applies hook safety only to renderer files", () => {
     const root = fixture();
@@ -149,11 +163,7 @@ describe("native typed lint correctness", () => {
       'import { useEffect } from "react";',
       "export function Bad(enabled: boolean) { if (enabled) useEffect(() => {}); return null; }",
     ].join("\n"));
-    const packageFile = require.resolve("oxlint/package.json");
-    const { bin } = JSON.parse(readFileSync(packageFile, "utf8"));
-    const result = spawnSync(process.execPath, [resolve(dirname(packageFile), bin.oxlint),
-      "--config", config, "--format=json", ...syntaxLintPaths(root),
-    ], { cwd: root, encoding: "utf8" });
+    const result = runOxlint(root, ["--config", config, "--format=json", ...syntaxLintPaths(root)]);
     expect(result.status).toBe(1);
     const diagnostics = JSON.parse(result.stdout).diagnostics;
     expect(diagnostics.filter((entry) => entry.code === "eslint(no-unused-vars)")).toHaveLength(3);
