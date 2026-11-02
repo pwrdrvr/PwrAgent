@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
 import { ForgeReadService } from "../pr-status/forge-read-service";
 import { FORGE_ARTIFACT_MAX_BYTES } from "../pr-status/forge-read-limits";
+import { removeRetiredCiArtifactStore } from "../pr-status/forge-artifact-download";
+import { deleteThreadAssets, threadArtifactDirectory } from "../app-server/thread-assets";
 import { buildForgeReadToolDefinitions } from "../agent-tools/pwragent-forge-agent-tools";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { searchPwrAgentTools } from "../agent-tools/pwragent-tool-search";
@@ -31,7 +33,7 @@ describe("CI artifact downloads", () => {
   let root: string;
   beforeEach(async () => {
     directory = await mkdtemp(path.join(os.tmpdir(), "pwragent-ci-artifact-test-"));
-    root = path.join(directory, "artifacts");
+    root = path.join(directory, "ci-artifacts");
   });
   afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
@@ -45,10 +47,10 @@ describe("CI artifact downloads", () => {
         : options.response?.() ?? new Response(zip));
     const githubToken = vi.fn(async (_host: string) => "fixture-token");
     const ci = new ForgeCiClient({ fetch: fetcher, githubToken, gitlab: { readApi: vi.fn() },
-      enabled: options.enabled ?? (() => true), takeToken: options.takeToken ?? (() => true), artifactRoot: () => root,
+      enabled: options.enabled ?? (() => true), takeToken: options.takeToken ?? (() => true),
     });
     const service = new ForgeReadService({ enabled: options.enabled ?? (() => true), ci, refresh: vi.fn() });
-    const scope = { remotes: [repository], attached: [], observations: [] };
+    const scope = { remotes: [repository], attached: [], observations: [], artifactDirectory: root };
     return { fetcher, githubToken, ci, service, scope, download: (signal?: AbortSignal) => service.execute("download_ci_artifact", { runId: 9, artifactId: 12 }, scope, signal) as Promise<Download> };
   }
 
@@ -67,9 +69,9 @@ describe("CI artifact downloads", () => {
     const payload = "contentItems" in result ? JSON.parse(result.contentItems.find((item) => item.type === "inputText")!.text) : result.structuredContent;
     expect(payload).toMatchObject({ runId: 9, artifactId: 12, providerRequests: 2, sizeBytes: zip.length, sha256: createHash("sha256").update(zip).digest("hex"), format: "zip", extracted: false, pathOwner: "thread_owner", trust: "untrusted" });
     expect(await readFile(payload.archivePath)).toEqual(zip);
-    expect(path.dirname(path.dirname(payload.archivePath))).toBe(root);
-    expect(await readdir(path.dirname(payload.archivePath))).toEqual(["artifact.zip"]);
-    expect(await readdir(directory)).toEqual(["artifacts"]);
+    expect(payload.archivePath).toBe(path.join(root, "9-12.zip"));
+    expect(await readdir(root)).toEqual(["9-12.zip"]);
+    expect(await readdir(directory)).toEqual(["ci-artifacts"]);
     expect(JSON.stringify(result)).not.toContain("fixture-secret");
     expect(h.fetcher.mock.calls[0]![1]?.headers).toMatchObject({ Authorization: "Bearer fixture-token" });
     expect(h.fetcher.mock.calls[2]![1]).toMatchObject({ redirect: "error" });
@@ -77,14 +79,14 @@ describe("CI artifact downloads", () => {
     if (process.platform !== "win32") expect((await stat(payload.archivePath)).mode & 0o777).toBe(0o600);
   });
 
-  it("does not overwrite an earlier download or use an artifact name as a path", async () => {
+  it("replaces an earlier download of the same artifact and never uses an artifact name as a path", async () => {
     const h = fixture();
     const first = await h.download();
+    await writeFile(first.archivePath, "stale");
     const second = await h.download();
-    expect(first.archivePath).not.toBe(second.archivePath);
-    expect(await readFile(first.archivePath)).toEqual(zip);
+    expect(second.archivePath).toBe(first.archivePath);
     expect(await readFile(second.archivePath)).toEqual(zip);
-    expect(await readdir(root)).toHaveLength(2);
+    expect(await readdir(root)).toEqual(["9-12.zip"]);
   });
 
   it("uses the Enterprise API root and host-specific authentication", async () => {
@@ -98,15 +100,43 @@ describe("CI artifact downloads", () => {
     expect(h.githubToken).toHaveBeenCalledWith("ghe.example.test");
   });
 
-  it("stores downloads in the selected PwrAgent home and profile", async () => {
+  it("refuses to download without a target thread's artifact directory", async () => {
+    const h = fixture();
+    await expect(h.service.execute("download_ci_artifact", { runId: 9, artifactId: 12 }, { ...h.scope, artifactDirectory: undefined }))
+      .rejects.toMatchObject({ code: "invalid_arguments" });
+    expect(h.fetcher).not.toHaveBeenCalled();
+    expect(await readdir(directory)).toEqual([]);
+  });
+
+  it("stores downloads with their thread and removes them when the thread is deleted", async () => {
     vi.stubEnv("PWRAGENT_HOME", directory);
     vi.stubEnv("PWRAGENT_PROFILE", "artifact-fixture");
     resetCachedActiveProfileNameForTests();
+    const owner = { backend: "codex" as const, threadId: "thread-1" };
+    const kept = { backend: "codex" as const, threadId: "thread-2" };
     const h = fixture();
-    const ci = new ForgeCiClient({ fetch: h.fetcher, githubToken: h.githubToken, gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true });
-    const result = await ci.execute("download_ci_artifact", repository, { runId: 9, artifactId: 12 }) as Download;
-    expect(path.dirname(path.dirname(result.archivePath))).toBe(path.join(directory, "profiles", "artifact-fixture", "artifacts", "ci"));
-    expect(await readFile(result.archivePath)).toEqual(zip);
+    const result = await h.service.execute("download_ci_artifact", { runId: 9, artifactId: 12 }, { ...h.scope, artifactDirectory: threadArtifactDirectory(owner) }) as Download;
+    const other = await h.service.execute("download_ci_artifact", { runId: 9, artifactId: 12 }, { ...h.scope, artifactDirectory: threadArtifactDirectory(kept) }) as Download;
+    expect(result.archivePath).toBe(path.join(directory, "profiles", "artifact-fixture", "state", "thread-assets", "codex", "thread-1", "ci-artifacts", "9-12.zip"));
+    await deleteThreadAssets(owner);
+    await expect(stat(result.archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(other.archivePath)).toEqual(zip);
+  });
+
+  it("removes the retired unowned store and keeps anything stored beside it", async () => {
+    vi.stubEnv("PWRAGENT_HOME", directory);
+    vi.stubEnv("PWRAGENT_PROFILE", "artifact-fixture");
+    resetCachedActiveProfileNameForTests();
+    const artifacts = path.join(directory, "profiles", "artifact-fixture", "artifacts");
+    await mkdir(path.join(artifacts, "ci", "download-abc123"), { recursive: true });
+    await writeFile(path.join(artifacts, "ci", "download-abc123", "artifact.zip"), zip);
+    await writeFile(path.join(artifacts, "other"), "kept");
+    await removeRetiredCiArtifactStore();
+    expect(await readdir(artifacts)).toEqual(["other"]);
+    await rm(path.join(artifacts, "other"));
+    await removeRetiredCiArtifactStore();
+    await expect(stat(artifacts)).rejects.toMatchObject({ code: "ENOENT" });
+    await removeRetiredCiArtifactStore();
   });
 
   it.each([
@@ -205,8 +235,8 @@ describe("CI artifact downloads", () => {
 
   it("fails a missing GitHub login before fetching or writing files", async () => {
     const h = fixture();
-    const ci = new ForgeCiClient({ fetch: h.fetcher, githubToken: async () => null, gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true, artifactRoot: () => root });
-    await expect(ci.execute("download_ci_artifact", repository, { runId: 9, artifactId: 12 })).rejects.toMatchObject({ code: "unauthenticated" });
+    const ci = new ForgeCiClient({ fetch: h.fetcher, githubToken: async () => null, gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true });
+    await expect(ci.execute("download_ci_artifact", repository, { runId: 9, artifactId: 12 }, undefined, root)).rejects.toMatchObject({ code: "unauthenticated" });
     expect(h.fetcher).not.toHaveBeenCalled();
     expect(await readdir(directory)).toEqual([]);
   });

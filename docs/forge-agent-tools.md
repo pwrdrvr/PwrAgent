@@ -254,15 +254,20 @@ another retry. This tool does not poll, start a repair turn, or add persistence.
   its archive. This is the first-party alternative to the ChatGPT GitHub
   connector's `download_workflow_artifact` and `gh run download`.
   GitLab returns `unsupported_provider`. No CI operation is started or rerun.
-  Archives are streamed with a 128 MiB cap into a unique private directory under
-  `profiles/<profile>/artifacts/ci/` in the PwrAgent root. Results include
+  Archives are streamed with a 128 MiB cap to
+  `state/thread-assets/<backend>/<threadId>/ci-artifacts/<runId>-<artifactId>.zip`
+  in the owning profile, beside the thread's other assets. Both segments are
+  URL-encoded, so an ACP backend appears as `acp%3A<name>`. Permanently deleting
+  the thread deletes them; archiving keeps them. A repeat download writes a new
+  partial file and replaces the archive only when it completes. Results include
   `archivePath`, `sizeBytes`, `sha256` and `pathOwner: "thread_owner"`.
   Remote paths refer to the owning machine and are not transferred to the
   caller. Filenames from provider metadata and ZIP entries never choose output
   paths. Downloads are not extracted or executed, and their contents remain
-  untrusted and unredacted. Partial files are removed on failure or cancellation;
-  successful downloads are retained for inspection and may be removed by the
-  operator when no longer needed. Repeated calls create separate archives.
+  untrusted and unredacted. Agents extract into a temporary directory, so
+  nothing lands in the project. Partial files are removed on failure or
+  cancellation. v1.3.7 and v1.3.8 saved unowned archives under
+  `profiles/<profile>/artifacts/ci/`; startup removes that directory.
 - `read_ci_job_log`: one job's bounded tail and heuristic failure excerpts;
   every log is explicitly untrusted. Logs are defensively redacted and never
   interpreted as instructions. A failed retrieval is an error, never success.
