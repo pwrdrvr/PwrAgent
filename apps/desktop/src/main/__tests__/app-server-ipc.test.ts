@@ -3082,6 +3082,144 @@ describe("app server ipc", () => {
       .toThrow("Directories project");
   });
 
+  it("cancels the project's pending repairs on pause, and polls and re-offers its PR watches on resume", async () => {
+    const { appServerService } = await import("../ipc/app-server");
+    const appState = await import("../state/app-state");
+    onTestFinished(() => resetProjectForgeAutomationIndexForTests());
+    const project = "directory:/repo/PwrAgent";
+    getProjectForgeAutomationIndex().rememberDirectories([{
+      key: project, kind: "directory", label: "PwrAgent", path: "/repo/PwrAgent",
+      threadKeys: ["codex:thread-1"], needsAttentionCount: 0,
+    }]);
+    const listPendingTerminalWatches = vi.fn(async (_thread: unknown) => [] as string[]);
+    overlayStoreFixture.stable = {
+      setDirectoryForgeAutomation: vi.fn(async (params: { automation: unknown }) => ({ forgeAutomation: params.automation })),
+      listPendingPrTerminalWatchPrKeys: listPendingTerminalWatches,
+    };
+    const cancelPendingDisallowedByProject = vi.fn(async (_thread: unknown) => true);
+    const handlePrEvent = vi.fn(async () => undefined);
+    const scheduler = { noteThreadInteraction: vi.fn(), tick: vi.fn(async () => undefined) };
+    const service = appServerService as unknown as {
+      getPrAutoDispatchCoordinator: () => unknown;
+      getThreadDependencyCoordinator: () => unknown;
+      prPollingScheduler: unknown;
+      backgroundPrPollingEnabled: boolean;
+    };
+    const previous = { scheduler: service.prPollingScheduler, polling: service.backgroundPrPollingEnabled };
+    service.prPollingScheduler = scheduler;
+    service.backgroundPrPollingEnabled = true;
+    const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
+    const autoDispatch = vi.spyOn(service, "getPrAutoDispatchCoordinator")
+      .mockReturnValue({ cancelPendingDisallowedByProject });
+    const dependencies = vi.spyOn(service, "getThreadDependencyCoordinator").mockReturnValue({ handlePrEvent });
+    try {
+      await appServerService.setProjectForgeAutomation({
+        directoryKey: project,
+        automation: { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true },
+      });
+      expect(cancelPendingDisallowedByProject).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "thread-1" });
+      expect(scheduler.tick).not.toHaveBeenCalled();
+      expect(listPendingTerminalWatches).not.toHaveBeenCalled();
+
+      await appServerService.setProjectForgeAutomation({
+        directoryKey: project,
+        automation: { ...DEFAULT_PROJECT_FORGE_AUTOMATION },
+      });
+      expect(scheduler.noteThreadInteraction).toHaveBeenCalledExactlyOnceWith(["codex:thread-1"]);
+      expect(scheduler.tick).toHaveBeenCalledTimes(1);
+      expect(handlePrEvent).toHaveBeenCalledTimes(1);
+      // A merge or close seen while paused left its watch pending; resume re-offers it.
+      expect(listPendingTerminalWatches).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "thread-1" });
+      expect(cancelPendingDisallowedByProject).toHaveBeenCalledTimes(1);
+    } finally {
+      dependencies.mockRestore(); autoDispatch.mockRestore(); mode.mockRestore();
+      service.prPollingScheduler = previous.scheduler;
+      service.backgroundPrPollingEnabled = previous.polling;
+    }
+  });
+
+  it.each([
+    { name: "holds", wakeupPolicy: "hold", locked: false },
+    { name: "discards", wakeupPolicy: "discard", locked: false },
+    { name: "leaves Lock to hold", wakeupPolicy: "discard", locked: true },
+  ] as const)("$name a turn_completed dependency into a paused project", async ({ wakeupPolicy, locked }) => {
+    const { appServerService } = await import("../ipc/app-server");
+    const appState = await import("../state/app-state");
+    const { StateDb } = await import("../state/state-db");
+    const { ThreadDependencyStore } = await import("../state/thread-dependency-store");
+    const { ThreadDependencyCoordinator } = await import("../app-server/thread-dependency-coordinator");
+    onTestFinished(() => resetProjectForgeAutomationIndexForTests());
+    const index = getProjectForgeAutomationIndex();
+    const project = "directory:/repo/PwrAgent";
+    index.set(project, { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 1_000, wakeupPolicy });
+    index.rememberDirectories([{
+      key: project, kind: "directory", label: "PwrAgent", path: "/repo/PwrAgent",
+      threadKeys: ["codex:consumer"], needsAttentionCount: 0,
+    }]);
+    // The registry's own hold and discard are covered in backend-registry.test.ts.
+    const registry = backendRegistryLifecycle.registry as Record<string, unknown>;
+    const isThreadLocked = vi.fn(async () => locked);
+    // A locked thread reads as busy, as the real registry reports it.
+    const submitTurnIfIdle = vi.fn(async () => ({ status: "busy" as const }));
+    const deliverProjectPausedWakeup = vi.fn(async (request: { project: { automation: { wakeupPolicy: string } } }) =>
+      request.project.automation.wakeupPolicy === "discard"
+        ? { status: "discarded" as const }
+        : { status: "queued" as const, entry: { id: "held" }, position: 1 });
+    Object.assign(registry, { isThreadLocked, submitTurnIfIdle, deliverProjectPausedWakeup });
+    onTestFinished(() => {
+      delete registry.isThreadLocked;
+      delete registry.submitTurnIfIdle;
+      delete registry.deliverProjectPausedWakeup;
+    });
+    const db = StateDb.open(":memory:");
+    const store = new ThreadDependencyStore(db.raw);
+    const service = appServerService as unknown as {
+      submitDependencyWakeup: (request: unknown) => Promise<{ status: "started" | "busy" | "held" | "discarded"; turnId?: string }>;
+      getThreadDependencyCoordinator: () => unknown;
+    };
+    const agent = new ThreadDependencyCoordinator({
+      store, changed: async () => undefined,
+      submit: async (request) => await service.submitDependencyWakeup(request),
+      readThread: async (condition) => ({
+        turns: condition.threadId === "prerequisite" ? [{ id: "watched", status: "completed" as const }] : [], prs: [],
+      }),
+    });
+    const item = store.register({ id: "paused-wake", backend: "codex", threadId: "consumer",
+      conditions: [{ backend: "codex", threadId: "prerequisite", when: "turn_completed", turnId: "watched" }],
+      mode: "all", onFailure: "notify", status: "waiting", evidence: [], createdAt: 1, updatedAt: 1,
+    });
+    const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
+    const coordinator = vi.spyOn(service, "getThreadDependencyCoordinator").mockReturnValue(agent);
+    try {
+      appServerService.handleAgentEventForDependencies({ backend: "codex", notification: {
+        method: "turn/completed",
+        params: { threadId: "prerequisite", turnId: "watched", turn: { id: "watched", status: "completed", output: [] } },
+      } as AppServerNotification });
+      await agent.reconcile();
+
+      if (locked) {
+        // Lock wins: the wake waits for unlock, as in an active project.
+        expect(deliverProjectPausedWakeup).not.toHaveBeenCalled();
+        expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
+        expect(store.get("codex", "consumer", item.id)).toMatchObject({ status: "ready" });
+        return;
+      }
+      expect(submitTurnIfIdle).not.toHaveBeenCalled();
+      expect(deliverProjectPausedWakeup).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        backend: "codex",
+        threadId: "consumer",
+        project: expect.objectContaining({ directoryKey: project, automation: expect.objectContaining({ wakeupPolicy }) }),
+        queueEntryId: `dependency:${item.id}`,
+        source: "dependency",
+        summary: expect.stringContaining("Continue After:"),
+      }));
+      // Held or discarded, the dependency is delivered and never retried.
+      expect(store.get("codex", "consumer", item.id)).toMatchObject({ status: "delivered" });
+    } finally {
+      coordinator.mockRestore(); mode.mockRestore(); db.close();
+    }
+  });
+
   it("watches an explicitly attached upstream fork PR and reports active primary monitoring", async () => {
     const attached = githubPr({
       number: 3129, org: "pwrdrvr", repo: "PwrAgent", state: "pending",
