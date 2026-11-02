@@ -668,7 +668,7 @@ describe("ProjectIndex drag", () => {
 
   it("keeps focus on a name ⌘⇧↓ moved, once its new place renders", () => {
     const { onMoveProject, rerender } = renderDraggable();
-    name("meridian").focus();
+    act(() => name("meridian").focus());
     fireEvent.keyDown(name("meridian"), { key: "ArrowDown", metaKey: true, shiftKey: true });
     expect(onMoveProject).toHaveBeenCalledWith("dir:meridian", "down");
     // Chromium drops focus from the <li> React moves; jsdom does not.
@@ -679,9 +679,9 @@ describe("ProjectIndex drag", () => {
 
   it("leaves focus alone once the operator has moved on", () => {
     const { rerender } = renderDraggable();
-    name("meridian").focus();
+    act(() => name("meridian").focus());
     fireEvent.keyDown(name("meridian"), { key: "ArrowDown", metaKey: true, shiftKey: true });
-    name("harbor").focus();
+    act(() => name("harbor").focus());
     rerender([reorderEntries[1]!, reorderEntries[0]!, ...reorderEntries.slice(2)]);
     expect(name("harbor")).toHaveFocus();
   });
@@ -728,6 +728,10 @@ describe("Sidebar project index reorder", () => {
         top, bottom: top + 20, height: 20, left: 0, right: 100, width: 100, x: 0, y: top, toJSON: () => ({}),
       });
     }
+    // Both are pinned, so the hairline follows relay.
+    vi.spyOn(nav.querySelector(".project-index__seam")!, "getBoundingClientRect").mockReturnValue({
+      top: 40, bottom: 49, height: 9, left: 0, right: 100, width: 100, x: 0, y: 40, toJSON: () => ({}),
+    });
     fireEvent.pointerDown(relay, { button: 0, clientX: 20, clientY: 30, pointerId: 3 });
     fireEvent.pointerMove(window, { buttons: 1, clientX: 20, clientY: 20, pointerId: 3 });
     fireEvent.pointerMove(window, { buttons: 1, clientX: 20, clientY: 4, pointerId: 3 });
