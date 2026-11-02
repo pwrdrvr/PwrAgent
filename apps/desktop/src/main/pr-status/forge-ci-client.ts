@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import path from "node:path";
+import { join } from "node:path";
 import { discoverGhCommands } from "../settings/gh-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { readGithubAuthToken } from "./github-graphql-client";
@@ -139,7 +139,7 @@ export class ForgeCiClient {
       if (metadata.expired === true) throw new ForgeReadError("artifact_expired", "This artifact has expired on GitHub.");
       if (Number(metadata.size_in_bytes) > FORGE_ARTIFACT_MAX_BYTES) throw new ForgeReadError("response_too_large", "Artifact exceeds the 128 MiB download limit.");
       providerRequests++;
-      const archivePath = path.join(artifactDirectory, `${args.runId}-${args.artifactId}.zip`);
+      const archivePath = join(artifactDirectory, `${args.runId}-${args.artifactId}.zip`);
       const archive = await this.requestGithub(r, { path: `${artifactPath}/zip`, downloadArtifact: archivePath }, signal);
       return { ...provenance(), fetchedAt: Date.now(), runId: args.runId, artifactId: args.artifactId, name: safeText(metadata.name),
         ...(archive as Record<string, unknown>), url: `${repositoryUrl(r)}/actions/runs/${args.runId}/artifacts/${args.artifactId}`,
