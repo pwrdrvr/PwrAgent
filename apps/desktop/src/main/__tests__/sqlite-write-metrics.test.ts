@@ -2609,6 +2609,59 @@ describe("sqlite write metrics", () => {
     }
   });
 
+  it.each([false, true])("bounds one Codex monitor recovery turn start (causal messaging=%s)", async (causal) => {
+    const codexClient = Object.assign(createStubBackendClient() as object, {
+      startTurn: async () => ({ threadId: "monitor-thread", turnId: "monitor-recovery-turn" }),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: codexClient as never,
+      overlayStore: store as never,
+    });
+    const monitorRecord = {
+      ...(causal ? { causalContext: { causalMessagingSource: { ownerId: "1".repeat(64), requestId: "2".repeat(64), surfaceSelector: "3".repeat(64) } } } : {}),
+      activeCommandCount: 0,
+      backend: "codex" as const,
+      createdAt: 1_800_000_000_000,
+      heartbeatIntervalSeconds: 30,
+      lastActivityAt: 1_800_000_000_000,
+      monitorId: "monitor-write-budget",
+      monitorThreadId: "monitor-thread",
+      monitorTurnId: "monitor-turn",
+      parentBackend: "codex" as const,
+      parentThreadId: "parent-thread",
+      parentTurnId: "parent-turn",
+      pollIntervalSeconds: 30,
+      preferredModel: "gpt-5.6-luna",
+      preferredReasoningEffort: "low",
+      startupTimeoutSeconds: 45,
+      task: "Wait for one bounded external operation.",
+    };
+    const internal = registry as unknown as {
+      startTaskMonitorRecoveryTurn(params: {
+        record: typeof monitorRecord;
+        terminalStatus: "completed";
+      }): Promise<void>;
+    };
+
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        await internal.startTaskMonitorRecoveryTurn({ record: monitorRecord, terminalStatus: "completed" });
+      });
+
+      expect(monitorRecord.monitorTurnId).toBe("monitor-recovery-turn");
+      expectSqliteWriteBudget({
+        // A monitor makes at most one recovery attempt. At 100 recovered
+        // messaging monitors/day, one ~12 KB commit each is about 1.2 MB/day.
+        note: causal ? "One Codex monitor recovery turn delegated from a messaging turn writes its prompt origin in one commit; at most one recovery per monitor. ~12 KB each: ~1.2 MB/day at 100 recovered messaging monitors/day, 0 MB/day idle."
+          : "A Codex monitor recovery turn with no messaging origin writes nothing.",
+        scenario: causal ? "messaging-causal-codex-monitor-recovery" : "codex-task-monitor-recovery",
+        writes,
+      });
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("repairs a thread pricing history in one transaction", async () => {
     for (let index = 0; index < 25; index += 1) {
       await store.upsertThreadUsageLine({
