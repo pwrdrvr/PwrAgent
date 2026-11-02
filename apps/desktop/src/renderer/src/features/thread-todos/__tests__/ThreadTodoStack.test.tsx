@@ -1474,7 +1474,9 @@ describe("ThreadTodosPanel group disclosure", () => {
 
   it("keeps unread work visible on a collapsed header", () => {
     const unread = todo({ id: "d-u1", threadId: "d-t3", title: "Unread card", sourceProject: CHARLIE });
-    renderAll([unread], { seenKeys: new Set() });
+    const seen = todo({ id: "d-u2", threadId: "d-t3", title: "Seen card", sourceProject: CHARLIE });
+    // A row seen before is not new, though it keeps its cookie while the panel is open.
+    renderAll([unread, seen], { seenKeys: new Set([operatorTodoItemKey(seen.id)]) });
     fireEvent.click(toggle(CHARLIE));
     const header = toggle(CHARLIE);
     expect(header.getAttribute("aria-expanded")).toBe("false");

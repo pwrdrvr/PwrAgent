@@ -322,8 +322,14 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
   const openGroupMenu = (event: MouseEvent<HTMLButtonElement>): void => {
     event.preventDefault();
     groupMenuTrigger.current = event.currentTarget;
-    setGroupMenu({ x: event.clientX, y: event.clientY });
+    // Shift+F10 and the Menu key report no pointer: open under the header.
+    const rect = event.currentTarget.getBoundingClientRect();
+    const fromKeyboard = event.clientX === 0 && event.clientY === 0;
+    setGroupMenu(fromKeyboard
+      ? { x: rect.left, y: rect.bottom + 4 }
+      : { x: event.clientX, y: event.clientY });
   };
+  const closeGroupMenu = useCallback(() => setGroupMenu(undefined), []);
 
   // One peer can fail both the open queue and the Done list; say it once.
   const alertText = [...new Set([actionError, listingError, view.queueError]
@@ -399,10 +405,11 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
             groups.map((group, index) => {
               const folded = isCollapsed(group);
               const listId = `${controlId}-group-${index}`;
-              // A folded header still says what is new in it.
+              // A folded header still says what is new in it, counted as the
+              // lens tabs count: rows already seen are not new.
               const unread = folded && !showResolved
                 ? group.items.filter((item) =>
-                  (item.type === "wait" || item.todo.status === "open") && isUnread(item.key)).length
+                  (item.type === "wait" || item.todo.status === "open") && !view.seenKeys.has(item.key)).length
                 : 0;
               const count = group.items.length;
               return (
@@ -562,7 +569,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
           triggerRef={groupMenuTrigger}
           allCollapsed={allCollapsed}
           noneCollapsed={noneCollapsed}
-          onClose={() => setGroupMenu(undefined)}
+          onClose={closeGroupMenu}
           onCollapseAll={() => setCollapsed(groupKeys, true)}
           onExpandAll={() => setCollapsed(groupKeys, false)}
         />,
