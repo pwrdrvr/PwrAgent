@@ -28,7 +28,7 @@ export type ReplayResponseStep = {
   threadId?: string;
   /**
    * `thread/read` only: answer the older page requested with this cursor.
-   * Without it, the read answers a request for the newest page.
+   * Without it, the read can answer a request for any page.
    */
   before?: string;
   result?: unknown;

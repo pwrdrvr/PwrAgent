@@ -97,15 +97,17 @@ export class ReplayController {
     // The most specific answer wins: this thread's page, then any thread's
     // page, then this thread's newest page, then the last newest-page read.
     const { threadId, before } = selector;
-    for (const key of [
+    const keys = new Set([
       responseReuseKey({ method, archived, threadId, before }),
       responseReuseKey({ method, archived, before }),
       responseReuseKey({ method, archived, threadId }),
-    ]) {
+      reuseKey,
+    ]);
+    for (const key of keys) {
       const reused = this.reusableResponses.get(key);
       if (reused) return reused;
     }
-    return this.reusableResponses.get(reuseKey);
+    return undefined;
   }
 
   advance(params: {
