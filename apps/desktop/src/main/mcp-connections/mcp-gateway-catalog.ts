@@ -67,18 +67,26 @@ export function gatewayCatalogRevision(tools: McpGatewayTool[]): string {
 
 export function validateGatewayArguments(tool: Tool, args: Record<string, unknown>): void {
   try {
-    // Never share an AJV $id cache across servers or schema revisions.
-    // Compilation is local only; unresolved remote references fail closed.
-    const draft = tool.inputSchema.$schema;
-    const Validator = typeof draft === "string" && draft.includes("draft-07") ? Ajv
-      : typeof draft === "string" && draft.includes("2019-09") ? Ajv2019 : Ajv2020;
-    // JSON Schema formats are annotations. Never coerce, default or remove input.
-    const validator = new Validator({ strict: false, validateFormats: false, allErrors: false });
-    const validate = validator.compile(tool.inputSchema);
-    if ("$async" in validate && validate.$async) throw new Error("Asynchronous schemas are not supported.");
-    if (!validate(args)) throw new Error(validator.errorsText(validate.errors));
+    validateJsonSchemaValue(tool.inputSchema, args);
   } catch (error) {
     throw new McpError(ErrorCode.InvalidParams,
       `Arguments could not be validated against ${tool.name}: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+/**
+ * Validate a value against a server-supplied JSON Schema, or throw.
+ * Shared by tool arguments and upstream form answers.
+ */
+export function validateJsonSchemaValue(schema: Record<string, unknown>, value: unknown): void {
+  // Never share an AJV $id cache across servers or schema revisions.
+  // Compilation is local only; unresolved remote references fail closed.
+  const draft = schema.$schema;
+  const Validator = typeof draft === "string" && draft.includes("draft-07") ? Ajv
+    : typeof draft === "string" && draft.includes("2019-09") ? Ajv2019 : Ajv2020;
+  // JSON Schema formats are annotations. Never coerce, default or remove input.
+  const validator = new Validator({ strict: false, validateFormats: false, allErrors: false });
+  const validate = validator.compile(schema);
+  if ("$async" in validate && validate.$async) throw new Error("Asynchronous schemas are not supported.");
+  if (!validate(value)) throw new Error(validator.errorsText(validate.errors));
 }

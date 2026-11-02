@@ -718,6 +718,158 @@ select_for_new_threads = true
     expect(internals.pendingServerRequests.size).toBe(0);
   });
 
+  describe("an upstream server's form during a gateway call", () => {
+    const form = {
+      message: "Remove /fixture/old? This cannot be undone.",
+      requestedSchema: {
+        type: "object" as const,
+        properties: { confirm: { type: "boolean" as const, title: "Remove permanently" } },
+        required: ["confirm"],
+      },
+      _meta: { "fixture/confirmation": "nonce-1", persist: ["session"] },
+    };
+
+    /** The owner relays one form while the call runs; record what came back. */
+    function serverAsksDuringCall() {
+      const answers: unknown[] = [];
+      const implementation = operation.getMockImplementation()!;
+      operation.mockImplementation(async (params) => {
+        if (params.operation !== "gateway/tools/call") return await implementation(params);
+        try {
+          answers.push(await params.elicit!(form, new AbortController().signal));
+        } catch (error) {
+          answers.push({ failed: error instanceof Error ? error.message : String(error) });
+        }
+        return { content: [{ type: "text", text: "fixture result" }] };
+      });
+      return answers;
+    }
+
+    function resolvedRequests() {
+      const ids: string[] = [];
+      registry.onEvent((event) => {
+        if (event.notification.method === "serverRequest/resolved") ids.push(String(event.notification.params.requestId));
+      });
+      return ids;
+    }
+
+    beforeEach(async () => {
+      await store.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode: "full-access" });
+      internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+    });
+
+    it("shows the form exactly and waits for the person, even in Full Access", async () => {
+      const answers = serverAsksDuringCall();
+      const shown = approval();
+
+      const call = internals.handleServerRequest("codex", request("call_mcp_tool", args));
+      const event = await shown;
+
+      expect(event.notification.params).toMatchObject({
+        threadId: "thread-1", turnId: "turn-1", serverName: "Fixture", mode: "form",
+        message: form.message, requestedSchema: form.requestedSchema, _meta: form._meta,
+      });
+      // A form, not a host tool approval: the card offers no grant to keep.
+      const state = createMcpElicitationState(event.notification)!;
+      expect(state.purpose).toBe("form");
+      expect(readMcpApprovalPersistence(state)).toEqual([]);
+      expect(answers).toEqual([]);
+      await registry.submitServerRequest({
+        backend: "codex", threadId: "thread-1", turnId: "turn-1",
+        requestId: event.notification.params.requestId,
+        response: { action: "accept", content: { confirm: true }, _meta: { "client/approval": "kept" } },
+      });
+
+      expect((await call).success).toBe(true);
+      expect(answers).toEqual([{ action: "accept", content: { confirm: true }, _meta: { "client/approval": "kept" } }]);
+      expect(internals.pendingServerRequests.size).toBe(0);
+    });
+
+    it("asks again for the next form instead of reusing an answer", async () => {
+      const answers = serverAsksDuringCall();
+      const seen: string[] = [];
+      registry.onEvent(async (event) => {
+        if (event.notification.method !== "mcpServer/elicitation/request") return;
+        const requestId = String(event.notification.params.requestId);
+        seen.push(requestId);
+        await registry.submitServerRequest({
+          backend: "codex", threadId: "thread-1", turnId: "turn-1", requestId,
+          response: { action: "accept", content: { confirm: true }, _meta: { persist: "session" } },
+        });
+      });
+
+      expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args, "call-1"))).success).toBe(true);
+      expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args, "call-2"))).success).toBe(true);
+
+      expect(new Set(seen).size).toBe(2);
+      expect(answers).toHaveLength(2);
+    });
+
+    it("takes the card down when the call ends, and refuses the late answer", async () => {
+      const answers = serverAsksDuringCall();
+      const resolved = resolvedRequests();
+      const shown = approval();
+
+      const call = internals.handleServerRequest("codex", request("call_mcp_tool", args));
+      const event = await shown;
+      const requestId = event.notification.params.requestId;
+      (registry as unknown as { mcpGatewayTools: { cancel(backend: string, threadId: string, turnId: string): void } })
+        .mcpGatewayTools.cancel("codex", "thread-1", "turn-1");
+      await call;
+
+      await vi.waitFor(() => expect(resolved).toContain(requestId));
+      expect(internals.pendingServerRequests.size).toBe(0);
+      await expect(registry.submitServerRequest({
+        backend: "codex", threadId: "thread-1", turnId: "turn-1", requestId,
+        response: { action: "accept", content: { confirm: true }, _meta: null },
+      })).rejects.toThrow("No pending server request");
+      expect(answers).toHaveLength(1);
+      expect(answers[0]).toHaveProperty("failed");
+    });
+
+    it("refuses a form that would be drawn as a host tool approval", async () => {
+      const implementation = operation.getMockImplementation()!;
+      const answers: unknown[] = [];
+      operation.mockImplementation(async (params) => {
+        if (params.operation === "gateway/tools/list") {
+          return (await implementation(params) as McpGatewayTool[])
+            .map((tool) => ({ ...tool, serverName: "browser" }));
+        }
+        try {
+          answers.push(await params.elicit!({
+            message: "Allow https://fixture.example?",
+            requestedSchema: { type: "object", properties: {} },
+            _meta: { origin: "https://fixture.example" },
+          }, new AbortController().signal));
+        } catch (error) {
+          answers.push({ failed: error instanceof Error ? error.message : String(error) });
+        }
+        return { content: [{ type: "text", text: "fixture result" }] };
+      });
+      const events = declineUnexpectedApproval();
+
+      await internals.handleServerRequest("codex", request("call_mcp_tool", args));
+
+      expect(events).toEqual([]);
+      expect(answers).toEqual([{ failed: expect.stringContaining("host tool approval") }]);
+      expect(internals.pendingServerRequests.size).toBe(0);
+    });
+
+    it("fails closed without a card for a headless automation run", async () => {
+      internals.headlessAutomationTurns.set("codex:thread-1:turn-1", {
+        agentThreadId: "automation-1", backend: "codex", automationRunId: "run-1",
+        executionMode: "full-access", executionThreadId: "thread-1", queueEntryId: "queue-1", startedAt: 1,
+      });
+      const answers = serverAsksDuringCall();
+      const events = declineUnexpectedApproval();
+
+      await internals.handleServerRequest("codex", request("call_mcp_tool", args));
+
+      expect(events).toEqual([]);
+      expect(answers).toEqual([{ failed: expect.stringContaining("no one to answer") }]);
+    });
+  });
+
   it("uses the active turn's Full Access when the saved mode differs", async () => {
     internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
     const events = declineUnexpectedApproval();
