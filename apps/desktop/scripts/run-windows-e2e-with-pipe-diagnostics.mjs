@@ -15,11 +15,13 @@ const executable = path.join(root, "windows-pipe-diagnostics.exe");
 const handleExecutable = process.env.PWRAGENT_WINDOWS_HANDLE_EXE;
 const rows = new Map();
 const launches = new Map();
+const launchEvents = new Map();
 const processed = new Set();
 const pending = new Set();
 const scanners = new Set();
 let watcher, requestWatcher, poll, liveArtifacts = false;
 let nativeBytes = 0, omittedNativeRecords = 0, captures = 0, watcherAvailable = false;
+let stalledCaptures = 0;
 
 // Raw tool output may contain unrelated file paths; persist only parsed pipe names.
 const json = (data) => JSON.stringify(data, (key, value) => key === "toolText" ? undefined : value);
@@ -112,9 +114,11 @@ async function inventory(event) {
   return { event, result, endpoints, source };
 }
 async function capture(event) {
-  write("trigger-" + event.launchId + ".json", { event, observedAt: Date.now(), watcherAvailable });
-  log("natural-exit-open-pipes", { ...event, observedAt: Date.now() });
-  if (++captures > 4) {
+  const stalled = event.kind === "stalled";
+  const prefix = stalled ? "stalled-" : "trigger-";
+  write(prefix + event.launchId + ".json", { event, observedAt: Date.now(), watcherAvailable });
+  log(stalled ? "close-stalled" : "natural-exit-open-pipes", { ...event, observedAt: Date.now() });
+  if ((stalled ? ++stalledCaptures : ++captures) > 4) {
     write("match-" + event.launchId + ".json", { event, error: "Per-run scan limit reached.", omittedScan: true });
     return;
   }
@@ -128,7 +132,8 @@ async function capture(event) {
   const launchQueryOverlappedExit = launch.result.queries.tool.ended >= event.at;
   const deadline = Date.now() + 5000;
   const matches = [];
-  const survivors = [...rows.values()].filter((row) => !row.goneAt && row.pid !== event.pid
+  const survivors = [...rows.values()].filter((row) => !row.goneAt
+    && (stalled || row.pid !== event.pid)
     && ancestry(rows, row.pid, row.created).chain.some((parent) => parent.pid === event.pid && parent.created === launch.source.created));
   let omittedProcesses = Math.max(0, survivors.length - 16);
   const inspect = async (pid, expectedCreated, reason) => {
@@ -173,7 +178,7 @@ async function capture(event) {
   const report = { launchId: event.launchId, trigger: event, launchQueryOverlappedExit, global, globalSearchStatus,
     globalErrors: parsed?.errors, omittedGlobalErrors: parsed?.omittedErrors, matches, omittedProcesses,
     expectedNames: launch.endpoints.names, attribution: "An exact verified holder is an observation; its launch cause is not inferred." };
-  write("match-" + event.launchId + ".json", report);
+  write((stalled ? "stalled-match-" : "match-") + event.launchId + ".json", report);
   log("match-result", { launchId: event.launchId, ended: Date.now(), launchQueryOverlappedExit,
     expectedNames: launch.endpoints.names, globalSearchStatus, globalError: global?.error,
     omittedProcesses, matches: matches.map(({ pid, created, allFourExactNames, sourceVerifiedAndLive, diagnosticProcess, ancestry: chain, result }) => ({
@@ -197,14 +202,19 @@ function scanRequests() {
     processed.add(filename);
     if (processed.size > 2048) { log("request-limit", { omitted: processed.size - 2048 }); continue; }
     const event = JSON.parse(readFileSync(path.join(requests, filename), "utf8"));
+    if (event.kind === "stalled") {
+      event.launchId = [...launchEvents.values()].findLast((launch) => launch.pid === event.pid && launch.workerPid === event.workerPid)?.launchId;
+    }
     if (!/^[a-f0-9-]{36}$/.test(event.launchId)) continue;
     if (!liveArtifacts) { cpSync(evidence, artifact, { recursive: true }); liveArtifacts = true; }
     if (event.kind === "launch") {
+      launchEvents.set(event.launchId, event);
       const operation = inventory(event);
       launches.set(event.launchId, operation);
       enqueue(operation);
     }
     if (event.kind === "trigger") enqueue(capture(event));
+    if (event.kind === "stalled") enqueue(capture(event));
   }
 }
 async function startObserver() {
