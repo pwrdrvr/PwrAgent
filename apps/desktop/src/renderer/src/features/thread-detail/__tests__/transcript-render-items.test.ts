@@ -1416,6 +1416,21 @@ describe("buildTranscriptRenderItems", () => {
     }
   });
 
+  it("keeps a stopped turn's work open above its usage row", () => {
+    const turn = { id: "stopped-usage", status: "cancelled" as const, durationMs: 90_000 };
+    const work = [tool("t1", turn), tool("t2", turn)];
+    const usage: AppServerThreadActivityEntry = {
+      type: "activity", id: "usage", summary: "Turn usage: 1,000 tokens", details: [], turn,
+    };
+
+    const items = buildTranscriptRenderItems({ entries: [...work, usage] });
+
+    expect(items).toEqual([
+      expect.objectContaining({ type: "workPhaseGroup", defaultExpanded: true, entries: work }),
+      { type: "entry", entry: usage },
+    ]);
+  });
+
   it("folds the work of a stopped turn that replied after it", () => {
     const turn = { id: "stopped-replied", status: "cancelled" as const, durationMs: 90_000 };
     const work = [tool("t1", turn), tool("t2", turn)];

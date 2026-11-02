@@ -327,10 +327,13 @@ function openStoppedTurnTails(
     return groups;
   }
 
-  const groupedEntries = new Set(groups.flatMap((group) => group.entries));
-  const groupByLastEntry = new Map(
-    groups.map((group) => [group.entries[group.entries.length - 1], group]),
-  );
+  const groupOfEntry = new Map<AppServerThreadEntry, RenderGroup>();
+  for (const group of groups) {
+    for (const entry of group.entries) {
+      groupOfEntry.set(entry, group);
+    }
+  }
+  // Walking backward, the first entry met of a group is its last one.
   const tails = new Set<RenderGroup>();
   const settledTurnIds = new Set<string>();
   for (let index = entries.length - 1; index >= 0; index -= 1) {
@@ -339,11 +342,11 @@ function openStoppedTurnTails(
     if (!turnId || !stoppedTurnIds.has(turnId) || settledTurnIds.has(turnId)) {
       continue;
     }
-    const group = groupByLastEntry.get(entry);
+    const group = groupOfEntry.get(entry);
     if (group) {
       tails.add(group);
       settledTurnIds.add(turnId);
-    } else if (!groupedEntries.has(entry) && isAssistantMessage(entry)) {
+    } else if (isAssistantMessage(entry)) {
       settledTurnIds.add(turnId);
     }
   }

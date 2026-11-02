@@ -125,6 +125,7 @@ type TranscriptListProps = {
   entries: AppServerThreadEntry[];
   error?: string;
   expandedActivityIds?: string[];
+  /** Opened group ids, plus `<id>:collapsed` for folded default-open groups. */
   expandedWorkPhaseGroupIds?: string[];
   loading: boolean;
   loadingMore: boolean;
@@ -221,10 +222,14 @@ const LOAD_OLDER_THRESHOLD_PX = 160;
 // transcript message on an unrelated live-turn render.
 const EMPTY_SKILLS: AppServerSkillSummary[] = [];
 
-// A group that starts open records a fold under its own key, so the expanded
-// set keeps meaning "open" for every other group.
-function collapsedWorkPhaseGroupKey(groupId: string): string {
-  return `${groupId}:collapsed`;
+// The key a click toggles in the expanded-group set. A group that starts open
+// records a fold under its own key, so the set keeps meaning "open" for every
+// other group.
+function workPhaseGroupToggleKey(group: {
+  defaultExpanded?: boolean;
+  id: string;
+}): string {
+  return group.defaultExpanded ? `${group.id}:collapsed` : group.id;
 }
 
 function isAssistantFinalMessage(entry: AppServerThreadEntry): boolean {
@@ -1579,11 +1584,8 @@ export function TranscriptList(props: TranscriptListProps) {
                   desktopApi={props.desktopApi}
                   entries={item.entries}
                   expanded={
-                    item.defaultExpanded
-                      ? !expandedCommentaryGroupIds.has(
-                          collapsedWorkPhaseGroupKey(item.id)
-                        )
-                      : expandedCommentaryGroupIds.has(item.id)
+                    expandedCommentaryGroupIds.has(workPhaseGroupToggleKey(item))
+                    !== Boolean(item.defaultExpanded)
                   }
                   expandedActivityIds={controlledExpandedActivityIds}
                   fileViewerContext={props.fileViewerContext}
@@ -1596,11 +1598,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   onActivityExpandedChange={setActivityExpanded}
                   onOpenImage={props.onOpenImage}
                   onToggle={() => {
-                    toggleCommentaryGroup(
-                      item.defaultExpanded
-                        ? collapsedWorkPhaseGroupKey(item.id)
-                        : item.id
-                    );
+                    toggleCommentaryGroup(workPhaseGroupToggleKey(item));
                   }}
                 />
               ) : isRewindMarkerEntry(item.entry) && item.entry.type === "activity" ? (
