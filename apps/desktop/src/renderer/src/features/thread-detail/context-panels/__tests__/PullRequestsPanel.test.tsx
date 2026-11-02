@@ -497,6 +497,33 @@ describe("PullRequestsPanel", () => {
       expect(within(card).queryByRole("button", { name: /^Stop|^Turn off|History|Ask Agent|Watch CI/ })).toBeNull();
     });
 
+    it("puts a peer owner's CI watch mark on the rail chip, as the sidebar does", () => {
+      renderPanel({
+        thread: {
+          ...threadWithPrs([openPr]),
+          activePrWatches: [ciWatch],
+          prCiWatches: [{
+            prKey: ciWatch.prKey,
+            watchId: ciWatch.watchId,
+            notifyOn: ["success", "failure"],
+            createdAt: ciWatch.createdAt,
+            runAttempt: 2,
+          }],
+          federation: {
+            ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "thread-1" },
+            instanceLabel: "Laptop",
+            peerStatus: "connected",
+            capabilities: [],
+          },
+        } as NavigationThreadSummary,
+      });
+      const card = screen.getByRole("listitem");
+      expect(within(card).getByRole("button", {
+        name: /^Open pwrdrvr\/PwrAgent#3174 \(.+\) in browser, waiting for CI$/,
+      })).toBeInTheDocument();
+      expect(within(card).getByText("Waiting for CI · attempt 2")).toBeInTheDocument();
+    });
+
     const capablePeer = {
       ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "thread-1" },
       instanceLabel: "Laptop",

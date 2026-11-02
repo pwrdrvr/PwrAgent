@@ -25,6 +25,7 @@ import {
   resolvePrChipWatch,
   useThreadAutoFixRepository,
   useThreadPrWatchIndicatorsContext,
+  useThreadPrWatches,
 } from "../../pr-watches/useThreadPrWatchIndicators";
 import { RailStatusChip, type RailChipTone } from "./RailStatusChip";
 
@@ -82,6 +83,9 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
     : localWatches;
   const watchIds = watches?.map((watch) => watch.watchId).join(",") ?? "";
   const autoFixRepository = useThreadAutoFixRepository(props.thread);
+  // The chip reads what the sidebar's chip reads, a peer owner's CI marks
+  // included, so one PR wears one eye in both places.
+  const chipWatches = useThreadPrWatches(props.thread);
   const canReadHistory = (localWatches !== undefined || peerManaged)
     && Boolean(props.desktopApi?.manageThreadPrWatches);
   const ownerTarget = props.thread.federation?.ref.target;
@@ -189,9 +193,7 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
             const checkState = resolveCheckState(pr);
             const statusKey = buildPullRequestStatusKey(pr);
             const prWatches = watches?.filter((watch) => watch.prKey === statusKey) ?? NO_WATCHES;
-            const chipWatch = ownerLabel === undefined && watchContext
-              ? resolvePrChipWatch(watchContext.byThreadKey.get(threadKey), pr, autoFixRepository)
-              : undefined;
+            const chipWatch = resolvePrChipWatch(chipWatches, pr, autoFixRepository);
             return (
               <li key={prKey(pr)} className="rail-card">
                 <p className="rail-card__status-line">
