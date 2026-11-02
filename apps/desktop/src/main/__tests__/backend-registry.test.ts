@@ -52074,41 +52074,44 @@ script = "printf setup"
         codexClient,
         overlayStore,
       });
-      const resolver = params.resolver ? vi.fn(params.resolver) : undefined;
-      if (resolver) registry.setPullRequestReferenceResolver(resolver);
-      await registry.publishLocalEvent({
-        backend: "codex",
-        notification: {
-          method: "turn/started",
+      try {
+        const resolver = params.resolver ? vi.fn(params.resolver) : undefined;
+        if (resolver) registry.setPullRequestReferenceResolver(resolver);
+        await registry.publishLocalEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/started",
+            params: {
+              threadId: "agent-thread",
+              turnId: "turn-1",
+              turn: { id: "turn-1" },
+            },
+          },
+        });
+        const response = await codexClient.emitRequest({
+          method: "item/tool/call",
           params: {
             threadId: "agent-thread",
             turnId: "turn-1",
-            turn: { id: "turn-1" },
+            callId: "call-1",
+            requestId: "call-1",
+            namespace: "pwragent",
+            tool: "attach_thread_pull_request",
+            arguments: {
+              backend: "codex",
+              threadId: "target-thread",
+              number: 3179,
+            },
           },
-        },
-      });
-      const response = await codexClient.emitRequest({
-        method: "item/tool/call",
-        params: {
-          threadId: "agent-thread",
-          turnId: "turn-1",
-          callId: "call-1",
-          requestId: "call-1",
-          namespace: "pwragent",
-          tool: "attach_thread_pull_request",
-          arguments: {
-            backend: "codex",
-            threadId: "target-thread",
-            number: 3179,
-          },
-        },
-      } as AppServerPendingRequestNotification);
-      const overlay = await overlayStore.getThreadOverlayState({
-        backend: "codex",
-        threadId: "target-thread",
-      });
-      await registry.close();
-      return { overlay, resolver, response };
+        } as AppServerPendingRequestNotification);
+        const overlay = await overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "target-thread",
+        });
+        return { overlay, resolver, response };
+      } finally {
+        await registry.close();
+      }
     } finally {
       await rm(root, { force: true, recursive: true });
     }

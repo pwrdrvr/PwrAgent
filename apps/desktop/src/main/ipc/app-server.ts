@@ -492,7 +492,7 @@ import {
   PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE,
   PrStatusTokenBucket,
 } from "../pr-status/pr-status-token-bucket";
-import { parsePullRequestReferenceUrl, type PullRequestReferenceIdentity } from "../pr-status/forge-reference";
+import { buildPullRequestReferenceUrl, parsePullRequestReferenceUrl, type PullRequestReferenceIdentity } from "../pr-status/forge-reference";
 import { logPrAutoDispatchOutcome } from "../pr-status/pr-auto-dispatch-log";
 import {
   PrStatusWatchCoordinator,
@@ -7217,7 +7217,38 @@ class DesktopAppServerService {
   }
 
   private async fetchForgePullRequests(refs: ForgePrRef[], reconnect = false, requestTokenTaken = false): Promise<PrSummary[]> {
-    return this.getPrFetcher().fetchPullRequests(refs, { reconnect, requestTokenTaken });
+    const prs = await this.getPrFetcher().fetchPullRequests(refs, { reconnect, requestTokenTaken });
+    this.learnPolledPullRequestRepositories(refs, prs);
+    return prs;
+  }
+
+  /**
+   * A forge answers a renamed or transferred repository's old name with the
+   * PR under its current name. A poll result under another repository than
+   * any ref asked for is that answer: pair it with the one ref of the same
+   * host and number, and learn the rename before the result is matched to
+   * the threads that attached the PR under the old name.
+   */
+  private learnPolledPullRequestRepositories(refs: readonly ForgePrRef[], prs: readonly PrSummary[]): void {
+    const requested = refs.map((ref) => ({
+      host: normalizePullRequestProvider(ref.host),
+      key: getPrStatusKey({ provider: ref.host, org: ref.owner, repo: ref.repo, number: ref.number }),
+      url: buildPullRequestReferenceUrl({
+        kind: ref.kind, provider: ref.host, org: ref.owner, repo: ref.repo, number: ref.number,
+      }),
+      number: ref.number,
+    }));
+    const requestedKeys = new Set(requested.map((ref) => ref.key));
+    const answeredKeys = new Set(prs.map((pr) => getPrStatusKey(pr)));
+    for (const pr of prs) {
+      if (requestedKeys.has(getPrStatusKey(pr))) continue;
+      const host = normalizePullRequestProvider(pr.provider);
+      // A ref that got its own answer is not the one this result renames.
+      const matches = requested.filter((ref) =>
+        ref.number === pr.number && ref.host === host && !answeredKeys.has(ref.key)
+      );
+      if (matches.length === 1) this.learnPullRequestRepository(matches[0]!.url, pr);
+    }
   }
 
   async getGlabStatus(request: GetGlabStatusRequest): Promise<GlabStatus> {

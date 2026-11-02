@@ -8655,6 +8655,57 @@ describe("app server ipc", () => {
     });
   });
 
+  it("learns a transferred GitLab project from a status poll of its old path", async () => {
+    // GitLab follows the old path's redirect, so the poll answers under the
+    // current path. Without learning the rename, the thread that attached the
+    // MR by its old path never matched the answer and its status froze.
+    const { appServerService } = await import("../ipc/app-server");
+    const service = appServerService as unknown as {
+      prRepositoryAliases: { canonicalizeUrl: (url: string) => string; clear: () => void };
+      primaryPrThreadsByKey: { has: (prKey: string) => boolean };
+      getPrFetcher: () => unknown;
+      setThreadPrAttachment: (
+        key: string,
+        attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] } | undefined,
+      ) => void;
+      fetchForgePullRequests: (refs: Array<Record<string, unknown>>) => Promise<PrSummary[]>;
+    };
+    const oldUrl = "https://gitlab.com/team/legacy/tools/api/-/merge_requests/41";
+    const newUrl = "https://gitlab.com/platform/api/-/merge_requests/41";
+    const otherUrl = "https://gitlab.com/team/other/-/merge_requests/41";
+    const gitlabMr = (org: string, repo: string, url: string): PrSummary => ({
+      ...githubPr({ number: 41, org, repo, state: "passing", url }),
+      provider: "gitlab.com",
+    });
+    service.setThreadPrAttachment("codex:transferred-poll", {
+      backend: "codex",
+      primaryRepoKey: "gitlab.com/team/legacy/tools/api",
+      prs: [gitlabMr("team/legacy/tools", "api", oldUrl)],
+    });
+    const fetchPullRequests = vi.fn(async () => [
+      gitlabMr("platform", "api", newUrl),
+      // Another project's own !41 answers its own ref and is not a rename.
+      gitlabMr("team", "other", otherUrl),
+    ]);
+    const fetcher = vi.spyOn(service, "getPrFetcher").mockReturnValue({ fetchPullRequests });
+    try {
+      expect(service.primaryPrThreadsByKey.has("gitlab.com/platform/api#41")).toBe(false);
+
+      await service.fetchForgePullRequests([
+        { kind: "gitlab", host: "gitlab.com", owner: "team/legacy/tools", repo: "api", number: 41 },
+        { kind: "gitlab", host: "gitlab.com", owner: "team", repo: "other", number: 41 },
+      ]);
+
+      expect(service.prRepositoryAliases.canonicalizeUrl(oldUrl)).toBe(newUrl);
+      expect(service.prRepositoryAliases.canonicalizeUrl(otherUrl)).toBe(otherUrl);
+      expect(service.primaryPrThreadsByKey.has("gitlab.com/platform/api#41")).toBe(true);
+    } finally {
+      fetcher.mockRestore();
+      service.setThreadPrAttachment("codex:transferred-poll", undefined);
+      service.prRepositoryAliases.clear();
+    }
+  });
+
   it("collapses a transferred GitLab project's duplicate MR once the forge names it", async () => {
     // GitLab redirects an old project path to the project's ID, so the
     // by-URL fetch answers under the current path, here a subgroup of
