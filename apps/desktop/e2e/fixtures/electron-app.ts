@@ -1291,9 +1291,6 @@ export async function closeElectronWithSessionDrain(
   const child = electronApp.process();
   const errorPrefix = `[pwragent-e2e-session-drain:${randomUUID()}]`;
   let buffered = "";
-  let rejectDrain: (error: Error) => void = () => undefined;
-  const drainFailed = new Promise<never>((_resolve, reject) => { rejectDrain = reject; });
-  drainFailed.catch(() => undefined);
   const onStderr = (chunk: Buffer | string) => {
     buffered += chunk.toString();
     for (;;) {
@@ -1310,8 +1307,6 @@ export async function closeElectronWithSessionDrain(
               ...message,
             })}\n`);
           }
-        } else if (typeof message === "string") {
-          rejectDrain(new Error(`Electron session drain failed: ${message}`));
         }
       } catch {
         // Other app stderr cannot change the owned close result.
@@ -1322,30 +1317,22 @@ export async function closeElectronWithSessionDrain(
   };
   child.stderr?.on("data", onStderr);
   try {
-    await electronApp.evaluate(({ app, session, webContents }, errorPrefix) => {
+    await electronApp.evaluate(async ({ app, session, webContents }, errorPrefix) => {
       const record = (stage: string, index?: number) => {
         process.stderr.write(`${errorPrefix}${JSON.stringify({
           stage, index, at: Date.now(), pid: process.pid,
         })}\n`);
       };
       record("installed");
-      app.once("before-quit", () => record("before-quit"));
-      app.once("quit", () => record("quit"));
       const sessions = new Set([
         session.defaultSession,
         ...webContents.getAllWebContents().map((contents) => contents.session),
       ]);
-      let quitHeld = false;
-      const holdNativeQuit = (event: Electron.Event) => {
-        record("will-quit");
-        event.preventDefault();
-        quitHeld = true;
-      };
-      // Keep Chromium's contexts alive until their completion callbacks run.
-      // Playwright may detach its inspector after app.quit() returns, so this
-      // barrier must finish in main without another renderer or inspector RPC.
-      app.on("will-quit", holdNativeQuit);
-      void Promise.all([...sessions].map(async (ownedSession, index) => {
+      // Session callbacks still need Chromium's live contexts. Retain the
+      // RPC owner until they finish, before Playwright closes windows, calls
+      // app.quit(), and detaches its inspector. Holding will-quit instead
+      // races this cache work against the contexts' native shutdown.
+      await Promise.all([...sessions].map(async (ownedSession, index) => {
         record("close-connections-start", index);
         await ownedSession.closeAllConnections();
         record("close-connections-complete", index);
@@ -1353,26 +1340,14 @@ export async function closeElectronWithSessionDrain(
         record("flush-cookies-complete", index);
         await ownedSession.clearData({ dataTypes: ["cache"] });
         record("clear-cache-complete", index);
-      })).then(() => {
-        record("released");
-        app.removeListener("will-quit", holdNativeQuit);
-        // A native will-quit dispatch can still be unwinding its microtask
-        // checkpoint. Retry from a fresh task, as product quit-retry.ts does.
-        if (quitHeld) setImmediate(() => { record("retry-quit"); app.quit(); });
-      }, (error: unknown) => {
-        // The parent owns this stderr pipe even after inspector detachment.
-        // Leave native quit held on failure; strict teardown owns force cleanup.
-        const message = error instanceof Error ? error.message : String(error);
-        try {
-          process.stderr.write(`${errorPrefix}${JSON.stringify(message.slice(0, 2_000))}\n`);
-        } catch {
-          // The unchanged graceful-close deadline still rejects the stall.
-        }
-      });
+      }));
+      record("released");
+      app.once("before-quit", () => record("before-quit"));
+      app.once("will-quit", () => record("will-quit"));
+      app.once("quit", () => record("quit"));
     }, errorPrefix);
-    // The session callbacks and before-quit disposal share the same deadline,
-    // rather than consuming it serially before native shutdown can start.
-    await Promise.race([electronApp.close(), drainFailed]);
+    // Preparation and native quit consume the same existing close deadline.
+    await electronApp.close();
   } finally {
     child.stderr?.removeListener("data", onStderr);
   }

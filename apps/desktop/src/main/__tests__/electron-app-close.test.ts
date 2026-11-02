@@ -136,7 +136,7 @@ describe("closeElectronApplication", () => {
     const closing = closeElectronApplication(harness.electronApp);
     await vi.advanceTimersByTimeAsync(5_999);
     expect(ownedSession.clearData).toHaveBeenCalledOnce();
-    expect(harness.close).toHaveBeenCalledOnce();
+    expect(harness.close).not.toHaveBeenCalled();
     expect(harness.child.exitCode).toBeNull();
     expect(execFile).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
@@ -147,7 +147,7 @@ describe("closeElectronApplication", () => {
     });
   });
 
-  it("overlaps application disposal and persistence without extending the six-second deadline", async () => {
+  it("charges persistence and subsequent application disposal to one six-second deadline", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.useFakeTimers();
@@ -160,16 +160,18 @@ describe("closeElectronApplication", () => {
     }]);
     harness.app.prependOnceListener("before-quit", (event: { preventDefault(): void }) => {
       event.preventDefault();
-      setTimeout(() => { harness.app.quit(); }, 2_000);
+      setTimeout(() => { harness.app.quit(); }, 500);
     });
     const closing = closeElectronApplication(harness.electronApp);
     await vi.advanceTimersByTimeAsync(4_499);
     expect(harness.child.exitCode).toBeNull();
     expect(childProcess.execFile).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(harness.child.exitCode).toBeNull();
     await vi.advanceTimersByTimeAsync(2);
     expect(harness.child.exitCode).toBe(0);
     await expect(closing).resolves.toMatchObject({
-      gracefulCloseOutcome: "closed", forceExitOutcome: "not-needed", elapsedMs: 4_501,
+      gracefulCloseOutcome: "closed", forceExitOutcome: "not-needed", elapsedMs: 5_001,
     });
     expect(childProcess.execFile).not.toHaveBeenCalled();
   });
@@ -202,26 +204,31 @@ describe("closeElectronApplication", () => {
 });
 
 describe("closeElectronWithSessionDrain", () => {
-  it("retries native quit after a cache callback settles inside will-quit", async () => {
+  it("retains the RPC owner until cache completion before entering native quit", async () => {
     const model = new ElectronQuitModel(["main"]);
     let finishCache: () => void = () => undefined;
+    let startedCache: () => void = () => undefined;
+    const cacheStarted = new Promise<void>((resolve) => { startedCache = resolve; });
     const harness = createCloseHarness([{
       closeAllConnections: async () => undefined,
       cookies: { flushStore: async () => undefined },
-      clearData: () => new Promise<void>((resolve) => { finishCache = resolve; }),
+      clearData: () => new Promise<void>((resolve) => { finishCache = resolve; startedCache(); }),
     }], { quitModel: model });
-    harness.app.once("will-quit", () => { finishCache(); });
     const closing = closeElectronWithSessionDrain(harness.electronApp);
+    await cacheStarted;
+    expect(model.emitted).not.toContain("before-quit");
+    expect(harness.close).not.toHaveBeenCalled();
+    finishCache();
+    await closing;
     await model.settle();
-    expect(model.emitted.filter((event) => event === "will-quit")).toHaveLength(2);
+    expect(model.emitted.filter((event) => event === "will-quit")).toHaveLength(1);
     expect(model.hasQuit).toBe(true);
     expect(harness.child.exitCode).toBe(0);
-    await closing;
     expect(harness.app.listenerCount("will-quit")).toBe(0);
     expect(harness.stderr.listenerCount("data")).toBe(0);
   });
 
-  it("keeps every distinct session alive until completion after inspector detachment", async () => {
+  it("keeps every distinct session and the inspector alive until completion", async () => {
     const completions: Array<() => void> = [];
     const makeSession = () => ({
       closeAllConnections: vi.fn(async () => undefined),
@@ -233,14 +240,15 @@ describe("closeElectronWithSessionDrain", () => {
     const harness = createCloseHarness([defaultSession, partitionSession, partitionSession]);
     const closing = closeElectronWithSessionDrain(harness.electronApp);
     await vi.waitFor(() => expect(completions).toHaveLength(2));
-    expect(harness.close).toHaveBeenCalledOnce();
+    expect(harness.close).not.toHaveBeenCalled();
     expect(harness.child.exitCode).toBeNull();
-    await expect(harness.electronApp.evaluate(() => undefined)).rejects.toThrow("Inspector detached");
+    await expect(harness.electronApp.evaluate(() => true)).resolves.toBe(true);
     completions[0]();
     await Promise.resolve();
     expect(harness.child.exitCode).toBeNull();
     completions[1]();
     await closing;
+    expect(harness.close).toHaveBeenCalledOnce();
     expect(harness.child.exitCode).toBe(0);
     expect(harness.app.listenerCount("will-quit")).toBe(0);
     expect(harness.stderr.listenerCount("data")).toBe(0);
@@ -251,7 +259,7 @@ describe("closeElectronWithSessionDrain", () => {
     }
   });
 
-  it("propagates a split-pipe cache failure after inspector detachment and leaves native quit held", async () => {
+  it("propagates cache failure through the live RPC before requesting quit", async () => {
     const failure = new Error("Network Persistent State write failed");
     const harness = createCloseHarness([{
       closeAllConnections: async () => undefined,
@@ -259,9 +267,9 @@ describe("closeElectronWithSessionDrain", () => {
       clearData: async () => { throw failure; },
     }]);
     await expect(closeElectronWithSessionDrain(harness.electronApp)).rejects.toThrow("Network Persistent State write failed");
-    expect(harness.close).toHaveBeenCalledOnce();
+    expect(harness.close).not.toHaveBeenCalled();
     expect(harness.child.exitCode).toBeNull();
-    expect(harness.app.listenerCount("will-quit")).toBe(1);
+    expect(harness.app.listenerCount("will-quit")).toBe(0);
     expect(harness.stderr.listenerCount("data")).toBe(0);
   });
 });

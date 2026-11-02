@@ -5,6 +5,48 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
+test("Windows retains the inspector owner until session cleanup completes", async () => {
+  test.skip(process.platform !== "win32", "Windows native storage shutdown");
+  const app = await launchElectronApp({
+    fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
+  });
+  try {
+    await app.electronApp.evaluate(({ session }) => {
+      const owner = globalThis as typeof globalThis & {
+        __e2eCacheDrain?: { entered: boolean; release?: () => void };
+      };
+      const pending = { entered: false, release: undefined as (() => void) | undefined };
+      owner.__e2eCacheDrain = pending;
+      const ownedSession = session.defaultSession;
+      const clearData = ownedSession.clearData.bind(ownedSession);
+      ownedSession.clearData = async (options) => {
+        await new Promise<void>((resolve) => {
+          pending.release = resolve;
+          pending.entered = true;
+        });
+        await clearData(options);
+      };
+    });
+    const closing = app.closeApplication();
+    closing.catch(() => undefined);
+    await expect.poll(async () => await app.electronApp.evaluate(() => {
+      const owner = globalThis as typeof globalThis & {
+        __e2eCacheDrain?: { entered: boolean };
+      };
+      return owner.__e2eCacheDrain?.entered ?? false;
+    })).toBe(true);
+    await app.electronApp.evaluate(() => {
+      const owner = globalThis as typeof globalThis & {
+        __e2eCacheDrain?: { release?: () => void };
+      };
+      owner.__e2eCacheDrain?.release?.();
+    });
+    await closing;
+  } finally {
+    await app.close();
+  }
+});
+
 test("Windows closes newly created persistent Chromium sessions", async () => {
   test.skip(process.platform !== "win32", "Windows native storage shutdown");
   const app = await launchElectronApp({
