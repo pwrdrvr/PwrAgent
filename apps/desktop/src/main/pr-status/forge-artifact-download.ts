@@ -60,7 +60,7 @@ export async function saveForgeArtifact(response: Response, archivePath: string,
   } catch (error) {
     if (signal.aborted) throw error;
     if (error instanceof ForgeReadError) throw error;
-    throw new ForgeReadError("download_failed", "Artifact download failed. Check connectivity and available disk space on the thread owner.");
+    throw new ForgeReadError("download_failed", "Artifact download failed. Check connectivity, available disk space, and that the existing archive is not open on the thread owner.");
   } finally {
     signal.removeEventListener("abort", cancel);
     await reader.cancel().catch(() => {});

@@ -256,7 +256,8 @@ another retry. This tool does not poll, start a repair turn, or add persistence.
   GitLab returns `unsupported_provider`. No CI operation is started or rerun.
   Archives are streamed with a 128 MiB cap to
   `state/thread-assets/<backend>/<threadId>/ci-artifacts/<runId>-<artifactId>.zip`
-  in the owning profile, beside the thread's other assets. Permanently deleting
+  in the owning profile, beside the thread's other assets. Both segments are
+  URL-encoded, so an ACP backend appears as `acp%3A<name>`. Permanently deleting
   the thread deletes them; archiving keeps them. A repeat download writes a new
   partial file and replaces the archive only when it completes. Results include
   `archivePath`, `sizeBytes`, `sha256` and `pathOwner: "thread_owner"`.

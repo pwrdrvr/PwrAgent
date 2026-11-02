@@ -23,7 +23,7 @@ import {
 import { getThreadTodoService, readThreadTodoPlacement } from "../thread-todos/thread-todo-runtime";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../shared/ipc";
 import { archiveCandidateProtectionReason } from "../app-server/thread-archive-sweeper";
-import { threadAssetRoot } from "../app-server/thread-assets";
+import { threadArtifactDirectory } from "../app-server/thread-assets";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../../shared/ipc";
 import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../../shared/ipc";
 import { readFederatedThreadFamilyPricing } from "../app-server/thread-family-pricing";
@@ -4635,7 +4635,7 @@ class DesktopAppServerService {
       attached,
       observations: [...observations.values()],
       branch: thread.observedGitBranch ?? thread.gitBranch,
-      artifactDirectory: path.join(threadAssetRoot({ backend, threadId }), "ci-artifacts"),
+      artifactDirectory: threadArtifactDirectory({ backend, threadId }),
     }, context.signal);
     const prAutomation = await this.getThreadPullRequestAutomationStatus({ backend, threadId }, { backend: context.backend, threadId: context.threadId });
     return { ...(result as Record<string, unknown>), backend, threadId, prAutomation };

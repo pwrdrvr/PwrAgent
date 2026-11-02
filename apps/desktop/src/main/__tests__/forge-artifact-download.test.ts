@@ -7,6 +7,7 @@ import { ForgeCiClient } from "../pr-status/forge-ci-client";
 import { ForgeReadService } from "../pr-status/forge-read-service";
 import { FORGE_ARTIFACT_MAX_BYTES } from "../pr-status/forge-read-limits";
 import { removeRetiredCiArtifactStore } from "../pr-status/forge-artifact-download";
+import { deleteThreadAssets, threadArtifactDirectory } from "../app-server/thread-assets";
 import { buildForgeReadToolDefinitions } from "../agent-tools/pwragent-forge-agent-tools";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { searchPwrAgentTools } from "../agent-tools/pwragent-tool-search";
@@ -105,6 +106,21 @@ describe("CI artifact downloads", () => {
       .rejects.toMatchObject({ code: "invalid_arguments" });
     expect(h.fetcher).not.toHaveBeenCalled();
     expect(await readdir(directory)).toEqual([]);
+  });
+
+  it("stores downloads with their thread and removes them when the thread is deleted", async () => {
+    vi.stubEnv("PWRAGENT_HOME", directory);
+    vi.stubEnv("PWRAGENT_PROFILE", "artifact-fixture");
+    resetCachedActiveProfileNameForTests();
+    const owner = { backend: "codex" as const, threadId: "thread-1" };
+    const kept = { backend: "codex" as const, threadId: "thread-2" };
+    const h = fixture();
+    const result = await h.service.execute("download_ci_artifact", { runId: 9, artifactId: 12 }, { ...h.scope, artifactDirectory: threadArtifactDirectory(owner) }) as Download;
+    const other = await h.service.execute("download_ci_artifact", { runId: 9, artifactId: 12 }, { ...h.scope, artifactDirectory: threadArtifactDirectory(kept) }) as Download;
+    expect(result.archivePath).toBe(path.join(directory, "profiles", "artifact-fixture", "state", "thread-assets", "codex", "thread-1", "ci-artifacts", "9-12.zip"));
+    await deleteThreadAssets(owner);
+    await expect(stat(result.archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(other.archivePath)).toEqual(zip);
   });
 
   it("removes the retired unowned store and keeps anything stored beside it", async () => {
