@@ -7,6 +7,7 @@ import type { DesktopApi } from "../../../lib/desktop-api";
 import { TranscriptReview } from "../../thread-detail/TranscriptReview";
 import { ThreadTodoCard } from "../ThreadTodoCard";
 import { formatEvidenceLabel } from "../review-tracking";
+import { reducedMotionPairedRingSelectors } from "../../../styles/__tests__/css-style-rules";
 
 const entry: AppServerThreadReviewEntry = {
   type: "review", id: "artifact", review: "A cancellation regression.",
@@ -297,6 +298,25 @@ describe("review To-do card", () => {
     rerenderCard(false);
     expect(screen.getByRole("button", { name: "Fix all" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Fix now: Abort pending exports" })).toBeEnabled();
+  });
+
+  it("stops the busy Fix ring under reduced motion because its words carry the state", async () => {
+    // app.css stops rings that sit beside text naming the work. The Fix
+    // button's ring sits beside "Sending…" or "Working…" with aria-busy, so
+    // it has to match one of those selectors in both busy states.
+    expect(reducedMotionPairedRingSelectors.length).toBeGreaterThan(0);
+    const pairedRing = reducedMotionPairedRingSelectors.join(", ");
+    let settle: (sent: boolean) => void = () => {};
+    const onDoHere = vi.fn(() => new Promise<boolean>((resolve) => { settle = resolve; }));
+    const { rerenderCard } = renderCard({ ...review, items: [finding("abort", "Abort pending exports", 1)] }, onDoHere);
+    fireEvent.click(await screen.findByRole("button", { name: "Fix all" }));
+    const sendingRing = screen.getByRole("button", { name: "Sending…" }).querySelector(".pending-spinner");
+    expect(sendingRing?.matches(pairedRing)).toBe(true);
+
+    rerenderCard(true);
+    settle(true);
+    const working = await screen.findByRole("button", { name: "Working…" });
+    expect(working.querySelector(".pending-spinner")?.matches(pairedRing)).toBe(true);
   });
 
   it("starts disabled when mounting during an active owning turn", async () => {
