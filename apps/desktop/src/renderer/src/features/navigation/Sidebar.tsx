@@ -2024,20 +2024,27 @@ export function Sidebar(props: SidebarProps) {
     });
   };
 
-  const peerAdvertisesForgeAutomation = (instanceId: string): boolean =>
-    props.peerForgeAutomationInstanceIds?.has(instanceId) === true;
+  const peerForgeAutomationInstanceIds = props.peerForgeAutomationInstanceIds;
+  const peerAdvertisesForgeAutomation = useCallback(
+    (instanceId: string): boolean => peerForgeAutomationInstanceIds?.has(instanceId) === true,
+    [peerForgeAutomationInstanceIds],
+  );
   // A placeholder row opens the project menu only for its peer project's
-  // Forge Automation items.
-  const placeholderOffersProjectMenu = useEventCallback(
+  // Forge Automation items. DirectoriesList asks during render, so this is
+  // a real dependency-tracked callback, never an event callback.
+  const canSetProjectForgeAutomation = Boolean(props.onSetProjectForgeAutomation);
+  const federationWindow = federationTarget !== undefined;
+  const placeholderOffersProjectMenu = useCallback(
     (directory: NavigationDirectorySummary): boolean =>
       directory.localAvailability === "unconfigured"
-      && Boolean(props.onSetProjectForgeAutomation)
+      && canSetProjectForgeAutomation
       && canEditProjectForgeAutomation(
         directory,
-        federationTarget !== undefined,
+        federationWindow,
         false,
         peerAdvertisesForgeAutomation,
       ),
+    [canSetProjectForgeAutomation, federationWindow, peerAdvertisesForgeAutomation],
   );
 
   // The project index's items open the project header's own menu, for the

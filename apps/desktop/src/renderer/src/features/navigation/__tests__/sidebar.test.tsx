@@ -9130,7 +9130,7 @@ describe("Sidebar directory pinning", () => {
 
   function renderSidebar(
     directoriesArg: NavigationDirectorySummary[],
-    overrides: {
+    initialOverrides: {
       threads?: NavigationThreadSummary[];
       onSetDirectoryPin?: (
         directory: NavigationDirectoryView,
@@ -9154,8 +9154,8 @@ describe("Sidebar directory pinning", () => {
       peerForgeAutomationInstanceIds?: ReadonlySet<string>;
       checkFederationTargetProject?: CheckFederationTargetProject;
     } = {},
-  ): void {
-    render(
+  ): { rerender: (next: typeof initialOverrides) => void } {
+    const element = (overrides: typeof initialOverrides) => (
       <Sidebar
         backends={backends}
         browseMode="directories"
@@ -9183,8 +9183,10 @@ describe("Sidebar directory pinning", () => {
         onReorderDirectoryPins={overrides.onReorderDirectoryPins}
         onRemoveDirectory={overrides.onRemoveDirectory}
         onOpenForgePermissions={overrides.onOpenForgePermissions}
-      />,
+      />
     );
+    const result = render(element(initialOverrides));
+    return { rerender: (next) => result.rerender(element(next)) };
   }
 
   /**
@@ -10415,6 +10417,21 @@ describe("Sidebar directory pinning", () => {
           { ...resumed, paused: false },
           expect.anything(),
         );
+      });
+
+      it("offers the items as soon as the peer starts advertising them", async () => {
+        const overrides = {
+          onSetDirectoryPin: async () => undefined,
+          onSetProjectForgeAutomation: vi.fn(async () => undefined),
+        };
+        const { rerender } = renderSidebar([placeholder], overrides);
+        // The peer connects after the first render; nothing else re-renders.
+        rerender({ ...overrides, peerForgeAutomationInstanceIds: new Set(["peer-owner"]) });
+        expect(getDirectorySummary(/ProjectC/i).querySelector(".directory-row__paused"))
+          .toHaveAttribute("data-tooltip", "Forge activity paused. Right-click for Forge Automation.");
+        fireEvent.contextMenu(getDirectorySummary(/ProjectC/i));
+        expect(await screen.findByRole("menuitemcheckbox", { name: "Pause Forge Activity" }))
+          .toBeInTheDocument();
       });
 
       it("opens no menu while the peer does not advertise them", () => {

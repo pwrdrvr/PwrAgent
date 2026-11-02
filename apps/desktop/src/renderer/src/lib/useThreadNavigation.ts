@@ -9636,15 +9636,15 @@ export function useThreadNavigation(
           ...projectForgeAutomationRequestTarget(directory, readRendererFederationTarget()),
           automation,
         });
-        // The row's own key: a placeholder's differs from the owner's.
-        const rowKey = directory.key;
-        noteDirectoryPatch([rowKey]);
+        // Patch the row by its own key: a placeholder's differs from the
+        // owner's key in the result.
+        noteDirectoryPatch([directory.key]);
         setState((current) => ({
           ...current,
           rows: updateDirectoryForgeAutomationInLoadedRows(
             current.rows,
             {
-              directoryKey: rowKey,
+              directoryKey: directory.key,
               automation: isDefaultProjectForgeAutomation(result.automation)
                 ? null
                 : result.automation,
