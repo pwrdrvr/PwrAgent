@@ -5,7 +5,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Options, Query, SDKMessage, SDKUserMessage, query } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent, AppServerThreadMessageOrigin, BackendModelOption } from "@pwragent/shared";
-import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
+import {
+  CLAUDE_FORK_SOURCE_GONE_MESSAGE, CLAUDE_SESSION_GONE_MESSAGE, CLAUDE_SESSION_GONE_REWIND_MESSAGE, ClaudeBackend, ClaudeTurnActiveError,
+  type ClaudeBackendOptions,
+} from "../claude/claude-backend";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import {
   CLAUDE_FORGE_TOOLS, CLAUDE_MCP_GATEWAY_TOOL, claudeAllowedTools, createClaudePermissionHandler, claudePermissionMode,
@@ -1845,6 +1848,86 @@ describe("Claude SDK backend", () => {
     expect(replay.entries?.find((entry) => entry.type === "message")?.turn?.status).toBe("failed");
     expect((await f.backend.readThread(threadId)).threadStatus).toBe("idle");
     expect(f.close).toHaveBeenCalledOnce();
+  });
+
+  describe("a Claude session that Claude Code deleted", () => {
+    const SDK_SESSION = "5a85c1ad-85c1-4930-ae19-50f721ad13dd";
+    /** What Claude Code 2.1.305 answers a resume of a missing session, before any init. */
+    function missing(sessionId: string): SDKMessage {
+      return { type: "result", subtype: "error_during_execution", is_error: true, num_turns: 0,
+        errors: [`No conversation found with session ID: ${sessionId}`] } as unknown as SDKMessage;
+    }
+
+    it("says Claude no longer has the conversation, on every send, and keeps the thread's own copy", async () => {
+      const f = await fixture(async function* (options, prompt) {
+        await prompt[Symbol.asyncIterator]().next();
+        if (options.resume) {
+          yield missing(options.resume);
+          return;
+        }
+        yield { type: "system", subtype: "init", session_id: SDK_SESSION } as SDKMessage;
+        yield { type: "assistant", parent_tool_use_id: null, message: {
+          id: "answer", content: [{ type: "text", text: "Hello world" }],
+        } } as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "Hello world" } as SDKMessage;
+      });
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hello" }] });
+      await f.waitForTurn();
+
+      for (const text of ["Hello again", "Still there?"]) {
+        await f.backend.startTurn({ threadId, input: [{ type: "text", text }] });
+        await f.waitForTurn();
+        expect(f.events.at(-1)?.notification).toMatchObject({
+          method: "turn/failed", params: { turn: { error: { message: CLAUDE_SESSION_GONE_MESSAGE } } },
+        });
+      }
+      expect(f.queries.slice(1).map((options) => options.resume)).toEqual([SDK_SESSION, SDK_SESSION]);
+      // The thread still names the session, so nothing is lost if it returns.
+      expect((await f.store.read(threadId)).sdkSessionId).toBe(SDK_SESSION);
+      expect((await f.backend.readThread(threadId)).messages.map((message) => message.text))
+        .toEqual(["Hello", "Hello world", "Hello again", "Still there?"]);
+    });
+
+    it("says a fork's source conversation is gone", async () => {
+      const f = await fixture(async function* (options, prompt) {
+        await prompt[Symbol.asyncIterator]().next();
+        yield missing(options.resume!);
+      });
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      const stored = await f.store.read(threadId);
+      await f.store.save({ ...stored, forkFromSdkSessionId: SDK_SESSION });
+
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Continue the fork" }] });
+      await f.waitForTurn();
+      expect(f.queries[0]).toMatchObject({ resume: SDK_SESSION, forkSession: true });
+      expect(f.events.at(-1)?.notification).toMatchObject({
+        method: "turn/failed", params: { turn: { error: { message: CLAUDE_FORK_SOURCE_GONE_MESSAGE } } },
+      });
+    });
+
+    it("keeps Claude's own message when the error names another session or nothing was resumed", async () => {
+      const other = "0d5b9b4e-1f1c-4a52-9b8a-3c0a3f3b2f11";
+      const f = await fixture(async function* (_options, prompt) {
+        await prompt[Symbol.asyncIterator]().next();
+        yield missing(other);
+      });
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Fresh session" }] });
+      await f.waitForTurn();
+      expect(f.events.at(-1)?.notification).toMatchObject({
+        method: "turn/failed", params: { turn: { error: { message: `No conversation found with session ID: ${other}` } } },
+      });
+
+      const stored = await f.store.read(threadId);
+      await f.store.save({ ...stored, sdkSessionId: SDK_SESSION });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Resumed session" }] });
+      await f.waitForTurn();
+      expect(f.queries.at(-1)?.resume).toBe(SDK_SESSION);
+      expect(f.events.at(-1)?.notification).toMatchObject({
+        method: "turn/failed", params: { turn: { error: { message: `No conversation found with session ID: ${other}` } } },
+      });
+    });
   });
 
   it("fails a silent empty success instead of presenting an unanswered send as complete", async () => {
@@ -3764,6 +3847,8 @@ describe("Claude thread rewind", () => {
     const f = await fixture(promptRecorder(prompts));
     // A prompt sent before PwrAgent supplied UUIDs, or one compacted away.
     Object.assign(f.backendOptions, { getSessionMessages: vi.fn(async () => []) });
+    // The session itself still exists.
+    f.backendOptions.getSessionInfo.mockResolvedValue({ sessionId: SDK_SESSION });
     const { threadId, turnIds } = await runTurns(f, ["First prompt"]);
     const target = { messageId: `user:${turnIds[0]}`, turnId: turnIds[0] };
 
@@ -3789,6 +3874,32 @@ describe("Claude thread rewind", () => {
       answered.resolve();
       await busy.waitForTurn();
     }
+  });
+
+  it("says Claude no longer has the conversation when Claude Code deleted its session", async () => {
+    const prompts: SDKUserMessage[] = [];
+    const rewindFiles = vi.fn();
+    const f = await fixture(promptRecorder(prompts), { rewindFiles });
+    // A deleted session reads as empty, in its folder and in every other.
+    const getSessionMessages = vi.fn(async () => []);
+    Object.assign(f.backendOptions, { getSessionMessages });
+    const { threadId, turnIds } = await runTurns(f, ["First prompt"]);
+    const target = { messageId: `user:${turnIds[0]}`, turnId: turnIds[0] };
+
+    expect(await f.backend.previewRewind(threadId, target))
+      .toEqual({ unavailableReason: CLAUDE_SESSION_GONE_REWIND_MESSAGE });
+    for (const mode of ["conversation", "conversation-and-files"] as const) {
+      await expect(f.backend.rewindThread({ threadId, target, mode })).rejects.toThrow(CLAUDE_SESSION_GONE_REWIND_MESSAGE);
+    }
+    // Claude was asked whether the session exists anywhere, not in one folder.
+    expect(f.backendOptions.getSessionInfo).toHaveBeenCalledWith(SDK_SESSION);
+    expect(getSessionMessages).toHaveBeenCalledWith(SDK_SESSION);
+    // No control query started, and the thread is as it was.
+    expect(f.run).toHaveBeenCalledOnce();
+    expect(rewindFiles).not.toHaveBeenCalled();
+    const stored = await f.store.read(threadId);
+    expect(stored).toMatchObject({ sdkSessionId: SDK_SESSION });
+    expect(stored.rewinds).toBeUndefined();
   });
 
   it("starts a turn only after a file preview's control query closes", async () => {
