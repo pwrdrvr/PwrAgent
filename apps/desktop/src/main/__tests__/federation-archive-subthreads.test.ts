@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import type { NavigationQueryPage, NavigationThreadSummary, UpdateSubthreadOrderRequest, UpdateSubthreadOrderResponse } from "@pwragent/shared";
+import type { NavigationQueryPage, NavigationThreadSummary, RemoteThreadPin, UpdateSubthreadOrderRequest,
+  UpdateSubthreadOrderResponse } from "@pwragent/shared";
 import { buildFederatedThreadRef } from "@pwragent/shared";
 import { DesktopFederationRuntime, getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
@@ -424,6 +425,55 @@ describe("Federation nested archive placement", () => {
     expect(await summary("child-b")).toMatchObject({ parentThreadId: "elsewhere" });
     expect((await summary("root")).subthreadOrder).toEqual(["before", "middle", "after"]);
     expect((await stores.get("middle-owner")!.listRemoteThreadPins()).find((pin) => pin.ref.threadId === "child-b")?.summary?.parentThreadId).toBe("middle");
+  });
+
+  // The peer moved child-b before this archive. Only the viewer's saved pin
+  // snapshot still names the archived parent.
+  const moveChildOnPeerOnly = () =>
+    stores.get("child-owner")!.setThreadParent({ backend: "codex", threadId: "child-b", parentThreadId: "elsewhere" });
+  const promotedIds = () => new Set(remoteUpdate.mock.calls.flatMap(([, request]) =>
+    request.archivePromotion?.children.map(({ ref }) => ref.threadId) ?? []));
+
+  it("rejects a child its disconnected peer already moved without overwriting the peer's parent", async () => {
+    await moveChildOnPeerOnly();
+    // No peer is connected, so the saved snapshot is all this viewer can see.
+    await expect(runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" }))
+      .rejects.toThrow("Thread parent changed");
+    expect(promotedIds().has("child-b")).toBe(true);
+    expect(remoteUpdate.mock.calls.every(([, request]) => request.archivePromotion?.dryRun)).toBe(true);
+    expect(await summary("child-b")).toMatchObject({ parentThreadId: "elsewhere" });
+    expect(await summary("child-a")).toMatchObject({ parentThreadId: "middle", parentThreadInstanceId: "middle-owner" });
+    expect((await summary("root")).subthreadOrder).toEqual(["before", "middle", "after"]);
+  });
+
+  it("promotes from the live peer view when the saved snapshot still names the archived parent", async () => {
+    await moveChildOnPeerOnly();
+    // Every pinned peer is reachable and serves its owner's current row.
+    vi.spyOn(runtime, "remoteThreadSummaries").mockReturnValue({
+      resolvePinnedThreads: async (pins: readonly RemoteThreadPin[]) => {
+        const served = await Promise.all(pins.map(async (pin) => ({ pin, row: await summary(pin.ref.threadId) })));
+        return {
+          threads: served.map(({ pin, row }) => ({ ...row,
+            federation: { ref: pin.ref, instanceLabel: pin.instanceLabel, peerStatus: "connected" } })),
+          refreshed: served.map(({ pin, row }) => ({ ref: pin.ref, summary: row, instanceLabel: pin.instanceLabel })),
+          archived: [],
+        };
+      },
+    } as never);
+    await runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" });
+    expect(promotedIds()).toEqual(new Set(["child-a"]));
+    expect(await summary("child-b")).toMatchObject({ parentThreadId: "elsewhere" });
+    expect(await summary("child-a")).toMatchObject({ parentThreadId: "root", parentThreadInstanceId: "root-owner" });
+    expect((await summary("root")).subthreadOrder).toEqual(["before", "child-a", "after"]);
+    const viewerPin = (await stores.get("middle-owner")!.listRemoteThreadPins()).find((pin) => pin.ref.threadId === "child-b");
+    expect(viewerPin?.summary?.parentThreadId).toBe("elsewhere");
+    // The promotion cached child-a's new parent itself; the next live read
+    // replaces that copy with the owner's row once.
+    await runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" });
+    const { writes } = await measureSqliteWrites(() =>
+      runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" }));
+    expectSqliteWriteBudget({ scenario: "federation-archive-live-peer-view-repeat", writes,
+      note: "Archive promotion repeated once the viewer's pin snapshots match the live peer view: zero commits; a pin is written only when its peer's summary changed. 0 MB/day." });
   });
 
   it.each(["membership", "order"])("rejects concurrent source %s changes before committing any promotion", async (change) => {
