@@ -91,12 +91,17 @@ export type ThreadPrCiWatchMark = {
   runAttempt?: number;
 };
 
-/** `forbidden`: Git settings turned background PR polling off. */
+/**
+ * `forbidden`: Git settings turned background PR polling off, or the
+ * project's Forge Automation turned PR watches off. `project_paused`: the
+ * operator paused forge activity in the thread's project.
+ */
 export type ThreadPrWatchesErrorCode =
   | "not_found"
   | "federation_unsupported"
   | "invalid_arguments"
-  | "forbidden";
+  | "forbidden"
+  | "project_paused";
 
 /**
  * Whether Auto-fix starts a repair turn on one opted-in local thread for one

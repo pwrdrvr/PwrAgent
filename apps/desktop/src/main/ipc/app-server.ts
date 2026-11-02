@@ -4802,7 +4802,10 @@ class DesktopAppServerService {
     | { ok: true; result: WatchThreadPullRequestResult }
     | {
         ok: false;
-        error: { code: "invalid_arguments" | "not_found" | "forbidden"; message: string };
+        error: {
+          code: "invalid_arguments" | "not_found" | "forbidden" | typeof PROJECT_PAUSED_ERROR_CODE;
+          message: string;
+        };
       }
   > {
     if (!args.backend || !isAppServerBackendKind(args.backend)) {
