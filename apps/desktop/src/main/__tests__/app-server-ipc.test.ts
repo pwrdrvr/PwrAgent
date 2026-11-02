@@ -1282,6 +1282,25 @@ vi.mock("../pr-status/git-remote", async () => {
   };
 });
 
+// The service is one module singleton for the whole file, and the file runs
+// in far less than the minute its PR request budget needs to refill. Every
+// lookup or by-URL fetch spends a token, so with the real bucket a test only
+// passes while fewer than PR_STATUS_TOKEN_BUCKET_CAPACITY spends precede it.
+// No test here is about the budget; pr-status-token-bucket.test.ts covers it.
+vi.mock("../pr-status/pr-status-token-bucket", async () => {
+  const actual = await vi.importActual<typeof import("../pr-status/pr-status-token-bucket")>(
+    "../pr-status/pr-status-token-bucket",
+  );
+  return {
+    ...actual,
+    PrStatusTokenBucket: class UnlimitedPrStatusTokenBucket extends actual.PrStatusTokenBucket {
+      override tryTake(): boolean {
+        return true;
+      }
+    },
+  };
+});
+
 describe("app server ipc", () => {
   it("reads exact persisted peer membership without repinning or listing navigation rows", async () => {
     const { NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL } = await import("../../shared/ipc");
@@ -1335,7 +1354,6 @@ describe("app server ipc", () => {
   type AppServerIpcModule = typeof import("../ipc/app-server");
   let disposeAppServerIpcHandlers: AppServerIpcModule["disposeAppServerIpcHandlers"];
   let registerAppServerIpcHandlers: AppServerIpcModule["registerAppServerIpcHandlers"];
-  let appServerServiceInternals: { prStatusTokenBucket: object };
   // Historical owner materialization coverage is deliberately separate from IPC.
   const readLegacyOwnerMaterialization = async (_event: unknown, request?: GetNavigationSnapshotRequest) =>
     (await import("../ipc/app-server")).appServerService.getNavigationSnapshot(request);
@@ -1374,17 +1392,9 @@ describe("app server ipc", () => {
     const appServerIpc = await import("../ipc/app-server");
     disposeAppServerIpcHandlers = appServerIpc.disposeAppServerIpcHandlers;
     registerAppServerIpcHandlers = appServerIpc.registerAppServerIpcHandlers;
-    appServerServiceInternals = appServerIpc.appServerService as unknown as typeof appServerServiceInternals;
   });
 
   beforeEach(() => {
-    // The service is one module singleton for the whole file, and its PR
-    // request budget (20 tokens, 20 a minute) does not refill in a run this
-    // short. Each lookup or by-URL fetch spends a token, so without a fresh
-    // bucket a test only passes while fewer than 20 spends precede it.
-    const bucket = appServerServiceInternals.prStatusTokenBucket;
-    appServerServiceInternals.prStatusTokenBucket =
-      new (bucket.constructor as new () => object)();
     getCachedThreadSummary.mockReset();
     isIncompleteThreadList.mockReset().mockReturnValue(false);
     federationMock.runtime.stampRemoteNavigationQueryPage.mockReset().mockImplementation((_target, page) => page);

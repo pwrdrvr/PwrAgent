@@ -487,6 +487,11 @@ import {
 } from "../pr-status/pr-activity";
 import { PrLookupsInFlight } from "../pr-status/pr-lookups-in-flight";
 import { PullRequestRepositoryAliases } from "../pr-status/pr-repository-aliases";
+import {
+  PR_STATUS_TOKEN_BUCKET_CAPACITY,
+  PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE,
+  PrStatusTokenBucket,
+} from "../pr-status/pr-status-token-bucket";
 import { parsePullRequestReferenceUrl, type PullRequestReferenceIdentity } from "../pr-status/forge-reference";
 import { logPrAutoDispatchOutcome } from "../pr-status/pr-auto-dispatch-log";
 import {
@@ -553,8 +558,6 @@ const USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS = 10_000;
  */
 const SCHEDULED_THREAD_PR_REFRESH_SLACK_MS = 5_000;
 const TERMINAL_USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
-const PR_STATUS_TOKEN_BUCKET_CAPACITY = 20;
-const PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE = 20;
 const STARTUP_DIRECTORY_GIT_STATUS_REFRESH_LIMIT =
   DIRECTORY_GIT_STATUS_BACKGROUND_BATCH_SIZE;
 // PR discovery (Layer B): a slow branch-lookup rotation across ALL open threads
@@ -1422,39 +1425,6 @@ type PrLookupRefreshClaim =
       minIntervalMs?: number;
       nextAllowedInMs?: number;
     };
-
-class PrStatusTokenBucket {
-  private tokens = PR_STATUS_TOKEN_BUCKET_CAPACITY;
-  private updatedAt = Date.now();
-
-  get availableTokens(): number { return Math.floor(this.tokens); }
-
-  /** The balance a take at `now` would see, without spending or refilling. */
-  peek(now = Date.now()): number {
-    return Math.floor(this.refilled(now));
-  }
-
-  tryTake(now = Date.now()): boolean {
-    this.tokens = this.refilled(now);
-    this.updatedAt = now;
-
-    if (this.tokens < 1) {
-      return false;
-    }
-
-    this.tokens -= 1;
-    return true;
-  }
-
-  private refilled(now: number): number {
-    const elapsedMs = Math.max(0, now - this.updatedAt);
-    return Math.min(
-      PR_STATUS_TOKEN_BUCKET_CAPACITY,
-      this.tokens +
-        (elapsedMs * PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE) / 60_000,
-    );
-  }
-}
 
 function prLogIds(prs: PrSummary[]): string[] {
   return prs.map((pr) => getPrStatusKey(pr));
