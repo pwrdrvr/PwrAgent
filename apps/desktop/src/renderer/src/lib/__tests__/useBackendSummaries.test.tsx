@@ -60,6 +60,30 @@ describe("useBackendSummaries", () => {
     }
   });
 
+  it("never replaces summaries with an older read that resolves later", async () => {
+    const claude = (usedPercent: number) => [{
+      kind: "claude", label: "Claude", available: true,
+      rateLimits: [{ name: "Weekly limit", limitId: "seven_day", usedPercent }],
+    }] as unknown as Awaited<ReturnType<NonNullable<DesktopApi["listBackends"]>>>["backends"];
+    const pending: Array<(value: Awaited<ReturnType<NonNullable<DesktopApi["listBackends"]>>>) => void> = [];
+    const listBackends = vi.fn<NonNullable<DesktopApi["listBackends"]>>(
+      async () => await new Promise((resolve) => { pending.push(resolve); }),
+    );
+    const { result } = renderHook(() => useBackendSummaries({ listBackends }));
+    await act(async () => { void result.current.refreshRateLimits(); });
+    expect(pending).toHaveLength(2);
+    // The later read was assembled after the earlier one and lands first.
+    await act(async () => { pending[1]({ fetchedAt: 20, backends: claude(50) }); });
+    expect(result.current.backends[0].rateLimits?.[0].usedPercent).toBe(50);
+    await act(async () => { pending[0]({ fetchedAt: 10, backends: claude(49) }); });
+    expect(result.current.backends[0].rateLimits?.[0].usedPercent).toBe(50);
+    // An unchanged newer read keeps the same objects, so nothing re-renders.
+    const shown = result.current.backends;
+    await act(async () => { void result.current.refreshRateLimits(); });
+    await act(async () => { pending[2]({ fetchedAt: 30, backends: claude(50) }); });
+    expect(result.current.backends).toBe(shown);
+  });
+
   it("distinguishes pending discovery from a completed empty result", async () => {
     let resolveBackends!: (value: {
       fetchedAt: number;

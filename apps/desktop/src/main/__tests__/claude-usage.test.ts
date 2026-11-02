@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ModelUsage, SDKControlGetUsageResponse } from "@anthropic-ai/claude-agent-sdk";
 import {
   claudeRateLimits, claudeStreamRateLimits, claudeTurnUsage, liveClaudeRateLimits,
-  mergeClaudeStreamRateLimits, nextClaudeRateLimitReset,
+  mergeClaudeRateLimits, nextClaudeRateLimitReset,
 } from "../claude/claude-usage";
 
 const model: ModelUsage = {
@@ -83,11 +83,11 @@ describe("Claude usage normalization", () => {
     } } as SDKControlGetUsageResponse);
     const stream = claudeStreamRateLimits({ status: "allowed", rateLimitType: "seven_day_overage_included",
       utilization: 0.11, resetsAt: Date.parse("2026-10-27T11:00:00Z") / 1000 });
-    const merged = mergeClaudeStreamRateLimits(snapshot, stream, now);
+    const merged = mergeClaudeRateLimits(snapshot, stream, now);
     expect(merged).toEqual([snapshot[0], { ...snapshot[1], usedPercent: 11 }]);
-    expect(mergeClaudeStreamRateLimits(merged, stream, now)).toEqual(merged);
+    expect(mergeClaudeRateLimits(merged, stream, now)).toEqual(merged);
     const next = { ...stream[0], usedPercent: 1, resetAt: Date.parse("2026-11-03T11:00:00Z") };
-    expect(mergeClaudeStreamRateLimits(merged, [next], now)).toEqual([snapshot[0], next]);
+    expect(mergeClaudeRateLimits(merged, [next], now)).toEqual([snapshot[0], next]);
   });
   it("collapses already cached Fable aliases before displaying limits", () => {
     const named = { name: "Weekly Fable limit", limitId: "model_scoped:Fable", usedPercent: 10.8,
@@ -96,7 +96,7 @@ describe("Claude usage normalization", () => {
       usedPercent: 11 };
     const expected = [{ ...named, limitId: "seven_day_overage_included", usedPercent: 11 }];
     expect(liveClaudeRateLimits([named, streamed], 1_000)).toEqual(expected);
-    expect(mergeClaudeStreamRateLimits([named, streamed], [], 1_000)).toEqual(expected);
+    expect(mergeClaudeRateLimits([named, streamed], [], 1_000)).toEqual(expected);
     expect(liveClaudeRateLimits([named, streamed], 10_000)).toEqual([]);
   });
   it("raises a live window from the stream but takes a reading from the next window", () => {
@@ -104,20 +104,50 @@ describe("Claude usage normalization", () => {
     const now = Date.parse("2026-10-21T14:30:00Z");
     // Known from an earlier stream event, its reset rounded up to the hour.
     const known = { name: "5-hour limit", limitId: "five_hour", usedPercent: 98, resetAt: now + hour / 2 };
-    expect(mergeClaudeStreamRateLimits([known], [{ ...known, usedPercent: 99 }], now))
+    expect(mergeClaudeRateLimits([known], [{ ...known, usedPercent: 99 }], now))
       .toEqual([{ ...known, usedPercent: 99 }]);
-    expect(mergeClaudeStreamRateLimits([known], [{ ...known, usedPercent: 40, resetAt: known.resetAt + hour }], now))
+    expect(mergeClaudeRateLimits([known], [{ ...known, usedPercent: 40, resetAt: known.resetAt + hour }], now))
       .toEqual([known]);
     // The window reset early and a new one began: a far later reset replaces it.
     const next = { ...known, usedPercent: 2, resetAt: now + 5 * hour };
-    expect(mergeClaudeStreamRateLimits([known], [next], now)).toEqual([next]);
+    expect(mergeClaudeRateLimits([known], [next], now)).toEqual([next]);
   });
   it("keeps an unknown reading unknown when merging", () => {
     const known = { name: "Weekly limit", limitId: "seven_day", resetAt: 2_000 };
-    expect(mergeClaudeStreamRateLimits([known], [{ name: "Weekly limit", limitId: "seven_day" }], 1_000))
+    expect(mergeClaudeRateLimits([known], [{ name: "Weekly limit", limitId: "seven_day" }], 1_000))
       .toEqual([known]);
-    expect(mergeClaudeStreamRateLimits([known], [{ ...known, usedPercent: 5 }], 1_000))
+    expect(mergeClaudeRateLimits([known], [{ ...known, usedPercent: 5 }], 1_000))
       .toEqual([{ ...known, usedPercent: 5 }]);
+  });
+  it("only moves each window forward when readings arrive out of order", () => {
+    const hour = 3_600_000;
+    const now = Date.parse("2026-11-01T20:00:00Z");
+    const weeklyReset = Date.parse("2026-11-03T14:00:00Z");
+    const credits = { name: "Cloud session credits", limitId: "iguana_necktie", usedPercent: 33,
+      resetAt: Date.parse("2026-11-05T10:59:00Z"), expires: true };
+    const fable = { name: "Weekly Fable limit", limitId: "seven_day_overage_included", usedPercent: 0,
+      resetAt: weeklyReset, windowMinutes: 10_080 };
+    const shown = [{ name: "Weekly limit", limitId: "seven_day", usedPercent: 50, resetAt: weeklyReset,
+      windowMinutes: 10_080 }, credits, fable];
+    // Another CLI's probe, taken before the stream reading above: one window, lower.
+    const older = [{ name: "Weekly limit", limitId: "seven_day", usedPercent: 49.4, resetAt: weeklyReset - 17 * 60_000,
+      windowMinutes: 10_080 }];
+    const merged = mergeClaudeRateLimits(shown, older, now, { precise: true });
+    expect(merged).toEqual([{ ...older[0], usedPercent: 50 }, credits, fable]);
+    // A reading from the window before the reset is ignored outright.
+    const lastWeek = [{ ...older[0], usedPercent: 97, resetAt: weeklyReset - 7 * 24 * hour }];
+    expect(mergeClaudeRateLimits(merged, lastWeek, now, { precise: true })).toEqual(merged);
+    // A higher reading of the same window moves it forward.
+    const newer = [{ ...older[0], usedPercent: 51.2 }];
+    expect(mergeClaudeRateLimits(merged, newer, now, { precise: true })[0].usedPercent).toBe(51.2);
+  });
+  it("lets a precise reading refine a stream window's reset but not the reverse", () => {
+    const now = Date.parse("2026-11-01T20:00:00Z");
+    const streamed = { name: "5-hour limit", limitId: "five_hour", usedPercent: 12, resetAt: Date.parse("2026-11-01T23:00:00Z") };
+    const probed = { ...streamed, usedPercent: 11.6, resetAt: Date.parse("2026-11-01T22:21:00Z") };
+    expect(mergeClaudeRateLimits([streamed], [probed], now, { precise: true }))
+      .toEqual([{ ...probed, usedPercent: 12 }]);
+    expect(mergeClaudeRateLimits([probed], [streamed], now)).toEqual([{ ...probed, usedPercent: 12 }]);
   });
   it("finds the next reset still ahead", () => {
     expect(nextClaudeRateLimitReset([
