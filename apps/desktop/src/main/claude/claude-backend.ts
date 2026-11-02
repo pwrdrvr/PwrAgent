@@ -904,9 +904,9 @@ export class ClaudeBackend {
       const sdkOptions: Options = {
         ...claudeHarnessOptions(executable, env),
         cwd: session.cwd,
-        ...(!session.ephemeral && (session.sdkSessionId ?? session.forkFromSdkSessionId)
+        ...(resumedSdkSessionId
           ? {
-            resume: session.sdkSessionId ?? session.forkFromSdkSessionId,
+            resume: resumedSdkSessionId,
             ...(session.resumeSessionAt ? { resumeSessionAt: session.resumeSessionAt } : {}),
             // A fork continues the source's conversation in a session of its own.
             ...(session.sdkSessionId ? {} : { forkSession: true }),
