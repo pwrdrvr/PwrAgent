@@ -1,15 +1,13 @@
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { checkTypedSuppressions, typedLintFiles, typedSuppressionLines } from "./lint-typed.mjs";
 import { syntaxLintPaths } from "./lint-syntax.mjs";
-import { tsgolintExecutable } from "./oxlint.mjs";
+import { oxlintBin, tsgolintExecutable } from "./oxlint.mjs";
 import workspaceConfig from "../vitest.workspace.ts";
 
-const require = createRequire(import.meta.url);
 const directories = [];
 const fixtureProbes = new Map();
 
@@ -22,9 +20,7 @@ const NATIVE_TYPED_LINT_SPAWN_TIMEOUT_MS = 30_000;
 const NATIVE_TYPED_LINT_TEST_TIMEOUT_MS = 40_000;
 
 function runOxlint(root, args) {
-  const packageFile = require.resolve("oxlint/package.json");
-  const { bin } = JSON.parse(readFileSync(packageFile, "utf8"));
-  return spawnSync(process.execPath, [resolve(dirname(packageFile), bin.oxlint), ...args], {
+  return spawnSync(process.execPath, [oxlintBin(), ...args], {
     cwd: root,
     encoding: "utf8",
     // Outside the repository oxlint finds tsgolint only through a
