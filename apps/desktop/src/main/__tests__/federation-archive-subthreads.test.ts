@@ -478,6 +478,15 @@ describe("Federation nested archive placement", () => {
       note: "Archive promotion repeated once the viewer's pin snapshots match the live peer view: zero commits; a pin is written only when its peer's summary changed. 0 MB/day." });
   });
 
+  it("falls back to saved snapshots when the live pin view cannot be read", async () => {
+    vi.spyOn(runtime, "remoteThreadSummaries").mockReturnValue({
+      resolvePinnedThreads: async () => { throw new Error("pin over budget"); },
+    } as never);
+    await runtime.ungroupRemoteChildrenOfArchivedThread({ backend: "codex", parentThreadId: "middle" });
+    expect(promotedIds()).toEqual(new Set(["child-b", "child-a"]));
+    expect((await summary("root")).subthreadOrder).toEqual(["before", "child-b", "child-a", "after"]);
+  });
+
   it.each(["membership", "order"])("rejects concurrent source %s changes before committing any promotion", async (change) => {
     const apply = remoteUpdate.getMockImplementation()!;
     let changed = false;

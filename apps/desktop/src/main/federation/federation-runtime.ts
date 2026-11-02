@@ -3557,7 +3557,16 @@ export class DesktopFederationRuntime {
     // changed and drops pins it proved archived, without waiting on a peer.
     // The full pins read back then hold that live-or-fallback view, and they
     // are also what this store's own promotion boundary validates against.
-    await loadViewerNavigationPins(store, this.remoteThreadSummaries());
+    // Every local archive runs this, so a failed refresh (such as a pin over
+    // the navigation row budget) falls back to the saved snapshots instead of
+    // blocking the archive.
+    try {
+      await loadViewerNavigationPins(store, this.remoteThreadSummaries());
+    } catch (error) {
+      log.warn("archive promotion could not refresh pins from the live peer view", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     const pins = await store.listRemoteThreadPins();
     const remoteChildren = pins.filter((pin) => pin.summary && isRemoteFederationTarget(pin.ref.target)
       && isPeerChildOfLocalThread({ ownerInstanceId: pin.ref.target.instanceId, summary: pin.summary,
