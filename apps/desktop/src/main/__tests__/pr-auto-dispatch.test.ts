@@ -1179,16 +1179,17 @@ describe("PrAutoDispatchCoordinator", () => {
   it("gives a merge conflict its own attempts after CI repairs run out", async () => {
     const harness = createHarness();
     const prKey = buildPullRequestStatusKey(pr());
-    const heads = ["a", "b"].map((value) => value.repeat(40));
+    const heads = ["a", "b", "c"].map((value) => value.repeat(40));
 
-    for (const head of heads) {
+    for (const head of heads.slice(0, 2)) {
       const failing = pr({ headSha: head });
       harness.setCurrentPr(failing);
       await observe(harness.coordinator, failing);
       await runCountdown();
     }
-    const failingB = pr({ headSha: heads[1] });
-    expect((await observe(harness.coordinator, failingB))[0]?.status).toBe(
+    const failingC = pr({ headSha: heads[2] });
+    harness.setCurrentPr(failingC);
+    expect((await observe(harness.coordinator, failingC))[0]?.status).toBe(
       "attempt-limit",
     );
     expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(
@@ -1196,7 +1197,7 @@ describe("PrAutoDispatchCoordinator", () => {
     );
 
     // Main moves while CI is still red on the exhausted head.
-    const conflicting = pr({ headSha: heads[1], mergeState: "conflicting" });
+    const conflicting = pr({ headSha: heads[2], mergeState: "conflicting" });
     harness.setCurrentPr(conflicting);
     expect((await observe(harness.coordinator, conflicting))[0]?.status).toBe(
       "scheduled",
@@ -1212,7 +1213,7 @@ describe("PrAutoDispatchCoordinator", () => {
     })).toBe(1);
 
     // The conflict joined the incident, so seeing it again spends nothing new.
-    const conflictingAgain = pr({ headSha: heads[1], mergeState: "conflicting" });
+    const conflictingAgain = pr({ headSha: heads[2], mergeState: "conflicting" });
     expect(
       (await observe(harness.coordinator, conflictingAgain))[0]?.status,
     ).not.toBe("scheduled");
