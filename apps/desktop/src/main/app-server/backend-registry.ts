@@ -18377,9 +18377,12 @@ export class DesktopBackendRegistry {
     if (backend === "claude") {
       const storedReplay = await this.claudeBackend.readThread(request.threadId);
       // Every review imports, not only the requested page's, so a review
-      // older than the newest page still reaches To-dos.
-      this.threadTodoHandler?.importReviews?.({ backend, threadId: request.threadId },
-        storedReplay.entries.filter((entry): entry is AppServerThreadReviewEntry => entry.type === "review"));
+      // older than the newest page still reaches To-dos. An older-page read
+      // has nothing to add to the latest read's import.
+      if (request.before === undefined) {
+        this.threadTodoHandler?.importReviews?.({ backend, threadId: request.threadId },
+          storedReplay.entries.filter((entry): entry is AppServerThreadReviewEntry => entry.type === "review"));
+      }
       // PwrAgent's Claude transcript is read whole, so cut the requested page
       // here, as for ACP. Without a page the renderer has no older history to
       // ask for when its copy of the thread is missing some.
@@ -48641,7 +48644,8 @@ export class DesktopBackendRegistry {
     this.assertNotBootstrap("readThreadForContentSearch");
     const { backend, threadId, limit } = request;
     const replay = backend === "claude"
-      ? pageNormalizedReplay(await this.claudeBackend.readThread(threadId), request)
+      // The whole transcript is already in memory; search all of it.
+      ? await this.claudeBackend.readThread(threadId)
       : isAcpBackendId(backend)
         ? pageNormalizedReplay(await this.acpBackend.readReplay(backend, threadId), request)
         : await this.withCodexThreadClient(threadId,
