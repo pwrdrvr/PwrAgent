@@ -2501,6 +2501,7 @@ describe("app server ipc", () => {
     // A lock that leaves the candidacy as it was, such as a note edit, does
     // not run the election again.
     scheduleThreadPrAutoDispatch.mockClear();
+    syncThreadPrAutoDispatchCandidates.mockResolvedValueOnce([]);
     await handler.lockChanged({ backend: "codex", threadId: "parent", locked: true });
     expect(scheduleThreadPrAutoDispatch).not.toHaveBeenCalled();
   });
