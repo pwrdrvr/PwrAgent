@@ -95,15 +95,15 @@ fails under the same deadline and is cleaned up by the owning test.
 Chromium's native `BrowserProcessIOThread::ProcessHostCleanUp` otherwise waits
 for the network service to flush cookies and cache after JavaScript quit has
 finished. That service can retain the launcher's pipes while native storage
-work is still pending. The fixture must await that work while the sessions
-are still reachable over RPC; storage isolation alone does not drain it.
+work is still pending. The fixture must await that work while the session
+contexts remain alive; storage isolation alone does not drain it.
 
 The cache operation also waits for Chromium's network-history completion.
 Unlike `clearCache()`, this reaches `HttpServerProperties::Clear` and the
 `Network/Network Persistent State` preference write. A matching Electron native
 snapshot retained that write and its initial preference read as queued
 `BLOCK_SHUTDOWN` work after the network service entered shutdown. Awaiting the
-cache completion keeps its RPC owner alive until the write finishes. Cache
+cache completion keeps its main-process owner alive until the write finishes. Cache
 disposal applies only to the Playwright-owned fixture sessions. A failed or
 stalled completion still fails teardown under the existing close deadline.
 
