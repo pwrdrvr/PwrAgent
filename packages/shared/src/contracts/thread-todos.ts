@@ -265,6 +265,27 @@ export const THREAD_TODO_MAX_ITEMS = 20;
  */
 export const THREAD_TODO_MAX_PREREQUISITES = 5;
 export const THREAD_TODO_ITEM_TEXT_MAX_LENGTH = 200;
+export const THREAD_TODO_ORIGIN_ID_MAX_LENGTH = 200;
+
+/**
+ * Reads the to-do marker on a message origin
+ * (`AppServerThreadMessageOrigin.threadTodo`). A peer asserts it, so every
+ * reader runs it through here: a non-empty id within the cap, and an optional
+ * trimmed title cut to the card title cap. Anything else is no marker.
+ */
+export function threadTodoMessageOriginFromUnknown(
+  value: unknown,
+): { id: string; title?: string } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.id !== "string") return undefined;
+  const id = record.id.trim();
+  if (!id || id.length > THREAD_TODO_ORIGIN_ID_MAX_LENGTH) return undefined;
+  const title = typeof record.title === "string"
+    ? record.title.trim().slice(0, THREAD_TODO_TITLE_MAX_LENGTH).trim()
+    : "";
+  return { id, ...(title ? { title } : {}) };
+}
 
 /**
  * Checks an agent's or the operator's step texts: an array of non-empty

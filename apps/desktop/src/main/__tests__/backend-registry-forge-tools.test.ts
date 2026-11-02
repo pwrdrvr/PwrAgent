@@ -176,7 +176,11 @@ describe("backend forge tool dispatch", () => {
     const result = await pending;
     expect(result.success).toBe(true);
     expect(text(result)).toMatch(/"attachedToThread":\s*true/);
-    expect(attach).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", url: "https://github.com/fixture/project/pull/9" });
+    // The forge returned this URL, so the attach does not ask it again.
+    expect(attach).toHaveBeenCalledWith(
+      { backend: "codex", threadId: "thread-1", url: "https://github.com/fixture/project/pull/9" },
+      { forgeUrl: true },
+    );
   });
 
   it("shows the whole body and every inline comment on the approval card", async () => {

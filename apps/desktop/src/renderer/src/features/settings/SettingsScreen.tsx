@@ -2,6 +2,7 @@ import { FORGE_KINDS, FORGE_PRODUCTS, type ForgeKind } from "@pwragent/shared";
 import { FORGE_SETTINGS } from "./forge-settings";
 import type {
   GhStatus,
+  AcpAgentSettingsEntry,
   AppServerBackendKind,
   BackendSummary,
   DesktopHotCpuProfileStartDelayMs,
@@ -889,6 +890,7 @@ export function SettingsScreen(props: {
           ) : snapshot ? (
             unsaved.provide(
               <SettingsSectionBody
+                acpAgents={acpCatalog.entries}
                 appearanceController={props.appearanceController}
                 cachedBackends={props.cachedBackends}
                 desktopApi={props.desktopApi}
@@ -919,6 +921,8 @@ export function SettingsScreen(props: {
 }
 
 function SettingsSectionBody(props: {
+  /** The ACP agent catalog the nav already read. */
+  acpAgents?: AcpAgentSettingsEntry[];
   appearanceController?: AppearanceController;
   cachedBackends?: BackendSummary[];
   desktopApi?: DesktopApi;
@@ -1452,6 +1456,8 @@ function SettingsSectionBody(props: {
   if (props.section === "git") {
     return (
       <GitSettings
+        acpAgents={props.acpAgents}
+        backends={props.cachedBackends}
         desktopApi={props.desktopApi}
         focusSectionId={props.sub}
         saving={props.settings.saving}
@@ -1505,6 +1511,10 @@ function SettingsSectionBody(props: {
             git: { agentTools: { access: { [group]: access } } },
           });
         }}
+        onAgentToolRulesChange={(rules) =>
+          props.settings.writeConfig({
+            git: { agentTools: { rules } },
+          })}
         onRefresh={props.settings.refresh}
         onGhStatusChange={(status) => props.onForgeStatusChange("github", status)}
         onGlabStatusChange={(status) => props.onForgeStatusChange("gitlab", status)}

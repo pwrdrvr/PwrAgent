@@ -4507,6 +4507,70 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("names this machine as the parent's owner when a peer's thread moves under a local thread", async () => {
+    const remoteTarget = { scope: "remote" as const, instanceId: "windows-peer" };
+    const parent: NavigationThreadSummary = {
+      id: "thread-root",
+      title: "Root",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const peerThread: NavigationThreadSummary = {
+      ...parent,
+      id: "thread-peer",
+      title: "Windows E2E",
+      parentThreadId: "thread-other",
+      parentThreadBackend: "claude",
+      parentThreadInstanceId: "viewer",
+      federation: {
+        ref: { backend: "codex", target: remoteTarget, threadId: "thread-peer" },
+        instanceLabel: "Win PC / dev",
+        capabilities: ["thread_grouping"],
+      },
+    };
+    const snapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [parent, peerThread],
+      directories: [],
+      launchpadDefaults: { backend: "codex", executionMode: "default" },
+    };
+    const setThreadParent = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-peer",
+      parentThreadId: "thread-root",
+      parentThreadBackend: "codex" as const,
+      parentThreadInstanceId: "viewer",
+    }));
+    const desktopApi: DesktopApi = {
+      readFederationHealth: async () => ({ health: { enabled: true, role: "client", status: "connected", instanceId: "viewer", peers: [] } }),
+      readPopulation: vi.fn(async () => snapshot),
+      onAgentEvent: () => () => undefined,
+      setThreadParent,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.threads).toHaveLength(2));
+
+    let saved: boolean | undefined;
+    await act(async () => {
+      saved = await result.current.setThreadParent(peerThread, "thread-root", "codex", true);
+    });
+
+    expect(saved).toBe(true);
+    expect(setThreadParent).toHaveBeenCalledWith({
+      backend: "codex",
+      federationTarget: remoteTarget,
+      threadId: "thread-peer",
+      parentThreadId: "thread-root",
+      parentThreadBackend: "codex",
+      parentThreadInstanceId: "viewer",
+    });
+  });
+
   describe("sidebar grouping failures", () => {
     // These actions start from a sidebar row or its context menu, often with
     // the launchpad or a different thread open. Their failures must reach the

@@ -454,6 +454,8 @@ type SidebarProps = {
     thread: NavigationThreadSummary,
     parentThreadId?: string,
     parentThreadBackend?: NavigationThreadSummary["source"],
+    /** The parent is this machine's own thread, and the thread may be a peer's. */
+    parentOnThisMachine?: boolean,
   ) => Promise<boolean | void>;
   onUnlinkThreads?: (
     threads: NavigationThreadSummary[],
@@ -489,6 +491,13 @@ type SidebarProps = {
    * row visible.
    */
   onRemoveDirectory?: (directory: NavigationDirectorySummary) => void | Promise<void>;
+  /**
+   * Open Settings → Git → Agent forge tools with this repository's project
+   * rules showing. The repository is `host/owner/repo` from the project's
+   * origin remote. Offered in the directory context menu only for a project
+   * with an origin.
+   */
+  onOpenForgePermissions?: (repository: string) => void;
   /**
    * Called by thread rows when the user hovers a non-merged PR chip
    * (or the row itself, depending on chip strategy). Used to prefetch
@@ -1067,7 +1076,7 @@ export function Sidebar(props: SidebarProps) {
             ? props.onSetSubthreadsCollapsed
             : undefined;
           void setCollapsed?.(parent, false);
-          void props.onSetThreadParent!(thread, parent.id, parent.source).then((saved) => {
+          void props.onSetThreadParent!(thread, parent.id, parent.source, !parent.federation).then((saved) => {
             if (saved === false) void setCollapsed?.(parent, true);
           });
         }
@@ -2923,6 +2932,11 @@ export function Sidebar(props: SidebarProps) {
     (directoryMenuPinnedIndex < pinnedDirectoryKeysInOrder.length - 1 || !completeDirectoryIndex);
   const directoryMenuHasPinActions =
     directoryMenuCanPin || directoryMenuShowMoveItems;
+  const directoryMenuForgeRepository =
+    !directoryContextMenuIsBulk && props.onOpenForgePermissions
+      ? directoryContextMenu?.directory.repositoryKey
+        ?? directoryContextMenu?.directory.gitStatus?.originRepository
+      : undefined;
 
   return (
     <aside
@@ -4158,6 +4172,25 @@ export function Sidebar(props: SidebarProps) {
                 </>
               ) : null}
             </div>
+          ) : null}
+          {directoryMenuForgeRepository ? (
+            <>
+              {directoryMenuCanMarkRead || directoryMenuHasPinActions ? (
+                <div className="thread-context-menu__separator" role="separator" />
+              ) : null}
+              <div className="thread-context-menu__section">
+                <button
+                  role="menuitem"
+                  type="button"
+                  onClick={() => {
+                    setDirectoryContextMenu(undefined);
+                    props.onOpenForgePermissions?.(directoryMenuForgeRepository);
+                  }}
+                >
+                  Forge Permissions…
+                </button>
+              </div>
+            </>
           ) : null}
           {directoryMenuCanArchive ? (
             <div className="thread-context-menu__section">

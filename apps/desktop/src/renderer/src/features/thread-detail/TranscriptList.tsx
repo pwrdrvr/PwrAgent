@@ -32,6 +32,7 @@ import type {
   ThreadTurnFailure,
   ThreadSubAgentSummary,
   MarkdownFileViewerContext,
+  ForgeApprovalRememberOptionId,
 } from "@pwragent/shared";
 import {
   anchorTurnUsageEntries,
@@ -189,6 +190,7 @@ type TranscriptListProps = {
     state: PendingMcpInteractionState,
     action: "accept" | "decline" | "cancel",
     persist?: McpApprovalPersistence,
+    remember?: ForgeApprovalRememberOptionId,
   ) => Promise<void>;
   onPendingUserInputChange?: (state: PendingQuestionnaireState) => void;
   onSubmitPendingUserInput?: (state: PendingQuestionnaireState) => Promise<void>;
@@ -1767,8 +1769,8 @@ export function TranscriptList(props: TranscriptListProps) {
               onChange={(state) => {
                 props.onPendingMcpInteractionChange?.(state);
               }}
-              onSubmit={async (state, action, persist) => {
-                await props.onSubmitPendingMcpInteraction?.(state, action, persist);
+              onSubmit={async (state, action, persist, remember) => {
+                await props.onSubmitPendingMcpInteraction?.(state, action, persist, remember);
               }}
             />
           ) : null}

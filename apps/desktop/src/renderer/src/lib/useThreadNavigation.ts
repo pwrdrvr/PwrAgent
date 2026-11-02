@@ -3248,6 +3248,8 @@ export function useThreadNavigation(
     thread: NavigationThreadSummary,
     parentThreadId?: string,
     parentThreadBackend?: AppServerBackendKind,
+    /** The parent is this machine's own thread, and `thread` may be a peer's. */
+    parentOnThisMachine?: boolean,
   ) => Promise<boolean>;
   unlinkThreads: (threads: NavigationThreadSummary[]) => Promise<void>;
   updateSubthreadOrder: (
@@ -9140,12 +9142,30 @@ export function useThreadNavigation(
       thread: NavigationThreadSummary,
       parentThreadId?: string,
       parentThreadBackend?: AppServerBackendKind,
+      parentOnThisMachine?: boolean,
     ): Promise<boolean> => {
       if (!setThreadParentRequest) {
         return false;
       }
       const federationTarget = thread.federation?.ref.target
         ?? readRendererFederationTarget();
+
+      let parentThreadInstanceId: string | undefined;
+      if (
+        parentThreadId !== undefined && parentOnThisMachine
+        && federationTarget?.scope === "remote" && !readRendererFederationTarget()
+      ) {
+        // A peer stores its thread's link, so it names this machine as the
+        // parent's owner, as a sub-thread started here on that peer does.
+        try {
+          parentThreadInstanceId = desktopApi?.readFederationHealth
+            ? (await desktopApi.readFederationHealth()).health.instanceId : undefined;
+          if (!parentThreadInstanceId) throw new Error("This machine's federation identity is unavailable.");
+        } catch (error) {
+          publishThreadActionError("set-thread-parent", error);
+          return false;
+        }
+      }
 
       setState((current) => ({
         ...current,
@@ -9155,6 +9175,7 @@ export function useThreadNavigation(
           threadId: thread.id,
           parentThreadId,
           parentThreadBackend,
+          parentThreadInstanceId,
         }),
       }));
 
@@ -9165,6 +9186,7 @@ export function useThreadNavigation(
           threadId: thread.id,
           parentThreadId,
           parentThreadBackend,
+          ...(parentThreadInstanceId ? { parentThreadInstanceId } : {}),
         });
         setState((current) => ({
           ...current,
@@ -9189,7 +9211,7 @@ export function useThreadNavigation(
         return false;
       }
     },
-    [refresh, publishThreadActionError, setThreadParentRequest],
+    [desktopApi, refresh, publishThreadActionError, setThreadParentRequest],
   );
 
   const unlinkThreads = useCallback(

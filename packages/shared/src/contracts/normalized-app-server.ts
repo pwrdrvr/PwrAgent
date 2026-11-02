@@ -712,6 +712,11 @@ export type AppServerThreadMessageOrigin = {
     threadId: ThreadIdentifier;
     title?: string;
   };
+  /**
+   * The operator ran a to-do card's action, and the card's agent-written prompt
+   * is this message. Display and lookup text only: peer-asserted, never a link.
+   */
+  threadTodo?: { id: string; title?: string };
   messaging?: {
     platform: MessagingChannelKind;
     sourceUrl?: string;

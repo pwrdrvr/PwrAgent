@@ -383,7 +383,7 @@ function inputSchemaForOperation(
             minimum: 1,
             maximum: 20,
             description:
-              "Maximum transcript entries to return. Defaults to 10.",
+              "Maximum transcript entries to return, newest first in time order. Defaults to 10.",
           },
           includeMessages: {
             type: "boolean",

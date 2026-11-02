@@ -33,8 +33,9 @@ import { backUpRewindFiles, recordRewoundFiles, restoreRewindFiles } from "./cla
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 import { ClaudeTaskTracker, claudeTaskRow, type ClaudeTaskSettlement } from "./claude-tasks";
 import {
-  CLAUDE_TODO_TOOL, claudeFileDiff, claudeShellCommand, claudeTodoSteps, claudeToolCallArguments, claudeToolCallDetail,
-  claudeToolDetail, claudeToolResultContent, claudeTurnDiff,
+  CLAUDE_ARTIFACT_TOOLS, CLAUDE_TODO_TOOL, claudeArtifactAction, claudeArtifactResult, claudeArtifactShowsOutput,
+  claudeFileDiff, claudeShellCommand, claudeTodoSteps, claudeToolCallArguments, claudeToolCallDetail, claudeToolDetail,
+  claudeToolResultContent, claudeTurnDiff,
 } from "./claude-tool-activity";
 import { normalizeClaudeTitle, requestClaudeTitle, type ClaudeTitleQuery } from "./claude-titles";
 import {
@@ -217,6 +218,8 @@ type RunningTurn = {
   hasCompletedToolActivity: boolean;
   /** Each successful file edit's diff, in order: the turn's live diff. */
   fileDiffs: string[];
+  /** Each artifact tool call's action, by tool-use id: its result carries the page's link. */
+  artifactCalls: Map<string, string>;
   ending?: boolean;
   titlePrompt?: string;
   /** Owned by the turn, but never awaited by the streaming message pump. */
@@ -375,7 +378,8 @@ function claudeTurn(session?: ClaudeSession, followUp = false): RunningTurn {
   return {
     ended: claudeDeferred(),
     turnId: randomUUID(), startedAt: Date.now(), entries: new Map(), pendingSteers: new Set(),
-    completedMessageText: new Map(), pendingReports: new Map(), hasCompletedToolActivity: false, fileDiffs: [], lastResultSeq: 0,
+    completedMessageText: new Map(), pendingReports: new Map(), hasCompletedToolActivity: false, fileDiffs: [],
+    artifactCalls: new Map(), lastResultSeq: 0,
     usageBaseline: session?.modelUsage, needsUsageBaseline: Boolean(session?.sdkSessionId) && !session?.modelUsage,
     ...(followUp ? { followUp, started: true } : {}),
   };
@@ -2032,6 +2036,7 @@ export class ClaudeBackend {
           createdAt: Date.now(), turn: { id: turnId },
         };
         turn.entries.set(block.id, activity);
+        if (CLAUDE_ARTIFACT_TOOLS.has(block.name)) turn.artifactCalls.set(block.id, claudeArtifactAction(block.name, input));
         // A task this call starts can outlive the turn.
         live.toolRows.set(block.id, { entry: activity, turnId });
         await this.store.append(threadId, [activity]);
@@ -2081,9 +2086,19 @@ export class ClaudeBackend {
         const { text: output, images } = claudeToolResultContent(block.content, entry.summary);
         const command = claudeShellCommand(entry.details[0]);
         const toolCall = entry.details[0].command?.source === "tool" ? entry.details[0] : undefined;
-        // A successful edit shows its diff instead of the tool's acknowledgement.
-        const edit = entry.details[0].kind === "write" && !block.is_error
+        // A successful publish links to its page, and a successful edit shows
+        // its diff, instead of the tool's acknowledgement.
+        const artifactAction = turn.artifactCalls.get(block.tool_use_id);
+        const artifact = artifactAction !== undefined && !block.is_error
+          ? claudeArtifactResult(entry.details[0], artifactAction, message.tool_use_result) : undefined;
+        // An artifact result written for the model stays out of the row.
+        const hideOutput = artifactAction !== undefined && !block.is_error
+          && !claudeArtifactShowsOutput(artifactAction, message.tool_use_result);
+        const edit = entry.details[0].kind === "write" && !block.is_error && artifactAction === undefined
           ? claudeFileDiff(message.tool_use_result, live.session.cwd) : undefined;
+        if (artifact) entry.summary = artifact.label;
+        // The invocation was recorded while the call ran; it takes the call's final status.
+        entry.details = [{ ...artifact ?? entry.details[0], status: entry.status }, ...entry.details.slice(1)];
         if (command !== undefined) {
           const details = claudeCommandActivity({ id: entry.id, command, status: entry.status, output }).details;
           entry.details = images.length ? [{ ...details[0], images }, ...details.slice(1)] : details;
@@ -2099,7 +2114,7 @@ export class ClaudeBackend {
             turn.fileDiffs.push(edit.diff);
             await this.emit({ method: "turn/diff/updated", params: { threadId, turnId, diff: claudeTurnDiff(turn.fileDiffs) } });
           }
-        } else {
+        } else if (!hideOutput) {
           // Keep the invocation when updating generic tools, too.
           const outputId = `${entry.id}:output`;
           entry.details = [...entry.details.filter((detail) => detail.id !== outputId), {

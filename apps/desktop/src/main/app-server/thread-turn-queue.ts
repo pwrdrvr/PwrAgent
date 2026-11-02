@@ -309,6 +309,10 @@ export class ThreadTurnQueue {
       const holdReason = this.heldQueues.get(key);
       // A title named the batch before this message joined it.
       const { title: _staleTitle, ...base } = current ?? input;
+      // A to-do marker labels one message. A batch keeps each message's own
+      // origin in agentMessages, so the batch origin must not claim it.
+      const { threadTodo: _threadTodo, ...batchOrigin }: Partial<AppServerThreadMessageOrigin> =
+        input.messageOrigin ?? {};
       const entry: ThreadTurnQueueEntry = {
         ...base,
         id: current?.id ?? input.id ?? `thread-turn:${randomUUID()}`,
@@ -320,7 +324,7 @@ export class ThreadTurnQueue {
           ...(message.origin ? [message.origin] : []),
         ],
         input: groupedAgentInput(messages),
-        messageOrigin: { ...input.messageOrigin, kind: "agent",
+        messageOrigin: { ...(messages.length > 1 ? batchOrigin : input.messageOrigin), kind: "agent",
           ...mergeCausalMessagingContext(current ? [current.messageOrigin, message.origin] : [message.origin]) },
         ...(holdReason ? { manualReleaseRequired: true, holdReason } : {}),
       };

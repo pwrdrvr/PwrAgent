@@ -537,6 +537,41 @@ function normalizeDetachedPrKeys(keys: string[] | undefined): string[] {
   ].sort((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Detached PR status keys under the forge's current repository names.
+ *
+ * A renamed repository showed one PR as two chips, one per name, and
+ * detaching either chip removed a duplicate, not the PR. So a detached key is
+ * released while the thread still holds a row for the same PR under another
+ * stored key: that is the copy the operator kept, or one attached again under
+ * the new name. Every other key moves to the new name, which keeps a PR
+ * detached once the forge reports it under that name.
+ */
+export function canonicalizeDetachedPrKeys(params: {
+  detachedPrKeys: string[] | undefined;
+  attachedPrKeys: Iterable<string>;
+  canonicalizePrKey: (key: string) => string;
+}): { detachedPrKeys: string[]; releasedPrKeys: Set<string> } {
+  const attachedByCanonical = new Map<string, Set<string>>();
+  for (const key of normalizeDetachedPrKeys([...params.attachedPrKeys])) {
+    const canonical = params.canonicalizePrKey(key);
+    attachedByCanonical.set(canonical, (attachedByCanonical.get(canonical) ?? new Set()).add(key));
+  }
+  const releasedPrKeys = new Set<string>();
+  const detachedPrKeys = normalizeDetachedPrKeys(
+    normalizeDetachedPrKeys(params.detachedPrKeys).flatMap((key) => {
+      const canonical = params.canonicalizePrKey(key);
+      const attached = attachedByCanonical.get(canonical);
+      if (attached && [...attached].some((attachedKey) => attachedKey !== key)) {
+        releasedPrKeys.add(key);
+        return [];
+      }
+      return [canonical];
+    }),
+  );
+  return { detachedPrKeys, releasedPrKeys };
+}
+
 function filterDetachedPrs(prs: PrSummary[], detachedPrKeys: string[]): PrSummary[] {
   if (detachedPrKeys.length === 0) {
     return prs;
@@ -5556,9 +5591,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     /**
      * The owner's live children. Each carries its own provider: a child can
      * run on another provider than its parent. Absent `backend` means the
-     * parent's.
+     * parent's. `ownerInstanceId` marks a peer's thread, whose link lives on
+     * that peer: the caller listed it from this machine's pin, so it has no
+     * overlay row here to check.
      */
-    children?: { backend?: ThreadOverlayState["backend"]; id: string; createdAt?: number }[];
+    children?: {
+      backend?: ThreadOverlayState["backend"];
+      id: string;
+      createdAt?: number;
+      ownerInstanceId?: string;
+    }[];
   }): Promise<string[]> {
     return this.stateDb.raw.transaction(() => {
       const parentKey = buildThreadIdentityKey(params.backend, params.parentThreadId);
@@ -5566,10 +5608,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       // per provider only, so an id two providers share is refused rather
       // than guessed. An unlisted id (a just-created child the owner's index
       // has not read yet) falls back to the parent's provider.
+      const ownersOf = (id: string) => params.children?.filter((entry) => entry.id === id) ?? [];
       const childKey = (id: string, listed: boolean): string | undefined => {
-        const owners = params.children?.filter((entry) => entry.id === id) ?? [];
+        const owners = ownersOf(id);
         if (owners.length > 1 || (listed && owners.length === 0)) return undefined;
         return buildThreadIdentityKey(owners[0]?.backend ?? params.backend, id);
+      };
+      const isPeerChild = (id: string): boolean => {
+        const owners = ownersOf(id);
+        return owners.length === 1 && Boolean(owners[0]!.ownerInstanceId);
       };
       const parent = this.getThread(parentKey) ?? {
         backend: params.backend,
@@ -5586,6 +5633,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           throw new Error("A relative child move requires distinct live children and an owner order.");
         }
         for (const id of [threadId, anchorThreadId]) {
+          if (isPeerChild(id)) continue;
           const key = childKey(id, true);
           const child = key ? this.getThread(key) : undefined;
           if (!child || child.archiveTombstonedAt !== undefined || child.parentThreadId !== params.parentThreadId
@@ -5607,7 +5655,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         }
         const { threadId, sourceThreadId } = params.insertAfter;
         for (const id of [threadId, sourceThreadId]) {
-          if (id === params.parentThreadId && id === sourceThreadId) continue;
+          if ((id === params.parentThreadId && id === sourceThreadId) || isPeerChild(id)) continue;
           const key = childKey(id, false);
           // A just-created child is often missing from the owner's listing,
           // and it may run on another provider than its parent. Its own link
@@ -6075,6 +6123,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     prs: PrSummary[];
     fetchedAt?: number;
     refreshKey?: string;
+    /**
+     * Maps a stored status key to the key its repository has now. A forge
+     * that renamed a repository answers its PRs under the new name, so a
+     * detachment recorded under the old one must keep filtering them.
+     */
+    canonicalizePrKey?: (key: string) => string;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const stored = this.getThread(threadKey);
@@ -6094,14 +6148,21 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     ) {
       return observed;
     }
-    const detachedPrKeys = normalizeDetachedPrKeys(current.detachedPrKeys);
-    const detachedPrs = mergePrSummariesByStatusKey(
-      current.detachedPrs,
-      collectDetachedPrs(params.prs, detachedPrKeys),
-    );
+    const canonicalizePrKey = params.canonicalizePrKey ?? ((key: string) => key);
     const explicitKeys = new Set((current.prs ?? [])
       .filter((pr) => pr.explicitlyAttached)
-      .map(buildPullRequestStatusKey));
+      .map((pr) => canonicalizePrKey(buildPullRequestStatusKey(pr))));
+    const { detachedPrKeys, releasedPrKeys } = canonicalizeDetachedPrKeys({
+      detachedPrKeys: current.detachedPrKeys,
+      attachedPrKeys: (current.prs ?? []).map(buildPullRequestStatusKey),
+      canonicalizePrKey,
+    });
+    const detachedPrs = mergePrSummariesByStatusKey(
+      // A released duplicate would come back as its own chip after a restart,
+      // before the forge names its repository again.
+      current.detachedPrs?.filter((pr) => !releasedPrKeys.has(buildPullRequestStatusKey(pr))),
+      collectDetachedPrs(params.prs, detachedPrKeys),
+    );
     const nextState: ThreadOverlayState = {
       ...current,
       detachedPrKeys,

@@ -863,6 +863,63 @@ describe("DesktopFederationRuntime", () => {
     }
   });
 
+  it("mounts a viewer's parent when the viewer moves one of this instance's threads under it", async () => {
+    await disposeDesktopFederationRuntime();
+    const stateDb = openInMemoryStateDb();
+    const overlayStore = new SqliteOverlayStore(stateDb);
+    setDesktopOverlayStoreForTests(overlayStore);
+    const runtime = getDesktopFederationRuntime();
+    const parentRow = {
+      ref: { backend: "codex" as const, threadId: "root", ownerInstanceId: "viewer" },
+      rowRevision: "root-revision",
+      ordinaryChildCount: 1,
+      nativeSubAgentGroupPresent: false,
+      queueCount: 0,
+      queueState: "ready" as const,
+      source: "codex" as const,
+      id: "root",
+      title: "Viewer parent",
+      titleSource: "explicit" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    vi.spyOn(runtime, "health").mockResolvedValue({ instanceId: "windows-peer" } as never);
+    const parentQuery = vi.spyOn(runtime, "remoteNavigationQueryPage").mockResolvedValue({
+      protocol: 2, queryKey: "parent-exact", generation: "g", ownerEpoch: "owner", countsRevision: "r",
+      counts: { total: 1, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: true,
+      entries: [{ row: parentRow, orderKey: "0", placement: { kind: "root" } }],
+    });
+    const publish = vi.spyOn(getDesktopBackendRegistry(), "publishLocalEvent").mockResolvedValue(undefined);
+    try {
+      const response = await runtime.localBackend().setThreadParent({
+        backend: "codex",
+        threadId: "windows-e2e",
+        parentThreadId: "root",
+        parentThreadBackend: "codex",
+        parentThreadInstanceId: "viewer",
+      });
+
+      expect(response).toMatchObject({ parentThreadId: "root", parentThreadInstanceId: "viewer" });
+      expect(parentQuery).toHaveBeenCalledWith({ scope: "remote", instanceId: "viewer" }, expect.objectContaining({
+        query: { kind: "exact", identities: [{ backend: "codex", threadId: "root", ownerInstanceId: "viewer" }],
+          includeAncestry: false },
+      }), expect.anything());
+      expect(await overlayStore.listRemoteThreadPins()).toEqual([expect.objectContaining({
+        ref: { backend: "codex", target: { scope: "remote", instanceId: "viewer" }, threadId: "root" },
+        pinnedVia: "companion",
+      })]);
+      expect(publish).toHaveBeenCalledWith(expect.objectContaining({
+        notification: expect.objectContaining({ method: "thread/parent/set" }),
+      }));
+    } finally {
+      parentQuery.mockRestore();
+      publish.mockRestore();
+      resetDesktopOverlayStoreForTests();
+      stateDb.close();
+      await disposeDesktopFederationRuntime();
+    }
+  });
+
   it.each(["complete", "checking"] as const)("mounts a remote parent when accepting a cross-instance child with %s coverage", async (coverageState) => {
     await disposeDesktopFederationRuntime();
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";

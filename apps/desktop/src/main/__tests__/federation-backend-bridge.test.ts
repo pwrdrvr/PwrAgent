@@ -24,6 +24,7 @@ import {
   QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE,
   registerFederationBackendHandlers,
   additionalFederationBackendCapabilities,
+  authenticateMessageOrigin,
   type FederationBackendOperations,
 } from "../federation/federation-backend-bridge";
 import { FederationRouter } from "../federation/federation-router";
@@ -5242,6 +5243,56 @@ describe("federation workspace recovery methods", () => {
     });
 
     expect(JSON.stringify(reply)).toContain("method_not_found");
+  });
+});
+
+describe("federated to-do provenance", () => {
+  const sourceThread = {
+    backend: "codex" as const,
+    threadId: "raising-thread",
+    instanceId: "spoofed_instance",
+    title: "Raising thread",
+  };
+  const authenticate = (messageOrigin: Record<string, unknown>) => authenticateMessageOrigin({
+    messageOrigin: messageOrigin as never,
+    resolveSourceInstance: () => ({ label: "Viewer Mac" }),
+    sourceInstanceId: "viewer_one",
+  });
+
+  it("keeps a valid card marker and still forces the sender's instance", () => {
+    expect(authenticate({
+      kind: "agent", sourceThread, threadTodo: { id: "todo-1", title: "Rewrite the CLI" },
+    })).toEqual({
+      kind: "agent",
+      sourceThread: {
+        backend: "codex", threadId: "raising-thread", instanceId: "viewer_one",
+        instanceLabel: "Viewer Mac", title: "Raising thread",
+      },
+      threadTodo: { id: "todo-1", title: "Rewrite the CLI" },
+    });
+  });
+
+  it("drops a malformed card marker and caps a long title", () => {
+    for (const threadTodo of [{ id: "" }, { id: 7 }, { id: "x".repeat(201) }, "todo-1", [{ id: "todo-1" }]]) {
+      expect(authenticate({ kind: "agent", sourceThread, threadTodo })).not.toHaveProperty("threadTodo");
+    }
+    expect(authenticate({
+      kind: "agent", sourceThread, threadTodo: { id: "todo-1", title: { text: "Not text" } },
+    })?.threadTodo).toEqual({ id: "todo-1" });
+    expect(authenticate({
+      kind: "agent", sourceThread, threadTodo: { id: "todo-1", title: "t".repeat(400) },
+    })?.threadTodo?.title).toHaveLength(120);
+  });
+
+  it("drops a card marker that names no raising thread or rides another kind", () => {
+    expect(authenticate({ kind: "agent", threadTodo: { id: "todo-1" } })).toEqual({ kind: "agent" });
+    expect(authenticate({ kind: "pwragent", sourceThread, threadTodo: { id: "todo-1" } }))
+      .not.toHaveProperty("threadTodo");
+  });
+
+  it("passes an origin without a marker through unchanged", () => {
+    const origin = { kind: "pwragent" as const };
+    expect(authenticate(origin)).toBe(origin);
   });
 });
 

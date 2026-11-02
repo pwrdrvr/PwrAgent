@@ -1570,7 +1570,7 @@ describe("Sidebar", () => {
       releaseThreadPinPointer({ x: 50, y: 70 });
     });
 
-    expect(onSetThreadParent).toHaveBeenCalledWith(loose, "target", "codex");
+    expect(onSetThreadParent).toHaveBeenCalledWith(loose, "target", "codex", true);
     expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(target, false);
     expect(shell("Target thread")).not.toHaveClass("is-drop-target-inside");
   });
@@ -1628,7 +1628,7 @@ describe("Sidebar", () => {
     });
 
     expect(onSetThreadParent).toHaveBeenCalledTimes(1);
-    expect(onSetThreadParent).toHaveBeenCalledWith(child, "other", "codex");
+    expect(onSetThreadParent).toHaveBeenCalledWith(child, "other", "codex", true);
   });
 
   it("does not expose sub-thread disclosure controls for an older remote peer", () => {
@@ -6695,7 +6695,7 @@ describe("Sidebar", () => {
       releaseThreadPinPointer({ x: 50, y: 20 });
     });
 
-    expect(onSetThreadParent).toHaveBeenCalledWith(second, "thread-first", "codex");
+    expect(onSetThreadParent).toHaveBeenCalledWith(second, "thread-first", "codex", true);
     expect(onReorderThreadPins).not.toHaveBeenCalled();
   });
 
@@ -9132,6 +9132,7 @@ describe("Sidebar directory pinning", () => {
       ) => Promise<void>;
       onReorderDirectoryPins?: (directoryKeys: string[]) => Promise<void>;
       onRemoveDirectory?: (directory: NavigationDirectoryView) => void;
+      onOpenForgePermissions?: (repository: string) => void;
       onOpenLaunchpad?: (
         directory: NavigationDirectoryView,
       ) => Promise<void>;
@@ -9163,6 +9164,7 @@ describe("Sidebar directory pinning", () => {
         onSetDirectoryPin={overrides.onSetDirectoryPin}
         onReorderDirectoryPins={overrides.onReorderDirectoryPins}
         onRemoveDirectory={overrides.onRemoveDirectory}
+        onOpenForgePermissions={overrides.onOpenForgePermissions}
       />,
     );
   }
@@ -9706,6 +9708,37 @@ describe("Sidebar directory pinning", () => {
     await clickElement(unpinItem);
 
     expect(onSetDirectoryPin).toHaveBeenCalledWith(expect.objectContaining({ key: pinned.key }), false);
+  });
+
+  it("opens a project's forge permissions from its context menu", async () => {
+    const onOpenForgePermissions = vi.fn();
+    // The directory index row's origin remote, which the fixture forwards.
+    const withOrigin = {
+      ...projectADirectory,
+      repositoryKey: "github.com/pwrdrvr/ProjectA",
+    };
+
+    renderSidebar([withOrigin, projectBDirectory], {
+      onOpenForgePermissions,
+      onSetDirectoryPin: async () => undefined,
+    });
+
+    fireEvent.contextMenu(getDirectorySummary(/ProjectA/i));
+    await clickElement(
+      await screen.findByRole("menuitem", { name: "Forge Permissions…" }),
+    );
+
+    expect(onOpenForgePermissions).toHaveBeenCalledWith("github.com/pwrdrvr/ProjectA");
+    expect(
+      screen.queryByRole("menuitem", { name: "Forge Permissions…" }),
+    ).not.toBeInTheDocument();
+
+    // A project without an origin has no repository to write rules for.
+    fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+    await screen.findByRole("menuitem", { name: "Pin Directory" });
+    expect(
+      screen.queryByRole("menuitem", { name: "Forge Permissions…" }),
+    ).not.toBeInTheDocument();
   });
 
   it("opens the context menu for workspace rows (workspaces are pinnable)", async () => {

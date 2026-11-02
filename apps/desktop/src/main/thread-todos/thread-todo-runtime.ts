@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  AppServerThreadMessageOrigin,
   AppServerThreadReviewEntry,
   CreateInstanceThreadResult,
   ListInstanceProjectsResult,
@@ -182,6 +183,8 @@ export function installThreadTodoRuntime(params: {
   readDefaultMergeMethod: () => ThreadTodoMergeMethod;
   /** The federation agent tools, which start threads on peers. */
   federation?: PwrAgentFederationHandler;
+  /** The same tools sending one message origin, for a card's peer start. */
+  federationWithOrigin?: (messageOrigin: AppServerThreadMessageOrigin) => PwrAgentFederationHandler;
   /** Plan cards for threads started on a peer. */
   peerPlans?: ThreadTodoPeerPlans;
   /** What the live card feed reads besides the services, and where it publishes. */
@@ -232,6 +235,7 @@ export function installThreadTodoRuntime(params: {
   todos.setRunners(createThreadTodoRunners({
     registry,
     federation,
+    ...(params.federationWithOrigin ? { federationWithOrigin: params.federationWithOrigin } : {}),
     listProjects,
     plans: {
       raiseHere: (thread, plan) => raiseThreadTodoPlan(registry, thread, plan, todos),
@@ -472,7 +476,8 @@ export function installThreadTodoRuntime(params: {
 /** The registry calls a to-do's Start thread makes. */
 export type ThreadTodoRunnerRegistry = Pick<
   DesktopBackendRegistry,
-  "readThreadHandoffSettings" | "readBackendModelOptions" | "listBackends" | "renameThread" | "startThread" | "startTurn" | "sendThreadTodoMessage"
+  | "readThreadHandoffSettings" | "readBackendModelOptions" | "listBackends" | "renameThread" | "startThread" | "startTurn"
+  | "sendThreadTodoMessage" | "buildThreadTodoMessageOrigin"
 >;
 
 /**
@@ -488,6 +493,11 @@ export type ThreadTodoRunnerRegistry = Pick<
 export function createThreadTodoRunners(params: {
   registry: ThreadTodoRunnerRegistry;
   federation?: PwrAgentFederationHandler;
+  /**
+   * The federation tools with one message origin: a peer start then labels
+   * its prompt as the card's. Without it the start carries the default origin.
+   */
+  federationWithOrigin?: (messageOrigin: AppServerThreadMessageOrigin) => PwrAgentFederationHandler;
   /**
    * This machine's Directories rows, whose origins find a card's project on
    * a peer that files it under another name.
@@ -537,7 +547,7 @@ export function createThreadTodoRunners(params: {
     mergePullRequest: async (request) =>
       await new GithubPrFetcher().mergePullRequest(request),
     startThread: async ({
-      sourceBackend, sourceThreadId, cwd, crossProject, action, modelSettings, workMode: chosenWorkMode, environment, speed, plan,
+      sourceBackend, sourceThreadId, cwd, crossProject, action, todo, modelSettings, workMode: chosenWorkMode, environment, speed, plan,
     }) => {
       const source = await registry.readThreadHandoffSettings({
         backend: sourceBackend,
@@ -636,10 +646,17 @@ export function createThreadTodoRunners(params: {
       const planned = plan && plans
         ? await raisePlan(() => plans.raiseHere({ backend: started.backend, threadId: started.threadId }, plan), started)
         : false;
+      // The operator sent the card's prompt, so the thread shows where it came from.
+      const messageOrigin = await registry.buildThreadTodoMessageOrigin({
+        backend: sourceBackend,
+        threadId: sourceThreadId,
+        todo,
+      });
       await registry.startTurn({
         backend: started.backend,
         threadId: started.threadId,
         input: [{ type: "text", text: planned ? withThreadTodoPlanNote(action.prompt) : action.prompt }],
+        messageOrigin,
         ...settings,
       });
       return {
@@ -656,6 +673,7 @@ export function createThreadTodoRunners(params: {
             project,
             crossProject,
             action,
+            todo,
             modelSettings,
             workMode,
             environment,
@@ -721,9 +739,15 @@ export function createThreadTodoRunners(params: {
             // An older peer gets the prompt alone.
             const peerPlans = plans?.peer;
             const plannable = plan !== undefined && peerPlans?.supports(instanceId) === true;
+            const messageOrigin = await registry.buildThreadTodoMessageOrigin({
+              backend: sourceBackend,
+              threadId: sourceThreadId,
+              todo,
+            });
+            const createThread = params.federationWithOrigin?.(messageOrigin) ?? federation;
             // No title: create_instance_thread has none to set, and the
             // peer names the thread from its first turn.
-            const created = await federation({
+            const created = await createThread({
               operation: "create_instance_thread",
               context,
               args: {
