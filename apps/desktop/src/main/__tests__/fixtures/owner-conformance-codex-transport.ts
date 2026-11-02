@@ -94,7 +94,9 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
           // The same turn the Outpost fixture records: one agent message.
           const turn = { id: turnId, status: "completed", items: [{ type: "agentMessage", text: "Fixture result" }], error: null };
           thread.turns.push(turn);
-          thread.updatedAt = Math.floor(Date.now() / 1000);
+          // Codex reports seconds. A real turn outlasts one, so its end always
+          // moves the thread's activity forward; this one takes 100 ms.
+          thread.updatedAt = Math.max(Math.floor(Date.now() / 1000), thread.updatedAt + 1);
           this.notify("turn/completed", { threadId: thread.id, turn });
         }, 100);
       }
