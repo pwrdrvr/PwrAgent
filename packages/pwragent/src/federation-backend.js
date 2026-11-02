@@ -1,16 +1,27 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { FEDERATION_MAX_FRAME_BYTES, fitThreadReplayWithinByteBudget, mergeCausalMessagingContext, pageThreadReplay, shortenDerivedThreadTitle } from "../dist/federation-core.js";
+import { FEDERATION_BACKEND_METHOD_CAPABILITIES, FEDERATION_MAX_FRAME_BYTES, fitThreadReplayWithinByteBudget, mergeCausalMessagingContext, pageThreadReplay, shortenDerivedThreadTitle } from "../dist/federation-core.js";
 import { ACTIVE, atomicJson, digest } from "./store.js";
 
-export const METHOD_CAPABILITIES = Object.fromEntries([
-  ["backend.resolveThreadAdmissionState", "messaging_route"],
-  ["backend.supportsMessagingPdfTools", "messaging_route"],
-  ...["getNavigationQueryPage", "getNavigationLaunchpadConfig", "getNavigationSelectedDetail", "getNavigationQueueProjection", "releaseNavigationAttentionView", "listThreads", "listBackends", "resolveThread", "markThreadSeen", "getProjectPage", "lookupArchivedThreads"].map((method) => [`backend.${method}`, "thread_navigation"]),
-  ...["readThread", "readTurnAssistantReply", "listSkills", "listThreadMcpServers"].map((method) => [`backend.${method}`, "thread_detail"]),
-  ...["startThread", "materializeDirectoryLaunchpad", "startTurn", "interruptTurn", "steerTurn", "controlActiveTurn", "renameThread", "setThreadModelSettings", "setThreadExecutionMode"].map((method) => [`backend.${method}`, "turn_control"]),
-]);
+// The owner methods this outpost serves. Each one's capability comes from the
+// shared owner contract, so a grant means the same here as on desktop.
+const OWNER_METHODS = [
+  "resolveThreadAdmissionState", "supportsMessagingPdfTools",
+  "getNavigationQueryPage", "getNavigationLaunchpadConfig", "getNavigationSelectedDetail", "getNavigationQueueProjection",
+  "releaseNavigationAttentionView", "listThreads", "listBackends", "resolveThread", "markThreadSeen", "getProjectPage", "lookupArchivedThreads",
+  "readThread", "readTurnAssistantReply", "listSkills", "listThreadMcpServers",
+  "startThread", "materializeDirectoryLaunchpad", "startTurn", "interruptTurn", "steerTurn", "controlActiveTurn", "renameThread",
+  "setThreadModelSettings", "setThreadExecutionMode",
+];
+export function ownerMethodCapabilities(methods, contract = FEDERATION_BACKEND_METHOD_CAPABILITIES) {
+  return Object.fromEntries(methods.map((name) => {
+    const method = `backend.${name}`;
+    if (!Object.hasOwn(contract, method)) throw new Error(`${method} is not in the shared owner contract`);
+    return [method, contract[method]];
+  }));
+}
+export const METHOD_CAPABILITIES = ownerMethodCapabilities(OWNER_METHODS);
 
 function mode(sandbox) { return sandbox === "workspace-write" ? "auto" : "default"; }
 function sandboxFor(params, fallback = "read-only") {
