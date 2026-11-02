@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export type PendingComposerInsert = { id: number; threadKey: string; text: string };
+type PendingComposerInsert = { id: number; threadKey: string; text: string };
 
 /**
  * One text insert waiting for a thread's composer, such as "Ask Agent to

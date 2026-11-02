@@ -197,7 +197,7 @@ export function TranscriptThreadToolActivity(props: {
   );
 }
 
-export function isPullRequestWatchToolDetail(
+function isPullRequestWatchToolDetail(
   detail: AppServerThreadActivityDetail,
 ): boolean {
   const identifier = detail.command?.rawCommand

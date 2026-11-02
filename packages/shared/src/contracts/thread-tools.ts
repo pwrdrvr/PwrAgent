@@ -401,7 +401,7 @@ export type PullRequestTerminalDetails = {
  * `watch` (the default) arms watches. `list` returns the thread's waiting
  * watches, and `cancel` stops one of them by `watchId`.
  */
-export type WatchThreadPullRequestAction = "watch" | "list" | "cancel";
+type WatchThreadPullRequestAction = "watch" | "list" | "cancel";
 
 export type WatchThreadPullRequestToolArgs = {
   /** Absent means `watch`, the only action before list and cancel existed. */
