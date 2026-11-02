@@ -57526,6 +57526,60 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("forgets a Codex monitor recovery turn's origin when the start fails", async () => {
+    const causalMessagingSource = { ownerId: "owner-1", requestId: "request-1" };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
+      startThreadResult: { threadId: "monitor-thread" },
+      startTurnErrors: [undefined, new Error("recovery start failed")],
+      startTurnResults: [{ threadId: "monitor-thread", turnId: "monitor-turn" }],
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: vi.fn(),
+      checkDynamicToolPermission: () => ({ allowed: true }),
+      authorizeRetainedTool: async () => ({ allowed: true }),
+    });
+    await overlayStore.upsertThreadMessageOrigin!({
+      backend: "codex", threadId: "thread-1", messageId: "user:turn-1",
+      origin: { kind: "messaging", causalMessagingSource },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: { threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1" } },
+      },
+    });
+    await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: { task: "Watch an asynchronous task until it finishes." },
+      },
+    } as AppServerPendingRequestNotification);
+    await emitCompletedTurn(registry, "codex", "thread-1", "turn-1");
+    await emitCompletedTurn(registry, "codex", "monitor-thread", "monitor-turn");
+
+    // The recovery start threw, so the fallback completion woke the parent.
+    expect(codexClient.startTurnCallCount).toBe(3);
+    expect(codexClient.lastStartTurnParams).toMatchObject({ threadId: "thread-1" });
+    // A later turn on the monitor thread must not inherit the failed start's origin.
+    await expect(registry.readCausalMessagingContext({
+      backend: "codex",
+      threadId: "monitor-thread",
+      turnId: "later-turn",
+    })).resolves.toEqual({});
+
+    await registry.close();
+  });
+
   it("reconciles orphaned sub-agents before serving threads after startup", async () => {
     const reconcileOrphanedThreadSubAgents = vi.fn(async () => ({
       repairedSubAgents: 0,
