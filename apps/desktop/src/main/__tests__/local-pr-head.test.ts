@@ -13,18 +13,26 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-/** A repository on `feature` with two commits; returns both heads. */
+/**
+ * A repository on `feature` with two commits, the first pushed to `origin`
+ * and the second not yet; returns both heads.
+ */
 async function repoWithTwoCommits() {
-  const repo = await mkdtemp(path.join(os.tmpdir(), "pwragent-local-pr-head-"));
-  tempDirs.push(repo);
+  const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-local-pr-head-"));
+  tempDirs.push(root);
+  const repo = path.join(root, "work");
+  const remote = path.join(root, "remote.git");
+  await execFileAsync("git", ["init", "-q", "--bare", remote]);
+  await execFileAsync("git", ["init", "-q", "-b", "feature", repo]);
   const git = async (...args: string[]) =>
     (await execFileAsync("git", ["-C", repo, ...args])).stdout.trim();
-  await git("init", "-b", "feature");
   await git("config", "user.email", "test@example.com");
   await git("config", "user.name", "Test User");
+  await git("remote", "add", "origin", remote);
   await writeFile(path.join(repo, "file.txt"), "one\n");
   await git("add", "file.txt");
   await git("commit", "-m", "one");
+  await git("push", "-q", "-u", "origin", "feature");
   const pushed = await git("rev-parse", "HEAD");
   await writeFile(path.join(repo, "file.txt"), "two\n");
   await git("commit", "-am", "two");
@@ -33,11 +41,29 @@ async function repoWithTwoCommits() {
 }
 
 describe("readLocalHeadPastPrHead", () => {
-  it("returns the checkout head when it is past the cached PR head", async () => {
-    const { repo, pushed, local } = await repoWithTwoCommits();
+  it("returns the checkout head once it is pushed past the cached PR head", async () => {
+    const { repo, git, pushed, local } = await repoWithTwoCommits();
+    await git("push", "-q", "origin", "feature");
     await expect(readLocalHeadPastPrHead({
       directories: [repo], cachedHeadSha: pushed, headRefName: "feature",
     })).resolves.toBe(local);
+    await expect(readLocalHeadPastPrHead({ directories: [repo], cachedHeadSha: pushed }))
+      .resolves.toBe(local);
+  });
+
+  it("returns nothing for a local commit the forge will never see", async () => {
+    const { repo, git, pushed } = await repoWithTwoCommits();
+    // Committed past the PR head, never pushed: no new CI result is coming.
+    await expect(readLocalHeadPastPrHead({
+      directories: [repo], cachedHeadSha: pushed, headRefName: "feature",
+    })).resolves.toBeUndefined();
+    await expect(readLocalHeadPastPrHead({ directories: [repo], cachedHeadSha: pushed }))
+      .resolves.toBeUndefined();
+    // Pushed only to another branch: the PR's branch still has the old head.
+    await git("push", "-q", "origin", "HEAD:refs/heads/scratch");
+    await expect(readLocalHeadPastPrHead({
+      directories: [repo], cachedHeadSha: pushed, headRefName: "feature",
+    })).resolves.toBeUndefined();
   });
 
   it("returns nothing at the cached head, behind it, or on another branch", async () => {
