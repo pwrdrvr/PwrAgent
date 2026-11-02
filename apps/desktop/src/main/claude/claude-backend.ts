@@ -124,8 +124,8 @@ const CLAUDE_TASK_FOLLOW_UP_GRACE_MS = 5_000;
 
 /**
  * The shortest gap between usage reports while a turn runs. Each report is a
- * usage probe and one write of the turn's usage row (about 55 KB of WAL), so
- * a thread that streams for an hour writes about 6.6 MB, and none while idle.
+ * usage probe and one write of the turn's usage row (about 57 KB of WAL), so
+ * a thread that streams for an hour writes about 6.8 MB, and none while idle.
  */
 const CLAUDE_LIVE_USAGE_INTERVAL_MS = 30_000;
 
