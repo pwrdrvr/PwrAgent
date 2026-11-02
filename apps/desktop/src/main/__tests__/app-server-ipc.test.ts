@@ -1335,6 +1335,7 @@ describe("app server ipc", () => {
   type AppServerIpcModule = typeof import("../ipc/app-server");
   let disposeAppServerIpcHandlers: AppServerIpcModule["disposeAppServerIpcHandlers"];
   let registerAppServerIpcHandlers: AppServerIpcModule["registerAppServerIpcHandlers"];
+  let appServerServiceInternals: { prStatusTokenBucket: object };
   // Historical owner materialization coverage is deliberately separate from IPC.
   const readLegacyOwnerMaterialization = async (_event: unknown, request?: GetNavigationSnapshotRequest) =>
     (await import("../ipc/app-server")).appServerService.getNavigationSnapshot(request);
@@ -1373,9 +1374,17 @@ describe("app server ipc", () => {
     const appServerIpc = await import("../ipc/app-server");
     disposeAppServerIpcHandlers = appServerIpc.disposeAppServerIpcHandlers;
     registerAppServerIpcHandlers = appServerIpc.registerAppServerIpcHandlers;
+    appServerServiceInternals = appServerIpc.appServerService as unknown as typeof appServerServiceInternals;
   });
 
   beforeEach(() => {
+    // The service is one module singleton for the whole file, and its PR
+    // request budget (20 tokens, 20 a minute) does not refill in a run this
+    // short. Each lookup or by-URL fetch spends a token, so without a fresh
+    // bucket a test only passes while fewer than 20 spends precede it.
+    const bucket = appServerServiceInternals.prStatusTokenBucket;
+    appServerServiceInternals.prStatusTokenBucket =
+      new (bucket.constructor as new () => object)();
     getCachedThreadSummary.mockReset();
     isIncompleteThreadList.mockReset().mockReturnValue(false);
     federationMock.runtime.stampRemoteNavigationQueryPage.mockReset().mockImplementation((_target, page) => page);
