@@ -411,6 +411,39 @@ describe("PrStatusWatchCoordinator", () => {
     })).toEqual([]);
   });
 
+  it("moves a renamed repository's watch to the new name, merging into a watch already there", async () => {
+    const oldKey = "github.com/pwrdrvr/pwragnt#1105";
+    const oldUrl = "https://github.com/pwrdrvr/PwrAgnt/pull/1105";
+    const canonical = await registerWatch(store, ["success"]);
+    for (const [threadId, notifyOn] of [["thread-1", ["failure"]], ["thread-2", ["success"]]] as const) {
+      await store.registerThreadPrStatusWatch({
+        watch: {
+          watchId: `old-${threadId}`, backend: "codex", threadId, prKey: oldKey, prUrl: oldUrl, prNumber: 1105,
+          headSha: pr().headSha!, notifyOn: [...notifyOn], createdAt: now - 1, failureHandledByAutoFix: false,
+        },
+        now,
+      });
+    }
+    const rename = {
+      canonicalizePrKey: (key: string) => key === oldKey ? buildPullRequestStatusKey(pr()) : key,
+      canonicalizePrUrl: (url: string) => url === oldUrl ? pr().url : url,
+      now,
+    };
+
+    await expect(store.canonicalizeThreadPrStatusWatchKeys(rename)).resolves.toBe(2);
+    await expect(store.canonicalizeThreadPrStatusWatchKeys(rename)).resolves.toBe(0);
+
+    expect(await store.listActiveThreadPrStatusWatches({ backend: "codex", threadId: "thread-1" })).toEqual([
+      { ...canonical, notifyOn: ["success", "failure"] },
+    ]);
+    expect(await store.listActiveThreadPrStatusWatches({ backend: "codex", threadId: "thread-2" })).toEqual([
+      expect.objectContaining({ watchId: "old-thread-2", prKey: buildPullRequestStatusKey(pr()), prUrl: pr().url }),
+    ]);
+    const { coordinator, submitTurnIfIdle } = createHarness();
+    await coordinator.handleStatusSnapshot(pr({ state: "failing", checkState: "failing" }), now);
+    expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
+  });
+
   it("stops retrying after a finite number of failed submissions", async () => {
     await registerWatch();
     const submitTurnIfIdle = vi.fn(async () => {
@@ -492,6 +525,7 @@ function createTerminalHarness(
     targetStore?: SqliteOverlayStore;
     submitTurnIfIdle?: Mock<SubmitTurnIfIdle>;
     fetchTerminalDetails?: Mock<(pr: PrSummary) => Promise<PullRequestTerminalDetails | undefined>>;
+    prepareClaims?: () => Promise<void>;
   } = {},
 ) {
   const submitTurnIfIdle = options.submitTurnIfIdle
@@ -507,6 +541,7 @@ function createTerminalHarness(
       registry: { submitTurnIfIdle },
       fetchTerminalDetails,
       now: () => now,
+      ...(options.prepareClaims ? { prepareClaims: options.prepareClaims } : {}),
     }),
     fetchTerminalDetails,
     submitTurnIfIdle,
@@ -651,6 +686,33 @@ describe("PrStatusWatchCoordinator merge/close watches", () => {
     const harness = createTerminalHarness();
     await expect(harness.coordinator.handleStatusSnapshot(mergedPr(), now))
       .resolves.toBe(1);
+    expect(promptOf(harness.submitTurnIfIdle)).toContain("- Merge method: squash");
+    expect(await store.listPendingPrTerminalWatchPrKeys()).toEqual([]);
+  });
+
+  it("wakes a merge watch saved under a renamed repository's old name", async () => {
+    const oldKey = "github.com/pwrdrvr/pwragnt#1105";
+    const oldUrl = "https://github.com/pwrdrvr/PwrAgnt/pull/1105";
+    await store.registerThreadPrStatusWatch({
+      watch: {
+        watchId: "old-terminal", backend: "codex", threadId: "thread-1", prKey: oldKey, prUrl: oldUrl,
+        prNumber: 1105, prTitle: pr().title, headSha: pr().headSha!, notifyOn: ["merged", "closed"],
+        createdAt: now, failureHandledByAutoFix: false, kind: "terminal",
+      },
+      now,
+    });
+    const prepareClaims = vi.fn(async () => {
+      await store.canonicalizeThreadPrStatusWatchKeys({
+        canonicalizePrKey: (key) => key === oldKey ? buildPullRequestStatusKey(pr()) : key,
+        canonicalizePrUrl: (url) => url === oldUrl ? pr().url : url,
+        now,
+      });
+    });
+
+    const harness = createTerminalHarness({ prepareClaims });
+    await expect(harness.coordinator.handleStatusSnapshot(mergedPr(), now))
+      .resolves.toBe(1);
+    expect(prepareClaims).toHaveBeenCalledTimes(1);
     expect(promptOf(harness.submitTurnIfIdle)).toContain("- Merge method: squash");
     expect(await store.listPendingPrTerminalWatchPrKeys()).toEqual([]);
   });

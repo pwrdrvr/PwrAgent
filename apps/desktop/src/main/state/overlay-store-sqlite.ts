@@ -8350,6 +8350,120 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return rows.map((row) => row.pr_key);
   }
 
+  /** Every undelivered watch, across threads. */
+  async listAllActiveThreadPrStatusWatches(): Promise<ThreadPullRequestWatchSummary[]> {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT payload
+         FROM pr_status_watches
+         WHERE status IN ('watching', 'dispatching')
+         ORDER BY created_at ASC`,
+      )
+      .all() as Array<{ payload: string }>;
+    return rows.flatMap((row) => {
+      const watch = parsePrStatusWatchSummary(row.payload);
+      return watch ? [watch] : [];
+    });
+  }
+
+  /**
+   * Move undelivered watches stored under a renamed repository's old name to
+   * the name the forge reports now. Status snapshots carry the new name, and
+   * every claim matches `pr_key` exactly, so an old-name watch would never
+   * fire. A watch whose thread already watches the new name for the same head
+   * merges into that watch. A watch held by a live dispatch lease is left
+   * alone: its owner finishes it by its current key.
+   *
+   * Reads only until a row needs moving, then commits once.
+   */
+  async canonicalizeThreadPrStatusWatchKeys(params: {
+    canonicalizePrKey: (key: string) => string;
+    canonicalizePrUrl: (url: string) => string;
+    now: number;
+  }): Promise<number> {
+    const select = `SELECT watch_id, backend, thread_id, pr_key, head_sha, status, payload
+       FROM pr_status_watches
+       WHERE status = 'watching'
+         OR (status = 'dispatching' AND COALESCE(lease_expires_at, 0) <= ?)
+       ORDER BY created_at ASC, watch_id ASC`;
+    type Row = {
+      watch_id: string;
+      backend: string;
+      thread_id: string;
+      pr_key: string;
+      head_sha: string;
+      status: string;
+      payload: string;
+    };
+    const needsMove = (row: Row) => params.canonicalizePrKey(row.pr_key) !== row.pr_key;
+    const candidates = this.stateDb.raw.prepare(select).all(params.now) as Row[];
+    if (!candidates.some(needsMove)) return 0;
+    const move = this.stateDb.raw.transaction(() => {
+      // Read again inside the write lock; another instance may have moved them.
+      const rows = (this.stateDb.raw.prepare(select).all(params.now) as Row[]).filter(needsMove);
+      const findTarget = this.stateDb.raw.prepare(
+        `SELECT watch_id, payload
+         FROM pr_status_watches
+         WHERE backend = ? AND thread_id = ? AND pr_key = ? AND head_sha = ?
+           AND status IN ('watching', 'dispatching')
+         LIMIT 1`,
+      );
+      const writeNotify = (watchId: string, watch: ThreadPullRequestWatchSummary, prKey: string) =>
+        this.stateDb.raw
+          .prepare(
+            `UPDATE pr_status_watches
+             SET pr_key = ?, notify_on_success = ?, notify_on_failure = ?,
+                 notify_on_merged = ?, notify_on_closed = ?,
+                 updated_at = ?, payload = ?
+             WHERE watch_id = ?`,
+          )
+          .run(
+            prKey,
+            watch.notifyOn.includes("success") ? 1 : 0,
+            watch.notifyOn.includes("failure") ? 1 : 0,
+            watch.notifyOn.includes("merged") ? 1 : 0,
+            watch.notifyOn.includes("closed") ? 1 : 0,
+            params.now,
+            JSON.stringify(watch),
+            watchId,
+          );
+      let moved = 0;
+      for (const row of rows) {
+        const watch = parsePrStatusWatchSummary(row.payload);
+        if (!watch) continue;
+        const prKey = params.canonicalizePrKey(row.pr_key);
+        const target = findTarget.get(row.backend, row.thread_id, prKey, row.head_sha) as
+          | { watch_id: string; payload: string }
+          | undefined;
+        const existing = target ? parsePrStatusWatchSummary(target.payload) : undefined;
+        if (target && existing) {
+          writeNotify(target.watch_id, {
+            ...existing,
+            notifyOn: [...new Set([...existing.notifyOn, ...watch.notifyOn])],
+            failureHandledByAutoFix: existing.failureHandledByAutoFix && watch.failureHandledByAutoFix,
+          }, prKey);
+          this.stateDb.raw
+            .prepare(
+              `UPDATE pr_status_watches
+               SET status = 'superseded', lease_owner = NULL,
+                   lease_expires_at = NULL, updated_at = ?
+               WHERE watch_id = ?`,
+            )
+            .run(params.now, row.watch_id);
+        } else {
+          writeNotify(row.watch_id, {
+            ...watch,
+            prKey,
+            prUrl: params.canonicalizePrUrl(watch.prUrl),
+          }, prKey);
+        }
+        moved += 1;
+      }
+      return moved;
+    });
+    return move.immediate();
+  }
+
   async listActiveThreadPrStatusWatches(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -11659,6 +11773,8 @@ export type OverlayStoreLike = Pick<
   | "claimThreadPrTerminalWatches"
   | "finishThreadPrTerminalWatch"
   | "listPendingPrTerminalWatchPrKeys"
+  | "listAllActiveThreadPrStatusWatches"
+  | "canonicalizeThreadPrStatusWatchKeys"
   | "turnOffCodexFastEverywhere"
   | "setThreadExpectedBranch"
   | "setThreadObservedBranch"

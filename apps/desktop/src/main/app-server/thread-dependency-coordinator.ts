@@ -11,6 +11,7 @@ import {
   THREAD_TODO_DETAIL_MAX_LENGTH, THREAD_TODO_TITLE_MAX_LENGTH, threadDependencyDeliveryTarget, threadDependencyTodoKey,
 } from "@pwragent/shared";
 import type { ThreadDependencyStore } from "../state/thread-dependency-store";
+import { isSameNumberInAnotherRepository } from "../pr-status/forge-reference";
 
 export type DependencyThreadSnapshot = {
   activeTurnId?: string;
@@ -64,6 +65,19 @@ type Options = {
   canDispatch?: (dependency: ThreadDependency) => boolean;
   isConsumerBusy?: (dependency: ThreadDependency) => boolean;
   hasDeliveryReceipt?: (dependency: ThreadDependency) => boolean;
+  /**
+   * A PR URL under the repository name the forge reports now, from names it
+   * has already answered. PR rows arrive under that name, so a condition
+   * saved with a renamed repository's old URL would never match them.
+   */
+  canonicalizePrUrl?: (url: string) => string;
+  /**
+   * Ask the forge which repository a PR URL names now, for a URL that names
+   * no attached PR while a PR with its number is attached under another
+   * repository. Learned names live in memory, so after a restart this is the
+   * only way to match. Returns the URL under the current name, or undefined.
+   */
+  resolvePrUrl?: (url: string) => Promise<string | undefined>;
   now?: () => number;
 };
 
@@ -112,7 +126,7 @@ export class ThreadDependencyCoordinator {
         }
         if (condition.when === "turn_completed" && condition.turnId !== snapshot.activeTurnId
           && !snapshot.turns.some((turn) => turn.id === condition.turnId)) throw new Error("The watched turn was not found in this prerequisite thread.");
-        conditions.push(condition);
+        conditions.push(await this.currentPrCondition(condition, snapshot) ?? this.canonicalPrCondition(condition));
       }
       const now = this.now();
       const item = this.options.store.register({
@@ -183,10 +197,20 @@ export class ThreadDependencyCoordinator {
     const urls = prUrls === undefined ? undefined : new Set(typeof prUrls === "string" ? [prUrls] : prUrls);
     if (urls?.size === 0) return Promise.resolve();
     return this.serialize(async () => {
+      const observed = urls && new Set([...urls].map((url) => this.canonicalizePrUrl(url)));
+      // A URL saved under a renamed repository's old name, before the forge
+      // has named it this session, still takes the event: evaluation asks.
+      const named = (url: string | undefined) => {
+        if (url === undefined) return false;
+        const current = this.canonicalizePrUrl(url);
+        return observed!.has(current)
+          || (this.options.resolvePrUrl !== undefined
+            && [...observed!].some((entry) => isSameNumberInAnotherRepository(entry, current)));
+      };
       for (const item of this.options.store.active()) {
         if (item.conditions.some((condition) => condition.when !== "turn_completed")
-          && (!urls || item.conditions.some((condition) => condition.prUrl !== undefined && urls.has(condition.prUrl))
-            || item.evidence.some((entry) => entry.prUrl !== undefined && urls.has(entry.prUrl)))) await this.evaluate(item);
+          && (!observed || item.conditions.some((condition) => named(condition.prUrl))
+            || item.evidence.some((entry) => named(entry.prUrl)))) await this.evaluate(item);
       }
     });
   }
@@ -194,8 +218,12 @@ export class ThreadDependencyCoordinator {
   private async evaluate(item: ThreadDependency, signal?: { target: { backend: string; threadId: string }; turn: AppServerThreadTurnMetadata }): Promise<void> {
     if (item.status === "dispatching") return;
     const evidence: ThreadDependencyEvidence[] = [];
+    // Conditions saved under a renamed repository's old URL move to its
+    // current one, once, with the evidence that first matched it.
+    const conditions = [...item.conditions];
     const snapshots = new Map<string, DependencyThreadSnapshot>();
-    for (const condition of item.conditions) {
+    for (const [conditionIndex, stored] of item.conditions.entries()) {
+      let condition = stored;
       const previous = item.evidence.find((entry) => JSON.stringify(entry.condition) === JSON.stringify(condition));
       // A pinned turn is immutable after completion. CI evidence is deliberately
       // reevaluated, including when the consumer was busy at the last success.
@@ -214,13 +242,19 @@ export class ThreadDependencyCoordinator {
           snapshot = await this.options.readThread(condition);
           snapshots.set(snapshotKey, snapshot);
         }
+        // Only a forge resolve waits: an extra await here would delay every
+        // admission behind the event that triggered it.
+        const resolving = this.currentPrCondition(condition, snapshot);
+        condition = (resolving && await resolving) ?? this.canonicalPrCondition(condition);
+        conditions[conditionIndex] = condition;
         const turn = signal && identity(signal.target) === identity(condition) && signal.turn.id === condition.turnId
           ? signal.turn : snapshot.turns.find((entry) => entry.id === condition.turnId);
         // Keep the first unambiguous PR identity even if another PR is attached
         // later. Its current head remains live unless explicitly pinned.
-        const selector = !condition.prUrl && previous?.prUrl
-          ? { ...condition, prUrl: previous.prUrl } : condition;
-        const observed = { ...evaluateCondition(selector, snapshot, this.now(), turn), condition };
+        const pinned = !condition.prUrl && previous?.prUrl ? { ...condition, prUrl: previous.prUrl } : undefined;
+        const resolvingPinned = pinned && this.currentPrCondition(pinned, snapshot);
+        const selector = pinned ? (resolvingPinned && await resolvingPinned) ?? this.canonicalPrCondition(pinned) : condition;
+        const observed = { ...evaluateCondition(selector, snapshot, this.now(), turn, this.options.canonicalizePrUrl), condition };
         if (!observed.prUrl && previous?.prUrl) {
           observed.prUrl = previous.prUrl;
           observed.headSha = previous.headSha;
@@ -248,7 +282,7 @@ export class ThreadDependencyCoordinator {
         ? previous : entry;
     });
     const next: ThreadDependency = {
-      ...item, evidence: persistedEvidence,
+      ...item, conditions, evidence: persistedEvidence,
       status: success || failure || (staleOnly && item.status === "ready") ? "ready" : "waiting",
       outcome: success ? "success" : failure ? "failure" : staleOnly && item.status === "ready" ? item.outcome : undefined,
       error: undefined,
@@ -325,6 +359,37 @@ export class ThreadDependencyCoordinator {
     return next;
   }
 
+  private canonicalizePrUrl(url: string): string {
+    return this.options.canonicalizePrUrl?.(url) ?? url;
+  }
+
+  /** The condition with its PR URL under the names the forge has already answered. */
+  private canonicalPrCondition(condition: ThreadDependencyCondition): ThreadDependencyCondition {
+    if (condition.when === "turn_completed" || !condition.prUrl) return condition;
+    const prUrl = this.canonicalizePrUrl(condition.prUrl);
+    return prUrl === condition.prUrl ? condition : { ...condition, prUrl };
+  }
+
+  /**
+   * A forge resolve of the condition's PR URL, or undefined when none is
+   * needed. Only a URL that matches no attached PR, while a PR with the same
+   * number is attached under another repository (what a rename leaves
+   * behind), is asked about.
+   */
+  private currentPrCondition(condition: ThreadDependencyCondition, snapshot: DependencyThreadSnapshot): Promise<ThreadDependencyCondition> | undefined {
+    const resolvePrUrl = this.options.resolvePrUrl;
+    const current = this.canonicalPrCondition(condition);
+    const prUrl = current.prUrl;
+    if (!resolvePrUrl || !prUrl || !condition.prUrl
+      || snapshot.prs.some(({ pr }) => this.canonicalizePrUrl(pr.url) === prUrl)
+      || !snapshot.prs.some(({ pr }) => isSameNumberInAnotherRepository(pr.url, prUrl))) return undefined;
+    const asked = condition.prUrl;
+    return resolvePrUrl(asked).catch(() => undefined).then((resolved) => {
+      const answered = resolved ? this.canonicalizePrUrl(resolved) : prUrl;
+      return answered === asked ? condition : { ...condition, prUrl: answered };
+    });
+  }
+
   private now(): number { return this.options.now?.() ?? Date.now(); }
 }
 
@@ -354,7 +419,8 @@ export function validateDependencyCreate(request: ManageThreadDependenciesReques
   }
 }
 
-export function evaluateCondition(condition: ThreadDependencyCondition, snapshot: DependencyThreadSnapshot, now: number, turn?: AppServerThreadTurnMetadata): ThreadDependencyEvidence {
+export function evaluateCondition(condition: ThreadDependencyCondition, snapshot: DependencyThreadSnapshot, now: number, turn?: AppServerThreadTurnMetadata,
+  canonicalizePrUrl: (url: string) => string = (url) => url): ThreadDependencyEvidence {
   const result = (state: ThreadDependencyEvidence["state"], reason: string, pr?: PrSummary): ThreadDependencyEvidence => ({
     condition, state, reason, observedAt: now,
     ...(pr ? { prUrl: pr.url, headSha: pr.headSha } : {}),
@@ -364,7 +430,8 @@ export function evaluateCondition(condition: ThreadDependencyCondition, snapshot
     if (turn?.status && ["failed", "cancelled", "interrupted"].includes(turn.status)) return result("failed", `Turn ${turn.id} ${turn.status}`);
     return result("waiting", `Waiting for turn ${condition.turnId}`);
   }
-  const matches = condition.prUrl ? snapshot.prs.filter(({ pr }) => pr.url === condition.prUrl) : snapshot.prs;
+  const wantedUrl = condition.prUrl && canonicalizePrUrl(condition.prUrl);
+  const matches = wantedUrl ? snapshot.prs.filter(({ pr }) => canonicalizePrUrl(pr.url) === wantedUrl) : snapshot.prs;
   if (matches.length !== 1) return result("waiting", matches.length > 1 ? "Choose a PR URL; the prerequisite has multiple PRs" : "Waiting for a primary-workspace PR");
   const { pr, fetchedAt } = matches[0]!;
   const merged = pr.lifecycleState === "merged" || pr.state === "merged";
