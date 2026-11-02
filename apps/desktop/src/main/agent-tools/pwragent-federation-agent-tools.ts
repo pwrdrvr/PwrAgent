@@ -274,7 +274,7 @@ function inputSchemaForOperation(
             type: "string",
             enum: LAUNCHPAD_WORKTREE_BASES,
             description:
-              "Worktree base when branchName is omitted. Omit to inherit the launchpad base.",
+              "Worktree base when branchName is omitted.",
           },
           groupingMode: {
             type: "string",
