@@ -195,15 +195,18 @@ export class McpGatewayToolService {
     const deadlineAt = Date.now() + timeout;
     const entry = { context, controller: new AbortController() };
     const idleMs = timeout + (timeout === MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS ? MCP_DISCOVERY_RESPONSE_GRACE_MS : 0);
-    const deadline = progressExtendedTimeout(idleMs, maxTotalTimeout ?? idleMs);
-    const extend = maxTotalTimeout === undefined ? () => undefined : deadline.extend;
-    const signal = AbortSignal.any([entry.controller.signal, deadline.signal, ...(context.signal ? [context.signal] : [])]);
+    const deadline = maxTotalTimeout === undefined ? undefined : progressExtendedTimeout(idleMs, maxTotalTimeout);
+    const signal = AbortSignal.any([
+      entry.controller.signal,
+      deadline?.signal ?? AbortSignal.timeout(idleMs),
+      ...(context.signal ? [context.signal] : []),
+    ]);
     this.running.add(entry);
     try {
       signal.throwIfAborted();
-      return await operation(signal, deadlineAt, extend);
+      return await operation(signal, deadlineAt, deadline?.extend ?? (() => undefined));
     } finally {
-      deadline.clear();
+      deadline?.clear();
       this.running.delete(entry);
     }
   }
