@@ -11,6 +11,14 @@ const require = createRequire(import.meta.url);
 const directories = [];
 const fixtureProbes = new Map();
 
+// The native typed backend takes ~0.2 s on Linux and ~0.3 s on Windows, but
+// 0.1-17 s on loaded macOS runners (median 2.1 s across 193 probed runs, Oct 31
+// to Nov 1 2026). That is real blocking work, not a hang. The child limit sits
+// near twice the slowest observed run, so a real hang is killed and reported.
+// The test limit adds headroom for fixture setup and the JSON assertions.
+const NATIVE_TYPED_LINT_SPAWN_TIMEOUT_MS = 30_000;
+const NATIVE_TYPED_LINT_TEST_TIMEOUT_MS = 40_000;
+
 // Write each boundary immediately: spawnSync blocks the worker, including its
 // timers. A final test timeout alone cannot locate a slow native invocation.
 function nativeLintProbe() {
@@ -115,7 +123,7 @@ describe("native typed lint correctness", () => {
     probe("node-native-launch");
     const result = spawnSync(process.execPath, [resolve(dirname(packageFile), bin.oxlint),
       "--config", join(root, "oxlint.typed.json"), "--format=json", file,
-    ], { cwd: root, encoding: "utf8" });
+    ], { cwd: root, encoding: "utf8", timeout: NATIVE_TYPED_LINT_SPAWN_TIMEOUT_MS });
     probe("node-native-complete", {
       pid: result.pid,
       status: result.status,
@@ -131,7 +139,7 @@ describe("native typed lint correctness", () => {
     expect(diagnostics[0].code).toBe("typescript(unbound-method)");
     expect(diagnostics[0].labels[0].span.line).toBe(2);
     probe("assertions-complete");
-  });
+  }, NATIVE_TYPED_LINT_TEST_TIMEOUT_MS);
 
   it("preserves unused-binding exemptions and applies hook safety only to renderer files", () => {
     const root = fixture();
