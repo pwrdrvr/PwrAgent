@@ -43,6 +43,10 @@ async function stop(daemon) { daemon.kill("SIGTERM"); assert.equal(await daemon.
 
 try {
   assert.match(await command(["--help"]), /PwrAgent Headless/);
+  // The installed CLI must read its own packed manifest, release metadata included.
+  const manifest = JSON.parse(readFileSync(path.join(path.dirname(realpathSync(cli)), "../package.json"), "utf8"));
+  assert.match(await command(["--version"]), new RegExp(`^pwragent ${manifest.version.replaceAll(".", "\\.")}\\b`));
+  assert.equal(JSON.parse(await command(["version"])).version, manifest.version);
   // Exercise native input, resize and exit from the offline-installed tarball.
   const installedRequire = createRequire(realpathSync(cli));
   const terminal = installedRequire("node-pty").spawn("/bin/sh", [], { cwd: temporary, cols: 80, rows: 24 });
@@ -65,7 +69,10 @@ try {
     if (!terminalExited) terminal.kill();
   }
   let daemon = await start();
-  assert.equal(JSON.parse(await command(["status"])).activeJob, null);
+  const status = JSON.parse(await command(["status"]));
+  assert.equal(status.activeJob, null);
+  assert.equal(status.running.version, manifest.version);
+  assert.equal(status.restartRequired, false);
   const prompt = path.join(temporary, "prompt.txt");
   writeFileSync(prompt, "packed-install");
   await command(["submit", "--id", "smoke", "--prompt-file", prompt, "--sandbox", "workspace-write"]);

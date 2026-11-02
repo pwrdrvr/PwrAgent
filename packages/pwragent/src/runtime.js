@@ -3,12 +3,16 @@ import path from "node:path";
 import { readFileSync, readdirSync } from "node:fs";
 import { AgentToolRouter, buildPwrAgentMessagingToolDefinitions, readPwrAgentMessagingDynamicToolCall, resolveMessagingOutboundFile, validateMessagingFileMetadata, FILE_PUSH_MAX_BYTES } from "../dist/federation-core.js";
 import { Codex } from "./codex.js";
+import { installedVersion } from "./version.js";
 import { ACTIVE, atomicJson, digest, privateDirectory, validId } from "./store.js";
 
 export class Runtime {
   constructor({ store, workspace, home, command, onFailure }) {
     this.store = store;
     this.workspace = workspace;
+    // Snapshot at startup: upgrading the package files does not change the
+    // code this process is running.
+    this.running = installedVersion();
     this.projects = new OutpostProjects(path.dirname(store.directory), workspace);
     this.messagingTools = new AgentToolRouter(buildPwrAgentMessagingToolDefinitions((request) => this.messagingRequest(request), { nativeDynamicPdfImages: true }));
     this.fileAccess = { privateStorageRoots: [home, process.env.PWRAGENT_HOME].filter(Boolean),
@@ -41,7 +45,7 @@ export class Runtime {
   async handle(method, params = {}) {
     if (this.stopping) throw new Error("Daemon is stopping");
     switch (method) {
-      case "status": return { version: 1, ready: true, pid: process.pid, activeJob: this.active || null, workspace: this.workspace };
+      case "status": return { version: 1, ready: true, pid: process.pid, running: this.running, activeJob: this.active || null, workspace: this.workspace };
       case "project-list": return this.projects.list();
       case "project-create": case "project-clone": return this.projects.create(params);
       case "project-add": return this.projects.add(params);
