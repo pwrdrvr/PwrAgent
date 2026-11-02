@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -18,6 +18,7 @@ import { FederationRouter } from "../federation/federation-router";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import { DesktopFederationRuntime, federationEventClassForMethod, unsequencedFederationEventPayload } from "../federation/federation-runtime";
 import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../app-server/desktop-overlay-store";
+import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { OwnerConformanceCodexTransport } from "./fixtures/owner-conformance-codex-transport";
@@ -76,7 +77,13 @@ async function startDesktopOwner(): Promise<OwnerHost> {
   const codexClient = new CodexAppServerClient({ directoryResolver: async () => [] });
   const overlayStore = new SqliteOverlayStore(db);
   setDesktopOverlayStoreForTests(overlayStore);
-  const registry = new DesktopBackendRegistry({ codexClient, overlayStore, messagingStore: null,
+  // Desktop lists Codex once discovery has selected an executable. The
+  // transport fixture stands in for that executable.
+  const configPath = path.join(tempDir, "config.toml");
+  await writeFile(configPath, "");
+  const configStore = new DesktopConfigStore({ configPath });
+  configStore.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/fixture/codex", selectedVersion: "0.159.2" });
+  const registry = new DesktopBackendRegistry({ codexClient, configStore, overlayStore, messagingStore: null,
     threadTitleGenerationService: null, pdfToolMcpServer: null, runtimeInstanceId: "conformance-desktop",
     resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [] });
   desktopOwner.registry = registry;
@@ -109,6 +116,7 @@ async function startDesktopOwner(): Promise<OwnerHost> {
       await codexClient.close();
       desktopOwner.registry = undefined;
       resetDesktopOverlayStoreForTests();
+      configStore.dispose();
       db.close();
       await rm(workspace, { recursive: true, force: true });
       await rm(tempDir, { recursive: true, force: true });
@@ -158,7 +166,7 @@ const rowValues = (page: any) => {
  */
 const FIRST_PROMPT_SCENARIO: Step[] = [
   { name: "list providers", method: "backend.listBackends", run: (host) => host.client.listBackends({}),
-    values: (response) => ({ backends: response.backends?.map((backend: any) => backend.id) }) },
+    values: (response) => ({ backends: response.backends?.map((backend: any) => backend.kind) }) },
   { name: "start a thread", method: "backend.startThread",
     run: async (host, context) => {
       const started = await host.client.startThread({ backend: "codex", cwd: host.workspace, executionMode: "auto" });

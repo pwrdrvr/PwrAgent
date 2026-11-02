@@ -71,6 +71,10 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
         return;
       }
       result = { thread: wire(thread) };
+    } else if (request.method === "thread/turns/list") {
+      const thread = threads.get(String(params.threadId));
+      const turns = [...(thread?.turns ?? [])];
+      result = { data: params.sortDirection === "desc" ? turns.reverse() : turns, nextCursor: null };
     } else if (request.method === "thread/list") {
       result = { data: [...threads.values()].map(wire), nextCursor: null, backwardsCursor: null };
     } else if (request.method === "thread/name/set") {
