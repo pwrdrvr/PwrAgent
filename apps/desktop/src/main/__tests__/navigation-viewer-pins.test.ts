@@ -192,6 +192,25 @@ it("keeps one placeholder for two same-named repositories and lets it stand for 
   expect(viewer.directories[0]!.threadKeys).toHaveLength(3);
 });
 
+it("never adds a thread's home repository to a placeholder it joined by a secondary link's name", () => {
+  const ref = (id: string) => buildFederatedThreadRef({ backend: "codex", threadId: id, instanceId: "peer-a" });
+  const app: NavigationThreadSummary = { id: "app", source: "codex", title: "App", titleSource: "explicit",
+    inbox: { inInbox: false }, federation: { ref: ref("app"), instanceLabel: "Peer A" },
+    linkedDirectories: [{ id: "/peer-a/app", kind: "local", label: "app", path: "/peer-a/app",
+      repositoryKey: "github.com/fixture-org/app" }] };
+  const other: NavigationThreadSummary = { id: "other", source: "codex", title: "Other", titleSource: "explicit",
+    inbox: { inInbox: false }, federation: { ref: ref("other"), instanceLabel: "Peer A" },
+    linkedDirectories: [
+      { id: "/peer-a/PwrAgnt", kind: "local", label: "PwrAgnt", path: "/peer-a/PwrAgnt",
+        repositoryKey: "github.com/fixture-org/pwragent" },
+      { id: "/peer-a/app", kind: "local", label: "app", path: "/peer-a/app", repositoryKey: "github.com/fixture-org/app" },
+    ] };
+  const viewer = appendViewerNavigationPins({ threads: [], directories: [] }, [app, other]);
+  const placeholder = viewer.directories.find((directory) => directory.key === "unconfigured-directory:app");
+  expect(placeholder).toMatchObject({ repositoryKey: "github.com/fixture-org/app" });
+  expect(placeholder?.repositoryKeys).toBeUndefined();
+});
+
 it("groups a remote parent with its local child across checkout paths and resolves the selected home", () => {
   const child: NavigationThreadSummary = { id: "child-m4", source: "codex", title: "Finish 2001", titleSource: "explicit",
     linkedDirectories: [{ id: "worktree", kind: "worktree", label: "PwrAgnt", path: "/m4/.codex/worktrees/task/PwrAgnt" }],

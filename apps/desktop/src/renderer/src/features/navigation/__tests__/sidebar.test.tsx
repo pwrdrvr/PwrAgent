@@ -9666,8 +9666,8 @@ describe("Sidebar directory pinning", () => {
     expect(summary).toHaveFocus();
   });
 
-  // What main hands the renderer for a project only a peer has checked out:
-  // a label and nothing else (`remoteDirectoryPlaceholder`).
+  // What main hands the renderer for a project only a peer has checked out,
+  // when the owner sent no repository identity (`remoteDirectoryPlaceholder`).
   const remoteOnlyDirectory: NavigationDirectorySummary = {
     key: "unconfigured-directory:projecta",
     kind: "directory",

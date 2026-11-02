@@ -267,9 +267,11 @@ export function attachRemoteThreadsToLocalDirectories(
         homeIndex = mergedDirectories.push(placeholder) - 1;
       }
     } else if (mergedDirectories[homeIndex]!.localAvailability === "unconfigured") {
-      // A later thread finds an earlier thread's placeholder by name.
+      // A later thread finds an earlier thread's placeholder by name. Only
+      // its home project's identity belongs there: a secondary link's name
+      // can match too, and the home repository is a different project.
       const placeholder = remoteDirectoryPlaceholder(thread);
-      if (placeholder) {
+      if (placeholder?.key === mergedDirectories[homeIndex]!.key) {
         mergedDirectories[homeIndex] = mergePlaceholderRepositories(mergedDirectories[homeIndex]!, placeholder);
       }
     }
