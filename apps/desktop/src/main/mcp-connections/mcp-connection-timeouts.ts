@@ -2,12 +2,14 @@
 // minutes, then render the requested composite. Keep every local bridge layer
 // above that ceiling so callers do not have to fall back to model-turn polling.
 export const MCP_CONNECTION_TOOL_TIMEOUT_MS = 12 * 60_000;
-export const MCP_CONNECTION_TOOL_TIMEOUT_SECONDS =
-  MCP_CONNECTION_TOOL_TIMEOUT_MS / 1_000;
 // A call whose server reports progress gets the timeout above again after
 // each report, up to this much in total. A call that stops reporting still
 // fails after the timeout above.
 export const MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS = 60 * 60_000;
+// Codex applies an absolute timeout even when progress arrives. Give the
+// gateway's total deadline time to return its result before Codex times out.
+export const MCP_CONNECTION_CODEX_TOOL_TIMEOUT_SECONDS =
+  MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS / 1_000 + 60;
 
 /**
  * A deadline that progress pushes back. It fires `idleMs` after it was made
