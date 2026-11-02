@@ -834,6 +834,7 @@ describe("DesktopFederationRuntime", () => {
       vi.spyOn(runtime, "health").mockResolvedValue({
         instanceId: "parent-peer",
       } as never);
+      vi.spyOn(runtime, "connectedPeerTargets").mockReturnValue([]);
       vi.spyOn(runtime, "remoteBackend").mockReturnValue({
         updateSubthreadOrder,
       } as never);

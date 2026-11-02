@@ -101,6 +101,8 @@ describe("Federation nested archive placement", () => {
     await mount("middle-owner", "root");
     runtime = new DesktopFederationRuntime();
     vi.spyOn(runtime, "health").mockResolvedValue({ instanceId: "middle-owner" } as never);
+    // No peer is connected by default: pins resolve to their saved snapshots.
+    vi.spyOn(runtime, "connectedPeerTargets").mockReturnValue([]);
     vi.spyOn(runtime, "assertRemoteNavigationQueryProtocol").mockImplementation(() => {});
     vi.spyOn(runtime, "remoteTargetSupportsCapability").mockReturnValue(true);
     vi.spyOn(runtime, "remoteNavigationQueryPage").mockImplementation(async (target, request) => {
