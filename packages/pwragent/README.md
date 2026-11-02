@@ -475,6 +475,18 @@ against the daemon. External providers and Codex are mocked; no live peers,
 operator projects, credentials or compute machines are used. Ubuntu CI runs the
 Node suite; the desktop contract test runs on POSIX lanes.
 
+The owner conformance suite
+(`apps/desktop/src/main/__tests__/owner-conformance.test.ts`) runs one thread's
+life through the owner methods both hosts implement. It runs on this daemon and
+on desktop's real owner, and compares each response and event. Each known
+difference is a line in `owner-conformance-baseline.json` beside it, so the
+suite fails on any new difference and names its method. After fixing a
+difference, or changing the contract on purpose, record the result:
+
+```sh
+UPDATE_OWNER_CONFORMANCE=1 pnpm test apps/desktop/src/main/__tests__/owner-conformance.test.ts
+```
+
 A separate live smoke test installed the packed tarball and official Codex
 0.159.2 in a Node 24 Debian Linux arm64 Docker image. It used an unprivileged
 user, a read-only authentication-file mount, container-owned state and workspace,

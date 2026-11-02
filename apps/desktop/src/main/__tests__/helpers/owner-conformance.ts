@@ -143,19 +143,17 @@ export type OwnerConformanceBaseline = {
 /** What changed against the checked-in baseline, as a readable failure. */
 export function describeBaselineChange(baseline: OwnerConformanceBaseline, measured: OwnerConformanceBaseline): string | undefined {
   const lines: string[] = [];
-  const diffList = (label: string, before: string[], after: string[]) => {
-    const added = after.filter((line) => !before.includes(line));
-    const removed = before.filter((line) => !after.includes(line));
-    for (const line of added) lines.push(`  new ${label}: ${line}`);
-    for (const line of removed) lines.push(`  no longer ${label}: ${line}`);
+  const diffList = (added: string, removed: string, before: string[], after: string[]) => {
+    for (const line of after.filter((entry) => !before.includes(entry))) lines.push(`  ${added}: ${line}`);
+    for (const line of before.filter((entry) => !after.includes(entry))) lines.push(`  ${removed}: ${line}`);
   };
-  diffList("shared method", baseline.sharedMethods, measured.sharedMethods);
-  diffList("difference", baseline.differences, measured.differences);
+  diffList("new shared method", "removed shared method", baseline.sharedMethods, measured.sharedMethods);
+  diffList("new difference", "fixed difference", baseline.differences, measured.differences);
   if (!lines.length) return undefined;
   return [
     "Desktop and the Outpost no longer answer owner requests the way the baseline records.",
     ...lines,
-    "A new difference is a drift to fix. A difference that is gone was fixed: record it with",
+    "A new difference is drift to fix. Record a fixed one, or an intended contract change, with",
     "UPDATE_OWNER_CONFORMANCE=1 pnpm test apps/desktop/src/main/__tests__/owner-conformance.test.ts",
   ].join("\n");
 }
