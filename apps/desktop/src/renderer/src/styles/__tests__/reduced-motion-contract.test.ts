@@ -291,8 +291,9 @@ describe("paired busy rings under reduced motion", () => {
 
   /**
    * Rings that keep spinning under reduced motion, by file relative to
-   * `renderer/src`, one reason per ring in source order. Each is a decision
-   * that the motion is the ring's surface's only progress signal.
+   * `renderer/src`, one reason per ring. The gate checks only how many
+   * unpaired rings each file has, so name each ring in its reason. Each is a
+   * decision that the motion is the ring's surface's only progress signal.
    */
   const STANDALONE_RINGS: Record<string, string[]> = {
     "features/composer/Composer.tsx": [
@@ -307,8 +308,9 @@ describe("paired busy rings under reduced motion", () => {
   /**
    * Busy rings in renderer source, counted per file by the class token on
    * each line. Each ring's className is one line naming `pending-spinner`, so
-   * a line that also names the modifier is a paired ring. Comment lines are
-   * skipped so prose about the ring does not count as one. A className split
+   * a line that also names the modifier is a paired ring. Comment lines and
+   * trailing `// …` comments are skipped so prose about the ring does not
+   * count as one. A className split
    * across lines counts as unpaired, which fails loudly rather than hiding a
    * ring.
    */
@@ -322,8 +324,10 @@ describe("paired busy rings under reduced motion", () => {
     for (const file of files) {
       let paired = 0;
       let unpaired = 0;
-      for (const line of readFileSync(path.join(rendererRoot, file), "utf8").split("\n")) {
-        if (/^\s*(?:\/\/|\/\*|\*)/.test(line)) continue;
+      for (const sourceLine of readFileSync(path.join(rendererRoot, file), "utf8").split("\n")) {
+        if (/^\s*(?:\/\/|\/\*|\*)/.test(sourceLine)) continue;
+        // A space before and after keeps `https://` in a string intact.
+        const line = sourceLine.replace(/\s\/\/\s.*$/, "");
         const rings = line.match(ringToken)?.length ?? 0;
         const pairedRings = Math.min(rings, line.match(pairedToken)?.length ?? 0);
         paired += pairedRings;

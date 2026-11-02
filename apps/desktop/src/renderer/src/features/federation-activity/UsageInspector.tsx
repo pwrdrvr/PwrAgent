@@ -195,6 +195,9 @@ export function UsageInspector(props: {
           ? `${props.total ? Math.round(group.cost / props.total * 100) : 0}% of the window · ${group.rows.length} ${group.rows.length === 1 ? "turn" : "turns"}${group.helperThreads ? `, ${usageMoney(group.helperCost)} from helpers` : ""}`
           : "from the window total"}</span></div>
       {analysis && group ? <>
+        {/* The Analysis tab's ring is paired: while it runs, the footer below
+            both tabs names the work ("Reading on …"), so it can go still
+            under reduced motion. Keep that line outside the tab panels. */}
         <div className="usage-inspector__tabs" role="tablist" aria-label="Inspection"
           onKeyDown={(event) => {
             if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
