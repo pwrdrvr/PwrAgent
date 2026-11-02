@@ -791,7 +791,7 @@ jobs:
           retention-days: 30
 
   windows-e2e:
-    name: Windows Desktop E2E (lane ${{ matrix.lane }} of 4)
+    name: Windows Desktop E2E (sample ${{ matrix.sample }}, lane ${{ matrix.lane }} of 4)
     # Advisory while the lane establishes a baseline: it is deliberately absent
     # from `desktop-e2e-result`, so a Windows-only failure cannot block a merge
     # yet. Promote it into that aggregate once it has been green for a while.
@@ -813,6 +813,7 @@ jobs:
       fail-fast: false
       matrix:
         lane: [1, 2, 3, 4]
+        sample: [1, 2, 3]
     # One budget for setup, build, tests, and reporting. Do not add shorter
     # step or suite deadlines that interrupt a progressing lane before this cap.
     # Green lanes take 6 to 9.75 minutes (15 CI runs, 2026-11-01), and a lane
@@ -868,7 +869,7 @@ jobs:
         uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
-          name: desktop-e2e-windows-lane-${{ matrix.lane }}-artifacts
+          name: desktop-e2e-windows-sample-${{ matrix.sample }}-lane-${{ matrix.lane }}-artifacts
           path: |
             apps/desktop/playwright-report/
             apps/desktop/test-results/
