@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ArchiveWorktreeRequest,
   ArchiveThreadRequest,
@@ -1337,6 +1337,17 @@ vi.mock("../pr-status/pr-status-token-bucket", async () => {
   };
 });
 
+// Load the module under test while the file loads, not in a hook. A static
+// import would run the mock factories before the helpers above exist, so this
+// waits for them. A cold load takes 3.5 to 4.7 s on the CI runners, and a
+// hook's 10 s timer failed the suite on a loaded macOS runner. File loading
+// has no timer, as for every test file that imports its subject statically.
+const {
+  disposeAppServerIpcHandlers,
+  registerAppServerIpcHandlers,
+  resetAppServerServiceForTests,
+} = await import("../ipc/app-server");
+
 describe("app server ipc", () => {
   it("reads exact persisted peer membership without repinning or listing navigation rows", async () => {
     const { NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL } = await import("../../shared/ipc");
@@ -1387,10 +1398,6 @@ describe("app server ipc", () => {
     }
   });
 
-  type AppServerIpcModule = typeof import("../ipc/app-server");
-  let disposeAppServerIpcHandlers: AppServerIpcModule["disposeAppServerIpcHandlers"];
-  let registerAppServerIpcHandlers: AppServerIpcModule["registerAppServerIpcHandlers"];
-  let resetAppServerServiceForTests: AppServerIpcModule["resetAppServerServiceForTests"];
   // Historical owner materialization coverage is deliberately separate from IPC.
   const readLegacyOwnerMaterialization = async (_event: unknown, request?: GetNavigationSnapshotRequest) =>
     (await import("../ipc/app-server")).appServerService.getNavigationSnapshot(request);
@@ -1421,15 +1428,6 @@ describe("app server ipc", () => {
     } finally {
       transport.mockRestore();
     }
-  });
-
-  beforeAll(async () => {
-    // Import after the hoisted mocks exist, but before an individual test can
-    // pay the cold module-graph evaluation cost.
-    const appServerIpc = await import("../ipc/app-server");
-    disposeAppServerIpcHandlers = appServerIpc.disposeAppServerIpcHandlers;
-    registerAppServerIpcHandlers = appServerIpc.registerAppServerIpcHandlers;
-    resetAppServerServiceForTests = appServerIpc.resetAppServerServiceForTests;
   });
 
   beforeEach(() => {
