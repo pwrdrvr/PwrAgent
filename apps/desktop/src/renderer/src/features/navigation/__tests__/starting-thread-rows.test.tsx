@@ -264,7 +264,7 @@ describe("a thread that is still starting", () => {
       view.rerender(renderStage(true, "Crop tool implementation", "-1024"));
       expect(rowNames(project)).toEqual([...before, "Crop tool implementation, pinned", ...after]);
     }
-    fireEvent.pointerLeave(screen.getByRole("region", { name: "Thread browser" }));
+    fireEvent.pointerLeave(project.closest<HTMLElement>(".sidebar__scroll-region")!, { pointerType: "mouse" });
     expect(rowNames(project)).toEqual([...before, ...after, "Crop tool implementation, pinned"]);
     if (!hasUnpinned) expect(screen.queryByText("Directory threads")).not.toBeInTheDocument();
   });
