@@ -175,12 +175,9 @@ shortcuts. Diagnosis and recovery remain in PwrSuiteLab's supported tools.
 These stay in this repository because they are product or CI contracts,
 not lab inventory:
 
-- Generate macOS visual goldens only in the lab VM that matches the
-  macOS/ARM64 CI renderer. The workflow is in
+- macOS visual goldens must match the CI renderer, a GitHub-hosted
+  `macos-26` runner. The workflow is in
   [CONTRIBUTING.md](../../../CONTRIBUTING.md).
-- The CI lane uses `runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]`.
-- The `PwrDrvr macOS` runner group is selected-repository only for
-  PwrAgent and PwrSnap. Do not add a repository-scoped runner. Do not
-  grant the rest of the organization access.
-- Fork-head pull requests must not run on those machines.
+- PwrAgent CI does not use lab runners. Do not move a CI job onto lab
+  machines: fork pull requests run every macOS job.
 - VM E2E sets `PWRAGENT_E2E_DISABLE_GPU=1`. Ordinary host E2E does not.
