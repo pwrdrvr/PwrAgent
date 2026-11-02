@@ -7,9 +7,11 @@ import {
 import { z } from "zod";
 import { validateJsonSchemaValue } from "./mcp-gateway-catalog";
 import {
-  assertRelayableFormElicitation,
+  assertRelayableElicitation,
   elicitationUnavailable,
+  isUrlElicitation,
   type ElicitationRoute,
+  type ElicitationSource,
   type ElicitationWireLine,
 } from "./mcp-elicitation-relay";
 
@@ -39,6 +41,15 @@ type InFlight = {
   client: object;
   signal: AbortSignal;
   route?: ElicitationRoute;
+  /** The caller can show a link as well as a form. */
+  url: boolean;
+  /** Told the id of each link the person chose to open. */
+  onUrlOpened?: (elicitationId: string) => void;
+};
+
+export type ElicitationTrackOptions = {
+  url?: boolean;
+  onUrlOpened?: (elicitationId: string) => void;
 };
 
 export type ElicitationOutcome =
@@ -71,8 +82,20 @@ export class UpstreamElicitationRoutes {
    * Record one request on an upstream client for as long as it runs. A route
    * is given only for a request whose caller can show the form to a person.
    */
-  track(token: string, client: object, signal: AbortSignal, route?: ElicitationRoute): () => void {
-    const entry: InFlight = { client, signal, ...(route ? { route } : {}) };
+  track(
+    token: string,
+    client: object,
+    signal: AbortSignal,
+    route?: ElicitationRoute,
+    options: ElicitationTrackOptions = {},
+  ): () => void {
+    const entry: InFlight = {
+      client,
+      signal,
+      url: Boolean(route && options.url),
+      ...(route ? { route } : {}),
+      ...(route && options.onUrlOpened ? { onUrlOpened: options.onUrlOpened } : {}),
+    };
     let entries = this.byToken.get(token);
     if (!entries) {
       entries = new Set();
@@ -90,6 +113,8 @@ export class UpstreamElicitationRoutes {
     token: string;
     client: object;
     request: ElicitRequestParams;
+    /** Where the server runs, which decides the links it may send. */
+    source: ElicitationSource;
     /** Aborts when the server cancels the form or its session closes. */
     signal: AbortSignal;
     /** Throws when the caller may not be asked, such as a revoked selection. */
@@ -100,7 +125,7 @@ export class UpstreamElicitationRoutes {
   }): Promise<ElicitResult> {
     const report = (outcome: ElicitationOutcome): void => params.onOutcome?.(outcome);
     try {
-      assertRelayableFormElicitation(params.request);
+      assertRelayableElicitation(params.request, params.source);
     } catch (error) {
       report("refused");
       throw error;
@@ -119,9 +144,12 @@ export class UpstreamElicitationRoutes {
       throw elicitationUnavailable("Several requests are running on this MCP session, so PwrAgent cannot tell which one this form belongs to.");
     }
     const entry = entries[0]!;
-    if (!entry.route) {
+    const link = isUrlElicitation(params.request);
+    if (!entry.route || (link && !entry.url)) {
       report("no_interactive_client");
-      throw elicitationUnavailable("The client that made this request cannot show MCP forms.");
+      throw elicitationUnavailable(link
+        ? "The client that made this request cannot show links from MCP servers."
+        : "The client that made this request cannot show MCP forms.");
     }
     try {
       await params.beforeAsk?.();
@@ -161,12 +189,15 @@ export class UpstreamElicitationRoutes {
     }
     let result: ElicitResult;
     try {
-      result = readFormElicitationAnswer(params.request, answer);
+      result = readElicitationAnswer(params.request, answer);
     } catch (error) {
       report("refused");
       throw error;
     }
     report("answered");
+    if (link && result.action === "accept") {
+      entry.onUrlOpened?.((params.request as { elicitationId: string }).elicitationId);
+    }
     return result;
   }
 }
@@ -174,12 +205,14 @@ export class UpstreamElicitationRoutes {
 /**
  * The answer a person gave, checked before it goes upstream.
  *
- * An acceptance must carry content that satisfies the requested schema: an
+ * For a link, `accept` means only that the person chose to open it; the
+ * server learns whether its flow finished on its own, so no content goes
+ * back. For a form, an acceptance must carry content that satisfies the requested schema: an
  * `accept` with no content is not an answer to a form, and some servers read
  * a missing `content` as nothing left to check. Decline and cancel carry no
  * content. The client's `_meta` passes through unchanged.
  */
-export function readFormElicitationAnswer(
+export function readElicitationAnswer(
   request: ElicitRequestParams,
   answer: unknown,
 ): ElicitResult {
@@ -194,7 +227,7 @@ export function readFormElicitationAnswer(
   const preservedMeta = meta && typeof meta === "object" && !Array.isArray(meta)
     ? { _meta: meta as Record<string, unknown> }
     : {};
-  if (action !== "accept") return { action, ...preservedMeta };
+  if (action !== "accept" || isUrlElicitation(request)) return { action, ...preservedMeta };
   const content = record?.content;
   if (!content || typeof content !== "object" || Array.isArray(content)) {
     throw new McpError(ErrorCode.InvalidParams, "An accepted MCP form answer must include its content.");

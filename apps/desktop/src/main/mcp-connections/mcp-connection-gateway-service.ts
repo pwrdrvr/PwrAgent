@@ -16,18 +16,22 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
+  ElicitationCompleteNotificationSchema,
   ErrorCode,
+  ListRootsRequestSchema,
   McpError,
   PromptListChangedNotificationSchema,
   ResourceListChangedNotificationSchema,
   ResourceUpdatedNotificationSchema,
   ToolListChangedNotificationSchema,
   type CallToolResult,
+  type ClientCapabilities,
   type ElicitRequestParams,
   type ElicitResult,
   type InitializeResult,
   type Notification,
   type Progress,
+  type Root,
 } from "@modelcontextprotocol/sdk/types.js";
 import { McpInitializationTransport } from "./mcp-initialization-transport";
 import { McpDiscovery, McpDiscoveryError, mcpDiscoveryContext, mcpDiscoveryPhaseContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
@@ -49,10 +53,17 @@ import {
 } from "./mcp-connection-rpc-client";
 import {
   ELICITATION_WIRE_OPT_IN,
-  UPSTREAM_FORM_ELICITATION_CAPABILITIES,
+  UPSTREAM_THREAD_ELICITATION_CAPABILITIES,
+  URL_ELICITATION_WIRE_OPT_IN,
   elicitationUnavailable,
   type ElicitationRoute,
 } from "./mcp-elicitation-relay";
+import {
+  buildUpstreamRoots,
+  readRelayedRoots,
+  rootsFingerprint,
+  type ThreadRootDirectory,
+} from "./mcp-upstream-roots";
 import {
   ElicitationWireChannel,
   UpstreamElicitationRoutes,
@@ -89,6 +100,7 @@ import {
   type SandboxerLinkTarget,
   type SandboxerTransport,
   isSandboxerTransport,
+  buildThreadIdentityKey,
 } from "@pwragent/shared";
 import { isSafeExternalOpenUrl } from "../external-url-policy";
 import { getMainLogger } from "../log";
@@ -165,12 +177,36 @@ const MAX_SERVER_INSTRUCTIONS_CHARS = 2_000;
  * so this is longer than the URL probe.
  */
 const STDIO_TEST_TIMEOUT_MS = 30_000;
+/** Threads whose roots the owner holds, and this instance reports. */
+const MAX_ROOT_THREADS = 512;
+/** A registration repeats this often during a turn; directory changes do not wait for it. */
+const ROOTS_REFRESH_INTERVAL_MS = 10_000;
+/** Links one session's host opened whose completion it may still be told of. */
+const MAX_OPENED_URL_ELICITATIONS = 32;
+/** Sign-in links a `-32042` tool error may show the person, one at a time. */
+const MAX_REQUIRED_URL_ELICITATIONS = 3;
 const GATEWAY_OFF_ERROR =
   "The PwrAgent MCP gateway is turned off. Turn it on in Settings → Plugins to use managed connections.";
 
 type BridgeGrant = {
   connectionId: string;
   threadId?: string;
+  /**
+   * The backend of a native bridge's thread. A gateway scope names its own;
+   * a bare thread id does not, and roots are read per backend and thread.
+   */
+  backend?: AppServerBackendKind;
+};
+
+type ThreadRootsScope = { backend: AppServerBackendKind; threadId: string };
+
+/** What a thread session answers besides the operations it forwards. */
+type UpstreamSessionHandlers = {
+  /** Only a thread's session can reach a person, so only it takes forms and links. */
+  onElicit?: UpstreamElicitHandler;
+  /** Only a local command's thread session is told the thread's directories. */
+  onListRoots?: (client: Client) => { roots: Root[] };
+  onElicitationComplete?: (client: Client, elicitationId: string) => void;
 };
 
 type UpstreamSession = {
@@ -196,6 +232,8 @@ type BridgeRequest = {
   elicitation?: unknown;
   /** The caller takes the upstream server's progress reports on this socket. */
   progress?: unknown;
+  /** With `elicitation`, the caller can also show the upstream server's links. */
+  urlElicitation?: unknown;
 };
 
 /**
@@ -265,6 +303,12 @@ type FetchLike = (
 
 export type McpConnectionGatewayServiceOptions = {
   sandboxer?: SandboxerConnection;
+  /**
+   * A thread's directories, read in the instance that runs the thread. The
+   * backend registry sets it with `setThreadRootsResolver` when it is not
+   * given here.
+   */
+  resolveThreadRoots?: (scope: ThreadRootsScope) => Promise<ThreadRootDirectory[]>;
   readGatewaySelection?: (context: { backend: AppServerBackendKind; threadId: string }) => Promise<string[]>;
   bridgeEntryPath?: string;
   fetchFn?: FetchLike;
@@ -659,6 +703,16 @@ export class McpConnectionGatewayService {
   private activeRpcSockets = 0;
   /** Requests in flight per thread session, for routing upstream forms. */
   private readonly elicitationRoutes = new UpstreamElicitationRoutes();
+  /** The owner's roots per thread identity, as the thread's instance reported them. */
+  private readonly threadRoots = new Map<string, Root[]>();
+  /** The roots each session was last given, and last told had changed. */
+  private readonly rootsServed = new WeakMap<Client, string>();
+  private readonly rootsAnnounced = new WeakMap<Client, string>();
+  /** Threads whose roots this instance reports because it registered their grants. */
+  private readonly rootThreads = new Map<string, { scope: ThreadRootsScope; refreshedAt: number; generation: number }>();
+  private threadRootsResolver?: (scope: ThreadRootsScope) => Promise<ThreadRootDirectory[]>;
+  /** Links a native host opened, per session, so the server's completion can follow. */
+  private readonly openedUrlElicitations = new WeakMap<Client, Map<string, string>>();
   private readonly recordCreatedSandbox: NonNullable<McpConnectionGatewayServiceOptions["recordCreatedSandbox"]>;
 
   constructor(options: McpConnectionGatewayServiceOptions = {}) {
@@ -667,6 +721,7 @@ export class McpConnectionGatewayService {
         if (!getAppStateMode()) return;
         new ThreadSandboxStore(getAppStateDb().raw).recordCreated(params);
       });
+    this.threadRootsResolver = options.resolveThreadRoots;
     this.readGatewaySelection = options.readGatewaySelection
       ?? (async (context) => (await getAppOverlayStore().getThreadOverlayState(context))?.mcpConnectionIds ?? []);
     this.bridgeEntryPath =
@@ -1688,6 +1743,19 @@ export class McpConnectionGatewayService {
     connectionId: string,
     threadId?: string,
     signal?: AbortSignal,
+    /** The backend of a bare thread id, so its roots can be read. */
+    backend?: AppServerBackendKind,
+  ): Promise<McpConnectionBridgeRegistration> {
+    const registration = await this.registerBridgeScope(connectionId, threadId, signal, backend);
+    this.noteRootThread(threadId, backend);
+    return registration;
+  }
+
+  private async registerBridgeScope(
+    connectionId: string,
+    threadId: string | undefined,
+    signal: AbortSignal | undefined,
+    backend: AppServerBackendKind | undefined,
   ): Promise<McpConnectionBridgeRegistration> {
     signal?.throwIfAborted();
     const ownership = await this.ensureOwnerBroker();
@@ -1698,6 +1766,7 @@ export class McpConnectionGatewayService {
         connectionId,
         threadId,
         signal,
+        backend,
       );
     }
     // Availability is checked before credentials: a connection withheld by
@@ -1724,17 +1793,19 @@ export class McpConnectionGatewayService {
       ? this.threadRegistrations.get(registrationKey)
       : undefined;
     if (existing && this.grants.has(existing.token)) {
-      return this.registrationHandle(existing.token, existing.server, registrationKey);
+      this.adoptGrantBackend(existing.token, backend);
+      return this.registrationHandle(existing.token, existing.server, registrationKey, backend);
     }
     await this.startBridgeServer();
     signal?.throwIfAborted();
     // Another call may have registered this same scope during broker startup.
     const started = registrationKey ? this.threadRegistrations.get(registrationKey) : undefined;
     if (started && this.grants.has(started.token)) {
-      return this.registrationHandle(started.token, started.server, registrationKey);
+      this.adoptGrantBackend(started.token, backend);
+      return this.registrationHandle(started.token, started.server, registrationKey, backend);
     }
     const token = randomBytes(32).toString("base64url");
-    this.grants.set(token, { connectionId, threadId });
+    this.grants.set(token, { connectionId, threadId, ...(backend ? { backend } : {}) });
     const socketPath = this.bridgeSocketPath;
     if (!socketPath) {
       this.grants.delete(token);
@@ -1744,7 +1815,13 @@ export class McpConnectionGatewayService {
     if (registrationKey) {
       this.threadRegistrations.set(registrationKey, { server, token });
     }
-    return this.registrationHandle(token, server, registrationKey);
+    return this.registrationHandle(token, server, registrationKey, backend);
+  }
+
+  /** A grant registered before its backend was known learns it once. */
+  private adoptGrantBackend(token: string, backend: AppServerBackendKind | undefined): void {
+    const grant = this.grants.get(token);
+    if (grant && backend && !grant.backend) grant.backend = backend;
   }
 
   /** Host callers authorize the live thread selection before entering this seam.
@@ -1760,6 +1837,8 @@ export class McpConnectionGatewayService {
     deadlineAt?: number;
     /** Shows the upstream server's forms for a call to the thread's operator. */
     elicit?: ElicitationRoute;
+    /** `elicit` can also show the upstream server's links. */
+    elicitUrl?: boolean;
     /** Called for each progress report from the upstream server during a call. */
     onProgress?: () => void;
   }): Promise<McpGatewayTool[] | CallToolResult> {
@@ -1780,6 +1859,7 @@ export class McpConnectionGatewayService {
         call ? MCP_CONNECTION_TOOL_TIMEOUT_MS : undefined,
         call ? params.elicit : undefined,
         call ? params.onProgress : undefined,
+        call && params.elicit && params.elicitUrl ? { urlElicitation: true } : undefined,
       ) as McpGatewayTool[] | CallToolResult;
     } finally {
       discovery.close();
@@ -1790,6 +1870,7 @@ export class McpConnectionGatewayService {
     token: string,
     server: McpConnectionBridgeServer,
     registrationKey?: string,
+    backend?: AppServerBackendKind,
   ): McpConnectionBridgeRegistration {
     let currentRegistrationKey = registrationKey;
     return {
@@ -1803,6 +1884,8 @@ export class McpConnectionGatewayService {
           currentRegistrationKey,
           { server, token },
         );
+        this.announceGrantRoots(token, grant);
+        this.noteRootThread(threadId, grant.backend ?? backend);
       },
       revoke: () => {
         this.grants.delete(token);
@@ -2033,6 +2116,7 @@ export class McpConnectionGatewayService {
     connectionId: string,
     threadId?: string,
     signal?: AbortSignal,
+    backend?: AppServerBackendKind,
   ): Promise<McpConnectionBridgeRegistration> {
     let record: McpConnectionBrokerRecord;
     let result: { token: string };
@@ -2041,7 +2125,7 @@ export class McpConnectionGatewayService {
       result = await this.requestBrokerRecord<{ token: string }>(
         record,
         "broker/register",
-        { connectionId, threadId },
+        { connectionId, threadId, ...(backend ? { backend } : {}) },
         signal,
       );
     } catch (error) {
@@ -2065,6 +2149,7 @@ export class McpConnectionGatewayService {
             error: error instanceof Error ? error.message : String(error),
           });
         });
+        this.noteRootThread(nextThreadId, backend);
       },
       revoke: () => {
         void this.requestBrokerRecord(
@@ -2548,8 +2633,15 @@ export class McpConnectionGatewayService {
       clientName: `pwragent-${connection.id}-proxy`,
       discovery,
       threadSession: true,
-      onElicit: async (client, request, signal) =>
-        await this.routeUpstreamElicitation(token, client, request, signal),
+      handlers: {
+        onElicit: async (client, request, signal) =>
+          await this.routeUpstreamElicitation(token, client, request, signal),
+        onElicitationComplete: (client, elicitationId) =>
+          this.completeUpstreamUrlElicitation(token, client, elicitationId),
+        ...(connection.kind === "stdio"
+          ? { onListRoots: (client: Client) => this.listUpstreamRoots(token, client) }
+          : {}),
+      },
       // A session evicts itself when it actually dies. Leaving that to the
       // per-request error path would close a healthy session shared by every
       // in-flight request on this token the first time one of them was
@@ -2590,8 +2682,7 @@ export class McpConnectionGatewayService {
       discovery: McpDiscovery;
       /** A thread's session, counted in a local command's running total. */
       threadSession?: boolean;
-      /** Only a thread's session can reach a person, so only it takes forms. */
-      onElicit?: UpstreamElicitHandler;
+      handlers?: UpstreamSessionHandlers;
     },
   ): Promise<UpstreamSession> {
     let transport: Transport;
@@ -2616,7 +2707,7 @@ export class McpConnectionGatewayService {
         { fetch: coordinator.authorizedFetch() },
       );
     }
-    const client = this.createUpstreamClient(connection, options.clientName, options.onElicit);
+    const client = this.createUpstreamClient(connection, options.clientName, options.handlers);
     const onClose = options.onClose;
     if (onClose) client.onclose = () => onClose(client);
     const abort = (): void => { void transport.close().catch(() => undefined); };
@@ -2662,13 +2753,13 @@ export class McpConnectionGatewayService {
       onClose?: (client: Client) => void;
       discovery: McpDiscovery;
       threadSession?: boolean;
-      onElicit?: UpstreamElicitHandler;
+      handlers?: UpstreamSessionHandlers;
     },
   ): Promise<UpstreamSession> {
     const launch = connection.stdio;
     if (!launch) throw new Error(`${connection.displayName} has no command to run.`);
     let transport: OwnedStdioClientTransport | undefined;
-    const client = this.createUpstreamClient(connection, options.clientName, options.onElicit);
+    const client = this.createUpstreamClient(connection, options.clientName, options.handlers);
     const abort = (): void => { void transport?.close().catch(() => undefined); };
     options.discovery.signal.addEventListener("abort", abort, { once: true });
     try {
@@ -2733,23 +2824,34 @@ export class McpConnectionGatewayService {
   /**
    * An MCP client for one upstream connection.
    *
-   * Only a thread session declares form elicitation; its forms are routed
-   * per request. Settings reads and tests declare nothing, as before, so a
-   * server never asks them for a person's answer.
+   * Only a thread session declares elicitation; its forms and links are
+   * routed per request. Only a local command's thread session declares
+   * roots. Settings reads and tests declare nothing, as before, so a server
+   * never asks them for a person's answer or a directory.
    */
   private createUpstreamClient(
     connection: McpConnectionRecord,
     clientName: string,
-    onElicit?: UpstreamElicitHandler,
+    handlers: UpstreamSessionHandlers = {},
   ): Client {
-    const client = new Client(
-      { name: clientName, version: "1.0.0" },
-      { capabilities: onElicit ? UPSTREAM_FORM_ELICITATION_CAPABILITIES : {} },
-    );
+    const capabilities: ClientCapabilities = {
+      ...(handlers.onElicit ? UPSTREAM_THREAD_ELICITATION_CAPABILITIES : {}),
+      ...(handlers.onListRoots ? { roots: { listChanged: true } } : {}),
+    };
+    const client = new Client({ name: clientName, version: "1.0.0" }, { capabilities });
     this.installDiscoveryNotifications(client, connection);
+    const { onElicit, onListRoots, onElicitationComplete } = handlers;
     if (onElicit) {
       client.setRequestHandler(VerbatimElicitRequestSchema, async (request, extra) =>
         await onElicit(client, request.params as ElicitRequestParams, extra.signal));
+    }
+    if (onListRoots) {
+      client.setRequestHandler(ListRootsRequestSchema, () => onListRoots(client));
+    }
+    if (onElicitationComplete) {
+      client.setNotificationHandler(ElicitationCompleteNotificationSchema, (notification) => {
+        onElicitationComplete(client, notification.params.elicitationId);
+      });
     }
     return client;
   }
@@ -2784,6 +2886,8 @@ export class McpConnectionGatewayService {
       token,
       client,
       request,
+      // A local command may send its own page on this machine; nothing else may.
+      source: { local: this.registry.get(grant.connectionId)?.kind === "stdio" },
       signal,
       beforeAsk: stillCurrent,
       beforeAnswer: stillCurrent,
@@ -2793,6 +2897,188 @@ export class McpConnectionGatewayService {
         outcome,
       }),
     });
+  }
+
+  /**
+   * Show the sign-in links a tool call's `-32042` error names, one at a
+   * time, to the person whose call it was, then hand the call's error back
+   * with what happened. The call is never retried here: the server may have
+   * done part of a write before it asked, and only the agent can decide to
+   * call again once the person has signed in.
+   */
+  private async offerRequiredUrlElicitations(
+    token: string,
+    client: Client,
+    error: McpError,
+    signal: AbortSignal | undefined,
+  ): Promise<McpError> {
+    const listed = (error.data as { elicitations?: unknown } | undefined)?.elicitations;
+    const requests = Array.isArray(listed) ? listed.slice(0, MAX_REQUIRED_URL_ELICITATIONS) : [];
+    const actions: string[] = [];
+    for (const entry of requests) {
+      if (signal?.aborted) break;
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+      const request = { ...(entry as Record<string, unknown>), mode: "url" } as ElicitRequestParams;
+      try {
+        const result = await this.routeUpstreamElicitation(token, client, request, signal ?? new AbortController().signal);
+        actions.push(result.action);
+      } catch {
+        actions.push("refused");
+      }
+    }
+    const reason = error.message.replace(/^MCP error -?\d+: /, "");
+    const note = actions.includes("accept")
+      ? " PwrAgent showed the operator the sign-in page and they opened it. Call the tool again after they confirm sign-in is finished; check first whether the earlier call already changed anything."
+      : actions.length > 0
+        ? " PwrAgent showed the operator the sign-in page, but they did not open it."
+        : "";
+    return new McpError(error.code, `${reason}${note}`, error.data);
+  }
+
+  /** A link a native host's person opened, kept until the server says it is done. */
+  private rememberOpenedUrlElicitation(token: string, client: Client, elicitationId: string): void {
+    let opened = this.openedUrlElicitations.get(client);
+    if (!opened) {
+      opened = new Map();
+      this.openedUrlElicitations.set(client, opened);
+    }
+    opened.delete(elicitationId);
+    opened.set(elicitationId, token);
+    while (opened.size > MAX_OPENED_URL_ELICITATIONS) {
+      opened.delete(opened.keys().next().value!);
+    }
+  }
+
+  /**
+   * The server finished a link's flow. Only the native host that opened that
+   * link is told, and only while the session it came from is still current.
+   * Any other id is ignored, as the spec requires.
+   */
+  private completeUpstreamUrlElicitation(token: string, client: Client, elicitationId: string): void {
+    const opened = this.openedUrlElicitations.get(client);
+    if (opened?.get(elicitationId) !== token) return;
+    opened.delete(elicitationId);
+    if (this.upstreamSessions.get(token)?.client !== client) return;
+    this.sendBridgeEvent(token, {
+      method: "notifications/elicitation/complete",
+      params: { elicitationId },
+    });
+  }
+
+  /**
+   * How the thread's instance reads a thread's directories. The backend
+   * registry sets this; without it no roots are reported.
+   */
+  setThreadRootsResolver(resolver: (scope: ThreadRootsScope) => Promise<ThreadRootDirectory[]>): void {
+    this.threadRootsResolver = resolver;
+  }
+
+  /**
+   * A thread's directories changed in this instance. Threads whose grants
+   * were registered here report their roots again; the owner then tells each
+   * session whose roots changed.
+   */
+  noteThreadDirectoriesChanged(backend: AppServerBackendKind, threadIds: readonly string[]): void {
+    for (const threadId of threadIds) {
+      const key = buildThreadIdentityKey(backend, threadId);
+      if (this.rootThreads.has(key)) this.refreshThreadRoots(key, { backend, threadId });
+    }
+  }
+
+  /**
+   * Report a registered thread's roots to the owner. A registration repeats
+   * on every turn and gateway call, so a recent report is not repeated.
+   */
+  private noteRootThread(scopeKey: string | undefined, backend: AppServerBackendKind | undefined): void {
+    const scope = threadRootsScope(scopeKey, backend);
+    if (!scope || !this.threadRootsResolver) return;
+    const key = buildThreadIdentityKey(scope.backend, scope.threadId);
+    const known = this.rootThreads.get(key);
+    if (known && Date.now() - known.refreshedAt < ROOTS_REFRESH_INTERVAL_MS) return;
+    this.refreshThreadRoots(key, scope);
+  }
+
+  private refreshThreadRoots(key: string, scope: ThreadRootsScope): void {
+    const resolver = this.threadRootsResolver;
+    if (!resolver) return;
+    const generation = (this.rootThreads.get(key)?.generation ?? 0) + 1;
+    this.rootThreads.delete(key);
+    this.rootThreads.set(key, { scope, refreshedAt: Date.now(), generation });
+    while (this.rootThreads.size > MAX_ROOT_THREADS) {
+      this.rootThreads.delete(this.rootThreads.keys().next().value!);
+    }
+    void (async () => {
+      const roots = buildUpstreamRoots(await resolver(scope));
+      // A later report for this thread supersedes one still resolving.
+      if (this.rootThreads.get(key)?.generation !== generation) return;
+      const ownership = await this.ensureOwnerBroker();
+      if (ownership.owned) {
+        this.storeThreadRoots(key, roots);
+        return;
+      }
+      await this.requestOwnerBroker<boolean>(ownership.holder, "broker/thread-roots", {
+        backend: scope.backend,
+        threadId: scope.threadId,
+        roots,
+      });
+    })().catch((error: unknown) => {
+      connectionLog.warn("MCP roots update failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  /** The owner's copy of a thread's roots; every session of it hears a change. */
+  private storeThreadRoots(key: string, roots: Root[]): void {
+    this.threadRoots.delete(key);
+    this.threadRoots.set(key, roots);
+    while (this.threadRoots.size > MAX_ROOT_THREADS) {
+      this.threadRoots.delete(this.threadRoots.keys().next().value!);
+    }
+    for (const [token, grant] of this.grants) {
+      if (grantRootsKey(grant) === key) this.announceGrantRoots(token, grant);
+    }
+  }
+
+  /**
+   * Send `notifications/roots/list_changed` to a grant's session when its
+   * roots differ from what it last read. A session that never asked is not
+   * told: it reads the current list when it first asks.
+   */
+  private announceGrantRoots(token: string, grant: BridgeGrant): void {
+    const client = this.upstreamSessions.get(token)?.client;
+    const served = client ? this.rootsServed.get(client) : undefined;
+    if (!client || served === undefined) return;
+    const key = grantRootsKey(grant);
+    const fingerprint = rootsFingerprint((key && this.threadRoots.get(key)) || []);
+    if (served === fingerprint || this.rootsAnnounced.get(client) === fingerprint) return;
+    this.rootsAnnounced.set(client, fingerprint);
+    void client.sendRootsListChanged().catch((error: unknown) => {
+      connectionLog.warn("MCP roots change notification failed", {
+        connectionId: grant.connectionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  /**
+   * A local command's `roots/list`: the directories of the thread its grant
+   * serves, or none before the grant names a thread. A replaced or revoked
+   * session is refused. A session still opening is answered: a server may
+   * ask before PwrAgent has finished recording it.
+   */
+  private listUpstreamRoots(token: string, client: Client): { roots: Root[] } {
+    const grant = this.grants.get(token);
+    const current = this.upstreamSessions.get(token)?.client;
+    if (!grant || (current && current !== client)) {
+      throw new McpError(ErrorCode.InvalidRequest, "This MCP session is no longer granted to a thread.");
+    }
+    const key = grantRootsKey(grant);
+    const roots = (key && this.threadRoots.get(key)) || [];
+    const fingerprint = rootsFingerprint(roots);
+    this.rootsServed.set(client, fingerprint);
+    this.rootsAnnounced.set(client, fingerprint);
+    return { roots: roots.map((root) => ({ ...root })) };
   }
 
   /**
@@ -3039,6 +3325,7 @@ export class McpConnectionGatewayService {
         typeof request.discoveryId === "string" && /^[a-f0-9-]{36}$/.test(request.discoveryId) ? request.discoveryId : undefined,
         forms?.route,
         onProgress,
+        Boolean(forms) && request.urlElicitation === URL_ELICITATION_WIRE_OPT_IN,
       );
       forms?.close();
       this.respond(socket, { ok: true, result });
@@ -3142,6 +3429,17 @@ export class McpConnectionGatewayService {
         stdio: values.stdio as McpStdioLaunchInput,
         ...(typeof values.connectionId === "string" ? { connectionId: values.connectionId } : {}),
       });
+    }
+    if (operation === "broker/thread-roots") {
+      if (typeof values.backend !== "string" || !values.backend
+        || typeof values.threadId !== "string" || !values.threadId) {
+        throw new Error("Invalid MCP roots update.");
+      }
+      this.storeThreadRoots(
+        buildThreadIdentityKey(values.backend as AppServerBackendKind, values.threadId),
+        readRelayedRoots(values.roots),
+      );
+      return true;
     }
     if (operation === "broker/close-thread-sessions") {
       if (
@@ -3281,13 +3579,18 @@ export class McpConnectionGatewayService {
       const existing = registrationKey
         ? this.threadRegistrations.get(registrationKey)
         : undefined;
+      const backend = typeof values.backend === "string" && values.backend
+        ? values.backend as AppServerBackendKind
+        : undefined;
       if (existing && this.grants.has(existing.token)) {
+        this.adoptGrantBackend(existing.token, backend);
         return { token: existing.token };
       }
       const token = randomBytes(32).toString("base64url");
       this.grants.set(token, {
         connectionId: connection.id,
         ...(threadId ? { threadId } : {}),
+        ...(backend ? { backend } : {}),
       });
       if (registrationKey && this.bridgeSocketPath) {
         this.threadRegistrations.set(registrationKey, {
@@ -3311,6 +3614,7 @@ export class McpConnectionGatewayService {
       const grant = this.grants.get(values.token);
       if (!grant) throw new Error("The MCP bridge grant is no longer active.");
       grant.threadId = values.threadId;
+      this.announceGrantRoots(values.token, grant);
       for (const [key, registration] of this.threadRegistrations) {
         if (registration.token === values.token) {
           this.threadRegistrations.delete(key);
@@ -3462,6 +3766,8 @@ export class McpConnectionGatewayService {
     elicit?: ElicitationRoute,
     /** Where the upstream server's progress reports for a tool call go. */
     onProgress?: (progress: Progress) => void,
+    /** `elicit` can also show the upstream server's links. */
+    elicitUrl = false,
   ): Promise<unknown> {
     // Net callbacks can inherit the registration that created the server.
     // Only this RPC owns its fetch signal; discovery phases override it locally.
@@ -3490,6 +3796,14 @@ export class McpConnectionGatewayService {
           client,
           signal ?? discovery.signal,
           interactive ? elicit : undefined,
+          {
+            url: interactive && elicitUrl,
+            // Only a native host knows the link's id, so only it is told the
+            // server's flow finished. `call_mcp_tool` has no card left to update.
+            ...(operation === "tools/call"
+              ? { onUrlOpened: (elicitationId: string) => this.rememberOpenedUrlElicitation(token, client, elicitationId) }
+              : {}),
+          },
         );
         const values = params && typeof params === "object"
           ? params as Record<string, unknown>
@@ -3515,8 +3829,16 @@ export class McpConnectionGatewayService {
             validateGatewayArguments(tool.definition, values.arguments as Record<string, unknown>);
             signal?.throwIfAborted();
             discovery.close();
-            const result = await client.callTool({ name: tool.toolName, arguments: values.arguments as Record<string, unknown> },
-              undefined, upstreamToolCallOptions(signal, onProgress));
+            let result: Awaited<ReturnType<Client["callTool"]>>;
+            try {
+              result = await client.callTool({ name: tool.toolName, arguments: values.arguments as Record<string, unknown> },
+                undefined, upstreamToolCallOptions(signal, onProgress));
+            } catch (error) {
+              if (error instanceof McpError && error.code === ErrorCode.UrlElicitationRequired && interactive && elicitUrl) {
+                throw await this.offerRequiredUrlElicitations(token, client, error, signal);
+              }
+              throw error;
+            }
             this.observeToolResult(grant, tool.toolName, result as CallToolResult);
             return result;
           }
@@ -3684,6 +4006,25 @@ function grantThreadId(grant: BridgeGrant): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The thread whose directories a scope's sessions are given. A gateway scope
+ * names its backend; a native bridge's bare thread id takes the backend it
+ * was registered with. Without both there are no roots.
+ */
+function threadRootsScope(
+  scopeKey: string | undefined,
+  backend: AppServerBackendKind | undefined,
+): ThreadRootsScope | undefined {
+  const thread = readGrantThread(scopeKey);
+  const threadBackend = (thread?.backend as AppServerBackendKind | undefined) ?? backend;
+  return thread && threadBackend ? { backend: threadBackend, threadId: thread.threadId } : undefined;
+}
+
+function grantRootsKey(grant: BridgeGrant): string | undefined {
+  const scope = threadRootsScope(grant.threadId, grant.backend);
+  return scope ? buildThreadIdentityKey(scope.backend, scope.threadId) : undefined;
 }
 
 function sameSecretValues(

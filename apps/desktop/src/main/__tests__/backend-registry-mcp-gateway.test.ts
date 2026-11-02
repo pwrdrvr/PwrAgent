@@ -954,7 +954,7 @@ select_for_new_threads = true
       backend: "codex", agentThreadId: "thread-1", automationRunId: "run-1", cwd: directory,
       mcpAllowlist: [allowed], input: [{ type: "text", text: "Look up the fixture." }],
     });
-    expect(registerBridge).toHaveBeenCalledWith("one", undefined);
+    expect(registerBridge).toHaveBeenCalledWith("one", undefined, undefined, "codex");
     internals.activeTurnKeys.add("codex:headless-1:turn-1");
     const call = request("call_mcp_tool", args);
     expect((await internals.handleServerRequest("codex", { ...call, params: { ...call.params, threadId: "headless-1" } })).success).toBe(true);
