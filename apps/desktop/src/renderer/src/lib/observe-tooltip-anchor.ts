@@ -1,3 +1,26 @@
+type AnchorRect = { top: number; right: number; bottom: number; left: number };
+
+/**
+ * Native observer geometry and `getBoundingClientRect()` can differ by a few
+ * floating-point units. This bound covers only that arithmetic noise; a
+ * layout-unit move or resize remains many orders of magnitude larger.
+ */
+export function anchorCoordinateRoundoff(rect: AnchorRect): number {
+  return Number.EPSILON * 8 * Math.max(
+    1, Math.abs(rect.top), Math.abs(rect.right),
+    Math.abs(rect.bottom), Math.abs(rect.left),
+  );
+}
+
+/** Whether two anchor rectangles differ by no more than arithmetic noise. */
+export function anchorRectsMatch(current: AnchorRect, remembered: AnchorRect): boolean {
+  const roundoff = anchorCoordinateRoundoff(remembered);
+  return Math.abs(current.top - remembered.top) <= roundoff
+    && Math.abs(current.right - remembered.right) <= roundoff
+    && Math.abs(current.bottom - remembered.bottom) <= roundoff
+    && Math.abs(current.left - remembered.left) <= roundoff;
+}
+
 /**
  * Observe the anchor's owned DOM path, not streaming siblings' subtrees.
  * IntersectionObserver supplies post-layout rectangles for movement caused by
@@ -6,7 +29,7 @@
  */
 export function observeTooltipAnchor(
   target: HTMLElement,
-  baseline: { top: number; right: number; bottom: number; left: number },
+  baseline: AnchorRect,
   tooltip: () => HTMLElement | null,
   check: (rect?: DOMRectReadOnly) => void,
 ): () => void {
@@ -56,13 +79,8 @@ export function observeTooltipAnchor(
   };
   for (let parent = target.parentElement; parent; parent = parent.parentElement) parents.push(parent);
   observePath(parents);
-  // Native box sizes and viewport-edge subtraction can differ by a few
-  // floating-point units. Ignore only that arithmetic noise; a layout-unit
-  // resize remains many orders of magnitude larger.
-  const coordinateRoundoff = Number.EPSILON * 8 * Math.max(
-    1, Math.abs(baseline.top), Math.abs(baseline.right),
-    Math.abs(baseline.bottom), Math.abs(baseline.left),
-  );
+  // Native box sizes and viewport-edge subtraction can differ by roundoff.
+  const coordinateRoundoff = anchorCoordinateRoundoff(baseline);
   const resize = typeof ResizeObserver === "undefined"
     ? undefined
     : new ResizeObserver((entries) => {
@@ -91,7 +109,9 @@ export function observeTooltipAnchor(
         Math.min(1, threshold + 0.000001), 1];
       intersection = new IntersectionObserver((entries) => {
         if (disposed) return;
-        const entry = entries.find((entry) => entry.target === target);
+        // A busy main thread can batch several crossings into one delivery.
+        // Only the newest describes where the anchor is now.
+        const entry = entries.findLast((entry) => entry.target === target);
         if (!entry) return;
         check(entry.boundingClientRect);
         // A clipped anchor can start below 100% intersection. Watch its actual

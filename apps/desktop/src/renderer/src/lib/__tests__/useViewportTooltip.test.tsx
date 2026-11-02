@@ -13,6 +13,7 @@ import {
   TOOLTIP_HOVER_DELAY_MS,
   useViewportTooltip,
 } from "../useViewportTooltip";
+import { anchorRectsMatch, observeTooltipAnchor } from "../observe-tooltip-anchor";
 
 afterEach(() => {
   cleanup();
@@ -1185,5 +1186,42 @@ describe("tooltip observation budgets", () => {
     expect(observe.mock.calls.some(([element, options]) =>
       element === document.body && options?.subtree,
     )).toBe(false);
+  });
+});
+
+describe("observeTooltipAnchor native geometry", () => {
+  const baseline = { top: 100, right: 300, bottom: 140, left: 200 };
+
+  function rect(values: typeof baseline): DOMRectReadOnly {
+    return { ...values, x: values.left, y: values.top,
+      width: values.right - values.left, height: values.bottom - values.top,
+      toJSON: () => values } as DOMRectReadOnly;
+  }
+
+  it("checks the newest intersection entry when a delivery batches several", () => {
+    const callbacks: IntersectionObserverCallback[] = [];
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(callback: IntersectionObserverCallback) { callbacks.push(callback); }
+      observe(): void {}
+      disconnect(): void {}
+    });
+    const target = document.createElement("button");
+    document.body.append(target);
+    const check = vi.fn();
+    const stop = observeTooltipAnchor(target, baseline, () => null, check);
+    const moved = rect({ top: 160, right: 300, bottom: 200, left: 200 });
+    const entry = (boundingClientRect: DOMRectReadOnly, intersectionRatio: number) =>
+      ({ target, boundingClientRect, intersectionRatio }) as unknown as IntersectionObserverEntry;
+    // The initial notification and a later move arrive in one delivery.
+    callbacks[0]!([entry(rect(baseline), 1), entry(moved, 0)], {} as IntersectionObserver);
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(check).toHaveBeenCalledWith(moved);
+    stop();
+    target.remove();
+  });
+
+  it("ignores floating-point roundoff and still detects a 1/64-pixel move", () => {
+    expect(anchorRectsMatch({ ...baseline, top: 100 + 1e-13 }, baseline)).toBe(true);
+    expect(anchorRectsMatch({ ...baseline, left: 200 + 1 / 64 }, baseline)).toBe(false);
   });
 });

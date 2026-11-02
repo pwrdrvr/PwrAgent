@@ -17,7 +17,7 @@ import {
   isNativeDragInteractionActive,
   subscribeNativeDragInteraction,
 } from "./native-drag-interaction";
-import { observeTooltipAnchor } from "./observe-tooltip-anchor";
+import { anchorRectsMatch, observeTooltipAnchor } from "./observe-tooltip-anchor";
 
 const VIEWPORT_PADDING = 12;
 /** Gap between the tooltip and its placement anchor. */
@@ -768,12 +768,9 @@ export function useViewportTooltip(options: {
         return { status: "gone" };
       }
       const currentRect = observedRect ?? target.getBoundingClientRect();
-      if (
-        currentRect.top === rememberedRect.top
-        && currentRect.right === rememberedRect.right
-        && currentRect.bottom === rememberedRect.bottom
-        && currentRect.left === rememberedRect.left
-      ) {
+      // Observer rectangles come from a different native path than the
+      // remembered `getBoundingClientRect()` and can differ by roundoff.
+      if (anchorRectsMatch(currentRect, rememberedRect)) {
         return { status: "unchanged" };
       }
       // Moved — but an anchor still being animated has not gone anywhere the
