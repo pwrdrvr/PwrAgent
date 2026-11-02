@@ -8,9 +8,11 @@ import type { AgentEvent, AppServerThreadMessageOrigin, BackendModelOption } fro
 import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import {
-  CLAUDE_MCP_GATEWAY_TOOL, claudeAllowedTools, createClaudePermissionHandler, claudePermissionMode, threadExecutionModeForClaudePermission,
+  CLAUDE_FORGE_TOOLS, CLAUDE_MCP_GATEWAY_TOOL, claudeAllowedTools, createClaudePermissionHandler, claudePermissionMode,
+  threadExecutionModeForClaudePermission,
 } from "../claude/claude-permissions";
 import { createClaudeElicitationHandler } from "../claude/claude-elicitation";
+import { buildForgeToolDefinitions } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import { buildLiveToolDetails, getNotificationItem } from "../../renderer/src/features/thread-detail/live-transcript-activity";
 import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-reviews/thread-review-events";
 
@@ -110,7 +112,7 @@ describe("Claude SDK backend", () => {
     await f.backend.close();
   });
 
-  it("lets PwrAgent's gateway ask for its own calls when PwrAgent's server is attached", async () => {
+  it("lets PwrAgent's gateway and forge policy ask for their own calls when PwrAgent's server is attached", async () => {
     const f = await fixture();
     const pwragent = { type: "http" as const, url: "http://127.0.0.1:9/mcp" };
     const withGateway = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
@@ -119,7 +121,7 @@ describe("Claude SDK backend", () => {
     const without = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
     await f.backend.startTurn({ threadId: without.threadId, input: [{ type: "text", text: "Hi" }], mcpServers: { crm: pwragent } });
     await f.waitForTurn();
-    expect(f.queries[0].allowedTools).toEqual([CLAUDE_MCP_GATEWAY_TOOL]);
+    expect(f.queries[0].allowedTools).toEqual([CLAUDE_MCP_GATEWAY_TOOL, ...CLAUDE_FORGE_TOOLS]);
     expect(CLAUDE_MCP_GATEWAY_TOOL).toBe("mcp__pwragent__call_mcp_tool");
     expect(f.queries[1]).not.toHaveProperty("allowedTools");
     await f.backend.close();
@@ -154,7 +156,7 @@ describe("Claude SDK backend", () => {
         expect(controls.setMcpServers).toHaveBeenCalledWith({ pwragent });
       } else {
         expect(f.run).toHaveBeenCalledTimes(2);
-        expect(f.queries[1].allowedTools).toEqual([CLAUDE_MCP_GATEWAY_TOOL]);
+        expect(f.queries[1].allowedTools).toEqual([CLAUDE_MCP_GATEWAY_TOOL, ...CLAUDE_FORGE_TOOLS]);
       }
       await f.backend.close();
     }
@@ -2823,13 +2825,33 @@ describe("Claude permission bridge", () => {
       .toEqual(["default", "auto", "bypassPermissions"]);
   });
 
-  it("pre-allows only the gateway's invocation tool, and only on PwrAgent's own server", () => {
+  it("pre-allows only the gateway's invocation tool and the forge tools, and only on PwrAgent's own server", () => {
     const server = { type: "http" as const, url: "http://127.0.0.1:9/mcp" };
-    expect(claudeAllowedTools({ pwragent: server, crm: server })).toEqual(["mcp__pwragent__call_mcp_tool"]);
+    const allowed = claudeAllowedTools({ pwragent: server, crm: server });
+    expect(allowed).toEqual(["mcp__pwragent__call_mcp_tool", ...CLAUDE_FORGE_TOOLS]);
+    expect(allowed).toEqual(expect.arrayContaining([
+      "mcp__pwragent__get_forge_status",
+      "mcp__pwragent__get_pull_request",
+      "mcp__pwragent__create_pull_request",
+      "mcp__pwragent__submit_pull_request_review",
+      "mcp__pwragent__merge_pull_request",
+    ]));
+    // Tools the forge policy does not govern keep Claude's own card.
+    for (const tool of ["search_mcp_tools", "mutate_thread", "send_message_to_thread", "watch_thread_pull_request"]) {
+      expect(allowed).not.toContain(`mcp__pwragent__${tool}`);
+    }
     // A connection server is named pwragent_<name>_<hash>, never pwragent itself.
     expect(claudeAllowedTools({ pwragent_crm: server })).toEqual([]);
     expect(claudeAllowedTools({})).toEqual([]);
     expect(claudeAllowedTools(undefined)).toEqual([]);
+  });
+
+  // The policy gate owns every tool in the forge family, so a new forge tool
+  // must not ship with Claude asking before the gate does.
+  it("pre-allows exactly the forge family that PwrAgent's server advertises", () => {
+    const forge = buildForgeToolDefinitions({}).map((definition) => `mcp__${definition.namespace}__${definition.name}`);
+    expect(new Set(forge).size).toBe(forge.length);
+    expect([...CLAUDE_FORGE_TOOLS].sort()).toEqual(forge.sort());
   });
 
   it("counts only bypass permissions and Auto as relaxed approval modes", () => {
