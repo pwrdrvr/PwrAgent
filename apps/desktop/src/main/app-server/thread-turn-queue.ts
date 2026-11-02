@@ -534,6 +534,28 @@ export class ThreadTurnQueue {
   }
 
   /**
+   * Puts back project-held wake-ups that an earlier process held, at
+   * startup and before any window reads the queue, so it emits nothing.
+   * They wait paused at the back of their FIFOs in hold order. An id that
+   * is already queued is skipped.
+   */
+  restoreProjectHeld(
+    entries: ReadonlyArray<Omit<ThreadTurnQueueEntry, "paused" | "pauseRevision"> & {
+      holdReason: string;
+      projectHold: ThreadTurnQueueProjectHold;
+    }>,
+  ): ThreadTurnQueueEntry[] {
+    const restored: ThreadTurnQueueEntry[] = [];
+    for (const input of [...entries].sort((left, right) => left.createdAt - right.createdAt)) {
+      if (this.findQueuedEntry(input.id)) continue;
+      const entry: ThreadTurnQueueEntry = { ...input, paused: true, pauseRevision: 1 };
+      this.queueFor(this.keyFor(entry)).push(entry);
+      restored.push(entry);
+    }
+    return restored;
+  }
+
+  /**
    * Atomically reject instead of queueing when the thread is busy. The
    * availability check and `startingKeys` claim happen in the same JS turn,
    * so another submit cannot slip between them and push this entry on deck.

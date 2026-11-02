@@ -64,6 +64,22 @@ way.
 Extend this exception only by updating this section. Any other table that
 stores history text needs its own documented exception.
 
+## Project-held wake-ups
+
+`project_held_wakeups` keeps the input of a wake-up that a paused project
+holds: a finished task monitor's handoff to its parent, or a Continue After
+prompt. Both sources are consumed when the wake-up is held, so without this
+row a restart loses it. It is unsent input, not history, and two rules keep
+it that way.
+
+- **One row per held entry, deleted when the entry leaves the queue.** The
+  turn starting, a failed start, and the operator's Discard each delete it.
+  After Send, the row stays until the turn starts, so a restart in between
+  holds the wake-up again instead of losing it.
+- **Nothing renders from it.** At startup the registry puts the rows back in
+  the turn queue as paused, project-held entries. The transcript shows the
+  input only once the turn runs, from the provider's own history.
+
 ## Future Fallback Storage
 
 An ACP fallback may use a narrowly scoped desktop-local append-only JSONL store
