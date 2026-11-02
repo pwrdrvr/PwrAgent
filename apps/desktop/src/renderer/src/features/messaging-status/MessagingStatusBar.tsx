@@ -136,6 +136,13 @@ export function MessagingStatusBar(props: {
     () => withConfiguredSettingsStatuses(statuses, settingsSnapshot),
     [settingsSnapshot, statuses],
   );
+  // Re-read settings when a platform's health moves, not whenever the
+  // status array is replaced. The initial snapshot and remote polls hand
+  // back new arrays with the same health; re-reading on those only races
+  // the mount read.
+  const statusHealthKey = statuses
+    .map((status) => `${status.platform}:${status.health}:${status.changedAt}`)
+    .join("|");
   const messagingOn = sessionOverride
     ?? runtimeMessagingEnabled
     ?? inferMessagingEnabled(displayStatuses);
@@ -184,7 +191,7 @@ export function MessagingStatusBar(props: {
     return () => {
       cancelled = true;
     };
-  }, [desktopApi, statuses]);
+  }, [desktopApi, statusHealthKey]);
 
   useEffect(() => {
     if (
