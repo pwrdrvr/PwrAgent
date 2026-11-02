@@ -82,6 +82,43 @@ afterEach(async () => {
 });
 
 describe("McpConnectionGatewayService", () => {
+  it("keeps native IPC outside browser OAuth and credential plumbing while retaining revocation", async () => {
+    const registry = temporaryRegistry();
+    const serverUrl = process.platform === "win32" ? "pipe:///pipe/fixture#/mcp" : "unix:///tmp/private/fixture.sock#/mcp";
+    const connection = registry.create({ displayName: "Native fixture", serverUrl });
+    const settings = createSettings();
+    const fetchFn = vi.fn(async () => new Response("unexpected network request"));
+    const openExternal = vi.fn(async () => undefined);
+    const service = new McpConnectionGatewayService({ registry, settings, fetchFn, openExternal, sandboxer: sandboxerStub(), leaseManager: null });
+    services.push(service);
+    await expect(service.authorizeConnection(connection.id)).rejects.toThrow("not browser OAuth");
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(settings.resolveMcpConnectionCredentials).not.toHaveBeenCalled();
+    await expect(service.disconnectConnection(connection.id)).resolves.toMatchObject({ enabled: false, authMode: "none" });
+    expect(settings.saveMcpConnectionCredentials).not.toHaveBeenCalled();
+    await expect(service.removeConnection(connection.id)).resolves.toBe(true);
+    expect(settings.clearMcpConnectionCredentials).not.toHaveBeenCalled();
+  });
+
+  it("encrypts IPC session tokens without returning them and clears them on endpoint change or disconnect", async () => {
+    const registry = temporaryRegistry();
+    const settings = createSettings();
+    const service = new McpConnectionGatewayService({ registry, settings, sandboxer: sandboxerStub(), leaseManager: null });
+    services.push(service);
+    const serverUrl = process.platform === "win32" ? "pipe:///pipe/token-fixture#/mcp" : "unix:///tmp/private/token-fixture.sock#/mcp";
+    const connection = await service.createConnection({ displayName: "Token fixture", serverUrl, ipcBearerToken: "native-session-ticket" });
+    expect(JSON.stringify(connection)).not.toContain("native-session-ticket");
+    expect(registry.get(connection.id)).not.toHaveProperty("ipcBearerToken");
+    expect(await settings.resolveMcpConnectionCredentials()).toContain("native-session-ticket");
+    await service.updateConnection({ connectionId: connection.id, serverUrl: "https://example.com/mcp" });
+    expect(await settings.resolveMcpConnectionCredentials()).toBeUndefined();
+    await service.updateConnection({ connectionId: connection.id, serverUrl, ipcBearerToken: "new-native-session-ticket" });
+    expect(await settings.resolveMcpConnectionCredentials()).toContain("new-native-session-ticket");
+    await service.disconnectConnection(connection.id);
+    expect(await settings.resolveMcpConnectionCredentials()).toBeUndefined();
+    await expect(service.createConnection({ displayName: "Network", serverUrl: "https://example.org/mcp", ipcBearerToken: "secret" })).rejects.toThrow("local IPC");
+  });
   it("serves a changing full catalog and validates calls over the revocable socket", async () => {
     const service = new McpConnectionGatewayService({ sandboxer: sandboxerStub(), readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
     services.push(service);

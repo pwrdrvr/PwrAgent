@@ -22,6 +22,22 @@ afterEach(() => {
 });
 
 describe("McpConnectionRegistry", () => {
+  it("persists local HTTP URLs with native approval and preserves selection/approval across URL edits", () => {
+    const target = configPath();
+    const registry = new McpConnectionRegistry({ configPath: target });
+    const serverUrl = process.platform === "win32" ? "pipe:///pipe/example#/mcp?x=%23" : "unix:///tmp/private/server.sock#/mcp?x=%23";
+    const connection = registry.create({ displayName: "Local app", serverUrl });
+    expect(connection).toMatchObject({ authMode: "none", selectForNewThreads: false });
+    registry.setSelectForNewThreads(connection.id, true);
+    registry.setToolApproval(connection.id, "approve");
+    expect(new McpConnectionRegistry({ configPath: target }).get(connection.id)).toMatchObject({
+      serverUrl, authMode: "none", selectForNewThreads: true, toolApproval: "approve",
+    });
+    expect(registry.update({ connectionId: connection.id, serverUrl: "https://example.com/mcp" }).connection).toMatchObject({
+      authMode: "oauth", selectForNewThreads: true, toolApproval: "approve",
+    });
+    expect(registry.update({ connectionId: connection.id, serverUrl }).connection.authMode).toBe("none");
+  });
   it("synthesizes Sandboxer with opt-in compute and persists independent profile choices", () => {
     const target = configPath();
     const registry = new McpConnectionRegistry({ configPath: target, randomId: () => "custom" });

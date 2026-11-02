@@ -58,6 +58,7 @@ export * from "./contracts/thread-search";
 export * from "./messaging-contact-labels";
 export * from "./messaging-id-validation";
 export * from "./mcp-auth-status";
+export * from "./mcp-ipc-url";
 export * from "./profile-menu";
 export * from "./profile-names";
 export * from "./directory-pins";

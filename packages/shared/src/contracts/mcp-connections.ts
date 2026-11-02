@@ -352,12 +352,14 @@ export type McpConnectionsChangedEvent = {
 };
 
 /**
- * Add a connection. Exactly one of `serverUrl` (a remote server that signs in
- * with OAuth) or `stdio` (a local command) is given.
+ * Add a connection. Exactly one of `serverUrl` (network HTTP with OAuth or
+ * verified local HTTP IPC) or `stdio` (a local command) is given.
  */
 export type CreateMcpConnectionRequest = {
   displayName: string;
   serverUrl?: string;
+  /** IPC only; encrypted on the owning instance and never returned. */
+  ipcBearerToken?: string;
   stdio?: McpStdioLaunchInput;
 };
 
@@ -947,6 +949,8 @@ export function summarizeMcpConnectionReadiness(
  * credentials, because they were issued by the old server.
  */
 export type UpdateMcpConnectionRequest = {
+  /** IPC only. Omit to retain; an empty string removes the encrypted token. */
+  ipcBearerToken?: string;
   connectionId: McpConnectionId;
   displayName?: string;
   serverUrl?: string;
@@ -1102,6 +1106,8 @@ export type ProbeMcpConnectionResponse =
       authMode: McpConnectionAuthMode;
       /** Absent when the server will not list tools before authorization. */
       toolCount?: number;
+      /** Same-user HTTP answered 401; no authenticated session was opened. */
+      needsIpcBearer?: boolean;
     }
   | {
       ok: false;

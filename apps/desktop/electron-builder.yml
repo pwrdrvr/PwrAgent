@@ -89,6 +89,10 @@ files:
   - "!**/node_modules/@pwragent/*/src/**"
 
 extraResources:
+  - from: build/mcp-ipc-relay/packaged
+    to: mcp-ipc-relay
+    filter:
+      - "mcp-ipc-relay{,.exe}"
   - from: node_modules/dugite/git
     to: git
   - from: resources/embedded-git
