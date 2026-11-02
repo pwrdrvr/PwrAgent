@@ -43,6 +43,8 @@ export function useBackendSummaries(
   // resolve in either order. Each response says when main assembled it, and
   // only a newer one replaces what is shown, so a value never steps back.
   const appliedRef = useRef<{ source: FederationTarget | undefined; fetchedAt: number } | undefined>(undefined);
+  // The shown list as JSON, kept so each response is serialized only once.
+  const shownJsonRef = useRef<string | undefined>(undefined);
 
   const readSummaries = useCallback(async (refreshRateLimits = false): Promise<BackendSummary[]> => {
     if (!enabled) {
@@ -89,14 +91,16 @@ export function useBackendSummaries(
       // Most refreshes find nothing new. Keep the same objects so nothing
       // that reads them renders again.
       const current = stateRef.current;
+      const responseJson = JSON.stringify(response.backends);
       if (
         current.loaded
         && current.error === undefined
         && sameSource
-        && JSON.stringify(current.backends) === JSON.stringify(response.backends)
+        && shownJsonRef.current === responseJson
       ) {
         return current.backends;
       }
+      shownJsonRef.current = responseJson;
       setState({
         backends: response.backends,
         error: undefined,

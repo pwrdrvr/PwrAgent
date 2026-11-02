@@ -1878,8 +1878,13 @@ export class ClaudeBackend {
     await this.loadRateLimits();
     if (account === this.rateLimitAccount) {
       if (plan === this.rateLimitPlan) return;
+      const previousPlan = this.rateLimitPlan;
       this.rateLimitPlan = plan;
-      this.saveRateLimits();
+      // A new plan changes each window's allowance, so usage can fall within
+      // a window. Limits only move forward, so start over; the next probe or
+      // stream event reads them again.
+      if (previousPlan !== undefined) this.setRateLimits([]);
+      else this.saveRateLimits();
       return;
     }
     const previous = this.rateLimitAccount;
