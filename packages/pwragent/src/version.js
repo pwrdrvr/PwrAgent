@@ -18,8 +18,8 @@ export function packageVersion() {
 
 // The version fields that status compares, without the package name.
 export function installedVersion() {
-  const { version, release } = packageVersion();
-  return { version, ...(release ? { release } : {}) };
+  const { name: _name, ...fields } = packageVersion();
+  return fields;
 }
 
 export function formatVersion({ name, version, release }) {

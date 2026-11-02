@@ -50,7 +50,7 @@ test("restartRequired compares the running daemon with the installed package", (
 test("status reports the running daemon's version beside the installed one", { timeout: 10000 }, async (t) => {
   const h = await setup(t);
   const { name: _name, ...expected } = versionInfo(manifest);
-  assert.equal(JSON.parse(h.daemon.output.split("\n").find((line) => line.includes("\"ready\":true"))).version, manifest.version);
+  assert.deepEqual(JSON.parse(h.daemon.output.split("\n").find((line) => line.includes("\"ready\":true"))).running, expected);
   const client = h.launch(["status"]);
   assert.equal((await client.done).code, 0, client.errors);
   const status = JSON.parse(client.output);
