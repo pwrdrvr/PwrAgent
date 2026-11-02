@@ -1,3 +1,5 @@
+import { ThreadMergeHoldsContext } from "./features/thread-merge-holds/useThreadMergeHolds";
+import { ThreadMergeHoldsDialog } from "./features/thread-merge-holds/ThreadMergeHoldsDialog";
 import { TodoDispatchProvider } from "./features/thread-todos/TodoDispatchProvider";
 import { threadTodoThreadKey, type ThreadTodo } from "@pwragent/shared";
 import { FederationShutdownNotices } from "./features/notifications/FederationShutdownNotices";
@@ -3252,6 +3254,8 @@ function DesktopAppShell(props: {
     useState<NavigationThreadSummary>();
   // Continue After, from the thread menu or a row's dependency chip.
   // Dependencies run on the owning machine, so a federation window has none.
+  const [mergeHoldsThread, setMergeHoldsThread] = useState<NavigationThreadSummary>();
+  const mergeHoldsContext = useMemo(() => ({ open: (thread: NavigationThreadSummary) => setMergeHoldsThread(thread) }), []);
   const [continueAfter, setContinueAfter] = useState<{
     thread: NavigationThreadSummary;
     returnFocus?: RefObject<HTMLElement | null>;
@@ -4203,6 +4207,7 @@ function DesktopAppShell(props: {
       localCodexFastAllowed={props.settings.snapshot?.models?.codex.allowFast?.value ?? true}
     >
     <OperatorWaitsContext.Provider value={operatorWaitsContext}>
+    <ThreadMergeHoldsContext.Provider value={mergeHoldsContext}>
     <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
     <ThreadProvidersContext.Provider value={threadProviders}>
     <TranscriptLinkProvider
@@ -4221,6 +4226,7 @@ function DesktopAppShell(props: {
           onSend={(request) => sendThreadToMachine(sendToMachineThread, request)}
         />
       ) : null}
+      {mergeHoldsThread ? <ThreadMergeHoldsDialog key={`${mergeHoldsThread.federation?.ref.target.scope === "remote" ? mergeHoldsThread.federation.ref.target.instanceId : "local"}:${mergeHoldsThread.source}:${mergeHoldsThread.id}`} thread={mergeHoldsThread} api={desktopApi} onClose={() => setMergeHoldsThread(undefined)} /> : null}
       {continueAfter ? (
         <ContinueAfterDialog
           key={`${continueAfter.thread.source}:${continueAfter.thread.id}`}
@@ -4852,6 +4858,7 @@ function DesktopAppShell(props: {
     </TranscriptLinkProvider>
     </ThreadProvidersContext.Provider>
     </ThreadDependencyIndicatorsContext.Provider>
+    </ThreadMergeHoldsContext.Provider>
     </OperatorWaitsContext.Provider>
     </TodoDispatchProvider>
     </ThreadTodoRevealContext.Provider>

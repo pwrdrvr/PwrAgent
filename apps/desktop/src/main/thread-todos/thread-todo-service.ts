@@ -54,6 +54,8 @@ export type ThreadTodoActionRunners = {
     todo: ThreadTodoDispatchCard;
   }) => Promise<{ summary: string }>;
   mergePullRequest: (params: {
+    sourceBackend: AppServerBackendKind;
+    sourceThreadId: string;
     cwd?: string;
     pullRequest: string;
     method: ThreadTodoMergeMethod;
@@ -723,6 +725,7 @@ export class ThreadTodoService {
           });
         }
         const merged = await runners.mergePullRequest({
+          sourceBackend: todo.backend, sourceThreadId: todo.threadId,
           cwd,
           pullRequest: action.pullRequest,
           method,

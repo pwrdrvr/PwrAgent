@@ -739,6 +739,7 @@ const setThreadPullRequestCanonicalizer = vi.fn();
 const setLocalPullRequestAuthorityResolver = vi.fn();
 const setThreadPullRequestWatchToolHandler = vi.fn();
 const setThreadDependencyToolHandler = vi.fn();
+const setThreadMergeHoldToolHandler = vi.fn();
 const setThreadPrAutoDispatchHandler = vi.fn();
 const setThreadPullRequestDetachHandler = vi.fn();
 const setThreadPullRequestRefreshHandler = vi.fn();
@@ -1211,6 +1212,7 @@ vi.mock("../app-server/backend-registry", () => {
     setLocalPullRequestAuthorityResolver,
     setThreadPullRequestWatchToolHandler,
     setThreadDependencyToolHandler,
+    setThreadMergeHoldToolHandler,
     setThreadPrAutoDispatchHandler,
     setThreadPullRequestDetachHandler,
     setThreadPullRequestRefreshHandler,
@@ -1495,6 +1497,7 @@ describe("app server ipc", () => {
     setLocalPullRequestAuthorityResolver.mockClear();
     setThreadPullRequestWatchToolHandler.mockClear();
     setThreadDependencyToolHandler.mockClear();
+    setThreadMergeHoldToolHandler.mockClear();
     setThreadPrAutoDispatchHandler.mockClear();
     setThreadPullRequestDetachHandler.mockClear();
     setThreadPullRequestRefreshHandler.mockClear();

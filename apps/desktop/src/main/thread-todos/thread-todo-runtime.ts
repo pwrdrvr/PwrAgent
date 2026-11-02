@@ -1,3 +1,5 @@
+import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { assertNoMergeHolds } from "../thread-merge-holds/thread-merge-holds";
 import type {
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
@@ -544,8 +546,16 @@ export function createThreadTodoRunners(params: {
       await registry.sendThreadTodoMessage(request);
       return { summary: `Sent to ${request.target.title ?? request.target.threadId}` };
     },
-    mergePullRequest: async (request) =>
-      await new GithubPrFetcher().mergePullRequest(request),
+    mergePullRequest: async (request) => {
+      assertNoMergeHolds(getDesktopOverlayStore().listActiveThreadMergeHolds(), {
+        backend: request.sourceBackend, threadId: request.sourceThreadId, pullRequest: request.pullRequest,
+      });
+      return await new GithubPrFetcher().mergePullRequest({ ...request, assertCanMerge: (pullRequest) => {
+        assertNoMergeHolds(getDesktopOverlayStore().listActiveThreadMergeHolds(), {
+          backend: request.sourceBackend, threadId: request.sourceThreadId, pullRequest,
+        });
+      } });
+    },
     startThread: async ({
       sourceBackend, sourceThreadId, cwd, crossProject, action, todo, modelSettings, workMode: chosenWorkMode, environment, speed, plan,
     }) => {
