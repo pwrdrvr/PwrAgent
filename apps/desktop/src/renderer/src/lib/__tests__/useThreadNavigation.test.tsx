@@ -3451,7 +3451,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("re-enables a locally mounted remote thread after reconnect", async () => {
+  it("keeps a mounted remote thread dimmed until reconnect restamps its capabilities", async () => {
     const federationTarget = {
       scope: "remote" as const,
       instanceId: "remote-instance",
@@ -3459,45 +3459,56 @@ describe("useThreadNavigation", () => {
     const listeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
     >();
+    // What the main process stamps on each read: an owner that is away
+    // grants nothing it can act on, as `heldOfflineThread` stamps it.
     let peerStatus: "connected" | "disconnected" = "connected";
-    const readPopulation = vi.fn(async () => ({
-      backend: "all" as const,
-      fetchedAt: Date.now(),
-      unchanged: false,
-      inboxThreadKeys: ["codex:thread-local", "codex:thread-remote"],
-      threads: [
-        {
-          id: "thread-local",
-          title: "Local thread",
-          titleSource: "explicit" as const,
-          source: "codex" as const,
-          linkedDirectories: [],
-          inbox: { inInbox: true },
-        },
-        {
-          id: "thread-remote",
-          title: "Mounted remote thread",
-          titleSource: "explicit" as const,
-          source: "codex" as const,
-          linkedDirectories: [],
-          inbox: { inInbox: true },
-          federation: {
-            ref: {
-              backend: "codex" as const,
-              target: federationTarget,
-              threadId: "thread-remote",
-            },
-            instanceLabel: "Remote fixture",
-            peerStatus,
+    let capabilities: Array<"thread_navigation" | "turn_control"> = [
+      "thread_navigation",
+      "turn_control",
+    ];
+    let readGate: Promise<void> = Promise.resolve();
+    const readPopulation = vi.fn(async () => {
+      await readGate;
+      return {
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: ["codex:thread-local", "codex:thread-remote"],
+        threads: [
+          {
+            id: "thread-local",
+            title: "Local thread",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            inbox: { inInbox: true },
           },
+          {
+            id: "thread-remote",
+            title: "Mounted remote thread",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            inbox: { inInbox: true },
+            federation: {
+              ref: {
+                backend: "codex" as const,
+                target: federationTarget,
+                threadId: "thread-remote",
+              },
+              instanceLabel: "Remote fixture",
+              peerStatus,
+              capabilities: [...capabilities],
+            },
+          },
+        ],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
         },
-      ],
-      directories: [],
-      launchpadDefaults: {
-        backend: "codex" as const,
-        executionMode: "default" as const,
-      },
-    }));
+      };
+    });
     const desktopApi: DesktopApi = {
       readPopulation,
       onAgentEvent: (callback) => {
@@ -3506,6 +3517,25 @@ describe("useThreadNavigation", () => {
           listeners.delete(callback);
         };
       },
+    };
+    const emitPeerStatus = (
+      status: "connected" | "disconnected",
+      unavailableReason?: string,
+    ): void => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          federationTarget,
+          notification: {
+            method: "federation/peerStatus/changed",
+            params: {
+              instanceId: "remote-instance",
+              status,
+              ...(unavailableReason ? { unavailableReason } : {}),
+            },
+          },
+        });
+      }
     };
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
@@ -3516,20 +3546,7 @@ describe("useThreadNavigation", () => {
     });
 
     act(() => {
-      for (const listener of listeners) {
-        listener({
-          backend: "codex",
-          federationTarget,
-          notification: {
-            method: "federation/peerStatus/changed",
-            params: {
-              instanceId: "remote-instance",
-              status: "disconnected",
-              unavailableReason: "Federation gateway connection closed.",
-            },
-          },
-        });
-      }
+      emitPeerStatus("disconnected", "Federation gateway connection closed.");
     });
 
     expect(result.current.threads[0]?.federation).toBeUndefined();
@@ -3540,31 +3557,44 @@ describe("useThreadNavigation", () => {
     // window into a global navigation error surface.
     expect(result.current.error).toBeUndefined();
 
-    peerStatus = "connected";
-    act(() => {
-      for (const listener of listeners) {
-        listener({
-          backend: "codex",
-          federationTarget,
-          notification: {
-            method: "federation/peerStatus/changed",
-            params: {
-              instanceId: "remote-instance",
-              status: "connected",
-            },
-          },
-        });
-      }
+    // A read while the owner is away serves the held row.
+    peerStatus = "disconnected";
+    capabilities = [];
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.threads[1]?.federation).toMatchObject({
+      peerStatus: "disconnected",
+      capabilities: [],
     });
 
-    expect(result.current.threads[1]?.federation?.peerStatus).toBe(
-      "connected",
-    );
+    // The owner returns. Hold the reconnect read open to observe the rows
+    // before the main process restamps them.
+    let releaseRead!: () => void;
+    readGate = new Promise((resolve) => {
+      releaseRead = resolve;
+    });
+    peerStatus = "connected";
+    capabilities = ["thread_navigation", "turn_control"];
+    act(() => {
+      emitPeerStatus("connected");
+    });
+
+    // The event carries no capabilities. Undimming the row now would show
+    // it ready while its menu still withholds Rename and Mark Unread.
+    expect(result.current.threads[1]?.federation).toMatchObject({
+      peerStatus: "disconnected",
+      capabilities: [],
+    });
+
+    await act(async () => {
+      releaseRead();
+    });
     await waitFor(() => {
-      expect(readPopulation).toHaveBeenCalledTimes(2);
-      expect(result.current.threads[1]?.federation?.peerStatus).toBe(
-        "connected",
-      );
+      expect(result.current.threads[1]?.federation).toMatchObject({
+        peerStatus: "connected",
+        capabilities: ["thread_navigation", "turn_control"],
+      });
     });
   });
 
