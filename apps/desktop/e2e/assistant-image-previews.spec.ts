@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,25 @@ import { expect, test, type Locator } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
+
+function initOwnedRepository(repoDir: string): void {
+  execFileSync("git", ["init", "-q"], { cwd: repoDir, stdio: "ignore" });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=PwrAgent Tests",
+      "-c",
+      "user.email=pwragent-tests@example.invalid",
+      "commit",
+      "--allow-empty",
+      "-q",
+      "-m",
+      "Seed image preview worktree",
+    ],
+    { cwd: repoDir, stdio: "ignore" },
+  );
+}
 
 function markdownImagePath(filePath: string): string {
   return filePath.split(path.sep).join("/");
@@ -21,9 +41,17 @@ async function expectLoaded(image: Locator): Promise<void> {
 
 test("previews replies and native image views live, then reopens retained images in the gallery", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-assistant-previews-"));
+  // The image protocol approves the temp directories for every thread, so a
+  // worktree there would load its mockup without the linked-worktree root.
+  // Keep it in the checkout's ignored `.local/`, but give it its own
+  // repository. The app runs Git in a linked worktree; without a repository
+  // here, Git finds the source checkout instead, and its bundled Git LFS
+  // filter installs hooks there that break `git worktree add` and `git push`
+  // on a machine without git-lfs.
   const worktreeRoot = path.resolve(specDir, "../../../.local");
   await mkdir(worktreeRoot, { recursive: true });
   const worktree = await mkdtemp(path.join(worktreeRoot, "image-preview-worktree-"));
+  initOwnedRepository(worktree);
   const imageFixture = path.join(specDir, "fixtures/thread-image-fit/thread-image.png");
   const mockup = path.join(worktree, "mockup.png");
   const screenshot = path.join(root, "screenshot.png");
