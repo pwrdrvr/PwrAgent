@@ -57577,6 +57577,160 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("gates a Codex monitor's recovery turn by its messaging origin", async () => {
+    const causalMessagingSource = { ownerId: "owner-1", requestId: "request-1" };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
+      startThreadResult: { threadId: "monitor-thread" },
+      startTurnResults: [
+        { threadId: "monitor-thread", turnId: "monitor-turn" },
+        { threadId: "monitor-thread", turnId: "monitor-recovery-turn" },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const authorizeRetainedTool = vi.fn(async (
+      _context: unknown,
+      check: { tool: string },
+    ) => check.tool === "read_thread"
+      ? { allowed: false, permission: "thread.read" }
+      : { allowed: true });
+    const checkDynamicToolPermission = vi.fn(() => ({ allowed: true }));
+    registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: vi.fn(),
+      checkDynamicToolPermission,
+      authorizeRetainedTool,
+    });
+    // The parent turn came from messaging.
+    await overlayStore.upsertThreadMessageOrigin!({
+      backend: "codex", threadId: "thread-1", messageId: "user:turn-1",
+      origin: { kind: "messaging", causalMessagingSource },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: { threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1" } },
+      },
+    });
+    await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: { task: "Watch an asynchronous task until it finishes." },
+      },
+    } as AppServerPendingRequestNotification);
+    expect(codexClient.startTurnCallCount).toBe(1);
+    const origin = { kind: "sub-agent", causalMessagingSource };
+    expect(overlayStore.upsertThreadMessageOrigin).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "monitor-thread",
+      messageId: "user:monitor-turn",
+      origin,
+    });
+
+    await emitCompletedTurn(registry, "codex", "thread-1", "turn-1");
+    // The monitor turn ends without complete_monitoring, so recovery starts.
+    await emitCompletedTurn(registry, "codex", "monitor-thread", "monitor-turn");
+    expect(codexClient.startTurnCallCount).toBe(2);
+    expect(codexClient.startTurnCalls[1]).toMatchObject({ threadId: "monitor-thread" });
+    expect(overlayStore.upsertThreadMessageOrigin).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "monitor-thread",
+      messageId: "user:monitor-recovery-turn",
+      origin,
+    });
+
+    authorizeRetainedTool.mockClear();
+    const denied = await (registry as unknown as {
+      authorizeAgentToolMcpCall(params: {
+        backend: AppServerBackendKind;
+        catalogId?: string;
+        threadId: string;
+        tool: string;
+        turnId: string;
+      }): Promise<string | null>;
+    }).authorizeAgentToolMcpCall({
+      backend: "codex",
+      catalogId: "thread_inspection",
+      threadId: "monitor-thread",
+      tool: "read_thread",
+      turnId: "monitor-recovery-turn",
+    });
+    expect(denied).toBe("thread.read");
+    expect(authorizeRetainedTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "monitor-thread",
+        turnId: "monitor-recovery-turn",
+        causalMessagingSource,
+      }),
+      expect.objectContaining({ category: "thread_inspection", tool: "read_thread" }),
+    );
+    expect(checkDynamicToolPermission).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
+  it("forgets a Codex monitor recovery turn's origin when the start fails", async () => {
+    const causalMessagingSource = { ownerId: "owner-1", requestId: "request-1" };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
+      startThreadResult: { threadId: "monitor-thread" },
+      startTurnErrors: [undefined, new Error("recovery start failed")],
+      startTurnResults: [{ threadId: "monitor-thread", turnId: "monitor-turn" }],
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: vi.fn(),
+      checkDynamicToolPermission: () => ({ allowed: true }),
+      authorizeRetainedTool: async () => ({ allowed: true }),
+    });
+    await overlayStore.upsertThreadMessageOrigin!({
+      backend: "codex", threadId: "thread-1", messageId: "user:turn-1",
+      origin: { kind: "messaging", causalMessagingSource },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: { threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1" } },
+      },
+    });
+    await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: { task: "Watch an asynchronous task until it finishes." },
+      },
+    } as AppServerPendingRequestNotification);
+    await emitCompletedTurn(registry, "codex", "thread-1", "turn-1");
+    await emitCompletedTurn(registry, "codex", "monitor-thread", "monitor-turn");
+
+    // The recovery start threw, so the fallback completion woke the parent.
+    expect(codexClient.startTurnCallCount).toBe(3);
+    expect(codexClient.lastStartTurnParams).toMatchObject({ threadId: "thread-1" });
+    // A later turn on the monitor thread must not inherit the failed start's origin.
+    await expect(registry.readCausalMessagingContext({
+      backend: "codex",
+      threadId: "monitor-thread",
+      turnId: "later-turn",
+    })).resolves.toEqual({});
+
+    await registry.close();
+  });
+
   it("reconciles orphaned sub-agents before serving threads after startup", async () => {
     const reconcileOrphanedThreadSubAgents = vi.fn(async () => ({
       repairedSubAgents: 0,
