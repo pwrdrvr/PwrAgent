@@ -9794,6 +9794,90 @@ describe("DesktopBackendRegistry", () => {
     ]);
   });
 
+  describe("a Codex quota read overtaken by a rate-limit notification", () => {
+    const limit = (window: "primary" | "secondary", usedPercent: number): BackendRateLimitSummary => ({
+      name: window === "primary" ? "5h limit" : "Weekly limit",
+      limitId: "codex",
+      limitName: "Codex",
+      windowKey: window,
+      usedPercent,
+      remaining: 100 - usedPercent,
+      windowMinutes: window === "primary" ? 300 : 10_080,
+    });
+    const update = (
+      window: "primary" | "secondary",
+      usedPercent: number,
+      limitId: string | null = "codex",
+    ): AppServerNotification => ({
+      method: "account/rateLimits/updated",
+      params: {
+        rateLimits: {
+          limitId,
+          limitName: "Codex",
+          primary: window === "primary"
+            ? { usedPercent, windowDurationMins: 300, resetsAt: null }
+            : null,
+          secondary: window === "secondary"
+            ? { usedPercent, windowDurationMins: 10_080, resetsAt: null }
+            : null,
+          individualLimit: null,
+          credits: null,
+          planType: null,
+          rateLimitReachedType: null,
+        },
+      },
+    });
+    const startRegistry = async () => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/list", "thread/read", "thread/start", "turn/start"] },
+        account: { type: "chatgpt", email: "user@example.com", planType: "pro" },
+        rateLimits: [limit("primary", 10), limit("secondary", 20)],
+      });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      const pending = createDeferred<BackendRateLimitSummary[]>();
+      onTestFinished(async () => { pending.resolve([]); await registry.close(); });
+      await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+      const read = vi.spyOn(codexClient, "readRateLimits").mockReturnValueOnce(pending.promise);
+      return { codexClient, registry, pending, read };
+    };
+
+    it("still merges forward when the notification lands during the read", async () => {
+      const { codexClient, registry, pending, read } = await startRegistry();
+      const refresh = registry.listBackends({ refreshRateLimits: true });
+      await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+      // A held window: the notification records at once, during the read.
+      await codexClient.emit(update("primary", 40));
+      pending.resolve([limit("primary", 30), limit("secondary", 25)]);
+      await refresh;
+
+      const codex = (await registry.listBackends()).backends[0];
+      // The read is no longer the newest: it raises the window it alone
+      // moved, and cannot lower the one the notification moved past it.
+      expect(codex.rateLimits).toEqual([
+        expect.objectContaining({ windowKey: "primary", usedPercent: 40 }),
+        expect.objectContaining({ windowKey: "secondary", usedPercent: 25 }),
+      ]);
+    });
+
+    it("still merges a sparse notification's refetch when the next notification arrives", async () => {
+      const { codexClient, registry, pending, read } = await startRegistry();
+      // No family ID: the notification has no merge base and refetches.
+      const unnamed = codexClient.emit(update("primary", 15, null));
+      await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+      // Arrives during the refetch and queues behind it.
+      const queued = codexClient.emit(update("secondary", 60));
+      pending.resolve([limit("primary", 30), limit("secondary", 25)]);
+      await Promise.all([unnamed, queued]);
+
+      const codex = (await registry.listBackends()).backends[0];
+      expect(read).toHaveBeenCalledOnce();
+      expect(codex.rateLimits).toEqual([
+        expect.objectContaining({ windowKey: "primary", usedPercent: 30 }),
+        expect.objectContaining({ windowKey: "secondary", usedPercent: 60 }),
+      ]);
+    });
+  });
+
   it("replaces a credits balance when a later snapshot omits the amount", async () => {
     const creditsLimit: BackendRateLimitSummary = {
       name: "Credits",

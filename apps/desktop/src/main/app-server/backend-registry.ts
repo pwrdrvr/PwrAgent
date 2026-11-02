@@ -9241,15 +9241,17 @@ export class DesktopBackendRegistry {
   /** Turn start times reported on turn/started, keyed like usageTurnAccounts. */
   private readonly usageTurnStartTimes = new Map<string, number>();
   private codexBackendGeneration = 0;
-  /** Reject quota reads started before refreshed account or plan metadata changed. */
+  /**
+   * Bumped by every account or plan change, so discovery keeps the refreshed
+   * account rather than its own older account reply. Quota reads need no
+   * revision: `planLimits.clear` drops every read requested before it.
+   */
   private codexAccountRevision = 0;
   private codexRateLimitBroadcastTimer?: ReturnType<typeof setTimeout>;
   private codexRateLimitLastBroadcastAt?: number;
-  private codexRateLimitNotificationWork?: Promise<boolean>;
   /** The last queued rate-limit update; each one applies after its predecessor. */
   private codexRateLimitsUpdateTail: Promise<unknown> = Promise.resolve();
   private pendingCodexRateLimitBroadcast?: AgentEvent;
-  private codexRateLimitsNotificationVersion = 0;
   /**
    * Every provider's account plan limits, which only move forward. The Codex
    * entry's account is the key captured with each reading, so later Settings
@@ -18884,9 +18886,9 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * The account changed: drop its limits and reject quota reads already in
-   * flight, as the account refresh does, so the old account's reply cannot
-   * return under its old key.
+   * The account changed: drop its limits. Clearing the store also drops every
+   * quota read already in flight, so the old account's reply cannot return
+   * under its old key.
    */
   private forgetCodexAccountRateLimits(): void {
     this.codexAccountRevision += 1;
@@ -31547,15 +31549,9 @@ export class DesktopBackendRegistry {
           backend === "codex"
           && notification.method === "account/rateLimits/updated"
         ) {
-          const updateWork = this.updateCachedCodexRateLimits(
+          const changed = await this.updateCachedCodexRateLimits(
             notification.params.rateLimits,
           );
-          this.codexRateLimitNotificationWork = updateWork;
-          const changed = await updateWork.finally(() => {
-            if (this.codexRateLimitNotificationWork === updateWork) {
-              this.codexRateLimitNotificationWork = undefined;
-            }
-          });
           if (changed) {
             await this.scheduleCodexRateLimitBroadcast({
               backend,
@@ -33615,7 +33611,6 @@ export class DesktopBackendRegistry {
     if (rateLimits.length === 0) {
       return false;
     }
-    ++this.codexRateLimitsNotificationVersion;
     const backendGeneration = this.codexBackendGeneration;
     // The transport does not serialize notifications, and each update carries
     // only some windows. A newer notification therefore does not supersede
@@ -33643,14 +33638,10 @@ export class DesktopBackendRegistry {
           || !currentKeys.has(planLimitKey(limit)),
       )
     ) {
-      // A notification that arrived while this one waited is older than the
-      // snapshot requested now, and merges after it in the queue. Only one
-      // arriving during the read may reject the snapshot.
-      return await this.refetchCodexRateLimits({
-        backendGeneration,
-        notificationVersion: this.codexRateLimitsNotificationVersion,
-        accountKey,
-      });
+      // A notification that arrived while this one waited merges after the
+      // snapshot in the queue. A reading recorded during the read makes the
+      // snapshot unordered, and the store still merges it forward.
+      return await this.refetchCodexRateLimits({ backendGeneration, accountKey });
     }
     // Each running turn reports the limits its own request saw, and those
     // requests finish in any order, so a rolling update can be older than
@@ -33720,7 +33711,6 @@ export class DesktopBackendRegistry {
       }
       await this.refetchCodexRateLimits({
         backendGeneration,
-        notificationVersion: this.codexRateLimitsNotificationVersion,
         accountKey: accountGroupRead ? usageAccountKey(account, usageAccountGroup) : undefined,
       });
     })();
@@ -33734,12 +33724,10 @@ export class DesktopBackendRegistry {
 
   private async refetchCodexRateLimits(params: {
     backendGeneration: number;
-    notificationVersion: number;
     accountKey: string | undefined;
   }): Promise<boolean> {
     if (this.codexClient.isAuthenticationRequired?.()) return false;
     if (isUnauthenticatedCodexProvider(this.codexBackendSummary?.account)) return false;
-    const accountRevision = this.codexAccountRevision;
     const since = this.planLimits.mark("codex");
     let refetchedRateLimits: BackendRateLimitSummary[];
     try {
@@ -33754,14 +33742,15 @@ export class DesktopBackendRegistry {
     if (
       this.closed
       || params.backendGeneration !== this.codexBackendGeneration
-      || accountRevision !== this.codexAccountRevision
-      || params.notificationVersion !== this.codexRateLimitsNotificationVersion
       || refetchedRateLimits.length === 0
     ) {
       return false;
     }
-    // A full read requested after every reading held is the newest one, so
-    // it may lower a window: a reset credit clears usage mid-window.
+    // `since` orders the read. Requested after every reading held, it is the
+    // newest one and may lower a window: a reset credit clears usage
+    // mid-window. Overtaken by a reading recorded during it, it merges
+    // unordered, so usage only rises. Requested before an account change
+    // cleared the limits, it is dropped.
     const changed = this.planLimits.record("codex", {
       limits: refetchedRateLimits,
       since,
@@ -33841,7 +33830,6 @@ export class DesktopBackendRegistry {
     const previousSummary = this.readCodexBackendSummary();
     const backendGeneration = this.codexBackendGeneration;
     const accountRevision = this.codexAccountRevision;
-    const rateLimitsNotificationVersion = this.codexRateLimitsNotificationVersion;
     const rateLimitsSince = this.planLimits.mark("codex");
     const { lastKnownGood } = this.readCodexProvider();
     const usageAccountGroup = this.resolveUsageAccountGroupsFn().codex;
@@ -33866,18 +33854,6 @@ export class DesktopBackendRegistry {
     ]);
     if (backendGeneration !== this.codexBackendGeneration) {
       return this.readCodexBackendSummary();
-    }
-    let settledRateLimitsNotificationVersion = rateLimitsNotificationVersion;
-    while (
-      accountRevision === this.codexAccountRevision
-      && settledRateLimitsNotificationVersion !== this.codexRateLimitsNotificationVersion
-    ) {
-      const observedVersion = this.codexRateLimitsNotificationVersion;
-      await this.codexRateLimitNotificationWork;
-      if (backendGeneration !== this.codexBackendGeneration) {
-        return this.readCodexBackendSummary();
-      }
-      settledRateLimitsNotificationVersion = observedVersion;
     }
     // Resolution rejects when nothing is selected yet; the durable observation
     // is then the only thing left that can name a command.
@@ -33924,10 +33900,11 @@ export class DesktopBackendRegistry {
     const capabilities = buildCapabilities(methods, "codex", serverVersion);
 
     // Runtime metadata still applies after an account transition. Its older
-    // account and quota replies must not replace the refreshed account state.
+    // account reply must not replace the refreshed account state. Its quota
+    // reply is ordered by `rateLimitsSince`, which an account change voids.
     const accountChangedDuringDiscovery = accountRevision !== this.codexAccountRevision;
     const discoveredRateLimits =
-      !accountChangedDuringDiscovery && rateLimitsResult.status === "fulfilled"
+      rateLimitsResult.status === "fulfilled"
         ? rateLimitsResult.value
         : undefined;
     const summary: BackendSummary = {
