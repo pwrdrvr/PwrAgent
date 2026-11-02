@@ -83,6 +83,14 @@ On Windows, fixture close also drains each live Electron session before asking
 Playwright to quit: it closes connections, awaits the cookie store flush, and
 disposes the fixture session cache with `clearData({ dataTypes: ["cache"] })`.
 This preparation shares the existing six-second graceful-close deadline.
+The fixture awaits the entire drain through its live main-process RPC before
+calling Playwright close. The owner therefore remains reachable until every
+session callback finishes. Entering quit concurrently and holding `will-quit`
+allowed session cleanup to race Chromium's native context shutdown. In CI run
+41482286163, the stalled-close snapshot verified that Electron main PID 7876
+still held all four launcher pipe names while cache cleanup was pending; its
+two observed Chromium children held none of them. An unfinished drain still
+fails under the same deadline and is cleaned up by the owning test.
 Chromium's native `BrowserProcessIOThread::ProcessHostCleanUp` otherwise waits
 for the network service to flush cookies and cache after JavaScript quit has
 finished. That service can retain the launcher's pipes while native storage

@@ -171,7 +171,7 @@ describe("closeElectronApplication", () => {
     await vi.advanceTimersByTimeAsync(2);
     expect(harness.child.exitCode).toBe(0);
     await expect(closing).resolves.toMatchObject({
-      gracefulCloseOutcome: "closed", forceExitOutcome: "not-needed", elapsedMs: 5_001,
+      gracefulCloseOutcome: "closed", forceExitOutcome: "not-needed", elapsedMs: 5_000,
     });
     expect(childProcess.execFile).not.toHaveBeenCalled();
   });
