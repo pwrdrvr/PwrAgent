@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
 import {
   GithubPrFetcher,
@@ -11,6 +11,11 @@ import {
   parseGhAuthStatus,
   parseGhPrPayload,
 } from "../pr-status/github-pr-fetcher";
+import {
+  GithubGraphqlPrClient,
+  type GraphqlPrNode,
+} from "../pr-status/github-graphql-client";
+import { clearForgeRepositoryNames } from "../pr-status/forge-repository-names";
 
 // JSON shape pinned from `gh pr list --json …` against pwrdrvr/PwrAgent
 // running gh 2.88.1 on 2026-05-04. If gh changes the shape, update these
@@ -652,6 +657,74 @@ describe("GithubPrFetcher", () => {
       });
 
       expect(fetchPullRequestsForBranches).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("a checkout whose remote still has the repository's old name", () => {
+    // GitHub redirects pwrdrvr/PwrAgnt to pwrdrvr/PwrAgent: the repository
+    // answers under its new name, and so does every PR in it.
+    const renamedNode: GraphqlPrNode = {
+      number: 3192,
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3192",
+      state: "OPEN",
+      isDraft: false,
+      headRefName: "fix/renamed",
+      headRepository: { name: "PwrAgent" },
+      headRepositoryOwner: { login: "pwrdrvr" },
+    };
+
+    afterEach(() => {
+      clearForgeRepositoryNames();
+    });
+
+    function buildRenamedFetcher(remote = { host: "github.com", owner: "pwrdrvr", repo: "PwrAgnt" }) {
+      const request = vi.fn(async (query: string) => query.includes("associatedPullRequests")
+        ? {
+            r0: {
+              nameWithOwner: "pwrdrvr/PwrAgent",
+              object: { associatedPullRequests: { nodes: [{ ...renamedNode, headRefOid: "c".repeat(40) }] } },
+            },
+          }
+        : { r0: { nameWithOwner: "pwrdrvr/PwrAgent", pullRequests: { nodes: [renamedNode] } } });
+      const fetcher = new GithubPrFetcher({
+        graphqlClient: new GithubGraphqlPrClient({
+          request,
+          getToken: async () => "token",
+          sleep: async () => {},
+        }),
+        probeGhAvailable: async () => true,
+        resolveGitHubRepos: async () => [remote],
+      });
+      return { fetcher, request };
+    }
+
+    it("keeps the branch's PR that GitHub returns under the new name", async () => {
+      const { fetcher, request } = buildRenamedFetcher();
+
+      await expect(fetcher.fetchAllPullRequestsForBranch({ cwd: "/repo", branch: "fix/renamed" }))
+        .resolves.toEqual([expect.objectContaining({ number: 3192, org: "pwrdrvr", repo: "PwrAgent" })]);
+      expect(request.mock.calls[0]![0]).toContain("nameWithOwner");
+      await expect(fetcher.fetchOpenPullRequests({ cwd: "/repo", branches: ["fix/renamed"] }))
+        .resolves.toEqual([expect.objectContaining({ number: 3192 })]);
+      await expect(fetcher.fetchPullRequestsForCommit({ cwd: "/repo", sha: "c".repeat(40) }))
+        .resolves.toEqual([expect.objectContaining({ number: 3192 })]);
+    });
+
+    it("keeps a primed PR once GitHub has named the remote", async () => {
+      const { fetcher } = buildRenamedFetcher();
+      await fetcher.fetchAllPullRequestsForBranch({ cwd: "/repo", branch: "fix/renamed" });
+      const primed = { ...primedPr, number: 3193, url: "https://github.com/pwrdrvr/PwrAgent/pull/3193" };
+      fetcher.primeBranchLookup([{ cwd: "/repo", branch: "fix/primed", prs: [primed] }]);
+
+      await expect(fetcher.fetchAllPullRequestsForBranch({ cwd: "/repo", branch: "fix/primed" }))
+        .resolves.toEqual([primed]);
+    });
+
+    it("treats a remote that differs only in case as the same repository", async () => {
+      const { fetcher } = buildRenamedFetcher({ host: "github.com", owner: "PWRDRVR", repo: "pwragent" });
+
+      await expect(fetcher.fetchAllPullRequestsForBranch({ cwd: "/repo", branch: "fix/renamed" }))
+        .resolves.toEqual([expect.objectContaining({ number: 3192 })]);
     });
   });
 

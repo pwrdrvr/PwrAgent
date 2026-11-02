@@ -5,6 +5,7 @@ import {
   resolveGitHubReposForDirectory,
   type GitHubRepoRef,
 } from "../pr-status/git-remote";
+import { withForgeRepositoryNames } from "../pr-status/forge-repository-names";
 
 export type ReviewGitRunner = (
   cwd: string,
@@ -23,10 +24,16 @@ export function prBelongsToWorkspace(pr: PrSummary, cwd: string): boolean {
   );
 }
 
+/**
+ * A remote also matches under the name the forge answers for it, so a checkout
+ * whose remote still has a renamed repository's old name keeps its own PRs.
+ */
 export function prMatchesRepository(pr: PrSummary, repo: GitHubRepoRef): boolean {
-  return pr.provider.trim().toLowerCase() === repo.host.toLowerCase()
-    && pr.org.trim().toLowerCase() === repo.owner.toLowerCase()
-    && pr.repo.trim().toLowerCase() === repo.repo.toLowerCase();
+  return withForgeRepositoryNames([repo]).some((name) =>
+    pr.provider.trim().toLowerCase() === name.host.toLowerCase()
+    && pr.org.trim().toLowerCase() === name.owner.toLowerCase()
+    && pr.repo.trim().toLowerCase() === name.repo.toLowerCase()
+  );
 }
 
 async function resolveLocalTargetBranch(

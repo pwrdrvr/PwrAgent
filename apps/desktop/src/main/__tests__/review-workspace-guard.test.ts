@@ -1,6 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
-import { assertReviewWorkspaceMatchesAttachedPullRequest } from "../app-server/review-workspace-guard";
+import {
+  assertReviewWorkspaceMatchesAttachedPullRequest,
+  prMatchesRepository,
+} from "../app-server/review-workspace-guard";
+import {
+  clearForgeRepositoryNames,
+  recordForgeRepositoryName,
+} from "../pr-status/forge-repository-names";
 
 const PR_HEAD = "e82f8783f994f429aa1624a7beaf1deeec9da0ca";
 const CURRENT_HEAD = "970b7f2ff4f612b8e8cd340eb6b6d789d7141dd2";
@@ -226,3 +233,22 @@ function pullRequest(overrides: Partial<PrSummary> = {}): PrSummary {
     ...overrides,
   };
 }
+
+describe("prMatchesRepository", () => {
+  const oldRemote = { host: "github.com", owner: "pwrdrvr", repo: "PwrAgnt" };
+  const renamedPr = {
+    provider: "github.com", number: 3192, org: "pwrdrvr", repo: "PwrAgent",
+    state: "pending", url: "https://github.com/pwrdrvr/PwrAgent/pull/3192",
+  } as PrSummary;
+
+  afterEach(() => {
+    clearForgeRepositoryNames();
+  });
+
+  it("matches a remote with a renamed repository's old name once the forge has named it", () => {
+    expect(prMatchesRepository(renamedPr, oldRemote)).toBe(false);
+    recordForgeRepositoryName(oldRemote, "pwrdrvr/PwrAgent");
+    expect(prMatchesRepository(renamedPr, oldRemote)).toBe(true);
+    expect(prMatchesRepository(renamedPr, { ...oldRemote, owner: "PWRDRVR", repo: "pwragent" })).toBe(true);
+  });
+});
