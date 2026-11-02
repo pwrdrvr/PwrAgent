@@ -24,9 +24,9 @@ const BASH_EXIT_TRAP =
 
 /**
  * PowerShell hosts this small native launcher because Node does not expose the
- * Windows Job Object APIs. The target starts suspended, enters a
- * KILL_ON_JOB_CLOSE job, and only then resumes, so even MSYS fork descendants
- * cannot escape between process creation and ownership assignment.
+ * Windows Job Object APIs. The target is created suspended inside a
+ * KILL_ON_JOB_CLOSE job. Assignment is part of CreateProcess itself: killing
+ * this launcher cannot strand an unassigned suspended process holding pipes.
  */
 const WINDOWS_JOB_WRAPPER_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
@@ -75,6 +75,8 @@ public static class PwrAgentWindowsJobRunner
 {
     private const uint CREATE_SUSPENDED = 0x00000004;
     private const uint CREATE_NO_WINDOW = 0x08000000;
+    private const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
+    private const int PROC_THREAD_ATTRIBUTE_JOB_LIST = 0x0002000D;
     private const uint HANDLE_FLAG_INHERIT = 0x00000001;
     private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
     private const int JobObjectExtendedLimitInformation = 9;
@@ -112,6 +114,13 @@ public static class PwrAgentWindowsJobRunner
         public IntPtr hThread;
         public uint dwProcessId;
         public uint dwThreadId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct STARTUPINFOEX
+    {
+        public STARTUPINFO StartupInfo;
+        public IntPtr lpAttributeList;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -191,11 +200,20 @@ public static class PwrAgentWindowsJobRunner
         uint creationFlags,
         IntPtr environment,
         string currentDirectory,
-        ref STARTUPINFO startupInfo,
+        ref STARTUPINFOEX startupInfo,
         out PROCESS_INFORMATION processInformation);
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+    private static extern bool InitializeProcThreadAttributeList(
+        IntPtr attributeList, int attributeCount, uint flags, ref IntPtr size);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool UpdateProcThreadAttribute(
+        IntPtr attributeList, uint flags, IntPtr attribute, IntPtr value,
+        IntPtr size, IntPtr previousValue, IntPtr returnSize);
+
+    [DllImport("kernel32.dll")]
+    private static extern void DeleteProcThreadAttributeList(IntPtr attributeList);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint ResumeThread(IntPtr thread);
@@ -323,6 +341,9 @@ public static class PwrAgentWindowsJobRunner
 
         PROCESS_INFORMATION processInformation = new PROCESS_INFORMATION();
         bool processCreated = false;
+        IntPtr attributeList = IntPtr.Zero;
+        IntPtr jobList = IntPtr.Zero;
+        bool attributesInitialized = false;
         try
         {
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits =
@@ -348,15 +369,37 @@ public static class PwrAgentWindowsJobRunner
             }
             WriteStartupPhase(startupStatusFile, startupStartedAt, "job-configured");
 
-            STARTUPINFO startupInfo = new STARTUPINFO();
-            startupInfo.cb = (uint)Marshal.SizeOf(typeof(STARTUPINFO));
-            startupInfo.dwFlags = STARTF_USESTDHANDLES;
-            startupInfo.hStdInput = GetStdHandle(-10);
-            startupInfo.hStdOutput = GetStdHandle(-11);
-            startupInfo.hStdError = GetStdHandle(-12);
-            MakeInheritable(startupInfo.hStdInput);
-            MakeInheritable(startupInfo.hStdOutput);
-            MakeInheritable(startupInfo.hStdError);
+            IntPtr attributeListSize = IntPtr.Zero;
+            InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attributeListSize);
+            if (attributeListSize == IntPtr.Zero)
+            {
+                ThrowLastWin32Error("InitializeProcThreadAttributeList size");
+            }
+            attributeList = Marshal.AllocHGlobal(attributeListSize);
+            if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref attributeListSize))
+            {
+                ThrowLastWin32Error("InitializeProcThreadAttributeList");
+            }
+            attributesInitialized = true;
+            jobList = Marshal.AllocHGlobal(IntPtr.Size);
+            Marshal.WriteIntPtr(jobList, job);
+            if (!UpdateProcThreadAttribute(
+                attributeList, 0, new IntPtr(PROC_THREAD_ATTRIBUTE_JOB_LIST),
+                jobList, new IntPtr(IntPtr.Size), IntPtr.Zero, IntPtr.Zero))
+            {
+                ThrowLastWin32Error("UpdateProcThreadAttribute job list");
+            }
+
+            STARTUPINFOEX startupInfo = new STARTUPINFOEX();
+            startupInfo.StartupInfo.cb = (uint)Marshal.SizeOf(typeof(STARTUPINFOEX));
+            startupInfo.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+            startupInfo.StartupInfo.hStdInput = GetStdHandle(-10);
+            startupInfo.StartupInfo.hStdOutput = GetStdHandle(-11);
+            startupInfo.StartupInfo.hStdError = GetStdHandle(-12);
+            startupInfo.lpAttributeList = attributeList;
+            MakeInheritable(startupInfo.StartupInfo.hStdInput);
+            MakeInheritable(startupInfo.StartupInfo.hStdOutput);
+            MakeInheritable(startupInfo.StartupInfo.hStdError);
 
             StringBuilder commandLine = new StringBuilder(QuoteArgument(application));
             foreach (string argument in arguments)
@@ -370,7 +413,7 @@ public static class PwrAgentWindowsJobRunner
                 IntPtr.Zero,
                 IntPtr.Zero,
                 true,
-                CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
                 IntPtr.Zero,
                 workingDirectory,
                 ref startupInfo,
@@ -384,11 +427,8 @@ public static class PwrAgentWindowsJobRunner
                 startupStartedAt,
                 "target-created-suspended");
 
-            if (!AssignProcessToJobObject(job, processInformation.hProcess))
-            {
-                TerminateProcess(processInformation.hProcess, 127);
-                ThrowLastWin32Error("AssignProcessToJobObject");
-            }
+            // The kernel assigned the Job before CreateProcess returned. A
+            // separate AssignProcessToJobObject leaves a fatal-kill race here.
             WriteStartupPhase(startupStatusFile, startupStartedAt, "target-assigned");
             if (ResumeThread(processInformation.hThread) == UInt32.MaxValue)
             {
@@ -415,6 +455,12 @@ public static class PwrAgentWindowsJobRunner
         }
         finally
         {
+            if (attributesInitialized)
+            {
+                DeleteProcThreadAttributeList(attributeList);
+            }
+            if (attributeList != IntPtr.Zero) Marshal.FreeHGlobal(attributeList);
+            if (jobList != IntPtr.Zero) Marshal.FreeHGlobal(jobList);
             if (processCreated)
             {
                 CloseHandle(processInformation.hThread);

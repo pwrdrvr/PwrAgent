@@ -46,6 +46,14 @@ export function claudeEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   // Claude reports `session_state_changed` only when asked. Its `idle` is the
   // authoritative end of work, after any background agents have reported.
   result.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = "1";
+  // Claude Code leaves its Artifact tools (`/design`, `/slides`) off in SDK
+  // hosts unless asked. The operator's own value, including `0`, wins, and
+  // the CLI still honors CLAUDE_CODE_DISABLE_ARTIFACT, `enableArtifact` and
+  // permission rules.
+  result.CLAUDE_CODE_ARTIFACT ??= "1";
+  // A first publish opens the browser by default. A background thread should
+  // not, so the transcript row carries the link instead.
+  result.CLAUDE_CODE_ARTIFACT_AUTO_OPEN ??= "0";
   return result;
 }
 

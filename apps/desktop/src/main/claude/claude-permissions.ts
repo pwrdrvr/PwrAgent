@@ -1,12 +1,44 @@
 import { randomUUID } from "node:crypto";
-import type { CanUseTool, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
-import type { AppServerPendingRequestNotification, ThreadExecutionMode } from "@pwragent/shared";
+import type { CanUseTool, Options, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
+import { PWRAGENT_TOOL_NAMESPACE, type AppServerPendingRequestNotification, type ThreadExecutionMode } from "@pwragent/shared";
+import { CLAUDE_ARTIFACT_TOOLS } from "./claude-tool-activity";
+
+/** PwrAgent's MCP gateway invocation tool, as Claude names it. */
+export const CLAUDE_MCP_GATEWAY_TOOL = `mcp__${PWRAGENT_TOOL_NAMESPACE}__call_mcp_tool`;
+
+/**
+ * Tools Claude runs without asking, because PwrAgent decides them itself.
+ *
+ * A gateway call gets PwrAgent's own card when it needs one. That card knows
+ * the upstream tool, the connection's Tool approval setting, the
+ * conversation's earlier approvals and automation allowlists. Claude's card
+ * would only name `call_mcp_tool`, and accepting it led to the gateway card.
+ * The rule names one exact tool on PwrAgent's own server, so it is set only
+ * when that server is attached. Claude still applies its plan mode and the
+ * operator's own `ask` and `deny` rules for the tool.
+ */
+export function claudeAllowedTools(mcpServers: Options["mcpServers"]): string[] {
+  return mcpServers && Object.hasOwn(mcpServers, PWRAGENT_TOOL_NAMESPACE) ? [CLAUDE_MCP_GATEWAY_TOOL] : [];
+}
 
 export function claudePermissionMode(mode: ThreadExecutionMode): PermissionMode {
   switch (mode) {
     case "default": return "default";
     case "auto": return "auto";
     case "full-access": return "bypassPermissions";
+  }
+}
+
+/**
+ * The PwrAgent approval mode a Claude permission mode runs under. Plan,
+ * accept-edits and don't-ask still stop for anything not already allowed, so
+ * they count as Default Access.
+ */
+export function threadExecutionModeForClaudePermission(mode: PermissionMode): ThreadExecutionMode {
+  switch (mode) {
+    case "bypassPermissions": return "full-access";
+    case "auto": return "auto";
+    default: return "default";
   }
 }
 
@@ -20,6 +52,38 @@ export const CLAUDE_EXIT_PLAN_TOOL = "ExitPlanMode";
  */
 const CLAUDE_PLAN_HANDOFF = "The operator has your plan and will reply when it should be implemented. "
   + "Stay in plan mode and end your turn now.";
+
+/**
+ * The input a card shows. Claude Code adds its own `__`-prefixed fields to an
+ * artifact call, such as a publish's consent and source pin. They are
+ * returned to the CLI unchanged, never shown. Another tool's input is shown
+ * whole: its `__` fields are arguments the call sends.
+ */
+function displayInput(toolName: string, input: Record<string, unknown>): Record<string, unknown> {
+  if (!CLAUDE_ARTIFACT_TOOLS.has(toolName)) return input;
+  return Object.fromEntries(Object.entries(input).filter(([key]) => !key.startsWith("__")));
+}
+
+/**
+ * What an approval card says. Claude Code writes its own question for an
+ * artifact request (a publish to claude.ai, a public share, a delete), so
+ * the card asks that instead of showing the call's input as a command. An
+ * artifact request without one shows its input, as any other tool's does.
+ */
+function claudeApprovalText(
+  toolName: string, input: Record<string, unknown>, context: Parameters<CanUseTool>[2],
+): { command?: string; prompt?: string; reason: string } {
+  const question = CLAUDE_ARTIFACT_TOOLS.has(toolName)
+    ? context.decisionReason ?? context.description ?? context.title
+    : undefined;
+  if (question) return { prompt: question, reason: question };
+  return {
+    command: toolName === "Bash"
+      ? String(input.command ?? "")
+      : `${toolName}: ${JSON.stringify(displayInput(toolName, input))}`,
+    reason: context.decisionReason ?? `Claude requests permission to use ${toolName}.`,
+  };
+}
 
 export function createClaudePermissionHandler(options: {
   threadId: string;
@@ -69,9 +133,8 @@ export function createClaudePermissionHandler(options: {
             requestId,
             itemId: context.toolUseID,
             toolName,
-            arguments: input,
-            command: toolName === "Bash" ? String(input.command ?? "") : `${toolName}: ${JSON.stringify(input)}`,
-            reason: context.decisionReason ?? `Claude requests permission to use ${toolName}.`,
+            arguments: displayInput(toolName, input),
+            ...claudeApprovalText(toolName, input, context),
             availableDecisions: ["accept", "decline", "cancel"],
           },
         };

@@ -39,6 +39,15 @@ function fixture() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("fixed MCP gateway tools", () => {
+  it("reports supplied process identity once without inferring a desktop owner", async () => {
+    const f = fixture();
+    const serverIdentity = { serverInfo: { name: "fixture", version: "3" }, metadata: { interface: { owner: "standalone", relayVersion: null } } };
+    f.catalog.set("one", [{ ...tool(), serverIdentity }, tool("one", "lookup_again")]);
+    const result = await f.service.search({ query: "lookup" }, context);
+    expect(result.servers).toEqual([{ connectionId: "one", serverName: "one", ...serverIdentity }]);
+    expect(result.tools.every((entry) => !("serverIdentity" in entry))).toBe(true);
+  });
+
   it("binds server consent to every tool revision, independent of listing order", () => {
     const first = tool("one", "lookup");
     const second = tool("one", "write");
@@ -266,6 +275,39 @@ describe("fixed MCP gateway tools", () => {
     expect(failed.isError).toBe(true);
     expect(JSON.stringify(failed)).toContain("-32602");
     expect(JSON.stringify(failed)).toContain("bad argument");
+  });
+
+  it("sends upstream forms to the host's form handler for the call only, never to approval", async () => {
+    const f = fixture();
+    const form = { message: "Confirm?", requestedSchema: { type: "object" as const, properties: {} } };
+    const answer = { action: "decline" };
+    const elicit = vi.fn(async () => answer);
+    const service = new McpGatewayToolService({
+      connections: { requestGatewayToolOperation: f.requestGatewayToolOperation }, approve: f.approve, elicit,
+      selectedConnections: async (caller) => f.selected.get(caller.threadId) ?? [],
+    });
+    let forwarded: unknown;
+    f.requestGatewayToolOperation.mockImplementation(async (params) => {
+      if (params.operation === "gateway/tools/list") {
+        expect(params.elicit).toBeUndefined();
+        return f.catalog.get(params.connectionId) ?? [];
+      }
+      const formSignal = new AbortController();
+      forwarded = await params.elicit!(form, formSignal.signal);
+      formSignal.abort();
+      return f.result;
+    });
+
+    await service.call(f.args, context);
+
+    expect(forwarded).toBe(answer);
+    expect(f.approve).toHaveBeenCalledTimes(1);
+    expect(elicit).toHaveBeenCalledWith(
+      form,
+      expect.objectContaining({ connectionId: "one", toolName: "lookup", arguments: { id: "record" } }),
+      context,
+      expect.any(AbortSignal),
+    );
   });
 
   it("retains original source attribution without confusing delimiters", () => {

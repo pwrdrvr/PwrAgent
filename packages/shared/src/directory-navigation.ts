@@ -13,6 +13,10 @@ import {
 } from "./contracts/navigation.js";
 import { compareThreadsByCreatedAtDesc } from "./thread-pins.js";
 import {
+  isDefaultProjectForgeAutomation,
+  resolveProjectForgeAutomation,
+} from "./project-forge-automation.js";
+import {
   isToolManagedWorktreePath,
 } from "./worktree-paths.js";
 
@@ -700,6 +704,14 @@ export function buildDirectorySummaries(params: {
       if (overlay.directoryThreadsCollapsed !== undefined) {
         summary.directoryThreadsCollapsed =
           overlay.directoryThreadsCollapsed;
+      }
+      // Forge Automation is per Directories project only. A stored value
+      // that reads back as the defaults is treated as absent.
+      if (overlay.forgeAutomation && summary.kind === "directory") {
+        const automation = resolveProjectForgeAutomation(overlay.forgeAutomation);
+        if (!isDefaultProjectForgeAutomation(automation)) {
+          summary.forgeAutomation = automation;
+        }
       }
     }
   }

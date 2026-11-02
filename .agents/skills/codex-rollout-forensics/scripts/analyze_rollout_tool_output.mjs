@@ -2,13 +2,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { createInterface } from "node:readline";
+
+const DISCOVERY_HEADER_BYTES = 64 * 1024;
 
 const USAGE = `Usage:
   analyze_rollout_tool_output.mjs [options] <rollout.jsonl | dir> [...]
   analyze_rollout_tool_output.mjs --thread-id <uuid> [--profile <name>]
 
 Options:
-  --thread-id <uuid>       Search Codex session trees for rollout files containing this id.
+  --thread-id <uuid>       Find rollout filenames, falling back to session metadata headers (64 KiB).
   --profile <name>         Include ~/.codex/profiles/<name>/sessions and archived_sessions.
   --json                   Emit full JSON instead of Markdown.
   --top <n>                Rows per table (default: 15).
@@ -56,15 +59,17 @@ function parseArgs(argv) {
   return args;
 }
 
-function walkJsonlFiles(root) {
+function* walkJsonlFiles(root) {
   if (!fs.existsSync(root)) {
-    return [];
+    return;
   }
   const stat = fs.statSync(root);
   if (stat.isFile()) {
-    return root.endsWith(".jsonl") ? [root] : [];
+    if (root.endsWith(".jsonl")) {
+      yield root;
+    }
+    return;
   }
-  const files = [];
   const stack = [root];
   while (stack.length > 0) {
     const current = stack.pop();
@@ -73,11 +78,10 @@ function walkJsonlFiles(root) {
       if (entry.isDirectory()) {
         stack.push(full);
       } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
-        files.push(full);
+        yield full;
       }
     }
   }
-  return files;
 }
 
 function defaultSearchRoots(profile) {
@@ -109,16 +113,10 @@ function defaultSearchRoots(profile) {
 
 function findRolloutsByThreadId(threadId, profile, maxFiles) {
   const matches = [];
-  const seen = new Set();
-  const candidates = [];
-  for (const root of defaultSearchRoots(profile)) {
+  const roots = defaultSearchRoots(profile);
+  for (const root of roots) {
     for (const file of walkJsonlFiles(root)) {
-      if (seen.has(file)) {
-        continue;
-      }
-      seen.add(file);
-      candidates.push(file);
-      if (path.basename(file).includes(threadId)) {
+      if (path.basename(file).endsWith(`-${threadId}.jsonl`)) {
         matches.push(file);
         if (matches.length >= maxFiles) {
           return matches;
@@ -126,19 +124,43 @@ function findRolloutsByThreadId(threadId, profile, maxFiles) {
       }
     }
   }
-  for (const file of candidates) {
-    if (matches.includes(file)) {
-      continue;
-    }
-    const text = fs.readFileSync(file, "utf8");
-    if (text.includes(threadId)) {
-      matches.push(file);
-      if (matches.length >= maxFiles) {
-        return matches;
+  // Canonical filenames identify the session without opening unrelated rollouts.
+  if (matches.length > 0) {
+    return matches;
+  }
+  for (const root of roots) {
+    for (const file of walkJsonlFiles(root)) {
+      if (readSessionId(file) === threadId) {
+        matches.push(file);
+        if (matches.length >= maxFiles) {
+          return matches;
+        }
       }
     }
   }
   return matches;
+}
+
+function readSessionId(file) {
+  const fd = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(DISCOVERY_HEADER_BYTES);
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    const header = buffer.subarray(0, bytesRead);
+    const newline = header.indexOf(10);
+    // A header beyond the bound is not a discovery candidate. A short file
+    // may consist of just the metadata record without a trailing newline.
+    if (newline === -1 && bytesRead === buffer.length) {
+      return undefined;
+    }
+    const record = parseJson(header.subarray(0, newline === -1 ? bytesRead : newline).toString("utf8"));
+    if (record?.type === "session_meta") {
+      return record.payload?.session_id || record.payload?.id;
+    }
+    return undefined;
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function estimateTokens(text) {
@@ -398,21 +420,31 @@ function normalizeToolOutput(value, explicitExitCode) {
   };
 }
 
-function readRecords(file) {
-  return fs.readFileSync(file, "utf8")
-    .split("\n")
-    .filter(Boolean)
-    .map((line, index) => {
-      try {
-        return { index, record: JSON.parse(line) };
-      } catch (error) {
-        return { error: String(error), index, record: undefined };
+async function* readRecords(file) {
+  const input = fs.createReadStream(file, { encoding: "utf8" });
+  const lines = createInterface({ input, crlfDelay: Infinity });
+  let index = 0;
+  try {
+    for await (const line of lines) {
+      if (!line) {
+        continue;
       }
-    });
+      let record;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        // Preserve the position of malformed records for replay attribution.
+      }
+      yield { index, record };
+      index += 1;
+    }
+  } finally {
+    lines.close();
+    input.destroy();
+  }
 }
 
-function analyzeRollout(file) {
-  const rows = readRecords(file);
+async function analyzeRollout(file) {
   const calls = new Map();
   let legacyCommandCount = 0;
   const outputs = [];
@@ -422,7 +454,7 @@ function analyzeRollout(file) {
   const userMessages = [];
   let meta;
 
-  for (const { index, record } of rows) {
+  for await (const { index, record } of readRecords(file)) {
     const payload = record?.payload;
     if (!meta && record?.type === "session_meta") {
       meta = payload;
@@ -467,7 +499,7 @@ function analyzeRollout(file) {
       && (payload?.type === "function_call_output" || payload?.type === "custom_tool_call_output")
     ) {
       const call = calls.get(payload.call_id);
-      const output = normalizeToolOutput(payload.output);
+      const { text: outputText, ...output } = normalizeToolOutput(payload.output);
       let normalizedCommand = call?.normalizedCommand || call?.name || "unknown";
       let command = call?.command || "";
       let pollSessionId;
@@ -506,7 +538,7 @@ function analyzeRollout(file) {
         sessionCommands.set(String(output.runningSessionId), commandAttribution);
       }
       outputs.push({
-        ...classifyOutput(output.text),
+        ...classifyOutput(outputText),
         ...output,
         callId: payload.call_id,
         command,
@@ -514,7 +546,7 @@ function analyzeRollout(file) {
         modelRequestsAfter: 0,
         name: call?.name || "unknown",
         normalizedCommand,
-        outputTokens: estimateTokens(output.text),
+        outputTokens: estimateTokens(outputText),
         pollSessionId,
         replayInputImpressions: 0,
         timestamp: record.timestamp,
@@ -523,11 +555,11 @@ function analyzeRollout(file) {
     }
     if (record?.type === "event_msg" && payload?.type === "exec_command_end") {
       const command = readPayloadCommand(payload);
-      const output = normalizeToolOutput(readPayloadOutput(payload), readPayloadExitCode(payload));
+      const { text: outputText, ...output } = normalizeToolOutput(readPayloadOutput(payload), readPayloadExitCode(payload));
       const normalizedCommand = normalizeCommand(command, "exec_command");
       legacyCommandCount += 1;
       outputs.push({
-        ...classifyOutput(output.text),
+        ...classifyOutput(outputText),
         ...output,
         callId: payload.call_id || payload.callId || `exec_command_end:${index}`,
         command,
@@ -535,7 +567,7 @@ function analyzeRollout(file) {
         modelRequestsAfter: 0,
         name: "exec_command",
         normalizedCommand,
-        outputTokens: estimateTokens(output.text),
+        outputTokens: estimateTokens(outputText),
         pollSessionId: undefined,
         replayInputImpressions: 0,
         timestamp: record.timestamp,
@@ -807,7 +839,10 @@ if (files.length === 0) {
   process.exit(1);
 }
 
-const summaries = files.map((file) => analyzeRollout(file));
+const summaries = [];
+for (const file of files) {
+  summaries.push(await analyzeRollout(file));
+}
 if (args.json) {
   console.log(JSON.stringify({ summaries }, null, 2));
 } else {

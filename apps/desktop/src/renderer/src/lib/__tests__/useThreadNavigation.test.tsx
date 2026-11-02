@@ -3451,7 +3451,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("re-enables a locally mounted remote thread after reconnect", async () => {
+  it("keeps a mounted remote thread dimmed until reconnect restamps its capabilities", async () => {
     const federationTarget = {
       scope: "remote" as const,
       instanceId: "remote-instance",
@@ -3459,45 +3459,56 @@ describe("useThreadNavigation", () => {
     const listeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
     >();
+    // What the main process stamps on each read: an owner that is away
+    // grants nothing it can act on, as `heldOfflineThread` stamps it.
     let peerStatus: "connected" | "disconnected" = "connected";
-    const readPopulation = vi.fn(async () => ({
-      backend: "all" as const,
-      fetchedAt: Date.now(),
-      unchanged: false,
-      inboxThreadKeys: ["codex:thread-local", "codex:thread-remote"],
-      threads: [
-        {
-          id: "thread-local",
-          title: "Local thread",
-          titleSource: "explicit" as const,
-          source: "codex" as const,
-          linkedDirectories: [],
-          inbox: { inInbox: true },
-        },
-        {
-          id: "thread-remote",
-          title: "Mounted remote thread",
-          titleSource: "explicit" as const,
-          source: "codex" as const,
-          linkedDirectories: [],
-          inbox: { inInbox: true },
-          federation: {
-            ref: {
-              backend: "codex" as const,
-              target: federationTarget,
-              threadId: "thread-remote",
-            },
-            instanceLabel: "Remote fixture",
-            peerStatus,
+    let capabilities: Array<"thread_navigation" | "turn_control"> = [
+      "thread_navigation",
+      "turn_control",
+    ];
+    let readGate: Promise<void> = Promise.resolve();
+    const readPopulation = vi.fn(async () => {
+      await readGate;
+      return {
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: ["codex:thread-local", "codex:thread-remote"],
+        threads: [
+          {
+            id: "thread-local",
+            title: "Local thread",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            inbox: { inInbox: true },
           },
+          {
+            id: "thread-remote",
+            title: "Mounted remote thread",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            inbox: { inInbox: true },
+            federation: {
+              ref: {
+                backend: "codex" as const,
+                target: federationTarget,
+                threadId: "thread-remote",
+              },
+              instanceLabel: "Remote fixture",
+              peerStatus,
+              capabilities: [...capabilities],
+            },
+          },
+        ],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
         },
-      ],
-      directories: [],
-      launchpadDefaults: {
-        backend: "codex" as const,
-        executionMode: "default" as const,
-      },
-    }));
+      };
+    });
     const desktopApi: DesktopApi = {
       readPopulation,
       onAgentEvent: (callback) => {
@@ -3506,6 +3517,25 @@ describe("useThreadNavigation", () => {
           listeners.delete(callback);
         };
       },
+    };
+    const emitPeerStatus = (
+      status: "connected" | "disconnected",
+      unavailableReason?: string,
+    ): void => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          federationTarget,
+          notification: {
+            method: "federation/peerStatus/changed",
+            params: {
+              instanceId: "remote-instance",
+              status,
+              ...(unavailableReason ? { unavailableReason } : {}),
+            },
+          },
+        });
+      }
     };
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
@@ -3516,20 +3546,7 @@ describe("useThreadNavigation", () => {
     });
 
     act(() => {
-      for (const listener of listeners) {
-        listener({
-          backend: "codex",
-          federationTarget,
-          notification: {
-            method: "federation/peerStatus/changed",
-            params: {
-              instanceId: "remote-instance",
-              status: "disconnected",
-              unavailableReason: "Federation gateway connection closed.",
-            },
-          },
-        });
-      }
+      emitPeerStatus("disconnected", "Federation gateway connection closed.");
     });
 
     expect(result.current.threads[0]?.federation).toBeUndefined();
@@ -3540,31 +3557,44 @@ describe("useThreadNavigation", () => {
     // window into a global navigation error surface.
     expect(result.current.error).toBeUndefined();
 
-    peerStatus = "connected";
-    act(() => {
-      for (const listener of listeners) {
-        listener({
-          backend: "codex",
-          federationTarget,
-          notification: {
-            method: "federation/peerStatus/changed",
-            params: {
-              instanceId: "remote-instance",
-              status: "connected",
-            },
-          },
-        });
-      }
+    // A read while the owner is away serves the held row.
+    peerStatus = "disconnected";
+    capabilities = [];
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.threads[1]?.federation).toMatchObject({
+      peerStatus: "disconnected",
+      capabilities: [],
     });
 
-    expect(result.current.threads[1]?.federation?.peerStatus).toBe(
-      "connected",
-    );
+    // The owner returns. Hold the reconnect read open to observe the rows
+    // before the main process restamps them.
+    let releaseRead!: () => void;
+    readGate = new Promise((resolve) => {
+      releaseRead = resolve;
+    });
+    peerStatus = "connected";
+    capabilities = ["thread_navigation", "turn_control"];
+    act(() => {
+      emitPeerStatus("connected");
+    });
+
+    // The event carries no capabilities. Undimming the row now would show
+    // it ready while its menu still withholds Rename and Mark Unread.
+    expect(result.current.threads[1]?.federation).toMatchObject({
+      peerStatus: "disconnected",
+      capabilities: [],
+    });
+
+    await act(async () => {
+      releaseRead();
+    });
     await waitFor(() => {
-      expect(readPopulation).toHaveBeenCalledTimes(2);
-      expect(result.current.threads[1]?.federation?.peerStatus).toBe(
-        "connected",
-      );
+      expect(result.current.threads[1]?.federation).toMatchObject({
+        peerStatus: "connected",
+        capabilities: ["thread_navigation", "turn_control"],
+      });
     });
   });
 
@@ -3872,6 +3902,67 @@ describe("useThreadNavigation", () => {
       result.current.dismissArchiveThreadNotice();
     });
     expect(result.current.archiveThreadNotice).toBeUndefined();
+  });
+
+  it("keeps a nested tray intact until the owner publishes promoted children", async () => {
+    let archived = false;
+    let releaseArchive!: () => void;
+    const archiveGate = new Promise<void>((resolve) => { releaseArchive = resolve; });
+    let releaseOwnerPage!: () => void;
+    const ownerPageGate = new Promise<void>((resolve) => { releaseOwnerPage = resolve; });
+    let ownerReadStarted = false;
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const rows: NavigationThreadSummary[] = ["root", "before", "parent", "survivor", "after"].map((id, index) => ({
+      id, source: "codex", title: id, titleSource: "explicit", linkedDirectories: [],
+      inbox: { inInbox: false }, createdAt: index, updatedAt: index,
+      ...(id === "root" ? { subthreadOrder: ["before", "parent", "after"] }
+        : { parentThreadId: id === "survivor" ? "parent" : "root", parentThreadBackend: "codex" }),
+    }));
+    const readPopulation = vi.fn(async (): Promise<NavigationSnapshot> => {
+      if (archived) {
+        ownerReadStarted = true;
+        await ownerPageGate;
+      }
+      return {
+        backend: "all", fetchedAt: Date.now(), unchanged: false, inboxThreadKeys: [], directories: [],
+        launchpadDefaults: { backend: "codex", executionMode: "default" },
+        threads: archived ? rows.filter((row) => row.id !== "parent").map((row) => row.id === "root"
+          ? { ...row, subthreadOrder: ["before", "survivor", "after"] }
+          : row.id === "survivor" ? { ...row, parentThreadId: "root" } : row) : rows,
+      };
+    });
+    const archiveThread = vi.fn(async () => {
+      await archiveGate;
+      archived = true;
+      return { backend: "codex" as const, threadId: "parent", archivedAt: 1000, cleanup: [] };
+    });
+    const api: DesktopApi = { readPopulation, archiveThread, onAgentEvent: (listener) => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    } };
+    const { result } = renderHook(() => useThreadNavigation(api));
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(5);
+      expect([...result.current.pagedNavigation.resources.values()].some(({ state }) =>
+        state.request.query.kind === "children" && state.request.query.parent.threadId === "root")).toBe(true);
+    });
+    let operation!: ReturnType<typeof result.current.archiveThread>;
+    act(() => { operation = result.current.archiveThread(result.current.threads.find((row) => row.id === "parent")!); });
+    expect(result.current.threads.map((row) => row.id)).toContain("parent");
+    expect(result.current.threads.find((row) => row.id === "survivor")?.parentThreadId).toBe("parent");
+    act(() => { releaseArchive(); });
+    await waitFor(() => expect(ownerReadStarted).toBe(true));
+    act(() => {
+      for (const listener of listeners) listener({ backend: "codex",
+        notification: { method: "thread/archived", params: { threadId: "parent" } } });
+    });
+    expect(result.current.threads.map((row) => row.id)).toContain("parent");
+    expect(result.current.threads.find((row) => row.id === "survivor")?.parentThreadId).toBe("parent");
+    await act(async () => { releaseOwnerPage(); await operation; });
+    await waitFor(() => {
+      expect(result.current.threads.map((row) => row.id)).not.toContain("parent");
+      expect(result.current.threads.find((row) => row.id === "survivor")?.parentThreadId).toBe("root");
+    });
   });
 
   it("archives sub-threads before the parent when archiving a group", async () => {
@@ -4443,6 +4534,70 @@ describe("useThreadNavigation", () => {
     expect(reorderThreadPins).toHaveBeenCalledWith({
       federationTarget: { scope: "local" },
       move: { key: "remote:child-owner:codex:thread-child", anchorKey: "codex:thread-parent", placement: "before" },
+    });
+  });
+
+  it("names this machine as the parent's owner when a peer's thread moves under a local thread", async () => {
+    const remoteTarget = { scope: "remote" as const, instanceId: "windows-peer" };
+    const parent: NavigationThreadSummary = {
+      id: "thread-root",
+      title: "Root",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const peerThread: NavigationThreadSummary = {
+      ...parent,
+      id: "thread-peer",
+      title: "Windows E2E",
+      parentThreadId: "thread-other",
+      parentThreadBackend: "claude",
+      parentThreadInstanceId: "viewer",
+      federation: {
+        ref: { backend: "codex", target: remoteTarget, threadId: "thread-peer" },
+        instanceLabel: "Win PC / dev",
+        capabilities: ["thread_grouping"],
+      },
+    };
+    const snapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [parent, peerThread],
+      directories: [],
+      launchpadDefaults: { backend: "codex", executionMode: "default" },
+    };
+    const setThreadParent = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-peer",
+      parentThreadId: "thread-root",
+      parentThreadBackend: "codex" as const,
+      parentThreadInstanceId: "viewer",
+    }));
+    const desktopApi: DesktopApi = {
+      readFederationHealth: async () => ({ health: { enabled: true, role: "client", status: "connected", instanceId: "viewer", peers: [] } }),
+      readPopulation: vi.fn(async () => snapshot),
+      onAgentEvent: () => () => undefined,
+      setThreadParent,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.threads).toHaveLength(2));
+
+    let saved: boolean | undefined;
+    await act(async () => {
+      saved = await result.current.setThreadParent(peerThread, "thread-root", "codex", true);
+    });
+
+    expect(saved).toBe(true);
+    expect(setThreadParent).toHaveBeenCalledWith({
+      backend: "codex",
+      federationTarget: remoteTarget,
+      threadId: "thread-peer",
+      parentThreadId: "thread-root",
+      parentThreadBackend: "codex",
+      parentThreadInstanceId: "viewer",
     });
   });
 
@@ -5906,6 +6061,8 @@ describe("useThreadNavigation", () => {
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
       releaseLaunchpadOnSubmit: true,
       codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
+        operationId: expect.any(String),
+        submittedAt: expect.any(Number),
       directoryKey: "directory:/Users/fixture-user/github/PwrAgent",
       launchpad: expect.objectContaining({
         directoryKey: "directory:/Users/fixture-user/github/PwrAgent",
@@ -6101,6 +6258,8 @@ describe("useThreadNavigation", () => {
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
       releaseLaunchpadOnSubmit: true,
       codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
+        operationId: expect.any(String),
+        submittedAt: expect.any(Number),
       directoryKey,
       launchpad: expect.objectContaining({
         prompt: "/review main",
@@ -6992,6 +7151,8 @@ describe("useThreadNavigation", () => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
         releaseLaunchpadOnSubmit: true,
         codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
+        operationId: expect.any(String),
+        submittedAt: expect.any(Number),
         directoryKey,
         launchpad: expect.objectContaining({
           directoryKey,
@@ -7098,6 +7259,29 @@ describe("useThreadNavigation", () => {
       const rendered = renderHook(() => useThreadNavigation(desktopApi));
       return { ...rendered, materializations, materializeDirectoryLaunchpad };
     };
+
+    it("uses every submitted text part for the starting title", async () => {
+      const { result, materializations } = renderStartingLaunchpad();
+      await waitFor(() => expect(result.current.selectedThread?.id).toBe("thread-existing"));
+      await act(async () => {
+        await result.current.openDirectoryLaunchpad(result.current.directories[0]!);
+      });
+
+      let start: Promise<void> | undefined;
+      act(() => {
+        start = result.current.materializeDirectoryLaunchpad(directoryKey, [
+          { type: "text", text: "-" },
+          { type: "text", text: "Prepare dependency updates" },
+        ]);
+      });
+      await waitFor(() => expect(materializations).toHaveLength(1));
+      expect(result.current.pendingLaunchpadCreations[0]?.title).toBe("-\n\nPrepare dependency updates");
+
+      await act(async () => {
+        materializations[0]!.resolve({ backend: "codex", threadId: "created", executionMode: "default", workMode: "worktree" });
+        await start;
+      });
+    });
 
     it("frees the directory's launchpad for another thread", async () => {
       const { result, materializations, materializeDirectoryLaunchpad } =
@@ -7322,6 +7506,8 @@ describe("useThreadNavigation", () => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
         releaseLaunchpadOnSubmit: true,
         codexEnvironmentSetupProgressKey: expect.stringMatching(/^starting-launchpad:/),
+        operationId: expect.any(String),
+        submittedAt: expect.any(Number),
         directoryKey: firstDirectoryKey,
         launchpad: expect.objectContaining({
           directoryKey: firstDirectoryKey,
@@ -9597,6 +9783,71 @@ describe("useThreadNavigation", () => {
     });
     expect(ensureDirectoryLaunchpad.mock.calls[0]?.[0].federationTarget).toBeUndefined();
     expect(result.current.selectedLaunchpad?.parentThreadInstanceId).toBeUndefined();
+  });
+
+  it("orders a sub-thread started on a peer under this machine's parent here, after pinning it", async () => {
+    const parent: NavigationThreadSummary = {
+      id: "workspace-parent", title: "Research", titleSource: "explicit", source: "codex", executionMode: "default",
+      projectKey: "/scratch/research", linkedDirectories: [
+        { id: "scratch", label: "Research", path: "/scratch/research", kind: "local" },
+      ], inbox: { inInbox: true },
+    };
+    const defaults = { backend: "codex" as const, executionMode: "default" as const };
+    const ensureDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["ensureDirectoryLaunchpad"]>>(async (request) => ({
+      launchpad: { ...request, ...defaults, prompt: "Check the Windows build", workMode: "local", createdAt: 1, updatedAt: 1 },
+      defaults,
+    }));
+    const updateDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>(async (request) => ({
+      launchpad: {
+        ...defaults, prompt: "Check the Windows build", workMode: "local", createdAt: 1, updatedAt: 2,
+        directoryKey: request.directoryKey, directoryKind: "workspace", directoryLabel: "New Workspace",
+        ...request.patch,
+      },
+      defaults,
+    }));
+    const materializeDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["materializeDirectoryLaunchpad"]>>(async () => ({
+      backend: "codex", threadId: "peer-child", executionMode: "default", workMode: "local",
+    }));
+    const addRemoteThreadPin = vi.fn<NonNullable<DesktopApi["addRemoteThreadPin"]>>(async (request) => ({
+      pin: { ref: request.ref, instanceLabel: "studio", pinnedVia: "explicit", addedAt: 1 },
+    }));
+    const updateSubthreadOrder = vi.fn<NonNullable<DesktopApi["updateSubthreadOrder"]>>(async (request) => ({
+      backend: "codex", parentThreadId: request.parentThreadId,
+    }));
+    const api: DesktopApi = {
+      ...actionDetailApi(parent), ensureDirectoryLaunchpad, updateDirectoryLaunchpad, materializeDirectoryLaunchpad,
+      addRemoteThreadPin, updateSubthreadOrder,
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false,
+        inboxThreadKeys: ["codex:workspace-parent"], threads: [parent], directories: [], launchpadDefaults: defaults }),
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(api, { localFederationInstanceId: "harbor" }));
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.createSubthread(parent, "new-workspace", { instanceId: "studio" });
+    });
+    const directoryKey = result.current.selectedLaunchpad!.directoryKey;
+    await act(async () => {
+      await result.current.materializeDirectoryLaunchpad(directoryKey);
+    });
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+      federationTarget: { scope: "remote", instanceId: "studio" },
+      parentThreadId: parent.id, parentThreadInstanceId: "harbor",
+    }));
+    // The parent is this machine's, so its order is written here, not sent
+    // to "harbor" over federation, and only after the pin that places the
+    // new child in this machine's group.
+    expect(updateSubthreadOrder).toHaveBeenCalledWith({
+      backend: "codex",
+      federationTarget: undefined,
+      parentThreadId: parent.id,
+      insertAfter: { threadId: "peer-child", sourceThreadId: parent.id },
+    });
+    expect(addRemoteThreadPin.mock.invocationCallOrder[0]).toBeLessThan(
+      updateSubthreadOrder.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("takes the peer's provider for a sub-thread when the peer cannot run the parent's", async () => {
@@ -12202,7 +12453,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("applies pull request update notification payloads before unchanged refreshes", async () => {
+  it.each(["title", "explicit-attachment"])("applies pull request %s notification payloads before unchanged refreshes", async (change) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     onTestFinished(() => { vi.useRealTimers(); });
     const listeners = new Set<(event: AgentEvent) => void>();
@@ -12216,7 +12467,9 @@ describe("useThreadNavigation", () => {
     };
     const updatedPr: PrSummary = {
       ...initialPr,
-      title: "Preserve PR title updates",
+      ...(change === "explicit-attachment"
+        ? { explicitlyAttached: true as const }
+        : { title: "Preserve PR title updates" }),
     };
     const readPopulation = vi
       .fn()
@@ -12338,7 +12591,7 @@ describe("useThreadNavigation", () => {
             titleSource: "explicit" as const,
             source: "codex" as const,
             linkedDirectories: [],
-            prs: [initialPr],
+            prs: [{ ...initialPr, explicitlyAttached: true }],
             inbox: { inInbox: true, reason: "new-thread" as const },
             updatedAt: 1_000,
           },
@@ -12425,7 +12678,7 @@ describe("useThreadNavigation", () => {
       });
 
       expect(result.current.threads.find((thread) => thread.id === "thread-1")?.prs)
-        .toEqual([updatedPr]);
+        .toEqual([{ ...updatedPr, explicitlyAttached: true }]);
       expect(result.current.threads.find((thread) => thread.id === "thread-2")?.prs)
         .toEqual([updatedPr]);
       expect(result.current.threads.find((thread) => thread.id === "thread-3")?.prs?.[0])

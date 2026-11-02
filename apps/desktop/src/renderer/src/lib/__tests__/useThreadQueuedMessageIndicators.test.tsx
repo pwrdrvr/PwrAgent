@@ -195,6 +195,21 @@ describe("useThreadQueuedMessageIndicators", () => {
     expect(result.current.indicators).toEqual({ "codex:a": "held" });
   });
 
+  it("classifies a wake-up its paused project holds as 'held', but not an operator pause", () => {
+    const thread = makeThread("a");
+    const other = makeThread("b");
+    const { result } = renderIndicators([thread, other]);
+    setQueued(result.current.store, thread, [
+      makeQueuedTurn({
+        queueEntryId: "task-monitor:monitor-1",
+        paused: true,
+        holdReason: "Held because forge activity in openclaw is paused.",
+      }),
+    ]);
+    setQueued(result.current.store, other, [makeQueuedTurn({ queueEntryId: "entry-2", paused: true })]);
+    expect(result.current.indicators).toEqual({ "codex:a": "held", "codex:b": "queued" });
+  });
+
   it("prefers 'held' over a durable scheduled start", () => {
     const thread = {
       ...makeThread("a"),

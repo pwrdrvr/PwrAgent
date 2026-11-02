@@ -66,6 +66,8 @@ vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => ({
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
 let tempDir: string;
+const isolatedGitKeys = /^(?:PWRAGENT_GIT_PATH|GIT_(?:DIR|WORK_TREE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|INDEX_FILE|NAMESPACE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM|CONFIG.*))$/i;
+let savedGitEnv: Map<string, string>;
 
 const ALERTING_TOOL_OUTPUT_POLICY = {
   outputCapHitsEnabled: true,
@@ -76,6 +78,13 @@ const ALERTING_TOOL_OUTPUT_POLICY = {
 };
 
 beforeEach(() => {
+  savedGitEnv = new Map();
+  for (const [key, value] of Object.entries(process.env)) {
+    if (isolatedGitKeys.test(key) && value !== undefined) {
+      savedGitEnv.set(key, value);
+      delete process.env[key];
+    }
+  }
   process.env[SQLITE_WRITE_METRICS_ENV] = "1";
   const fixture = createTempStateDb("pwragent-write-metrics-");
   tempDir = fixture.tempDir;
@@ -89,12 +98,19 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  gitCommand.mockClear();
-  delete process.env[SQLITE_WRITE_METRICS_ENV];
-  stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
-  try { expect(sdkGetSessionInfo).not.toHaveBeenCalled(); }
-  finally { sdkGetSessionInfo.mockClear(); }
+  try {
+    gitCommand.mockClear();
+    delete process.env[SQLITE_WRITE_METRICS_ENV];
+    stateDb.close();
+    rmSync(tempDir, { recursive: true, force: true });
+    try { expect(sdkGetSessionInfo).not.toHaveBeenCalled(); }
+    finally { sdkGetSessionInfo.mockClear(); }
+  } finally {
+    for (const key of Object.keys(process.env)) {
+      if (isolatedGitKeys.test(key)) delete process.env[key];
+    }
+    for (const [key, value] of savedGitEnv) process.env[key] = value;
+  }
 });
 
 describe("sqlite write metrics", () => {
@@ -152,26 +168,11 @@ describe("sqlite write metrics", () => {
       registry.onEvent((event) => { idleEvents.push(event); });
       const probeStart = gitCommand.mock.calls.length;
       const idle = await measureSqliteWrites(async () => {
-        // One real unchanged observation covers the Git integration. Repeating
-        // the same subprocess 100 times tests process startup cost, while this
-        // budget needs 100 passes through the registry and the real SQLite store.
-        await registry.refreshThreadDirectoryRelationship(identity);
-        expect(gitCommand.mock.calls.slice(probeStart)).toEqual([
-          [cwd, ["rev-parse", "--abbrev-ref", "HEAD"], { ownProcessTree: true }],
-        ]);
-        const observation = await gitCommand.mock.results.at(-1)!.value;
-        expect(observation.stdout.trim()).toBe("fix/external-branch");
-        const run = gitCommand.getMockImplementation()!;
-        try {
-          gitCommand.mockResolvedValue(observation);
-          for (let index = 1; index < 100; index++) await registry.refreshThreadDirectoryRelationship(identity);
-        } finally {
-          gitCommand.mockImplementation(run);
-        }
+        // Ordinary branch refs now use filesystem observations. Exercise all
+        // 100 real refreshes without paying platform-specific launcher costs.
+        for (let index = 0; index < 100; index++) await registry.refreshThreadDirectoryRelationship(identity);
       });
-      expect(gitCommand.mock.calls.slice(probeStart)).toEqual(Array.from({ length: 100 }, () => [
-        cwd, ["rev-parse", "--abbrev-ref", "HEAD"], { ownProcessTree: true },
-      ]));
+      expect(gitCommand.mock.calls.slice(probeStart)).toEqual([]);
       expect(await store.getThreadOverlayState(identity)).toMatchObject({
         gitBranch: "fix/agent-branch", observedGitBranch: "fix/external-branch",
       });
@@ -180,7 +181,7 @@ describe("sqlite write metrics", () => {
         note: "100 unchanged hover/timer observations; zero commits, 0 MB/day while idle", writes: idle.writes });
       await git(["switch", "fix/agent-branch"]);
       await registry.refreshThreadDirectoryRelationship(identity);
-      // This probe is real again: the fixture must observe the switch back.
+      // The fixture must observe the switch back after the unchanged refreshes.
       expect(await store.getThreadOverlayState(identity)).toMatchObject({
         gitBranch: "fix/agent-branch", observedGitBranch: "fix/agent-branch",
       });
@@ -321,6 +322,38 @@ describe("sqlite write metrics", () => {
     } finally { await registry.close(); }
   });
 
+  it("budgets a Claude turn's live usage reports at one commit each", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+    });
+    const internal = registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+      flushLiveThreadUsageLines(): Promise<void>;
+    };
+    const target = { backend: "claude" as const, threadId: "claude-live-usage-fixture" };
+    const report = (step: number) => internal.emit({ backend: "claude", notification: {
+      method: "thread/tokenUsage/updated", params: {
+        threadId: target.threadId, turnId: "turn", model: "claude-opus-5-5",
+        tokenUsage: { last: { inputTokens: 350 * step, cachedInputTokens: 200 * step, cacheWriteInputTokens: 50,
+          outputTokens: 20 * step, totalTokens: 370 * step }, claudeCostUSD: 0.1 * step },
+      },
+    } });
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        // Three reports 30 seconds apart while the turn runs, then the result's.
+        for (let step = 1; step <= 4; step += 1) {
+          await report(step);
+          await internal.flushLiveThreadUsageLines();
+        }
+      });
+      const pricing = await store.readThreadPricing(target);
+      expect(pricing.lines).toHaveLength(1);
+      expect(pricing.lines[0]).toMatchObject({ totalCostMicros: 400_000, outputTokens: 80 });
+      expectSqliteWriteBudget({ scenario: "claude-live-turn-usage", note: "Three live usage reports and the result's, each in its own flush window: one commit per report. Reports run at most every 30 s and only while Claude streams, so ~120 commits per streaming hour (~6.8 MB at ~57 KB each); 0 MB/day idle", writes });
+    } finally { await registry.close(); }
+  });
+
   it("budgets Claude creation and operator mode changes without repeat-selection writes", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: createStubBackendClient(), overlayStore: store,
@@ -341,6 +374,64 @@ describe("sqlite write metrics", () => {
       });
       expectSqliteWriteBudget({ scenario: "claude-permission-selection", note: "one operator mode selection; 100 duplicate selections add no writes", writes });
     } finally { await registry.close(); }
+  });
+
+  it("budgets the origin a to-do card's Start thread records on its first prompt", async () => {
+    const run = gitCommand.getMockImplementation()!;
+    // This fixture is not a Git repository; keep native Git startup out of the budget.
+    gitCommand.mockImplementation(async (cwd, args, options) => {
+      if (cwd === tempDir && args.join(" ") === "rev-parse --abbrev-ref HEAD") {
+        return { stdout: "", stderr: "" };
+      }
+      return await run(cwd, args, options);
+    });
+    const finish = Promise.withResolvers<void>();
+    const prompts: SDKUserMessage[] = [];
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store: new ClaudeSessionStore(path.join(tempDir, "claude")),
+        getSessionInfo: async () => undefined,
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+        query: ({ prompt, options = {} }) => {
+          if (typeof prompt === "string") throw new Error("Expected streaming input");
+          const input = prompt[Symbol.asyncIterator]();
+          async function* messages(): AsyncGenerator<ClaudeMessage> {
+            prompts.push((await input.next()).value);
+            yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
+            // The turn stays open, so its completion stays outside the budget.
+            await finish.promise;
+            yield { type: "result", subtype: "success", is_error: false,
+              user_message_uuid: prompts.at(-1)?.uuid,
+            } as ClaudeMessage;
+          }
+          return Object.assign(messages(), { close: () => { finish.resolve(); } }) as unknown as ClaudeQuery;
+        },
+      },
+    });
+    try {
+      const { threadId } = await registry.startThread({ backend: "claude", cwd: tempDir, executionMode: "default" });
+      const identity = { backend: "claude" as const, threadId };
+      const origin: AppServerThreadMessageOrigin = {
+        kind: "agent",
+        sourceThread: { backend: "codex", threadId: "raising-thread", title: "Raising thread" },
+        threadTodo: { id: "todo-1", title: "Rewrite the CLI" },
+      };
+      const { result: started, writes } = await measureSqliteWrites(async () =>
+        await registry.startTurn({ ...identity, input: [{ type: "text", text: "Rewrite the CLI" }], messageOrigin: origin }));
+      expectSqliteWriteBudget({ scenario: "thread-todo-start-origin",
+        note: "One to-do Start thread click: the started thread's first prompt with its to-do origin. The origin row is the only write the card adds; ~1.2 MB/day at 100 starts, zero idle writes.",
+        writes });
+      const messageId = `user:${started.turnId}`;
+      expect((await store.readThreadMessageOrigins({ ...identity, messageIds: [messageId] }))[messageId]).toEqual(origin);
+      await vi.waitFor(() => expect(prompts).toHaveLength(1));
+    } finally {
+      finish.resolve();
+      try { await registry.close(); }
+      finally { gitCommand.mockImplementation(run); }
+    }
   });
 
   it("keeps 24 hourly inactive-thread sweeps read-only", async () => {
@@ -2465,7 +2556,8 @@ describe("sqlite write metrics", () => {
 
     try {
       const { writes } = await measureSqliteWrites(async () => {
-        if (causal) await internal.persistThreadMessageOrigin({ backend: "acp:kimi", threadId: monitorRecord.monitorThreadId,
+        // Every ACP monitor brief persists its origin, causal or not.
+        await internal.persistThreadMessageOrigin({ backend: "acp:kimi", threadId: monitorRecord.monitorThreadId,
           messageId: `user:${monitorRecord.monitorTurnId}`, origin: { kind: "sub-agent", ...monitorRecord.causalContext } });
         await internal.persistTaskMonitorSubAgent(monitorRecord, {
           status: "running",
@@ -2535,15 +2627,68 @@ describe("sqlite write metrics", () => {
       });
 
       expectSqliteWriteBudget({
-        // Measured at four commits per completed monitor, independent of the
-        // 120 heartbeats. At 100 monitors/day that is 400 commits/day; this
-        // calibration observed about 115 KB per lifecycle, or about 11 MB/day.
+        // Measured at five commits per completed monitor, independent of the
+        // 120 heartbeats. At 100 monitors/day that is 500 commits/day; this
+        // calibration observed about 160 KB per lifecycle, or about 16 MB/day.
         note: causal ? "One attributed ACP monitor origin plus lifecycle and final usage; 120 heartbeats add no commits. Provenance is one fixed reference captured at delegation."
-          : "one ACP monitor start, 120 transient heartbeats, completion, and final usage attribution",
+          : "one ACP monitor start with its brief's origin, 120 transient heartbeats, completion, and final usage attribution",
         scenario: causal ? "messaging-causal-monitor-lifecycle" : "acp-task-monitor-lifecycle",
         writes,
       });
       expect(internal.completedTaskMonitorsByThread.size).toBe(0);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it.each([false, true])("bounds one Codex monitor recovery turn start (causal messaging=%s)", async (causal) => {
+    const codexClient = Object.assign(createStubBackendClient() as object, {
+      startTurn: async () => ({ threadId: "monitor-thread", turnId: "monitor-recovery-turn" }),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: codexClient as never,
+      overlayStore: store as never,
+    });
+    const monitorRecord = {
+      ...(causal ? { causalContext: { causalMessagingSource: { ownerId: "1".repeat(64), requestId: "2".repeat(64), surfaceSelector: "3".repeat(64) } } } : {}),
+      activeCommandCount: 0,
+      backend: "codex" as const,
+      createdAt: 1_800_000_000_000,
+      heartbeatIntervalSeconds: 30,
+      lastActivityAt: 1_800_000_000_000,
+      monitorId: "monitor-write-budget",
+      monitorThreadId: "monitor-thread",
+      monitorTurnId: "monitor-turn",
+      parentBackend: "codex" as const,
+      parentThreadId: "parent-thread",
+      parentTurnId: "parent-turn",
+      pollIntervalSeconds: 30,
+      preferredModel: "gpt-5.6-luna",
+      preferredReasoningEffort: "low",
+      startupTimeoutSeconds: 45,
+      task: "Wait for one bounded external operation.",
+    };
+    const internal = registry as unknown as {
+      startTaskMonitorRecoveryTurn(params: {
+        record: typeof monitorRecord;
+        terminalStatus: "completed";
+      }): Promise<void>;
+    };
+
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        await internal.startTaskMonitorRecoveryTurn({ record: monitorRecord, terminalStatus: "completed" });
+      });
+
+      expect(monitorRecord.monitorTurnId).toBe("monitor-recovery-turn");
+      expectSqliteWriteBudget({
+        // A monitor makes at most one recovery attempt. At 100 recovered
+        // messaging monitors/day, one ~12 KB commit each is about 1.2 MB/day.
+        note: causal ? "One Codex monitor recovery turn delegated from a messaging turn writes its prompt origin in one commit; at most one recovery per monitor. ~12 KB each: ~1.2 MB/day at 100 recovered messaging monitors/day, 0 MB/day idle."
+          : "A Codex monitor recovery turn with no messaging origin writes nothing.",
+        scenario: causal ? "messaging-causal-codex-monitor-recovery" : "codex-task-monitor-recovery",
+        writes,
+      });
     } finally {
       await registry.close();
     }

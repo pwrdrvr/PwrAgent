@@ -18,6 +18,7 @@ import { CODEX_SIGN_IN_REQUIRED, codexAuthState } from "../codex-auth-state";
 import { mkdir } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
   buildSubAgentActivityDetail,
@@ -293,6 +294,7 @@ const PREFERRED_CODEX_MODEL_ORDER = [
   "gpt-6-astra",
   "gpt-6.1-sol",
   "gpt-6-sol",
+  "gpt-6.1-terra",
   "gpt-6-luna",
   "gpt-5.6-sol",
   "gpt-5.6-terra",
@@ -597,6 +599,9 @@ function isHandledServerRequestMethod(method: string): boolean {
     method === "item/tool/call"
   );
 }
+
+/** How long after a thread/name/set its echo is still recognized. */
+const THREAD_NAME_ECHO_WINDOW_MS = 60_000;
 
 function isKnownCodexNotificationMethod(
   method: string
@@ -3307,10 +3312,11 @@ function reviewDisplayText(item: Record<string, unknown>): string | undefined {
 
 function pushActivityDetail(
   details: AppServerThreadActivityDetail[],
-  detailsByLabel: Map<string, AppServerThreadActivityDetail>,
+  detailsByKey: Map<string, AppServerThreadActivityDetail>,
   detail: AppServerThreadActivityDetail
 ): void {
-  const existing = detailsByLabel.get(detail.label);
+  const key = JSON.stringify(detail.images?.length ? ["image", detail.id] : ["label", detail.label]);
+  const existing = detailsByKey.get(key);
   if (existing) {
     if (!existing.status || existing.status === "completed") {
       existing.status = detail.status ?? existing.status;
@@ -3318,7 +3324,7 @@ function pushActivityDetail(
     return;
   }
   details.push(detail);
-  detailsByLabel.set(detail.label, detail);
+  detailsByKey.set(key, detail);
 }
 
 function normalizeFileChangeKind(
@@ -4668,7 +4674,7 @@ function summarizeActivityItems(
   }
 
   const details: AppServerThreadActivityDetail[] = [];
-  const detailsByLabel = new Map<string, AppServerThreadActivityDetail>();
+  const detailsByKey = new Map<string, AppServerThreadActivityDetail>();
   let inspectedFiles = 0;
   let commandsRun = 0;
   let changedFiles = 0;
@@ -4688,7 +4694,7 @@ function summarizeActivityItems(
       status ??= "completed";
       pushActivityDetail(
         details,
-        detailsByLabel,
+        detailsByKey,
         buildSubAgentActivityDetail(subAgentActivity),
       );
       continue;
@@ -4716,7 +4722,7 @@ function summarizeActivityItems(
 
       if (actions.length === 0) {
         commandsRun += 1;
-        pushActivityDetail(details, detailsByLabel, {
+        pushActivityDetail(details, detailsByKey, {
           id: itemId,
           kind: "command",
           label: appendElapsedLabel(formatCommandLabel(command), elapsedMs),
@@ -4735,7 +4741,7 @@ function summarizeActivityItems(
 
         if (actionType === "read" && actionPath) {
           inspectedFiles += 1;
-          pushActivityDetail(details, detailsByLabel, {
+          pushActivityDetail(details, detailsByKey, {
             id: detailId,
             kind: "read",
             label: appendElapsedLabel(
@@ -4750,7 +4756,7 @@ function summarizeActivityItems(
 
         if (actionType === "search") {
           inspectedFiles += 1;
-          pushActivityDetail(details, detailsByLabel, {
+          pushActivityDetail(details, detailsByKey, {
             id: detailId,
             kind: "read",
             label: appendElapsedLabel(
@@ -4771,7 +4777,7 @@ function summarizeActivityItems(
           const label = actionPath
             ? `Listed ${path.basename(actionPath) || actionPath}`
             : "Listed files";
-          pushActivityDetail(details, detailsByLabel, {
+          pushActivityDetail(details, detailsByKey, {
             id: detailId,
             kind: "read",
             label: appendElapsedLabel(label, elapsedMs),
@@ -4783,7 +4789,7 @@ function summarizeActivityItems(
 
         commandsRun += 1;
         const label = fallbackName?.trim() || formatCommandLabel(command);
-        pushActivityDetail(details, detailsByLabel, {
+        pushActivityDetail(details, detailsByKey, {
           id: detailId,
           kind: "command",
           label: appendElapsedLabel(label, elapsedMs),
@@ -4824,7 +4830,7 @@ function summarizeActivityItems(
         changedFiles += 1;
         changedFileAdditions += diffSummary?.additions ?? 0;
         changedFileRemovals += diffSummary?.removals ?? 0;
-        pushActivityDetail(details, detailsByLabel, {
+        pushActivityDetail(details, detailsByKey, {
           id: `${itemId}-${index + 1}`,
           kind: "write",
           label: `${changeType[0]?.toUpperCase() ?? "U"}${changeType.slice(1)} ${
@@ -4862,7 +4868,7 @@ function summarizeActivityItems(
       const commandDetail = functionName === "exec_command"
         ? buildCommandDetail({ item, command, elapsedMs })
         : undefined;
-      pushActivityDetail(details, detailsByLabel, {
+      pushActivityDetail(details, detailsByKey, {
         id: itemId,
         kind: "command",
         label: appendElapsedLabel(
@@ -4896,7 +4902,7 @@ function summarizeActivityItems(
         receiverThreadIds,
         tool,
       });
-      pushActivityDetail(details, detailsByLabel, {
+      pushActivityDetail(details, detailsByKey, {
         id: itemId,
         kind: "command",
         label: appendElapsedLabel(label, elapsedMs),
@@ -4916,7 +4922,8 @@ function summarizeActivityItems(
       toolCalls += 1;
       const toolName =
         pickString(item, ["tool", "toolName", "tool_name", "name"]) ??
-        (normalizedItemType === "websearch" ? "web search" : undefined);
+        (normalizedItemType === "websearch" ? "web search"
+          : normalizedItemType === "imageview" ? `View image: ${pickString(item, ["path"]) ?? "unknown image"}` : undefined);
       const args = parseToolArguments(item);
       const query =
         pickString(item, ["query"]) ??
@@ -4935,6 +4942,8 @@ function summarizeActivityItems(
           ? extractDynamicToolCallImageParts(item, toolName ?? "Tool")
           : normalizedItemType === "mcptoolcall"
             ? extractMcpToolResultContentImageParts(item, toolName ?? "Tool")
+          : normalizedItemType === "imageview" && typeof item.path === "string" && path.isAbsolute(item.path)
+            ? [{ type: "image" as const, url: pathToFileURL(item.path).toString(), sourceUrl: pathToFileURL(item.path).toString(), alt: path.basename(item.path) }]
           : [];
       const label =
         (normalizedItemType === "mcptoolcall" || normalizedItemType === "dynamictoolcall")
@@ -4946,7 +4955,7 @@ function summarizeActivityItems(
               toolName,
             )}`
           : toolName ?? "Used tool";
-      pushActivityDetail(details, detailsByLabel, {
+      pushActivityDetail(details, detailsByKey, {
         id: itemId,
         kind: normalizedItemType === "websearch" ? "read" : "command",
         label: [
@@ -7796,6 +7805,15 @@ export class CodexAppServerClient {
   private archivedThreadListingGeneration = 0;
   private readonly threadListingInvalidations = new WeakSet<AppServerNotification>();
   private readonly recordedThreadNames = new Map<string, string>();
+  /**
+   * Names this client set with `thread/name/set` that Codex has not echoed
+   * yet. Codex 0.159.2 answers the request, then sends `thread/name/updated`
+   * with no `titleSource`, which every recorder reads as an operator rename.
+   * The caller of each set announces the name with its real source, so the
+   * echo is dropped. An entry expires, so a build that never echoes cannot
+   * leave one behind to swallow a later rename to the same name.
+   */
+  private readonly pendingThreadNameEchoes = new Map<string, Array<{ name: string; expiresAt: number }>>();
   private readonly requestListeners = new Set<
     (
       request: AppServerPendingRequestNotification
@@ -7998,6 +8016,7 @@ export class CodexAppServerClient {
         this.takeGuardianDenialLimitMessage(method, params),
       );
       if (navigationQueryEventRequiresRefresh(method)) this.invalidateThreadListings(normalized);
+      if (method === "thread/name/updated" && this.consumeThreadNameEcho(params)) return;
       const helperThreadId = extractThreadIdFromNotification(normalized, params);
       // Codex can send startup warnings before thread/start returns its ID.
       // Wait only for startup notices, then suppress those belonging to the
@@ -8313,6 +8332,7 @@ export class CodexAppServerClient {
     this.pendingFirstTurnThreadResults.clear();
     this.pendingFirstTurnShellEnvironments.clear();
     this.recordedThreadNames.clear();
+    this.pendingThreadNameEchoes.clear();
     this.helperThreadIds.clear();
     this.helperThreadToolHandlers.clear();
     this.helperToolTurnThreadIds.clear();
@@ -8948,6 +8968,15 @@ export class CodexAppServerClient {
         threadId: params.threadId,
         error: error instanceof Error ? error.message : String(error),
       });
+      return;
+    }
+    // The first prompt named the thread. Announce it as derived; Codex's own
+    // echo of this set is dropped because it cannot say where the name came from.
+    for (const listener of this.notificationListeners) {
+      await listener({
+        method: "thread/name/updated",
+        params: { threadId: params.threadId, threadName, titleSource: "derived" },
+      });
     }
   }
 
@@ -8955,14 +8984,48 @@ export class CodexAppServerClient {
     threadId: string;
     name: string;
   }): Promise<void> {
-    await requestWithThreadMetadataReadRetry(async () => {
-      await requestWithFallbacks({
-        client: this.connection,
-        methods: ["thread/name/set"],
-        payloads: [{ threadId: params.threadId, name: params.name }],
-        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    // Before the request: Codex sends the echo right after its response.
+    const echo = params.name.trim();
+    const now = Date.now();
+    const pending = (this.pendingThreadNameEchoes.get(params.threadId) ?? []).filter((entry) => entry.expiresAt > now);
+    // Delete first so a thread named again moves to the newest end of the map.
+    this.pendingThreadNameEchoes.delete(params.threadId);
+    rememberBoundedMap(this.pendingThreadNameEchoes, params.threadId,
+      [...pending, { name: echo, expiresAt: now + THREAD_NAME_ECHO_WINDOW_MS }].slice(-8), 1_000);
+    try {
+      await requestWithThreadMetadataReadRetry(async () => {
+        await requestWithFallbacks({
+          client: this.connection,
+          methods: ["thread/name/set"],
+          payloads: [{ threadId: params.threadId, name: params.name }],
+          timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        });
       });
-    });
+      // The echo follows the response, so the window runs from here.
+      const entry = this.pendingThreadNameEchoes.get(params.threadId)?.find((pending) => pending.name === echo);
+      if (entry) entry.expiresAt = Date.now() + THREAD_NAME_ECHO_WINDOW_MS;
+    } catch (error) {
+      this.forgetThreadNameEcho(params.threadId, echo);
+      throw error;
+    }
+  }
+
+  /** Whether a `thread/name/updated` is Codex echoing a name this client set. */
+  private consumeThreadNameEcho(params: unknown): boolean {
+    const record = asRecord(params) ?? {};
+    const threadId = pickString(record, ["threadId", "thread_id"]);
+    const threadName = pickString(record, ["threadName", "thread_name"]);
+    return threadId !== undefined && threadName !== undefined && this.forgetThreadNameEcho(threadId, threadName);
+  }
+
+  private forgetThreadNameEcho(threadId: string, name: string): boolean {
+    const now = Date.now();
+    const pending = this.pendingThreadNameEchoes.get(threadId);
+    const index = pending?.findIndex((entry) => entry.name === name && entry.expiresAt > now) ?? -1;
+    if (!pending || index < 0) return false;
+    pending.splice(index, 1);
+    if (!pending.length) this.pendingThreadNameEchoes.delete(threadId);
+    return true;
   }
 
   private handleHelperThreadNotification(
@@ -9872,6 +9935,15 @@ export class CodexAppServerClient {
    */
   modelProviderForThread(threadId: string): string | undefined {
     return this.modelProviderTranslator?.providerForThread(threadId);
+  }
+
+  /**
+   * The model provider Codex last reported for a thread, whether or not
+   * PwrAgent configured it: `openai` for Codex's default. Undefined when this
+   * connection has not been told, which callers must treat as unknown.
+   */
+  reportedModelProviderForThread(threadId: string): string | undefined {
+    return this.modelProviderTranslator?.reportedProviderForThread(threadId);
   }
 
   async readThreadPricingSnapshot(threadId: string): Promise<ThreadPricingSnapshot> {

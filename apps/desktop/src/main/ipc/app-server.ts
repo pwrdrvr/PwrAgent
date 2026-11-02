@@ -2,20 +2,28 @@ import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detac
 import { ForgeReadService, repositoryFromPr } from "../pr-status/forge-read-service";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
 import { GithubPrToolClient } from "../pr-status/github-pr-tool-client";
-import { ForgePrToolService, type ForgePrToolScope } from "../pr-status/forge-pr-tool-service";
+import { ForgePrToolService, type ForgePrToolPreparedCall, type ForgePrToolScope } from "../pr-status/forge-pr-tool-service";
 import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
-import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "../pr-status/forge-tool-contract";
+import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
 import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
+import { readLocalHeadPastPrHead } from "../pr-status/local-pr-head";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { createOwnerRoutedForgeReadHandler } from "../federation/federated-forge-read-service";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
+import { THREAD_PR_WATCHES_CHANNEL, THREAD_PR_WATCH_HISTORY_MAX_LIMIT, type ThreadPrAutoFixState, type ThreadPrWatchesRequest, type ThreadPrWatchesResponse, type WatchThreadPullRequestReason } from "@pwragent/shared";
 import { THREAD_DEPENDENCIES_CHANNEL, type ManageThreadDependenciesRequest, type ManageThreadDependenciesResponse, type ThreadDependencyCondition, type AppServerThreadTurnMetadata, type AppServerNotification } from "@pwragent/shared";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import { ThreadDependencyCoordinator, validateDependencyCreate, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
+import {
+  getProjectForgeAutomationIndex,
+  summarizeProjectHeldWakeup,
+  type ProjectForgeAutomationResolution,
+} from "../app-server/project-forge-automation-index";
 import { getThreadTodoService, readThreadTodoPlacement } from "../thread-todos/thread-todo-runtime";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../shared/ipc";
 import { archiveCandidateProtectionReason } from "../app-server/thread-archive-sweeper";
+import { threadArtifactDirectory } from "../app-server/thread-assets";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../../shared/ipc";
 import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../../shared/ipc";
 import { readFederatedThreadFamilyPricing } from "../app-server/thread-family-pricing";
@@ -52,10 +60,12 @@ import path from "node:path";
 import type {
   DirectoryGitStatusCacheEntry,
   OverlayStoreLike,
+  PrAutoDispatchCandidateChange,
   PrLookupCacheEntry,
   PrStatusCacheEntry,
   SqliteOverlayStore,
 } from "../state/overlay-store-sqlite";
+import { canonicalizeDetachedPrKeys } from "../state/overlay-store-sqlite";
 import {
   type AgentEvent,
   type AppServerBackendKind,
@@ -75,9 +85,12 @@ import {
   type DetachDirectoryFromThreadResponse,
   type CheckThreadPullRequestStatusToolArgs,
   type WatchThreadPullRequestToolArgs,
+  type WatchThreadPullRequestResult,
+  type ThreadPullRequestWatchListResult,
   type ThreadPullRequestAutomationStatus,
   type ThreadPullRequestWatchEvent,
   type ThreadPullRequestWatchSummary,
+  type ThreadPullRequestWatchBaseline,
   type CancelThreadPrAutoDispatchRequest,
   type SendThreadPrAutoDispatchNowRequest,
   type SetThreadPrAutoDispatchRequest,
@@ -111,6 +124,7 @@ import {
   type GlabStatus,
   type GhStatus,
   type LinkedDirectorySummary,
+  isWorkspaceHandoffDirectory,
   type ListModelSettingsRecentsRequest,
   type ListModelSettingsRecentsResponse,
   type ListRecentFileReferencesRequest,
@@ -185,6 +199,21 @@ import {
   type SetDirectoryPinResponse,
   type SetDirectoryThreadsCollapsedRequest,
   type SetDirectoryThreadsCollapsedResponse,
+  type SetProjectForgeAutomationRequest,
+  type SetProjectForgeAutomationResponse,
+  type ListProjectHeldWakeupsRequest,
+  type ListProjectHeldWakeupsResponse,
+  type ResolveProjectHeldWakeupsRequest,
+  type ResolveProjectHeldWakeupsResponse,
+  type ProjectForgeAutomation,
+  buildProjectPrDependencyNotice,
+  buildProjectPrWatchRefusal,
+  isDefaultProjectForgeAutomation,
+  PROJECT_PAUSED_ERROR_CODE,
+  projectAllowsAutoFixKind,
+  projectAllowsForgePolling,
+  projectAllowsPrWatches,
+  resolveProjectForgeAutomation,
   type SetThreadParentRequest,
   type SetThreadParentResponse,
   type SetThreadAgentRequest,
@@ -266,10 +295,12 @@ import {
   resolvePullRequestIdentity,
   buildThreadIdentityKey,
   federatedThreadIdentityKey,
+  forgeRuleProjectLabel,
   isAppServerBackendKind,
   isFederationInstanceId,
   isRemoteFederationTarget,
   type FederationTarget,
+  mergeThreadLinkedDirectories,
   normalizePullRequestProvider as normalizeSharedPullRequestProvider,
   parseThreadIdentityKey,
   rankInboxThreadKeys,
@@ -288,6 +319,7 @@ import {
 import { materializeTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
 import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { markLocalThreadSeen } from "../app-server/mark-local-thread-seen";
 import {
   DIRECTORY_GIT_STATUS_BACKGROUND_BATCH_SIZE,
   DIRECTORY_GIT_STATUS_FORCE_COALESCE_WINDOW_MS,
@@ -380,6 +412,9 @@ import {
   NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL,
   NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
   NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL,
+  NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL,
+  NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL,
+  NAVIGATION_RESOLVE_PROJECT_HELD_WAKEUPS_CHANNEL,
   NAVIGATION_SET_THREAD_PARENT_CHANNEL,
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL,
@@ -431,11 +466,25 @@ import {
   isFederationWindowWebContents,
 } from "../window";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
+import {
+  manageRemoteThreadPrWatches,
+  readFederationThreadPrWatchesRequest,
+  readThreadPrWatchesRemoteTarget,
+} from "../pr-status/thread-pr-watches-federation";
+import {
+  PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE,
+  type FederationRemoteBackendClient,
+} from "../federation/federation-backend-bridge";
+import {
+  assertProjectHeldWakeupResolutions,
+  readProjectForgeDirectoryKey,
+} from "../app-server/project-forge-automation-requests";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
 import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, findRemoteHomeDirectoryIndex, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { readLocalNavigationDirectoryIndex } from "../app-server/navigation-directory-index";
 import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
@@ -471,6 +520,7 @@ import { PrPollingFocusTracker } from "../pr-status/pr-polling-focus";
 import {
   PrAutoDispatchCoordinator,
   buildPrRepositoryKey,
+  getPrAutoDispatchEventKinds,
   pullRequestMatchesRepositoryKey,
 } from "../pr-status/pr-auto-dispatch";
 import {
@@ -481,6 +531,18 @@ import {
   prRepairDecisionTone,
 } from "../pr-status/pr-activity";
 import { PrLookupsInFlight } from "../pr-status/pr-lookups-in-flight";
+import { PullRequestRepositoryAliases } from "../pr-status/pr-repository-aliases";
+import {
+  PR_STATUS_TOKEN_BUCKET_CAPACITY,
+  PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE,
+  PrStatusTokenBucket,
+} from "../pr-status/pr-status-token-bucket";
+import {
+  buildPullRequestReferenceUrl,
+  isSameNumberInAnotherRepository,
+  parsePullRequestReferenceUrl,
+  type PullRequestReferenceIdentity,
+} from "../pr-status/forge-reference";
 import { logPrAutoDispatchOutcome } from "../pr-status/pr-auto-dispatch-log";
 import {
   PrStatusWatchCoordinator,
@@ -515,8 +577,17 @@ import {
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const PR_STATUS_WATCH_CURRENT_OUTCOME_MAX_AGE_MS = 30_000;
+/**
+ * GitHub can take this long to show a queued re-run, so a status read this
+ * soon after `rerun_failed_ci_jobs` may still be the attempt it replaced.
+ */
+const RERUN_SETTLE_MS = 20_000;
+/** A recorded re-run older than this no longer explains a cached outcome. */
+const RERUN_RECORD_MAX_AGE_MS = 24 * 60 * 60_000;
 /** How long a merge/close wake waits for sandbox cleanup to report. */
 const SANDBOX_CLEANUP_WAKE_WAIT_MS = 30_000;
+/** How long a by-URL resolve the forge could not answer waits before asking again. */
+const PR_REFERENCE_RETRY_MS = 10 * 60_000;
 
 async function withTimeout<T>(
   promise: Promise<T>,
@@ -546,8 +617,6 @@ const USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS = 10_000;
  */
 const SCHEDULED_THREAD_PR_REFRESH_SLACK_MS = 5_000;
 const TERMINAL_USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
-const PR_STATUS_TOKEN_BUCKET_CAPACITY = 20;
-const PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE = 20;
 const STARTUP_DIRECTORY_GIT_STATUS_REFRESH_LIMIT =
   DIRECTORY_GIT_STATUS_BACKGROUND_BATCH_SIZE;
 // PR discovery (Layer B): a slow branch-lookup rotation across ALL open threads
@@ -590,6 +659,47 @@ type ThreadPrRefreshContext = {
 };
 
 const appServerLog = getMainLogger("pwragent:app-server");
+
+/**
+ * Forge Automation is owner-local and per Directories project. A remote
+ * window's request belongs to the peer that owns the project, which v1 does
+ * not reach.
+ */
+/**
+ * The peer that owns the project a Forge Automation request names, or
+ * undefined when this instance owns it. A peer that does not advertise
+ * `project_forge_automation`, or grants no `turn_control`, is refused here
+ * rather than asked.
+ */
+function remoteProjectForgeOwner(request: {
+  federationTarget?: FederationTarget;
+}): FederationRemoteBackendClient | undefined {
+  const target = request?.federationTarget;
+  if (!target || !isRemoteFederationTarget(target)) return undefined;
+  const runtime = getDesktopFederationRuntime();
+  if (!runtime.remoteTargetSupportsCapability(target, "project_forge_automation")) {
+    throw new Error(PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE);
+  }
+  if (!runtime.remoteTargetSupportsCapability(target, "turn_control")) {
+    throw new Error("The owning instance does not allow this machine to control its turns.");
+  }
+  return runtime.remoteBackend(target);
+}
+
+/**
+ * A remote window's Forge Automation requests always go to the peer it
+ * fronts, whatever target the renderer stamped: the window's target was
+ * fixed when main created it.
+ */
+function withProjectForgeWindowOwner<
+  Request extends { federationTarget?: FederationTarget },
+>(
+  event: { sender?: IpcMainInvokeEvent["sender"] } | undefined,
+  request: Request,
+): Request {
+  const windowTarget = federationWindowTargetForWebContents(event?.sender);
+  return windowTarget ? { ...request, federationTarget: windowTarget } : request;
+}
 
 /**
  * Reject directory preference writes that target the synthetic
@@ -1273,6 +1383,95 @@ const PR_STATUS_WATCH_EVENTS: ReadonlySet<string> = new Set([
   "closed",
 ]);
 
+/** One or two plain sentences on what will wake the thread, for the agent. */
+function describePrWatchArming(params: {
+  prNumber: number;
+  headSha: string;
+  ciEvents: ThreadPullRequestWatchEvent[];
+  watch?: ThreadPullRequestWatchSummary;
+  watchExisted: boolean;
+  terminalWatch?: ThreadPullRequestWatchSummary;
+  terminalWatchExisted: boolean;
+  knownOutcome?: ThreadPullRequestWatchEvent;
+  knownAgeMs?: number;
+  /** The checkout's head, past the cached head the watch was armed at. */
+  pushedHeadSha?: string;
+  /** Who reads it: an agent learns the tool argument that waits anyway. */
+  audience: "agent" | "operator";
+}): string {
+  const head = params.headSha.slice(0, 7);
+  const sentences: string[] = [];
+  if (params.watch) {
+    const baseline = params.watch.baseline;
+    const runAttempt = params.watch.runAttempt ?? baseline?.runAttempt;
+    const attempt = runAttempt !== undefined
+      ? ` (attempt ${runAttempt})`
+      : "";
+    sentences.push(
+      `${params.watchExisted ? "Already watching" : "Watching"} PR #${params.prNumber} at ${head} for the next ${
+        params.watch.notifyOn.join(" or ")
+      }${attempt}.`,
+    );
+    if (baseline) {
+      sentences.push(
+        `The ${baseline.outcome} observed at ${new Date(baseline.observedAt).toISOString()} ${
+          baseline.rerunRequestedAt !== undefined ? "predates the re-run and " : ""
+        }will not fire this watch.`,
+      );
+    }
+    if (params.pushedHeadSha) {
+      sentences.push(
+        `Your checkout is at ${params.pushedHeadSha.slice(0, 7)}, past ${head}, so that result is stale. The watch moves to the pushed head when PwrAgent sees it.`,
+      );
+    }
+  } else if (params.knownOutcome && params.ciEvents.length > 0) {
+    const seconds = Math.max(0, Math.round((params.knownAgeMs ?? 0) / 1000));
+    sentences.push(
+      `No ${params.terminalWatch ? "CI " : ""}watch was created: checks on ${head} already finished with ${params.knownOutcome} ${seconds}s ago.${
+        params.audience === "agent"
+          ? " If CI was re-run outside PwrAgent, call again with waitForNextResult: true."
+          : ""
+      }`,
+    );
+  }
+  if (params.terminalWatch) {
+    const outcomes = params.terminalWatch.notifyOn.map((event) =>
+      event === "merged" ? "merges" : "closes without merge"
+    );
+    sentences.push(
+      `${params.terminalWatchExisted ? "Already watching" : "Watching"} PR #${params.prNumber} until it ${
+        outcomes.join(" or ")
+      }.`,
+    );
+  }
+  return sentences.join(" ");
+}
+
+function describePrWatchBrief(watch: ThreadPullRequestWatchSummary): string {
+  return (watch.kind ?? "checks") === "checks"
+    ? `CI on PR #${watch.prNumber}`
+    : `merge or close of PR #${watch.prNumber}`;
+}
+
+function describePrWatchList(watches: readonly ThreadPullRequestWatchSummary[]): string {
+  if (watches.length === 0) return "No PR watch is waiting on this thread.";
+  return `${watches.length} ${watches.length === 1 ? "watch waits" : "watches wait"} on this thread: ${
+    watches.map((watch) => `${describePrWatchBrief(watch)} (watchId ${watch.watchId})`).join(", ")
+  }.`;
+}
+
+function describePrWatchCancel(
+  cancelled: ThreadPullRequestWatchSummary,
+  remaining: readonly ThreadPullRequestWatchSummary[],
+): string {
+  const stopped = (cancelled.kind ?? "checks") === "checks"
+    ? `Stopped waiting for CI on PR #${cancelled.prNumber}.`
+    : `Stopped watching PR #${cancelled.prNumber} for merge or close.`;
+  return remaining.length === 0
+    ? `${stopped} Nothing else waits on this thread.`
+    : `${stopped} ${describePrWatchList(remaining)}`;
+}
+
 function normalizePrWatchUrl(url: string | undefined): string | undefined {
   const normalized = url?.trim().replace(/\/+$/, "").toLowerCase();
   return normalized || undefined;
@@ -1416,39 +1615,6 @@ type PrLookupRefreshClaim =
       nextAllowedInMs?: number;
     };
 
-class PrStatusTokenBucket {
-  private tokens = PR_STATUS_TOKEN_BUCKET_CAPACITY;
-  private updatedAt = Date.now();
-
-  get availableTokens(): number { return Math.floor(this.tokens); }
-
-  /** The balance a take at `now` would see, without spending or refilling. */
-  peek(now = Date.now()): number {
-    return Math.floor(this.refilled(now));
-  }
-
-  tryTake(now = Date.now()): boolean {
-    this.tokens = this.refilled(now);
-    this.updatedAt = now;
-
-    if (this.tokens < 1) {
-      return false;
-    }
-
-    this.tokens -= 1;
-    return true;
-  }
-
-  private refilled(now: number): number {
-    const elapsedMs = Math.max(0, now - this.updatedAt);
-    return Math.min(
-      PR_STATUS_TOKEN_BUCKET_CAPACITY,
-      this.tokens +
-        (elapsedMs * PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE) / 60_000,
-    );
-  }
-}
-
 function prLogIds(prs: PrSummary[]): string[] {
   return prs.map((pr) => getPrStatusKey(pr));
 }
@@ -1558,6 +1724,23 @@ class DesktopAppServerService {
   private readonly pendingPrOverlayWrites = new Map<string, Promise<void>>();
   private readonly prActivity = new PrActivityJournal();
   private readonly prLookupsInFlight = new PrLookupsInFlight();
+  /** Repository renames the forge has answered with. See its class. */
+  private readonly prRepositoryAliases = new PullRequestRepositoryAliases();
+  /** Counts learned renames, so stored watch keys move once per rename. */
+  private prRepositoryAliasGeneration = 0;
+  private prWatchKeysGeneration = 0;
+  private prWatchKeySync: Promise<void> = Promise.resolve();
+  /** One terminal-watch retry covers every rename learned in the same tick. */
+  private prRenameRetryQueued = false;
+  /**
+   * By-URL resolves asked for stored references, by URL. An answer is kept
+   * for the session; a failure is asked again after `PR_REFERENCE_RETRY_MS`.
+   */
+  private readonly prReferenceResolutions = new Map<string, {
+    askedAt: number;
+    result: Promise<string | undefined>;
+    answered: boolean;
+  }>();
   private readonly prStatusTokenBucket = new PrStatusTokenBucket();
   private lastPrObservationTimestamp = 0;
   private prStatusRegistryLoaded = false;
@@ -1589,6 +1772,16 @@ class DesktopAppServerService {
   private prAutoDispatchBudgetPausedAt: number | undefined;
   private prAutoDispatchCoordinator: PrAutoDispatchCoordinator | undefined;
   private prStatusWatchCoordinator: PrStatusWatchCoordinator | undefined;
+  /**
+   * CI re-runs this instance requested, by PR. In memory only: they explain
+   * why a cached result at the same head is not the next one.
+   */
+  private readonly ciRerunsByPrKey = new Map<string, {
+    headSha?: string;
+    runId: number;
+    runAttempt?: number;
+    requestedAt: number;
+  }>();
   private threadDependencyCoordinator: ThreadDependencyCoordinator | undefined;
   private sandboxerPrCleanup: SandboxerPrCleanupService | undefined;
   private ownerNavigationActive = false;
@@ -1964,14 +2157,10 @@ class DesktopAppServerService {
         .archiveThread(remoteRequest);
     }
     const backend = request.backend ?? "codex";
-    const response = await getDesktopBackendRegistry().archiveThread({
-      ...request,
-      backend,
-    });
     await getDesktopFederationRuntime().ungroupRemoteChildrenOfArchivedThread({
-      backend: response.backend,
-      parentThreadId: response.threadId,
+      backend, parentThreadId: request.threadId, expectedParent: request.expectedParent,
     });
+    const response = await getDesktopBackendRegistry().archiveThread({ ...request, backend });
 
     logDebug("archiveThread", {
       backend,
@@ -2258,6 +2447,8 @@ class DesktopAppServerService {
         instanceId: request.federationTarget.instanceId, directoryKeys,
       });
       rpcOptions?.signal.throwIfAborted();
+      // The owner's Forge Automation rides on its rows as stored there; only
+      // the disclosure is this viewer's own.
       const apply = (directory: NavigationDirectoryRow): NavigationDirectoryRow => {
         const collapsed = overlays[directory.key]?.directoryThreadsCollapsed;
         return collapsed === undefined || collapsed === directory.directoryThreadsCollapsed
@@ -2687,17 +2878,13 @@ class DesktopAppServerService {
     let changed = false;
     const directories = snapshot.directories.map((directory) => {
       const collapsed = overlays[directory.key]?.directoryThreadsCollapsed;
-      if (
-        collapsed === undefined
-        || directory.directoryThreadsCollapsed === collapsed
-      ) {
+      // The owner's Forge Automation stays on its rows; only the disclosure
+      // is this viewer's own.
+      if (collapsed === undefined || directory.directoryThreadsCollapsed === collapsed) {
         return directory;
       }
       changed = true;
-      return {
-        ...directory,
-        directoryThreadsCollapsed: collapsed,
-      };
+      return { ...directory, directoryThreadsCollapsed: collapsed };
     });
     return changed
       ? {
@@ -2962,13 +3149,33 @@ class DesktopAppServerService {
     }
   }
 
+  /**
+   * `pullRequestMatchesRepositoryKey` for a thread's primary repository. A
+   * checkout whose remote still uses a renamed repository's old name holds the
+   * repository the forge reports PRs under, so once the forge has named it,
+   * both sides compare under its current name.
+   */
+  private matchesPrimaryRepository(pr: PrSummary, primaryRepoKey: string | undefined): boolean {
+    if (pullRequestMatchesRepositoryKey(pr, primaryRepoKey)) return true;
+    if (!primaryRepoKey || !this.prRepositoryAliases.hasRenames()) return false;
+    return pullRequestMatchesRepositoryKey(
+      this.prRepositoryAliases.canonicalize(pr),
+      this.prRepositoryAliases.canonicalizeRepositoryKey(primaryRepoKey),
+    );
+  }
+
+  /** A primary repository key under the forge's current name. */
+  private canonicalPrimaryRepoKey(primaryRepoKey: string | undefined): string | undefined {
+    return primaryRepoKey && this.prRepositoryAliases.canonicalizeRepositoryKey(primaryRepoKey);
+  }
+
   private setThreadPrAttachment(
     threadKey: string,
     attachment: { backend: AppServerBackendKind; primaryRepoKey?: string; prs: PrSummary[] } | undefined,
   ): void {
     this.primaryPrThreadsByKey.set(threadKey, (attachment?.prs ?? [])
-      .filter((pr) => pullRequestMatchesRepositoryKey(pr, attachment?.primaryRepoKey))
-      .map(getPrStatusKey));
+      .filter((pr) => this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey))
+      .map((pr) => getPrStatusKey(this.prRepositoryAliases.canonicalize(pr))));
     if (attachment) this.attachedPrsByThreadKey.set(threadKey, attachment);
     else this.attachedPrsByThreadKey.delete(threadKey);
   }
@@ -3004,7 +3211,7 @@ class DesktopAppServerService {
       candidates.push({
         backend: thread.source,
         threadId: thread.id,
-        prKeys: (thread.prs ?? []).filter((pr) => pullRequestMatchesRepositoryKey(pr, primaryRepoKey)).map(getPrStatusKey),
+        prKeys: (thread.prs ?? []).filter((pr) => this.matchesPrimaryRepository(pr, primaryRepoKey)).map(getPrStatusKey),
       });
     }
     if (options.replace) {
@@ -3020,7 +3227,9 @@ class DesktopAppServerService {
       }
     }
     if (options.isCurrent && !options.isCurrent()) return;
-    await this.getOverlayStore().syncThreadPrAutoDispatchCandidatesBatch({ threads: candidates, now: Date.now() });
+    this.publishPrAutoFixCandidateChanges(
+      await this.getOverlayStore().syncThreadPrAutoDispatchCandidatesBatch({ threads: candidates, now: Date.now() }),
+    );
   }
 
   private async rememberThreadPrAttachmentUpdate(params: {
@@ -3030,6 +3239,8 @@ class DesktopAppServerService {
   }): Promise<void> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const current = this.attachedPrsByThreadKey.get(threadKey);
+    // Write the PR list before any await so overlapping updates keep their
+    // arrival order.
     this.setThreadPrAttachment(
       threadKey,
       {
@@ -3040,20 +3251,53 @@ class DesktopAppServerService {
         prs: params.prs,
       },
     );
+    if (!current?.primaryRepoKey) {
+      const primaryRepoKey = await this.resolveUncachedPrimaryRepoKey(params);
+      // Patch only the key onto whatever list is now current. A refresh may
+      // have supplied a key, or dropped the thread, while this resolved.
+      const latest = this.attachedPrsByThreadKey.get(threadKey);
+      if (primaryRepoKey && latest && !latest.primaryRepoKey) {
+        this.setThreadPrAttachment(threadKey, { ...latest, primaryRepoKey });
+      }
+    }
     await this.syncThreadPrAutoDispatchCandidates(params);
   }
 
+  /**
+   * The owner navigation refresh normally supplies a thread's primary
+   * repository. A thread created mid-session can attach and watch a PR before
+   * that refresh lists it; without this, its PR would not count as primary
+   * and the watch tool would refuse it until the next refresh.
+   */
+  private async resolveUncachedPrimaryRepoKey(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<string | undefined> {
+    const summary = getDesktopBackendRegistry().getCachedThreadSummary(params);
+    if (!summary) return undefined;
+    const overlay = await this.getOverlayStore().getThreadOverlayState(params);
+    return await resolvePrimaryThreadRepoKey({
+      gitOriginUrl: summary.gitOriginUrl,
+      linkedDirectories: mergeThreadLinkedDirectories([
+        ...summary.linkedDirectories,
+        ...(overlay?.extraLinkedDirectories ?? []),
+      ]),
+    });
+  }
+
   readPrimaryGitRepository(backend: AppServerBackendKind, threadId: string): string | undefined {
-    return this.attachedPrsByThreadKey.get(buildThreadIdentityKey(backend, threadId))?.primaryRepoKey;
+    return this.canonicalPrimaryRepoKey(
+      this.attachedPrsByThreadKey.get(buildThreadIdentityKey(backend, threadId))?.primaryRepoKey,
+    );
   }
 
   private applyPrimaryGitRepositories(
     threads: NavigationSnapshot["threads"],
   ): NavigationSnapshot["threads"] {
     return threads.map((thread) => {
-      const primaryGitRepository = this.attachedPrsByThreadKey.get(
+      const primaryGitRepository = this.canonicalPrimaryRepoKey(this.attachedPrsByThreadKey.get(
         buildThreadIdentityKey(thread.source, thread.id),
-      )?.primaryRepoKey;
+      )?.primaryRepoKey);
       return primaryGitRepository
         ? { ...thread, primaryGitRepository }
         : thread;
@@ -3103,14 +3347,91 @@ class DesktopAppServerService {
     const prKeys = attachment
       ? attachment.prs
           .filter((pr) =>
-            pullRequestMatchesRepositoryKey(pr, attachment.primaryRepoKey),
+            this.matchesPrimaryRepository(pr, attachment.primaryRepoKey),
           )
           .map(getPrStatusKey)
       : [];
-    await this.getOverlayStore().syncThreadPrAutoDispatchCandidates({
-      ...params,
-      prKeys,
-      now: Date.now(),
+    this.publishPrAutoFixCandidateChanges(
+      await this.getOverlayStore().syncThreadPrAutoDispatchCandidates({
+        ...params,
+        prKeys,
+        now: Date.now(),
+      }),
+    );
+  }
+
+  /**
+   * Auto-fix candidacy changed after a window may have listed it. Each
+   * thread holding an affected PR re-lists: one thread's candidacy can move
+   * another between active and handled by another thread.
+   */
+  private publishPrAutoFixCandidateChanges(
+    changes: PrAutoDispatchCandidateChange[] | undefined,
+  ): void {
+    if (!changes?.length) return;
+    void (async () => {
+      const prKeys = new Set(changes.map((change) => change.prKey));
+      const holders = (await this.getOverlayStore().listPrAutoDispatchCandidates())
+        .filter((candidate) => prKeys.has(candidate.prKey));
+      const threads = new Map<string, { backend: AppServerBackendKind; threadId: string }>();
+      for (const thread of [...changes, ...holders]) {
+        threads.set(buildThreadIdentityKey(thread.backend, thread.threadId), {
+          backend: thread.backend,
+          threadId: thread.threadId,
+        });
+      }
+      await this.publishPrWatchesUpdated([...threads.values()]);
+    })().catch((error: unknown) => {
+      appServerLog.warn("failed to publish Auto-fix candidate change", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  /**
+   * The thread's attached PRs on its primary repository, from the overlay.
+   * A thread no navigation refresh has listed yet gets its primary
+   * repository resolved first, so its PRs are not read as non-primary.
+   */
+  private async readPrimaryAttachedPrs(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<{ overlay: ThreadOverlayState | undefined; prs: PrSummary[] }> {
+    const overlay = await this.getOverlayStore().getThreadOverlayState(params);
+    const overlayPrs = this.canonicalizePrs(overlay?.prs ?? []);
+    if (!this.readPrimaryGitRepository(params.backend, params.threadId)) {
+      await this.rememberThreadPrAttachmentUpdate({ ...params, prs: overlayPrs });
+    }
+    return {
+      overlay,
+      prs: this.primaryAttachedPrsForThread({ ...params, prs: overlayPrs }),
+    };
+  }
+
+  /**
+   * The thread's checkout head when it is past the PR head the status cache
+   * holds, else undefined. Git failures read as undefined.
+   */
+  private async readPushedPrHeadSha(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    pr: PrSummary;
+    headSha: string;
+    overlay: ThreadOverlayState | undefined;
+  }): Promise<string | undefined> {
+    const summary = getDesktopBackendRegistry().getCachedThreadSummary(params);
+    const directories = params.pr.linkedDirectoryPaths?.length
+      ? params.pr.linkedDirectoryPaths
+      : resolveThreadPullRequestDirectoryPaths({
+          linkedDirectories: [
+            ...(summary?.linkedDirectories ?? []),
+            ...(params.overlay?.extraLinkedDirectories ?? []),
+          ],
+        });
+    return await readLocalHeadPastPrHead({
+      directories: directories.slice(0, 4),
+      cachedHeadSha: params.headSha,
+      ...(params.pr.headRefName ? { headRefName: params.pr.headRefName } : {}),
     });
   }
 
@@ -3123,7 +3444,7 @@ class DesktopAppServerService {
       buildThreadIdentityKey(params.backend, params.threadId),
     );
     return params.prs.filter((pr) =>
-      pullRequestMatchesRepositoryKey(pr, attachment?.primaryRepoKey),
+      this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey),
     );
   }
 
@@ -3137,7 +3458,7 @@ class DesktopAppServerService {
     );
     return attachment?.prs.some((pr) =>
       getPrStatusKey(pr) === params.prKey
-      && pullRequestMatchesRepositoryKey(pr, attachment.primaryRepoKey),
+      && this.matchesPrimaryRepository(pr, attachment.primaryRepoKey),
     ) ?? false;
   }
 
@@ -3151,6 +3472,7 @@ class DesktopAppServerService {
         return normalizePrSummary({
           ...pr,
           linkedDirectoryPaths: candidate.linkedDirectoryPaths,
+          ...(candidate.explicitlyAttached ? { explicitlyAttached: true } : {}),
         });
       });
       if (changed) {
@@ -3898,10 +4220,24 @@ class DesktopAppServerService {
 
   async startOwnerNavigation(): Promise<void> {
     this.ownerNavigationActive = true;
+    // Gates read Forge Automation from memory; load it before polling starts.
+    await this.hydrateProjectForgeAutomation();
     this.syncPrPollingSchedulerState();
     const state = getDesktopBackendRegistry().getStartupProviderRefreshStatus()?.state;
     if (state === "ready" || state === "degraded") {
       await this.refreshOwnerNavigationMetadata();
+    }
+  }
+
+  private async hydrateProjectForgeAutomation(): Promise<void> {
+    const index = getProjectForgeAutomationIndex();
+    if (index.isHydrated()) return;
+    try {
+      index.hydrate(await this.getOverlayStore().readAllDirectoryOverlays());
+    } catch (error) {
+      appServerLog.warn("failed to load project Forge Automation", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -3978,27 +4314,18 @@ class DesktopAppServerService {
         .markThreadSeen(remoteRequest);
     }
     const backend = request.backend ?? "codex";
-
-    const markSeen = async () => await this.getOverlayStore().markThreadSeen({
+    const response = await markLocalThreadSeen({
       backend,
       seenAt: request.seenAt,
       seenUpdatedAt: request.seenUpdatedAt,
       threadId: request.threadId,
     });
-    const registry = getExistingDesktopBackendRegistry();
-    const response = registry
-      ? await registry.withThreadLifecycleMutation({ backend, threadId: request.threadId }, markSeen)
-      : await markSeen();
 
     logDebug("markThreadSeen", {
       backend,
       threadId: request.threadId,
       seenUpdatedAt: request.seenUpdatedAt ?? null,
     });
-
-    await getDesktopBackendRegistry().publishLocalEvent({ backend, notification: {
-      method: "navigation/thread/seen", params: { threadId: request.threadId, seenUpdatedAt: request.seenUpdatedAt },
-    } });
     return response;
   }
 
@@ -4186,15 +4513,92 @@ class DesktopAppServerService {
     });
   }
 
-  /** The GitHub or GitLab repository a call would act in, so an approval prompt can name it. */
-  async resolveForgePrRepositoryForAgent(args: ForgePrToolArgs, context: AgentToolCallContext): Promise<ForgeRepository> {
-    return this.forgePrToolService().resolveRepository(args, await this.forgePrToolScope(context));
+  /** The repository and settled arguments of a call, so an approval prompt names them and a bad call fails first. */
+  async prepareForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<ForgePrToolPreparedCall> {
+    return await this.forgePrToolService().prepare(operation, args, await this.forgePrToolScope(context), context.signal);
   }
 
   /** Pull request and issue tools act only in the calling thread's own repositories. */
   async runForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<unknown> {
     const result = await this.forgePrToolService().execute(operation, args, await this.forgePrToolScope(context), context.signal);
+    if (operation === "rerun_failed_ci_jobs") {
+      // The re-run already happened; failing to remember it must not fail the call.
+      await this.recordCiRerun(result, context).catch((error: unknown) => {
+        appServerLog.warn("failed to record a CI re-run", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
     return { ...(result as Record<string, unknown>), backend: context.backend, threadId: context.threadId };
+  }
+
+  /**
+   * A re-run keeps the head, so the cached failure it replaces still looks
+   * current. Record it for the calling thread's open PRs at that head, then
+   * refresh those PRs once through the shared poll budget.
+   */
+  private async recordCiRerun(result: unknown, context: AgentToolCallContext): Promise<void> {
+    const rerun = result as {
+      requested?: unknown;
+      runId?: unknown;
+      runAttempt?: unknown;
+      headSha?: unknown;
+      repository?: { host?: unknown; owner?: unknown; repo?: unknown };
+    } | undefined;
+    if (rerun?.requested !== true || typeof rerun.runId !== "number") return;
+    const repository = rerun.repository;
+    const fold = (value: unknown) => typeof value === "string" ? value.toLowerCase() : undefined;
+    const headSha = typeof rerun.headSha === "string" && rerun.headSha.trim()
+      ? rerun.headSha.trim()
+      : undefined;
+    const requestedAt = Date.now();
+    // Read the overlay, as the watch tool does: a thread no navigation
+    // refresh has listed yet has no in-memory attachment.
+    const { prs: attachedPrs } = await this.readPrimaryAttachedPrs({
+      backend: context.backend,
+      threadId: context.threadId,
+    });
+    const prKeys = new Set<string>();
+    for (const attached of attachedPrs) {
+      const prKey = getPrStatusKey(attached);
+      const pr = this.prStatusRegistry.get(prKey)?.pr ?? attached;
+      if (isTerminalPullRequest(pr)) continue;
+      const prRepository = repositoryFromPr(pr.url);
+      if (
+        !prRepository
+        || fold(prRepository.host) !== fold(repository?.host)
+        || fold(prRepository.owner) !== fold(repository?.owner)
+        || fold(prRepository.repo) !== fold(repository?.repo)
+      ) {
+        continue;
+      }
+      if (headSha && pr.headSha && pr.headSha.trim() !== headSha) continue;
+      prKeys.add(prKey);
+    }
+    for (const [prKey, entry] of this.ciRerunsByPrKey) {
+      if (requestedAt - entry.requestedAt > RERUN_RECORD_MAX_AGE_MS) this.ciRerunsByPrKey.delete(prKey);
+    }
+    for (const prKey of prKeys) {
+      this.ciRerunsByPrKey.set(prKey, {
+        ...(headSha ? { headSha } : {}),
+        runId: rerun.runId,
+        ...(typeof rerun.runAttempt === "number" ? { runAttempt: rerun.runAttempt } : {}),
+        requestedAt,
+      });
+    }
+    this.requestPriorityPrRefresh(prKeys);
+  }
+
+  /** Poll these PRs on the next pass whatever their cadence, within the shared token budget. */
+  private requestPriorityPrRefresh(prKeys: ReadonlySet<string>): void {
+    const scheduler = this.prPollingScheduler;
+    if (!scheduler || prKeys.size === 0 || !this.backgroundPrPollingEnabled) return;
+    const targets = this.collectPrPollTargets()
+      .filter((target) => prKeys.has(target.prKey))
+      .map(({ fetchedAt: _fetchedAt, ...target }) => target);
+    if (targets.length === 0) return;
+    for (const target of targets) scheduler.forgetTarget(target.prKey);
+    void scheduler.tick(() => targets);
   }
 
   async readForgeForTool(operation: ForgeReadOperation, args: ForgeReadArgs, context: AgentToolCallContext): Promise<unknown> {
@@ -4228,6 +4632,7 @@ class DesktopAppServerService {
             context.signal?.throwIfAborted();
             if (!this.takePrPollingToken("Agent explicit forge refresh")) throw new ForgeReadError("rate_limited", "The shared PR refresh budget is exhausted.");
             const pr = await fetcher.fetchPullRequestByUrl({ cwd: directories[0] ?? os.homedir(), url, onProviderFailure: () => { failed = true; } });
+            this.learnPullRequestRepository(url, pr);
             if (!pr) failed = true;
             else results.push(pr);
           }
@@ -4242,7 +4647,13 @@ class DesktopAppServerService {
         return results;
       },
     });
-    const result = await service.execute(operation, args, { remotes, attached, observations: [...observations.values()], branch: thread.observedGitBranch ?? thread.gitBranch }, context.signal);
+    const result = await service.execute(operation, args, {
+      remotes,
+      attached,
+      observations: [...observations.values()],
+      branch: thread.observedGitBranch ?? thread.gitBranch,
+      artifactDirectory: threadArtifactDirectory({ backend, threadId }),
+    }, context.signal);
     const prAutomation = await this.getThreadPullRequestAutomationStatus({ backend, threadId }, { backend: context.backend, threadId: context.threadId });
     return { ...(result as Record<string, unknown>), backend, threadId, prAutomation };
   }
@@ -4346,6 +4757,103 @@ class DesktopAppServerService {
   async watchThreadPullRequestForTool(
     args: WatchThreadPullRequestToolArgs,
   ): Promise<PwrAgentThreadInspectionResponse> {
+    const action = args.action ?? "watch";
+    if (action === "list" || action === "cancel") {
+      return await this.listOrCancelThreadPrWatchesForTool({ ...args, action });
+    }
+    if (action !== "watch") {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "action must be watch, list, or cancel.",
+        },
+      };
+    }
+    const armed = await this.armThreadPrWatch({ ...args, createdBy: "agent" });
+    return armed.ok
+      ? { ok: true, data: { pullRequestWatch: armed.result } }
+      : { ok: false, error: armed.error };
+  }
+
+  /** The agent's own list and cancel, scoped to one thread's waiting watches. */
+  private async listOrCancelThreadPrWatchesForTool(
+    args: WatchThreadPullRequestToolArgs & { action: "list" | "cancel" },
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    const invalid = (message: string): PwrAgentThreadInspectionResponse => ({
+      ok: false,
+      error: { code: "invalid_arguments", message },
+    });
+    if (!args.backend || !isAppServerBackendKind(args.backend)) {
+      return invalid("backend must be a known PwrAgent backend.");
+    }
+    const threadId = args.threadId?.trim();
+    if (!threadId) return invalid("threadId is required.");
+    const backend = args.backend;
+    const store = this.getOverlayStore();
+    const waiting = await store.listActiveThreadPrStatusWatches({ backend, threadId });
+    const respond = (result: ThreadPullRequestWatchListResult): PwrAgentThreadInspectionResponse => ({
+      ok: true,
+      data: { pullRequestWatches: result },
+    });
+    if (args.action === "list") {
+      const requestedUrl = normalizePrWatchUrl(args.url);
+      const watches = requestedUrl
+        ? waiting.filter((watch) => normalizePrWatchUrl(watch.prUrl) === requestedUrl)
+        : waiting;
+      return respond({ action: "list", watches, message: describePrWatchList(watches) });
+    }
+    const watchId = args.watchId?.trim();
+    if (!watchId) {
+      return invalid("watchId is required to cancel. Call with action list to find it.");
+    }
+    const target = waiting.find((watch) => watch.watchId === watchId);
+    const cancelled = target
+      ? await store.cancelThreadPrStatusWatch({
+          backend,
+          threadId,
+          watchId,
+          now: Date.now(),
+          endedReason: "cancelled_by_agent",
+        })
+      : undefined;
+    if (!target || !cancelled) {
+      return {
+        ok: false,
+        error: {
+          code: "not_found",
+          message: target
+            ? "That watch is waking the thread now, so it can no longer be cancelled."
+            : "No waiting watch on this thread has that watchId. Call with action list to see them.",
+        },
+      };
+    }
+    await this.publishPrWatchesUpdated([cancelled]);
+    const watches = waiting.filter((watch) => watch.watchId !== watchId);
+    return respond({
+      action: "cancel",
+      watches,
+      cancelled: target,
+      message: describePrWatchCancel(target, watches),
+    });
+  }
+
+  /**
+   * Arms the watches `watch_thread_pull_request` and the operator's Watch CI
+   * create. Both run this, so a watch means the same thing whoever asked.
+   */
+  private async armThreadPrWatch(
+    args: WatchThreadPullRequestToolArgs & { createdBy: "agent" | "operator" },
+  ): Promise<
+    | { ok: true; result: WatchThreadPullRequestResult }
+    | {
+        ok: false;
+        error: {
+          code: "invalid_arguments" | "not_found" | "forbidden" | typeof PROJECT_PAUSED_ERROR_CODE;
+          message: string;
+        };
+      }
+  > {
     if (!args.backend || !isAppServerBackendKind(args.backend)) {
       return {
         ok: false,
@@ -4375,6 +4883,21 @@ class DesktopAppServerService {
         },
       };
     }
+    const project = this.resolveThreadForgeProject({ backend: args.backend, threadId });
+    if (project && !projectAllowsPrWatches(project.automation)) {
+      const pullRequest = args.url?.trim().match(/\/(?:pull|merge_requests)\/(\d+)/)?.[1];
+      return {
+        ok: false,
+        error: {
+          code: project.automation.paused ? PROJECT_PAUSED_ERROR_CODE : "forbidden",
+          message: buildProjectPrWatchRefusal({
+            projectLabel: project.label,
+            ...(pullRequest ? { pullRequest: `PR #${pullRequest}` } : {}),
+            paused: project.automation.paused,
+          }),
+        },
+      };
+    }
     const requestedEvents = normalizePrStatusWatchEvents(args.notifyOn);
     if (!requestedEvents) {
       return {
@@ -4386,19 +4909,37 @@ class DesktopAppServerService {
       };
     }
 
-    const overlay = await this.getOverlayStore().getThreadOverlayState({
+    const { overlay, prs: primaryPrs } = await this.readPrimaryAttachedPrs({
       backend: args.backend,
       threadId,
     });
-    const attachedPrs = this.primaryAttachedPrsForThread({
-      backend: args.backend,
-      threadId,
-      prs: this.canonicalizePrs(overlay?.prs ?? []),
-    });
+    let attachedPrs = primaryPrs;
+    const matchesUrl = (url: string | undefined) => {
+      const requested = normalizePrWatchUrl(url);
+      return requested
+        ? attachedPrs.filter((pr) => normalizePrWatchUrl(pr.url) === requested)
+        : attachedPrs;
+    };
     const requestedUrl = normalizePrWatchUrl(args.url);
-    const matches = requestedUrl
-      ? attachedPrs.filter((pr) => normalizePrWatchUrl(pr.url) === requestedUrl)
-      : attachedPrs;
+    let matches = matchesUrl(args.url && this.prRepositoryAliases.canonicalizeUrl(args.url.trim()));
+    if (requestedUrl && matches.length === 0) {
+      // A renamed repository's old URL: ask the forge which PR it names.
+      const cwd = attachedPrs[0]?.linkedDirectoryPaths?.[0];
+      const resolved = await this.resolvePullRequestReference({
+        url: args.url!.trim(),
+        ...(cwd ? { cwd } : {}),
+      });
+      if (resolved) {
+        // The answer can teach a rename, which changes both the rows and
+        // which of them belong to the primary repository.
+        attachedPrs = this.primaryAttachedPrsForThread({
+          backend: args.backend,
+          threadId,
+          prs: this.canonicalizePrs(overlay?.prs ?? []),
+        });
+        matches = matchesUrl(resolved.url);
+      }
+    }
     if (matches.length !== 1) {
       const message = requestedUrl
         ? "The requested pull request is not attached to this thread's primary workspace."
@@ -4431,9 +4972,6 @@ class DesktopAppServerService {
     });
     const failureCoveredByAutoFix = prAutomation.autoFixActive
       && ciEvents.includes("failure");
-    const coveredByAutoFix: ThreadPullRequestWatchEvent[] = failureCoveredByAutoFix
-      ? ["failure" as const]
-      : [];
     if (isTerminalPullRequest(pr)) {
       // A merged or closed PR has nothing left to watch. Report it now, with
       // the same merge details a merge/close wake would carry.
@@ -4445,13 +4983,16 @@ class DesktopAppServerService {
         : getPrStatusWatchOutcome(pr);
       return {
         ok: true,
-        data: {
-          pullRequestWatch: {
-            ...(currentOutcome ? { currentOutcome } : {}),
-            ...(terminal ? { terminal } : {}),
-            coveredByAutoFix,
-            prAutomation,
-          },
+        result: {
+          ...(currentOutcome ? { currentOutcome } : {}),
+          ...(terminal ? { terminal } : {}),
+          coveredByAutoFix: failureCoveredByAutoFix ? ["failure"] : [],
+          prAutomation,
+          armed: false,
+          reason: "pr_terminal",
+          message: `No watch was created: PR #${pr.number} is already ${
+            terminalOutcome === "merged" ? "merged" : "closed without merge"
+          }.`,
         },
       };
     }
@@ -4466,30 +5007,67 @@ class DesktopAppServerService {
         },
       };
     }
+    const createdAt = Date.now();
     const currentOutcome = getPrStatusWatchOutcome(pr);
-    const currentOutcomeIsFresh = Boolean(
-      currentPrEntry
-      && Date.now() - currentPrEntry.fetchedAt
-        <= PR_STATUS_WATCH_CURRENT_OUTCOME_MAX_AGE_MS,
+    const observedAt = currentPrEntry?.fetchedAt;
+    const currentOutcomeIsFresh = observedAt !== undefined
+      && createdAt - observedAt <= PR_STATUS_WATCH_CURRENT_OUTCOME_MAX_AGE_MS;
+    // A re-run keeps the head, so neither the head nor the cache's age can
+    // tell its result from the attempt it replaced. A status read before the
+    // re-run settled is the old attempt, fresh or not.
+    const recordedRerun = this.ciRerunsByPrKey.get(prKey);
+    const rerun = recordedRerun && (!recordedRerun.headSha || recordedRerun.headSha === headSha)
+      ? recordedRerun
+      : undefined;
+    const staleAfterRerun = Boolean(
+      rerun && (observedAt ?? 0) <= rerun.requestedAt + RERUN_SETTLE_MS,
     );
+    // Right after a push the cache can still hold the previous head's final
+    // outcome, fresh or not. A checkout past that head makes it stale: the
+    // watch waits at the cached head with it as the baseline, and the next
+    // poll moves the watch to the pushed head.
+    const pushedHeadSha = currentOutcome && ciEvents.length > 0 && headSha
+      ? await this.readPushedPrHeadSha({
+          backend: args.backend,
+          threadId,
+          pr: attachedPr,
+          headSha,
+          overlay,
+        })
+      : undefined;
+    const baseline: ThreadPullRequestWatchBaseline | undefined = currentOutcome
+      && ciEvents.length > 0
+      && (staleAfterRerun || pushedHeadSha !== undefined || args.waitForNextResult === true)
+      ? {
+          outcome: currentOutcome,
+          observedAt: observedAt ?? createdAt,
+          ...(currentOutcome === "failure" && pr.failedCheckUrl
+            ? { failedCheckUrl: pr.failedCheckUrl }
+            : {}),
+          ...(rerun ? { rerunRequestedAt: rerun.requestedAt } : {}),
+          ...(rerun?.runAttempt !== undefined ? { runAttempt: rerun.runAttempt } : {}),
+        }
+      : undefined;
     const ciOutcomeAlreadyKnown = Boolean(
       currentOutcome
       && ciEvents.includes(currentOutcome)
-      && currentOutcomeIsFresh,
+      && currentOutcomeIsFresh
+      && !baseline,
     );
-    if (ciOutcomeAlreadyKnown && terminalEvents.length === 0) {
-      return {
-        ok: true,
-        data: {
-          pullRequestWatch: {
-            currentOutcome,
-            coveredByAutoFix,
-            prAutomation,
-          },
-        },
-      };
-    }
-    const createdAt = Date.now();
+    // Auto-fix dedupes a repeat failure at the same head, so it will not wake
+    // the thread for a failure that follows a baseline failure there. A
+    // pushed head is a new head, where Auto-fix sees any failure.
+    const coversFailure = (watchBaseline: ThreadPullRequestWatchBaseline | undefined) =>
+      failureCoveredByAutoFix
+      && (pushedHeadSha !== undefined || watchBaseline?.outcome !== "failure");
+    // The re-run's attempt is what this watch waits for while its result is
+    // not known yet. Kept beside the baseline, which clears once checks run.
+    const watchRun = rerun && pushedHeadSha === undefined && (staleAfterRerun || !currentOutcome)
+      ? {
+          ...(rerun.runAttempt !== undefined ? { runAttempt: rerun.runAttempt } : {}),
+          runId: rerun.runId,
+        }
+      : {};
     const baseWatch = {
       backend: args.backend,
       threadId,
@@ -4498,9 +5076,10 @@ class DesktopAppServerService {
       prNumber: pr.number,
       ...(pr.title ? { prTitle: pr.title } : {}),
       createdAt,
-      failureHandledByAutoFix: coveredByAutoFix.length > 0,
+      createdBy: args.createdBy,
     };
     let watch: ThreadPullRequestWatchSummary | undefined;
+    let watchExisted = false;
     if (ciEvents.length > 0 && headSha && !ciOutcomeAlreadyKnown) {
       const registration = await this.getOverlayStore().registerThreadPrStatusWatch({
         watch: {
@@ -4508,13 +5087,18 @@ class DesktopAppServerService {
           watchId: randomUUID(),
           headSha,
           notifyOn: ciEvents,
+          failureHandledByAutoFix: coversFailure(baseline),
           kind: "checks",
+          ...watchRun,
+          ...(baseline ? { baseline } : {}),
         },
         now: createdAt,
       });
       watch = registration.watch;
+      watchExisted = registration.existed;
     }
     let terminalWatch: ThreadPullRequestWatchSummary | undefined;
+    let terminalWatchExisted = false;
     if (terminalEvents.length > 0) {
       // Not bound to a head: pushes and CI results leave it in place until
       // the PR merges or closes, and it survives restarts in sqlite.
@@ -4530,26 +5114,208 @@ class DesktopAppServerService {
         now: createdAt,
       });
       terminalWatch = registration.watch;
+      terminalWatchExisted = registration.existed;
     }
-    if (watch && currentOutcomeIsFresh) {
+    if (watch || terminalWatch) {
+      await this.publishPrWatchesUpdated([{ backend: args.backend, threadId, prKey }]);
+    }
+    // A baseline is the outcome the watch must not fire on, so it is never
+    // offered as a snapshot.
+    if (watch && currentOutcomeIsFresh && !watch.baseline) {
       await this.getPrStatusWatchCoordinator().handleStatusSnapshot(pr, createdAt);
     }
 
+    const coveredByAutoFix: ThreadPullRequestWatchEvent[] =
+      ciEvents.includes("failure") && coversFailure(watch?.baseline ?? baseline)
+        ? ["failure"]
+        : [];
+    // Armed only when every requested event has a waiting watch. A merge
+    // watch alone must not read as a wait for a CI result that already came.
+    const armed = (ciEvents.length === 0 || Boolean(watch))
+      && (terminalEvents.length === 0 || Boolean(terminalWatch));
+    const reason: WatchThreadPullRequestReason = !armed
+      ? "outcome_already_final"
+      : (!watch || watchExisted) && (!terminalWatch || terminalWatchExisted)
+        ? "already_armed"
+        : "armed";
     return {
       ok: true,
-      data: {
-        pullRequestWatch: {
-          ...(watch ? { watch } : {}),
-          ...(terminalWatch ? { terminalWatch } : {}),
-          ...(ciOutcomeAlreadyKnown && currentOutcome ? { currentOutcome } : {}),
-          coveredByAutoFix,
-          prAutomation: await this.getThreadPullRequestAutomationStatus({
-            backend: args.backend,
-            threadId,
-          }),
-        },
+      result: {
+        ...(watch ? { watch } : {}),
+        ...(terminalWatch ? { terminalWatch } : {}),
+        ...(ciOutcomeAlreadyKnown && currentOutcome ? { currentOutcome } : {}),
+        coveredByAutoFix,
+        prAutomation: await this.getThreadPullRequestAutomationStatus({
+          backend: args.backend,
+          threadId,
+        }),
+        armed,
+        reason,
+        message: describePrWatchArming({
+          prNumber: pr.number,
+          headSha: headSha ?? "",
+          ciEvents,
+          watch,
+          watchExisted,
+          terminalWatch,
+          terminalWatchExisted,
+          knownOutcome: ciOutcomeAlreadyKnown ? currentOutcome : undefined,
+          knownAgeMs: observedAt !== undefined ? createdAt - observedAt : undefined,
+          pushedHeadSha,
+          audience: args.createdBy,
+        }),
       },
     };
+  }
+
+  /** The operator's list, history, and Stop for PR watches on local threads. */
+  async manageThreadPrWatches(
+    request: ThreadPrWatchesRequest,
+  ): Promise<ThreadPrWatchesResponse> {
+    const invalid = (message: string): ThreadPrWatchesResponse => ({
+      ok: false,
+      error: { code: "invalid_arguments", message },
+    });
+    if (request?.action === "active") {
+      // Before a profile's state opens there is nothing to list, not an error.
+      if (!getAppStateMode()) return { ok: true, active: [], autoFix: [] };
+      return {
+        ok: true,
+        active: await this.getOverlayStore().listAllActivePrStatusWatches(),
+        autoFix: await this.listThreadPrAutoFixStates(),
+      };
+    }
+    if (
+      request?.action !== "history"
+      && request?.action !== "cancel"
+      && request?.action !== "watch"
+    ) {
+      return invalid("action must be active, history, cancel, or watch.");
+    }
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return {
+        ok: false,
+        error: {
+          code: "federation_unsupported",
+          message: "PR watches run on the instance that owns the thread. Stop them there.",
+        },
+      };
+    }
+    if (!isAppServerBackendKind(request.backend) || !request.threadId?.trim()) {
+      return invalid("backend and threadId are required.");
+    }
+    if (request.action === "history") {
+      const limit = Math.min(
+        THREAD_PR_WATCH_HISTORY_MAX_LIMIT,
+        Math.max(1, Math.floor(request.limit ?? 10)),
+      );
+      return {
+        ok: true,
+        history: await this.getOverlayStore().listThreadPrStatusWatchHistory({
+          backend: request.backend,
+          threadId: request.threadId,
+          limit: Number.isFinite(limit) ? limit : 10,
+        }),
+      };
+    }
+    if (request.action === "watch") {
+      if (!request.prUrl?.trim()) return invalid("prUrl is required.");
+      // Watch CI asks for the next pass or failure, as an agent's default does.
+      const armed = await this.armThreadPrWatch({
+        backend: request.backend,
+        threadId: request.threadId,
+        url: request.prUrl,
+        notifyOn: ["success", "failure"],
+        createdBy: "operator",
+      });
+      return armed.ok ? { ok: true, watch: armed.result } : { ok: false, error: armed.error };
+    }
+    if (!request.watchId?.trim()) return invalid("watchId is required.");
+    const cancelled = await this.getOverlayStore().cancelThreadPrStatusWatch({
+      backend: request.backend,
+      threadId: request.threadId,
+      watchId: request.watchId,
+      now: Date.now(),
+    });
+    if (!cancelled) {
+      return {
+        ok: false,
+        error: {
+          code: "not_found",
+          message: "That watch is no longer waiting, or it is waking the thread now.",
+        },
+      };
+    }
+    await this.publishPrWatchesUpdated([cancelled]);
+    return { ok: true, cancelled: true };
+  }
+
+  /**
+   * What Auto-fix does on each opted-in thread for each of its PRs. It runs
+   * on the elected thread only, and not while the repair budget is paused.
+   * Nothing when Git settings stop it, which the windows already know.
+   */
+  private async listThreadPrAutoFixStates(): Promise<ThreadPrAutoFixState[]> {
+    if (!this.backgroundPrPollingEnabled || !this.prAutoDispatchAllowed) return [];
+    const candidates = await this.getOverlayStore().listPrAutoDispatchCandidates();
+    const winners = new Map<string, (typeof candidates)[number]>();
+    for (const candidate of candidates) {
+      if (!winners.has(candidate.prKey)) winners.set(candidate.prKey, candidate);
+    }
+    return candidates.map((candidate): ThreadPrAutoFixState => {
+      const base = {
+        backend: candidate.backend,
+        threadId: candidate.threadId,
+        prKey: candidate.prKey,
+      };
+      if (this.prAutoDispatchBudgetPaused) return { ...base, state: "paused" };
+      const winner = winners.get(candidate.prKey)!;
+      if (winner.backend === candidate.backend && winner.threadId === candidate.threadId) {
+        return { ...base, state: "active" };
+      }
+      const title = getDesktopBackendRegistry().getCachedThreadSummary({
+        backend: winner.backend,
+        threadId: winner.threadId,
+      })?.title;
+      return {
+        ...base,
+        state: "handled_by_other_thread",
+        handledBy: {
+          backend: winner.backend,
+          threadId: winner.threadId,
+          ...(title ? { title } : {}),
+        },
+      };
+    });
+  }
+
+  /** Auto-fix's states changed: opted-in threads' windows re-list them. */
+  private async publishPrAutoFixStatesChanged(): Promise<void> {
+    const candidates = await this.getOverlayStore().listPrAutoDispatchCandidates();
+    const threads = new Map(candidates.map((candidate) => [
+      buildThreadIdentityKey(candidate.backend, candidate.threadId),
+      { backend: candidate.backend, threadId: candidate.threadId },
+    ]));
+    await this.publishPrWatchesUpdated([...threads.values()]);
+  }
+
+  /** Tell windows a thread's PR watches changed; they re-list them. */
+  private async publishPrWatchesUpdated(
+    threads: Array<{ backend: AppServerBackendKind; threadId: string; prKey?: string }>,
+  ): Promise<void> {
+    for (const thread of threads) {
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend: thread.backend,
+        notification: {
+          method: "thread/prWatches/updated",
+          params: {
+            backend: thread.backend,
+            threadId: thread.threadId,
+            ...(thread.prKey ? { prKey: thread.prKey } : {}),
+          },
+        },
+      });
+    }
   }
 
   async getThreadPullRequestAutomationStatus(
@@ -4580,8 +5346,14 @@ class DesktopAppServerService {
       winner?.backend === params.backend && winner.threadId === params.threadId,
     );
     const waitingForPr = hasPrimaryRepo && primaryPrs.length === 0;
+    // The thread's project can narrow Auto-fix, never widen it.
+    const forgeProject = this.resolveThreadForgeProject(params);
+    const projectSkipsMergeConflicts = !projectAllowsAutoFixKind(forgeProject?.automation, "merge-conflict");
+    const projectSkipsCiFailures = !projectAllowsAutoFixKind(forgeProject?.automation, "ci-failure");
+    const projectBlocksAutoFix = projectSkipsMergeConflicts && projectSkipsCiFailures;
     const autoFixActive =
       autoFixEnabled
+      && !projectBlocksAutoFix
       && this.isPrAutoDispatchAvailable()
       && (waitingForPr || ownsAttachedPr);
     const isInvokingThread =
@@ -4590,7 +5362,7 @@ class DesktopAppServerService {
     const watches = await this.getOverlayStore().listActiveThreadPrStatusWatches(
       params,
     );
-    const guidance = autoFixActive && waitingForPr
+    const baseGuidance = autoFixActive && waitingForPr
       ? "Auto-fix PR monitoring is armed. This is monitoring state, not a repair-turn event. This primary workspace has no linked PR yet; PwrAgent will begin monitoring when one is linked. Do not poll CI or create a monitor thread after a PR is linked."
       : autoFixActive
       ? isInvokingThread
@@ -4613,6 +5385,12 @@ class DesktopAppServerService {
               : "Background PR polling is active, but Auto-fix PR is off for this thread. Use watch_thread_pull_request for a bounded one-shot success, failure, merge, or close notification instead of polling or creating a monitor thread."
             : "Background PR polling is active, but automatic PR repair is disabled globally in Git settings. Use watch_thread_pull_request for a bounded one-shot success, failure, merge, or close notification instead of polling or creating a monitor thread."
           : "Background PR polling and Auto-fix PR are off. PwrAgent will not wake this thread for PR status changes.";
+    const projectSkippedKind = projectSkipsMergeConflicts ? "merge conflicts" : "failing CI";
+    const guidance = autoFixEnabled && forgeProject && projectBlocksAutoFix
+      ? `Auto-fix PR is saved for this thread, but it is in ${forgeProject.label}, where ${forgeProject.automation.paused ? "forge activity is paused" : "Auto-fix is turned off in Forge Automation"}. PwrAgent will not start a repair turn. Do not poll CI or create a monitor in its place. Tell the operator, who can change it from the project menu: Forge Automation.`
+      : autoFixActive && forgeProject && (projectSkipsMergeConflicts || projectSkipsCiFailures)
+        ? `${baseGuidance} ${forgeProject.label} skips ${projectSkippedKind} in Forge Automation, so PwrAgent will not start a repair turn for ${projectSkippedKind}.`
+        : baseGuidance;
     return {
       backgroundPollingEnabled: this.backgroundPrPollingEnabled,
       autoFixAllowed: this.prAutoDispatchAllowed,
@@ -4644,17 +5422,39 @@ class DesktopAppServerService {
     const backend = request.backend ?? "codex";
     const prKey = getPrStatusKey(request.pr);
     const currentPr = this.prStatusRegistry.get(prKey)?.pr;
-    const overlay = await this.getOverlayStore().detachThreadPullRequest({
+    let overlay = await this.getOverlayStore().detachThreadPullRequest({
       backend,
       threadId: request.threadId,
       pr: request.pr,
     });
-    await this.getOverlayStore().cancelThreadPrStatusWatchesForPr({
+    // A row still stored under a renamed repository's old name is the same
+    // PR; the client only saw its canonical chip.
+    let cancelledWatches = 0;
+    for (const alias of (overlay.prs ?? []).filter((pr) =>
+      getPrStatusKey(pr) !== prKey
+      && getPrStatusKey(this.prRepositoryAliases.canonicalize(normalizePrSummary(pr))) === prKey
+    )) {
+      overlay = await this.getOverlayStore().detachThreadPullRequest({
+        backend,
+        threadId: request.threadId,
+        pr: alias,
+      });
+      cancelledWatches += await this.getOverlayStore().cancelThreadPrStatusWatchesForPr({
+        backend,
+        threadId: request.threadId,
+        prKey: getPrStatusKey(alias),
+        now: Date.now(),
+      });
+    }
+    cancelledWatches += await this.getOverlayStore().cancelThreadPrStatusWatchesForPr({
       backend,
       threadId: request.threadId,
       prKey,
       now: Date.now(),
     });
+    if (cancelledWatches > 0) {
+      await this.publishPrWatchesUpdated([{ backend, threadId: request.threadId, prKey }]);
+    }
     const prs = overlay.prs ?? [];
     await this.publishThreadPullRequestsUpdated({
       backend,
@@ -4698,10 +5498,10 @@ class DesktopAppServerService {
     await this.loadPrStatusRegistry();
     await this.loadPrLookupRegistry();
     const storedPrs = existing?.prs ?? [];
-    const retainedStoredPrs = await filterStoredDiscoveredPullRequests(storedPrs);
+    const retainedStoredPrs = await this.filterStoredDiscoveredPrs(storedPrs);
     const persistedPrs = this.mergePrHistory(
       retainedStoredPrs,
-      await filterStoredDiscoveredPullRequests(existing?.detachedPrs ?? []),
+      await this.filterStoredDiscoveredPrs(existing?.detachedPrs ?? []),
     );
     this.rememberPrStatuses(
       persistedPrs,
@@ -4732,7 +5532,7 @@ class DesktopAppServerService {
       : existingLookupMatches
         ? existingPrs
         : [];
-    const currentLookupPrs = await filterStoredDiscoveredPullRequests(
+    const currentLookupPrs = await this.filterStoredDiscoveredPrs(
       associatePrsWithLinkedDirectories(lookupPrs, lookupDirectoryPaths),
     );
     // Legacy automatic matches may already be in an overlay even though the
@@ -4745,7 +5545,7 @@ class DesktopAppServerService {
         write: async () => {
           const latest = await overlay.getThreadOverlayState({ backend, threadId: request.threadId });
           if (!latest) return;
-          const prs = await filterStoredDiscoveredPullRequests(latest.prs ?? []);
+          const prs = await this.filterStoredDiscoveredPrs(latest.prs ?? []);
           if (prSummariesEqual(latest.prs ?? [], prs)) return;
           const updated = await overlay.setThreadPullRequests({
             backend,
@@ -4753,6 +5553,7 @@ class DesktopAppServerService {
             prs,
             fetchedAt: latest.prsFetchedAt ?? 0,
             refreshKey: latest.prsRefreshKey,
+            ...this.detachedPrKeyCanonicalizer(),
           });
           await this.publishThreadPullRequestsUpdated({
             backend,
@@ -4764,8 +5565,17 @@ class DesktopAppServerService {
       });
     }
     let knownPrs = this.mergePrHistory(existingPrs, currentLookupPrs);
+    // The same rule as the store's write, so a response never hides a chip
+    // the store keeps.
     const visibleKnownPrs = (): PrSummary[] =>
-      filterDetachedPullRequests(knownPrs, existing?.detachedPrKeys);
+      filterDetachedPullRequests(
+        knownPrs,
+        canonicalizeDetachedPrKeys({
+          detachedPrKeys: existing?.detachedPrKeys,
+          attachedPrKeys: storedPrs.map(getPrStatusKey),
+          canonicalizePrKey: (key) => this.prRepositoryAliases.canonicalizeKey(key),
+        }).detachedPrKeys,
+      );
     const statusFetchedAt = lookupEntry?.fetchedAt
       ?? (existingPrs.length > 0 || existingLookupMatches
         ? existing?.prsFetchedAt
@@ -4834,6 +5644,7 @@ class DesktopAppServerService {
         persistedRefreshKey: existing?.prsRefreshKey,
         prs: currentLookupPrs,
         fetchedAt: lookupEntry.fetchedAt,
+        renamePending: this.storedPrsNeedRename(existing),
       });
     }
     // Terminal-state short-circuit: once every cached PR for a lookup is
@@ -4859,6 +5670,9 @@ class DesktopAppServerService {
       && branch !== "HEAD"
       && request.trigger !== "user"
       && request.trigger !== "post-turn"
+      // A PR shown under two repository names is one the lookup's by-URL
+      // fetch can merge, and aliases are relearned after each launch.
+      && this.prRepositoryAliases.renameCandidates(visibleKnownPrs()).length === 0
     ) {
       return {
         backend,
@@ -4886,6 +5700,23 @@ class DesktopAppServerService {
           trigger,
         }));
       }
+      return {
+        backend,
+        threadId: request.threadId,
+        provider,
+        prs: visibleKnownPrs(),
+        ...responseFreshness(false),
+        ghAvailable,
+      };
+    }
+
+    // A paused project runs no background lookups. The operator's own
+    // refresh and the post-turn lookup still run; the Auto-fix, watch and
+    // dependency gates keep them from starting automatic turns.
+    if (
+      trigger === "scheduled"
+      && !projectAllowsForgePolling(this.threadForgeAutomation({ backend, threadId: request.threadId }))
+    ) {
       return {
         backend,
         threadId: request.threadId,
@@ -4953,6 +5784,7 @@ class DesktopAppServerService {
         ? { allowPrimedBranchLookup: false }
         : {}),
     })).map(normalizePrSummary);
+    this.prRepositoryAliases.confirm(prs);
     const retainedPrs = await this.fetchRetainedNonTerminalPullRequests({
       prs: this.getPullRequestLookupSubscriberPreviousPrs({
         lookupKey: params.lookupKey,
@@ -5022,13 +5854,23 @@ class DesktopAppServerService {
       params.discoveredPrs.map((pr) => getPrStatusKey(pr)),
     );
     const seenRetainedKeys = new Set<string>();
-    const retainedPrs = params.prs
-      .map(normalizePrSummary)
+    const normalizedPrs = params.prs.map(normalizePrSummary);
+    // A finished PR is fetched again only to learn whether its repository is
+    // another's old name.
+    const renameCandidateKeys = new Set(
+      this.prRepositoryAliases
+        .renameCandidates([...params.discoveredPrs, ...normalizedPrs])
+        .map(getPrStatusKey),
+    );
+    const retainedPrs = normalizedPrs
       .filter((pr) => {
         const key = getPrStatusKey(pr);
         if (discoveredKeys.has(key)) return false;
         if (seenRetainedKeys.has(key)) return false;
-        if (pr.lifecycleState === "merged" || pr.lifecycleState === "closed") {
+        if (
+          (pr.lifecycleState === "merged" || pr.lifecycleState === "closed")
+          && !renameCandidateKeys.has(key)
+        ) {
           return false;
         }
         seenRetainedKeys.add(key);
@@ -5056,6 +5898,11 @@ class DesktopAppServerService {
           }),
       ),
     );
+    // The pairing with the URL asked for is how a renamed repository is
+    // learned: the forge answers its old URL under the new name.
+    refreshed.forEach((pr, index) => {
+      this.learnPullRequestRepository(retainedPrs[index]!.url, pr);
+    });
     return refreshed.filter((pr): pr is PrSummary => Boolean(pr))
       .map(normalizePrSummary);
   }
@@ -5335,7 +6182,7 @@ class DesktopAppServerService {
               latest?.prs ?? [],
               latest?.detachedPrs ?? [],
             );
-            const previousPrs = await filterStoredDiscoveredPullRequests(this.mergePrHistory(
+            const previousPrs = await this.filterStoredDiscoveredPrs(this.mergePrHistory(
               subscriber.previousPrs,
               latestPrs,
             ));
@@ -5352,6 +6199,7 @@ class DesktopAppServerService {
               // failed-provider observations must keep their old freshness.
               fetchedAt: params.incomplete ? latest?.prsFetchedAt ?? 0 : params.fetchedAt,
               refreshKey: subscriber.requestKey,
+              ...this.detachedPrKeyCanonicalizer(),
             });
             const persistedPrs = updated.prs ?? [];
             if ((updated.prsFetchedAt ?? 0) > params.fetchedAt) {
@@ -5411,14 +6259,19 @@ class DesktopAppServerService {
     persistedRefreshKey?: string;
     prs: PrSummary[];
     fetchedAt: number;
+    /** Stored rows or detached keys still use a renamed repository's old name. */
+    renamePending?: boolean;
   }): Promise<PrSummary[]> {
     const associatedPrs = associatePrsWithLinkedDirectories(
       params.prs,
       params.request.directoryPaths,
     );
     const nextPrs = this.mergePrHistory(params.persistedPrs, associatedPrs);
+    // `persistedPrs` is already projected under the forge's names, so it can
+    // equal the result while storage still holds the old ones.
     if (
       params.persistedRefreshKey === params.requestKey
+      && !params.renamePending
       && prSummariesEqual(params.persistedPrs, nextPrs)
     ) {
       return params.persistedPrs;
@@ -5430,6 +6283,7 @@ class DesktopAppServerService {
       prs: nextPrs,
       fetchedAt: params.fetchedAt,
       refreshKey: params.requestKey,
+      ...this.detachedPrKeyCanonicalizer(),
     });
     const persistedPrs = updated.prs ?? [];
     if ((updated.prsFetchedAt ?? 0) > params.fetchedAt) {
@@ -5711,19 +6565,222 @@ class DesktopAppServerService {
     await this.getOverlayStore().writePrLookupCacheEntry(entry);
   }
 
+  /**
+   * Rows under the forge's repository name with the registry's status, one per
+   * PR. A row stored under a renamed repository's old name and the same PR
+   * under the new name share one key here, so they merge: the first keeps its
+   * position, attachment intent and directory provenance are united.
+   */
   private canonicalizePrs(prs: PrSummary[]): PrSummary[] {
-    return prs.map((pr) => {
-      const normalized = normalizePrSummary(pr);
-      const canonical = this.prStatusRegistry.get(getPrStatusKey(normalized))?.pr;
-      if (!canonical) {
-        return normalized;
+    const merged: PrSummary[] = [];
+    const renamed: boolean[] = [];
+    const indexes = new Map<string, number>();
+    for (const pr of prs) {
+      const stored = normalizePrSummary(pr);
+      const aliased = this.prRepositoryAliases.canonicalize(stored);
+      const normalized = aliased === stored ? stored : normalizePrSummary(aliased);
+      const key = getPrStatusKey(normalized);
+      const status = this.prStatusRegistry.get(key)?.pr;
+      const row = status
+        ? normalizePrSummary({
+            ...status,
+            linkedDirectoryPaths: normalized.linkedDirectoryPaths,
+            ...(normalized.explicitlyAttached ? { explicitlyAttached: true } : {}),
+          })
+        : normalized;
+      const existingIndex = indexes.get(key);
+      if (existingIndex === undefined) {
+        indexes.set(key, merged.length);
+        merged.push(row);
+        renamed.push(aliased !== stored);
+        continue;
       }
-      return normalizePrSummary({
-        ...canonical,
-        linkedDirectoryPaths: normalized.linkedDirectoryPaths,
-        ...(normalized.explicitlyAttached ? { explicitlyAttached: true } : {}),
+      const existing = merged[existingIndex]!;
+      // Without a registry status, a row the forge stored under the current
+      // name is fresher than one rewritten from an old name.
+      const base = renamed[existingIndex] && aliased === stored ? row : existing;
+      renamed[existingIndex] = renamed[existingIndex]! && aliased !== stored;
+      merged[existingIndex] = normalizePrSummary({
+        ...base,
+        linkedDirectoryPaths: mergeLinkedDirectoryPaths(
+          existing.linkedDirectoryPaths,
+          row.linkedDirectoryPaths,
+        ),
+        ...((existing.explicitlyAttached || row.explicitlyAttached) ? { explicitlyAttached: true } : {}),
       });
+    }
+    return merged;
+  }
+
+  /**
+   * Whether a write would move a thread's stored rows or detached keys to the
+   * forge's repository names. Detached rows are left out: they keep the name
+   * they were detached under, and their keys carry the decision.
+   */
+  private storedPrsNeedRename(state: ThreadOverlayState | undefined): boolean {
+    if (!state || !this.prRepositoryAliases.hasRenames()) return false;
+    return (state.prs ?? []).some((pr) =>
+      getPrStatusKey(this.prRepositoryAliases.canonicalize(normalizePrSummary(pr))) !== getPrStatusKey(pr)
+    ) || (state.detachedPrKeys ?? []).some((key) => {
+      const folded = key.trim().toLowerCase();
+      return this.prRepositoryAliases.canonicalizeKey(folded) !== folded;
     });
+  }
+
+  /** Store option that keeps detachments recorded under a renamed repository's old name. */
+  private detachedPrKeyCanonicalizer(): { canonicalizePrKey?: (key: string) => string } {
+    return this.prRepositoryAliases.hasRenames()
+      ? { canonicalizePrKey: (key) => this.prRepositoryAliases.canonicalizeKey(key) }
+      : {};
+  }
+
+  /** Record what the forge answered for a by-URL fetch. */
+  private learnPullRequestRepository(requestedUrl: string, returned: PrSummary | undefined): void {
+    if (!this.prRepositoryAliases.learn(requestedUrl, returned)) return;
+    this.prRepositoryAliasGeneration += 1;
+    // A thread's primary PRs can now include rows under either name.
+    for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
+      this.setThreadPrAttachment(threadKey, attachment);
+    }
+    // The poller no longer fetches a merged or closed PR, so a merge watch
+    // saved under the old name needs its cached status offered again. A poll
+    // can learn several renames at once; one retry scan covers them all.
+    if (!this.prRenameRetryQueued) {
+      this.prRenameRetryQueued = true;
+      queueMicrotask(() => {
+        this.prRenameRetryQueued = false;
+        void this.retryPendingPrTerminalWatches().catch((error) => {
+          appServerLog.warn("pr terminal watch retry after a repository rename failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      });
+    }
+    const requested = parsePullRequestReferenceUrl(requestedUrl);
+    appServerLog.info("forge answered a pull request under another repository name", {
+      requested: requested ? `${requested.provider}/${requested.org}/${requested.repo}` : requestedUrl,
+      canonical: returned?.url,
+    });
+  }
+
+  /**
+   * Ask the forge which repository a PR URL names now, for an attach. One
+   * by-URL fetch from the shared budget; undefined when it cannot answer.
+   */
+  async resolvePullRequestReference(params: {
+    url: string;
+    cwd?: string;
+  }): Promise<PullRequestReferenceIdentity | undefined> {
+    const requested = parsePullRequestReferenceUrl(params.url);
+    if (!requested) return undefined;
+    const known = parsePullRequestReferenceUrl(this.prRepositoryAliases.canonicalizeUrl(params.url));
+    if (known && (known.org !== requested.org || known.repo !== requested.repo)) {
+      return known;
+    }
+    if (!this.takePrPollingToken("Agent PR attach")) return undefined;
+    const pr = await this.getPrFetcher().fetchPullRequestByUrl({
+      cwd: params.cwd ?? os.homedir(),
+      url: params.url,
+    });
+    this.learnPullRequestRepository(params.url, pr);
+    const answered = parsePullRequestReferenceUrl(pr?.url);
+    return answered
+      && answered.provider === requested.provider
+      && answered.number === requested.number
+      ? answered
+      : undefined;
+  }
+
+  /**
+   * A stored PR URL under the repository name the forge reports now. Asks the
+   * forge at most once per URL per session, or again after a failed answer,
+   * because learned names live in memory and a reference saved under an old
+   * name has nothing else to learn it from after a restart.
+   */
+  private async resolveCurrentPullRequestUrl(url: string, cwd?: string): Promise<string | undefined> {
+    const known = this.prRepositoryAliases.canonicalizeUrl(url);
+    if (known !== url) return known;
+    const now = Date.now();
+    const cached = this.prReferenceResolutions.get(url);
+    if (cached && (cached.answered || now - cached.askedAt < PR_REFERENCE_RETRY_MS)) {
+      return await cached.result;
+    }
+    const entry = {
+      askedAt: now,
+      answered: false,
+      result: this.resolvePullRequestReference({ url, ...(cwd ? { cwd } : {}) })
+        .then((identity) => identity ? this.prRepositoryAliases.canonicalizeUrl(url) : undefined)
+        .catch(() => undefined),
+    };
+    this.prReferenceResolutions.set(url, entry);
+    const result = await entry.result;
+    entry.answered = result !== undefined;
+    return result;
+  }
+
+  /**
+   * Move stored watch keys to the repository names the forge has answered
+   * with, once per learned rename. Status snapshots carry the new name and a
+   * claim matches its key exactly.
+   */
+  private syncPrStatusWatchKeys(): Promise<void> {
+    const run = this.prWatchKeySync.then(async () => {
+      const generation = this.prRepositoryAliasGeneration;
+      if (generation === this.prWatchKeysGeneration) return;
+      try {
+        const moved = await this.getOverlayStore().canonicalizeThreadPrStatusWatchKeys({
+          canonicalizePrKey: (key) => this.prRepositoryAliases.canonicalizeKey(key),
+          canonicalizePrUrl: (url) => this.prRepositoryAliases.canonicalizeUrl(url),
+          now: Date.now(),
+        });
+        this.prWatchKeysGeneration = generation;
+        if (moved > 0) {
+          appServerLog.info("pr status watches moved to a renamed repository", { watchCount: moved });
+        }
+      } catch (error) {
+        // Claims still run; the next one tries the move again.
+        appServerLog.warn("pr status watch rename failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+    this.prWatchKeySync = run;
+    return run;
+  }
+
+  /**
+   * Ask the forge about watches whose PR is attached to their thread only
+   * under another repository name. Stored rows and status snapshots already
+   * use a renamed repository's new name, so after a restart a watch saved
+   * under the old one has nothing else to learn the rename from.
+   */
+  private async resolveRenamedPrWatchRepositories(): Promise<void> {
+    if (!this.backgroundPrPollingEnabled) return;
+    const store = this.getOverlayStore();
+    const watches = await store.listAllActiveThreadPrStatusWatches();
+    if (watches.length === 0) return;
+    await this.loadPrStatusRegistry();
+    const asked = new Set<string>();
+    // A thread usually holds a CI watch and a merge watch for the same PR.
+    const rowsByThread = new Map<string, PrSummary[]>();
+    for (const watch of watches) {
+      if (asked.has(watch.prUrl)) continue;
+      const prKey = this.prRepositoryAliases.canonicalizeKey(watch.prKey);
+      const threadKey = buildThreadIdentityKey(watch.backend, watch.threadId);
+      let rows = rowsByThread.get(threadKey);
+      if (!rows) {
+        const overlay = await store.getThreadOverlayState({ backend: watch.backend, threadId: watch.threadId });
+        rows = this.canonicalizePrs(overlay?.prs ?? []);
+        rowsByThread.set(threadKey, rows);
+      }
+      if (rows.some((pr) => getPrStatusKey(pr) === prKey)) continue;
+      const renamed = rows.find((pr) =>
+        isSameNumberInAnotherRepository(pr.url, this.prRepositoryAliases.canonicalizeUrl(watch.prUrl))
+      );
+      if (!renamed) continue;
+      asked.add(watch.prUrl);
+      await this.resolveCurrentPullRequestUrl(watch.prUrl, renamed.linkedDirectoryPaths?.[0]);
+    }
   }
 
   /**
@@ -5737,7 +6794,7 @@ class DesktopAppServerService {
     prs: PrSummary[],
   ): Promise<PrSummary[]> {
     await this.loadPrStatusRegistry();
-    return await filterStoredDiscoveredPullRequests(this.canonicalizePrs(prs));
+    return await this.filterStoredDiscoveredPrs(this.canonicalizePrs(prs));
   }
 
   private mergePrHistory(
@@ -5936,6 +6993,20 @@ class DesktopAppServerService {
 
   acknowledgeBundledGitLfsAdvisory(): void {
     this.bundledGitLfsNotice.acknowledge();
+  }
+
+  /**
+   * Repair stored automatic attachments. A renamed repository's remote can
+   * still carry the old name, so a stored PR no remote names asks GitHub what
+   * that remote is called now before it is dropped.
+   */
+  private async filterStoredDiscoveredPrs(prs: PrSummary[]): Promise<PrSummary[]> {
+    return await filterStoredDiscoveredPullRequests(prs, {
+      resolveRepositoryNames: async (repos) => {
+        if (!getDesktopSettingsService().isForgeEnabled("github")) return;
+        await this.getPrGraphqlClient().resolveRepositoryNames(repos);
+      },
+    });
   }
 
   private getPrGraphqlClient(): GithubGraphqlPrClient {
@@ -6186,6 +7257,14 @@ class DesktopAppServerService {
     if (pauseStateChanged || pauseEventChanged) {
       this.broadcastPrAutoDispatchBudgetStatus(status);
     }
+    if (pauseStateChanged) {
+      // Auto-fix rows read "paused" from the PR watch list.
+      void this.publishPrAutoFixStatesChanged().catch((error: unknown) => {
+        appServerLog.warn("failed to publish Auto-fix state change", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
   }
 
   private broadcastPrAutoDispatchBudgetStatus(
@@ -6282,11 +7361,18 @@ class DesktopAppServerService {
         appServerLog.info("background PR polling started", {
           trackedPrCount: this.collectPrPollTargets().length,
         });
-        void this.retryPendingPrTerminalWatches().catch((error) => {
-          appServerLog.warn("pr terminal watch startup retry failed", {
-            error: error instanceof Error ? error.message : String(error),
+        void this.resolveRenamedPrWatchRepositories()
+          .catch((error) => {
+            appServerLog.warn("pr watch repository resolve failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          })
+          .then(() => this.retryPendingPrTerminalWatches())
+          .catch((error) => {
+            appServerLog.warn("pr terminal watch startup retry failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
           });
-        });
         void this.retryPendingSandboxCleanups().catch((error) => {
           appServerLog.warn("sandboxer cleanup startup retry failed", {
             error: error instanceof Error ? error.message : String(error),
@@ -6331,7 +7417,10 @@ class DesktopAppServerService {
     this.prunePrDiscoveryState(threadKeys);
 
     const due = selectDiscoveryDueThreadKeys({
-      threadKeys,
+      // A paused project discovers no PRs; its clocks are kept for resume.
+      threadKeys: threadKeys.filter((threadKey) =>
+        projectAllowsForgePolling(this.threadKeyForgeAutomation(threadKey))
+      ),
       lastRefreshedAt: this.prDiscoveryLastRefreshedAt,
       now,
       cadenceMs: PR_DISCOVERY_CADENCE_MS,
@@ -6494,8 +7583,11 @@ class DesktopAppServerService {
 
     for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
       if (!this.backgroundPrPollingEnabled) break;
+      // A paused project's PRs are not polled; their chips keep the last
+      // status. Another project's thread on the same PR still polls it.
+      if (!projectAllowsForgePolling(this.threadKeyForgeAutomation(threadKey))) continue;
       for (const pr of attachment.prs.filter((candidate) =>
-        pullRequestMatchesRepositoryKey(candidate, attachment.primaryRepoKey)
+        this.matchesPrimaryRepository(candidate, attachment.primaryRepoKey)
       )) {
         const prKey = getPrStatusKey(pr);
         const status = this.prStatusRegistry.get(prKey);
@@ -6537,6 +7629,37 @@ class DesktopAppServerService {
     return [...byKey.values()];
   }
 
+  /**
+   * The stored Forge Automation of a thread's project, from the in-memory
+   * index. The registry is read only for a thread the last navigation scan
+   * did not list, and only while some project stores a setting.
+   */
+  private threadForgeAutomation(ref: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): ProjectForgeAutomation | undefined {
+    return getProjectForgeAutomationIndex().automationForThread(
+      ref,
+      () => getDesktopBackendRegistry().getCachedThreadSummary(ref),
+    );
+  }
+
+  private threadKeyForgeAutomation(threadKey: string): ProjectForgeAutomation | undefined {
+    if (!getProjectForgeAutomationIndex().hasAny()) return undefined;
+    const identity = parseThreadIdentityKey(threadKey);
+    return identity ? this.threadForgeAutomation(identity) : undefined;
+  }
+
+  private resolveThreadForgeProject(ref: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): ProjectForgeAutomationResolution | undefined {
+    return getProjectForgeAutomationIndex().resolveThread(
+      ref,
+      () => getDesktopBackendRegistry().getCachedThreadSummary(ref),
+    );
+  }
+
   private recordPrCheck(
     prs: PrSummary[],
     source: string,
@@ -6560,6 +7683,29 @@ class DesktopAppServerService {
     }
   }
 
+  /**
+   * The thread that owns Auto-fix for a PR. A project switch narrows only its
+   * own threads, so the oldest thread whose project allows one of the PR's
+   * current incidents wins. When none does, the plain winner stands and its
+   * outcome reports the project setting.
+   */
+  private async getPrAutoDispatchWinner(pr: PrSummary, prKey: string) {
+    const store = this.getOverlayStore();
+    const eventKinds = getProjectForgeAutomationIndex().hasAny()
+      ? getPrAutoDispatchEventKinds(pr)
+      : [];
+    const allowed = eventKinds.length > 0
+      ? await store.getPrAutoDispatchCandidateWinner({
+          prKey,
+          accepts: (candidate) => {
+            const automation = this.threadForgeAutomation(candidate);
+            return eventKinds.some((kind) => projectAllowsAutoFixKind(automation, kind));
+          },
+        })
+      : undefined;
+    return allowed ?? await store.getPrAutoDispatchCandidateWinner({ prKey });
+  }
+
   private async handlePrAutoDispatchSnapshots(
     prs: PrSummary[],
     observedAt: number,
@@ -6569,8 +7715,7 @@ class DesktopAppServerService {
     const coordinator = this.getPrAutoDispatchCoordinator();
     for (const pr of prs) {
       const prKey = getPrStatusKey(pr);
-      const winner = await this.getOverlayStore()
-        .getPrAutoDispatchCandidateWinner({ prKey });
+      const winner = await this.getPrAutoDispatchWinner(pr, prKey);
       const threadKeys = winner
         ? [buildThreadIdentityKey(winner.backend, winner.threadId)]
         : [];
@@ -6610,7 +7755,14 @@ class DesktopAppServerService {
         });
         logPrAutoDispatchOutcome(appServerLog, prKey, outcome);
       }
-      if (this.backgroundPrPollingEnabled) {
+      // Every thread showing this PR is in a project whose PR watches are
+      // off: skip the claim-and-release a watch would cost on each poll.
+      const watchThreadKeys = this.primaryPrThreadsByKey.get(prKey);
+      const watchesHeld = Boolean(watchThreadKeys?.size)
+        && [...watchThreadKeys!].every((threadKey) =>
+          !projectAllowsPrWatches(this.threadKeyForgeAutomation(threadKey))
+        );
+      if (this.backgroundPrPollingEnabled && !watchesHeld) {
         const failureCoveredThreadKeys = new Set(
           outcomes.flatMap((outcome) =>
             outcome.status === "scheduled"
@@ -6772,6 +7924,18 @@ class DesktopAppServerService {
     if (requests.length === 0) {
       return;
     }
+    try {
+      await this.applyThreadPrAutoDispatchPreferences(requests);
+    } finally {
+      // A toggle can move the election to or from another thread, so every
+      // window re-lists the Auto-fix rows.
+      await this.publishPrWatchesUpdated(requests);
+    }
+  }
+
+  private async applyThreadPrAutoDispatchPreferences(
+    requests: SetThreadPrAutoDispatchRequest[],
+  ): Promise<void> {
 
     const coordinator = this.getPrAutoDispatchCoordinator();
     const disabledRequests = requests.filter((request) => !request.enabled);
@@ -6784,7 +7948,7 @@ class DesktopAppServerService {
       );
       previouslyEligiblePrs.push(
         ...(attachment?.prs ?? []).filter((pr) =>
-          pullRequestMatchesRepositoryKey(pr, attachment?.primaryRepoKey),
+          this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey),
         ),
       );
       await coordinator.cancelAllPendingForThread(request);
@@ -6882,7 +8046,7 @@ class DesktopAppServerService {
       return Boolean(
         attachment?.primaryRepoKey
         && attachment.prs.some((pr) =>
-          pullRequestMatchesRepositoryKey(pr, attachment.primaryRepoKey)
+          this.matchesPrimaryRepository(pr, attachment.primaryRepoKey)
           && !isTerminalPullRequest(pr)
         ),
       );
@@ -7004,7 +8168,38 @@ class DesktopAppServerService {
   }
 
   private async fetchForgePullRequests(refs: ForgePrRef[], reconnect = false, requestTokenTaken = false): Promise<PrSummary[]> {
-    return this.getPrFetcher().fetchPullRequests(refs, { reconnect, requestTokenTaken });
+    const prs = await this.getPrFetcher().fetchPullRequests(refs, { reconnect, requestTokenTaken });
+    this.learnPolledPullRequestRepositories(refs, prs);
+    return prs;
+  }
+
+  /**
+   * A forge answers a renamed or transferred repository's old name with the
+   * PR under its current name. A poll result under another repository than
+   * any ref asked for is that answer: pair it with the one ref of the same
+   * host and number, and learn the rename before the result is matched to
+   * the threads that attached the PR under the old name.
+   */
+  private learnPolledPullRequestRepositories(refs: readonly ForgePrRef[], prs: readonly PrSummary[]): void {
+    const requested = refs.map((ref) => ({
+      host: normalizePullRequestProvider(ref.host),
+      key: getPrStatusKey({ provider: ref.host, org: ref.owner, repo: ref.repo, number: ref.number }),
+      url: buildPullRequestReferenceUrl({
+        kind: ref.kind, provider: ref.host, org: ref.owner, repo: ref.repo, number: ref.number,
+      }),
+      number: ref.number,
+    }));
+    const requestedKeys = new Set(requested.map((ref) => ref.key));
+    const answeredKeys = new Set(prs.map((pr) => getPrStatusKey(pr)));
+    for (const pr of prs) {
+      if (requestedKeys.has(getPrStatusKey(pr))) continue;
+      const host = normalizePullRequestProvider(pr.provider);
+      // A ref that got its own answer is not the one this result renames.
+      const matches = requested.filter((ref) =>
+        ref.number === pr.number && ref.host === host && !answeredKeys.has(ref.key)
+      );
+      if (matches.length === 1) this.learnPullRequestRepository(matches[0]!.url, pr);
+    }
   }
 
   async getGlabStatus(request: GetGlabStatusRequest): Promise<GlabStatus> {
@@ -7743,6 +8938,11 @@ class DesktopAppServerService {
             instanceLabel: pin.instanceLabel,
           }]);
         }
+        // Nesting unpins, as a local thread's link does. This viewer's own
+        // rank would otherwise bring the row back to its pins on refresh.
+        if (pin?.localPinnedRank && response.parentThreadId) {
+          await this.getOverlayStore().setRemoteThreadLocalPin({ ref: pin.ref, pinned: false });
+        }
       } catch (error) {
         // The relationship mutation already committed on the owner. Keep that
         // success authoritative even if this viewer's cached pin cannot patch.
@@ -7816,7 +9016,9 @@ class DesktopAppServerService {
         .remoteBackend(federationTarget)
         .updateSubthreadOrder(ownerRequest);
     }
-    const response = await updateLocalSubthreadOrder(request);
+    const response = await updateLocalSubthreadOrder(request, {
+      peers: getDesktopFederationRuntime().peerChildSource(),
+    });
     logDebug("updateSubthreadOrder", {
       backend: response.backend,
       parentThreadId: request.parentThreadId,
@@ -8009,6 +9211,150 @@ class DesktopAppServerService {
       directoryKey: request.directoryKey,
       collapsed,
     };
+  }
+
+  /**
+   * Save a local Directories project's Forge Automation in one commit, then
+   * apply it: repairs the project no longer allows are cancelled, and a
+   * resume re-checks its PRs and PR prerequisites at once. Polling follows
+   * on its next tick, since every tick reads the index.
+   */
+  async setProjectForgeAutomation(
+    request: SetProjectForgeAutomationRequest,
+  ): Promise<SetProjectForgeAutomationResponse> {
+    const directoryKey = readProjectForgeDirectoryKey(request);
+    if (!request.automation || typeof request.automation !== "object") {
+      throw new Error("Forge Automation settings are required.");
+    }
+    const owner = remoteProjectForgeOwner(request);
+    if (owner) {
+      return await owner.setProjectForgeAutomation({
+        directoryKey,
+        automation: resolveProjectForgeAutomation(request.automation),
+      });
+    }
+    const index = getProjectForgeAutomationIndex();
+    const previous = index.get(directoryKey);
+    const overlay = await this.getOverlayStore().setDirectoryForgeAutomation({
+      directoryKey,
+      automation: resolveProjectForgeAutomation(request.automation),
+      now: Date.now(),
+    });
+    const automation = resolveProjectForgeAutomation(overlay.forgeAutomation);
+    const stored = isDefaultProjectForgeAutomation(automation) ? undefined : automation;
+    index.set(directoryKey, stored ?? null);
+
+    logDebug("setProjectForgeAutomation", {
+      directoryKey,
+      paused: automation.paused,
+      autoFixMergeConflicts: automation.autoFixMergeConflicts,
+      autoFixCiFailures: automation.autoFixCiFailures,
+      prWatches: automation.prWatches,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "directory/forgeAutomation/updated",
+        params: { directoryKey, automation: stored ?? null },
+      },
+    });
+    await this.applyProjectForgeAutomationChange(directoryKey, previous, stored)
+      .catch((error: unknown) => {
+        appServerLog.warn("failed to apply project Forge Automation", {
+          directoryKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    return { directoryKey, automation };
+  }
+
+  /** Wake-ups the project's paused threads hold, for the resume dialog. */
+  async listProjectHeldWakeups(
+    request: ListProjectHeldWakeupsRequest,
+  ): Promise<ListProjectHeldWakeupsResponse> {
+    const directoryKey = readProjectForgeDirectoryKey(request);
+    const owner = remoteProjectForgeOwner(request);
+    if (owner) return await owner.listProjectHeldWakeups({ directoryKey });
+    return {
+      directoryKey,
+      wakeups: getDesktopBackendRegistry().listProjectHeldWakeups(directoryKey),
+    };
+  }
+
+  /** Send or discard held wake-ups; an operator action, allowed while paused. */
+  async resolveProjectHeldWakeups(
+    request: ResolveProjectHeldWakeupsRequest,
+  ): Promise<ResolveProjectHeldWakeupsResponse> {
+    const directoryKey = readProjectForgeDirectoryKey(request);
+    assertProjectHeldWakeupResolutions(request.resolutions);
+    const owner = remoteProjectForgeOwner(request);
+    if (owner) {
+      return await owner.resolveProjectHeldWakeups({
+        directoryKey,
+        resolutions: request.resolutions,
+      });
+    }
+    return await getDesktopBackendRegistry().resolveProjectHeldWakeups({
+      directoryKey,
+      resolutions: request.resolutions,
+    });
+  }
+
+  /** Threads filed under a project: the last scan's, plus any newer ones. */
+  private projectThreadKeys(directoryKey: string): string[] {
+    const index = getProjectForgeAutomationIndex();
+    const threadKeys = new Set(index.threadKeysForDirectory(directoryKey));
+    for (const threadKey of this.attachedPrsByThreadKey.keys()) {
+      if (threadKeys.has(threadKey)) continue;
+      const identity = parseThreadIdentityKey(threadKey);
+      if (identity && index.directoryKeyForThread(
+        identity,
+        () => getDesktopBackendRegistry().getCachedThreadSummary(identity),
+      ) === directoryKey) {
+        threadKeys.add(threadKey);
+      }
+    }
+    return [...threadKeys];
+  }
+
+  private async applyProjectForgeAutomationChange(
+    directoryKey: string,
+    previous: ProjectForgeAutomation | undefined,
+    next: ProjectForgeAutomation | undefined,
+  ): Promise<void> {
+    const threadKeys = this.projectThreadKeys(directoryKey);
+    if (threadKeys.length === 0) return;
+    const narrowsAutoFix = Boolean(next)
+      && (!projectAllowsAutoFixKind(next, "merge-conflict") || !projectAllowsAutoFixKind(next, "ci-failure"));
+    if (narrowsAutoFix && getAppStateMode()) {
+      const coordinator = this.getPrAutoDispatchCoordinator();
+      for (const threadKey of threadKeys) {
+        const identity = parseThreadIdentityKey(threadKey);
+        if (identity) await coordinator.cancelPendingDisallowedByProject(identity);
+      }
+    }
+    const resumedPolling = !projectAllowsForgePolling(previous) && projectAllowsForgePolling(next);
+    if (resumedPolling) {
+      // Thaw and poll the project's PRs now rather than on their next slot.
+      // Nothing missed while paused is replayed: only current status counts.
+      this.prPollingScheduler?.noteThreadInteraction(threadKeys);
+      void this.prPollingScheduler?.tick().catch((error: unknown) => {
+        appServerLog.debug("resume PR poll failed", {
+          directoryKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+    if (!projectAllowsPrWatches(previous) && projectAllowsPrWatches(next) && getAppStateMode()) {
+      await this.getThreadDependencyCoordinator().handlePrEvent();
+      // A merge or close seen while watches were held left its watch
+      // pending, and the poller no longer fetches a terminal PR. Re-offer it.
+      for (const threadKey of threadKeys) {
+        const identity = parseThreadIdentityKey(threadKey);
+        if (identity) await this.retryPendingPrTerminalWatches(identity);
+      }
+    }
   }
 
   async ensureDirectoryLaunchpad(
@@ -8533,6 +9879,12 @@ class DesktopAppServerService {
     this.pendingThreadPullRequestRefreshes.clear();
     this.pendingEditCommitResolves.clear();
     this.prStatusRegistry.clear();
+    this.prRepositoryAliases.clear();
+    this.prRepositoryAliasGeneration = 0;
+    this.prWatchKeysGeneration = 0;
+    this.prWatchKeySync = Promise.resolve();
+    this.prRenameRetryQueued = false;
+    this.prReferenceResolutions.clear();
     this.lastPrObservationTimestamp = 0;
     this.prLookupRegistry.clear();
     this.pendingPrLookupRefreshes.clear();
@@ -8583,6 +9935,8 @@ class DesktopAppServerService {
         getBudgetConfig: () => this.prAutoDispatchBudgetConfig,
         onActivity: (event) => this.prActivity.record(event),
         getCurrentPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
+        allowsEventKind: (identity, kind) =>
+          projectAllowsAutoFixKind(this.threadForgeAutomation(identity), kind),
         refreshPendingPrs: async (pending) =>
           await this.refreshPendingPrAutoDispatches(pending),
         isPrAttached: ({ backend, threadId, prKey }) =>
@@ -8610,6 +9964,8 @@ class DesktopAppServerService {
         store: this.getOverlayStore(),
         registry: getDesktopBackendRegistry(),
         isBackgroundPollingEnabled: () => this.backgroundPrPollingEnabled,
+        allowsWatchDispatch: (watch) =>
+          projectAllowsPrWatches(this.threadForgeAutomation(watch)),
         fetchTerminalDetails: async (pr) =>
           await this.getPrFetcher().fetchPullRequestTerminalDetails(pr),
         prepareTerminalWake: async ({ watch }) => {
@@ -8625,6 +9981,8 @@ class DesktopAppServerService {
           }
           return formatSandboxCleanupLines(report);
         },
+        onWatchesChanged: async (threads) => await this.publishPrWatchesUpdated(threads),
+        prepareClaims: async () => await this.syncPrStatusWatchKeys(),
       });
     }
     return this.prStatusWatchCoordinator;
@@ -8642,10 +10000,17 @@ class DesktopAppServerService {
           publish: (todo) => getThreadTodoService().publish(todo),
         },
         readThread: (condition) => this.readDependencyThread(condition),
-        submit: (request) => getDesktopBackendRegistry().submitTurnIfIdle(request),
+        canonicalizePrUrl: (url) => this.prRepositoryAliases.canonicalizeUrl(url),
+        resolvePrUrl: async (url) => await this.resolveCurrentPullRequestUrl(url),
+        submit: async (request) => await this.submitDependencyWakeup(request),
         isConsumerBusy: (dependency) => Boolean(getDesktopBackendRegistry().getActiveTurnForThread(dependency)),
+        // PR conditions also wait while the consumer's project holds PR
+        // watches. A paused project's turn-only wake is held or discarded
+        // in submit, by its wake-up policy.
         canDispatch: (dependency) => this.ownerNavigationActive
-          && (dependency.conditions.every((condition) => condition.when === "turn_completed") || this.backgroundPrPollingEnabled),
+          && (dependency.conditions.every((condition) => condition.when === "turn_completed")
+            || (this.backgroundPrPollingEnabled
+              && projectAllowsPrWatches(this.threadForgeAutomation(dependency)))),
         changed: async (dependency) => {
           // Prerequisite threads list their dependents, so they refresh too.
           const targets = new Map<string, { backend: AppServerBackendKind; threadId: string }>();
@@ -8662,6 +10027,38 @@ class DesktopAppServerService {
       });
     }
     return this.threadDependencyCoordinator;
+  }
+
+  /**
+   * A dependency's wake. When the consumer's project is paused, its wake-up
+   * policy holds it as a project-held message or discards it with a note;
+   * the dependency counts as delivered either way.
+   */
+  private async submitDependencyWakeup(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: { type: "text"; text: string }[];
+    origin: "automation";
+    messageOrigin: import("@pwragent/shared").AppServerThreadMessageOrigin;
+  }): Promise<{ status: "started" | "busy" | "held" | "discarded"; turnId?: string }> {
+    const registry = getDesktopBackendRegistry();
+    const project = this.resolveThreadForgeProject(request);
+    // A lock already holds every source, so it wins: the dependency waits
+    // for unlock exactly as it does in an active project.
+    if (!project?.automation.paused || await registry.isThreadLocked(request)) {
+      return await registry.submitTurnIfIdle(request);
+    }
+    // The prompt's first evidence line names the prerequisite that fired.
+    const evidence = (request.input[0]?.text ?? "").split("\n")
+      .find((line) => line.startsWith("- "))?.slice(2);
+    const delivered = await registry.deliverProjectPausedWakeup({
+      ...request,
+      project,
+      queueEntryId: `dependency:${request.messageOrigin.dependencyId ?? randomUUID()}`,
+      source: "dependency",
+      summary: summarizeProjectHeldWakeup(`Continue After: ${evidence ?? "prerequisites met"}`),
+    });
+    return { status: delivered.status === "discarded" ? "discarded" : "held" };
   }
 
   private async readDependencyThread(condition: Pick<ThreadDependencyCondition, "backend" | "threadId"> & Partial<ThreadDependencyCondition>): Promise<DependencyThreadSnapshot> {
@@ -8731,6 +10128,34 @@ class DesktopAppServerService {
     return await this.getThreadDependencyCoordinator().manage({ ...request, backend: request.backend, threadId: request.threadId.trim() }, provenance);
   }
 
+  /**
+   * An agent's PR prerequisite is stored while the waiting thread's project
+   * holds PR watches, and `canDispatch` keeps it waiting until they return.
+   * The agent is told why. Turn prerequisites need no notice: their wake is
+   * held or discarded by the project's wake-up policy.
+   */
+  dependencyProjectNotice(request: ManageThreadDependenciesRequest): string | undefined {
+    if (
+      request?.action !== "create"
+      || !request.conditions?.some((condition) => condition?.when !== "turn_completed")
+      || typeof request.backend !== "string"
+      || !isAppServerBackendKind(request.backend)
+      || typeof request.threadId !== "string"
+      || !request.threadId.trim()
+    ) {
+      return undefined;
+    }
+    const project = this.resolveThreadForgeProject({
+      backend: request.backend,
+      threadId: request.threadId.trim(),
+    });
+    if (!project || projectAllowsPrWatches(project.automation)) return undefined;
+    return buildProjectPrDependencyNotice({
+      projectLabel: project.label,
+      paused: project.automation.paused,
+    });
+  }
+
   async reconcileThreadDependencies(): Promise<void> {
     if (!getAppStateMode()) return;
     await this.getThreadDependencyCoordinator().reconcile();
@@ -8775,6 +10200,7 @@ class DesktopAppServerService {
     thread?: { backend: AppServerBackendKind; threadId: string },
   ): Promise<void> {
     if (!this.backgroundPrPollingEnabled) return;
+    await this.syncPrStatusWatchKeys();
     const prKeys = await this.getOverlayStore()
       .listPendingPrTerminalWatchPrKeys(thread ?? {});
     if (prKeys.length === 0) return;
@@ -8864,12 +10290,18 @@ async function resolvePrimaryThreadRepoKey(
   >,
   resolutionByPath = new Map<string, Promise<string | undefined>>(),
 ): Promise<string | undefined> {
-  const origin = thread.gitOriginUrl
+  // A workspace move (move_thread_workspace) is the thread's primary
+  // workspace. The provider's origin describes the checkout the session
+  // started in, which can be another project after a to-project move.
+  const movedWorkspace = thread.linkedDirectories.findLast(
+    isWorkspaceHandoffDirectory,
+  );
+  const origin = !movedWorkspace && thread.gitOriginUrl
     ? parseForgeRemote(thread.gitOriginUrl)
     : undefined;
   if (origin) return buildPrRepositoryKey(origin.host, origin.owner, origin.repo);
 
-  const primaryDirectory = thread.linkedDirectories[0];
+  const primaryDirectory = movedWorkspace ?? thread.linkedDirectories[0];
   const primaryPath = primaryDirectory
     ? resolvePullRequestDirectoryPath(primaryDirectory)
     : undefined;
@@ -9032,7 +10464,17 @@ async function withNavigationConsumer<T>(event: IpcMainInvokeEvent, consumerId: 
   }
 }
 /** Internal owner service; legacy materialization is retained only for unit regression coverage. */
-export const appServerService = new DesktopAppServerService();
+export let appServerService = new DesktopAppServerService();
+
+/**
+ * Test seam: swap in a fresh owner service so no test sees PR registries,
+ * caches or budgets an earlier test left behind. Run
+ * `disposeAppServerIpcHandlers` first; it closes the outgoing instance.
+ * Importers read the live binding, so the IPC handlers use the new instance.
+ */
+export function resetAppServerServiceForTests(): void {
+  appServerService = new DesktopAppServerService();
+}
 
 export async function startAppServerOwnerNavigation(): Promise<void> {
   await appServerService.startOwnerNavigation();
@@ -9101,10 +10543,16 @@ export function registerAppServerIpcHandlers(): void {
   }));
   getDesktopBackendRegistry().setForgePrToolHandler(
     async (operation, args, context) => await appServerService.runForgePrToolForAgent(operation, args, context),
-    async (args, context) => await appServerService.resolveForgePrRepositoryForAgent(args, context),
+    async (operation, args, context) => await appServerService.prepareForgePrToolForAgent(operation, args, context),
   );
   getDesktopBackendRegistry().setForgeToolPolicyResolver(
     () => getDesktopSettingsService().resolveForgeAgentToolPolicy(),
+  );
+  getDesktopBackendRegistry().setForgeToolRuleWriter(
+    async (update) => await getDesktopSettingsService().upsertForgeAgentToolRule(update),
+  );
+  getDesktopBackendRegistry().setForgeProjectLabelResolver(
+    async (repository) => forgeRuleProjectLabel(await readLocalNavigationDirectoryIndex(), repository),
   );
   getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(
     async (args, context) =>
@@ -9114,6 +10562,9 @@ export function registerAppServerIpcHandlers(): void {
     async (prs) =>
       await appServerService.canonicalizeStoredPullRequests(prs),
   );
+  getDesktopBackendRegistry().setPullRequestReferenceResolver(
+    async (params) => await appServerService.resolvePullRequestReference(params),
+  );
   getDesktopBackendRegistry().setThreadPrimaryGitRepositoryReader((backend, threadId) =>
     appServerService.readPrimaryGitRepository(backend, threadId)
   );
@@ -9122,7 +10573,9 @@ export function registerAppServerIpcHandlers(): void {
   );
   getDesktopBackendRegistry().setThreadDependencyToolHandler(async (request, provenance) => {
     try {
-      return { ok: true, data: { threadDependencies: await appServerService.manageThreadDependencies(request, provenance) } };
+      const threadDependencies = await appServerService.manageThreadDependencies(request, provenance);
+      const projectNotice = appServerService.dependencyProjectNotice(request);
+      return { ok: true, data: { threadDependencies, ...(projectNotice ? { projectNotice } : {}) } };
     } catch (error) {
       return { ok: false, error: { code: "invalid_arguments", message: error instanceof Error ? error.message : String(error) } };
     }
@@ -9132,6 +10585,35 @@ export function registerAppServerIpcHandlers(): void {
     if (isFederationWindowWebContents(event.sender)) throw new Error("Thread dependencies currently require a local window.");
     if (request?.action === "active") return appServerService.listActiveThreadDependencies();
     return await appServerService.manageThreadDependencies(request);
+  });
+  ipcMain.removeHandler(THREAD_PR_WATCHES_CHANNEL);
+  ipcMain.handle(THREAD_PR_WATCHES_CHANNEL, async (event, request: ThreadPrWatchesRequest): Promise<ThreadPrWatchesResponse> => {
+    // A peer's thread is managed on its owner, from any window.
+    const remoteTarget = readThreadPrWatchesRemoteTarget(request);
+    if (remoteTarget && request.action !== "active") {
+      return await manageRemoteThreadPrWatches(request, remoteTarget, getDesktopFederationRuntime());
+    }
+    if (isFederationWindowWebContents(event.sender)) {
+      return {
+        ok: false,
+        error: {
+          code: "federation_unsupported",
+          message: "PR watches are listed and stopped in a local window of the instance that owns the thread.",
+        },
+      };
+    }
+    return await appServerService.manageThreadPrWatches(request);
+  });
+  getDesktopBackendRegistry().setThreadPrWatchesPeerHandler(async (request) => {
+    // Envelope params are the viewer's; only the named fields reach the store.
+    const owned = readFederationThreadPrWatchesRequest(request);
+    if (!owned) {
+      return {
+        ok: false,
+        error: { code: "invalid_arguments", message: "backend, threadId and the action's argument are required." },
+      };
+    }
+    return await appServerService.manageThreadPrWatches(owned);
   });
   getDesktopBackendRegistry().setThreadPullRequestWatchToolHandler(
     async (args) => await appServerService.watchThreadPullRequestForTool(args),
@@ -9146,6 +10628,20 @@ export function registerAppServerIpcHandlers(): void {
     async (request) =>
       await appServerService.refreshOwnedThreadPullRequests(request),
   );
+  // A peer's requests name no target, so the service answers them here.
+  getDesktopBackendRegistry().setProjectForgeAutomationHandler({
+    set: async (request) => await appServerService.setProjectForgeAutomation({
+      directoryKey: request.directoryKey,
+      automation: request.automation,
+    }),
+    listHeldWakeups: async (request) => await appServerService.listProjectHeldWakeups({
+      directoryKey: request.directoryKey,
+    }),
+    resolveHeldWakeups: async (request) => await appServerService.resolveProjectHeldWakeups({
+      directoryKey: request.directoryKey,
+      resolutions: request.resolutions,
+    }),
+  });
   getDesktopBackendRegistry().setThreadGitWorkingStateRefreshHandler(
     async (request) =>
       await appServerService.refreshThreadGitWorkingState(request),
@@ -9868,6 +11364,42 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.setDirectoryThreadsCollapsed(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL,
+    async (
+      event,
+      request: SetProjectForgeAutomationRequest,
+    ): Promise<SetProjectForgeAutomationResponse> => {
+      return await appServerService.setProjectForgeAutomation(
+        withProjectForgeWindowOwner(event, request),
+      );
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL,
+    async (
+      event,
+      request: ListProjectHeldWakeupsRequest,
+    ): Promise<ListProjectHeldWakeupsResponse> => {
+      return await appServerService.listProjectHeldWakeups(
+        withProjectForgeWindowOwner(event, request),
+      );
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_RESOLVE_PROJECT_HELD_WAKEUPS_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_RESOLVE_PROJECT_HELD_WAKEUPS_CHANNEL,
+    async (
+      event,
+      request: ResolveProjectHeldWakeupsRequest,
+    ): Promise<ResolveProjectHeldWakeupsResponse> => {
+      return await appServerService.resolveProjectHeldWakeups(
+        withProjectForgeWindowOwner(event, request),
+      );
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
   ipcMain.handle(
     NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
@@ -10401,6 +11933,7 @@ export function registerAppServerIpcHandlers(): void {
 export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL);
   ipcMain.removeHandler(THREAD_DEPENDENCIES_CHANNEL);
+  ipcMain.removeHandler(THREAD_PR_WATCHES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL);
   await navigationAttentionViewLeases.dispose();
@@ -10492,13 +12025,16 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   registry?.setThreadDependencyToolHandler(undefined);
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);
+  registry?.setPullRequestReferenceResolver(undefined);
   registry?.setThreadPrimaryGitRepositoryReader(undefined);
   registry?.setLocalPullRequestAuthorityResolver(undefined);
   registry?.setThreadPullRequestWatchToolHandler(undefined);
   registry?.setDirectoryGitStatusWriter(undefined);
   registry?.setThreadPrAutoDispatchHandler(undefined);
   registry?.setThreadPullRequestDetachHandler(undefined);
+  registry?.setThreadPrWatchesPeerHandler(undefined);
   registry?.setThreadPullRequestRefreshHandler(undefined);
+  registry?.setProjectForgeAutomationHandler(undefined);
   await appServerService.close();
 }
 

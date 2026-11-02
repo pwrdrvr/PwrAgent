@@ -63,6 +63,7 @@ import type { ProjectRevealRequest } from "./features/navigation/DirectoriesList
 import { isSubthreadLaunchpadDraft } from "./features/navigation/StartingThreadRow";
 import { SidebarResizeHandle } from "./features/navigation/SidebarResizeHandle";
 import { useThreadJump } from "./features/navigation/useThreadJump";
+import { useLensHotkeys } from "./features/navigation/useLensHotkeys";
 import { revealSelectedSidebarThreadRow } from "./features/navigation/reveal-selected-thread-row";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
 import { buildFederationThreadTargets } from "./features/chrome/federation-thread-targets";
@@ -80,6 +81,12 @@ import {
   useThreadDependencyIndicators,
 } from "./features/thread-dependencies/useThreadDependencyIndicators";
 import {
+  buildWatchCiRequestText,
+  ThreadPrWatchIndicatorsContext,
+  useThreadPrWatchIndicators,
+  type PrWatchStopTarget,
+} from "./features/pr-watches/useThreadPrWatchIndicators";
+import {
   ThreadProvidersContext,
   useStableThreadProviders,
 } from "./features/navigation/provider-chip-visibility";
@@ -95,6 +102,7 @@ import { useHistoryNavHotkeys } from "./features/chrome/useHistoryNavHotkeys";
 import { useLayoutChordHotkeys } from "./features/chrome/useLayoutChordHotkeys";
 import type { SettingsSection } from "./features/settings/SettingsScreen";
 import { encodeEnvironmentsRoute } from "./features/settings/environments-route";
+import { encodeForgeRulesRoute } from "./features/settings/forge-rules-route";
 import { checkForManagedCodexUpdates, refreshManagedCodexModelCatalog } from "./features/settings/managed-codex-actions";
 import type { ConfirmSettingsLeave } from "./features/settings/UnsavedSettingsChanges";
 import {
@@ -122,10 +130,12 @@ import {
 import { ThreadPlaceholderHeader } from "./features/thread-detail/ThreadPlaceholderHeader";
 import { handoffLaunchpadComposer } from "./features/composer/launchpad-composer-handoff";
 import { hasComposerDraftContent } from "./features/composer/useComposerDraftStore";
+import { usePendingComposerInsert } from "./features/composer/usePendingComposerInsert";
 import { useRecoverableState, useRecoverableComposerDraftStore } from "./lib/RendererRecoveryState";
 import { readBootstrapLayoutPreferences } from "./lib/layout-preferences";
 import { useAppearance, type AppearanceController } from "./lib/useAppearance";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
+import { useSidebarOwnerBackends } from "./lib/useSidebarOwnerBackends";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useDesktopApplications } from "./lib/useDesktopApplications";
 import { useEventCallback } from "./lib/useEventCallback";
@@ -816,6 +826,27 @@ function DesktopAppShell(props: {
       liveFederationHealth,
     ],
   );
+  // A peer window offers its projects' Forge Automation only when the peer
+  // can store and enforce it, and lets this machine control its turns.
+  const federationOwnerForgeAutomation = useMemo(() => {
+    const ownerId = readRendererFederationTarget()?.instanceId;
+    const capabilities = ownerId === undefined
+      ? undefined
+      : liveFederationHealth?.peers.find((peer) => peer.id === ownerId)?.capabilities;
+    return capabilities?.includes("project_forge_automation") === true
+      && capabilities.includes("turn_control");
+  }, [liveFederationHealth]);
+  // This instance's windows offer the same items on a placeholder row
+  // standing for a connected peer's project, under the same rule.
+  const peerForgeAutomationInstanceIds = useMemo(() => new Set(
+    readRendererFederationTarget()
+      ? []
+      : (liveFederationHealth?.peers ?? [])
+        .filter((peer) => peer.status === "connected"
+          && peer.capabilities?.includes("project_forge_automation") === true
+          && peer.capabilities.includes("turn_control"))
+        .map((peer) => peer.id),
+  ), [liveFederationHealth]);
   // Every known machine, the window's owner included, for naming one.
   const federationMachines = useMemo(
     () => buildFederationThreadTargets(liveFederationHealth),
@@ -1975,6 +2006,9 @@ function DesktopAppShell(props: {
   // thread menu reports the thread it was opened on, without selecting it.
   const copyThreadDiagnosticsInfo = useEventCallback(
     (thread: NavigationThreadSummary | undefined): void => {
+      const pending = thread ? undefined : navigation.pendingLaunchpadCreations.find(
+        (creation) => creation.selectionKey === navigation.selectedItemKey,
+      );
       const metadataPromise = desktopApi?.readAppMetadata?.();
       if (!metadataPromise) {
         return;
@@ -2004,6 +2038,17 @@ function DesktopAppShell(props: {
                   federationWindowTarget: readRendererFederationTarget(),
                 }
               : {
+                  backend: pending?.launchpad.backend,
+                  projectPath: pending?.startup?.cwd ?? pending?.setupProgress?.cwd ?? pending?.launchpad.directoryPath,
+                  title: pending?.title,
+                  startup: pending ? {
+                    ...pending.startup,
+                    operationId: pending.operationId,
+                    submittedAt: pending.submittedAt,
+                    directoryKey: pending.directoryKey,
+                    setupProgress: pending.startup?.setupProgress,
+                    targetInstanceId: pending.target?.scope === "remote" ? pending.target.instanceId : federationHealth?.instanceId,
+                  } : undefined,
                   federationHealth,
                   federationWindowLabel: readRendererFederationLabel(),
                   federationWindowTarget: readRendererFederationTarget(),
@@ -2149,11 +2194,29 @@ function DesktopAppShell(props: {
           .repeatedLargeOutputMinimumPercent,
     );
   }, [settings.snapshot?.general.toolOutputAlerts]);
-  const backendSummaries = useBackendSummaries(desktopApi, {
+  // The sidebar belongs to the window's navigation owner even when its
+  // selected transcript belongs to a peer. A peer's provider catalog must
+  // not remove management actions from this window's local thread rows.
+  const windowFederationTarget = useMemo(() => readRendererFederationTarget(), []);
+  const windowBackendSummaries = useBackendSummaries(desktopApi, {
     enabled: normalAppEnabled,
+    federationTarget: windowFederationTarget,
+    suspended: Boolean(windowFederationTarget && remoteReadsSuspended),
+    pollRateLimits: !sidebarHidden,
+  });
+  const selectedPeerCatalog = !federationTargetsEqual(activeFederationTarget, windowFederationTarget);
+  const selectedPeerBackendSummaries = useBackendSummaries(desktopApi, {
+    enabled: normalAppEnabled && selectedPeerCatalog,
     federationTarget: activeFederationTarget,
     suspended: remoteReadsSuspended,
     pollRateLimits: !sidebarHidden,
+  });
+  const backendSummaries = selectedPeerCatalog
+    ? selectedPeerBackendSummaries
+    : windowBackendSummaries;
+  const remoteSidebarBackends = useSidebarOwnerBackends(desktopApi, navigation.threads, {
+    enabled: normalAppEnabled,
+    windowInstanceId: windowFederationTarget?.instanceId,
   });
   const startupBackend = useMemo(
     () => resolveNewThreadBackend(backendSummaries.backends),
@@ -2404,6 +2467,11 @@ function DesktopAppShell(props: {
     restore: restoreHistoryLocation,
   });
   useHistoryNavHotkeys({ onBack: history.goBack, onForward: history.goForward });
+  useLensHotkeys({
+    browseMode: navigation.browseMode,
+    onBrowseModeChange: navigation.setBrowseMode,
+    threadLensesEmpty: navigation.threadLensesEmpty,
+  });
   // ⌘⇧F / ⌃⇧F opens the global thread search screen; ⌘F is the focus-sensitive
   // context find; ⌘K always lands on the thread-list quick search.
   useFindHotkeys({
@@ -2679,6 +2747,8 @@ function DesktopAppShell(props: {
       availability: target.availability,
       dispatchTarget: liveFederationHealth?.peers.find((peer) => peer.id === target.instanceId)
         ?.capabilities.includes("thread_todo_dispatch_target") === true,
+      messageTarget: liveFederationHealth?.peers.find((peer) => peer.id === target.instanceId)
+        ?.capabilities.includes("thread_todo_message") === true,
     })),
     [federationMachines, liveFederationHealth],
   );
@@ -2808,6 +2878,7 @@ function DesktopAppShell(props: {
       run: (todo, options) => {
         if (
           todo.action?.type !== "start_thread"
+          || options?.messageTarget !== undefined
           || todo.action.executionMode !== "full-access"
         ) {
           return threadTodoController.runAction(todo.id, options);
@@ -3224,6 +3295,118 @@ function DesktopAppShell(props: {
         : {}),
     }),
     [threadDependencyIndicators, canContinueAfter],
+  );
+  // PR watches that wake threads. A federation window lists none of this
+  // instance's. A peer's thread is stopped and armed on its owner, where
+  // `canManageThreadPrWatches` says the owner accepts it.
+  const threadPrWatchIndicators = useThreadPrWatchIndicators(desktopApi);
+  const canManagePrWatches = Boolean(desktopApi?.manageThreadPrWatches);
+  const canAskAgentToWatchCi = canManagePrWatches && !readRendererFederationTarget();
+  const stopPrWatch = useEventCallback(async (
+    watch: PrWatchStopTarget,
+    thread?: Pick<NavigationThreadSummary, "federation">,
+  ) => {
+    const failed = (message: string) => showAppNotice({
+      id: `pr-watch-stop:${watch.watchId}`,
+      title: "The watch is still running",
+      message,
+    });
+    try {
+      const federationTarget = thread?.federation?.ref.target;
+      const response = await desktopApi?.manageThreadPrWatches?.({
+        action: "cancel",
+        backend: watch.backend,
+        threadId: watch.threadId,
+        ...(federationTarget ? { federationTarget } : {}),
+        watchId: watch.watchId,
+      });
+      // The list refreshes from `thread/prWatches/updated`.
+      if (response && !response.ok) {
+        // The watch ended, or is waking its thread, before the click landed.
+        if (response.error.code === "not_found") {
+          showAppNotice({
+            id: `pr-watch-stop:${watch.watchId}`,
+            title: "The watch already ended",
+            message: response.error.message,
+          });
+        } else {
+          failed(response.error.message);
+        }
+      }
+    } catch (error) {
+      failed(error instanceof Error ? error.message : String(error));
+    }
+  });
+  // Watch CI arms the watch in main, as the agent tool would. The list
+  // refreshes from `thread/prWatches/updated`; only a wait that did not
+  // start is worth a notice.
+  const watchPrCi = useEventCallback(async (thread: NavigationThreadSummary, pr: PrSummary) => {
+    const id = `pr-watch-ci:${threadSummaryIdentityKey(thread)}:${pr.url}`;
+    try {
+      const federationTarget = thread.federation?.ref.target;
+      const response = await desktopApi?.manageThreadPrWatches?.({
+        action: "watch",
+        backend: thread.source,
+        threadId: thread.id,
+        ...(federationTarget ? { federationTarget } : {}),
+        prUrl: pr.url,
+      });
+      if (!response) return;
+      if (!response.ok) {
+        showAppNotice({ id, title: "Couldn't watch CI", message: response.error.message });
+      } else if (response.watch && !response.watch.armed) {
+        showAppNotice({ id, title: "Not waiting for CI", message: response.watch.message });
+      }
+    } catch (error) {
+      showAppNotice({
+        id,
+        title: "Couldn't watch CI",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+  // "Ask Agent to Watch CI" drafts into the thread's composer and never
+  // sends. It first shows the thread; the composer takes the request once
+  // it shows that thread. Showing anything else drops it, so it never lands
+  // in a draft the operator comes back to later.
+  const {
+    request: composerInsertRequest,
+    issue: issueComposerInsertRequest,
+    handled: handleComposerInsertRequestHandled,
+  } = usePendingComposerInsert(mainView === "thread" ? navigation.selectedItemKey : undefined);
+  const askAgentToWatchCi = useEventCallback((thread: NavigationThreadSummary, pr: PrSummary) => {
+    const threadKey = threadSummaryIdentityKey(thread);
+    // Issued with the switch, not before it: Settings may ask to keep
+    // editing, and then nothing waits.
+    setMainView("thread", () => {
+      issueComposerInsertRequest(threadKey, buildWatchCiRequestText(pr));
+      if (navigation.selectedItemKey !== threadKey) {
+        selectThreadNavigation(thread);
+      }
+    });
+  });
+  // Auto-fix rows claim a wake only where main can dispatch one. Until the
+  // settings load, or in a federation window, this is unknown.
+  const prAutoFixAvailable = settings.snapshot && !readRendererFederationTarget()
+    ? (settings.snapshot.git?.backgroundPrPolling?.value ?? DEFAULT_BACKGROUND_PR_POLLING)
+      && (settings.snapshot.git?.prAutoDispatchAllowed?.value ?? DEFAULT_PR_AUTO_DISPATCH_ALLOWED)
+    : undefined;
+  const threadPrWatchContext = useMemo(
+    () => ({
+      byThreadKey: threadPrWatchIndicators,
+      ...(prAutoFixAvailable !== undefined ? { autoFixAvailable: prAutoFixAvailable } : {}),
+      ...(canManagePrWatches ? { stop: stopPrWatch, watchCi: watchPrCi } : {}),
+      ...(canAskAgentToWatchCi ? { askAgentToWatchCi } : {}),
+    }),
+    [
+      threadPrWatchIndicators,
+      prAutoFixAvailable,
+      canManagePrWatches,
+      canAskAgentToWatchCi,
+      stopPrWatch,
+      watchPrCi,
+      askAgentToWatchCi,
+    ],
   );
   const threadHandoffTargets = useMemo(
     () =>
@@ -4021,6 +4204,8 @@ function DesktopAppShell(props: {
     launchpadCancelRequest,
     composerFocusRequest,
     onComposerFocusRequestHandled: handleComposerFocusRequestHandled,
+    composerInsertRequest,
+    onComposerInsertRequestHandled: handleComposerInsertRequestHandled,
     onDetachLaunchpadParent: handleDetachLaunchpadParent,
     onSelectLaunchpadParent: handleSelectLaunchpadParent,
     // The composer's 5th argument is `extraDirectoryPaths` (draft
@@ -4161,6 +4346,7 @@ function DesktopAppShell(props: {
     >
     <OperatorWaitsContext.Provider value={operatorWaitsContext}>
     <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
+    <ThreadPrWatchIndicatorsContext.Provider value={threadPrWatchContext}>
     <ThreadProvidersContext.Provider value={threadProviders}>
     <TranscriptLinkProvider
       localInstanceId={liveFederationHealth?.instanceId}
@@ -4234,8 +4420,9 @@ function DesktopAppShell(props: {
             navigation.detachSubthreadLaunchpad(draft.directoryKey);
           }}
           addingProjectDirectory={navigation.pickingDirectory}
-          backends={backendSummaries.backends}
-          onRefreshRateLimits={backendSummaries.refreshRateLimits}
+          backends={windowBackendSummaries.backends}
+          remoteBackends={remoteSidebarBackends}
+          onRefreshRateLimits={windowBackendSummaries.refreshRateLimits}
           browseMode={navigation.browseMode}
           pinnedThreadsOnTop={navigation.pinnedThreadsOnTop}
           pinnedGroupCollapsed={navigation.pinnedGroupCollapsed}
@@ -4435,8 +4622,20 @@ function DesktopAppShell(props: {
           onSetDirectoryThreadsCollapsed={
             navigation.setDirectoryThreadsCollapsed
           }
+          onSetProjectForgeAutomation={
+            desktopApi?.setProjectForgeAutomation
+              ? navigation.setProjectForgeAutomation
+              : undefined
+          }
+          onListProjectHeldWakeups={navigation.listProjectHeldWakeups}
+          onResolveProjectHeldWakeups={navigation.resolveProjectHeldWakeups}
+          federationOwnerForgeAutomation={federationOwnerForgeAutomation}
+          peerForgeAutomationInstanceIds={peerForgeAutomationInstanceIds}
           onRemoveDirectory={(directory) =>
             navigation.removeDirectory(directory.key)}
+          onOpenForgePermissions={readRendererFederationTarget()
+            ? undefined
+            : (repository) => openSettingsSection("git", encodeForgeRulesRoute(repository))}
           onPrefetchPullRequests={pullRequests.prefetch}
           onPrefetchGitWorkingState={gitWorkingState.prefetch}
           onDetachPullRequest={detachThreadPullRequest}
@@ -4797,6 +4996,7 @@ function DesktopAppShell(props: {
       {todoFullAccessRiskDialog}
     </TranscriptLinkProvider>
     </ThreadProvidersContext.Provider>
+    </ThreadPrWatchIndicatorsContext.Provider>
     </ThreadDependencyIndicatorsContext.Provider>
     </OperatorWaitsContext.Provider>
     </TodoDispatchProvider>

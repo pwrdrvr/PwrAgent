@@ -63,6 +63,11 @@ test("renders markdown edge cases without breaking transcript boundaries", async
     await expect(inlineCode.locator("code.transcript-message__code"))
       .toBeVisible();
 
+    // Navigate as a user so initial layout cannot keep following the bottom
+    // after hover's implicit scroll brings the earlier inline code into view.
+    await transcript.getByRole("list").press("Home");
+    await expect(inlineCode).toBeInViewport();
+
     const inlineCopyButton = inlineCode;
     await expect(inlineCopyButton).toHaveAccessibleName("Copy inline code");
     await expect

@@ -99,7 +99,7 @@ const REQUIRED: Partial<Record<ForgePrToolOperation, string[]>> = {
   get_issue: ["number"],
   list_issue_comments: ["number"],
   search_issues: ["query"],
-  create_pull_request: ["title"],
+  create_pull_request: ["title", "head"],
   update_pull_request: ["number"],
   add_issue_comment: ["number", "body"],
   reply_to_review_comment: ["number", "body"],

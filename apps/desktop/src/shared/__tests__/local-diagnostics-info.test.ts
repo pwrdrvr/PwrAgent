@@ -24,6 +24,20 @@ const metadata: AppMetadata = {
 };
 
 describe("local diagnostics info", () => {
+  it("identifies pending startup before a thread ID exists", () => {
+    const info = buildLocalThreadDiagnosticsInfo({
+      backend: "codex", title: "Submitted task", projectPath: "C:/work/repo",
+      startup: { operationId: "op-1", directoryKey: "repo", targetInstanceId: "owner-1", phase: "setup",
+        submittedAt: 1_000, startedAt: 2_000, cwd: "C:/work/tree" },
+    }, metadata);
+    expect(info).toContain("Startup operation ID: op-1");
+    expect(info).toContain("Startup target instance ID: owner-1");
+    expect(info).toContain("Provider/backend: codex");
+    expect(info).toContain("Thread title: Submitted task");
+    expect(info).toContain("Startup worktree path: C:/work/tree");
+    expect(info).toContain("Owner started at (UTC): 1970-01-01T00:00:02.000Z");
+    expect(info).toContain("Thread ID: Unavailable");
+  });
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-14T00:30:45.123-04:00"));

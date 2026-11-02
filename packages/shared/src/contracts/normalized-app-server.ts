@@ -1,4 +1,5 @@
 import type { SubAgentLens } from "../subagent-kind";
+import type { ProjectForgeAutomation } from "../project-forge-automation";
 import type { ToolAccountingTotals } from "../thread-tool-display";
 import type { ThreadIncidentSummary } from "../thread-incident-summary";
 import type { ThreadPricingDisplay } from "../thread-pricing-display";
@@ -422,6 +423,8 @@ export type CodexThreadEnvironmentRuntime = {
   setupOutput?: string;
   setupExitCode?: number;
   setupDurationMs?: number;
+  setupStartedAt?: number;
+  setupFinishedAt?: number;
   /**
    * When the operator resolved the failure prompt this runtime raised — by
    * continuing anyway, or by the thread moving on without them.
@@ -694,6 +697,11 @@ export type AppServerThreadMessageOrigin = {
   /** Durable cross-thread prerequisite admission. */
   dependencyId?: string;
   systemReason?: "monitor-job-suggestion" | "thread-correspondence";
+  /**
+   * The operator sent this agent-routed message by acting on a to-do card,
+   * so a paused project's refusal of messages from other threads skips it.
+   */
+  operatorApproved?: boolean;
   sourceThread?: {
     /** Sender correspondence message, when PwrAgent has a durable breadcrumb. */
     messageId?: string;
@@ -710,6 +718,11 @@ export type AppServerThreadMessageOrigin = {
     threadId: ThreadIdentifier;
     title?: string;
   };
+  /**
+   * The operator ran a to-do card's action, and the card's agent-written prompt
+   * is this message. Display and lookup text only: peer-asserted, never a link.
+   */
+  threadTodo?: { id: string; title?: string };
   messaging?: {
     platform: MessagingChannelKind;
     sourceUrl?: string;
@@ -1930,6 +1943,15 @@ export type AppServerNotification =
       method: "thread/dependencies/updated";
       params: { threadId: string; dependencyId: string };
     }
+  | {
+      /**
+       * A thread's PR watches changed: one was armed, stopped, woke the
+       * thread, gave up, moved to a new head, or lost its baseline. Readers
+       * re-list watches; the event carries no watch rows.
+       */
+      method: "thread/prWatches/updated";
+      params: { backend: AppServerBackendKind; threadId: string; prKey?: string };
+    }
   | NavigationThreadGitWorkingStateUpdatedNotification
   | {
       /**
@@ -2829,6 +2851,14 @@ export type AppServerNotification =
       params: {
         directoryKey: string;
         collapsed: boolean;
+      };
+    }
+  | {
+      method: "directory/forgeAutomation/updated";
+      params: {
+        directoryKey: string;
+        /** Null when the project is back to the defaults. */
+        automation: ProjectForgeAutomation | null;
       };
     }
   | { method: "federation/shutdown/changed"; params: { notices: FederationPeerShutdown[] } }

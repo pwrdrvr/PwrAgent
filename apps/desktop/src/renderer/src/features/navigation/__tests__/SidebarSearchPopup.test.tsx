@@ -8,6 +8,7 @@ import {
   type FederationJumpSearchRequest,
   type NavigationThreadSummary,
   type NavigationQueryPage,
+  type NavigationQueryRequest,
   type PrSummary,
 } from "@pwragent/shared";
 import { SidebarSearchPopup } from "../SidebarSearchPopup";
@@ -24,7 +25,7 @@ const readRendererFederationTarget = vi.fn<
   () => { scope: "remote"; instanceId: string } | undefined
 >(() => undefined);
 
-const getNavigationQueryPage = vi.fn<() => Promise<NavigationQueryPage>>();
+const getNavigationQueryPage = vi.fn<(request?: NavigationQueryRequest, consumerId?: string) => Promise<NavigationQueryPage>>();
 const releaseNavigationQuery = vi.fn(async () => undefined);
 const desktopApi = { jumpSearchRemoteThreads, getNavigationQueryPage, releaseNavigationQuery, platform: "darwin" };
 vi.mock("../../../lib/desktop-api", () => ({ getDesktopApi: () => desktopApi }));
@@ -86,6 +87,23 @@ function remoteThread(params: {
   } as NavigationThreadSummary;
 }
 
+function recentPage(threads: NavigationThreadSummary[]): NavigationQueryPage {
+  return {
+    protocol: 2, queryKey: "recent", generation: "generation", ownerEpoch: "owner",
+    countsRevision: "counts", counts: { total: threads.length, active: 0, unread: 0, review: 0 },
+    coverage: { state: "complete" }, complete: true,
+    entries: threads.map((thread, index) => ({
+      row: { ...thread, ref: { backend: thread.source, threadId: thread.id }, rowRevision: "revision",
+        ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" },
+      orderKey: String(index), placement: { kind: "root" },
+    })),
+  };
+}
+
+function resultTitles(): Array<string | null | undefined> {
+  return screen.queryAllByRole("option").map((row) => row.querySelector(".jump-palette__row-title")?.textContent);
+}
+
 async function settleRemoteSearch(): Promise<void> {
   await act(async () => {
     vi.advanceTimersByTime(250);
@@ -111,6 +129,179 @@ afterEach(() => {
 });
 
 describe("SidebarSearchPopup", () => {
+  it("immediately shows the ten latest active threads without floating pins", async () => {
+    getNavigationQueryPage.mockImplementation(() => new Promise(() => {}));
+    const threads = Array.from({ length: 12 }, (_, index) => localThread({
+      id: `thread-${index}`, title: `Thread ${index}`, updatedAt: 1_000 + index,
+      createdAt: 2_000 - index, ...(index === 0 ? { pinnedRank: "0" } : {}),
+    }));
+    render(<SidebarSearchPopup threads={[
+      threads[0]!, ...threads, localThread({ id: "undated" }),
+      localThread({ id: "archived", archivedAt: 5_000, updatedAt: 5_000 }),
+      localThread({ id: "worker", updatedAt: 6_000, codexNativeSubAgent: { parentThreadId: "parent" } }),
+    ]} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+
+    expect(resultTitles()).toEqual(Array.from({ length: 10 }, (_, index) => `Thread ${11 - index}`));
+    const input = screen.getByRole("textbox");
+    expect(input).toHaveFocus();
+    expect(document.getElementById(input.getAttribute("aria-controls")!)).toHaveAttribute("role", "listbox");
+    expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toHaveAttribute("aria-selected", "true");
+    await act(async () => {});
+    expect(jumpSearchRemoteThreads).not.toHaveBeenCalled();
+  });
+
+  it("loads recent threads outside the sidebar page and releases the query on close", async () => {
+    const offPage = localThread({ id: "off-page", title: "Latest off-page reply", updatedAt: 3_000 });
+    getNavigationQueryPage.mockResolvedValue(recentPage([offPage]));
+    const select = vi.fn();
+    const close = vi.fn();
+    const view = render(<SidebarSearchPopup threads={[localThread({ title: "Loaded older thread", updatedAt: 1_000 })]}
+      onJumpToThread={select} onClose={close} />);
+    await act(async () => {});
+
+    expect(getNavigationQueryPage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      inventory: "viewer", consumer: "search", pageSize: 10, query: { kind: "lens", lens: "inbox" },
+    }), expect.any(String));
+    expect(resultTitles()).toEqual([offPage.title]);
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ id: offPage.id }));
+    expect(close).toHaveBeenCalledOnce();
+    view.unmount();
+    expect(releaseNavigationQuery).toHaveBeenCalledWith(getNavigationQueryPage.mock.calls[0]![1]);
+  });
+
+  it("keeps distinct owners and providers, with stable timestamp ties and undated threads last", async () => {
+    getNavigationQueryPage.mockImplementation(() => new Promise(() => {}));
+    const peer = { ...remoteThread({ threadId: "shared", title: "Latest peer reply" }), updatedAt: 2_000 };
+    const selectRemote = vi.fn();
+    render(<SidebarSearchPopup threads={[
+      localThread({ id: "shared", title: "Codex reply", updatedAt: 1_000 }),
+      peer,
+      localThread({ id: "undated", title: "Undated thread" }),
+      localThread({ id: "shared", source: "claude", title: "Claude reply", updatedAt: 1_000 }),
+    ]} onJumpToThread={vi.fn()} onJumpToRemoteThread={selectRemote} onClose={vi.fn()} />);
+    expect(resultTitles()).toEqual(["Latest peer reply", "Claude reply", "Codex reply", "Undated thread"]);
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(selectRemote).toHaveBeenCalledWith(peer);
+    await act(async () => {});
+  });
+
+  it("wraps keyboard navigation through all ten recent threads and supports clicking", async () => {
+    const threads = Array.from({ length: 10 }, (_, index) => localThread({
+      id: `thread-${index}`, title: `Thread ${index}`, updatedAt: 2_000 - index,
+    }));
+    getNavigationQueryPage.mockResolvedValue(recentPage(threads));
+    const select = vi.fn();
+    render(<SidebarSearchPopup threads={[]} onJumpToThread={select} onClose={vi.fn()} />);
+    await act(async () => {});
+    const input = screen.getByRole("textbox");
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(select).toHaveBeenLastCalledWith(expect.objectContaining({ id: "thread-9" }));
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(select).toHaveBeenLastCalledWith(expect.objectContaining({ id: "thread-0" }));
+    fireEvent.click(screen.getByText("Thread 5"));
+    expect(select).toHaveBeenLastCalledWith(expect.objectContaining({ id: "thread-5" }));
+  });
+
+  it("restores recent activity after clearing a search and ignores stale history responses", async () => {
+    let finishStale!: (page: NavigationQueryPage) => void;
+    getNavigationQueryPage.mockImplementationOnce(() => new Promise((resolve) => { finishStale = resolve; }));
+    const match = localThread({ id: "match", title: "Search match", updatedAt: 1_000 });
+    render(<SidebarSearchPopup threads={[match]} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    await act(async () => {});
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "search" } });
+    await settleRemoteSearch();
+    let finishFresh!: (page: NavigationQueryPage) => void;
+    getNavigationQueryPage.mockImplementationOnce(() => new Promise((resolve) => { finishFresh = resolve; }));
+    fireEvent.change(input, { target: { value: "  " } });
+    await act(async () => {});
+    // The first open's page lands only after the empty query asked again.
+    await act(async () => { finishStale(recentPage([localThread({ id: "stale", title: "Stale history", updatedAt: 9_000 })])); });
+    expect(resultTitles()).toEqual([match.title]);
+    const newest = localThread({ id: "newest", title: "New assistant reply", updatedAt: 4_000 });
+    await act(async () => { finishFresh(recentPage([newest, match])); });
+    expect(resultTitles()).toEqual([newest.title, match.title]);
+    expect(screen.queryByText("Other instances")).not.toBeInTheDocument();
+    expect(screen.queryByText("No threads match")).not.toBeInTheDocument();
+  });
+
+  it("selects a row on hover only once the pointer moves", async () => {
+    const threads = Array.from({ length: 10 }, (_, index) => localThread({
+      id: `thread-${index}`, title: `Thread ${index}`, updatedAt: 2_000 - index,
+    }));
+    getNavigationQueryPage.mockResolvedValue(recentPage(threads));
+    const select = vi.fn();
+    render(<SidebarSearchPopup threads={[]} onJumpToThread={select} onClose={vi.fn()} />);
+    await act(async () => {});
+    const row = screen.getByText("Thread 4").closest("button")!;
+    const selected = (): string | null | undefined => screen.getByRole("option", { selected: true })
+      .querySelector(".jump-palette__row-title")?.textContent;
+
+    // Rows that open under a resting pointer get hover events, and Chromium
+    // can follow them with a move at the same coordinates.
+    fireEvent.mouseOver(row);
+    fireEvent.mouseEnter(row);
+    fireEvent.mouseMove(row, { clientX: 40, clientY: 80 });
+    fireEvent.mouseMove(row, { clientX: 40, clientY: 80 });
+    expect(selected()).toBe("Thread 0");
+    fireEvent.mouseMove(row, { clientX: 42, clientY: 80 });
+    expect(selected()).toBe("Thread 4");
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ id: "thread-4" }));
+  });
+
+  it("keeps the picked thread selected when the recent page replaces the loaded rows", async () => {
+    let finishRecent!: (page: NavigationQueryPage) => void;
+    getNavigationQueryPage.mockImplementationOnce(() => new Promise((resolve) => { finishRecent = resolve; }));
+    const [first, second, third] = [3_000, 2_000, 1_000].map((updatedAt, index) =>
+      localThread({ id: `loaded-${index}`, title: `Loaded ${index}`, updatedAt }));
+    const select = vi.fn();
+    render(<SidebarSearchPopup threads={[first!, second!, third!]} onJumpToThread={select} onClose={vi.fn()} />);
+    await act(async () => {});
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "ArrowDown" });
+    const offPage = localThread({ id: "off-page", title: "Newer off-page reply", updatedAt: 5_000 });
+    await act(async () => { finishRecent(recentPage([offPage, first!, second!, third!])); });
+
+    expect(resultTitles()).toEqual([offPage.title, first!.title, second!.title, third!.title]);
+    expect(screen.getByRole("option", { selected: true })).toHaveTextContent(second!.title);
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ id: second!.id }));
+  });
+
+  it("scopes recent activity to the owning instance in a remote window", async () => {
+    readRendererFederationTarget.mockReturnValue({ scope: "remote", instanceId: "peer-windows" });
+    getNavigationQueryPage.mockResolvedValue(recentPage([localThread({ title: "Remote owner reply" })]));
+    render(<SidebarSearchPopup threads={[]} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    await act(async () => {});
+    expect(getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+      inventory: "owner", federationTarget: { scope: "remote", instanceId: "peer-windows" },
+      query: { kind: "lens", lens: "inbox" }, pageSize: 10,
+    }), expect.any(String));
+    expect(resultTitles()).toEqual(["Remote owner reply"]);
+    expect(jumpSearchRemoteThreads).not.toHaveBeenCalled();
+  });
+
+  it("keeps loaded recent threads available when the activity query fails", async () => {
+    getNavigationQueryPage.mockRejectedValue(new Error("Owner unavailable"));
+    render(<SidebarSearchPopup threads={[localThread({ title: "Loaded reply", updatedAt: 1_000 })]}
+      onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    await act(async () => {});
+    expect(resultTitles()).toEqual(["Loaded reply"]);
+    expect(screen.getByRole("status")).toHaveTextContent("Recent threads unavailable");
+    expect(screen.queryByText("Loading recent threads…")).not.toBeInTheDocument();
+  });
+
+  it("leaves no dangling listbox references when there are no recent threads", async () => {
+    render(<SidebarSearchPopup threads={[]} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    await act(async () => {});
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox")).not.toHaveAttribute("aria-controls");
+    expect(screen.getByRole("textbox")).not.toHaveAttribute("aria-activedescendant");
+  });
+
   it("finds an unloaded owner match and releases the query when the palette closes", async () => {
     const row = { ...localThread({ id: "off-page", title: "Agent outside the loaded page" }),
       ref: { backend: "codex" as const, threadId: "off-page" }, rowRevision: "revision", ordinaryChildCount: 0,

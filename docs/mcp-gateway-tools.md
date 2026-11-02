@@ -23,8 +23,20 @@ another thread identity, endpoint or credential.
 
 Full Access approves gateway invocations automatically, including headless
 automations. Codex uses the active turn's applied mode, falling back to the
-automation mode or saved thread mode when no active mode is recorded. ACP uses
-its runtime mode selector when present, otherwise its session execution mode.
+automation mode or saved thread mode when no active mode is recorded. Claude's
+Full Access is bypass permissions. Claude uses its open process's permission
+mode, so a change during the turn applies to the next call, falling back to
+the automation mode or saved thread mode when no process is open. Under bypass
+permissions Claude asks for nothing itself, so the gateway card would be the
+only prompt. ACP uses its runtime mode selector when present, otherwise its
+session execution mode.
+
+In Default and Auto the gateway card is the only prompt for a gateway call,
+whichever backend runs the thread. Codex does not review PwrAgent's dynamic
+tools. A Claude query pre-allows `mcp__pwragent__call_mcp_tool` through
+`allowedTools`, so Claude does not ask through `canUseTool` before the gateway
+does. Claude's `plan` mode and the operator's own Claude `ask` and `deny`
+rules for the tool still apply. See [Claude provider](claude-provider.md).
 Selection, actor permissions, connection authorization and schema validation
 still apply to every call. No permission is cached for the generic wrapper.
 
@@ -63,6 +75,109 @@ the invocation. It ends on shutdown, selection revocation, or a changed catalog
 revision, which includes every tool's schema and authorization revision. Tool
 listing order does not affect consent. Ordinary upstream MCP elicitation still
 requires its own response.
+
+### Upstream MCP forms on managed connections
+
+A managed connection's server can ask a person a question in the middle of a
+tool call with a form-mode `elicitation/create`, for example to confirm a
+destructive removal. This is separate from the gateway's invocation approval
+above. Approving the invocation, Full Access, a connection's tool-approval
+policy and conversation grants never answer the server's form. Only the
+person's own response does.
+
+The owner broker's thread sessions, for both remote URL and local command
+connections, declare `elicitation: { form: {} }`. Settings listings and
+connection tests declare no capabilities. URL mode stays unsupported, so the
+SDK refuses it.
+
+MCP does not link a server's request to the client request that caused it,
+and one session serves every request on a bridge grant. The owner therefore
+routes a form to the request in flight on that exact upstream client. It
+does so only when exactly one request is in flight and that request is a
+tool call from a caller that can show forms. Every other case fails closed
+with `-32601`, the error the server received before the capability was
+declared:
+
+- No request is in flight.
+- Several requests are in flight.
+- The request is not a tool call.
+- The caller cannot show forms.
+- The caller is a Job Monitor's read-only scope.
+- The caller is a headless automation run.
+- The turn is no longer live.
+
+The routes are:
+
+- **Native bridge.** The bridge forwards `tools/call` with the caller's form
+  route only when the agent's MCP client declared form elicitation. It sends
+  the form to that client with `relatedRequestId` set to the call.
+- **Fixed gateway tools.** `call_mcp_tool` shows the form on the calling
+  thread's card as `mcpServer/elicitation/request`, with a request ID that
+  begins `mcp-upstream-form:`.
+
+The forwarded form keeps the server's `message`, `requestedSchema`, `_meta`
+and `mode` exactly as sent. This includes schema keywords that the SDK does
+not model. The owner refuses a form whose `_meta` contains
+`codex_approval_kind` or `pwragent_approval_kind`, because those keys would
+draw it as a host tool approval. It does not rewrite those keys.
+
+The owner checks each answer before it returns the answer upstream:
+
+- An acceptance must include content that validates against the requested
+  schema. An `accept` without content is refused. An empty form is refused
+  when it does not validate.
+- A decline or cancel carries no content.
+- The client's `_meta` passes through unchanged.
+
+PwrAgent records no answer, so the next form asks again.
+
+The bridge RPC socket carries one request. A request opts in with
+`elicitation: "form"`. The owner can then write
+`{ "elicit": { id, params } }` lines on that socket before the final
+`{ ok }` line. The requester replies with `elicitResult` or `elicitError`.
+`elicitCancel` withdraws a form. The owner drops a reply for an ID that is
+no longer open. An owner never sends a form to a request that did not opt
+in. For that reason, either side may be an older build.
+
+A pending form settles as `cancel` and is never answered later in these
+cases:
+
+- The caller disconnects, including bridge EOF.
+- The call is cancelled or the turn ends.
+- The upstream server exits or its session closes.
+- The thread stops selecting the connection.
+- The grant is revoked.
+
+The card is withdrawn, and a late submission finds no pending request. The
+owner checks the grant, the exact session and, for fixed gateway tools, the
+thread's selection both before it asks and before it delivers an answer.
+After a reconnect, the replacement session can be answered only by its own
+form. Nothing launches the server's desktop application to answer a form.
+
+### Upstream progress
+
+A managed thread session asks the upstream server for progress on every tool
+call. The SDK sends the server PwrAgent's own progress token, never the
+caller's.
+
+- Each report restarts the call's 12-minute timeout.
+- A call that reports progress can run for up to 60 minutes in total.
+- A call that reports nothing still fails after 12 minutes.
+
+A native bridge passes each report on to the agent's MCP client, tied to the
+call and under the token that client sent. If the client sent no token, the
+reports only keep the call alive. A fixed `call_mcp_tool` call uses the
+reports the same way, but it does not show them on the thread's card.
+
+A bridge request opts in with `progress: "notify"`. The owner can then write
+`{ "progress": { progress, total?, message? } }` lines on that socket before
+the final `{ ok }` line. Each line also restarts the requester's own socket
+timer. An owner never sends progress to a request that did not opt in. A
+request from an older bridge keeps its old behavior: its token goes to the
+server as sent, and the call has a fixed 12-minute limit.
+
+Native Codex hosts still get `tool_timeout_sec` of 12 minutes. That limit
+belongs to Codex, and progress through PwrAgent does not change it.
 
 ### Automation MCP grants
 
@@ -130,7 +245,8 @@ search safety timers allow one additional second to deliver the owner's phase
 error; that second does not extend upstream work. Native Codex bridges set
 `startup_timeout_sec` to 75 for process overhead and preserve the discovery
 deadline from initialization through the initial catalog and its cursors.
-Tool execution keeps its separate 12-minute allowance.
+Tool execution keeps its separate 12-minute allowance, which the server's
+progress reports can extend (see "Upstream progress").
 Gateway call RPCs carry the short discovery deadline for catalog validation
 while their sockets retain the 12-minute call allowance. Completing discovery
 stops its timer before tool execution. Native catalog continuations use opaque
@@ -167,7 +283,9 @@ the catalog without invoking a tool or changing the connection's configuration.
 
 Selection changes, turn termination and shutdown cancel outstanding gateway
 work. MCP request cancellation propagates through the local socket to the
-upstream SDK signal without closing healthy sibling calls. Disabling or
+upstream SDK signal without closing healthy sibling calls. This covers tool
+calls, resource listings, reads and subscriptions, and prompt listings and
+reads. Disabling or
 disconnecting a connection closes its sessions, including invalidating sessions
 that are still opening. Cancellation cannot undo an already completed external
 effect; the gateway never automatically retries side effects.

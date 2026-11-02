@@ -33,6 +33,15 @@ async function createDirectoryLaunchpadTranscriptFixture(): Promise<{
     { cwd: repoDir, stdio: "ignore" },
   );
 
+  const keptThread = {
+    id: "thread-kept",
+    title: "Always at top",
+    titleSource: "explicit",
+    source: "codex",
+    executionMode: "default",
+    linkedDirectories: [{ id: "fixture-repo", label: "FixtureRepo", path: repoDir, kind: "local" }],
+    updatedAt: 500,
+  };
   const fixturePath = path.join(rootDir, "directory-launchpad-transcript-sync.fixture.json");
   await writeFile(
     fixturePath,
@@ -61,6 +70,7 @@ async function createDirectoryLaunchpadTranscriptFixture(): Promise<{
             kind: "response",
             method: "thread/list",
             result: [
+              keptThread,
               {
                 id: "thread-existing",
                 title: "Existing directory thread",
@@ -128,7 +138,11 @@ async function createDirectoryLaunchpadTranscriptFixture(): Promise<{
             id: "thread-list-2",
             kind: "response",
             method: "thread/list",
+            // A startup refresh must not list the new thread before the
+            // launchpad creates it. Unpinned, it opens Directory threads.
+            afterResponseId: "thread-start-1",
             result: [
+              keptThread,
               {
                 id: "thread-new",
                 title: "hello from launchpad",
@@ -169,6 +183,9 @@ async function createDirectoryLaunchpadTranscriptFixture(): Promise<{
             id: "thread-read-2",
             kind: "response",
             method: "thread/read",
+            // The empty first read belongs to the new thread, not to a
+            // startup reread of the existing one.
+            afterResponseId: "thread-start-1",
             result: {
               entries: [],
               messages: [],
@@ -272,6 +289,7 @@ test("directory launchpad preserves all-pinned placement and rereads an initiall
       const db = StateDb.open(stateDbPathForHomeRoot(homeRoot), { profileName: "default" });
       try {
         await new SqliteOverlayStore(db).setThreadPin({ backend: "codex", threadId: "thread-existing", pinnedRank: "1024" });
+        await new SqliteOverlayStore(db).setThreadPin({ backend: "codex", threadId: "thread-kept", pinnedRank: String(-(2 ** 40)) });
       } finally {
         db.close();
       }
@@ -285,10 +303,12 @@ test("directory launchpad preserves all-pinned placement and rereads an initiall
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
 
-    await app.window
-      .getByRole("textbox", { name: "New thread" })
-      .fill("hello from launchpad");
-    await app.window.getByRole("button", { name: "Start thread" }).click();
+    const composer = app.window.getByRole("textbox", { name: "New thread" });
+    await composer.fill("hello from launchpad");
+    // Keep the sidebar frozen while sending from the composer. Clicking Start
+    // moves the pointer away and cannot reproduce the placeholder handoff.
+    await app.window.getByRole("button", { name: "Always at top, pinned" }).hover();
+    await composer.press("Enter");
 
     await expect(
       app.window.getByRole("heading", { level: 2, name: "hello from launchpad" }),
@@ -299,6 +319,13 @@ test("directory launchpad preserves all-pinned placement and rereads an initiall
     await expect(
       app.window.getByRole("region", { name: "Transcript" }).getByText("No thread history yet."),
     ).toBeHidden();
+    const directory = app.window.locator(".directory-row").filter({
+      has: app.window.getByRole("button", { name: /^FixtureRepo(,|$)/ }),
+    });
+    const pinnedTitles = directory.locator('.thread-row-shell[data-thread-pin-state="pinned"] .thread-row__title');
+    await expect(pinnedTitles).toHaveCount(3);
+    await directory.screenshot({ path: testInfo.outputPath("creation-handoff.png") });
+    await expect(pinnedTitles).toHaveText(["Always at top", "hello from launchpad", "Existing directory thread"]);
 
     await app.advance({ stepId: "turn-started-1" });
     await expect(
@@ -317,14 +344,11 @@ test("directory launchpad preserves all-pinned placement and rereads an initiall
         .getByRole("region", { name: "Transcript" })
         .getByText("captured after refresh"),
     ).toBeVisible();
-    const directory = app.window.locator(".directory-row").filter({
-      has: app.window.getByRole("button", { name: /^FixtureRepo(,|$)/ }),
-    });
     // Capture the final state even against the regression, where the new
     // thread appears below a newly created Directory threads disclosure.
     await directory.screenshot({ path: testInfo.outputPath("all-pinned-creation.png") });
     await expect(directory.locator('.thread-row-shell[data-thread-pin-state="pinned"] .thread-row__title'))
-      .toHaveText(["hello from launchpad", "Existing directory thread"]);
+      .toHaveText(["Always at top", "hello from launchpad", "Existing directory thread"]);
     await expect(directory.getByText("Directory threads", { exact: true })).toHaveCount(0);
   } finally {
     await app.close();

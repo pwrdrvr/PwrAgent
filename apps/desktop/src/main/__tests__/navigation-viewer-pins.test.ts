@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
-import { buildFederatedThreadRef, type NavigationThreadSummary } from "@pwragent/shared";
+import { buildFederatedThreadRef, buildThreadIdentityKey, type NavigationThreadSummary,
+  type ProjectForgeAutomation } from "@pwragent/shared";
 import { appendViewerNavigationPins, loadViewerNavigationPins } from "../app-server/navigation-viewer-pins";
 import { projectNavigationQuery } from "../app-server/navigation-query-projection";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
@@ -317,4 +318,99 @@ it.each([
     expect(collision.threadKeys).toEqual([]);
     expect(workspace.threadKeys).toEqual([]);
   }
+});
+
+const PAUSED: ProjectForgeAutomation = { paused: true, pausedAt: 1, autoFixMergeConflicts: true,
+  autoFixCiFailures: true, prWatches: true, refuseThreadMessages: false, wakeupPolicy: "hold" };
+
+function ownerThread(id: string, path: string): NavigationThreadSummary {
+  return { id, source: "codex", title: id, titleSource: "explicit", inbox: { inInbox: false },
+    linkedDirectories: [{ id: path, kind: "local", label: "repo", path }] };
+}
+
+/** The owner's pinned-rows page for these threads, stamped as the viewer stamps it. */
+function ownerPinnedRows(params: {
+  instanceId: string;
+  threads: NavigationThreadSummary[];
+  directories: import("@pwragent/shared").NavigationDirectorySummary[];
+}): NavigationThreadSummary[] {
+  const page = projectNavigationQuery({ index: { threads: params.threads, directories: params.directories },
+    request: { protocol: 2, consumer: "main-sidebar", inventory: "owner", readReason: "pins",
+      query: { kind: "group-members", roots: params.threads.map((thread) => ({ backend: thread.source, threadId: thread.id })) } } });
+  return page.entries.map(({ row }) => ({ ...row, federation: {
+    ref: buildFederatedThreadRef({ backend: row.source, threadId: row.id, instanceId: params.instanceId }),
+    instanceLabel: params.instanceId } }));
+}
+
+function viewerPlaceholder(pins: NavigationThreadSummary[]) {
+  const viewer = appendViewerNavigationPins({ threads: [], directories: [] }, pins);
+  const page = projectNavigationQuery({ index: viewer,
+    request: { protocol: 2, consumer: "main-sidebar", inventory: "viewer", query: { kind: "directory-index" } } });
+  expect(page.directories).toHaveLength(1);
+  return page.directories[0]!;
+}
+
+it("shows a peer project's Forge Automation on the placeholder row standing for it", () => {
+  const thread = ownerThread("t1", "/owner/repo");
+  const second = ownerThread("t2", "/owner/repo");
+  const project = { key: "directory:/owner/repo", kind: "directory" as const, label: "repo", path: "/owner/repo",
+    threadKeys: [buildThreadIdentityKey("codex", "t1"), buildThreadIdentityKey("codex", "t2")],
+    needsAttentionCount: 0, forgeAutomation: PAUSED };
+  const rows = ownerPinnedRows({ instanceId: "peer", threads: [thread, second], directories: [project] });
+  expect(rows.map((row) => row.homeProject)).toEqual([
+    { directoryKey: project.key, forgeAutomation: PAUSED },
+    { directoryKey: project.key, forgeAutomation: PAUSED },
+  ]);
+  // Only the pinned-rows read carries it; an ordinary lens page does not.
+  const lens = projectNavigationQuery({ index: { threads: [thread], directories: [project] },
+    request: { protocol: 2, consumer: "main-sidebar", inventory: "owner", query: { kind: "lens", lens: "inbox" } } });
+  expect(lens.entries[0]?.row.homeProject).toBeUndefined();
+
+  expect(viewerPlaceholder(rows)).toMatchObject({
+    localAvailability: "unconfigured",
+    forgeAutomation: PAUSED,
+    peerProject: { target: { scope: "remote", instanceId: "peer" }, directoryKey: project.key },
+  });
+  // A project at the defaults still names itself, so the row can be paused.
+  const defaults = ownerPinnedRows({ instanceId: "peer", threads: [thread],
+    directories: [{ ...project, forgeAutomation: undefined }] });
+  const placeholder = viewerPlaceholder(defaults);
+  expect(placeholder.peerProject?.directoryKey).toBe(project.key);
+  expect(placeholder.forgeAutomation).toBeUndefined();
+});
+
+it("shows no Forge Automation on a placeholder whose threads span peers or projects", () => {
+  const thread = ownerThread("t1", "/owner/repo");
+  const project = { key: "directory:/owner/repo", kind: "directory" as const, label: "repo", path: "/owner/repo",
+    threadKeys: [buildThreadIdentityKey("codex", "t1")], needsAttentionCount: 0, forgeAutomation: PAUSED };
+  const peerRows = ownerPinnedRows({ instanceId: "peer", threads: [thread], directories: [project] });
+  const otherPeerRows = ownerPinnedRows({ instanceId: "other", threads: [ownerThread("t9", "/other/repo")], directories: [{
+    ...project, key: "directory:/other/repo", path: "/other/repo", threadKeys: [buildThreadIdentityKey("codex", "t9")] }] });
+  // Another checkout with the same name on the same peer files into the same placeholder.
+  const sameNameRows = ownerPinnedRows({ instanceId: "peer", threads: [ownerThread("t3", "/elsewhere/repo")], directories: [{
+    ...project, key: "directory:/elsewhere/repo", path: "/elsewhere/repo", threadKeys: [buildThreadIdentityKey("codex", "t3")] }] });
+  // An owner that predates `homeProject` names no project.
+  const olderOwnerRows = peerRows.map(({ homeProject: _home, ...row }) => row);
+  for (const pins of [[...peerRows, ...otherPeerRows], [...peerRows, ...sameNameRows], olderOwnerRows]) {
+    const placeholder = viewerPlaceholder(pins);
+    expect(placeholder.localAvailability).toBe("unconfigured");
+    expect(placeholder.peerProject).toBeUndefined();
+    expect(placeholder.forgeAutomation).toBeUndefined();
+  }
+});
+
+it("never puts a peer's Forge Automation on a local project row", () => {
+  const thread = ownerThread("t1", "/owner/repo");
+  const project = { key: "directory:/owner/repo", kind: "directory" as const, label: "repo", path: "/owner/repo",
+    threadKeys: [buildThreadIdentityKey("codex", "t1")], needsAttentionCount: 0, forgeAutomation: PAUSED };
+  const rows = ownerPinnedRows({ instanceId: "peer", threads: [thread], directories: [project] });
+  const local = { key: "directory:/viewer/repo", kind: "directory" as const, label: "repo", path: "/viewer/repo",
+    threadKeys: [], needsAttentionCount: 0 };
+  const viewer = appendViewerNavigationPins({ threads: [], directories: [local] }, rows);
+  const page = projectNavigationQuery({ index: viewer,
+    request: { protocol: 2, consumer: "main-sidebar", inventory: "viewer", query: { kind: "directory-index" } } });
+  expect(page.directories).toHaveLength(1);
+  expect(page.directories[0]).toMatchObject({ key: local.key, counts: { total: 1 } });
+  expect(page.directories[0]?.forgeAutomation).toBeUndefined();
+  expect(page.directories[0]?.peerProject).toBeUndefined();
 });

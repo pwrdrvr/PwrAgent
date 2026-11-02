@@ -510,7 +510,8 @@ export type ControlActiveTurnErrorCode =
   | "no_active_turn"
   | "stale_target"
   | "unsupported_backend"
-  | "unsupported_capability";
+  | "unsupported_capability"
+  | "project_paused";
 
 export type ControlActiveTurnResponse =
   | {
@@ -1141,6 +1142,9 @@ export type ResetDirectoryLaunchpadResponse = {
 };
 
 export type MaterializeDirectoryLaunchpadRequest = {
+  /** Viewer-generated identity, stable across progress delivery and reconnect. */
+  operationId?: string;
+  submittedAt?: number;
   directoryKey: string;
   federationTarget?: FederationTarget;
   launchpad?: NavigationLaunchpadDraft;
@@ -1193,6 +1197,8 @@ export type MaterializedDirectoryLaunchpadThread = {
 };
 
 export type MaterializeDirectoryLaunchpadOptions = {
+  /** Owner-side attachment preparation runs only after startup registration. */
+  resolveInput?: () => Promise<AppServerTurnInputItem[]>;
   messageOrigin?: AppServerThreadMessageOrigin;
   onCodexEnvironmentSetupProgress?: (
     event: CodexEnvironmentSetupProgressEvent,
@@ -1211,7 +1217,42 @@ export type MaterializeDirectoryLaunchpadResponse = MaterializedDirectoryLaunchp
   };
 };
 
+export type LaunchpadCreationStatus = {
+  operationId: string;
+  directoryKey: string;
+  backend?: AppServerBackendKind;
+  projectPath?: string;
+  cwd?: string;
+  title?: string;
+  submittedAt: number;
+  startedAt: number;
+  updatedAt: number;
+  finishedAt?: number;
+  phase: "preparing" | "setup" | "creating" | "dispatching" | "cancelling" | "cancelled" | "completed" | "failed";
+  cancellable: boolean;
+  setupProgress?: CodexEnvironmentSetupProgressEvent;
+  threadId?: string;
+  result?: MaterializeDirectoryLaunchpadResponse;
+  error?: string;
+};
+
+export type LaunchpadCreationRequest = {
+  operationId: string;
+  federationTarget?: FederationTarget;
+  action: "read" | "cancel";
+};
+
+export type LaunchpadCreationResponse = {
+  operation?: LaunchpadCreationStatus;
+  /** Cancellation is accepted only before the first turn/review is dispatched. */
+  cancellationAccepted?: boolean;
+};
+
 export type CodexEnvironmentSetupProgressEvent = {
+  sequence?: number;
+  operationId?: string;
+  /** Owner clock, retained on every output and terminal event. */
+  startedAt?: number;
   directoryKey: string;
   federationTarget?: FederationTarget;
   environmentId: string;
@@ -1470,6 +1511,8 @@ export type AgentEvent = {
    * raw params are expensive for React to parse on every update.
    */
   rendererActivityEntry?: AppServerThreadActivityEntry;
+  /** Safe, retained previews resolved by main at an item completion boundary. */
+  rendererImageParts?: AppServerThreadImagePart[];
 };
 
 export type LatestCodexConfigWarningResponse = {

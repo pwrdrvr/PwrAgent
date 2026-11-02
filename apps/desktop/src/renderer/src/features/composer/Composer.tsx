@@ -1,5 +1,6 @@
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
 import { codexProviderIdOfModel, formatModelOptionLabel } from "@pwragent/shared";
+import { splitModelMenuOptions } from "../../lib/model-menu-options";
 import { mayContainLinearPastedImages } from "@pwragent/shared";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
@@ -16,8 +17,18 @@ import {
   findCheckedOutPullRequest,
 } from "../../../../shared/pull-request-review";
 import { hydrateComposerDraft } from "./composer-draft-hydration";
+import {
+  getShortTermRateLimitResetAt,
+  getRateLimitResetSendAt,
+  RATE_LIMIT_RESET_BUFFER_MS,
+  RATE_LIMIT_RESET_JITTER_MS,
+} from "./rate-limit-schedule";
 import { useLaunchpadComposerFocusHandoff } from "./useLaunchpadComposerFocusHandoff";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
+import {
+  describeProjectAutoFixOverride,
+  findThreadProjectDirectory,
+} from "../forge-automation/forge-automation-view";
 import {
   beginLaunchpadComposition,
   getLaunchpadComposerDestination,
@@ -156,6 +167,7 @@ import { openImageGallery } from "../thread-detail/ImageGalleryLayer";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { resolveReviewRunMode } from "../../lib/review-run-mode";
 import { readRendererFederationTarget } from "../../lib/federation-window";
@@ -419,6 +431,14 @@ export type ComposerProps = {
    */
   focusRequest?: { threadKey: string; id: number; origin: HTMLElement };
   onFocusRequestHandled?: (id: number) => void;
+  /**
+   * Appends text to the named thread's draft, on a new line when the draft
+   * is not empty, and focuses the input. It never sends: the operator reads
+   * and sends the request. Each id applies once, when this composer shows
+   * that thread and can take input.
+   */
+  composerInsertRequest?: { threadKey: string; id: number; text: string };
+  onComposerInsertRequestHandled?: (id: number) => void;
   launchpad?: NavigationLaunchpadDraft;
   /** Which machine the launchpad starts its thread on, and how to move it. */
   launchpadMachine?: LaunchpadMachineControl;
@@ -459,6 +479,9 @@ export type ComposerProps = {
   ) => Promise<void>;
   /** Discard this launchpad draft (the "Cancel" button next to "Start thread"). */
   onCancelLaunchpad?: (directoryKey: string) => void;
+  onCancelLaunchpadStartup?: () => void;
+  launchpadStartupCancelling?: boolean;
+  launchpadStartupCancellable?: boolean;
   /**
    * Cancel this launchpad as its Cancel button does, asked from outside the
    * composer (a sub-thread draft row's menu). The composer must run it: its
@@ -924,12 +947,14 @@ const SCHEDULED_SEND_OPTIONS = [
   { label: "Send in 30m", delayMs: 30 * 60_000 },
   { label: "Send in 1h", delayMs: 60 * 60_000 },
   { label: "Send in 2h", delayMs: 2 * 60 * 60_000 },
+  { label: "Send in 5h", delayMs: 5 * 60 * 60_000 },
 ] as const;
 
 type ScheduledSendMenuOption = {
   delayMs?: number;
   label: string;
-  scheduledSendAt?: number;
+  description?: string;
+  rateLimitResetAt?: number;
 };
 
 const globalQueuedTurnReleaseScopeKeys = new Set<string>();
@@ -949,69 +974,6 @@ function formatScheduledSendCountdown(
   now = Date.now(),
 ): string {
   return formatRunningDurationMs(Math.max(0, scheduledSendAt - now));
-}
-
-function isFiveHourRateLimitName(value?: string): boolean {
-  return value?.toLowerCase().endsWith("5h limit") ?? false;
-}
-
-function rateLimitMatchesModel(
-  rateLimit: NonNullable<BackendSummary["rateLimits"]>[number],
-  selectedModelOption?: ModelOption,
-): boolean {
-  const modelTerms = [
-    selectedModelOption?.id,
-    selectedModelOption?.label,
-  ]
-    .filter((term): term is string => Boolean(term))
-    .map((term) => term.toLowerCase());
-  if (modelTerms.length === 0) {
-    return false;
-  }
-
-  const searchable = [
-    rateLimit.limitId,
-    rateLimit.name,
-  ]
-    .filter((term): term is string => Boolean(term))
-    .map((term) => term.toLowerCase());
-  return modelTerms.some((term) =>
-    searchable.some((candidate) => candidate.includes(term))
-  );
-}
-
-function getFiveHourRateLimitResetAt(params: {
-  backend?: BackendSummary;
-  now: number;
-  selectedModelOption?: ModelOption;
-}): number | undefined {
-  const candidates = (params.backend?.rateLimits ?? []).filter((rateLimit) => {
-    const resetAt = rateLimit.resetAt;
-    return (
-      typeof resetAt === "number" &&
-      Number.isFinite(resetAt) &&
-      resetAt > params.now &&
-      (isFiveHourRateLimitName(rateLimit.name) ||
-        isFiveHourRateLimitName(rateLimit.limitId))
-    );
-  });
-  if (candidates.length === 0) {
-    return undefined;
-  }
-
-  const modelSpecific = candidates.filter((candidate) =>
-    rateLimitMatchesModel(candidate, params.selectedModelOption)
-  );
-  const generic = candidates.filter(
-    (candidate) => candidate.name.toLowerCase() === "5h limit",
-  );
-  const ordered =
-    modelSpecific.length > 0
-      ? modelSpecific
-      : generic.length > 0
-        ? generic
-        : candidates;
-  return Math.min(...ordered.map((candidate) => candidate.resetAt!));
 }
 
 const SLASH_COMMANDS: SlashCommandSuggestion[] = [
@@ -4348,6 +4310,42 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
     props.onFocusRequestHandled?.(request.id);
   }, [props.focusRequest, props.onFocusRequestHandled, props.thread, props.disabled, editorScope.scopeKey, composerScopeKey]);
+  const handledInsertRequestIdRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const request = props.composerInsertRequest;
+    if (
+      !request
+      || handledInsertRequestIdRef.current === request.id
+      || !props.thread
+      || threadSummaryIdentityKey(props.thread) !== request.threadKey
+      || props.disabled
+      || editorScope.scopeKey !== composerScopeKey
+    ) {
+      return;
+    }
+    handledInsertRequestIdRef.current = request.id;
+    const current = canonicalDraft.replace(/\s+$/, "");
+    const nextDraft = current ? `${current}\n${request.text}` : request.text;
+    const hydrated = hydrateComposerDraft(
+      nextDraft,
+      props.skills,
+      threadLinks,
+      pullRequestLinks,
+    );
+    // The editor replays its current content once before it takes the new
+    // value; the guard drops that stale replay, as for a draft restore.
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: hydrated.draft,
+      expectedSkillTokensSignature: getComposerSkillTokensSignature(hydrated.skillTokens),
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
+    setComposerDraftFromCanonical(nextDraft);
+    props.onComposerInsertRequestHandled?.(request.id);
+    requestAnimationFrame(() => inputRef.current?.focus());
+    // The helpers are recreated each render; the id guard applies once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.composerInsertRequest, props.thread, props.disabled, editorScope.scopeKey, composerScopeKey]);
   const appliedReviewRequestId = useRef<number | undefined>(undefined);
   useEffect(() => {
     const request = props.reviewRequest;
@@ -6316,7 +6314,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         const manualReleaseRequired =
           turnQueueRecord.manualReleaseRequired === true
           || turnQueueRecord.status === "held";
-        const holdReason = manualReleaseRequired
+        // A paused entry with a reason is held by its owner, such as a
+        // wake-up its paused project keeps; the reason says why.
+        const holdReason = (manualReleaseRequired || turnQueueRecord.paused === true)
           && typeof turnQueueRecord.errorMessage === "string"
             ? turnQueueRecord.errorMessage
             : undefined;
@@ -6725,8 +6725,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       setSendError("Choose a project to review.");
       return;
     }
-    if (!options?.queued && shouldQueueThreadSubmit()) {
-      queueReviewCommand(reviewCommand);
+    if (!options?.queued && (
+      (props.launchpad && (props.launchpadMaterializing || sendingRef.current))
+      || shouldQueueThreadSubmit()
+    )) {
+      await queueReviewCommand(reviewCommand);
       return;
     }
 
@@ -7226,7 +7229,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         ? runModeDecision.runMode : undefined,
     };
     if (futureScheduledDraftSendAt) {
-      if (props.launchpad) {
+      if (props.launchpad && !props.launchpadMaterializing && !sendingRef.current) {
         await scheduleLaunchpadMaterialization(
           futureScheduledDraftSendAt,
           routedReviewCommand.target,
@@ -7898,6 +7901,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       globalQueuedTurnReleaseScopeKeys.has(composerScopeKey) ||
       props.threadBusy ||
       activeTurnId ||
+      activeTurnIdRef.current ||
       sending ||
       props.launchpad ||
       props.disabled
@@ -8068,9 +8072,42 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       displayText: string;
       runMode?: ReviewRunMode;
       target: AppServerReviewTarget;
+      reviewer?: ModelSettingsRecent;
     },
     options?: { scheduledSendAt?: number },
   ): Promise<void> | undefined => {
+    // Setup has no thread id yet. Keep the review in the starting composer's
+    // FIFO; handoffLaunchpadComposer moves it to the thread before selection.
+    if (props.launchpad && (props.launchpadMaterializing || sendingRef.current)) {
+      const reviewer = reviewCommand.reviewer
+        ?? ((reviewConfig?.reviewer || reviewerSelection.fallback)
+          && reviewerSelection.backend
+          ? {
+              backend: reviewerSelection.backend,
+              model: reviewerSelection.model?.id,
+              reasoningEffort: reviewerSelection.reasoningEffort,
+            }
+          : undefined);
+      enqueueQueuedTurnInScope(composerScopeKey, {
+        id: createQueuedTurnId(),
+        text: formatReviewCommand(reviewCommand.target),
+        imageAttachments: [],
+        fileAttachments: [],
+        reviewCommand: { ...reviewCommand, ...(reviewer ? { reviewer } : {}) },
+        ...(options?.scheduledSendAt ? { scheduledSendAt: options.scheduledSendAt } : {}),
+      });
+      recordComposerDraftHistory(
+        composerScopeKey,
+        latestDraftSnapshotRef.current.snapshot,
+        "unsent",
+      );
+      resetComposerDraftAndState(composerScopeKey);
+      setScheduledDraftSendAt(undefined);
+      setScheduleArmed(true);
+      setReviewConfig(undefined);
+      setSendError(undefined);
+      return;
+    }
     const enqueue = async (): Promise<void> => {
       const text = formatReviewCommand(reviewCommand.target);
       if (!props.thread || !props.desktopApi?.createScheduledThreadAction) {
@@ -8912,6 +8949,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
     if (props.launchpad && (props.launchpadMaterializing || sendingRef.current)) {
       if (props.disabled || !hasLiveComposerContent()) return;
+      if (reviewCommand) {
+        if (isBareReviewCommand) {
+          setReviewConfig(reviewConfig ?? createReviewConfig({
+            directory: props.directory,
+            thread: props.thread,
+          }));
+          setSendError(undefined);
+        } else {
+          await submitReviewCommand(reviewCommand);
+        }
+        return;
+      }
       const scopeKey = composerScopeKey;
       const destination = getLaunchpadComposerDestination(draftStore, scopeKey);
       const snapshot = latestDraftSnapshotRef.current.snapshot;
@@ -9211,7 +9260,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           draftStore.pushDraft(submittedScopeKey, submittedSnapshot);
         }
         props.onPendingStatusChange?.(undefined);
-        if (!launchpadMaterializingRef.current) {
+        if (!launchpadMaterializingRef.current && !(error instanceof LaunchpadStartupCancelledError)) {
           setSendError(error instanceof Error ? error.message : String(error));
         }
       } finally {
@@ -10800,17 +10849,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     && (threadModelProvider || providerModelOptions.length > 0)
     ? `This thread runs on ${threadProviderLabel}. To use another provider, hand it off to a new thread.`
     : undefined;
-  const showOlderCodexModelsUnderOther = backend?.kind === "codex"
-    && !threadModelProvider
-    && ownModelOptions.some((model) => /^gpt-6(?:[.-]|$)/iu.test(model.id));
-  const otherModelOptions = backend?.kind === "claude"
-    ? ownModelOptions.filter((model) => model.other)
-    : showOlderCodexModelsUnderOther
-    ? ownModelOptions.filter((model) => /^gpt-5\.(?:5|6)(?:-|$)/iu.test(model.id))
-    : [];
-  const visibleModelOptions = otherModelOptions.length
-    ? ownModelOptions.filter((model) => !otherModelOptions.includes(model))
-    : ownModelOptions;
+  const { primary: visibleModelOptions, other: otherModelOptions } = splitModelMenuOptions(
+    backend?.kind,
+    ownModelOptions,
+  );
   const selectedModelOption =
     modelOptions.find((option) => option.id === currentSettings?.model) ??
     getDefaultModelOption(backend);
@@ -11060,27 +11102,36 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     abandonComposerDraftSnapshot(composerScopeKey);
     props.onCancelLaunchpad?.(request.directoryKey);
   }, [props.launchpadCancelRequest]);
-  const fiveHourResetAt = getFiveHourRateLimitResetAt({
-    backend,
-    now: scheduleNow,
-    selectedModelOption,
-  });
+  const backendsDescribeScheduleOwner =
+    filesystemFederationTarget?.scope !== "remote"
+    || rendererFederationTarget?.instanceId === filesystemFederationTarget.instanceId;
+  const shortTermResetAt = backendsDescribeScheduleOwner
+    ? getShortTermRateLimitResetAt({
+        rateLimits: backend?.rateLimits,
+        now: scheduleNow,
+        selectedModelOption,
+      })
+    : undefined;
   const scheduledSendOptions: ScheduledSendMenuOption[] = [
+    ...(shortTermResetAt
+      ? [
+          {
+            label: "Send after rate limit reset",
+            description: `In ${formatScheduledSendCountdown(
+              shortTermResetAt + RATE_LIMIT_RESET_BUFFER_MS,
+              scheduleNow,
+            )}–${formatScheduledSendCountdown(
+              shortTermResetAt + RATE_LIMIT_RESET_BUFFER_MS + RATE_LIMIT_RESET_JITTER_MS,
+              scheduleNow,
+            )} · 5–10m buffer`,
+            rateLimitResetAt: shortTermResetAt,
+          },
+        ]
+      : []),
     ...SCHEDULED_SEND_OPTIONS.map((option) => ({
       delayMs: option.delayMs,
       label: option.label,
     })),
-    ...(fiveHourResetAt
-      ? [
-          {
-            label: `Send in ${formatScheduledSendCountdown(
-              fiveHourResetAt,
-              scheduleNow,
-            )} (5h context reset)`,
-            scheduledSendAt: fiveHourResetAt,
-          },
-        ]
-      : []),
   ];
   const sendButtonDisabled =
     forking ||
@@ -11347,13 +11398,28 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const hasAttachedPullRequest = props.thread
     ? hasPrimaryWorkspacePullRequest(props.thread)
     : false;
+  // A project's Forge Automation can only narrow Auto-fix. It mutes the
+  // control and explains itself; the thread's own value is left alone. A
+  // peer's thread is governed by its owner's projects, which this window
+  // does not hold, so a local project of the same path must not claim it.
+  const prAutoDispatchProject = props.thread && showPrAutoDispatchToggle && !props.thread.federation
+    ? findThreadProjectDirectory(props.thread, props.directories)
+    : undefined;
+  const prAutoDispatchProjectOverride = prAutoDispatchProject
+    ? describeProjectAutoFixOverride(prAutoDispatchProject.forgeAutomation, prAutoDispatchProject.label)
+    : undefined;
   const prAutoDispatchTooltip = !backgroundPrPollingEnabled
     ? "Auto-fix PR paused — turn on background PR polling in Settings"
     : !prAutoDispatchAllowed
       ? "Auto-fix PR disabled globally — allow it in Git settings"
-      : hasAttachedPullRequest
-        ? "Auto-fix PR — handle new CI failures or merge conflicts"
-        : "Auto-fix PR — starts when a PR for this workspace is linked";
+      : prAutoDispatchProjectOverride
+        ? prAutoDispatchProjectOverride.tooltip
+        : hasAttachedPullRequest
+          ? "Auto-fix PR — starts a repair turn when a new push fails CI or hits a merge conflict. To hear about a pass or a re-run, ask the agent to watch CI."
+          : "Auto-fix PR — starts when a PR for this workspace is linked";
+  const prAutoDispatchProjectMuted = Boolean(
+    prAutoDispatchAvailable && prAutoDispatchProjectOverride?.muted,
+  );
   // Environments are edited on the machine that runs them, so a peer's
   // thread or a remote execution workspace gets no editor here.
   const environmentEditPath =
@@ -12742,6 +12808,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           ? "Steer when ready"
           : queued.manualReleaseRequired
           ? "Held for retry"
+          : queued.paused && queued.holdReason
+          ? "Held"
           : queued.errorMessage
           ? "Failed to send"
           : scheduledSendAt
@@ -12772,7 +12840,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             onKeyDown={(event) => queuedReorder.onKeyDown(event, queued.id)}
             onPointerDown={(event) => queuedReorder.onPointerDown(event, queued.id)}
             aria-label={
-              queued.paused
+              queued.paused && queued.holdReason
+                ? index === 0
+                  ? "Held queued message"
+                  : `Held queued message ${index + 1}`
+                : queued.paused
                 ? index === 0
                   ? "Paused queued message"
                   : `Paused queued message ${index + 1}`
@@ -12828,7 +12900,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   Resume
                 </button>
               ) : isLaunchpad ? (
-                supportsSteering ? (
+                supportsSteering && !queued.reviewCommand ? (
                   <button
                     className="composer__secondary-action"
                     disabled={queued.backendQueuePending}
@@ -13154,7 +13226,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       {previewState?.status === "loading" ? (
                         <span
                           aria-hidden="true"
-                          className="pending-spinner pending-spinner--lg"
+                          className="pending-spinner pending-spinner--lg pending-spinner--paired"
                         />
                       ) : (
                         <FileCodeIcon size={22} aria-hidden="true" />
@@ -14672,9 +14744,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               type="button"
               className={`composer__toggle tooltip-target${
                 props.thread.prAutoDispatchEnabled ? " is-active" : ""
-              }`}
+              }${prAutoDispatchProjectMuted ? " is-project-overridden" : ""}`}
               aria-label="Auto-fix PR"
               aria-pressed={Boolean(props.thread.prAutoDispatchEnabled)}
+              // aria-pressed keeps the thread's own value; this says what the
+              // project does to it, which the tooltip only shows on hover.
+              aria-description={prAutoDispatchAvailable ? prAutoDispatchProjectOverride?.tooltip : undefined}
               data-tooltip={prAutoDispatchTooltip}
               disabled={!prAutoDispatchAvailable}
               onClick={() => {
@@ -15072,7 +15147,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               {interrupting ? "Stopping…" : "Stop"}
             </button>
           ) : null}
-          {props.launchpad && props.onCancelLaunchpad ? (
+          {props.launchpadMaterializing && props.onCancelLaunchpadStartup ? (
+            <button className="button button--ghost" type="button" disabled={props.launchpadStartupCancelling || props.launchpadStartupCancellable === false} onClick={props.onCancelLaunchpadStartup}>
+              {props.launchpadStartupCancelling ? "Cancelling…" : "Cancel startup"}
+            </button>
+          ) : props.launchpad && props.onCancelLaunchpad ? (
             <button
               className="button button--ghost"
               disabled={launchpadSubmitting}
@@ -15186,7 +15265,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 {preparingSend ? (
                   <span
                     aria-hidden="true"
-                    className="pending-spinner pending-spinner--sm"
+                    className="pending-spinner pending-spinner--sm pending-spinner--paired"
                   />
                 ) : null}
                 {submitButtonLabel}
@@ -15277,24 +15356,38 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     </div>
                   </>
                 ) : null}
-                {scheduledSendOptions.map((option) => (
-                  <button
-                    className="composer__schedule-menu-item"
-                    key={option.label}
-                    role="menuitem"
-                    type="button"
-                    onClick={() => {
-                      setScheduleMenuOpen(false);
-                      scheduleCurrentDraft(
-                        option.scheduledSendAt ?? Date.now() + option.delayMs!,
-                      );
-                    }}
-                  >
-                    {props.launchpad
-                      ? option.label.replace(/^Send /, "Start ")
-                      : option.label}
-                  </button>
-                ))}
+                {scheduledSendOptions.map((option) => {
+                  const label = props.launchpad
+                    ? option.label.replace(/^Send /, "Start ")
+                    : option.label;
+                  const onSelect = () => {
+                    setScheduleMenuOpen(false);
+                    if (option.rateLimitResetAt !== undefined) {
+                      if (option.rateLimitResetAt <= Date.now()) return;
+                      scheduleCurrentDraft(getRateLimitResetSendAt(option.rateLimitResetAt));
+                    } else {
+                      scheduleCurrentDraft(Date.now() + option.delayMs!);
+                    }
+                  };
+                  return option.description ? (
+                    <ComposerSendMenuItem
+                      key={option.label}
+                      label={label}
+                      description={option.description}
+                      onSelect={onSelect}
+                    />
+                  ) : (
+                    <button
+                      className="composer__schedule-menu-item"
+                      key={option.label}
+                      role="menuitem"
+                      type="button"
+                      onClick={onSelect}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
               </div>
             ) : null}
           </div>

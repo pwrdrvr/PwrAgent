@@ -170,6 +170,16 @@ describe("ThreadArchiveSweeper", () => {
     }
   });
 
+  it("never archives a thread that an active PR watch will wake", async () => {
+    const watched = { ...candidate("watched"), activePrWatch: true };
+    expect(archiveCandidateProtectionReason(watched)).toBe("Watching a PR");
+    expect(isStaleArchiveCandidate(watched, Date.now())).toBe(false);
+    const { deps, sweeper } = harness([watched, candidate()]);
+    await sweeper.sweep();
+    expect(deps.archive.mock.calls.map(([item]) => item.thread.id)).toEqual(["old"]);
+    await sweeper.stop();
+  });
+
   it("uses the 30-day boundary and protects recent views and restores", () => {
     const item = candidate();
     item.thread.updatedAt = Date.now() - THREAD_AUTO_ARCHIVE_AGE_MS;
@@ -311,7 +321,9 @@ describe("workspaceIsSafeForAutoArchive", () => {
     const broken = path.join(root, "broken-worktree");
     await mkdir(broken);
     await writeFile(path.join(broken, ".git"), `gitdir: ${path.join(root, "missing", ".git", "worktrees", "x")}\n`);
-    await expect(workspaceIsSafeForAutoArchive(broken, signal)).rejects.toThrow(/not a git repository/);
+    await expect(workspaceIsSafeForAutoArchive(broken, signal)).rejects.toThrow(
+      /not a git repository|gitfile does not point to a valid repository/,
+    );
   });
 });
 

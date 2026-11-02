@@ -4,6 +4,7 @@ import { createTemporaryTestDirectory } from "../testing/test-harness";
 import type { ProcessMetric } from "electron";
 import { resolveHotCpuProfileConfig } from "../diagnostics/hot-cpu-profile-config";
 import { createHotCpuProfileSession } from "../diagnostics/hot-cpu-profile-session";
+import { acquireDebuggerLease } from "../diagnostics/debugger-lease";
 import { HotCpuProfiler } from "../diagnostics/hot-cpu-profiler";
 import { createMainProcessHotCpuTarget } from "../diagnostics/main-process-hot-cpu-target";
 
@@ -354,6 +355,31 @@ describe("HotCpuProfiler", () => {
     expect(debuggerApi.sendCommand.mock.calls.filter(([method]) => method === "Profiler.start")).toHaveLength(3);
     expect(debuggerApi.sendCommand.mock.calls.filter(([method]) => method === "Profiler.stop")).toHaveLength(3);
     expect(target.debugger.isAttached()).toBe(false);
+  });
+
+  it("stops its CPU recorder without detaching a rendering lease", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+    const config = createEnabledConfig(workspace.path);
+    const created = await createHotCpuProfileSession({
+      config,
+      versions: { appVersion: "test", electronVersion: "test", chromeVersion: "test", nodeVersion: "test" },
+    });
+    if (!created.ok) throw new Error(created.message);
+    const { target, debuggerApi } = createTarget();
+    const profiler = createProfiler({
+      config, session: created.session, target, getAppMetrics: () => [createMetric(0)],
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    await profiler.start();
+    const trace = acquireDebuggerLease(debuggerApi, "Tracing");
+    await profiler.stop("settings-disabled");
+    expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.stop");
+    expect(debuggerApi.detach).not.toHaveBeenCalled();
+    expect(trace.valid).toBe(true);
+    trace.release();
+    expect(debuggerApi.attach).toHaveBeenCalledOnce();
+    expect(debuggerApi.detach).toHaveBeenCalledOnce();
   });
 
   it("discards an untriggered recorder and waits for an in-flight start during shutdown", async () => {

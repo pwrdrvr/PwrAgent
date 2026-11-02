@@ -16,22 +16,22 @@ Codex App Server Rust dependency disclosures are maintained by the Codex distrib
 Bundled Git runtime (approved separate-executable license exception)
 ------------------------------------------------------------------
 PwrAgent redistributes the unmodified Git and Git LFS executables from
-Dugite 3.2.3 / dugite-native v2.53.0-4. These are separate command-line tools.
+Dugite 3.3.2 / dugite-native v2.56.0-2. These are separate command-line tools.
 PwrAgent's own code remains MIT licensed.
 
-Git 2.53.0: GPL-2.0-only; see COPYING.
-Source: https://github.com/git/git/tree/v2.53.0
-Windows Git 2.53.0.windows.4 source:
-https://github.com/git-for-windows/git/tree/v2.53.0.windows.4
+Git 2.56.0: GPL-2.0-only; see COPYING.
+Source: https://github.com/git/git/tree/v2.56.0
+Windows Git 2.56.0.windows.4 source:
+https://github.com/git-for-windows/git/tree/v2.56.0.windows.4
 Build scripts, patches, and distribution metadata:
-https://github.com/desktop/dugite-native/tree/v2.53.0-4
+https://github.com/desktop/dugite-native/tree/v2.56.0-2
 
-Git LFS 3.7.1: MIT; see LICENSE.git-lfs.
-https://github.com/git-lfs/git-lfs/tree/v3.7.1
+Git LFS 3.8.1: MIT; see LICENSE.git-lfs.
+https://github.com/git-lfs/git-lfs/tree/v3.8.1
 
-Git Credential Manager 2.9.0 (non-macOS distributions): MIT;
+Git Credential Manager 2.9.1 (non-macOS distributions): MIT;
 see LICENSE.git-credential-manager and NOTICE.
-https://github.com/git-ecosystem/git-credential-manager/tree/v2.9.0
+https://github.com/git-ecosystem/git-credential-manager/tree/v2.9.1
 
 The macOS package omits Git Credential Manager's .NET payload because its
 architecture-specific non-Mach-O files cannot be merged into a universal app.
@@ -721,7 +721,7 @@ ISC
 
 MIT
 ~~~
-- @ai-markdown/engine@3.4.2 | https://github.com/ai-markdown/ai-markdown
+- @ai-markdown/engine@3.5.0 | https://github.com/ai-markdown/ai-markdown
 - @ai-markdown/hast-util-from-parse5@8.0.5 | ai-markdown/hast-util-from-parse5
 - @ai-markdown/hast-util-raw@9.1.3 | ai-markdown/hast-util-raw
 - @ai-markdown/rehype-raw@7.0.3 | ai-markdown/rehype-raw
@@ -742,19 +742,19 @@ MIT
 - @mattermost/client@11.9.0 | https://github.com/mattermost/mattermost
 - @mattermost/types@11.9.0 | https://github.com/mattermost/mattermost
 - @mermaid-js/parser@1.2.1 | https://github.com/mermaid-js/mermaid
-- @modelcontextprotocol/sdk@1.32.1 | https://github.com/modelcontextprotocol/typescript-sdk
-- @napi-rs/canvas@1.0.11 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-android-arm64@1.0.11 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-darwin-arm64@1.0.11 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-darwin-x64@1.0.11 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-arm-gnueabihf@1.0.11 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-arm64-gnu@1.0.11 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-arm64-musl@1.0.11 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-riscv64-gnu@1.0.11 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-x64-gnu@1.0.11 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-x64-musl@1.0.11 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-win32-arm64-msvc@1.0.11 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-win32-x64-msvc@1.0.11 | https://github.com/Brooooooklyn/canvas
+- @modelcontextprotocol/sdk@1.32.2 | https://github.com/modelcontextprotocol/typescript-sdk
+- @napi-rs/canvas@1.0.13 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-android-arm64@1.0.13 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-darwin-arm64@1.0.13 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-darwin-x64@1.0.13 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-arm-gnueabihf@1.0.13 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-arm64-gnu@1.0.13 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-arm64-musl@1.0.13 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-riscv64-gnu@1.0.13 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-x64-gnu@1.0.13 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-x64-musl@1.0.13 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-win32-arm64-msvc@1.0.13 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-win32-x64-msvc@1.0.13 | https://github.com/Brooooooklyn/canvas
 - @octokit/endpoint@11.0.5 | github:octokit/endpoint.js
 - @octokit/graphql@9.0.5 | github:octokit/graphql.js
 - @octokit/openapi-types@29.0.1 | https://github.com/octokit/openapi-types.ts
@@ -935,12 +935,12 @@ MIT
 - dequal@2.0.3 | lukeed/dequal
 - devlop@1.1.0 | wooorm/devlop
 - discord-api-types@0.38.50 | https://github.com/discordjs/discord-api-types
-- dugite@3.2.3 | https://github.com/desktop/dugite
+- dugite@3.3.2 | https://github.com/desktop/dugite
 - dunder-proto@1.0.1 | https://github.com/es-shims/dunder-proto
 - ee-first@1.1.1 | jonathanong/ee-first
 - electron@44.9.3 | https://github.com/electron/electron
 - electron-log@5.4.4 | megahertz/electron-log
-- electron-updater@6.8.10 | https://github.com/electron-userland/electron-builder
+- electron-updater@6.8.11 | https://github.com/electron-userland/electron-builder
 - emojilib@2.4.0 | https://github.com/muan/emojilib
 - emoticon@4.1.0 | wooorm/emoticon
 - encodeurl@2.0.0 | pillarjs/encodeurl
@@ -1031,7 +1031,7 @@ MIT
 - json-with-bigint@3.5.12 | https://github.com/Ivan-Korolenko/json-with-bigint
 - jsonfile@6.2.1 | https://github.com/jprichardson/node-jsonfile
 - katex@0.16.47 | https://github.com/KaTeX/KaTeX
-- katex@0.19.0 | https://github.com/KaTeX/KaTeX
+- katex@0.19.1 | https://github.com/KaTeX/KaTeX
 - khroma@2.1.0 | github:fabiospampinato/khroma
 - layout-base@1.0.2 | https://github.com/iVis-at-Bilkent/layout-base
 - layout-base@2.0.1 | https://github.com/iVis-at-Bilkent/layout-base
@@ -1239,7 +1239,7 @@ MIT
 - tuf-js@6.0.0 | https://github.com/theupdateframework/tuf-js
 - type-is@2.1.0 | jshttp/type-is
 - undici@6.28.1 | https://github.com/nodejs/undici
-- undici@8.12.2 | https://github.com/nodejs/undici
+- undici@8.12.3 | https://github.com/nodejs/undici
 - undici-types@7.24.6 | https://github.com/nodejs/undici
 - unicode-emoji-modifier-base@1.0.0 | https://github.com/mathiasbynens/unicode-emoji-modifier-base
 - unified@11.0.5 | unifiedjs/unified
@@ -1253,9 +1253,11 @@ MIT
 - unist-util-stringify-position@4.0.0 | syntax-tree/unist-util-stringify-position
 - unist-util-visit@2.0.3 | syntax-tree/unist-util-visit
 - unist-util-visit@5.1.0 | syntax-tree/unist-util-visit
+- unist-util-visit@5.2.0 | syntax-tree/unist-util-visit
 - unist-util-visit-children@3.0.0 | syntax-tree/unist-util-visit-children
 - unist-util-visit-parents@3.1.1 | syntax-tree/unist-util-visit-parents
 - unist-util-visit-parents@6.0.2 | syntax-tree/unist-util-visit-parents
+- unist-util-visit-parents@6.1.0 | syntax-tree/unist-util-visit-parents
 - universalify@2.0.1 | https://github.com/RyanZim/universalify
 - unpipe@1.0.0 | stream-utils/unpipe
 - use-sync-external-store@1.6.0 | https://github.com/facebook/react
@@ -1268,7 +1270,7 @@ MIT
 - web-namespaces@2.0.1 | wooorm/web-namespaces
 - whatwg-url@5.0.0 | jsdom/whatwg-url
 - ws@8.22.0 | https://github.com/websockets/ws
-- zod@4.6.6 | https://github.com/colinhacks/zod
+- zod@4.6.7 | https://github.com/colinhacks/zod
 - zwitch@2.0.4 | wooorm/zwitch
 
 OFL-1.1
@@ -1282,15 +1284,15 @@ Python-2.0
 
 SEE LICENSE IN README.md
 ~~~~~~~~~~~~~~~~~~~~~~~~
-- @anthropic-ai/claude-agent-sdk@0.3.303 | https://github.com/anthropics/claude-agent-sdk-typescript
-- @anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.303 | https://github.com/anthropics/claude-agent-sdk-typescript
-- @anthropic-ai/claude-agent-sdk-darwin-x64@0.3.303 | https://github.com/anthropics/claude-agent-sdk-typescript
-- @anthropic-ai/claude-agent-sdk-linux-arm64@0.3.303 | https://github.com/anthropics/claude-agent-sdk-typescript
-- @anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.303 | https://github.com/anthropics/claude-agent-sdk-typescript
-- @anthropic-ai/claude-agent-sdk-linux-x64@0.3.303 | https://github.com/anthropics/claude-agent-sdk-typescript
-- @anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.303 | https://github.com/anthropics/claude-agent-sdk-typescript
-- @anthropic-ai/claude-agent-sdk-win32-arm64@0.3.303 | https://github.com/anthropics/claude-agent-sdk-typescript
-- @anthropic-ai/claude-agent-sdk-win32-x64@0.3.303 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk@0.3.310 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.310 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-darwin-x64@0.3.310 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-linux-arm64@0.3.310 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.310 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-linux-x64@0.3.310 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.310 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-win32-arm64@0.3.310 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-win32-x64@0.3.310 | https://github.com/anthropics/claude-agent-sdk-typescript
 
 Unlicense
 ~~~~~~~~~
@@ -1499,13 +1501,13 @@ Apache License
    See the License for the specific language governing permissions and
    limitations under the License.
 
-@ai-markdown/engine@3.4.2 (MIT)
+@ai-markdown/engine@3.5.0 (MIT)
 -------------------------------
 
 Applies to:
-- @ai-markdown/engine@3.4.2 (MIT)
+- @ai-markdown/engine@3.5.0 (MIT)
 
-Representative file: @ai-markdown/engine@3.4.2/LICENSE
+Representative file: @ai-markdown/engine@3.5.0/LICENSE
 
 MIT License
 
@@ -1574,6 +1576,8 @@ Applies to:
 - remark-gfm@4.0.1 (MIT)
 - remark-rehype@11.1.2 (MIT)
 - retext-smartypants@6.2.0 (MIT)
+- unist-util-visit@5.2.0 (MIT)
+- unist-util-visit-parents@6.1.0 (MIT)
 - vfile-message@4.0.3 (MIT)
 
 Representative file: @ai-markdown/hast-util-from-parse5@8.0.5/license
@@ -1672,21 +1676,21 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-@anthropic-ai/claude-agent-sdk@0.3.303 (SEE LICENSE IN README.md)
+@anthropic-ai/claude-agent-sdk@0.3.310 (SEE LICENSE IN README.md)
 -----------------------------------------------------------------
 
 Applies to:
-- @anthropic-ai/claude-agent-sdk@0.3.303 (SEE LICENSE IN README.md)
-- @anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.303 (SEE LICENSE IN README.md)
-- @anthropic-ai/claude-agent-sdk-darwin-x64@0.3.303 (SEE LICENSE IN README.md)
-- @anthropic-ai/claude-agent-sdk-linux-arm64@0.3.303 (SEE LICENSE IN README.md)
-- @anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.303 (SEE LICENSE IN README.md)
-- @anthropic-ai/claude-agent-sdk-linux-x64@0.3.303 (SEE LICENSE IN README.md)
-- @anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.303 (SEE LICENSE IN README.md)
-- @anthropic-ai/claude-agent-sdk-win32-arm64@0.3.303 (SEE LICENSE IN README.md)
-- @anthropic-ai/claude-agent-sdk-win32-x64@0.3.303 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk@0.3.310 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.310 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-darwin-x64@0.3.310 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-linux-arm64@0.3.310 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.310 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-linux-x64@0.3.310 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.310 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-win32-arm64@0.3.310 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-win32-x64@0.3.310 (SEE LICENSE IN README.md)
 
-Representative file: @anthropic-ai/claude-agent-sdk@0.3.303/LICENSE.md
+Representative file: @anthropic-ai/claude-agent-sdk@0.3.310/LICENSE.md
 
 © Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance.
 
@@ -3929,13 +3933,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-@modelcontextprotocol/sdk@1.32.1 (MIT)
+@modelcontextprotocol/sdk@1.32.2 (MIT)
 --------------------------------------
 
 Applies to:
-- @modelcontextprotocol/sdk@1.32.1 (MIT)
+- @modelcontextprotocol/sdk@1.32.2 (MIT)
 
-Representative file: @modelcontextprotocol/sdk@1.32.1/LICENSE
+Representative file: @modelcontextprotocol/sdk@1.32.2/LICENSE
 
 MIT License
 
@@ -3959,24 +3963,24 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-@napi-rs/canvas@1.0.11 (MIT)
+@napi-rs/canvas@1.0.13 (MIT)
 ----------------------------
 
 Applies to:
-- @napi-rs/canvas@1.0.11 (MIT)
-- @napi-rs/canvas-android-arm64@1.0.11 (MIT)
-- @napi-rs/canvas-darwin-arm64@1.0.11 (MIT)
-- @napi-rs/canvas-darwin-x64@1.0.11 (MIT)
-- @napi-rs/canvas-linux-arm-gnueabihf@1.0.11 (MIT)
-- @napi-rs/canvas-linux-arm64-gnu@1.0.11 (MIT)
-- @napi-rs/canvas-linux-arm64-musl@1.0.11 (MIT)
-- @napi-rs/canvas-linux-riscv64-gnu@1.0.11 (MIT)
-- @napi-rs/canvas-linux-x64-gnu@1.0.11 (MIT)
-- @napi-rs/canvas-linux-x64-musl@1.0.11 (MIT)
-- @napi-rs/canvas-win32-arm64-msvc@1.0.11 (MIT)
-- @napi-rs/canvas-win32-x64-msvc@1.0.11 (MIT)
+- @napi-rs/canvas@1.0.13 (MIT)
+- @napi-rs/canvas-android-arm64@1.0.13 (MIT)
+- @napi-rs/canvas-darwin-arm64@1.0.13 (MIT)
+- @napi-rs/canvas-darwin-x64@1.0.13 (MIT)
+- @napi-rs/canvas-linux-arm-gnueabihf@1.0.13 (MIT)
+- @napi-rs/canvas-linux-arm64-gnu@1.0.13 (MIT)
+- @napi-rs/canvas-linux-arm64-musl@1.0.13 (MIT)
+- @napi-rs/canvas-linux-riscv64-gnu@1.0.13 (MIT)
+- @napi-rs/canvas-linux-x64-gnu@1.0.13 (MIT)
+- @napi-rs/canvas-linux-x64-musl@1.0.13 (MIT)
+- @napi-rs/canvas-win32-arm64-msvc@1.0.13 (MIT)
+- @napi-rs/canvas-win32-x64-msvc@1.0.13 (MIT)
 
-Representative file: @napi-rs/canvas@1.0.11/LICENSE
+Representative file: @napi-rs/canvas@1.0.13/LICENSE
 
 MIT License
 
@@ -3999,6 +4003,40 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+src/svg_doc/broken_image.png is Chromium's broken-image icon
+(third_party/blink/public/default_100_percent/blink/broken_image.png),
+used under the Chromium license:
+
+Copyright 2015 The Chromium Authors
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+   * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+   * Neither the name of Google LLC nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 @npmcli/agent@5.0.2 (ISC)
 -------------------------
@@ -5996,7 +6034,7 @@ builder-util-runtime@9.7.0 (MIT)
 
 Applies to:
 - builder-util-runtime@9.7.0 (MIT)
-- electron-updater@6.8.10 (MIT)
+- electron-updater@6.8.11 (MIT)
 
 Representative file: builder-util-runtime@9.7.0/LICENSE
 
@@ -7384,13 +7422,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-dugite@3.2.3 (MIT)
+dugite@3.3.2 (MIT)
 ------------------
 
 Applies to:
-- dugite@3.2.3 (MIT)
+- dugite@3.3.2 (MIT)
 
-Representative file: dugite@3.2.3/LICENSE
+Representative file: dugite@3.3.2/LICENSE
 
 MIT License
 
@@ -9461,7 +9499,7 @@ katex@0.16.47 (MIT)
 
 Applies to:
 - katex@0.16.47 (MIT)
-- katex@0.19.0 (MIT)
+- katex@0.19.1 (MIT)
 
 Representative file: katex@0.16.47/LICENSE
 
@@ -13144,7 +13182,7 @@ undici@6.28.1 (MIT)
 
 Applies to:
 - undici@6.28.1 (MIT)
-- undici@8.12.2 (MIT)
+- undici@8.12.3 (MIT)
 - undici-types@7.24.6 (MIT)
 
 Representative file: undici@6.28.1/LICENSE
@@ -13406,13 +13444,13 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-zod@4.6.6 (MIT)
+zod@4.6.7 (MIT)
 ---------------
 
 Applies to:
-- zod@4.6.6 (MIT)
+- zod@4.6.7 (MIT)
 
-Representative file: zod@4.6.6/LICENSE
+Representative file: zod@4.6.7/LICENSE
 
 MIT License
 

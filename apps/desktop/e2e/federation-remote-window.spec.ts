@@ -1466,6 +1466,69 @@ test.describe("federation remote window", () => {
     }
   });
 
+  test("observes and cancels remote startup from both controls after reconnect", async ({ browserName: _browserName }, testInfo) => {
+    test.setTimeout(240_000);
+    const fixture = await createLocalControlFixture();
+    const gateway = await startInProcessFederationGateway({
+      instanceLabel: "Fixture owner / dev", holdLaunchpadSetup: true, threads: [],
+      directories: [{ key: "directory:/fixture/repo", label: "FixtureRepo", path: "/fixture/repo" }],
+    });
+    let app: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+    const failures: unknown[] = [];
+    try {
+      app = await launchElectronApp({ fixturePath: fixture.fixturePath, secretStorage: "memory" });
+      const { electronApp, window } = app;
+      await window.getByRole("button", { name: "Open settings" }).click();
+      await window.getByRole("navigation", { name: "Settings sections" }).getByRole("button", { name: "Federation", exact: true }).click();
+      await window.getByLabel("Import invite").fill(gateway.invite);
+      await window.getByRole("button", { name: "Import invite" }).click();
+      await gateway.waitForConnection(30_000);
+      const remoteWindow = electronApp.waitForEvent("window");
+      await window.getByRole("button", { name: "Browse remote threads" }).click();
+      const remote = await remoteWindow;
+      await remote.waitForLoadState("domcontentloaded");
+      await remote.getByRole("tab", { name: "directories" }).click();
+      for (const surface of ["composer", "setup row"]) {
+        await remote.getByRole("button", { name: "Open new thread launchpad for FixtureRepo" }).click();
+        const prompt = remote.getByRole("textbox", { name: "New thread" });
+        const submitted = `Inspect fixture startup from ${surface}`;
+        await prompt.fill(submitted);
+        await remote.getByRole("button", { name: "Start thread", exact: true }).click();
+        const setup = remote.getByLabel("Env setup running", { exact: true });
+        await expect(setup).toBeVisible();
+        await expect(setup).toContainText(/1m/);
+        await expect(remote.getByLabel("Preparing transcript")).toContainText("Owner started");
+        await expect(remote.getByLabel("Submitted message").locator("time")).toHaveAttribute("datetime", /T/);
+        await setup.getByRole("button", { expanded: false }).click();
+        await expect(setup).toContainText("Installing fixture dependencies");
+        if (surface === "composer") {
+          const reconnect = gateway.waitForNextConnection(30_000);
+          await gateway.stop();
+          await gateway.restart();
+          await reconnect;
+          await expect(setup).toContainText("Installing fixture dependencies");
+          await remote.screenshot({ path: testInfo.outputPath("remote-startup-observable.png") });
+        }
+        await (surface === "setup row" ? setup : remote.locator(".composer__actions"))
+          .getByRole("button", { name: "Cancel startup", exact: true }).click();
+        await expect(remote.getByLabel("Preparing transcript")).toHaveCount(0);
+        await expect(prompt).toHaveText(submitted);
+        await expect(remote.locator(".thread-row__title").filter({ hasText: submitted })).toHaveCount(0);
+      }
+      expect(gateway.calls.filter((call) => call.method === "materializeDirectoryLaunchpad")).toHaveLength(2);
+      expect(gateway.calls.filter((call) => call.method === "manageLaunchpadCreation" && (call.params as { action: string }).action === "cancel")).toHaveLength(2);
+    } catch (error) {
+      failures.push(error);
+    }
+    for (const cleanup of [() => app?.close(), () => gateway.close(), () => fixture.cleanup()]) {
+      try { await cleanup(); } catch (error) { failures.push(error); }
+    }
+    if (failures.length) {
+      const details = failures.map((error) => error instanceof Error ? error.stack ?? error.message : String(error));
+      throw new AggregateError(failures, `Remote startup scenario or teardown failed:\n${details.join("\n\n")}`);
+    }
+  });
+
   test("starts drafts on the peer's provider when the peer cannot run this machine's", async () => {
     test.setTimeout(240_000);
 
@@ -2118,12 +2181,24 @@ test.describe("federation remote window", () => {
       expect(childTitle).toBeTruthy();
       await rightClickThreadRow(viewer.window, childTitle!, { exact: true });
       await viewer.window.getByRole("menuitem", { name: "Unlink from Parent" }).click();
+      // The child can already have a pin rank before unlink completes.
+      // Observe the cleared relationship and the pin in the same owner read.
       await expect
-        .poll(async () => (await readViewerRelationship()).childThread)
-        .toMatchObject({ pinnedRank: expect.any(String) });
-      relationship = await readViewerRelationship();
-      expect(relationship.childThread?.parentThreadId).toBeUndefined();
-      expect(relationship.childThread?.parentThreadInstanceId).toBeUndefined();
+        .poll(async () => {
+          const thread = (await readViewerRelationship()).childThread;
+          return {
+            pinnedRank: thread?.pinnedRank,
+            parentThreadId: thread?.parentThreadId,
+            parentThreadBackend: thread?.parentThreadBackend,
+            parentThreadInstanceId: thread?.parentThreadInstanceId,
+          };
+        })
+        .toEqual({
+          pinnedRank: expect.any(String),
+          parentThreadId: undefined,
+          parentThreadBackend: undefined,
+          parentThreadInstanceId: undefined,
+        });
 
       // Unlink above must not wait for provider listing; on CI it routinely
       // runs while the relaunched viewer is still checking. Archive must wait.

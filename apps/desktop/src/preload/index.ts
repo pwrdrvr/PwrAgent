@@ -305,6 +305,12 @@ import type {
   SetDirectoryPinResponse,
   SetDirectoryThreadsCollapsedRequest,
   SetDirectoryThreadsCollapsedResponse,
+  SetProjectForgeAutomationRequest,
+  SetProjectForgeAutomationResponse,
+  ListProjectHeldWakeupsRequest,
+  ListProjectHeldWakeupsResponse,
+  ResolveProjectHeldWakeupsRequest,
+  ResolveProjectHeldWakeupsResponse,
   SetThreadParentRequest,
   SetThreadParentResponse,
   SetThreadPinRequest,
@@ -730,6 +736,7 @@ import {
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_STOP_SUB_AGENT_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  AGENT_LAUNCHPAD_CREATION_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_PREVIEW_THREAD_REWIND_CHANNEL,
@@ -1022,6 +1029,9 @@ import {
   NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL,
   NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
   NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL,
+  NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL,
+  NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL,
+  NAVIGATION_RESOLVE_PROJECT_HELD_WAKEUPS_CHANNEL,
   NAVIGATION_SET_THREAD_PARENT_CHANNEL,
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL,
@@ -1246,6 +1256,8 @@ let threadSearchRequestSequence = 0;
 const desktopApi = Object.freeze({
   manageThreadDependencies: async (request: import("@pwragent/shared").ManageThreadDependenciesRequest): Promise<import("@pwragent/shared").ManageThreadDependenciesResponse> =>
     await ipcRenderer.invoke("thread:dependencies", request),
+  manageThreadPrWatches: async (request: import("@pwragent/shared").ThreadPrWatchesRequest): Promise<import("@pwragent/shared").ThreadPrWatchesResponse> =>
+    await ipcRenderer.invoke("thread:prWatches", request),
   nativeVoiceCapability: () => ipcRenderer.invoke(NATIVE_VOICE_CAPABILITY_CHANNEL),
   startNativeVoice: (request: NativeVoiceStart) => ipcRenderer.invoke(NATIVE_VOICE_START_CHANNEL, request),
   stopNativeVoice: (request: NativeVoiceTarget) => ipcRenderer.invoke(NATIVE_VOICE_STOP_CHANNEL, request),
@@ -2606,6 +2618,8 @@ const desktopApi = Object.freeze({
     request: MaterializeDirectoryLaunchpadRequest
   ): Promise<MaterializeDirectoryLaunchpadResponse> =>
     await ipcRenderer.invoke(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL, request),
+  manageLaunchpadCreation: async (request: import("@pwragent/shared").LaunchpadCreationRequest) =>
+    await ipcRenderer.invoke(AGENT_LAUNCHPAD_CREATION_CHANNEL, request),
   runCodexEnvironmentAction: async (
     request: RunCodexEnvironmentActionRequest,
   ): Promise<RunCodexEnvironmentActionResponse> =>
@@ -2854,6 +2868,27 @@ const desktopApi = Object.freeze({
   ): Promise<SetDirectoryThreadsCollapsedResponse> =>
     await ipcRenderer.invoke(
       NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL,
+      request,
+    ),
+  setProjectForgeAutomation: async (
+    request: SetProjectForgeAutomationRequest,
+  ): Promise<SetProjectForgeAutomationResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL,
+      request,
+    ),
+  listProjectHeldWakeups: async (
+    request: ListProjectHeldWakeupsRequest,
+  ): Promise<ListProjectHeldWakeupsResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL,
+      request,
+    ),
+  resolveProjectHeldWakeups: async (
+    request: ResolveProjectHeldWakeupsRequest,
+  ): Promise<ResolveProjectHeldWakeupsResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_RESOLVE_PROJECT_HELD_WAKEUPS_CHANNEL,
       request,
     ),
   refreshThreadPullRequests: async (

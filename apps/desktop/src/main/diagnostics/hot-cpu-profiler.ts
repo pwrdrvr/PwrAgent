@@ -10,28 +10,20 @@ import type { HotCpuProfileConfig } from "./hot-cpu-profile-config";
 import type { HotCpuProfileSession } from "./hot-cpu-profile-session";
 import { getMainLogger } from "../log";
 import { joinCpuProfiles } from "./cpu-profile-history";
+import { acquireDebuggerLease, type DebuggerLease, type DiagnosticDebugger } from "./debugger-lease";
 
-const CHROME_DEBUGGER_PROTOCOL_VERSION = "1.3";
 // Rotate only after evaluating the CPU sample, and retain the last complete
 // window as well as the live one. A burst across a rotation stays available.
 const RECORDING_WINDOW_MS = 30_000;
 
 type Logger = Pick<Console, "info" | "warn" | "error">;
 
-type HotCpuDebugger = {
-  attach: (version: string) => void;
-  detach: () => void;
-  isAttached: () => boolean;
-  sendCommand: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
-  on: (event: "detach", listener: (event: unknown, reason: string) => void) => void;
-  off?: (event: "detach", listener: (event: unknown, reason: string) => void) => void;
-};
-
 export type HotCpuTarget = {
-  debugger: HotCpuDebugger;
+  debugger: DiagnosticDebugger;
   getOSProcessId: () => number;
   readDiagnostics?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
   isDestroyed?: () => boolean;
+  isDevToolsOpened?: () => boolean;
   takeHeapSnapshot?: (filePath: string) => Promise<void>;
   readHeapUsage?: () => {
     heapUsed: number;
@@ -66,7 +58,8 @@ function artifactFilename(filePath: string): string {
 
 export class HotCpuProfiler {
   private readonly detachListener = (_event: unknown, reason: string) => {
-    this.debuggerAttached = false;
+    this.target.debugger.off?.("detach", this.detachListener);
+    this.debuggerLease = undefined;
     this.recording = false;
     this.previousRecording = null;
     void this.session.appendEvent({
@@ -100,7 +93,7 @@ export class HotCpuProfiler {
   private previousRecording: Profiler.Profile | null = null;
   private previousRecordingStartedAtMs = 0;
   private consecutiveHotSamples = 0;
-  private debuggerAttached = false;
+  private debuggerLease: DebuggerLease | undefined;
   private heapSnapshotLimitReached = false;
   private heapSnapshotsCaptured = 0;
   private heapSnapshotMidTimer: ReturnType<typeof setTimeout> | null = null;
@@ -442,16 +435,18 @@ export class HotCpuProfiler {
       this.stopped
       || this.recording
       || this.isTargetDestroyed()
+      || this.target.isDevToolsOpened?.()
       || this.profileCount >= this.config.maxProfiles
     ) return;
-    if (this.target.debugger.isAttached()) return;
     try {
-      this.target.debugger.attach(CHROME_DEBUGGER_PROTOCOL_VERSION);
-      this.debuggerAttached = true;
-      this.target.debugger.on("detach", this.detachListener);
+      if (!this.debuggerLease) {
+        this.debuggerLease = acquireDebuggerLease(this.target.debugger, "Profiler");
+        this.target.debugger.on("detach", this.detachListener);
+      }
       await this.target.debugger.sendCommand("Profiler.enable");
       if (this.stopped) return;
       await this.target.debugger.sendCommand("Profiler.start");
+      if (!this.debuggerLease?.valid || this.isTargetDestroyed()) throw new Error("CPU recorder target lost");
       this.recording = true;
       this.recordingStartedAtMs = startedAtMs;
       this.recordingStartedAtMonotonicMs = performance.now();
@@ -482,6 +477,7 @@ export class HotCpuProfiler {
       this.previousRecordingStartedAtMs = this.recordingStartedAtMs;
       if (this.stopped) return;
       await this.target.debugger.sendCommand("Profiler.start");
+      if (!this.debuggerLease?.valid || this.isTargetDestroyed()) throw new Error("CPU recorder target lost");
       this.recording = true;
       this.recordingStartedAtMs = startedAtMs;
       this.recordingStartedAtMonotonicMs = performance.now();
@@ -857,29 +853,17 @@ export class HotCpuProfiler {
   }
 
   private detachDebugger(): void {
-    if (this.isTargetDestroyed()) {
-      this.debuggerAttached = false;
-      return;
-    }
-
     try {
-      if (this.target.debugger.off) {
-        this.target.debugger.off("detach", this.detachListener);
-      }
-
-      if (!this.debuggerAttached || !this.target.debugger.isAttached()) {
-        return;
-      }
-
-      this.target.debugger.detach();
-      this.debuggerAttached = false;
+      this.target.debugger.off?.("detach", this.detachListener);
+      this.debuggerLease?.release(this.isTargetDestroyed());
     } catch (error) {
-      this.debuggerAttached = false;
       this.logger.warn("[pwragent:hot-cpu] target debugger detach failed", {
         error: serializeError(error),
         target: this.session.target ?? "renderer",
         sessionDirectory: this.session.directoryPath,
       });
+    } finally {
+      this.debuggerLease = undefined;
     }
   }
 

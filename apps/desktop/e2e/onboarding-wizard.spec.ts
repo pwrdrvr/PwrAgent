@@ -223,7 +223,9 @@ async function expectFakeProvidersFound(
 
 test.describe("Onboarding wizard", () => {
   test("fires on a fresh PWRAGENT_HOME and walks Welcome → Done in Shared mode", async () => {
-    const app = await launchWizard();
+    // The geometry check below is the product's work-area fit, so this
+    // launch keeps it.
+    const app = await launchWizard({ PWRAGENT_E2E_LARGER_THAN_SCREEN: undefined });
     try {
       // Welcome screen visible.
       await expect(

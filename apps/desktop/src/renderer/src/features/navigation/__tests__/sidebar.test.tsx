@@ -14,17 +14,29 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  BackendSummary,
-  DesktopPwrAgentProfileSummary,
-  NavigationDirectorySummary,
-  NavigationThreadSummary,
+import {
+  DEFAULT_PROJECT_FORGE_AUTOMATION,
+  type BackendSummary,
+  type DesktopPwrAgentProfileSummary,
+  type FederationCapability,
+  type NavigationDirectorySummary,
+  type NavigationThreadSummary,
+  type ProjectForgeAutomation,
+  type ProjectHeldWakeup,
+  type ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
 import type { FederationThreadTarget } from "../../chrome/federation-thread-targets";
-import type { FederationProjectDirectory } from "../../chrome/useFederationProjectStates";
+import type {
+  CheckFederationTargetProject,
+  FederationProjectDirectory,
+} from "../../chrome/useFederationProjectStates";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { ThreadDependencyIndicatorsContext } from "../../thread-dependencies/useThreadDependencyIndicators";
+import {
+  summarizeThreadPrWatches,
+  ThreadPrWatchIndicatorsContext,
+} from "../../pr-watches/useThreadPrWatchIndicators";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import { useState, type ComponentProps } from "react";
 import type { Editor } from "@tiptap/react";
@@ -1030,6 +1042,7 @@ describe("Sidebar", () => {
   });
 
   it("describes each thread lens with a custom tooltip and preserves selection", async () => {
+    stubMacPlatform();
     const onBrowseModeChange = vi.fn();
 
     render(
@@ -1050,9 +1063,10 @@ describe("Sidebar", () => {
     );
 
     const updatedTab = screen.getByRole("tab", { name: "Updated" });
+    expect(updatedTab).toHaveAttribute("aria-keyshortcuts", "Meta+Alt+3");
     fireEvent.mouseEnter(updatedTab);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "Updated — all threads, most recently updated first"
+      "Updated — all threads, most recently updated first  (⌥⌘3)"
     );
     fireEvent.mouseLeave(updatedTab);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
@@ -1060,7 +1074,7 @@ describe("Sidebar", () => {
     const createdTab = screen.getByRole("tab", { name: "Created" });
     fireEvent.focus(createdTab);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "Created — all threads, newest created first"
+      "Created — all threads, newest created first  (⌥⌘4)"
     );
 
     // Selecting a lens still works and the tooltip dismisses on click.
@@ -1107,7 +1121,7 @@ describe("Sidebar", () => {
     const updatedTab = within(tablist).getByRole("tab", { name: "Updated" });
     fireEvent.focus(updatedTab);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "Updated — all threads, most recently updated first\nNo threads yet"
+      "Updated — all threads, most recently updated first  (Ctrl+Alt+3)\nNo threads yet"
     );
     fireEvent.blur(updatedTab);
 
@@ -1562,7 +1576,7 @@ describe("Sidebar", () => {
       releaseThreadPinPointer({ x: 50, y: 70 });
     });
 
-    expect(onSetThreadParent).toHaveBeenCalledWith(loose, "target", "codex");
+    expect(onSetThreadParent).toHaveBeenCalledWith(loose, "target", "codex", true);
     expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(target, false);
     expect(shell("Target thread")).not.toHaveClass("is-drop-target-inside");
   });
@@ -1620,7 +1634,7 @@ describe("Sidebar", () => {
     });
 
     expect(onSetThreadParent).toHaveBeenCalledTimes(1);
-    expect(onSetThreadParent).toHaveBeenCalledWith(child, "other", "codex");
+    expect(onSetThreadParent).toHaveBeenCalledWith(child, "other", "codex", true);
   });
 
   it("does not expose sub-thread disclosure controls for an older remote peer", () => {
@@ -2390,6 +2404,7 @@ describe("Sidebar", () => {
     render(
       <Sidebar
         backends={remoteBackends}
+        remoteBackends={new Map([["peer-mini", remoteBackends]])}
         browseMode="inbox"
         directories={directories}
         inboxThreads={[remoteChild]}
@@ -4643,6 +4658,8 @@ describe("Sidebar", () => {
       expect(card).toHaveTextContent(
         /AttentionThreads in progress or waiting to be reviewedIn progress1To review1/,
       );
+      expect(card).toHaveTextContent("Show Attention (Ctrl+Alt+1)");
+      expect(tab).toHaveAttribute("aria-keyshortcuts", "Control+Alt+1");
       // Unfederated: no machine named, because there is nothing to tell apart.
       expect(card.textContent).not.toContain("Quitting");
       // The consequence lines exist nowhere else, so the card has to be
@@ -4838,7 +4855,7 @@ describe("Sidebar", () => {
 
       fireEvent.mouseEnter(screen.getByRole("tab", { name: /^Drafts,/ }));
       expect((await screen.findByRole("tooltip")).textContent).toBe(
-        "Drafts — threads with a reply you started and never sent"
+        "Drafts — threads with a reply you started and never sent  (Ctrl+Alt+2)"
           + "\n1 thread with an unsent draft",
       );
     });
@@ -6684,7 +6701,7 @@ describe("Sidebar", () => {
       releaseThreadPinPointer({ x: 50, y: 20 });
     });
 
-    expect(onSetThreadParent).toHaveBeenCalledWith(second, "thread-first", "codex");
+    expect(onSetThreadParent).toHaveBeenCalledWith(second, "thread-first", "codex", true);
     expect(onReorderThreadPins).not.toHaveBeenCalled();
   });
 
@@ -8698,6 +8715,177 @@ describe("Sidebar", () => {
     expect(onSelectThread).not.toHaveBeenCalled();
   });
 
+  describe("PR watch menu items", () => {
+    const ciWatch: ThreadPullRequestWatchSummary = {
+      watchId: "watch-ci",
+      backend: "codex",
+      threadId: "thread-1",
+      prKey: "github.com/exampleorg/exampleapp#202",
+      prUrl: "https://github.com/ExampleOrg/ExampleApp/pull/202",
+      prNumber: 202,
+      headSha: "9f2c41a0000000000000000000000000000000000",
+      notifyOn: ["success", "failure"],
+      createdAt: 1,
+      failureHandledByAutoFix: false,
+      kind: "checks",
+      baseline: { outcome: "failure", observedAt: 1, runAttempt: 2 },
+    };
+    const terminalWatch: ThreadPullRequestWatchSummary = {
+      ...ciWatch,
+      watchId: "watch-merge",
+      notifyOn: ["merged", "closed"],
+      createdAt: 2,
+      kind: "terminal",
+      baseline: undefined,
+    };
+
+    function renderWithWatches(
+      watches: ThreadPullRequestWatchSummary[],
+      thread: NavigationThreadSummary = pullRequestThread,
+    ) {
+      const stop = vi.fn(async () => undefined);
+      const askAgentToWatchCi = vi.fn();
+      const watchCi = vi.fn(async () => undefined);
+      render(
+        <ThreadPrWatchIndicatorsContext.Provider value={{
+          byThreadKey: summarizeThreadPrWatches(watches),
+          stop,
+          watchCi,
+          askAgentToWatchCi,
+        }}>
+          <Sidebar
+            backends={backends}
+            browseMode="recents"
+            directories={directories}
+            inboxThreads={[thread]}
+            loading={false}
+            creatingThread={undefined}
+            selectedItemKey="codex:thread-1"
+            threads={[thread]}
+            onBrowseModeChange={() => undefined}
+            onCreateThread={async () => undefined}
+            onDetachPullRequest={async () => undefined}
+            onOpenLaunchpad={async () => undefined}
+            onSelectThread={() => undefined}
+          />
+        </ThreadPrWatchIndicatorsContext.Provider>,
+      );
+      const chip = screen.getByRole("button", { name: /^Open ExampleOrg\/ExampleApp#202 / });
+      fireEvent.contextMenu(chip, { clientX: 48, clientY: 64 });
+      return { chip, stop, askAgentToWatchCi, watchCi };
+    }
+
+    it("lists the stops between copying and detaching, and stops the chosen watch", async () => {
+      const { chip, stop } = renderWithWatches([ciWatch, terminalWatch]);
+      expect(chip).toHaveAccessibleName(
+        "Open ExampleOrg/ExampleApp#202 (ready for review · checks passing) in browser, waiting for CI",
+      );
+      expect(chip.querySelector(".pr-chip__watch")).not.toBeNull();
+      const labels = within(screen.getByRole("menu"))
+        .getAllByRole("menuitem")
+        .map(menuItemLabel);
+      const copy = labels.indexOf("Copy Pull Request URL");
+      expect(labels.slice(copy, copy + 4)).toEqual([
+        "Copy Pull Request URL",
+        "Stop Waiting for CIattempt 2",
+        "Stop Watching for Merge",
+        "Detach Pull Request",
+      ]);
+      expect(labels).not.toContain("Ask Agent to Watch CI");
+      expect(labels).not.toContain("Watch CI");
+
+      await clickElement(screen.getByRole("menuitem", { name: /^Stop Waiting for CI/ }));
+      expect(stop).toHaveBeenCalledWith(ciWatch, expect.objectContaining({ id: "thread-1" }));
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+
+    it("offers Watch CI before Ask Agent to Watch CI on the primary workspace's open PR", async () => {
+      const thread = { ...pullRequestThread, primaryGitRepository: "github.com/exampleorg/exampleapp" };
+      const { watchCi, askAgentToWatchCi } = renderWithWatches([terminalWatch], thread);
+      const labels = within(screen.getByRole("menu"))
+        .getAllByRole("menuitem")
+        .map(menuItemLabel);
+      const watch = labels.indexOf("Watch CI");
+      expect(labels.slice(watch, watch + 2)).toEqual(["Watch CI", "Ask Agent to Watch CI"]);
+      await clickElement(screen.getByRole("menuitem", { name: "Watch CI" }));
+      expect(watchCi).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "thread-1" }),
+        expect.objectContaining({ number: 202 }),
+      );
+      expect(askAgentToWatchCi).not.toHaveBeenCalled();
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+
+    it("offers Ask Agent to Watch CI on an open PR with no CI watch", async () => {
+      const { askAgentToWatchCi } = renderWithWatches([terminalWatch]);
+      expect(screen.queryByRole("menuitem", { name: /^Stop Waiting for CI/ })).toBeNull();
+      // Not on the thread's primary repository: main would not watch it.
+      expect(screen.queryByRole("menuitem", { name: "Watch CI" })).toBeNull();
+      await clickElement(screen.getByRole("menuitem", { name: "Ask Agent to Watch CI" }));
+      expect(askAgentToWatchCi).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "thread-1" }),
+        expect.objectContaining({ number: 202 }),
+      );
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+
+    it("shows no watch items for an older peer's thread", () => {
+      renderWithWatches([ciWatch], {
+        ...pullRequestThread,
+        federation: {
+          ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "thread-1" },
+          instanceLabel: "Laptop",
+          peerStatus: "connected",
+          capabilities: [],
+        },
+      } as NavigationThreadSummary);
+      const labels = within(screen.getByRole("menu")).getAllByRole("menuitem").map(menuItemLabel);
+      expect(labels).toContain("Copy Pull Request URL");
+      expect(labels.filter((label) => /Watch|Waiting/.test(label))).toEqual([]);
+    });
+
+    const peerThread = (capabilities: FederationCapability[]): NavigationThreadSummary => ({
+      ...pullRequestThread,
+      primaryGitRepository: "github.com/exampleorg/exampleapp",
+      // The owner's marks, not this instance's list, draw a peer row's eye.
+      prCiWatches: [{
+        prKey: ciWatch.prKey, watchId: "peer-ci", notifyOn: ["success", "failure"], createdAt: 1, runAttempt: 3,
+      }],
+      federation: {
+        ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "thread-1" },
+        instanceLabel: "Laptop",
+        peerStatus: "connected",
+        capabilities,
+      },
+    });
+
+    it("draws a peer row's eye from its owner's marks and stops the watch there", async () => {
+      const thread = peerThread(["thread_navigation", "turn_control", "thread_pr_watch_control_v1"]);
+      // A local watch with the same thread id must not reach the peer's row.
+      const { chip, stop } = renderWithWatches([terminalWatch], thread);
+      expect(chip).toHaveAccessibleName(
+        "Open ExampleOrg/ExampleApp#202 (ready for review · checks passing) in browser, waiting for CI",
+      );
+      expect(chip.querySelector(".pr-chip__watch")).not.toBeNull();
+      const labels = within(screen.getByRole("menu")).getAllByRole("menuitem").map(menuItemLabel);
+      expect(labels).toContain("Stop Waiting for CIattempt 3");
+      expect(labels).not.toContain("Stop Watching for Merge");
+      expect(labels).not.toContain("Watch CI");
+      await clickElement(screen.getByRole("menuitem", { name: /^Stop Waiting for CI/ }));
+      expect(stop).toHaveBeenCalledWith(
+        { backend: "codex", threadId: "thread-1", watchId: "peer-ci" },
+        expect.objectContaining({ federation: thread.federation }),
+      );
+    });
+
+    it("draws the eye but offers no stop when the peer grants no turn control", () => {
+      const { chip } = renderWithWatches([], peerThread(["thread_navigation", "thread_pr_watch_control_v1"]));
+      expect(chip.querySelector(".pr-chip__watch")).not.toBeNull();
+      const labels = within(screen.getByRole("menu")).getAllByRole("menuitem").map(menuItemLabel);
+      expect(labels.filter((label) => /Watch|Waiting/.test(label))).toEqual([]);
+    });
+  });
+
   it("shows compact runtime identity chips that copy full values", async () => {
     const copyText = vi.fn(async () => undefined);
     Object.defineProperty(window, "pwragent", {
@@ -8942,7 +9130,7 @@ describe("Sidebar directory pinning", () => {
 
   function renderSidebar(
     directoriesArg: NavigationDirectorySummary[],
-    overrides: {
+    initialOverrides: {
       threads?: NavigationThreadSummary[];
       onSetDirectoryPin?: (
         directory: NavigationDirectoryView,
@@ -8950,6 +9138,7 @@ describe("Sidebar directory pinning", () => {
       ) => Promise<void>;
       onReorderDirectoryPins?: (directoryKeys: string[]) => Promise<void>;
       onRemoveDirectory?: (directory: NavigationDirectoryView) => void;
+      onOpenForgePermissions?: (repository: string) => void;
       onOpenLaunchpad?: (
         directory: NavigationDirectoryView,
       ) => Promise<void>;
@@ -8958,19 +9147,31 @@ describe("Sidebar directory pinning", () => {
         directory?: FederationProjectDirectory,
       ) => Promise<void>;
       newThreadFederationTargets?: readonly FederationThreadTarget[];
+      onSetProjectForgeAutomation?: ComponentProps<typeof Sidebar>["onSetProjectForgeAutomation"];
+      onListProjectHeldWakeups?: ComponentProps<typeof Sidebar>["onListProjectHeldWakeups"];
+      onResolveProjectHeldWakeups?: ComponentProps<typeof Sidebar>["onResolveProjectHeldWakeups"];
+      federationOwnerForgeAutomation?: boolean;
+      peerForgeAutomationInstanceIds?: ReadonlySet<string>;
+      checkFederationTargetProject?: CheckFederationTargetProject;
     } = {},
-  ): void {
-    render(
+  ): { rerender: (next: typeof initialOverrides) => void } {
+    const element = (overrides: typeof initialOverrides) => (
       <Sidebar
         backends={backends}
         browseMode="directories"
         directories={directoriesArg}
+        onSetProjectForgeAutomation={overrides.onSetProjectForgeAutomation}
+        onListProjectHeldWakeups={overrides.onListProjectHeldWakeups}
+        onResolveProjectHeldWakeups={overrides.onResolveProjectHeldWakeups}
+        federationOwnerForgeAutomation={overrides.federationOwnerForgeAutomation}
+        peerForgeAutomationInstanceIds={overrides.peerForgeAutomationInstanceIds}
         inboxThreads={[]}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
         threads={overrides.threads ?? []}
         newThreadFederationTargets={overrides.newThreadFederationTargets}
+        checkFederationTargetProject={overrides.checkFederationTargetProject}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onCreateThreadOnFederationTarget={
@@ -8981,8 +9182,11 @@ describe("Sidebar directory pinning", () => {
         onSetDirectoryPin={overrides.onSetDirectoryPin}
         onReorderDirectoryPins={overrides.onReorderDirectoryPins}
         onRemoveDirectory={overrides.onRemoveDirectory}
-      />,
+        onOpenForgePermissions={overrides.onOpenForgePermissions}
+      />
     );
+    const result = render(element(initialOverrides));
+    return { rerender: (next) => result.rerender(element(next)) };
   }
 
   /**
@@ -9429,34 +9633,112 @@ describe("Sidebar directory pinning", () => {
     expect(summary).toHaveFocus();
   });
 
-  it("hides the whole launchpad cluster on a directory this instance cannot host", () => {
-    // The unconfigured guard wraps icon AND chevron. Offering "new chat on
-    // <machine>" from a row with no local launchpad would reintroduce the
-    // affordance that guard exists to remove.
-    renderSidebar(
-      [{ ...projectADirectory, localAvailability: "unconfigured" }],
-      {
-        newThreadFederationTargets: [
-          {
-            availability: "available",
-            instanceId: "studio-work",
-            label: "Studio Mac / work",
-          },
-        ],
-        onCreateThreadOnFederationTarget: async () => undefined,
-      },
-    );
+  // What main hands the renderer for a project only a peer has checked out:
+  // a label and nothing else (`remoteDirectoryPlaceholder`).
+  const remoteOnlyDirectory: NavigationDirectorySummary = {
+    key: "unconfigured-directory:projecta",
+    kind: "directory",
+    label: "ProjectA",
+    localAvailability: "unconfigured",
+    threadKeys: [],
+    needsAttentionCount: 0,
+  };
 
+  it("offers the machines that have a project this instance cannot host", async () => {
+    const onOpenLaunchpad = vi.fn(async () => undefined);
+    const onCreateThreadOnFederationTarget = vi.fn(async () => undefined);
+    const checkFederationTargetProject = vi.fn(
+      async (instanceId: string) => instanceId === "studio-work",
+    );
+    renderSidebar([remoteOnlyDirectory], {
+      onOpenLaunchpad,
+      onCreateThreadOnFederationTarget,
+      checkFederationTargetProject,
+      newThreadFederationTargets: [
+        {
+          availability: "available",
+          instanceId: "studio-work",
+          label: "Studio Mac / work",
+        },
+        {
+          availability: "available",
+          instanceId: "laptop-home",
+          label: "Laptop / home",
+        },
+      ],
+    });
+
+    // Nothing here can open a local launchpad: there is no checkout.
     expect(
       screen.queryByRole("button", {
         name: "Open new thread launchpad for ProjectA",
       }),
     ).not.toBeInTheDocument();
+
+    // One "+" whose only job is the machine menu, so it is not a split pair.
+    const start = screen.getByRole("button", {
+      name: "Start a new thread in ProjectA on another machine",
+    });
+    expect(start).toHaveAttribute("aria-haspopup", "menu");
+    expect(start).toHaveClass("directory-row__launchpad-button");
+    expect(start.parentElement).not.toHaveClass(
+      "directory-row__launchpad-cluster--split",
+    );
+    const header = directoryHeader(/ProjectA/i);
+    expect(header).toHaveClass("directory-row__header--with-launchpad");
+    expect(header).not.toHaveClass("directory-row__header--split");
+
+    await clickElement(start);
+    expect(start).toHaveAttribute("aria-expanded", "true");
+    // The menu asks each machine whether it has the project, by name.
+    expect(checkFederationTargetProject).toHaveBeenCalledWith("laptop-home", {
+      kind: "directory",
+      label: "ProjectA",
+    });
+    const laptop = await screen.findByRole("menuitem", { name: /Laptop \/ home/ });
+    await waitFor(() => expect(laptop).toHaveAttribute("aria-disabled", "true"));
+    await clickElement(
+      screen.getByRole("menuitem", { name: /Studio Mac \/ work/ }),
+    );
+
+    expect(onCreateThreadOnFederationTarget).toHaveBeenCalledWith("studio-work", {
+      kind: "directory",
+      label: "ProjectA",
+    });
+    expect(onOpenLaunchpad).not.toHaveBeenCalled();
+  });
+
+  it("points the remote-only tooltip at the + when machines can take the thread", async () => {
+    renderSidebar([remoteOnlyDirectory], {
+      onCreateThreadOnFederationTarget: async () => undefined,
+      newThreadFederationTargets: [
+        {
+          availability: "available",
+          instanceId: "studio-work",
+          label: "Studio Mac / work",
+        },
+      ],
+    });
+
+    fireEvent.mouseEnter(getDirectorySummary(/ProjectA/i));
+    expect(await screen.findByText(
+      "This project isn't set up on this machine. Use + to start a thread on a machine that has it, or Add Directory to connect it here.",
+    )).toBeInTheDocument();
+  });
+
+  it("still offers nothing on a remote-only project when no machine is connected", () => {
+    renderSidebar([remoteOnlyDirectory], { newThreadFederationTargets: [] });
+
     expect(
-      screen.queryByRole("button", {
-        name: "Start a new thread in ProjectA on another machine",
-      }),
+      screen.queryByRole("button", { name: /ProjectA on another machine/ }),
     ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /launchpad for ProjectA/ }),
+    ).not.toBeInTheDocument();
+    // No cluster, so the counts must not fade to a blank edge on hover.
+    expect(directoryHeader(/ProjectA/i)).not.toHaveClass(
+      "directory-row__header--with-launchpad",
+    );
   });
 
   it("omits the chevron entirely when the federation offers no machines", () => {
@@ -9524,6 +9806,37 @@ describe("Sidebar directory pinning", () => {
     await clickElement(unpinItem);
 
     expect(onSetDirectoryPin).toHaveBeenCalledWith(expect.objectContaining({ key: pinned.key }), false);
+  });
+
+  it("opens a project's forge permissions from its context menu", async () => {
+    const onOpenForgePermissions = vi.fn();
+    // The directory index row's origin remote, which the fixture forwards.
+    const withOrigin = {
+      ...projectADirectory,
+      repositoryKey: "github.com/pwrdrvr/ProjectA",
+    };
+
+    renderSidebar([withOrigin, projectBDirectory], {
+      onOpenForgePermissions,
+      onSetDirectoryPin: async () => undefined,
+    });
+
+    fireEvent.contextMenu(getDirectorySummary(/ProjectA/i));
+    await clickElement(
+      await screen.findByRole("menuitem", { name: "Forge Permissions…" }),
+    );
+
+    expect(onOpenForgePermissions).toHaveBeenCalledWith("github.com/pwrdrvr/ProjectA");
+    expect(
+      screen.queryByRole("menuitem", { name: "Forge Permissions…" }),
+    ).not.toBeInTheDocument();
+
+    // A project without an origin has no repository to write rules for.
+    fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+    await screen.findByRole("menuitem", { name: "Pin Directory" });
+    expect(
+      screen.queryByRole("menuitem", { name: "Forge Permissions…" }),
+    ).not.toBeInTheDocument();
   });
 
   it("opens the context menu for workspace rows (workspaces are pinnable)", async () => {
@@ -9952,6 +10265,275 @@ describe("Sidebar directory pinning", () => {
     expect(
       screen.queryByRole("menuitem", { name: /Unpin Directory/i }),
     ).not.toBeInTheDocument();
+  });
+
+  describe("Forge Automation", () => {
+    const PAUSED: ProjectForgeAutomation = {
+      ...DEFAULT_PROJECT_FORGE_AUTOMATION,
+      autoFixMergeConflicts: false,
+      paused: true,
+      pausedAt: 1_000,
+    };
+    const heldWakeup: ProjectHeldWakeup = {
+      entryId: "entry-1",
+      backend: "codex",
+      threadId: "thread-1",
+      threadTitle: "Shared GitHub rate limits",
+      source: "monitor",
+      summary: "Monitor finished: \"Watch the nightly run\"",
+      createdAt: 1_500,
+    };
+
+    it("offers Pause Forge Activity and Forge Automation… on a local project", async () => {
+      renderSidebar([projectBDirectory], {
+        onSetDirectoryPin: async () => undefined,
+        onSetProjectForgeAutomation: vi.fn(async () => undefined),
+      });
+      fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+      const menu = await screen.findByRole("menu");
+      expect(menu).toHaveClass("thread-context-menu--check-column");
+      const pause = within(menu).getByRole("menuitemcheckbox", { name: "Pause Forge Activity" });
+      expect(pause).toHaveAttribute("aria-checked", "false");
+      expect(within(menu).getByRole("menuitem", { name: "Forge Automation…" })).toBeInTheDocument();
+    });
+
+    it("leaves both items off a workspace row, and off every row without an owner to save to", async () => {
+      renderSidebar([workspaceDirectory, projectBDirectory], {
+        onSetDirectoryPin: async () => undefined,
+        onSetProjectForgeAutomation: vi.fn(async () => undefined),
+      });
+      fireEvent.contextMenu(getDirectorySummary(/Workspace/i));
+      expect(await screen.findByRole("menuitem", { name: "Pin Directory" })).toBeInTheDocument();
+      expect(screen.queryByRole("menuitemcheckbox", { name: "Pause Forge Activity" })).not.toBeInTheDocument();
+      expect(screen.getByRole("menu")).not.toHaveClass("thread-context-menu--check-column");
+      cleanup();
+
+      renderSidebar([projectBDirectory], { onSetDirectoryPin: async () => undefined });
+      fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+      expect(await screen.findByRole("menuitem", { name: "Pin Directory" })).toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: "Forge Automation…" })).not.toBeInTheDocument();
+    });
+
+    it("leaves both items out of a peer window whose owner does not advertise them", async () => {
+      (window as unknown as { __pwragentFederationTarget?: unknown }).__pwragentFederationTarget = {
+        scope: "remote",
+        instanceId: "remote-instance",
+      };
+      renderSidebar([projectBDirectory], {
+        onSetDirectoryPin: async () => undefined,
+        onSetProjectForgeAutomation: vi.fn(async () => undefined),
+      });
+      fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+      expect(await screen.findByRole("menuitem", { name: "Pin Directory" })).toBeInTheDocument();
+      expect(screen.queryByRole("menuitemcheckbox", { name: "Pause Forge Activity" })).not.toBeInTheDocument();
+    });
+
+    it("offers both items in a peer window whose owner advertises them, and pauses there", async () => {
+      (window as unknown as { __pwragentFederationTarget?: unknown }).__pwragentFederationTarget = {
+        scope: "remote",
+        instanceId: "remote-instance",
+      };
+      const onSetProjectForgeAutomation = vi.fn(async () => undefined);
+      renderSidebar([projectBDirectory], {
+        onSetDirectoryPin: async () => undefined,
+        onSetProjectForgeAutomation,
+        federationOwnerForgeAutomation: true,
+      });
+      fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+      const menu = await screen.findByRole("menu");
+      expect(within(menu).getByRole("menuitem", { name: "Forge Automation…" })).toBeInTheDocument();
+      await clickElement(within(menu).getByRole("menuitemcheckbox", { name: "Pause Forge Activity" }));
+      expect(onSetProjectForgeAutomation).toHaveBeenCalledWith(
+        expect.objectContaining({ key: projectBDirectory.key }),
+        { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: expect.any(Number) },
+      );
+    });
+
+    it("marks a peer's paused project with the owner's state", () => {
+      (window as unknown as { __pwragentFederationTarget?: unknown }).__pwragentFederationTarget = {
+        scope: "remote",
+        instanceId: "remote-instance",
+      };
+      renderSidebar([{ ...projectBDirectory, forgeAutomation: PAUSED }], {
+        onSetDirectoryPin: async () => undefined,
+      });
+      expect(getDirectorySummary(/ProjectB/i)).toHaveAccessibleName("ProjectB, forge activity paused");
+    });
+
+    describe("on a placeholder for a peer's project", () => {
+      const placeholder: NavigationDirectorySummary = {
+        key: "unconfigured-directory:projectc",
+        kind: "directory",
+        label: "ProjectC",
+        localAvailability: "unconfigured",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 3000,
+        forgeAutomation: PAUSED,
+        peerProject: {
+          target: { scope: "remote", instanceId: "peer-owner" },
+          directoryKey: "directory:/Users/peer/ProjectC",
+        },
+      };
+
+      it("marks the project paused as its owner stored it", () => {
+        renderSidebar([placeholder], { onSetDirectoryPin: async () => undefined });
+        const header = getDirectorySummary(/ProjectC/i);
+        expect(header).toHaveAccessibleName(
+          "ProjectC, not configured on this instance, forge activity paused",
+        );
+        // No menu to point at while the peer cannot take a change.
+        expect(header.querySelector(".directory-row__paused"))
+          .toHaveAttribute("data-tooltip", "Forge activity paused.");
+      });
+
+      it("offers only the Forge Automation items once the peer advertises them, and resumes there", async () => {
+        const onSetProjectForgeAutomation = vi.fn(async () => undefined);
+        const onListProjectHeldWakeups = vi.fn(async () => []);
+        renderSidebar([placeholder], {
+          onSetDirectoryPin: async () => undefined,
+          onRemoveDirectory: () => undefined,
+          onOpenForgePermissions: () => undefined,
+          onSetProjectForgeAutomation,
+          onListProjectHeldWakeups,
+          peerForgeAutomationInstanceIds: new Set(["peer-owner"]),
+        });
+        fireEvent.contextMenu(getDirectorySummary(/ProjectC/i));
+        const menu = await screen.findByRole("menu");
+        const pause = within(menu).getByRole("menuitemcheckbox", { name: "Pause Forge Activity" });
+        expect(pause).toHaveAttribute("aria-checked", "true");
+        expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent))
+          .toEqual(["Forge Automation…"]);
+        expect(getDirectorySummary(/ProjectC/i).querySelector(".directory-row__paused"))
+          .toHaveAttribute("data-tooltip", "Forge activity paused. Right-click for Forge Automation.");
+        await clickElement(pause);
+        await waitFor(() => expect(onSetProjectForgeAutomation).toHaveBeenCalledTimes(1));
+        expect(onListProjectHeldWakeups).toHaveBeenCalledWith(
+          expect.objectContaining({ key: placeholder.key }),
+        );
+        const { pausedAt: _pausedAt, ...resumed } = PAUSED;
+        expect(onSetProjectForgeAutomation).toHaveBeenCalledWith(
+          expect.objectContaining({ key: placeholder.key, peerProject: placeholder.peerProject }),
+          { ...resumed, paused: false },
+          expect.anything(),
+        );
+      });
+
+      it("offers the items as soon as the peer starts advertising them", async () => {
+        const overrides = {
+          onSetDirectoryPin: async () => undefined,
+          onSetProjectForgeAutomation: vi.fn(async () => undefined),
+        };
+        const { rerender } = renderSidebar([placeholder], overrides);
+        // The peer connects after the first render; nothing else re-renders.
+        rerender({ ...overrides, peerForgeAutomationInstanceIds: new Set(["peer-owner"]) });
+        expect(getDirectorySummary(/ProjectC/i).querySelector(".directory-row__paused"))
+          .toHaveAttribute("data-tooltip", "Forge activity paused. Right-click for Forge Automation.");
+        fireEvent.contextMenu(getDirectorySummary(/ProjectC/i));
+        expect(await screen.findByRole("menuitemcheckbox", { name: "Pause Forge Activity" }))
+          .toBeInTheDocument();
+      });
+
+      it("opens no menu while the peer does not advertise them", () => {
+        renderSidebar([placeholder], {
+          onSetDirectoryPin: async () => undefined,
+          onSetProjectForgeAutomation: vi.fn(async () => undefined),
+          peerForgeAutomationInstanceIds: new Set(["another-peer"]),
+        });
+        fireEvent.contextMenu(getDirectorySummary(/ProjectC/i));
+        expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      });
+    });
+
+    it("pauses in place, keeping the stored switches and the menu open", async () => {
+      const onSetProjectForgeAutomation = vi.fn(async () => undefined);
+      const narrowed: ProjectForgeAutomation = { ...DEFAULT_PROJECT_FORGE_AUTOMATION, autoFixCiFailures: false };
+      renderSidebar([{ ...projectBDirectory, forgeAutomation: narrowed }], {
+        onSetDirectoryPin: async () => undefined,
+        onSetProjectForgeAutomation,
+      });
+      fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+      await clickElement(await screen.findByRole("menuitemcheckbox", { name: "Pause Forge Activity" }));
+      expect(onSetProjectForgeAutomation).toHaveBeenCalledWith(
+        expect.objectContaining({ key: projectBDirectory.key }),
+        { ...narrowed, paused: true, pausedAt: expect.any(Number) },
+      );
+      expect(screen.getByRole("menuitemcheckbox", { name: "Pause Forge Activity" })).toBeInTheDocument();
+    });
+
+    it("marks a paused project's header and resumes at once when nothing is held", async () => {
+      const onSetProjectForgeAutomation = vi.fn(async () => undefined);
+      const onListProjectHeldWakeups = vi.fn(async () => []);
+      renderSidebar([{ ...projectBDirectory, forgeAutomation: PAUSED }], {
+        onSetDirectoryPin: async () => undefined,
+        onSetProjectForgeAutomation,
+        onListProjectHeldWakeups,
+      });
+      const header = getDirectorySummary(/ProjectB/i);
+      expect(header).toHaveAccessibleName("ProjectB, forge activity paused");
+      const pill = header.querySelector(".directory-row__paused");
+      expect(pill).toHaveTextContent("Paused");
+      expect(pill).toHaveAttribute("data-tooltip", "Forge activity paused. Right-click for Forge Automation.");
+
+      fireEvent.contextMenu(header);
+      const pause = await screen.findByRole("menuitemcheckbox", { name: "Pause Forge Activity" });
+      expect(pause).toHaveAttribute("aria-checked", "true");
+      await clickElement(pause);
+      await waitFor(() => expect(onSetProjectForgeAutomation).toHaveBeenCalledTimes(1));
+      expect(onListProjectHeldWakeups).toHaveBeenCalledWith(expect.objectContaining({ key: projectBDirectory.key }));
+      const { pausedAt: _pausedAt, ...resumed } = PAUSED;
+      expect(onSetProjectForgeAutomation).toHaveBeenCalledWith(
+        expect.objectContaining({ key: projectBDirectory.key }),
+        { ...resumed, paused: false },
+        expect.anything(),
+      );
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("lists held wake-ups before resuming", async () => {
+      const onSetProjectForgeAutomation = vi.fn(async () => undefined);
+      renderSidebar([{ ...projectBDirectory, forgeAutomation: PAUSED }], {
+        onSetDirectoryPin: async () => undefined,
+        onSetProjectForgeAutomation,
+        onListProjectHeldWakeups: vi.fn(async () => [heldWakeup]),
+        onResolveProjectHeldWakeups: vi.fn(async () => ({ results: [] })),
+      });
+      fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+      await clickElement(await screen.findByRole("menuitemcheckbox", { name: "Pause Forge Activity" }));
+      const dialog = await screen.findByRole("dialog", { name: "Resume forge activity in ProjectB?" });
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(within(dialog).getByText("Shared GitHub rate limits")).toBeInTheDocument();
+      expect(onSetProjectForgeAutomation).not.toHaveBeenCalled();
+
+      await clickElement(within(dialog).getByRole("button", { name: "Resume" }));
+      await waitFor(() => expect(onSetProjectForgeAutomation).toHaveBeenCalledWith(
+        expect.objectContaining({ key: projectBDirectory.key }),
+        expect.objectContaining({ paused: false, autoFixMergeConflicts: false }),
+        { reportError: false },
+      ));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
+
+    it("opens Forge Automation… as a dialog and saves it", async () => {
+      const onSetProjectForgeAutomation = vi.fn(async () => undefined);
+      renderSidebar([{ ...projectBDirectory, repositoryKey: "github.com/fixture/ProjectB" } as NavigationDirectorySummary], {
+        onSetDirectoryPin: async () => undefined,
+        onSetProjectForgeAutomation,
+      });
+      fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+      await clickElement(await screen.findByRole("menuitem", { name: "Forge Automation…" }));
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      const dialog = screen.getByRole("dialog", { name: "Forge Automation" });
+      expect(within(dialog).getByText("ProjectB · github.com/fixture/ProjectB")).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole("checkbox", { name: "Merge conflicts" }));
+      await clickElement(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(onSetProjectForgeAutomation).toHaveBeenCalledWith(
+        expect.objectContaining({ key: projectBDirectory.key }),
+        { ...DEFAULT_PROJECT_FORGE_AUTOMATION, autoFixMergeConflicts: false },
+        { reportError: false },
+      ));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
   });
 });
 
@@ -11210,5 +11792,140 @@ describe("⌘K jump keeps the lens", () => {
     );
     expect(document.querySelector(".sidebar-visiting")).toBeNull();
     expect(lensRowTitles()).toEqual(["Running thread"]);
+  });
+});
+
+
+describe("Sidebar row owner provider capabilities", () => {
+  const capable = (kind: BackendSummary["kind"]): BackendSummary => ({
+    ...backends[0]!, kind,
+    capabilities: { ...backends[0]!.capabilities, forkThread: true },
+  });
+  const local = { ...sharedThread, title: "Viewer thread" };
+  const remote: NavigationThreadSummary = {
+    ...sharedThread, id: "owner-thread", title: "Owner thread", source: "acp:grok", pinnedRank: "1024",
+    federation: {
+      ref: { backend: "acp:grok", threadId: "owner-thread", target: { scope: "remote", instanceId: "owner" } },
+      instanceLabel: "Owner", peerStatus: "connected", capabilities: ["thread_navigation", "turn_control"],
+    },
+  };
+  function view(overrides: Partial<ComponentProps<typeof Sidebar>> = {}) {
+    return <Sidebar backends={[capable("codex")]}
+      remoteBackends={new Map([["owner", [capable("acp:grok")]]])}
+      browseMode="recents" directories={directories} threads={[local, remote]} loading={false}
+      selectedItemKey={threadSummaryIdentityKey(local)}
+      onBrowseModeChange={() => undefined} onCreateThread={async () => undefined}
+      onOpenLaunchpad={async () => undefined} onSelectThread={() => undefined}
+      onRenameThread={async () => undefined} onArchiveThread={async () => undefined}
+      onForkThread={async () => undefined} {...overrides} />;
+  }
+  const mutationItems = ["Rename Thread", "Archive Thread", "Fork into Same Worktree"];
+
+  it.each(["acp:grok", "codex"] as const)("offers management actions for %s installed only on the row owner", (kind) => {
+    const row = { ...remote, source: kind,
+      federation: { ...remote.federation!, ref: { ...remote.federation!.ref, backend: kind } } };
+    render(view({ backends: [], threads: [row], remoteBackends: new Map([["owner", [capable(kind)]]]) }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Owner thread(?:,|$)/ }));
+    for (const name of mutationItems.slice(0, kind === "codex" ? 3 : 2)) {
+      expect(screen.getByRole("menuitem", { name })).toBeInTheDocument();
+    }
+  });
+
+  it.each(["missing", "unavailable", "unsupported", "pending", "disconnected", "no turn control"]
+    .flatMap((reason) => (["acp:grok", "codex"] as const).map((kind) => ({ reason, kind }))))(
+    "does not borrow viewer $kind capabilities when the owner is $reason", ({ reason, kind }) => {
+      const ownerBackend = capable(kind);
+      if (reason === "unavailable") ownerBackend.available = false;
+      if (reason === "unsupported") ownerBackend.capabilities = {
+        ...ownerBackend.capabilities, renameThread: false, archiveThread: false, forkThread: false,
+      };
+      const row: NavigationThreadSummary = { ...remote, source: kind, federation: { ...remote.federation!,
+        ref: { ...remote.federation!.ref, backend: kind },
+        ...(reason === "disconnected" ? { peerStatus: "disconnected" as const } : {}),
+        ...(reason === "no turn control" ? { capabilities: ["thread_navigation"] } : {}),
+      } };
+      render(view({ backends: [capable(kind)], threads: [row],
+        remoteBackends: reason === "pending" ? undefined : new Map([["owner", reason === "missing" ? [] : [ownerBackend]]]),
+      }));
+      fireEvent.contextMenu(screen.getByRole("button", { name: new RegExp(`^${row.title}(?:,|$)`) }));
+      for (const name of mutationItems) expect(screen.queryByRole("menuitem", { name })).not.toBeInTheDocument();
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+      const button = screen.getByRole("button", { name: new RegExp(`^${row.title}(?:,|$)`) });
+      button.focus();
+      fireEvent.keyDown(button, { key: "F2", code: "F2" });
+      expect(screen.queryByRole("textbox", { name: "Thread name" })).not.toBeInTheDocument();
+      fireEvent.doubleClick(button);
+      expect(screen.queryByRole("textbox", { name: "Thread name" })).not.toBeInTheDocument();
+    },
+  );
+
+  it("uses the window owner's catalog for rows in a federation window", () => {
+    Object.defineProperty(window, "__pwragentFederationTarget", {
+      configurable: true, value: remote.federation!.ref.target,
+    });
+    render(view({ backends: [capable("acp:grok")], remoteBackends: undefined, threads: [remote] }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Owner thread(?:,|$)/ }));
+    expect(screen.getByRole("menuitem", { name: "Rename Thread" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Archive Thread" })).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    fireEvent.doubleClick(screen.getByRole("button", { name: /^Owner thread(?:,|$)/ }));
+    expect(screen.getByRole("textbox", { name: "Thread name" })).toHaveValue(remote.title);
+  });
+
+  it.each(["menu", "keyboard", "double-click"])("renames inline through the owner from %s", (path) => {
+    const onRenameThread = vi.fn(async () => undefined);
+    render(view({ onRenameThread }));
+    const button = screen.getByRole("button", { name: /^Owner thread(?:,|$)/ });
+    if (path === "menu") {
+      fireEvent.contextMenu(button);
+      fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
+    } else if (path === "keyboard") {
+      button.focus();
+      fireEvent.keyDown(button, { key: "F2", code: "F2" });
+    } else fireEvent.doubleClick(button);
+    const input = screen.getByRole("textbox", { name: "Thread name" });
+    expect(input.closest("[data-thread-key]")).toHaveAttribute("data-thread-key", threadSummaryIdentityKey(remote));
+    fireEvent.change(input, { target: { value: "Owner renamed" } });
+    if (path === "double-click") fireEvent.blur(input);
+    else fireEvent.keyDown(input, { key: "Enter" });
+    expect(onRenameThread).toHaveBeenCalledWith(remote, "Owner renamed");
+  });
+
+  it("keeps local row actions when the selected remote owner lacks the local provider", () => {
+    render(view({ selectedItemKey: threadSummaryIdentityKey(remote) }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: local.title }));
+    for (const name of mutationItems) expect(screen.getByRole("menuitem", { name })).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    fireEvent.doubleClick(screen.getByRole("button", { name: local.title }));
+    expect(screen.getByRole("textbox", { name: "Thread name" })).toHaveValue(local.title);
+  });
+
+  it.each(["menu", "keyboard"])("filters mixed-owner bulk archives through each provider and turn control from %s", async (path) => {
+    const onArchiveThread = vi.fn(async (_thread: NavigationThreadSummary) => undefined);
+    const blocked: NavigationThreadSummary = { ...remote, id: "blocked", title: "Blocked owner", pinnedRank: "2048",
+      federation: { ...remote.federation!, ref: { ...remote.federation!.ref, threadId: "blocked",
+        target: { scope: "remote", instanceId: "blocked-owner" } }, capabilities: ["thread_navigation"] } };
+    const offline: NavigationThreadSummary = { ...blocked, id: "offline", title: "Offline owner", pinnedRank: "3072",
+      federation: { ...blocked.federation!, ref: { ...blocked.federation!.ref, threadId: "offline" },
+        peerStatus: "disconnected", capabilities: ["turn_control"] } };
+    render(view({ threads: [local, remote, blocked, offline], onArchiveThread,
+      remoteBackends: new Map([["owner", [capable("acp:grok")]], ["blocked-owner", [capable("acp:grok")]]]),
+    }));
+    const localButton = screen.getByRole("button", { name: local.title });
+    fireEvent.click(localButton);
+    for (const row of [remote, blocked, offline]) {
+      fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${row.title}(?:,|$)`) }), { ctrlKey: true, metaKey: true });
+    }
+    if (path === "menu") {
+      fireEvent.contextMenu(localButton);
+      await act(async () => { fireEvent.click(screen.getByRole("menuitem", { name: "Archive 2 Threads" })); });
+    } else {
+      localButton.focus();
+      await act(async () => { fireEvent.keyDown(localButton, {
+        key: "Backspace", code: "Backspace", ctrlKey: true, shiftKey: true,
+      }); });
+    }
+    expect(onArchiveThread.mock.calls).toHaveLength(2);
+    expect(onArchiveThread.mock.calls.map((call) => call[0])).toEqual(expect.arrayContaining([local, remote]));
   });
 });

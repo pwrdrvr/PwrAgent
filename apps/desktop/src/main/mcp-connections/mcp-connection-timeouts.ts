@@ -4,6 +4,44 @@
 export const MCP_CONNECTION_TOOL_TIMEOUT_MS = 12 * 60_000;
 export const MCP_CONNECTION_TOOL_TIMEOUT_SECONDS =
   MCP_CONNECTION_TOOL_TIMEOUT_MS / 1_000;
+// A call whose server reports progress gets the timeout above again after
+// each report, up to this much in total. A call that stops reporting still
+// fails after the timeout above.
+export const MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS = 60 * 60_000;
+
+/**
+ * A deadline that progress pushes back. It fires `idleMs` after it was made
+ * or last extended, and never later than `maxTotalMs` after it was made.
+ */
+export function progressExtendedTimeout(
+  idleMs: number,
+  maxTotalMs: number = idleMs,
+): { signal: AbortSignal; extend: () => void; clear: () => void } {
+  const controller = new AbortController();
+  const startedAt = Date.now();
+  const totalDeadlineAt = startedAt + Math.max(idleMs, maxTotalMs);
+  let extendedAt = startedAt;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // `extend` only records the time; the timer re-arms when it fires, so a
+  // server that reports often costs no timer work per report.
+  const fire = (): void => {
+    const dueAt = Math.min(extendedAt + idleMs, totalDeadlineAt);
+    const now = Date.now();
+    if (now >= dueAt) {
+      controller.abort(new DOMException("The MCP request timed out.", "TimeoutError"));
+      return;
+    }
+    timer = setTimeout(fire, dueAt - now);
+  };
+  timer = setTimeout(fire, Math.max(1, Math.min(idleMs, totalDeadlineAt - startedAt)));
+  return {
+    signal: controller.signal,
+    extend: () => {
+      extendedAt = Date.now();
+    },
+    clear: () => clearTimeout(timer),
+  };
+}
 
 /**
  * How long the Add-a-connection probe waits for an endpoint to answer.

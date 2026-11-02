@@ -5589,6 +5589,13 @@ textarea,
   align-items: center;
 }
 
+.project-index__paused {
+  display: flex;
+  flex: none;
+  align-items: center;
+  color: var(--text-muted);
+}
+
 /* The seam between the index and the list, drawn like the sidebar's own:
    an 11px hit area centred on the border, lit 1px on hover or focus. */
 .project-index__grip {
@@ -8090,13 +8097,10 @@ a.button {
 }
 
 /* A failed check does not make its sibling jobs terminal. Keep the error hue,
-   but use the existing gentle status pulse to say that the rollup is still
-   moving. Only the dot animates — the PR chip stays still and legible. The
-   hover card has no counterpart: it says "checks still running" in words, and a
-   pulsing dot inside an already-transient card is noise. */
-.pr-chip--checks-running .pr-chip__dot {
-  animation: status-blink 1.6s ease-in-out infinite;
-}
+   but use the shared status pulse (`lib/status-pulse.ts`) to say that the
+   rollup is still moving. Only the dot dims — the PR chip stays still and
+   legible. The hover card has no counterpart: it says "checks still running"
+   in words, and a pulsing dot inside an already-transient card is noise. */
 
 .pr-chip--pending .pr-chip__dot,
 .pr-status-card .pr-status-card__dot--pending {
@@ -8139,15 +8143,20 @@ a.button {
   color: var(--text-muted);
 }
 
-.pr-chip__detach:hover,
-.pr-chip__detach:focus-visible {
+/* Pointer-only: it takes no focus (see PrChip), so it has no focus ring. */
+.pr-chip__detach:hover {
   background: var(--danger-soft);
   color: var(--danger-text);
 }
 
-.pr-chip__detach:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
+/* A CI watch waits to wake the thread. Muted, and not a target: the dot
+   carries status, the row keeps one accent, and the card explains it. */
+.pr-chip__watch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  margin-left: -2px;
+  color: var(--text-muted);
 }
 
 /* Portal-rendered hover card for a PR chip (rendered by useViewportTooltip).
@@ -8381,6 +8390,11 @@ a.button {
   white-space: nowrap;
 }
 
+/* Auto-fix is a standing setting, not a pending wait. */
+.pr-status-card__row-value--muted {
+  color: var(--text-muted);
+}
+
 .pr-detach-warning-modal {
   position: fixed;
   inset: 0;
@@ -8583,8 +8597,9 @@ a.button {
   opacity: 0;
 }
 
-:root[data-native-drag-active] .directory-row__header--with-launchpad:hover .directory-row__summary-meta {
+:root[data-native-drag-active] .directory-row__header--with-launchpad:not(.directory-row__header--has-draft):hover .directory-row__summary-meta {
   opacity: 1;
+  min-width: 0;
 }
 
 .directory-row.is-drop-target-before::before,
@@ -8793,6 +8808,23 @@ a.button {
   text-align: right;
 }
 
+/* Forge activity paused: one quiet mark on the project header. Neutral and
+   outlined, the Held chip's shape without its danger tone, because a pause is
+   the operator's own choice, not something waiting on them. */
+.directory-row__paused {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 16px;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+}
+
 /* The header count cookie inherits the base 10px size — it used to be a
    9px one-off, which made the thread rows' (then-12px) cookie read as a
    different, chunkier mark for the same state. */
@@ -8943,15 +8975,27 @@ a.button {
 /* The count block yields to the revealed cluster: fade it on header
    hover (or keyboard focus inside the cluster), exactly like the
    thread-row timestamp yields to the kebab. Scoped to
-   `--with-launchpad` headers (set in TSX for configured directories):
-   an unconfigured directory renders NO cluster, and fading its counts
-   would leave the header's right edge simply blank while hovered.
+   `--with-launchpad` headers (set in TSX when the row has a cluster):
+   an unconfigured directory with no peer to start a thread on renders
+   NO cluster, and fading its counts would leave the header's right
+   edge simply blank while hovered.
    The TSX-computed modifier classes (`--with-launchpad`, `--split`,
    `--has-draft`) replace per-hover :has() subtree scans with plain
    class matches — DirectoriesList already knows all three booleans. */
 .directory-row__header--with-launchpad:hover .directory-row__summary-meta,
 .directory-row__header--with-launchpad:has(.directory-row__launchpad-cluster :focus-visible) .directory-row__summary-meta {
   opacity: 0;
+  /* The faded block keeps at least the cluster's width, so a long name
+     ellipsizes beside the "+" instead of running under it. Without this
+     a directory with no counts has a zero-width block and its title
+     reaches the row's right edge. Both share the 6px right inset, so the
+     block's width equals the cluster's (24px button / 24+16px split). */
+  min-width: 24px;
+}
+
+.directory-row__header--with-launchpad.directory-row__header--split:hover .directory-row__summary-meta,
+.directory-row__header--with-launchpad.directory-row__header--split:has(.directory-row__launchpad-cluster :focus-visible) .directory-row__summary-meta {
+  min-width: 40px;
 }
 
 /* A directory holding an unsent launchpad draft shows the tinted "+"
@@ -9656,6 +9700,12 @@ a.button {
   color: var(--accent-bright);
 }
 
+/* A run attempt, set in the PR chip's own face. */
+.thread-context-menu__aside--mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
 /* Checkable items (Pinned, Keep at Top). The labels never change; the box
    carries the state. On: solid accent box with a check. Off: muted outline
    with a muted check, so the item still reads as checkable. */
@@ -10027,6 +10077,171 @@ a.button {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+/* Forge Automation and its Resume step: the lock dialog's frame. The
+   eyebrow labels, hints and status row copy `.thread-lock-dialog`'s. */
+.forge-automation-dialog {
+  width: min(480px, 100%);
+}
+
+.forge-automation-dialog--resume {
+  width: min(560px, 100%);
+}
+
+.forge-automation-dialog__subtitle {
+  margin: 4px 0 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forge-automation-dialog__lede {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.forge-automation-dialog__group {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+/* Keeps `.forge-automation-dialog__group`'s top margin when both apply. */
+.forge-automation-dialog__fieldset {
+  min-width: 0;
+  margin-inline: 0;
+  margin-bottom: 0;
+  padding: 0;
+  border: 0;
+}
+
+.forge-automation-dialog__fieldset > legend {
+  margin-bottom: 4px;
+}
+
+.forge-automation-dialog__group > .forge-automation-dialog__fieldset {
+  margin-top: 6px;
+}
+
+.forge-automation-dialog__label {
+  margin: 0;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.forge-automation-dialog__hint {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.forge-automation-dialog__hint--lead {
+  margin: 2px 0 2px;
+}
+
+.forge-automation-dialog__option {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  padding: 5px 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.3;
+  cursor: pointer;
+}
+
+.forge-automation-dialog__option input {
+  width: 14px;
+  height: 14px;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+}
+
+.forge-automation-dialog__option input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.forge-automation-dialog__option:has(input:disabled) {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.forge-automation-dialog__option-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.forge-automation-dialog__option-text small {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.forge-automation-dialog__status {
+  margin: 14px 0 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.forge-automation-dialog__held {
+  max-height: 280px;
+  margin: 12px 0 0;
+  padding: 0;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  list-style: none;
+}
+
+.forge-automation-dialog__held-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 12px;
+  padding: 8px 10px;
+}
+
+.forge-automation-dialog__held-row + .forge-automation-dialog__held-row {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.forge-automation-dialog__held-title {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forge-automation-dialog__held-actions {
+  display: inline-flex;
+  grid-row: span 2;
+  gap: 6px;
+}
+
+.forge-automation-dialog__held-meta {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 /* Continue After: the rename dialog's frame, wide enough to pick threads on
@@ -25020,6 +25235,103 @@ a.button {
 }
 
 /* The Markdown prompt rests at three lines; its own control opens it. */
+.todo-message-destination {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.todo-message-destination__heading,
+.todo-message-destination__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.todo-message-destination__target {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.todo-message-destination__heading > span:first-child {
+  align-self: flex-start;
+  color: var(--text-muted);
+}
+
+.todo-message-destination .thread-todo-card__button {
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.todo-message-destination .thread-todo-card__button:hover {
+  background: var(--bg-panel-hover);
+}
+
+.todo-message-destination .thread-todo-card__button:focus-visible {
+  outline: 1px solid var(--focus-ring);
+}
+
+.todo-message-destination .thread-todo-card__button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.todo-message-destination small {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.todo-message-destination input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.todo-message-destination input:focus-visible {
+  outline: 1px solid var(--focus-ring);
+}
+
+.todo-message-destination__results {
+  display: grid;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.todo-message-destination__results button {
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.todo-message-destination__results button:hover,
+.todo-message-destination__results button:focus-visible {
+  background: var(--bg-panel-hover);
+  outline: 1px solid var(--focus-ring);
+}
+
+.todo-split__primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .thread-todo-card__prompt {
   display: block;
   width: 100%;
@@ -25587,15 +25899,63 @@ a.button {
   margin-top: 12px;
 }
 
+/* Holds the top of the list while its rows scroll past, as the sidebar's
+   project headers do, so a long All list never loses which project a row
+   is in. Bleeds over the body's 12px gutters so the opaque band and its
+   hairline span the rail. */
 .thread-todos-panel__group-title {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  margin: 0 0 6px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 -12px 6px;
+  padding: 0 12px;
+  background: var(--bg-panel);
+  box-shadow: 0 1px 0 var(--border-subtle);
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 600;
   line-height: 16px;
+}
+
+.thread-todos-panel__group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.thread-todos-panel__group-toggle:hover {
+  color: var(--text-secondary);
+}
+
+.thread-todos-panel__group-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* The rail's inline disclosure chevron, as on the Edits tab's groups, sized
+   down to the 11px heading it leads. */
+.thread-todos-panel__group-toggle .live-work-rail__chevron {
+  width: 6px;
+  height: 6px;
+  margin-inline: 1px 2px;
+}
+
+.thread-todos-panel__group-toggle[aria-expanded="false"] .live-work-rail__chevron {
+  transform: rotate(-45deg);
+}
+
+.thread-todos-panel__group-toggle[aria-expanded="true"] .live-work-rail__chevron {
+  transform: rotate(45deg);
 }
 
 .thread-todos-panel__group-name {
@@ -25963,6 +26323,35 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
   margin-top: 10px;
 }
 
+/* The To-dos tab fills the rail as a flex column, as the Edits tab does: the
+   title and lens switch stay put over a body that owns the scroll, so the
+   group headers inside it pin to its top edge. */
+.context-panel__section.context-panel__section--todos {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  padding: 0;
+  border-bottom: 0;
+}
+
+.thread-todos-panel__header {
+  flex: 0 0 auto;
+  padding: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* No top padding: a stuck group header pins flush under the lens switch.
+   The first group's own margin gives the resting list its air and scrolls
+   away with it. */
+.thread-todos-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 12px 12px;
+}
+
 .thread-todos-panel__footnote {
   margin-top: 16px;
   padding-top: 8px;
@@ -26028,7 +26417,8 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
 }
 
 /* The rail tab's count. Sits where the actions tab's activity dot does. */
-.context-rail__activity--todos {
+.context-rail__activity--todos,
+.context-rail__activity--watches {
   display: inline-grid;
   min-width: 14px;
   height: 14px;
@@ -26046,8 +26436,10 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
 }
 
 /* Nothing unread: this thread's open count, outlined so it reads as a
-   tally rather than news. */
-.context-rail__activity--todos.context-rail__activity--quiet {
+   tally rather than news. The Pull requests tab's watch count is always a
+   tally: a watch waiting is not news. */
+.context-rail__activity--todos.context-rail__activity--quiet,
+.context-rail__activity--watches {
   border: 1px solid var(--border-strong);
   background: var(--bg-panel-elevated);
   color: var(--text-secondary);
@@ -32281,6 +32673,13 @@ div.composer-error-row__toggle {
   font-size: 11px;
 }
 
+.transcript-pr-watch__message {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 /* Inside the accent-framed card the toggle must sit ON the card's text
    grid — the bare rows' negative margin (which aligns the chevron with
    the transcript's left edge) would bleed the toggle chrome into the
@@ -32991,6 +33390,106 @@ div.composer-error-row__toggle {
 .transcript-questionnaire__actions .button--ghost:hover:not([disabled]),
 .transcript-mcp__actions .button--ghost:hover:not([disabled]) {
   color: var(--text-primary);
+}
+
+/* Allow split into its grant and a chevron for the other ways to allow,
+   when a forge approval can remember the answer as a project rule. The two
+   halves share one seam and keep the primary button's tokens. */
+.transcript-mcp__split {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.transcript-mcp__actions .transcript-mcp__split-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.transcript-mcp__actions .transcript-mcp__split-toggle {
+  display: inline-grid;
+  width: 30px;
+  place-items: center;
+  margin-left: -1px;
+  padding: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.transcript-mcp__split-toggle svg {
+  transition: transform 120ms ease;
+}
+
+.transcript-mcp__split--open .transcript-mcp__split-toggle {
+  background: var(--accent-fill);
+  color: var(--button-text);
+}
+
+.transcript-mcp__split--open .transcript-mcp__split-toggle svg {
+  transform: rotate(180deg);
+}
+
+/* Portalled to the body and placed by PendingMcpAllowSplit against the
+   window, so the transcript's clipping never hides it. */
+.transcript-mcp__split-menu {
+  position: fixed;
+  z-index: 150;
+  overflow-y: auto;
+  font-size: 13px;
+  display: flex;
+  width: max-content;
+  min-width: 220px;
+  max-width: min(340px, 80vw);
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.transcript-mcp__split-menu:focus {
+  outline: none;
+}
+
+.transcript-mcp__split-item {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.transcript-mcp__split-item:hover,
+.transcript-mcp__split-item:focus-visible {
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.transcript-mcp__split-item-label {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.transcript-mcp__split-item:hover .transcript-mcp__split-item-label,
+.transcript-mcp__split-item:focus-visible .transcript-mcp__split-item-label {
+  color: var(--accent-bright);
+}
+
+.transcript-mcp__split-item-description {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .transcript-request__actions .button {
@@ -37717,10 +38216,6 @@ div.composer-error-row__toggle {
   background: var(--status-suspended);
 }
 
-.rail-chip__dot--blink {
-  animation: status-blink 1.6s ease-in-out infinite;
-}
-
 /* Title sits on its own row, full width, and wraps (clamped) instead of
    truncating mid-word in a shared flex row. */
 .rail-card__title {
@@ -37844,6 +38339,170 @@ div.composer-error-row__toggle {
   font-size: 11px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+/* A Pull requests card's "Wakes this thread" list: each watch, Auto-fix, and
+   the hint to ask for a CI watch. Neutral throughout; the PR's status pills
+   above carry the tone. */
+.pr-watch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.pr-watch-list__eyebrow {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pr-watch-list__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.pr-watch-list__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  height: 16px;
+  color: var(--text-muted);
+}
+
+.pr-watch-list__text {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.pr-watch-list__title {
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.pr-watch-list__sub {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+/* Auto-fix is on for the thread but will not wake it for this PR. */
+.pr-watch-list__row--muted .pr-watch-list__title {
+  color: var(--text-secondary);
+}
+
+.pr-watch-list__action,
+.pr-watch-list__hint-action {
+  flex: 0 0 auto;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.pr-watch-list__action:hover:not(:disabled),
+.pr-watch-list__hint-action:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.pr-watch-list__action:focus-visible,
+.pr-watch-list__hint-action:focus-visible,
+.pr-watch-list__history-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.pr-watch-list__action:disabled,
+.pr-watch-list__hint-action:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* Nothing waits for CI: dashed, because it describes an absence. */
+.pr-watch-list__hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 6px 5px 8px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 6px;
+}
+
+.pr-watch-list__hint-text,
+.pr-watch-list__owner {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.pr-watch-list__history-toggle {
+  align-self: flex-start;
+  min-height: 20px;
+  padding: 0 4px;
+  margin-left: -4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.pr-watch-list__history-toggle:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.pr-watch-list__history {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.pr-watch-list__history-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.pr-watch-list__history-text {
+  min-width: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.pr-watch-list__history-time {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .rail-card__message,
@@ -38630,7 +39289,9 @@ button.pricing-token-miser__folded:focus-visible {
 
 @media (prefers-reduced-motion: no-preference) {
   .usage-pace-card__hit::after {
-    animation: usage-pace-ping 1.8s ease-out infinite;
+    /* Announce the projection, then let its dot and label carry the warning
+       without keeping the compositor drawing at the display refresh rate. */
+    animation: usage-pace-ping 1.8s ease-out 2;
   }
 }
 
@@ -44572,6 +45233,15 @@ button.composer__subthread-source-parent:hover {
   cursor: default;
 }
 
+/* The project's Forge Automation has Auto-fix paused or off: the thread keeps
+   its own value (aria-pressed) but the chip drops its accent. */
+.composer__toggle.is-project-overridden,
+.composer__toggle.is-active.is-project-overridden {
+  border-color: var(--border-subtle);
+  background: var(--bg-input);
+  color: var(--text-muted);
+}
+
 /* A shell remains alive behind a collapsed integrated terminal panel. */
 .composer__terminal-toggle.is-running {
   color: var(--accent);
@@ -46255,19 +46925,11 @@ button.composer__subthread-source-parent:hover {
   background: var(--accent);
 }
 
-@keyframes status-blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.45;
-  }
-}
-
-.status-dot--blink {
-  animation: status-blink 1.6s ease-in-out infinite;
-}
+/* `.status-dot--blink`, `.rail-chip__dot--blink` and a checks-running PR
+   chip's dot pulse from one shared timer in `lib/status-pulse.ts`: one finite
+   dip every 4.5s on the dots that are on screen, and none under reduced
+   motion. A CSS loop here would keep the compositor waking on every display
+   refresh for as long as the dot is mounted, even offscreen. */
 
 /* Pending spinner — the renderer's one busy ring. Promoted out of
    `.composer__action-button-spinner` so the composer, Settings, and every
@@ -46309,26 +46971,25 @@ button.composer__subthread-source-parent:hover {
   }
 }
 
-/* Reduced motion is scoped to the rings that sit beside text. A stopped arc
-   reads as a stalled spinner rather than a still one, so the paired ring goes
-   uniformly accent-tinted and "Saving…" carries the state on its own.
+/* Reduced motion is scoped to the rings that sit beside text naming the work.
+   A stopped arc reads as a stalled spinner rather than a still one, so the
+   paired ring goes uniformly accent-tinted and "Saving…" carries the state on
+   its own.
+
+   A ring opts in itself: give it `.pending-spinner--paired` wherever it
+   renders beside visible text such as "Saving…", "Sending…" or a provider
+   row's current step. The rule is keyed to the ring rather than to each
+   surface, so a new surface cannot miss it by not knowing to add its
+   context here.
 
    A ring that is the only signal its surface has — the composer's Run button
-   swaps the play glyph for a bare, aria-hidden ring — keeps spinning. The
-   preference asks for non-essential motion to stop, and motion that is the
-   sole indication of progress is not that. Give a standalone ring a text or
-   `aria-busy` companion and it belongs in the selector below. */
+   swaps the play glyph for a bare, aria-hidden ring — keeps spinning, and
+   stays unmarked. The preference asks for non-essential motion to stop, and
+   motion that is the sole indication of progress is not that. `aria-busy`
+   alone does not pair a ring: it tells a screen reader, not someone looking
+   at a still arc. */
 @media (prefers-reduced-motion: reduce) {
-  .settings-pending .pending-spinner,
-  /* A provider row's ring sits beside the step it is on ("Opening a
-     session"), which states the running state without motion. */
-  .provider-refresh .pending-spinner,
-  /* The composer's pre-send ring qualifies under the same rule: it sits
-     beside the word "Preparing…" and the form carries `aria-busy`, so the
-     state survives the ring going still. */
-  .composer__send-split-pill .pending-spinner,
-  /* A to-do's running ring sits beside "Merging…" or "Starting…". */
-  .thread-todo-card__button--busy .pending-spinner {
+  .pending-spinner--paired {
     border-color: var(--accent);
     animation: none;
   }
@@ -46512,14 +47173,6 @@ button.composer__subthread-source-parent:hover {
   gap: 10px;
   margin-top: 12px;
   padding: 12px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .status-dot--blink,
-  .pr-chip--checks-running .pr-chip__dot,
-  .rail-chip__dot--blink {
-    animation: none;
-  }
 }
 
 /* ==============================================}

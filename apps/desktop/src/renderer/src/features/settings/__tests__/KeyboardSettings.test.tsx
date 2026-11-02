@@ -97,6 +97,10 @@ describe("KeyboardSettings", () => {
     expect(rename.getByText("F2")).toBeInTheDocument();
     expect(within(row("Keep at Top")).getByText("Not set")).toBeInTheDocument();
     expect(within(row("Quit")).getByText("⌘Q")).toBeInTheDocument();
+    expect(within(row("Toggle Attention Lens")).getByText("⌥⌘0")).toBeInTheDocument();
+    for (const [index, lens] of ["Attention", "Drafts", "Updated", "Created", "Directories"].entries()) {
+      expect(within(row(`Show ${lens} Lens`)).getByText(`⌥⌘${index + 1}`)).toBeInTheDocument();
+    }
     expect(screen.getByText(FILE_PATH)).toBeInTheDocument();
   });
 

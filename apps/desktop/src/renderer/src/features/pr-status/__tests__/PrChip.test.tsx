@@ -88,6 +88,58 @@ describe("PrChip", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
+  describe("detach", () => {
+    function renderDetachable() {
+      const onDetach = vi.fn();
+      const { container } = render(
+        <PrChip pr={basePr()} showRepoPrefix={false} onOpen={vi.fn()} onDetach={onDetach} />,
+      );
+      return { chip: container.querySelector(".pr-chip") as HTMLElement, onDetach };
+    }
+
+    // axe's nested-interactive: a focusable widget inside the chip's own
+    // role="button". Its 16px box also failed the 24px target-size floor.
+    it("draws the ✕ as a pointer shortcut, not a control inside the chip", () => {
+      const { chip, onDetach } = renderDetachable();
+      expect(chip.querySelectorAll("[role=button], [tabindex]")).toHaveLength(0);
+      const detach = chip.querySelector(".pr-chip__detach") as HTMLElement;
+      expect(detach).toHaveAttribute("aria-hidden", "true");
+      expect(detach).toHaveAttribute("title", "Detach pwrdrvr/PwrAgent#743 from thread");
+
+      fireEvent.click(detach);
+      expect(onDetach).toHaveBeenCalledWith(expect.objectContaining({ number: 743 }));
+    });
+
+    it("detaches from the keyboard with Delete or Backspace on the chip", () => {
+      const { chip, onDetach } = renderDetachable();
+      expect(chip).toHaveAttribute("aria-keyshortcuts", "Delete Backspace");
+
+      fireEvent.keyDown(chip, { key: "Delete" });
+      fireEvent.keyDown(chip, { key: "Backspace" });
+      expect(onDetach).toHaveBeenCalledTimes(2);
+
+      // A chord belongs to whatever owns it, not to the chip.
+      fireEvent.keyDown(chip, { key: "Backspace", metaKey: true });
+      expect(onDetach).toHaveBeenCalledTimes(2);
+    });
+
+    it("offers Detach Pull Request in the chip's own menu", () => {
+      const { chip, onDetach } = renderDetachable();
+      fireEvent.contextMenu(chip, { clientX: 40, clientY: 40 });
+      fireEvent.click(screen.getByRole("menuitem", { name: "Detach Pull Request" }));
+      expect(onDetach).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+
+    it("takes no Delete and offers no Detach where it cannot detach", () => {
+      const chip = renderChip(basePr());
+      expect(chip).not.toHaveAttribute("aria-keyshortcuts");
+      expect(chip.querySelector(".pr-chip__detach")).toBeNull();
+      fireEvent.contextMenu(chip, { clientX: 40, clientY: 40 });
+      expect(screen.queryByRole("menuitem", { name: "Detach Pull Request" })).toBeNull();
+    });
+  });
+
   it("derives canonical copy values for deep pull request links", () => {
     expect(pullRequestCopyTargets(basePr({
       url: "https://github.com/pwrdrvr/PwrAgent/pull/743/files?diff=split",
@@ -218,6 +270,70 @@ describe("PrChip", () => {
 
     fireEvent.mouseLeave(chip);
     expect(document.querySelector(".pr-status-card")).toBeNull();
+  });
+
+  it("draws a muted eye for a CI watch only, and says so in the chip's name", () => {
+    const { container, rerender } = render(
+      <PrChip
+        pr={basePr()}
+        showRepoPrefix={false}
+        onOpen={vi.fn()}
+        watch={{ ci: { runAttempt: 2, createdAt: 1, notifyOn: ["success", "failure"] } }}
+      />,
+    );
+    const chip = container.querySelector(".pr-chip") as HTMLElement;
+    expect(chip).toHaveAccessibleName(
+      "Open pwrdrvr/PwrAgent#743 (ready for review · checks passing) in browser, waiting for CI",
+    );
+    const eye = chip.querySelector(".pr-chip__watch") as HTMLElement;
+    expect(eye).toHaveAttribute("aria-hidden", "true");
+    expect(eye).not.toHaveAttribute("tabindex");
+    expect(eye.querySelector("[tabindex], button, [role='button']")).toBeNull();
+    // The eye sits between the number and the detach control.
+    expect(eye.previousElementSibling).toHaveClass("pr-chip__label");
+
+    // A merge watch and Auto-fix are listed on the card, not drawn on the row.
+    rerender(
+      <PrChip
+        pr={basePr()}
+        showRepoPrefix={false}
+        onOpen={vi.fn()}
+        watch={{ terminal: { createdAt: 1 }, autoFix: true }}
+      />,
+    );
+    expect(chip.querySelector(".pr-chip__watch")).toBeNull();
+    expect(chip).toHaveAccessibleName(
+      "Open pwrdrvr/PwrAgent#743 (ready for review · checks passing) in browser",
+    );
+  });
+
+  it("lists what wakes the thread on the card, with the stop hint only where a menu can stop it", () => {
+    vi.useFakeTimers();
+    const watch = { ci: { runAttempt: 2, createdAt: 1, notifyOn: ["success", "failure"] as const } };
+    const { container } = render(
+      <PrChip
+        pr={basePr()}
+        showRepoPrefix={false}
+        onOpen={vi.fn()}
+        onOpenContextMenu={vi.fn()}
+        watch={watch}
+      />,
+    );
+    const chip = container.querySelector(".pr-chip") as HTMLElement;
+    fireEvent.mouseEnter(chip);
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    const card = document.querySelector(".pr-status-card") as HTMLElement;
+    expect(card.textContent).toContain("Wakes this thread");
+    expect(card.textContent).toContain("Waiting for CIattempt 2");
+    expect(card.textContent).toContain("Right-click the chip to stop a watch.");
+    fireEvent.mouseLeave(chip);
+    cleanup();
+
+    const standalone = renderChip(basePr());
+    expect(standalone.querySelector(".pr-chip__watch")).toBeNull();
+    fireEvent.mouseEnter(standalone);
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    expect(document.querySelector(".pr-status-card")?.textContent).not.toContain("Wakes this thread");
   });
 
   it("opens delayed hover content with the latest PR data", () => {

@@ -31,6 +31,27 @@ describe("AgentToolMcpServer", () => {
     await Promise.all(openServers.splice(0).map(async (server) => server.close()));
   });
 
+  it("lists and dispatches only the catalog permitted for the bound worker", async () => {
+    const mutation = vi.fn(async () => agentToolSuccess({ changed: true }));
+    const parent = new AgentToolRouter([{ namespace: "pwragent", name: "reset_fixture", description: "Reset", inputSchema: { type: "object" }, dispatch: mutation }]);
+    const worker = new AgentToolRouter([{ namespace: "pwragent", name: "inspect_fixture", description: "Inspect", inputSchema: { type: "object" }, dispatch: async () => agentToolSuccess({ status: "done" }) }]);
+    const server = new AgentToolMcpServer({
+      resolveCatalogs: (context) => [{ id: "mcp_connections", router: context.threadId === "worker" ? worker : parent }],
+      resolveCallContext: (context) => context.threadId ? { ...context, threadId: context.threadId, turnId: "turn" } : undefined,
+    });
+    openServers.push(server);
+    const registration = await server.registerClient({ backend: "claude", threadId: "worker" });
+    const client = await connectClient(registration);
+    try {
+      expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(["inspect_fixture"]);
+      expect((await client.callTool({ name: "reset_fixture", arguments: {} })).isError).toBe(true);
+      expect(mutation).not.toHaveBeenCalled();
+      expect((await client.callTool({ name: "inspect_fixture", arguments: {} })).isError).not.toBe(true);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("advertises production read-only classifications and a callable guide over HTTP", async () => {
     const store = new TestTokenMiserStore("catalog-annotation-test");
     const focused = new TokenMiserFocusedSummaries({

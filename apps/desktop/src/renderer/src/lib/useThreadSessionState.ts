@@ -34,7 +34,7 @@ import type {
   MessagingConversationKind,
   NavigationThreadSummary,
 } from "@pwragent/shared";
-import { isAppServerBackendKind, isCelestialIconId } from "@pwragent/shared";
+import { isAppServerBackendKind, isCelestialIconId, threadTodoMessageOriginFromUnknown } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
 import {
@@ -185,6 +185,11 @@ type ThreadSessionEntry = {
   hydratedInitialHistoryLimit?: number;
   hydratedUpdatedAt?: number;
   hydratedStreamRecoveryVersion?: number;
+  /**
+   * A read from the thread's owner has replaced `response` at least once.
+   * Until then `response` may hold only live events that arrived first.
+   */
+  hydratedFromOwner?: true;
   initialLoadDurationMs?: number;
   interacted: boolean;
   lastTouchedAt: number;
@@ -3457,7 +3462,7 @@ function liveActivityNotificationSignature(params: {
   }
 
   const item = getNotificationItem(params.notification.params);
-  const details = item ? buildLiveToolDetails(item) : [];
+  const details = item ? buildLiveToolDetails(item, undefined, params.notification.method) : [];
   if (details.length === 0) {
     return undefined;
   }
@@ -4442,6 +4447,11 @@ function threadMessageOriginFromUnknown(
       ...(prAutomation ? { prAutomation } : {}),
     };
   }
+  // A to-do marker names the thread that raised the card, so it needs one.
+  const threadTodo =
+    record.kind === "agent"
+      ? threadTodoMessageOriginFromUnknown(record.threadTodo)
+      : undefined;
   return {
     kind: record.kind,
     ...(dependencyId ? { dependencyId } : {}),
@@ -4465,6 +4475,7 @@ function threadMessageOriginFromUnknown(
         ? { title: sourceRecord.title }
         : {}),
     },
+    ...(threadTodo ? { threadTodo } : {}),
     ...(messaging ? { messaging } : {}),
     ...(subAgent ? { subAgent } : {}),
     ...(prAutomation ? { prAutomation } : {}),
@@ -5569,6 +5580,7 @@ export function useThreadSessionState(params: {
             hydratedEnvironmentSetupVersion:
               getEnvironmentSetupHydrationVersion(targetThread),
             hydratedInitialHistoryLimit: initialHistoryLimit,
+            hydratedFromOwner: true,
             hydratedStreamRecoveryVersion: streamRecoveryVersion,
             hydratedUpdatedAt:
               needsHydrationAfterCompletion && completionHydrationRetries < 2
@@ -5914,6 +5926,17 @@ export function useThreadSessionState(params: {
       return;
     }
 
+    // A live event for a thread with no transcript in this window starts one
+    // from that event alone. That is not the thread's history, and the
+    // active-turn check below would hold it back until the turn ends, leaving
+    // only the current turn on screen with nothing older to scroll to.
+    if (!session.hydratedFromOwner) {
+      if (session.failedHydrationVersion !== hydrationVersion) {
+        void loadLatest(thread);
+      }
+      return;
+    }
+
     if (
       session.hydratedEnvironmentSetupVersion
       !== getEnvironmentSetupHydrationVersion(thread)
@@ -6124,7 +6147,7 @@ export function useThreadSessionState(params: {
         const method = event.notification.method;
         if (method === "item/started" || method === "item/completed") {
           const item = getNotificationItem(event.notification.params);
-          const detail = item ? buildLiveToolDetails(item)[0] : undefined;
+          const detail = item ? buildLiveToolDetails(item, undefined, method)[0] : undefined;
           if (detail) {
             const currentItems = liveToolItemsRef.current[targetThreadKey] ?? {};
             if (method === "item/started" && (
@@ -6394,7 +6417,7 @@ export function useThreadSessionState(params: {
 
         if (event.notification.method === "item/started") {
           const item = getNotificationItem(event.notification.params);
-          const details = item ? buildLiveToolDetails(item) : [];
+          const details = item ? buildLiveToolDetails(item, undefined, event.notification.method) : [];
           if (details.length === 0) {
             return current;
           }
@@ -6711,6 +6734,12 @@ export function useThreadSessionState(params: {
                 itemParams: event.notification.params,
                 turn: assistantTurn,
               });
+          if (assistantMessageEntry && event.rendererImageParts?.length) {
+            assistantMessageEntry.parts = [
+              { type: "text", text: assistantMessageEntry.text },
+              ...event.rendererImageParts,
+            ];
+          }
           const taskMonitorUsageEntry = item && !transientTaskMonitorItem
             ? buildTaskMonitorUsageActivityEntry({
                 id: `${item.id ?? event.notification.params.turnId ?? "monitor"}:usage`,
@@ -6834,7 +6863,7 @@ export function useThreadSessionState(params: {
             };
           }
 
-          const details = item ? buildLiveToolDetails(item) : [];
+          const details = item ? buildLiveToolDetails(item, event.rendererImageParts, event.notification.method) : [];
           if (details.length > 0) {
             const turn = buildTurnMetadata({
               fallbackId:

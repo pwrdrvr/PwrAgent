@@ -3,6 +3,7 @@ import type {
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
   BackendSummary,
+  ThreadExecutionMode,
 } from "@pwragent/shared";
 import { isAcpBackendId } from "@pwragent/shared";
 
@@ -101,6 +102,36 @@ export function buildMessagingAcpRuntimeModeSummary(params: {
       : "Agent default",
     currentValue: fallbackValue,
   };
+}
+
+/**
+ * Whether an ACP backend's Permissions control is PwrAgent's Default and
+ * Full Access execution modes. Grok and Kimi builds without a permission
+ * selector of their own declare both on the backend summary, and the registry
+ * applies them. Any runtime mode such a backend still advertises, such as
+ * Grok's planning selector, is not a permission choice.
+ */
+export function acpBackendUsesExecutionModePermissions(
+  backend: BackendSummary | undefined,
+): boolean {
+  return (
+    acpBackendDeclaresExecutionMode(backend, "default")
+    && acpBackendDeclaresExecutionMode(backend, "full-access")
+  );
+}
+
+/** Whether an ACP backend declares `mode` as an available execution mode. */
+export function acpBackendDeclaresExecutionMode(
+  backend: BackendSummary | undefined,
+  mode: ThreadExecutionMode,
+): boolean {
+  return Boolean(
+    backend
+    && isAcpBackendId(backend.kind)
+    && backend.executionModes.some(
+      (candidate) => candidate.mode === mode && candidate.available,
+    ),
+  );
 }
 
 export function resolveAcpRuntimeModeValue(

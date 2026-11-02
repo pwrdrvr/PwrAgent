@@ -20,6 +20,7 @@ import {
 } from "@pwragent/shared";
 import { PinIcon } from "../../icons";
 import { useDropIndicatorController } from "./drag-drop";
+import type { NestThreadHandler } from "./thread-nest-drop";
 import { useSubthreadReorderDrag } from "./useSubthreadReorderDrag";
 import { useThreadNestDrag } from "./useThreadNestDrag";
 import { createSubthreadTrays } from "./subthread-trays";
@@ -138,10 +139,7 @@ type RecentsListProps = {
     move: NavigationRelativeChildMove,
   ) => Promise<void>;
   /** A thread dropped on another row becomes its sub-thread. */
-  onNestThread?: (
-    thread: NavigationThreadSummary,
-    parent: NavigationThreadSummary,
-  ) => void;
+  onNestThread?: NestThreadHandler;
   onSetSubthreadsCollapsed?: (
     parent: NavigationThreadSummary,
     collapsed: boolean,

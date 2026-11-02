@@ -40,8 +40,9 @@ const ctx = (extra: Partial<ForgePrToolContext> = {}): ForgePrToolContext => ({
 
 describe("GitHub tool contract", () => {
   it("rejects unknown fields, missing requirements and cross-repository search", () => {
-    expect(() => validateForgePrToolArgs("create_pull_request", { title: "x", threadId: "other" })).toThrow(/Unknown argument/);
+    expect(() => validateForgePrToolArgs("create_pull_request", { title: "x", head: "topic", threadId: "other" })).toThrow(/Unknown argument/);
     expect(() => validateForgePrToolArgs("merge_pull_request", { number: 1 })).toThrow(/requires expectedHeadSha/);
+    expect(() => validateForgePrToolArgs("create_pull_request", { title: "x" })).toThrow(/requires head/);
     expect(() => validateForgePrToolArgs("search_issues", { query: "repo:other/thing bug" })).toThrow(/this thread's repository only/);
     expect(() => validateForgePrToolArgs("create_pull_request", { title: "x", head: "topic; rm -rf" })).toThrow(/valid branch/);
     expect(() => validateForgePrToolArgs("update_pull_request", { number: 1, attachments: [{ path: "/tmp/a.png" }] })).toThrow(/full new body/);
@@ -125,14 +126,46 @@ describe("GitHub tool client", () => {
     const { calls, client } = harness(() => new Response(null, { status: 201 }));
     const result = await client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx({ repository: { ...repo, host } }));
     const root = host === "github.com" ? "https://api.github.com" : `https://${host}/api/v3`;
-    expect(calls).toEqual([{ url: `${root}/repos/fixture/project/actions/runs/42/rerun-failed-jobs`, method: "POST", body: undefined, accept: "application/vnd.github+json" }]);
-    expect(result).toMatchObject({ requested: true, runId: 42, providerRequests: 1, scope: "failed_jobs_and_dependents", url: `https://${host}/fixture/project/actions/runs/42` });
+    expect(calls[0]).toEqual({ url: `${root}/repos/fixture/project/actions/runs/42/rerun-failed-jobs`, method: "POST", body: undefined, accept: "application/vnd.github+json" });
+    // The follow-up read of the run returned no body: the accepted re-run is
+    // still reported, without its attempt or head.
+    expect(calls[1]).toMatchObject({ url: `${root}/repos/fixture/project/actions/runs/42`, method: "GET" });
+    expect(result).toMatchObject({ requested: true, runId: 42, providerRequests: 2, scope: "failed_jobs_and_dependents", url: `https://${host}/fixture/project/actions/runs/42` });
+    expect(result).not.toHaveProperty("runAttempt");
+    expect(result).not.toHaveProperty("headSha");
+  });
+
+  it("reports the re-run's attempt and head from one follow-up read of the run", async () => {
+    const { calls, client } = harness((call) => call.method === "POST"
+      ? new Response(null, { status: 201 })
+      : json({ id: 42, run_attempt: 2, head_sha: "c".repeat(40), status: "queued" }));
+    const result = await client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx());
+    expect(calls.map((call) => call.method)).toEqual(["POST", "GET"]);
+    expect(result).toMatchObject({ requested: true, runId: 42, runAttempt: 2, headSha: "c".repeat(40), providerRequests: 2 });
+  });
+
+  it("still reports an accepted re-run when the follow-up read fails", async () => {
+    const { client } = harness((call) => call.method === "POST"
+      ? new Response(null, { status: 201 })
+      : json({ message: "Server Error" }, 500));
+    const result = await client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx());
+    expect(result).toMatchObject({ requested: true, runId: 42, providerRequests: 2 });
+    expect(result).not.toHaveProperty("runAttempt");
   });
 
   it("returns a refused rerun without falling back to rerunning the whole workflow", async () => {
     const { calls, client } = harness(() => json({ message: "This workflow run cannot be rerun." }, 403));
     await expect(client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx())).rejects.toMatchObject({ code: "forbidden", message: expect.stringContaining("cannot be rerun") });
     expect(calls).toHaveLength(1);
+  });
+
+  it("reads whether a pull request head is pushed, with slashes kept as path segments", async () => {
+    const { calls, client } = harness((call) => call.url.endsWith("/git/ref/heads/fix/pushed") ? json({ ref: "refs/heads/fix/pushed" }) : json({ message: "Not Found" }, 404));
+    await expect(client.headBranchExists(repo, "fix/pushed")).resolves.toBe(true);
+    expect(calls[0]!.url).toBe("https://api.github.com/repos/fixture/project/git/ref/heads/fix/pushed");
+    await expect(client.headBranchExists(repo, "fix/local-only")).resolves.toBe(false);
+    await expect(client.headBranchExists(repo, "someone:topic")).resolves.toBeUndefined();
+    expect(calls).toHaveLength(2);
   });
 
   it("opens a pull request into the default branch and returns it read back", async () => {
@@ -310,5 +343,18 @@ describe("forge tool service", () => {
   it("honors a provider switched off in Settings → Git", async () => {
     const service = new ForgePrToolService({ enabled: (provider) => provider === "github", clients: { github: { execute: vi.fn() }, gitlab: { execute: vi.fn() } }, defaultMergeMethod: () => "merge" });
     await expect(service.execute("get_issue", { number: 1 }, scope([remotes.gitlab]))).rejects.toMatchObject({ code: "provider_disabled" });
+  });
+  it("refuses a pull request from an unpushed head before approval, and does not guess for forks or unknown answers", async () => {
+    const headBranchExists = vi.fn(async (_repository: ForgeRepository, head: string) => head === "fix/pushed" ? true : head === "fix/local-only" ? false : undefined);
+    const service = new ForgePrToolService({ enabled: () => true, clients: { github: { execute: vi.fn(), headBranchExists }, gitlab: { execute: vi.fn() } }, defaultMergeMethod: () => "merge" });
+    await expect(service.prepare("create_pull_request", { title: "Fix", head: "fix/pushed" }, scope([remotes.github])))
+      .resolves.toEqual({ repository: repo, args: { title: "Fix", head: "fix/pushed" } });
+    await expect(service.prepare("create_pull_request", { title: "Fix", head: "fix/local-only" }, scope([remotes.github])))
+      .rejects.toMatchObject({ code: "invalid_arguments", message: expect.stringContaining("Push it") });
+    await expect(service.prepare("create_pull_request", { title: "Fix", head: "someone:topic" }, scope([remotes.github])))
+      .resolves.toMatchObject({ args: { head: "someone:topic" } });
+    await expect(service.prepare("add_issue_comment", { number: 1, body: "Hi" }, scope([remotes.github])))
+      .resolves.toEqual({ repository: repo, args: { number: 1, body: "Hi" } });
+    expect(headBranchExists).toHaveBeenCalledTimes(3);
   });
 });

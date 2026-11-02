@@ -3,7 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { HandoffSourceSettings } from "../app-server/backend-registry";
-import type { CreateInstanceThreadResult, ListInstanceProjectsResult, ThreadTodo, ThreadTodoProject } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  AppServerThreadMessageOrigin,
+  CreateInstanceThreadResult,
+  ListInstanceProjectsResult,
+  ThreadTodo,
+  ThreadTodoProject,
+} from "@pwragent/shared";
 import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
 import {
@@ -14,6 +21,20 @@ import {
 } from "../thread-todos/thread-todo-runtime";
 import { withThreadTodoPlanNote } from "../thread-todos/thread-todo-plan";
 import type { ThreadTodoProjectCandidate } from "../thread-todos/thread-todo-projects";
+
+/** The card whose action the operator ran. */
+const CARD = { id: "todo-1", title: "Rewrite the CLI" };
+
+/** The registry's to-do origin: the raising thread, titled, plus the card. */
+const buildThreadTodoMessageOrigin = () => vi.fn(async (params: {
+  backend: AppServerBackendKind;
+  threadId: string;
+  todo: { id: string; title?: string };
+}): Promise<AppServerThreadMessageOrigin> => ({
+  kind: "agent",
+  sourceThread: { backend: params.backend, threadId: params.threadId, title: "Source thread" },
+  threadTodo: params.todo,
+}));
 
 const FULL_ACCESS_SOL: HandoffSourceSettings = {
   executionMode: "full-access",
@@ -38,6 +59,7 @@ function fakeRegistry(source: HandoffSourceSettings) {
     })),
     renameThread: vi.fn(async () => undefined),
     startTurn: vi.fn(async (_params: Record<string, unknown>) => ({ turnId: "child-turn" })),
+    buildThreadTodoMessageOrigin: buildThreadTodoMessageOrigin(),
   };
   return {
     registry,
@@ -59,6 +81,7 @@ describe("thread to-do Start thread", () => {
       sourceThreadId: "source-thread",
       cwd: "/repo",
       crossProject: false,
+      todo: CARD,
       action: { type: "start_thread", prompt: "Rewrite the CLI", workMode: "worktree" },
     });
 
@@ -95,6 +118,7 @@ describe("thread to-do Start thread", () => {
       sourceBackend: "codex",
       sourceThreadId: "source-thread",
       crossProject: false,
+      todo: CARD,
       action: {
         type: "start_thread",
         prompt: "Review it",
@@ -123,6 +147,7 @@ describe("thread to-do Start thread", () => {
       sourceBackend: "codex",
       sourceThreadId: "source-thread",
       crossProject: false,
+      todo: CARD,
       action: { type: "start_thread", prompt: "Go", model: "gpt-6.1-sol" },
     });
 
@@ -145,6 +170,7 @@ describe("thread to-do Start thread", () => {
       startThread: vi.fn(),
       renameThread: vi.fn(),
       startTurn: vi.fn(),
+      buildThreadTodoMessageOrigin: buildThreadTodoMessageOrigin(),
     };
     const federation = vi.fn(async (request: { operation: string }) =>
       request.operation === "list_instance_projects"
@@ -177,6 +203,7 @@ describe("thread to-do Start thread", () => {
       sourceThreadId: "source-thread",
       project: { key: "local-repo", label: "repo", path: "/local/repo" },
       crossProject: false,
+      todo: CARD,
       action: { type: "start_thread", prompt: "Go", model: "gpt-6.1-sol", reasoningEffort: "high" },
     });
 
@@ -223,7 +250,7 @@ describe("thread to-do Start thread on a peer that names the project differently
     });
     const run = () => runners.startThreadOnInstance!({
       instanceId: "win", sourceBackend: "codex", sourceThreadId: "source-thread", project: card,
-      crossProject: false, action: { type: "start_thread", prompt: "Go" },
+      crossProject: false, todo: CARD, action: { type: "start_thread", prompt: "Go" },
     });
     const created = () => federation.mock.calls
       .map(([request]) => request)
@@ -282,7 +309,7 @@ describe("thread to-do Start thread on project pagination", () => {
     const runners = createThreadTodoRunners({ registry: registry as unknown as ThreadTodoRunnerRegistry, federation });
     const run = () => runners.startThreadOnInstance!({
       instanceId: "peer", sourceBackend: "codex", sourceThreadId: "source-thread", project,
-      crossProject: false, action: { type: "start_thread", prompt: "Go" },
+      crossProject: false, todo: CARD, action: { type: "start_thread", prompt: "Go" },
     });
     return { run, federation };
   }
@@ -379,6 +406,7 @@ describe("chosen dispatch backend", () => {
     registry.readBackendModelOptions.mockResolvedValue({ models: [{ id: "opus", label: "Opus 5.5", reasoningEfforts: ["high"] }] } as never);
     await runners.startThread({
       sourceBackend: "codex", sourceThreadId: "source", cwd: "/repo", crossProject: false,
+      todo: CARD,
       action: { type: "start_thread", prompt: "Build it", workMode: "worktree" },
       modelSettings: { backend: "claude", model: "Opus 5.5", reasoningEffort: "high" },
     });
@@ -397,6 +425,7 @@ describe("chosen dispatch backend", () => {
     registry.readBackendModelOptions.mockResolvedValue({ models: [{ id: "opus", reasoningEfforts: ["high"] }] } as never);
     await expect(runners.startThread({
       sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      todo: CARD,
       action: { type: "start_thread", prompt: "Build it" },
       modelSettings: { backend: "claude", model: "gpt-6.1-sol" },
     })).rejects.toThrow('No model named "gpt-6.1-sol"');
@@ -407,6 +436,7 @@ describe("chosen dispatch backend", () => {
     const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, serviceTier: "fast", fastMode: true });
     await runners.startThread({
       sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      todo: CARD,
       action: { type: "start_thread", prompt: "Build it" },
       modelSettings: { backend: "codex", model: "other", reasoningEffort: "medium" },
     });
@@ -418,6 +448,7 @@ describe("dispatch access mode compatibility", () => {
   it.each(["codex", "claude"] as const)("starts on ACP Default Access when inheriting %s Auto", async (sourceBackend) => {
     const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, executionMode: "auto" });
     await runners.startThread({ sourceBackend, sourceThreadId: "source", crossProject: false,
+      todo: CARD,
       action: { type: "start_thread", prompt: "Build it" }, modelSettings: { backend: "acp:kimi" } });
     expect(registry.listBackends).toHaveBeenCalledWith({ includeUnavailable: true });
     expect(registry.startThread).toHaveBeenCalledWith(expect.objectContaining({ backend: "acp:kimi", executionMode: "default" }));
@@ -427,6 +458,7 @@ describe("dispatch access mode compatibility", () => {
   it("keeps Auto when the destination advertises it", async () => {
     const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, executionMode: "auto" });
     await runners.startThread({ sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      todo: CARD,
       action: { type: "start_thread", prompt: "Build it" }, modelSettings: { backend: "claude" } });
     expect(registry.startThread).toHaveBeenCalledWith(expect.objectContaining({ executionMode: "auto" }));
     expect(registry.startTurn).toHaveBeenCalledWith(expect.objectContaining({ executionMode: "auto" }));
@@ -438,6 +470,7 @@ describe("dispatch access mode compatibility", () => {
       { mode: "default", available: false }, { mode: "full-access", available: true },
     ] }] });
     await expect(runners.startThread({ sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      todo: CARD,
       action: { type: "start_thread", prompt: "Build it" }, modelSettings: { backend: "acp:kimi" } })).rejects.toThrow("Default Access");
     expect(registry.startThread).not.toHaveBeenCalled();
   });
@@ -445,9 +478,11 @@ describe("dispatch access mode compatibility", () => {
   it("preserves explicit card access and same-backend inheritance", async () => {
     const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, executionMode: "auto" });
     await runners.startThread({ sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      todo: CARD,
       action: { type: "start_thread", prompt: "Build it", executionMode: "full-access" }, modelSettings: { backend: "acp:kimi" } });
     expect(registry.startThread).toHaveBeenLastCalledWith(expect.objectContaining({ executionMode: "full-access" }));
     await runners.startThread({ sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      todo: CARD,
       action: { type: "start_thread", prompt: "Build it" } });
     expect(registry.startThread).toHaveBeenLastCalledWith(expect.objectContaining({ executionMode: "auto" }));
     expect(registry.listBackends).not.toHaveBeenCalled();
@@ -466,6 +501,7 @@ describe("operator dispatch choices", () => {
     }] } as never);
     await runners.startThread({
       sourceBackend: "codex", sourceThreadId: "source", cwd: "/repo", crossProject: false,
+      todo: CARD,
       action: { type: "start_thread", prompt: "Build it" },
       workMode: "worktree",
       speed: "fast",
@@ -489,6 +525,7 @@ describe("operator dispatch choices", () => {
       const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, codexEnvironmentRuntime: own });
       const start = (environment: string, crossProject = false) => runners.startThread({
         sourceBackend: "codex", sourceThreadId: "source", cwd: repo, crossProject,
+        todo: CARD,
         action: { type: "start_thread", prompt: "Build it" }, environment,
       });
       await start("ci");
@@ -517,6 +554,7 @@ describe("operator dispatch choices", () => {
     }] } as never);
     await expect(runners.startThread({
       sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      todo: CARD,
       action: { type: "start_thread", prompt: "Build it" }, speed: "fast",
     })).rejects.toThrow("Fast mode is turned off");
     expect(registry.startThread).not.toHaveBeenCalled();
@@ -530,6 +568,7 @@ describe("operator dispatch choices", () => {
     }] } as never);
     await runners.startThread({
       sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      todo: CARD,
       action: { type: "start_thread", prompt: "Build it" },
     });
     expect(registry.startThread).toHaveBeenCalledWith(expect.objectContaining({ fastMode: false }));
@@ -539,6 +578,7 @@ describe("operator dispatch choices", () => {
     const registry = {
       readThreadHandoffSettings: vi.fn(async () => FULL_ACCESS_SOL),
       startThread: vi.fn(), renameThread: vi.fn(), startTurn: vi.fn(),
+      buildThreadTodoMessageOrigin: buildThreadTodoMessageOrigin(),
     };
     const federation = vi.fn(async (request: { operation: string }) =>
       request.operation === "list_instance_projects"
@@ -555,6 +595,7 @@ describe("operator dispatch choices", () => {
     await runners.startThreadOnInstance!({
       instanceId: "win", sourceBackend: "claude", sourceThreadId: "source",
       project: { key: "local-repo", label: "repo", path: "/repo" }, crossProject: false,
+      todo: CARD,
       action: { type: "start_thread", prompt: "Reproduce it", workMode: "worktree" },
       modelSettings: { backend: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
       speed: "fast", workMode: "local", environment: "windows-ci",
@@ -577,6 +618,7 @@ describe("operator dispatch choices", () => {
     await expect(runners.startThreadOnInstance!({
       instanceId: "win", sourceBackend: "codex", sourceThreadId: "source",
       project: { key: "k", label: "repo", path: "/repo" }, crossProject: false,
+      todo: CARD,
       action: { type: "start_thread", prompt: "Go" }, speed: "ultrafast",
     })).rejects.toThrow("Ultrafast");
     expect(federation).not.toHaveBeenCalled();
@@ -601,6 +643,7 @@ describe("thread to-do Start thread with a plan", () => {
     sourceBackend: "codex",
     sourceThreadId: "source-thread",
     crossProject: false,
+    todo: CARD,
     action: { type: "start_thread", prompt: "Finish the Windows smoke test." },
     ...(plan ? { plan } : {}),
   });
@@ -641,6 +684,7 @@ describe("thread to-do Start thread with a plan", () => {
       startThread: vi.fn(),
       renameThread: vi.fn(),
       startTurn: vi.fn(),
+      buildThreadTodoMessageOrigin: buildThreadTodoMessageOrigin(),
     };
     const federation = vi.fn(async (request: { operation: string }) =>
       request.operation === "list_instance_projects"
@@ -666,6 +710,7 @@ describe("thread to-do Start thread with a plan", () => {
       sourceThreadId: "source-thread",
       project: { key: "local-atlas", label: "atlas", path: "/local/atlas" },
       crossProject: false,
+      todo: CARD,
       action: { type: "start_thread", prompt: "Finish the Windows smoke test." },
       ...(plan ? { plan } : {}),
     });
@@ -713,5 +758,109 @@ describe("thread to-do Start thread with a plan", () => {
     };
     await raiseThreadTodoPlan(registry as never, { backend: "codex", threadId: "child" }, PLAN, { raisePlan });
     expect(raisePlan).toHaveBeenCalledWith({ backend: "codex", threadId: "child", cwd: "/worktrees/atlas", plan: PLAN });
+  });
+});
+
+describe("thread to-do dispatch provenance", () => {
+  const TODO_ORIGIN = {
+    kind: "agent",
+    sourceThread: { backend: "codex", threadId: "source-thread", title: "Source thread" },
+    threadTodo: CARD,
+  };
+
+  it("labels a local start's prompt with the raising thread and the card", async () => {
+    const { registry, runners } = fakeRegistry(FULL_ACCESS_SOL);
+
+    await runners.startThread({
+      sourceBackend: "codex",
+      sourceThreadId: "source-thread",
+      crossProject: false,
+      todo: CARD,
+      action: { type: "start_thread", prompt: "Rewrite the CLI" },
+    });
+
+    expect(registry.buildThreadTodoMessageOrigin).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "source-thread",
+      todo: CARD,
+    });
+    expect(registry.startTurn).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: "child-thread",
+      messageOrigin: TODO_ORIGIN,
+    }));
+    // The operator clicked the card: no agent turn sent the prompt.
+    const origin = registry.startTurn.mock.calls[0]![0].messageOrigin as AppServerThreadMessageOrigin;
+    expect(origin.sourceThread).not.toHaveProperty("turnId");
+  });
+
+  function peerStart(withOrigin: boolean) {
+    const { registry } = fakeRegistry(FULL_ACCESS_SOL);
+    const answer: PwrAgentFederationHandler = async (request) =>
+      request.operation === "list_instance_projects"
+        ? { ok: true, data: {
+            instanceId: "peer", instanceLabel: "Studio", isLocal: false, complete: true,
+            projects: [{ key: "peer-repo", label: "repo", path: "/peer/repo", kind: "directory", hasLaunchpad: true }],
+          } as ListInstanceProjectsResult }
+        : { ok: true, data: {
+            backend: "codex", threadId: "peer-thread", isLocal: false, instanceId: "peer", instanceLabel: "Studio",
+          } as CreateInstanceThreadResult };
+    const federation = vi.fn<PwrAgentFederationHandler>(answer);
+    const originFederation = vi.fn<PwrAgentFederationHandler>(answer);
+    const federationWithOrigin = vi.fn((_origin: AppServerThreadMessageOrigin) => originFederation);
+    const runners = createThreadTodoRunners({
+      registry: registry as unknown as ThreadTodoRunnerRegistry,
+      federation,
+      ...(withOrigin ? { federationWithOrigin } : {}),
+    });
+    const run = () => runners.startThreadOnInstance!({
+      instanceId: "peer", sourceBackend: "codex", sourceThreadId: "source-thread",
+      project: { key: "local-repo", label: "repo", path: "/local/repo" },
+      crossProject: false, todo: CARD, action: { type: "start_thread", prompt: "Go" },
+    });
+    const operations = (handler: typeof federation) => handler.mock.calls.map(([request]) => request.operation);
+    return { registry, run, federation, originFederation, federationWithOrigin, operations };
+  }
+
+  it("creates a peer thread through the tools that carry the card's origin", async () => {
+    const { registry, run, federation, originFederation, federationWithOrigin, operations } = peerStart(true);
+
+    await run();
+
+    expect(registry.buildThreadTodoMessageOrigin).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "source-thread",
+      todo: CARD,
+    });
+    expect(federationWithOrigin).toHaveBeenCalledWith(TODO_ORIGIN);
+    // The project listing has no prompt to label.
+    expect(operations(federation)).toEqual(["list_instance_projects"]);
+    expect(operations(originFederation)).toEqual(["create_instance_thread"]);
+  });
+
+  it("falls back to the plain federation tools without an origin factory", async () => {
+    const { run, federation, originFederation, operations } = peerStart(false);
+
+    await run();
+
+    expect(operations(federation)).toEqual(["list_instance_projects", "create_instance_thread"]);
+    expect(originFederation).not.toHaveBeenCalled();
+  });
+
+  it("forwards the card to the registry for a sent message", async () => {
+    const sendThreadTodoMessage = vi.fn(async () => undefined);
+    const runners = createThreadTodoRunners({
+      registry: { sendThreadTodoMessage } as unknown as ThreadTodoRunnerRegistry,
+    });
+    const request = {
+      sourceBackend: "codex" as const,
+      sourceThreadId: "source-thread",
+      target: { backend: "codex" as const, threadId: "target-thread", title: "Target" },
+      prompt: "Pick this up",
+      todo: CARD,
+    };
+
+    await expect(runners.sendMessage!(request)).resolves.toEqual({ summary: "Sent to Target" });
+
+    expect(sendThreadTodoMessage).toHaveBeenCalledWith(request);
   });
 });

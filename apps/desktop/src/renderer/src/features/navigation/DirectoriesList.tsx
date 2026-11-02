@@ -36,6 +36,7 @@ import {
 import {
   ChevronDownIcon,
   NewThreadIcon,
+  PauseIcon,
   UnlinkedDotIcon,
 } from "../../icons";
 import { useEventCallback } from "../../lib/useEventCallback";
@@ -46,6 +47,7 @@ import {
 } from "./thread-action-hotkeys";
 import { useDropIndicatorController } from "./drag-drop";
 import { beginPointerReorderDrag, type Point, type PointerReorderTarget } from "./pointer-reorder-drag";
+import type { NestThreadHandler } from "./thread-nest-drop";
 import { useSubthreadReorderDrag } from "./useSubthreadReorderDrag";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import {
@@ -212,10 +214,7 @@ type DirectoriesListProps = {
     move: NavigationRelativeChildMove,
   ) => Promise<void>;
   /** A thread dropped on another row becomes its sub-thread. */
-  onNestThread?: (
-    thread: NavigationThreadSummary,
-    parent: NavigationThreadSummary,
-  ) => void;
+  onNestThread?: NestThreadHandler;
   onSetSubthreadsCollapsed?: (
     parent: NavigationThreadSummary,
     collapsed: boolean,
@@ -247,6 +246,14 @@ type DirectoriesListProps = {
     directory: NavigationDirectorySummary,
     position: { x: number; y: number; anchorTop?: number },
   ) => void;
+  /**
+   * Whether a placeholder row (a peer's project with no local checkout)
+   * opens the project menu. It does only for its peer project's Forge
+   * Automation; without this it opens none.
+   */
+  placeholderOffersDirectoryContextMenu?: (
+    directory: NavigationDirectorySummary,
+  ) => boolean;
   onSetReaction?: (
     thread: NavigationThreadSummary,
     emoji: string,
@@ -1039,11 +1046,36 @@ export function DirectoriesList(props: DirectoriesListProps) {
    * pinned-vs-unpinned `draggable` toggling. See plan
    * 2026-05-09-002 Unit K.
    */
+  const openFederationTargetMenu = (
+    directory: NavigationDirectorySummary,
+    event: MouseEvent<HTMLButtonElement>,
+  ): void => {
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    // `x` is the button's RIGHT edge; the sidebar right-aligns the card to it
+    // once the card has been measured. The card's width is a range
+    // (220–320px), so subtracting a guess here would misplace it on the wider
+    // end.
+    props.onOpenFederationTargetMenu?.(directory, {
+      x: rect.right,
+      y: rect.bottom + 4,
+      anchorTop: rect.top,
+    });
+  };
+
   const renderDirectoryRow = (
     directory: NavigationDirectorySummary,
   ): ReactElement => {
     const directoryUnconfigured =
       directory.localAvailability === "unconfigured";
+    // A project only a peer has checked out has no local launchpad, but the
+    // peer can still take a new thread in it. Its "+" opens the machine menu.
+    const remoteLaunchOnly =
+      directoryUnconfigured && Boolean(props.onOpenFederationTargetMenu);
+    const hasLaunchCluster = !directoryUnconfigured || remoteLaunchOnly;
+    const unconfiguredTooltip = remoteLaunchOnly
+      ? "This project isn't set up on this machine. Use + to start a thread on a machine that has it, or Add Directory to connect it here."
+      : "This project directory isn't configured on this instance. Use Add Directory to connect it.";
     const directoryPinned = isPinnedDirectory(directory);
     const directoryDraggable =
       directoryDragEnabled &&
@@ -1074,9 +1106,15 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const pinResource = props.pagedNavigation?.resources.get(pinResourceId);
     const rootResourceId = `directory:${directory.key}`;
     const rootResource = props.pagedNavigation?.resources.get(rootResourceId);
+    const forgeActivityPaused = directory.forgeAutomation?.paused === true;
+    // A placeholder's menu holds its peer project's Forge Automation only
+    // while that peer can take the change.
+    const forgeAutomationMenuAvailable = !directoryUnconfigured
+      || props.placeholderOffersDirectoryContextMenu?.(directory) === true;
     const directorySummaryLabel = [
       directory.label,
       directoryUnconfigured ? "not configured on this instance" : undefined,
+      forgeActivityPaused ? "forge activity paused" : undefined,
       activeThreadCount > 0 ? activeThreadLabel : undefined,
       remoteActiveThreadCount > 0 ? formatRemoteActiveThreadCount(remoteActiveThreadCount) : undefined,
       reviewThreadCount > 0 ? formatReviewThreadCount(reviewThreadCount) : undefined,
@@ -1409,13 +1447,13 @@ export function DirectoriesList(props: DirectoriesListProps) {
           // computes, so the CSS that swaps the count block for the
           // launchpad cluster can match plain classes instead of
           // re-running :has() subtree scans on every header hover —
-          // and `--with-launchpad` scopes the hover fade so an
-          // unconfigured directory (which renders no cluster) never
-          // blanks its counts with nothing in their place.
+          // and `--with-launchpad` scopes the hover fade so a row that
+          // renders no cluster never blanks its counts with nothing in
+          // their place. A remote-only row's lone "+" is not a split pair.
           className={`directory-row__header${
-            directoryUnconfigured ? "" : " directory-row__header--with-launchpad"
+            hasLaunchCluster ? " directory-row__header--with-launchpad" : ""
           }${
-            props.onOpenFederationTargetMenu
+            props.onOpenFederationTargetMenu && !directoryUnconfigured
               ? " directory-row__header--split"
               : ""
           }${
@@ -1473,7 +1511,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
             }}
             onContextMenu={(() => {
               const openMenu = props.onOpenDirectoryContextMenu;
-              if (!openMenu || !isPinnableDirectoryKind(directory)) {
+              if (!openMenu || !(isPinnableDirectoryKind(directory)
+                || props.placeholderOffersDirectoryContextMenu?.(directory))) {
                 return undefined;
               }
               return (event) => {
@@ -1495,7 +1534,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
               directoryUnconfigured
                 ? (event) => unavailableDirectoryTooltip.show(
                     event.currentTarget,
-                    "This project directory isn't configured on this instance. Use Add Directory to connect it.",
+                    unconfiguredTooltip,
                   )
                 : undefined
             }
@@ -1503,7 +1542,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
               directoryUnconfigured
                 ? (event) => unavailableDirectoryTooltip.show(
                     event.currentTarget,
-                    "This project directory isn't configured on this instance. Use Add Directory to connect it.",
+                    unconfiguredTooltip,
                   )
                 : undefined
             }
@@ -1536,6 +1575,18 @@ export function DirectoriesList(props: DirectoriesListProps) {
             </span>
 
             <span className="directory-row__summary-meta">
+              {forgeActivityPaused ? (
+                <span
+                  aria-hidden="true"
+                  className="directory-row__paused tooltip-target"
+                  data-tooltip={forgeAutomationMenuAvailable
+                    ? "Forge activity paused. Right-click for Forge Automation."
+                    : "Forge activity paused."}
+                >
+                  <PauseIcon size={10} strokeWidth={2.5} />
+                  Paused
+                </span>
+              ) : null}
               {activeThreadCount > 0 ? (
                 <DirectoryCount
                   activeCount={activeThreadCount}
@@ -1571,9 +1622,25 @@ export function DirectoriesList(props: DirectoriesListProps) {
             </span>
           </button>
 
-          {/* Guarded as a unit: an unconfigured row has no local launchpad, so
-              it gets no machine chevron either. */}
-          {directoryUnconfigured ? null : (
+          {remoteLaunchOnly ? (
+            // No checkout here, so there is no local half to split from: the
+            // one "+" is the machine menu, and a peer that lacks the project
+            // says so in it.
+            <span className="directory-row__launchpad-cluster">
+              <button
+                aria-label={`Start a new thread in ${directory.label} on another machine`}
+                aria-haspopup="menu"
+                aria-expanded={
+                  props.openFederationTargetMenuDirectoryKey === directory.key
+                }
+                className="directory-row__launchpad-button"
+                type="button"
+                onClick={(event) => openFederationTargetMenu(directory, event)}
+              >
+                <NewThreadIcon size={16} />
+              </button>
+            </span>
+          ) : directoryUnconfigured ? null : (
             <span
               className={`directory-row__launchpad-cluster${
                 props.onOpenFederationTargetMenu
@@ -1606,19 +1673,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   }
                   className="directory-row__launchpad-targets-button"
                   type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    const rect = event.currentTarget.getBoundingClientRect();
-                    // `x` is the chevron's RIGHT edge; the sidebar right-aligns
-                    // the card to it once the card has been measured. The card's
-                    // width is a range (220–320px), so subtracting a guess here
-                    // would misplace it on the wider end.
-                    props.onOpenFederationTargetMenu?.(directory, {
-                      x: rect.right,
-                      y: rect.bottom + 4,
-                      anchorTop: rect.top,
-                    });
-                  }}
+                  onClick={(event) => openFederationTargetMenu(directory, event)}
                 >
                   {/* Heavier stroke at a smaller size: at the icon library's
                       1.75 default a 12px chevron read washed out next to the

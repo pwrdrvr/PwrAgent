@@ -1,6 +1,10 @@
 import type { LinkedDirectorySummary, PrSummary } from "@pwragent/shared";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { resolveReviewProvenance } from "../app-server/review-provenance";
+import {
+  clearForgeRepositoryNames,
+  recordForgeRepositoryName,
+} from "../pr-status/forge-repository-names";
 
 const WORKSPACE = "/Users/dev/pwrdrvr/PwrAgent";
 const WORKTREE = "/Users/dev/.codex/worktrees/mti5p133/PwrAgent";
@@ -597,6 +601,51 @@ describe("resolveReviewProvenance for a review that named its pull requests", ()
       repo: "PwrRoute",
       number: 97,
       url: "https://github.com/pwrdrvr/PwrRoute/pull/97",
+    });
+  });
+
+  describe("a remote with a renamed repository's old name", () => {
+    const oldRemote = { host: "github.com", owner: "pwrdrvr", repo: "PwrAgnt" };
+    const renamedPullRequest = {
+      provider: "github.com",
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      number: 97,
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/97",
+    };
+
+    afterEach(() => {
+      clearForgeRepositoryNames();
+    });
+
+    it("names an unattached pull request under the repository's current name", async () => {
+      recordForgeRepositoryName(oldRemote, "pwrdrvr/PwrAgent");
+      for (const named of [{ number: 97 }, { provider: "github.com", org: "pwrdrvr", repo: "PwrAgent", number: 97 }]) {
+        const context = await resolveReviewProvenance({
+          cwd: WORKSPACE,
+          namedPullRequests: [named],
+          prs: [],
+          resolveGitHubRepos: async () => [oldRemote],
+          runGit: gitRunner("feat/first-run-profile-access"),
+          target: claudeTarget,
+        });
+
+        expect(context?.pullRequest).toEqual(renamedPullRequest);
+      }
+    });
+
+    it("treats remotes spelling one repository two ways as one repository", async () => {
+      recordForgeRepositoryName(oldRemote, "pwrdrvr/PwrAgent");
+      const context = await resolveReviewProvenance({
+        cwd: WORKSPACE,
+        namedPullRequests: [{ number: 97 }],
+        prs: [],
+        resolveGitHubRepos: async () => [oldRemote, { host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" }],
+        runGit: gitRunner("feat/first-run-profile-access"),
+        target: claudeTarget,
+      });
+
+      expect(context?.pullRequest).toEqual(renamedPullRequest);
     });
   });
 

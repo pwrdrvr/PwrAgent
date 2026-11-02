@@ -104,6 +104,36 @@ describe("GitDirectoryService", () => {
     );
   });
 
+  it("resolves registered worktrees and their subdirectories for trust checks", async () => {
+    const repoDir = await realpath(await createFixtureRepo());
+    cleanupPaths.push(repoDir);
+    const worktreePath = path.join(repoDir, ".worktrees", "registered");
+    runGit(repoDir, ["worktree", "add", "--detach", worktreePath, "main"]);
+    const subdirectory = path.join(worktreePath, "nested");
+    await mkdir(subdirectory);
+    const service = new GitDirectoryService();
+
+    for (const cwd of [repoDir, worktreePath, subdirectory]) {
+      await expect(service.resolvePrimaryWorkspacePath(cwd, {
+        requireRegisteredWorktree: true,
+      })).resolves.toBe(toForwardSlashes(repoDir));
+    }
+  });
+
+  it("rejects a registered Git root that does not contain the requested directory", async () => {
+    const repoDir = await realpath(await createFixtureRepo());
+    const destination = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-git-root-override-")));
+    cleanupPaths.push(repoDir, destination);
+    await writeFile(path.join(destination, ".git"), `gitdir: ${toForwardSlashes(path.join(repoDir, ".git"))}\n`);
+    runGit(repoDir, ["config", "core.worktree", repoDir]);
+    expect(runGit(destination, ["rev-parse", "--show-toplevel"])).toBe(toForwardSlashes(repoDir));
+    const service = new GitDirectoryService();
+
+    await expect(service.resolvePrimaryWorkspacePath(destination, {
+      requireRegisteredWorktree: true,
+    })).resolves.toBeUndefined();
+  });
+
   it("returns the original directory for local launchpads", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);

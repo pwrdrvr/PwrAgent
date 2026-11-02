@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
+import { buildPwrAgentMcpInstructions } from "../agent-tools/agent-tool-mcp-server";
+import { PWRAGENT_IMAGE_REPLY_GUIDANCE } from "../agent-tools/agent-tool-router";
 import {
   buildPwrAgentToolSearchDefinition,
   MESSAGING_EAGER_TOOLS,
@@ -20,6 +22,11 @@ const catalog: DynamicToolSpec[] = [{
 }];
 
 describe("PwrAgent tool discovery", () => {
+  it("gives Codex discovery and Claude MCP the same explicit image reply guidance", () => {
+    expect(new AgentToolRouter([buildPwrAgentToolSearchDefinition(catalog)]).buildDynamicToolSpecs()[0])
+      .toMatchObject({ description: expect.stringContaining(PWRAGENT_IMAGE_REPLY_GUIDANCE) });
+    expect(buildPwrAgentMcpInstructions([])).toContain(PWRAGENT_IMAGE_REPLY_GUIDANCE);
+  });
   it("leaves the default catalog untouched and keeps only search eager when enabled", () => {
     const before = JSON.stringify(catalog);
     expect(withPwrAgentToolDiscovery(catalog, false)).toBe(catalog);
@@ -103,6 +110,8 @@ describe("PwrAgent tool discovery", () => {
     ["feishu send file", "send_messaging_file"],
     ["read star map", "read_star_map_view"],
     ["watch pull request", "watch_thread_pull_request"],
+    ["cancel pr watch", "watch_thread_pull_request"],
+    ["list my watches", "watch_thread_pull_request"],
     ["manage mcp connections", "manage_mcp_connections"],
   ])("finds %s in its bounded results", (query, name) => {
     const results = searchPwrAgentTools(catalog, query);

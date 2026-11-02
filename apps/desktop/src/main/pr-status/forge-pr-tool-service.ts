@@ -8,7 +8,14 @@ export type ForgePrToolScope = Pick<ForgeReadScope, "remotes" | "attached" | "br
   privateRoots: readonly string[];
 };
 
-type ProviderClient = { execute(operation: ForgePrToolOperation, args: ForgePrToolArgs, ctx: ForgePrToolContext): Promise<unknown> };
+/** What a call acts on, settled before the operator is asked. */
+export type ForgePrToolPreparedCall = { repository: ForgeRepository; args: ForgePrToolArgs };
+
+type ProviderClient = {
+  execute(operation: ForgePrToolOperation, args: ForgePrToolArgs, ctx: ForgePrToolContext): Promise<unknown>;
+  /** Whether a branch exists on the forge. Undefined when that cannot be told. */
+  headBranchExists?(repository: ForgeRepository, head: string, signal?: AbortSignal): Promise<boolean | undefined>;
+};
 
 /** Picks the one GitHub or GitLab repository a call acts in, then runs it with that provider's client. */
 export class ForgePrToolService {
@@ -25,6 +32,23 @@ export class ForgePrToolService {
     const repository = candidates[0]!;
     if (!this.options.enabled(repository.provider)) throw new ForgeReadError("provider_disabled", `${repository.provider === "github" ? "GitHub" : "GitLab"} is disabled in Settings → Git.`);
     return repository;
+  }
+
+  /**
+   * Settles what a call acts on before any approval card, so a call that
+   * would fail is refused without asking. An approved pull request whose
+   * head was never pushed fails at the forge, and the agent's retry asks
+   * the operator a second time.
+   */
+  async prepare(operation: ForgePrToolOperation, args: ForgePrToolArgs, scope: ForgePrToolScope, signal?: AbortSignal): Promise<ForgePrToolPreparedCall> {
+    const repository = this.resolveRepository(args, scope);
+    if (operation === "create_pull_request" && args.head) {
+      const exists = await this.options.clients[repository.provider].headBranchExists?.(repository, args.head, signal);
+      if (exists === false) {
+        throw new ForgeReadError("invalid_arguments", `Branch ${args.head} is not on ${repository.owner}/${repository.repo}. Push it, then open the pull request.`);
+      }
+    }
+    return { repository, args };
   }
 
   async execute(operation: ForgePrToolOperation, args: ForgePrToolArgs, scope: ForgePrToolScope, signal?: AbortSignal): Promise<unknown> {

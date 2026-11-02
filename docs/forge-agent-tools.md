@@ -27,9 +27,13 @@ Agent forge tools**:
 | `ci` | same | `auto` | `rerun_failed_ci_jobs` |
 | `approve_merge` | same | `ask` | `merge_pull_request`, an `APPROVE` or `REQUEST_CHANGES` review |
 
-- `allow` runs without asking. `auto` asks unless the turn has Full Access,
-  the same rule as an MCP connection's Auto tool approval. `ask` always asks.
-  `off` removes the tools.
+- `allow` runs without asking. `ask` always asks. `off` removes the tools.
+- `auto` follows the thread's own approval mode:
+  - Full Access runs every group. For Claude, that is bypass permissions.
+  - A Codex or Claude Auto turn runs every group except `approve_merge`.
+  - Any other mode asks, including Claude's plan and accept-edits modes.
+  - A Claude thread's mode is read from its open Claude process, so a change
+    during the turn applies to the next call.
 - A group that is off, or the family switched off, is not advertised to new
   turns. The main process also checks the policy on every call, so a turn that
   still holds an older schema gets `tools_disabled` naming the setting.
@@ -48,6 +52,51 @@ Agent forge tools**:
   (`tools.thread_inspection`) for reads and **Agent: change GitHub and GitLab**
   (`tools.forge_write`) for writes. `FORGE_AGENT_WRITE_TOOL_GROUPS` in
   `@pwragent/shared` lists every write, and both gates read it.
+
+### Project rules
+
+`[[git.agent_tools.rules]]` entries narrow or widen the write levels above for
+one repository and one agent. **Settings → Git → Agent forge tools → Project
+rules** edits them, and the approval card's **Always allow** menu writes one.
+
+```toml
+[[git.agent_tools.rules]]
+repository = "github.com/pwrdrvr/PwrAgent"
+agent = "claude"
+pull_requests = "allow"
+
+[[git.agent_tools.rules]]
+repository = "github.com/pwrdrvr/PwrAgent"
+agent = "codex"
+codex_model_provider = "llamacpp"
+model = "qwen3-abliterated"
+pull_requests = "ask"
+approve_merge = "off"
+```
+
+- `repository` is the forge repository a call acts in, `host/owner/repo`,
+  compared without regard to case. Every checkout and worktree of that
+  repository uses the same rules.
+- `agent` is `*` (all agents), `claude`, `codex`, or `acp:<registryId>`.
+  `codex_model_provider` and `model` narrow a row. They come from PwrAgent's
+  record of the thread, never from tool arguments.
+- A `codex` row without `codex_model_provider` covers only the default OpenAI
+  provider. A Codex thread on a custom provider needs its own row or `*`.
+  When Codex has not reported a thread's provider, Codex rules can only make
+  the level stricter.
+- Rules set `pull_requests`, `comments`, `issues`, `ci` and `approve_merge`.
+  Reads stay global.
+- For each call the most specific row that sets the group wins: model, then
+  provider, then `*`, then the global level. The master switch and a global
+  `off` still win, because those tools are not advertised to turns.
+- A rule's `off` refuses the call with `tools_disabled` naming the rule. A
+  rule's `allow` also lets an automation make that change.
+- An entry that cannot be read (unknown agent, misspelled key, bad level)
+  is ignored, and its repository asks for every write until it is fixed.
+  Settings shows a warning, and saving keeps the unreadable entry unchanged.
+- The **Always allow** menu appears only for pull requests, comments, issues
+  and CI reruns, never in automations, and never when a rule set `ask`. Main
+  accepts only an option it offered for that request.
 
 ## Pull request, merge request and issue tools
 
@@ -79,9 +128,12 @@ Reads (`read` group):
 
 Writes:
 
-- `create_pull_request`: head defaults to the thread's branch and base to the
-  repository's default branch. Draft, labels and reviewers are optional. The
-  new PR/MR is attached to the calling thread (`attachedToThread`).
+- `create_pull_request`: head is required and must already be pushed. The
+  agent names the branch, so the approval card always shows what opens, and
+  an unpushed branch is refused before the card instead of after approval.
+  Base defaults to the repository's default branch. Draft, labels and
+  reviewers are optional. The new PR/MR is attached to the calling thread
+  (`attachedToThread`).
 - `update_pull_request`: title, body, base, open or closed, draft or ready,
   labels and reviewers.
 - `add_issue_comment`, `reply_to_review_comment` (by `reviewThreadId` or a
@@ -202,15 +254,20 @@ another retry. This tool does not poll, start a repair turn, or add persistence.
   its archive. This is the first-party alternative to the ChatGPT GitHub
   connector's `download_workflow_artifact` and `gh run download`.
   GitLab returns `unsupported_provider`. No CI operation is started or rerun.
-  Archives are streamed with a 128 MiB cap into a unique private directory under
-  `profiles/<profile>/artifacts/ci/` in the PwrAgent root. Results include
+  Archives are streamed with a 128 MiB cap to
+  `state/thread-assets/<backend>/<threadId>/ci-artifacts/<runId>-<artifactId>.zip`
+  in the owning profile, beside the thread's other assets. Both segments are
+  URL-encoded, so an ACP backend appears as `acp%3A<name>`. Permanently deleting
+  the thread deletes them; archiving keeps them. A repeat download writes a new
+  partial file and replaces the archive only when it completes. Results include
   `archivePath`, `sizeBytes`, `sha256` and `pathOwner: "thread_owner"`.
   Remote paths refer to the owning machine and are not transferred to the
   caller. Filenames from provider metadata and ZIP entries never choose output
   paths. Downloads are not extracted or executed, and their contents remain
-  untrusted and unredacted. Partial files are removed on failure or cancellation;
-  successful downloads are retained for inspection and may be removed by the
-  operator when no longer needed. Repeated calls create separate archives.
+  untrusted and unredacted. Agents extract into a temporary directory, so
+  nothing lands in the project. Partial files are removed on failure or
+  cancellation. v1.3.7 and v1.3.8 saved unowned archives under
+  `profiles/<profile>/artifacts/ci/`; startup removes that directory.
 - `read_ci_job_log`: one job's bounded tail and heuristic failure excerpts;
   every log is explicitly untrusted. Logs are defensively redacted and never
   interpreted as instructions. A failed retrieval is an error, never success.

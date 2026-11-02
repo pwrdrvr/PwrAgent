@@ -10,6 +10,7 @@ import type {
   AgentEvent, AppServerAvailableCommandSummary, AppServerBackgroundTask, AppServerCollaborationModeRequest,
   AppServerPendingRequestNotification, AppServerReviewContext,
   AppServerThreadActivityEntry, AppServerThreadEntry, AppServerThreadImagePart, AppServerThreadMessageEntry,
+  AppServerThreadMessageOrigin,
   AppServerThreadMessagePart, AppServerThreadPlanEntry, AppServerThreadPlanStep, AppServerThreadReplay,
   AppServerThreadReviewEntry, AppServerThreadSummary,
   AppServerTurnInputItem, BackendModelOption, LinkedDirectorySummary, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode,
@@ -19,21 +20,26 @@ import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, type ClaudeInstallation } from "./claude-executable";
-import { CLAUDE_EXIT_PLAN_TOOL, createClaudePermissionHandler, claudePermissionMode } from "./claude-permissions";
+import {
+  CLAUDE_EXIT_PLAN_TOOL, claudeAllowedTools, createClaudePermissionHandler, claudePermissionMode,
+  threadExecutionModeForClaudePermission,
+} from "./claude-permissions";
 import { createClaudeElicitationHandler } from "./claude-elicitation";
 import { claudeHarnessOptions, discoverClaudeModels, readClaudeMcpServerStatus, readClaudeMetadata } from "./claude-models";
 import { CLAUDE_TERMINAL_COMMANDS_SEED, claudeCommandSummaries } from "./claude-commands";
 import {
-  claudeRateLimits, claudeStreamRateLimits, claudeTelemetry, claudeTurnUsage, liveClaudeRateLimits,
-  mergeClaudeStreamRateLimits, nextClaudeRateLimitReset,
+  CLAUDE_RESET_TOLERANCE_MS, canonicalClaudeRateLimit, claudeRateLimits, claudeStreamRateLimits, claudeTelemetry,
+  claudeTurnUsage,
 } from "./claude-usage";
+import { PlanLimitStore } from "../app-server/plan-limit-store";
 import { claudeCommandActivity, groupClaudeActivities } from "./claude-activity";
 import { backUpRewindFiles, recordRewoundFiles, restoreRewindFiles } from "./claude-rewind-backup";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 import { ClaudeTaskTracker, claudeTaskRow, type ClaudeTaskSettlement } from "./claude-tasks";
 import {
-  CLAUDE_TODO_TOOL, claudeFileDiff, claudeShellCommand, claudeTodoSteps, claudeToolCallArguments, claudeToolCallDetail,
-  claudeToolDetail, claudeToolResultContent, claudeTurnDiff,
+  CLAUDE_ARTIFACT_TOOLS, CLAUDE_TODO_TOOL, claudeArtifactAction, claudeArtifactResult, claudeArtifactShowsOutput,
+  claudeFileDiff, claudeShellCommand, claudeTodoSteps, claudeToolCallArguments, claudeToolCallDetail, claudeToolDetail,
+  claudeToolResultContent, claudeTurnDiff,
 } from "./claude-tool-activity";
 import { normalizeClaudeTitle, requestClaudeTitle, type ClaudeTitleQuery } from "./claude-titles";
 import {
@@ -59,8 +65,12 @@ export type ClaudeBackendOptions = {
   emit: (event: AgentEvent) => Promise<void>;
   request: (request: AppServerPendingRequestNotification, signal: AbortSignal) => Promise<unknown>;
   cancelRequest: (threadId: string, turnId: string, requestId: string) => Promise<void>;
+  /** Account plan limits shared with the other providers; a private store when absent. */
+  planLimits?: PlanLimitStore;
   /** Overrides CLAUDE_TASK_FOLLOW_UP_GRACE_MS. */
   taskFollowUpGraceMs?: number;
+  /** Overrides CLAUDE_LIVE_USAGE_INTERVAL_MS. */
+  liveUsageIntervalMs?: number;
   /** Overrides CLAUDE_INTERRUPT_GRACE_MS. */
   interruptGraceMs?: number;
   /** Overrides CLAUDE_REWIND_PREVIEW_TIMEOUT_MS. */
@@ -81,8 +91,6 @@ export type ClaudeBackendOptions = {
 
 const claudeBackendLog = getMainLogger("pwragent:claude-backend");
 
-/** setTimeout's longest delay; a later reset re-arms on wake. */
-const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const MAX_TURN_STDERR_LENGTH = 4_096;
 
 /** Error subtypes are authoritative even when the producer leaves is_error false. */
@@ -117,6 +125,13 @@ function claudeExceptionMessage(error: unknown, stderr: string): string {
  * of its own; this bounds the wait when it does not.
  */
 const CLAUDE_TASK_FOLLOW_UP_GRACE_MS = 5_000;
+
+/**
+ * The shortest gap between usage reports while a turn runs. Each report is a
+ * usage probe and one write of the turn's usage row (about 57 KB of WAL), so
+ * a thread that streams for an hour writes about 6.8 MB, and none while idle.
+ */
+const CLAUDE_LIVE_USAGE_INTERVAL_MS = 30_000;
 
 /**
  * How long Stop waits for Claude to end an interrupted turn before ending it
@@ -216,6 +231,8 @@ type RunningTurn = {
   hasCompletedToolActivity: boolean;
   /** Each successful file edit's diff, in order: the turn's live diff. */
   fileDiffs: string[];
+  /** Each artifact tool call's action, by tool-use id: its result carries the page's link. */
+  artifactCalls: Map<string, string>;
   ending?: boolean;
   titlePrompt?: string;
   /** Owned by the turn, but never awaited by the streaming message pump. */
@@ -230,12 +247,23 @@ type RunningTurn = {
   usageBaseline?: ClaudeSession["modelUsage"];
   /** An old session with no baseline cannot attribute its first totals. */
   needsUsageBaseline: boolean;
+  /** Usage reports while the turn runs; stopped before its final report. */
+  liveUsage?: LiveUsageRefresh;
   /** Stop interrupted Claude rather than ending the query, so the turn ends cancelled. */
   interrupted?: boolean;
   /** Claude did not answer the interrupt in time; the turn ends without it. */
   abandoned?: boolean;
   /** Settles once the turn has reported its end. */
   ended: ClaudeDeferred;
+};
+
+type LiveUsageRefresh = {
+  lastAt: number;
+  timer?: ReturnType<typeof setTimeout>;
+  running?: Promise<void>;
+  /** A message arrived during a report; schedule another after it. */
+  again: boolean;
+  stopped: boolean;
 };
 
 /** What a live session was launched with, compared when a turn reuses it. */
@@ -246,6 +274,9 @@ type ClaudeSessionConfig = {
   instructions?: string;
   mcpServers?: Options["mcpServers"];
   mcpKey: string;
+  strictMcpConfig?: boolean;
+  /** Tools Claude runs without asking, fixed when the process starts. */
+  allowedTools: string[];
   /** The thread's other linked directories, fixed when the process starts. */
   additionalDirectories: string[];
   /** The thread environment's captured toolchain variables. */
@@ -274,6 +305,8 @@ type LiveSession = {
   onClosed: (() => void)[];
   closing?: boolean;
   closed?: boolean;
+  /** Its owner released the thread: the process ends with the turn, tasks and all. */
+  released?: boolean;
   contextWindow?: ClaudeSession["contextWindow"];
   /** One background context probe at a time; a request while it runs reruns it once. */
   contextRefresh?: { promise: Promise<void>; again: boolean };
@@ -316,12 +349,18 @@ type ClaudeTurnParams = {
   threadId: string; input: AppServerTurnInputItem[]; model?: string; reasoningEffort?: string;
   executionMode?: ThreadExecutionMode; instructions?: string;
   mcpServers?: Options["mcpServers"];
+  strictMcpConfig?: boolean;
   /** Plan runs this turn in Claude's read-only plan mode. */
   collaborationMode?: AppServerCollaborationModeRequest;
   /** Directories attached to the thread after it was created. */
   attachedDirectories?: readonly LinkedDirectorySummary[];
   /** Variables the thread environment's setup captured, such as PATH. */
   shellEnvironment?: Record<string, string>;
+  /**
+   * Who sent the prompt when it was not the operator. The live user item
+   * carries it, so the transcript labels the message before any read.
+   */
+  messageOrigin?: AppServerThreadMessageOrigin;
 };
 
 type ClaudeTurnStart = { backend: "claude"; threadId: string; turnId: string };
@@ -348,6 +387,8 @@ function claudeSessionConfig(params: ClaudeTurnParams, session: ClaudeSession): 
     instructions: params.instructions,
     mcpServers: params.mcpServers,
     mcpKey: JSON.stringify(params.mcpServers ?? {}),
+    strictMcpConfig: params.strictMcpConfig,
+    allowedTools: claudeAllowedTools(params.mcpServers),
     additionalDirectories: claudeAdditionalDirectories(session, params.attachedDirectories),
     shellEnvironment: params.shellEnvironment,
     shellEnvironmentKey: JSON.stringify(
@@ -366,7 +407,8 @@ function claudeTurn(session?: ClaudeSession, followUp = false): RunningTurn {
   return {
     ended: claudeDeferred(),
     turnId: randomUUID(), startedAt: Date.now(), entries: new Map(), pendingSteers: new Set(),
-    completedMessageText: new Map(), pendingReports: new Map(), hasCompletedToolActivity: false, fileDiffs: [], lastResultSeq: 0,
+    completedMessageText: new Map(), pendingReports: new Map(), hasCompletedToolActivity: false, fileDiffs: [],
+    artifactCalls: new Map(), lastResultSeq: 0,
     usageBaseline: session?.modelUsage, needsUsageBaseline: Boolean(session?.sdkSessionId) && !session?.modelUsage,
     ...(followUp ? { followUp, started: true } : {}),
   };
@@ -403,6 +445,15 @@ export class ClaudeBackend {
   private readonly sessions = new Map<string, LiveSession>();
   /** Threads whose first turn is reading its session, before a query exists. */
   private readonly starting = new Map<string, AbortController>();
+  /** Turn starts can still read the store before they enter sessions. */
+  private readonly turnStarts = new Set<Promise<ClaudeTurnStart>>();
+  /**
+   * Every session's message pump until it settles. A session leaves
+   * `sessions` before its last turn's terminal event has reached listeners.
+   */
+  private readonly sessionRuns = new Set<Promise<void>>();
+  private closing = false;
+  private closeOperation?: Promise<void>;
   /** Threads a rewind is changing; a message for one waits in the queue. */
   private readonly rewinding = new Set<string>();
   /**
@@ -420,17 +471,14 @@ export class ClaudeBackend {
   private modelDiscovery?: Promise<void>;
   private nextModelRefreshAt = 0;
   private models?: BackendModelOption[];
-  // Account-wide, so one thread's turn must never clear another's view.
-  private rateLimits: BackendSummary["rateLimits"];
+  // Account-wide, so one thread's turn must never clear another's view. The
+  // entry's account is `claudeAccountKey`; its plan is the subscription
+  // Claude reports (`max`, `pro`).
+  private readonly planLimits: PlanLimitStore;
+  private readonly ownsPlanLimits: boolean;
+  private readonly unsubscribePlanLimits: () => void;
   private rateLimitsLoad?: Promise<void>;
   private rateLimitWrites = Promise.resolve();
-  /** The account the limits describe, as `claudeAccountKey`. */
-  private rateLimitAccount?: string;
-  /** When Claude last reported the limits, changed or not. */
-  private rateLimitsObservedAt?: number;
-  /** The account's subscription, as Claude reports it (`max`, `pro`). */
-  private rateLimitPlan?: string;
-  private rateLimitExpiry?: ReturnType<typeof setTimeout>;
   // Last command list Claude reported per working directory. Project
   // commands and skills differ by folder, so the folder is the key.
   private readonly commandsByCwd = new Map<string, AppServerAvailableCommandSummary[]>();
@@ -444,6 +492,16 @@ export class ClaudeBackend {
       resolveActiveProfilePath("state/claude"),
       resolveActiveProfilePath("state/thread-images/claude"),
     );
+    this.ownsPlanLimits = !options.planLimits;
+    this.planLimits = options.planLimits ?? new PlanLimitStore();
+    // summary() hides a window once it resets. Tell listeners when that
+    // happens, so a surface that refreshes only on events drops the row.
+    this.unsubscribePlanLimits = this.planLimits.subscribe((provider) => {
+      if (provider !== "claude") return;
+      this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } }).catch((error: unknown) => {
+        claudeBackendLog.warn("Could not report an expired Claude usage limit", error);
+      });
+    });
   }
 
   async discover(options: { models?: boolean } = {}): Promise<void> {
@@ -461,7 +519,7 @@ export class ClaudeBackend {
           await this.refreshModelCatalog(env);
         }
         if (claudeHasNoPlanLimits(this.installation)) {
-          this.setRateLimits([]);
+          this.clearRateLimits();
         } else {
           await this.loadRateLimits();
         }
@@ -589,6 +647,16 @@ export class ClaudeBackend {
     return (await this.store.read(threadId)).thread.executionMode ?? "default";
   }
 
+  /**
+   * The approval mode the thread's open Claude process runs tools under now.
+   * It follows a permission change made during the turn and a plan turn, which
+   * the saved mode does not. Undefined when no process is open.
+   */
+  liveExecutionMode(threadId: string): ThreadExecutionMode | undefined {
+    const live = this.sessions.get(threadId);
+    return live ? threadExecutionModeForClaudePermission(live.config.permissionMode) : undefined;
+  }
+
   async listThreads(params: { archived?: boolean; filter?: string } = {}): Promise<AppServerThreadSummary[]> {
     const filter = params.filter?.toLowerCase();
     // Metadata from builds that could not move a Claude thread still carries
@@ -602,9 +670,15 @@ export class ClaudeBackend {
   /**
    * Ends an ephemeral thread. Its process exits after every settled turn, and
    * a monitor may still need a recovery turn, so its owner ends it instead.
+   * A process kept open for a background task, such as a monitor's watcher,
+   * ends now, or with the turn that is running.
    */
   releaseEphemeralThread(threadId: string): void {
     this.store.forgetEphemeral(threadId);
+    const live = this.sessions.get(threadId);
+    if (!live) return;
+    live.released = true;
+    if (!live.turn) live.wake.wake();
   }
 
   async readThread(threadId: string): Promise<AppServerThreadReplay> {
@@ -712,9 +786,12 @@ export class ClaudeBackend {
     onSessionClosed?: () => void;
   }): Promise<ClaudeTurnStart> {
     const { onSessionClosed, ...turnParams } = params;
+    const starting = this.startTurnInSession(turnParams);
+    this.turnStarts.add(starting);
     try {
-      return await this.startTurnInSession(turnParams);
+      return await starting;
     } finally {
+      this.turnStarts.delete(starting);
       // A live session uses the thread's MCP grants, so it keeps them too.
       if (onSessionClosed) this.releaseWithSession(params.threadId, onSessionClosed);
       const carried = this.carriedReleases.get(params.threadId);
@@ -731,6 +808,7 @@ export class ClaudeBackend {
 
   private async startTurnInSession(params: ClaudeTurnParams): Promise<ClaudeTurnStart> {
     for (;;) {
+      if (this.closing) throw new Error("Claude backend is closing.");
       if (this.rewinding.has(params.threadId)) {
         throw new ClaudeTurnActiveError("Claude is rewinding this thread.");
       }
@@ -775,7 +853,7 @@ export class ClaudeBackend {
       };
       this.starting.delete(threadId);
       this.sessions.set(threadId, current);
-      await this.beginTurn(current, turn, session, params.input);
+      await this.beginTurn(current, turn, session, params.input, params.messageOrigin);
       const { config } = current;
       // The environment's toolchain (PATH, NVM_DIR, …) reaches every command
       // Claude runs, as it does for Codex and ACP threads.
@@ -816,6 +894,9 @@ export class ClaudeBackend {
         abortController: controller,
         stderr: (data) => { current.stderr = (current.stderr + data).slice(-MAX_TURN_STDERR_LENGTH); },
         mcpServers: config.mcpServers,
+        ...(config.strictMcpConfig ? { strictMcpConfig: true } : {}),
+        // PwrAgent's gateway asks for its own calls, so Claude does not ask first.
+        ...(config.allowedTools.length ? { allowedTools: config.allowedTools } : {}),
         ...(config.additionalDirectories.length ? { additionalDirectories: config.additionalDirectories } : {}),
         canUseTool: createClaudePermissionHandler({
           threadId, turnId: () => current.turn?.turnId ?? current.lastTurnId,
@@ -862,9 +943,10 @@ export class ClaudeBackend {
       } finally { releasePrompt(); }
       turn.usageBaseline = session.modelUsage;
       turn.needsUsageBaseline = Boolean(session.sdkSessionId ?? session.forkFromSdkSessionId) && !session.modelUsage;
-      current.done = this.consume(current);
+      const done = current.done = this.consume(current);
       // consume owns every error after launch, including terminal notification.
-      void current.done.catch(() => {});
+      this.sessionRuns.add(done);
+      void done.catch(() => {}).finally(() => this.sessionRuns.delete(done));
       return { backend: "claude", threadId, turnId: turn.turnId };
     } catch (error) {
       const failure = claudeExceptionMessage(error, live?.stderr ?? "");
@@ -918,7 +1000,7 @@ export class ClaudeBackend {
     const prompted = claudeDeferred();
     live.inputWrites = live.inputWrites.then(() => prompted.promise);
     try {
-      await this.beginTurn(live, turn, session, params.input);
+      await this.beginTurn(live, turn, session, params.input, params.messageOrigin);
       // The session closed while the turn opened; its prompt was never sent.
       if (live.closing) throw new Error("Claude stopped before the message was sent.");
       // The turn id doubles as the prompt's UUID, which a rewind targets.
@@ -969,6 +1051,15 @@ export class ClaudeBackend {
         threadId: live.session.thread.id, taskCount: live.tasks.active().length,
       });
     }
+    // Without the rule Claude asks before PwrAgent's gateway does, which is
+    // safe, so running tasks keep the process until it relaunches.
+    if (config.allowedTools.join("\n") !== live.config.allowedTools.join("\n")) {
+      if (!keepTasks) return false;
+      claudeBackendLog.info("Deferring new Claude tool permissions until the session relaunches", {
+        threadId: live.session.thread.id, taskCount: live.tasks.active().length,
+      });
+    }
+    if (config.strictMcpConfig !== live.config.strictMcpConfig) return false;
     try {
       if (config.model !== live.config.model) {
         await query.setModel(config.model);
@@ -1000,7 +1091,13 @@ export class ClaudeBackend {
   }
 
   /** Show the operator's message and open the desktop turn. */
-  private async beginTurn(live: LiveSession, turn: RunningTurn, session: ClaudeSession, input: AppServerTurnInputItem[]): Promise<void> {
+  private async beginTurn(
+    live: LiveSession,
+    turn: RunningTurn,
+    session: ClaudeSession,
+    input: AppServerTurnInputItem[],
+    origin?: AppServerThreadMessageOrigin,
+  ): Promise<void> {
     const threadId = session.thread.id;
     const parts = claudeUserMessageParts(input);
     const user: AppServerThreadMessageEntry = {
@@ -1028,7 +1125,7 @@ export class ClaudeBackend {
     } });
     await this.emit({ method: "item/completed", params: {
       threadId, turnId: turn.turnId,
-      item: { id: user.id, type: "userMessage", text: user.text, content: parts },
+      item: { id: user.id, type: "userMessage", text: user.text, content: parts, ...(origin ? { origin } : {}) },
     } });
   }
 
@@ -1187,11 +1284,7 @@ export class ClaudeBackend {
           }
         }
         if (message.type === "rate_limit_event") {
-          const update = claudeStreamRateLimits(message.rate_limit_info);
-          const merged = mergeClaudeStreamRateLimits(this.rateLimits ?? [], update, Date.now());
-          // Only an update naming every window is a reading of all of them.
-          const reported = new Set(update.map((limit) => limit.limitId));
-          if (this.setRateLimits(merged, merged.every((limit) => reported.has(limit.limitId)))) {
+          if (this.mergeRateLimits(claudeStreamRateLimits(message.rate_limit_info), false)) {
             await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
           }
         }
@@ -1213,6 +1306,8 @@ export class ClaudeBackend {
         if (turn && message.type === "assistant" && !message.parent_tool_use_id) {
           this.scheduleContextRefresh(live);
         }
+        // Subagent requests bill the turn too.
+        if (turn && message.type === "assistant") this.scheduleLiveUsage(live, turn);
         if (message.type === "result") {
           live.lastResultSeq = live.messageSeq;
           if (turn) {
@@ -1291,6 +1386,7 @@ export class ClaudeBackend {
    */
   private sessionSettled(live: LiveSession, ignoreTurn = false): boolean {
     if (live.turn && !ignoreTurn) return false;
+    if (live.released) return true;
     if (live.tasks.active().length > 0) return false;
     if (live.sessionState !== undefined && live.sessionState !== "idle") return false;
     return live.lastNotificationSeq < live.lastResultSeq || live.followUpWaivedAt === live.messageSeq;
@@ -1414,6 +1510,7 @@ export class ClaudeBackend {
   ): Promise<void> {
     const threadId = live.session.thread.id;
     const { turnId } = turn;
+    await this.stopLiveUsage(turn);
     const cancelled = outcome.cancelled || turn.interrupted === true;
     let { failure } = outcome;
     const status = cancelled ? "cancelled" : failure ? "failed" : "completed";
@@ -1463,6 +1560,9 @@ export class ClaudeBackend {
   /** Re-read metadata so a live rename/mode change cannot be overwritten. */
   private async saveSessionMetadata(live: LiveSession): Promise<void> {
     const { session } = live;
+    // A monitor that calls complete_monitoring ends its own thread before
+    // that turn ends. Nothing is left to save, as for the turn's entries.
+    if (this.store.isForgotten(session.thread.id)) return;
     const current = await this.store.read(session.thread.id);
     current.sdkSessionId = session.sdkSessionId;
     current.modelUsage = session.modelUsage;
@@ -1477,6 +1577,8 @@ export class ClaudeBackend {
     const threadId = session.thread.id;
     const turnId = turn.turnId;
     turn.ending = true;
+    // The result's totals are final; a live report must not land after them.
+    await this.stopLiveUsage(turn);
     let failure = turn.resultFailure;
     // A normal send with no visible work must not silently look answered.
     // Local slash commands can legitimately finish without model output, and
@@ -1679,20 +1781,102 @@ export class ClaudeBackend {
     }
   }
 
-  private async refreshUsage(live: LiveSession) {
+  /**
+   * `announce: "changed"` reports the limits only when they moved, for the
+   * probes a running turn makes. Otherwise every probe is announced, changed
+   * or not: it marks the turn's provider refresh as settled for listeners.
+   */
+  private async refreshUsage(live: LiveSession, options: { announce?: "always" | "changed" } = {}) {
     const usage = await claudeTelemetry(() => live.query!.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }));
-    // The snapshot is complete, so it replaces every window. A probe that
-    // timed out or returned nothing keeps the last good reading. Only an
+    // Each CLI answers from its own reading, which can be older than one
+    // already shown, so a probe merges forward like a stream event. A probe
+    // that timed out or returned nothing keeps the last good reading. Only an
     // account Claude does not meter by subscription clears it.
     const limits = usage?.rate_limits_available && usage.rate_limits ? claudeRateLimits(usage) : [];
-    if (limits.length > 0) this.setRateLimits(limits);
+    let changed = false;
+    if (limits.length > 0) changed = this.mergeRateLimits(limits, true);
     else if (usage && !usage.rate_limits_available && claudeHasNoPlanLimits(this.installation)) {
-      this.setRateLimits([]);
+      changed = this.clearRateLimits();
     }
-    // Emitted after every probe, changed or not: it marks the turn's provider
-    // refresh as settled for listeners.
-    await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
+    if (options.announce !== "changed" || changed) {
+      await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
+    }
     return usage;
+  }
+
+  /**
+   * Merge one reading into the account's limits; see PlanLimitStore. Each
+   * CLI reads on its own schedule, so no reading is known to be the newest.
+   * A probe is precise; a stream event is whole percent with its reset
+   * rounded up to the hour. Returns whether the shown limits changed; a
+   * change is also written for the next launch.
+   */
+  private mergeRateLimits(reading: BackendRateLimitSummary[], precise: boolean): boolean {
+    const changed = this.planLimits.record("claude", {
+      limits: reading.map(canonicalClaudeRateLimit), precise, resetToleranceMs: CLAUDE_RESET_TOLERANCE_MS,
+      // A probe is a reading of the account. A stream event names one or two
+      // windows, and dates the rest as read now only when it names them all.
+      ...(precise ? { dated: true } : {}),
+    });
+    if (changed) this.saveRateLimits();
+    return changed;
+  }
+
+  /**
+   * Claude puts a turn's usage on its result, so without these reports a
+   * long turn shows no usage until it ends. Each is a usage probe and a
+   * write of the turn's usage row, so they run at most once per interval and
+   * only while Claude streams. The result's totals still settle the turn.
+   */
+  private scheduleLiveUsage(live: LiveSession, turn: RunningTurn): void {
+    // Without a baseline the totals cannot be attributed to this turn.
+    if (turn.needsUsageBaseline || turn.ending) return;
+    const state = turn.liveUsage ??= { lastAt: turn.startedAt, again: false, stopped: false };
+    if (state.stopped || state.timer) return;
+    if (state.running) {
+      state.again = true;
+      return;
+    }
+    const interval = this.options.liveUsageIntervalMs ?? CLAUDE_LIVE_USAGE_INTERVAL_MS;
+    state.timer = setTimeout(() => {
+      state.timer = undefined;
+      if (state.stopped || live.closed) return;
+      state.lastAt = Date.now();
+      state.running = this.reportLiveUsage(live, turn, state).finally(() => {
+        state.running = undefined;
+        if (!state.again) return;
+        state.again = false;
+        this.scheduleLiveUsage(live, turn);
+      });
+    }, Math.max(0, state.lastAt + interval - Date.now()));
+    state.timer.unref?.();
+  }
+
+  private async reportLiveUsage(live: LiveSession, turn: RunningTurn, state: LiveUsageRefresh): Promise<void> {
+    try {
+      const usage = await this.refreshUsage(live, { announce: "changed" });
+      const modelUsage = usage?.session?.model_usage;
+      if (state.stopped || !claudeHasModelUsage(modelUsage)) return;
+      // The totals are cumulative; the turn bills what grew since it began.
+      // Each report replaces the last as the turn's usage.
+      const tokenUsage = claudeTurnUsage(modelUsage, turn.usageBaseline);
+      await this.emit({ method: "thread/tokenUsage/updated", params: {
+        threadId: live.session.thread.id, turnId: turn.turnId, model: tokenUsage.model, tokenUsage,
+      } });
+    } catch (error) {
+      // A live reading must never fail the turn.
+      claudeBackendLog.warn("Could not report Claude usage during the turn", error);
+    }
+  }
+
+  /** Stop live reports and wait out one in flight, so a final report comes last. */
+  private async stopLiveUsage(turn: RunningTurn): Promise<void> {
+    const state = turn.liveUsage;
+    if (!state) return;
+    state.stopped = true;
+    if (state.timer) clearTimeout(state.timer);
+    state.timer = undefined;
+    await state.running;
   }
 
   /**
@@ -1705,29 +1889,20 @@ export class ClaudeBackend {
     const account = claudeAccountKey(info);
     const plan = info.subscriptionType?.trim() || undefined;
     await this.loadRateLimits();
-    if (account === this.rateLimitAccount) {
-      if (plan === this.rateLimitPlan) return;
-      this.rateLimitPlan = plan;
-      this.saveRateLimits();
-      return;
-    }
-    const previous = this.rateLimitAccount;
-    this.rateLimitAccount = account;
-    this.rateLimitPlan = plan;
+    // Another account's limits are cleared. A new plan changes each window's
+    // allowance, so usage can fall within a window; limits only move forward,
+    // so they start over and the next probe or stream event reads them again.
     // A file from before accounts were recorded is adopted, not discarded.
-    if (previous !== undefined) this.setRateLimits([]);
-    else this.saveRateLimits();
+    if (this.planLimits.setAccount("claude", { account, plan })) this.saveRateLimits();
   }
 
   private async loadRateLimits(): Promise<void> {
     this.rateLimitsLoad ??= this.store.readRateLimits().then(({ limits, account, observedAt, plan }) => {
       // A reading taken since launch is newer than the file.
-      if (this.rateLimits !== undefined) return;
-      this.rateLimits = liveClaudeRateLimits(limits, Date.now());
-      this.rateLimitAccount ??= account;
-      this.rateLimitPlan ??= plan;
-      this.rateLimitsObservedAt ??= observedAt;
-      this.scheduleRateLimitExpiry();
+      this.planLimits.restore("claude", {
+        limits: limits.map(canonicalClaudeRateLimit), account, plan, observedAt,
+        resetToleranceMs: CLAUDE_RESET_TOLERANCE_MS,
+      });
     });
     await this.rateLimitsLoad;
   }
@@ -1738,29 +1913,20 @@ export class ClaudeBackend {
 
   /** Remembered limits describe a usable install; hide them while Claude is unavailable. */
   private shownRateLimits(): BackendRateLimitSummary[] | undefined {
-    return this.rateLimits && (this.available() ? liveClaudeRateLimits(this.rateLimits, Date.now()) : []);
+    const limits = this.planLimits.limits("claude");
+    return limits && (this.available() ? limits : []);
   }
 
-  /**
-   * Returns whether the reading changed; a change is also written for the next
-   * launch. `observed` is false for a sparse stream update merged into older
-   * windows, which must not date those windows as read now.
-   */
-  private setRateLimits(limits: BackendRateLimitSummary[], observed = true): boolean {
-    // An unchanged reading is still a newer one; only a change is written.
-    if (limits.length === 0) this.rateLimitsObservedAt = undefined;
-    else if (observed || this.rateLimitsObservedAt === undefined) this.rateLimitsObservedAt = Date.now();
-    if (this.rateLimits && JSON.stringify(limits) === JSON.stringify(this.rateLimits)) return false;
-    this.rateLimits = limits;
-    this.saveRateLimits();
-    this.scheduleRateLimitExpiry();
-    return true;
+  /** An account Claude does not meter by plan has no limits. Returns whether that changed them. */
+  private clearRateLimits(): boolean {
+    const changed = this.planLimits.clear("claude");
+    if (changed) this.saveRateLimits();
+    return changed;
   }
 
   private saveRateLimits(): void {
-    const limits = this.rateLimits ?? [];
-    const account = this.rateLimitAccount;
-    const reading = { observedAt: this.rateLimitsObservedAt, plan: this.rateLimitPlan };
+    const { limits, account, observedAt, plan } = this.planLimits.snapshot("claude") ?? { limits: [] };
+    const reading = { observedAt, plan };
     this.rateLimitWrites = this.rateLimitWrites
       .then(() => this.store.saveRateLimits(limits, account, reading))
       .catch((error: unknown) => {
@@ -1786,45 +1952,26 @@ export class ClaudeBackend {
       if (timer) clearTimeout(timer);
     }
     await this.loadRateLimits().catch(() => undefined);
-    return this.rateLimitAccount;
+    return this.planLimits.snapshot("claude")?.account;
   }
 
   /** The limits summary() shows, as a Usage Activity reading. */
   limitObservation(): UsageLimitObservation | undefined {
-    const observedAt = this.rateLimitsObservedAt;
+    const reading = this.planLimits.snapshot("claude");
+    const observedAt = reading?.observedAt;
     const limits = this.shownRateLimits() ?? [];
     if (observedAt === undefined || limits.length === 0) return undefined;
     return {
       observedAt,
       provider: "anthropic",
-      accountKey: this.rateLimitAccount,
-      planType: this.rateLimitPlan,
+      accountKey: reading?.account,
+      planType: reading?.plan,
       limits: limits.map((limit) => ({
         name: limit.name, limitId: limit.limitId, usedPercent: limit.usedPercent,
         resetAt: limit.resetAt, windowMinutes: limit.windowMinutes,
         ...(limit.expires ? { expires: true } : {}),
       })),
     };
-  }
-
-  /**
-   * summary() hides a window once it resets. Tell listeners when that
-   * happens, so a surface that refreshes only on events drops the row.
-   */
-  private scheduleRateLimitExpiry(): void {
-    if (this.rateLimitExpiry) clearTimeout(this.rateLimitExpiry);
-    this.rateLimitExpiry = undefined;
-    const next = nextClaudeRateLimitReset(this.rateLimits ?? [], Date.now());
-    if (next === undefined) return;
-    this.rateLimitExpiry = setTimeout(() => {
-      this.rateLimitExpiry = undefined;
-      this.scheduleRateLimitExpiry();
-      if (next > Date.now()) return;
-      this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } }).catch((error: unknown) => {
-        claudeBackendLog.warn("Could not report an expired Claude usage limit", error);
-      });
-    }, Math.min(next - Date.now() + 1, MAX_TIMER_DELAY_MS));
-    this.rateLimitExpiry.unref?.();
   }
 
   private scheduleContextRefresh(live: LiveSession): void {
@@ -2007,6 +2154,7 @@ export class ClaudeBackend {
           createdAt: Date.now(), turn: { id: turnId },
         };
         turn.entries.set(block.id, activity);
+        if (CLAUDE_ARTIFACT_TOOLS.has(block.name)) turn.artifactCalls.set(block.id, claudeArtifactAction(block.name, input));
         // A task this call starts can outlive the turn.
         live.toolRows.set(block.id, { entry: activity, turnId });
         await this.store.append(threadId, [activity]);
@@ -2056,9 +2204,19 @@ export class ClaudeBackend {
         const { text: output, images } = claudeToolResultContent(block.content, entry.summary);
         const command = claudeShellCommand(entry.details[0]);
         const toolCall = entry.details[0].command?.source === "tool" ? entry.details[0] : undefined;
-        // A successful edit shows its diff instead of the tool's acknowledgement.
-        const edit = entry.details[0].kind === "write" && !block.is_error
+        // A successful publish links to its page, and a successful edit shows
+        // its diff, instead of the tool's acknowledgement.
+        const artifactAction = turn.artifactCalls.get(block.tool_use_id);
+        const artifact = artifactAction !== undefined && !block.is_error
+          ? claudeArtifactResult(entry.details[0], artifactAction, message.tool_use_result) : undefined;
+        // An artifact result written for the model stays out of the row.
+        const hideOutput = artifactAction !== undefined && !block.is_error
+          && !claudeArtifactShowsOutput(artifactAction, message.tool_use_result);
+        const edit = entry.details[0].kind === "write" && !block.is_error && artifactAction === undefined
           ? claudeFileDiff(message.tool_use_result, live.session.cwd) : undefined;
+        if (artifact) entry.summary = artifact.label;
+        // The invocation was recorded while the call ran; it takes the call's final status.
+        entry.details = [{ ...artifact ?? entry.details[0], status: entry.status }, ...entry.details.slice(1)];
         if (command !== undefined) {
           const details = claudeCommandActivity({ id: entry.id, command, status: entry.status, output }).details;
           entry.details = images.length ? [{ ...details[0], images }, ...details.slice(1)] : details;
@@ -2074,7 +2232,7 @@ export class ClaudeBackend {
             turn.fileDiffs.push(edit.diff);
             await this.emit({ method: "turn/diff/updated", params: { threadId, turnId, diff: claudeTurnDiff(turn.fileDiffs) } });
           }
-        } else {
+        } else if (!hideOutput) {
           // Keep the invocation when updating generic tools, too.
           const outputId = `${entry.id}:output`;
           entry.details = [...entry.details.filter((detail) => detail.id !== outputId), {
@@ -2614,6 +2772,7 @@ export class ClaudeBackend {
 
   async steerTurn(params: {
     threadId: string; expectedTurnId: string; input: AppServerTurnInputItem[]; delivery?: SteerTurnDelivery;
+    messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<{
     threadId: string; turnId: string; messageId: string;
   }> {
@@ -2662,7 +2821,10 @@ export class ClaudeBackend {
       await this.store.append(params.threadId, [entry]).catch(() => {});
       await this.emit({ method: "item/completed", params: {
         threadId: params.threadId, turnId: turn.turnId,
-        item: { id: messageId, type: "userMessage", text: entry.text, content: parts },
+        item: {
+          id: messageId, type: "userMessage", text: entry.text, content: parts,
+          ...(params.messageOrigin ? { origin: params.messageOrigin } : {}),
+        },
       } });
     });
     live.inputWrites = operation.catch(() => {});
@@ -2678,11 +2840,26 @@ export class ClaudeBackend {
     } while (writes !== live.inputWrites);
   }
 
-  async close(): Promise<void> {
-    if (this.rateLimitExpiry) clearTimeout(this.rateLimitExpiry);
-    this.rateLimitExpiry = undefined;
+  close(): Promise<void> {
+    this.closeOperation ??= this.closeResources();
+    return this.closeOperation;
+  }
+
+  private async closeResources(): Promise<void> {
+    this.closing = true;
+    this.unsubscribePlanLimits();
+    if (this.ownsPlanLimits) this.planLimits.close();
     for (const controller of this.starting.values()) controller.abort();
-    await Promise.all([...this.sessions.values()].map((live) => this.closeSession(live)));
+    // A start may still be reading session metadata before it appears in
+    // sessions. Close both groups before callers can remove the store root.
+    await Promise.all([
+      Promise.allSettled([...this.turnStarts]),
+      Promise.all([...this.sessions.values()].map((live) => this.closeSession(live))),
+    ]);
+    // A session already gone from `sessions` may still be reporting its last
+    // turn, and that report's listeners read the store and the workspace.
+    await Promise.allSettled([...this.sessionRuns]);
+    await this.rateLimitWrites;
   }
 }
 

@@ -149,6 +149,8 @@ describe("thread replay pagination cursor id space", () => {
 
   it("classifies cursor ownership by backend", () => {
     expect(threadReplayCursorIdSpace("acp:claude-code")).toBe("entry-id");
+    // The Claude SDK backend's store is read whole and paged by entry id too.
+    expect(threadReplayCursorIdSpace("claude")).toBe("entry-id");
     expect(threadReplayCursorIdSpace("codex")).toBe("provider-cursor");
     expect(threadReplayCursorIdSpace(undefined)).toBe("provider-cursor");
   });

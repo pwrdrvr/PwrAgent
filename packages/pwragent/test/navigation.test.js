@@ -5,14 +5,19 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { HeadlessBackend } from "../src/federation-backend.js";
 
-function backendFixture(t, jobs) {
+function backendFixture(t, jobs, published = []) {
   const local = fileURLToPath(new URL("../../../.local/", import.meta.url));
   mkdirSync(local, { recursive: true });
   const directory = mkdtempSync(path.join(local, "navigation-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const runtime = { projects: { list: () => [{ path: directory, label: "Fixture" }] }, workspace: directory, loadedThreads: new Set(), store: { directory: path.join(directory, "jobs"), jobs },
     onFailure: (error) => { throw error; } };
-  return new HeadlessBackend(runtime, () => {});
+  return new HeadlessBackend(runtime, (event, eventClass) => published.push({ eventClass, ...event.notification }));
+}
+
+// What a viewer sends to mark a thread read: the update it displayed.
+function markRead(backend, threadId) {
+  return backend.handle("markThreadSeen", { threadId, seenUpdatedAt: backend.summary(backend.owned(threadId)).updatedAt });
 }
 
 function job(id, threadId, createdAt, updatedAt = createdAt) {
@@ -80,6 +85,54 @@ test("replay normalizes turn status on messages and activities for mid-turn hydr
   assert.deepEqual(result.replay.messages.at(-1).turn, { id: "turn-inProgress", status: "in_progress" });
 });
 
+test("federated transcript reads return the newest page and page back by cursor", async (t) => {
+  const backend = backendFixture(t, new Map([["job", job("job", "thread", "2026-01-01T00:00:00.000Z")]]));
+  backend.runtime.codex = { request: async () => ({ thread: { turns: [1, 2, 3].map((n) => ({
+    id: `turn-${n}`, status: "completed", items: [
+      { id: `user-${n}`, type: "userMessage", content: [{ type: "text", text: `Question ${n}` }] },
+      { id: `answer-${n}`, type: "agentMessage", text: `Answer ${n}` },
+    ],
+  })) } }) };
+  // read_thread on a viewer keeps the first `limit` entries of what the owner
+  // returns, so an unpaged owner showed the oldest turn of a long thread.
+  const newest = (await backend.handle("readThread", { threadId: "thread", limit: 1 })).replay;
+  assert.deepEqual(newest.entries.map((entry) => entry.id), ["user-3", "answer-3"]);
+  assert.equal(newest.lastAssistantMessage, "Answer 3");
+  assert.deepEqual(newest.pagination, { supportsPagination: true, hasPreviousPage: true, previousCursor: "user-3" });
+  const older = (await backend.handle("readThread", { threadId: "thread", limit: 1, before: newest.pagination.previousCursor })).replay;
+  assert.deepEqual(older.entries.map((entry) => entry.id), ["user-2", "answer-2"]);
+  const oldest = (await backend.handle("readThread", { threadId: "thread", limit: 1, before: older.pagination.previousCursor })).replay;
+  assert.deepEqual(oldest.entries.map((entry) => entry.id), ["user-1", "answer-1"]);
+  assert.equal(oldest.pagination.hasPreviousPage, false);
+  const whole = (await backend.handle("readThread", { threadId: "thread" })).replay;
+  assert.equal(whole.entries.length, 6, "an unbounded read still returns the whole transcript");
+  assert.equal((await backend.readThread("thread")).replay.entries.length, 6, "handoff export reads stay unpaged");
+  assert.deepEqual((await backend.handle("readThread", { threadId: "thread", includeTurns: false })).replay.entries, []);
+  for (const before of ["", "missing"]) {
+    const unresolved = (await backend.handle("readThread", { threadId: "thread", limit: 1, before })).replay;
+    assert.deepEqual(unresolved.entries, [], `cursor ${JSON.stringify(before)} must not restart at the newest page`);
+    assert.equal(unresolved.pagination.hasPreviousPage, false);
+  }
+});
+
+test("federated transcript pages fit the frame budget and keep a cursor to the trimmed entries", async (t) => {
+  const backend = backendFixture(t, new Map([["job", job("job", "thread", "2026-01-01T00:00:00.000Z")]]));
+  backend.replayByteBudget = 20_000;
+  backend.runtime.codex = { request: async () => ({ thread: { turns: [{ id: "turn-1", status: "completed", items: [
+    { id: "user-1", type: "userMessage", content: [{ type: "text", text: "Run it" }] },
+    { id: "command-1", type: "commandExecution", command: "find /", aggregatedOutput: "x".repeat(200_000), status: "completed" },
+    { id: "answer-1", type: "agentMessage", text: "Done" },
+  ] }] } }) };
+  const response = await backend.handle("readThread", { threadId: "thread", limit: 1 });
+  assert.ok(Buffer.byteLength(JSON.stringify(response)) <= backend.replayByteBudget);
+  assert.deepEqual(response.replay.entries.map((entry) => entry.id), ["answer-1"]);
+  assert.deepEqual(response.replay.pagination, { supportsPagination: true, hasPreviousPage: true, previousCursor: "answer-1" });
+  const older = await backend.handle("readThread", { threadId: "thread", limit: 1, before: "answer-1" });
+  assert.ok(Buffer.byteLength(JSON.stringify(older)) <= backend.replayByteBudget);
+  assert.deepEqual(older.replay.entries.map((entry) => entry.id), ["command-1"], "the oversized entry is compacted, not lost");
+  assert.match(older.replay.entries[0].summary, /exceeded the federation frame limit/);
+});
+
 test("seen acknowledgements retain the displayed update watermark across a newer result and restart", async (t) => {
   const value = job("job", "thread", "2026-01-01T00:00:00.000Z", "2026-01-03T00:00:00.000Z");
   const backend = backendFixture(t, new Map([[value.id, value]]));
@@ -91,14 +144,35 @@ test("seen acknowledgements retain the displayed update watermark across a newer
   const reopened = new HeadlessBackend(backend.runtime, () => {});
   assert.equal(reopened.owned("thread").seenUpdatedAt, seenUpdatedAt);
   assert.equal(reopened.summary(reopened.owned("thread")).inbox.inInbox, true);
-  const acknowledged = await reopened.handle("markThreadSeen", { threadId: "thread" });
-  assert.equal(acknowledged.seenUpdatedAt, Date.parse(value.updatedAt), "omitted watermark acknowledges current content");
+  const refreshed = await reopened.handle("markThreadSeen", { threadId: "thread" });
+  assert.equal(refreshed.seenUpdatedAt, undefined, "the response echoes only a requested watermark");
+  assert.equal(reopened.owned("thread").seenUpdatedAt, seenUpdatedAt, "an omitted watermark keeps the stored one");
+  assert.equal(reopened.summary(reopened.owned("thread")).inbox.inInbox, true);
+  await markRead(reopened, "thread");
   assert.equal(reopened.summary(reopened.owned("thread")).inbox.inInbox, false);
   await reopened.handle("markThreadSeen", { threadId: "thread", seenUpdatedAt: 0 });
   assert.equal(reopened.summary(reopened.owned("thread")).inbox.inInbox, true, "zero is a watermark, not a missing value");
   for (const invalid of [-1, NaN, "yesterday"]) {
     await assert.rejects(reopened.handle("markThreadSeen", { threadId: "thread", seenUpdatedAt: invalid }), /Invalid seenUpdatedAt/);
   }
+});
+
+test("marking seen without a watermark never changes unread state, and is announced", async (t) => {
+  const unseen = job("unseen-job", "unseen", "2026-01-01T00:00:00.000Z");
+  const legacy = job("legacy-job", "legacy", "2026-01-01T00:00:00.000Z");
+  const published = [];
+  const backend = backendFixture(t, new Map([[unseen.id, unseen], [legacy.id, legacy]]), published);
+  // A registry written before watermarks existed judged unread by seenAt.
+  Object.assign(backend.owned("legacy"), { seenAt: Date.parse("2026-01-02T00:00:00.000Z") });
+  assert.equal(backend.summary(backend.owned("unseen")).inbox.inInbox, true);
+  assert.equal(backend.summary(backend.owned("legacy")).inbox.inInbox, false);
+  for (const threadId of ["unseen", "legacy"]) await backend.handle("markThreadSeen", { threadId, seenAt: Date.parse("2026-01-03T00:00:00.000Z") });
+  assert.equal(backend.summary(backend.owned("unseen")).inbox.inInbox, true, "a later seenAt does not read the thread");
+  assert.equal(backend.summary(backend.owned("legacy")).inbox.inInbox, false);
+  assert.deepEqual(published.filter((event) => event.params.threadId === "unseen"), [
+    { eventClass: "transcript", method: "navigation/thread/seen", params: { threadId: "unseen" } },
+    { eventClass: "navigation", method: "navigation/invalidated", params: { threadId: "unseen", sourceMethod: "navigation/thread/seen" } },
+  ]);
 });
 
 test("filtered continuation cursors expire when unrelated global counts change", async (t) => {
@@ -149,7 +223,7 @@ for (const promoteOnTurnEnd of [true, false]) {
     assert.equal(rank("old"), finishedRank, "repeated completion/activity cannot move a turn again");
     const filtered = backend.query({ ...request, query: { ...request.query, filter: "Renamed" } });
     assert.equal(filtered.entries[0].attentionRank, finishedRank, "filtering never resets membership ranks");
-    await backend.handle("markThreadSeen", { threadId: "old" });
+    await markRead(backend, "old");
     assert.deepEqual(ids(), ["new"]);
     await backend.handle("markThreadSeen", { threadId: "old", seenUpdatedAt: 0 });
     assert.deepEqual(ids(), ["old", "new"]);
@@ -158,7 +232,7 @@ for (const promoteOnTurnEnd of [true, false]) {
     update({ ...old, id: "unobserved", createdAt: "2026-01-08T00:00:00.000Z" });
     assert.equal(rank("old") > beforeUnobserved, promoteOnTurnEnd, "a complete new job between queries is a turn boundary");
     const beforeReentry = rank("old");
-    await backend.handle("markThreadSeen", { threadId: "old" });
+    await markRead(backend, "old");
     await backend.handle("markThreadSeen", { threadId: "old", seenUpdatedAt: 0 });
     assert.ok(rank("old") > beforeReentry, "membership removal is observed even between queries");
     await backend.handle("releaseNavigationAttentionView", { viewId: "window" });

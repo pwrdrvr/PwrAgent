@@ -6,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { call } from "./client.js";
 import { serve } from "./daemon.js";
 import { ACTIVE } from "./store.js";
+import { formatVersion, installedVersion, packageVersion, restartRequired } from "./version.js";
 
 const help = `PwrAgent Headless (experimental, Linux/macOS, Node >=22)
 
@@ -16,6 +17,7 @@ const help = `PwrAgent Headless (experimental, Linux/macOS, Node >=22)
   pwragent project-add|project-remove --path /workspace/project
   pwragent git-auth-configure --config-file /outpost/git-auth-settings.json
   pwragent status | list
+  pwragent --version | version
   pwragent submit --id JOB --prompt-file /task.txt [--sandbox read-only|workspace-write]
                   [--model MODEL] [--thread THREAD_ID] [--cwd /workspace/project]
   pwragent show|read|interrupt|wait --id JOB
@@ -36,6 +38,7 @@ No provisioning, login, queue, automatic replay, or local messaging providers.
 export async function main(args) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, strict: true, options: {
     help: { type: "boolean", short: "h" },
+    version: { type: "boolean" },
     profile: { type: "string" },
     workspace: { type: "string" },
     "codex-home": { type: "string" },
@@ -52,7 +55,9 @@ export async function main(args) {
     peer: { type: "string" },
     name: { type: "string" }, remote: { type: "string" }, path: { type: "string" }, cwd: { type: "string" }, "config-file": { type: "string" },
   } });
-  if (values.help || !positionals.length) { console.log(help); return 0; }
+  if (values.help) { console.log(help); return 0; }
+  if (values.version) { console.log(formatVersion(packageVersion())); return 0; }
+  if (!positionals.length) { console.log(help); return 0; }
   if (positionals.length !== 1) throw new Error("Expected one command; see --help");
   const command = positionals[0];
   const allowed = {
@@ -60,7 +65,7 @@ export async function main(args) {
     submit: ["id", "prompt-file", "thread", "model", "sandbox", "cwd"],
     "project-list": [], "project-create": ["name", "label"], "project-clone": ["name", "remote", "label"],
     "project-add": ["path", "label"], "project-remove": ["path"], "git-auth-configure": ["config-file"],
-    show: ["id"], read: ["id"], interrupt: ["id"], wait: ["id"], status: [], list: [],
+    show: ["id"], read: ["id"], interrupt: ["id"], wait: ["id"], status: [], list: [], version: [],
     "federation-join": ["invite-file", "gateway", "label"],
     "federation-invite": ["port", "label"],
     "federation-status": [], "federation-leave": [], "federation-revoke": ["peer"],
@@ -69,6 +74,7 @@ export async function main(args) {
   for (const option of Object.keys(values)) {
     if (option !== "profile" && !allowed[command].includes(option)) throw new Error(`--${option} does not apply to ${command}`);
   }
+  if (command === "version") { console.log(JSON.stringify(packageVersion())); return 0; }
   const profile = values.profile || process.env.PWRAGENT_PROFILE || "default";
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(profile)) throw new Error("Invalid profile name");
   const root = process.env.PWRAGENT_HOME || path.join(homedir(), ".pwragent");
@@ -117,6 +123,12 @@ export async function main(args) {
       }
       await delay(1000);
     }
+  }
+  if (command === "status") {
+    const status = await call(directory, "status", {});
+    const installed = installedVersion();
+    console.log(JSON.stringify({ ...status, installed, restartRequired: restartRequired(status.running, installed) }));
+    return 0;
   }
   console.log(JSON.stringify(await call(directory, command, { id: values.id })));
   return 0;

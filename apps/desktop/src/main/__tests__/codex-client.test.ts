@@ -2,6 +2,7 @@ import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AppServerNotification,
@@ -27,6 +28,7 @@ import type {
   ThreadArchiveResponse,
   ThreadSetNameResponse,
   ThreadSettingsUpdateResponse,
+  ThreadItem,
   TurnInterruptResponse,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
 
@@ -3918,6 +3920,7 @@ describe("CodexAppServerClient", () => {
       MockTransport.modelListResult = createModelListResponse([
         createCodexModel({ id: "future-model", isDefault: true }),
         createCodexModel({ id: "gpt-6-luna", additionalSpeedTiers: ["fast"] }),
+        createCodexModel({ id: "gpt-6.1-terra", additionalSpeedTiers: ["fast"] }),
         createCodexModel({ id: "hidden-model", hidden: true }),
         createCodexModel({ id: "gpt-6-sol", additionalSpeedTiers: ["fast"] }),
         createCodexModel({ id: "gpt-6.1-sol", additionalSpeedTiers: ["fast"] }),
@@ -3925,13 +3928,16 @@ describe("CodexAppServerClient", () => {
       ]);
       const refreshed = await client.listModels();
       expect(refreshed.map((model) => model.id)).toEqual([
-        "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "future-model",
+        "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6.1-terra", "gpt-6-luna", "future-model",
       ]);
       expect(refreshed.find((model) => model.id === "gpt-6.1-sol")).toMatchObject({
         label: "GPT-6.1-Sol", supportsFast: true,
       });
       expect(refreshed.find((model) => model.id === "gpt-6-sol")).toMatchObject({
         label: "GPT-6-Sol", supportsFast: true,
+      });
+      expect(refreshed.find((model) => model.id === "gpt-6.1-terra")).toMatchObject({
+        label: "GPT-6.1-Terra", supportsFast: true,
       });
       expect(refreshed.find((model) => model.id === "gpt-6-luna")).toMatchObject({
         label: "GPT-6-Luna", supportsFast: true,
@@ -7375,6 +7381,45 @@ describe("CodexAppServerClient", () => {
     expect(replay.lastUserMessage).toBe("Describe this image");
 
     await client.close();
+  });
+
+  it("projects native imageView history into local image placeholders for safe materialization", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const file = path.join(os.tmpdir(), "native (v1)#100%.png");
+    const item = { type: "imageView", id: "native-view", path: file } satisfies ThreadItem;
+    MockTransport.readThreadResultByThreadId.set("thread-native-image", {
+      thread: { turns: [{ id: "native-turn", items: [item] }] },
+    });
+    const client = new CodexAppServerClient();
+    try {
+      const replay = await client.readThread({ threadId: "thread-native-image" });
+      expect(replay.entries).toEqual([expect.objectContaining({ type: "activity", details: [expect.objectContaining({
+        id: item.id, label: `View image: ${file}`,
+        images: [{ type: "image", url: pathToFileURL(file).toString(), sourceUrl: pathToFileURL(file).toString(), alt: path.basename(file) }],
+      })] })]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("keeps distinct native image views of the same path in replay", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const file = path.join(os.tmpdir(), "screenshot.png");
+    const items = ["before", "after"].map((id) => ({ type: "imageView", id, path: file } satisfies ThreadItem));
+    MockTransport.readThreadResultByThreadId.set("thread-repeated-image", {
+      thread: { turns: [{ id: "image-turn", items }] },
+    });
+    const client = new CodexAppServerClient();
+    try {
+      const replay = await client.readThread({ threadId: "thread-repeated-image" });
+      expect(replay.entries).toEqual([expect.objectContaining({ type: "activity", details: items.map((item) =>
+        expect.objectContaining({ id: item.id, label: `View image: ${file}`, images: [{
+          type: "image", url: pathToFileURL(file).toString(), sourceUrl: pathToFileURL(file).toString(), alt: path.basename(file),
+        }] }),
+      ) })]);
+    } finally {
+      await client.close();
+    }
   });
 
   it("attaches custom tool output images to the final assistant message", async () => {
@@ -12491,6 +12536,48 @@ describe("CodexAppServerClient", () => {
       ]);
     } finally {
       await fs.rm(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("announces a first-prompt name as derived and drops Codex's echo of each name it set", async () => {
+    const threadId = "thread-name-echoes";
+    MockTransport.threadStartResult = {
+      thread: { id: threadId, cwd: "/fixture/workspace", preview: "", name: null, updatedAt: 1_777_347_163 },
+      model: "gpt-5.5",
+    };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const names: unknown[] = [];
+    client.onNotification((notification) => {
+      if (notification.method === "thread/name/updated") names.push(notification.params);
+    });
+    try {
+      await client.startThread({ cwd: "/fixture/workspace" });
+      const transport = MockTransport.instances.at(-1)!;
+      // Codex 0.159.2 echoes every thread/name/set, without a titleSource.
+      transport.notify("thread/name/updated", { threadId, threadName: "Untitled thread" });
+      await client.startTurn({ threadId, input: [{ type: "text", text: "Repair the flaky login test" }] });
+      transport.notify("thread/name/updated", { threadId, threadName: "Repair the flaky login test" });
+      // A rename made elsewhere, such as another Codex client, still arrives.
+      transport.notify("thread/name/updated", { threadId, threadName: "Renamed elsewhere" });
+      await vi.waitFor(() => expect(names).toHaveLength(2));
+      expect(names).toEqual([
+        { threadId, threadName: "Repair the flaky login test", titleSource: "derived" },
+        { threadId, threadName: "Renamed elsewhere" },
+      ]);
+      // An echo that never came expires: a later rename to that name still arrives.
+      await client.renameThread({ threadId, name: "Release checklist" });
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now + 61_000);
+      try {
+        transport.notify("thread/name/updated", { threadId, threadName: "Release checklist" });
+        await vi.waitFor(() => expect(names).toHaveLength(3));
+      } finally {
+        clock.mockRestore();
+      }
+      expect(names[2]).toEqual({ threadId, threadName: "Release checklist" });
+    } finally {
+      await client.close();
     }
   });
 

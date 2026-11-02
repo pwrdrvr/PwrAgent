@@ -1,4 +1,6 @@
 import { threadTodoThreadKey, parseRemoteOperatorItemKey } from "@pwragent/shared";
+import { StartupTiming } from "../composer/StartupTiming";
+import { LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
 import { ThreadServices } from "../federation/ThreadServices";
 import type { BackgroundTerminalsViewProps } from "./BackgroundTerminalsView";
 import type { AgentCommandsStatus } from "../../lib/useThreadSessionState";
@@ -65,6 +67,7 @@ import type {
   ThreadToolInvocationRecord,
   ThreadUsageLineRecord,
   ToolOutputIncidentExplorerLens,
+  ForgeApprovalRememberOptionId,
 } from "@pwragent/shared";
 import {
   buildPendingRequestResponse,
@@ -1026,6 +1029,9 @@ export type ThreadViewProps = {
   /** Focus the composer once it shows this thread (a mouse click on its sidebar row). */
   composerFocusRequest?: ComposerProps["focusRequest"];
   onComposerFocusRequestHandled?: ComposerProps["onFocusRequestHandled"];
+  /** Append a drafted request to this thread's composer ("Ask Agent to Watch CI"). */
+  composerInsertRequest?: ComposerProps["composerInsertRequest"];
+  onComposerInsertRequestHandled?: ComposerProps["onComposerInsertRequestHandled"];
   onDetachLaunchpadParent?: (directoryKey: string) => void;
   onSelectLaunchpadParent?: (launchpad: NavigationLaunchpadDraft) => void;
   onPendingStatusChange?: (status?: string) => void;
@@ -1326,10 +1332,11 @@ export function ThreadView(props: ThreadViewProps) {
       id: "launchpad-submitted-message",
       type: "message",
       role: "user",
+      createdAt: props.pendingLaunchpadCreation?.submittedAt,
       text: parts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n\n"),
       parts,
     };
-  }, [launchpadSubmittedInput, props.pendingLaunchpadCreation?.input]);
+  }, [launchpadSubmittedInput, props.pendingLaunchpadCreation?.input, props.pendingLaunchpadCreation?.submittedAt]);
   // Terminal state is owned by `useIntegratedTerminals` up in App, mirroring
   // the main process's registry. It cannot live here: ThreadView unmounts on
   // search and on any refresh that flips `threadDetailPending`, which used to
@@ -2580,7 +2587,7 @@ export function ThreadView(props: ThreadViewProps) {
     const environment = selectedLaunchpad.codexEnvironmentOptions?.find(
       (option) => option.id === selectedLaunchpad.codexEnvironmentId,
     );
-    if (!environment?.setupScript) {
+    if (!environment?.setupScript && !launchpadSetupProgress) {
       return undefined;
     }
     const status = launchpadSetupProgress
@@ -2594,12 +2601,15 @@ export function ThreadView(props: ThreadViewProps) {
       : undefined;
     return {
       key: `launchpad:${selectedLaunchpad.directoryKey}`,
-      phase: "setup",
+      phase: launchpadSetupProgress ? "setup" : "startup",
       status,
+      startedAt: launchpadSetupProgress?.startedAt ?? props.pendingLaunchpadCreation?.submittedAt,
+      onCancel: props.pendingLaunchpadCreation?.startup?.cancellable === false ? undefined : props.pendingLaunchpadCreation?.onCancel,
+      cancelling: props.pendingLaunchpadCreation?.cancelling,
       ...fields,
-      environmentId: fields?.environmentId ?? environment.id,
-      environmentName: fields?.environmentName ?? environment.name,
-      command: fields?.command ?? environment.setupScript,
+      environmentId: fields?.environmentId ?? environment?.id,
+      environmentName: fields?.environmentName ?? environment?.name,
+      command: fields?.command ?? environment?.setupScript,
       cwd: fields?.cwd ?? selectedLaunchpad.directoryPath,
     };
   }, [
@@ -2607,6 +2617,7 @@ export function ThreadView(props: ThreadViewProps) {
     launchpadMaterializing,
     launchpadSetupProgress,
     selectedLaunchpad,
+    props.pendingLaunchpadCreation,
   ]);
 
   const branchDriftRetentionKey = (
@@ -2876,7 +2887,7 @@ export function ThreadView(props: ThreadViewProps) {
     options?: ThreadTodoDoHereOptions,
   ): Promise<boolean> => {
     const { prompt, ...resolveOptions } = options ?? {};
-    const handoff = todo.action?.type === "start_thread" ? todo.action.prompt : undefined;
+    const handoff = todo.action?.type === "start_thread" || todo.action?.type === "send_message" ? todo.action.prompt : undefined;
     const text = prompt ?? handoff;
     if (!text || !selectedThread || threadTodoThreadKey(todo) !== threadSummaryIdentityKey(selectedThread)) return false;
     try {
@@ -3931,6 +3942,7 @@ export function ThreadView(props: ThreadViewProps) {
     pendingMcpInteraction: PendingMcpInteractionState,
     action: "accept" | "decline" | "cancel",
     persist?: McpApprovalPersistence,
+    remember?: ForgeApprovalRememberOptionId,
   ): Promise<void> {
     if (!props.desktopApi?.submitServerRequest || !selectedThread) {
       setPendingRequestError("Desktop bridge is missing submitServerRequest().");
@@ -3951,7 +3963,7 @@ export function ThreadView(props: ThreadViewProps) {
             ? pendingMcpInteraction.turnId
             : undefined,
         requestId: pendingMcpInteraction.requestId,
-        response: buildMcpElicitationResponse(pendingMcpInteraction, action, persist),
+        response: buildMcpElicitationResponse(pendingMcpInteraction, action, persist, remember),
       });
       props.clearPendingRequest(
         pendingMcpInteraction.requestId,
@@ -3992,6 +4004,12 @@ export function ThreadView(props: ThreadViewProps) {
         scheduledFor,
       );
     } catch (error) {
+      if (error instanceof LaunchpadStartupCancelledError) {
+        setLaunchpadMaterializing(false);
+        setLaunchpadSubmittedInput([]);
+        setLaunchpadMaterializeError(undefined);
+        throw error;
+      }
       setLaunchpadMaterializeError(
         error instanceof Error ? error.message : String(error)
       );
@@ -4082,6 +4100,9 @@ export function ThreadView(props: ThreadViewProps) {
           onReloadLaunchpadConfiguration: props.onReloadLaunchpadConfiguration,
           onMaterializeLaunchpad: handleMaterializeLaunchpad,
           onCancelLaunchpad: props.onCancelLaunchpad,
+          onCancelLaunchpadStartup: props.pendingLaunchpadCreation?.onCancel,
+          launchpadStartupCancelling: props.pendingLaunchpadCreation?.cancelling,
+          launchpadStartupCancellable: props.pendingLaunchpadCreation?.startup?.cancellable,
           launchpadCancelRequest: props.launchpadCancelRequest,
           onDetachLaunchpadParent: props.onDetachLaunchpadParent,
           onSelectLaunchpadParent: props.onSelectLaunchpadParent,
@@ -4110,6 +4131,8 @@ export function ThreadView(props: ThreadViewProps) {
           reviewRequest: todoReviewRequest,
           focusRequest: props.composerFocusRequest,
           onFocusRequestHandled: props.onComposerFocusRequestHandled,
+          composerInsertRequest: props.composerInsertRequest,
+          onComposerInsertRequestHandled: props.onComposerInsertRequestHandled,
           onReviewStarted: handleReviewStarted,
           workspaceActionsBlocked: props.workspaceActionsBlocked,
           onEditEnvironments: props.onEditEnvironments,
@@ -4245,6 +4268,9 @@ export function ThreadView(props: ThreadViewProps) {
               <div className="launchpad-pending">
                 <p className="eyebrow">Preparing transcript</p>
                 <h3>Starting {composerLaunchpad.directoryLabel}</h3>
+                {props.pendingLaunchpadCreation ? <p><StartupTiming submittedAt={props.pendingLaunchpadCreation.submittedAt} startedAt={props.pendingLaunchpadCreation.startup?.startedAt} /></p> : null}
+                {props.pendingLaunchpadCreation?.cancelError ? <p role="alert">{props.pendingLaunchpadCreation.cancelError}</p> : null}
+                {props.pendingLaunchpadCreation?.connectionLost ? <p role="status">Connection to owner interrupted. Startup status will resume when it reconnects. Cancellation must be confirmed by the owner.</p> : null}
                 <p>
                   {launchpadRunningCodexEnvironmentSetup
                     ? `Running the ${
@@ -4831,6 +4857,7 @@ export function ThreadView(props: ThreadViewProps) {
           onDismissEnvActionRun: dismissEnvActionRun,
           onStopEnvActionRun: stopEnvActionRun,
           onRefreshNavigation: props.onRefreshNavigation,
+          onSetThreadPrAutoDispatch: props.onSetThreadPrAutoDispatch,
           platform: props.platform,
           thread: selectedThread,
           pricing: props.pricing,
@@ -4963,6 +4990,7 @@ export function ThreadView(props: ThreadViewProps) {
             activeTab={activeContextTab}
             backendError={props.backendError}
             backends={props.backends}
+            ownerBackends={peerOwnerTarget ? peerOwnerSummaries.backends : undefined}
             desktopApi={props.desktopApi}
             onOpenAutomations={props.onOpenAutomations}
             onActiveTabChange={onActiveContextTabChange}

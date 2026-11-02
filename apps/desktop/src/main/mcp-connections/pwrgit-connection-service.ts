@@ -1,7 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
-import { setTimeout as delay } from "node:timers/promises";
 import { shell } from "electron";
 import type { ConnectPwrGitResponse, OpenPwrGitResponse, PwrGitConnectionStatus } from "@pwragent/shared";
 import { getMcpConnectionGatewayService, type McpConnectionGatewayService } from "./mcp-connection-gateway-service";
@@ -13,8 +12,6 @@ export type PwrGitConnectionServiceOptions = {
   openExternal?: (url: string) => Promise<void>;
   openPath?: (path: string) => Promise<string>;
   resolveInstallPaths?: () => string[];
-  launchPollAttempts?: number;
-  launchPollDelayMs?: number;
 };
 
 function resolveDefaultPwrGitInstallPaths(): string[] {
@@ -104,16 +101,7 @@ export class PwrGitConnectionService {
 
   private async connectNow(): Promise<ConnectPwrGitResponse> {
     if (!(await this.isEndpointAvailable())) {
-      if (this.findInstalledPath()) {
-        await this.openApplication();
-        for (let attempt = 0; attempt < (this.options.launchPollAttempts ?? 16); attempt += 1) {
-          await delay(this.options.launchPollDelayMs ?? 500);
-          if (await this.isEndpointAvailable()) break;
-        }
-      }
-      if (!(await this.isEndpointAvailable())) {
-        return { outcome: "needs_local_agent_access", status: await this.readStatus() };
-      }
+      return { outcome: "needs_local_agent_access", status: await this.readStatus() };
     }
     await this.gateway.authorizeConnection("pwrgit");
     return { outcome: "connected", status: await this.readStatus() };

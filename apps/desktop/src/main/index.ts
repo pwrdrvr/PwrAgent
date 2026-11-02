@@ -14,6 +14,7 @@ import {
   getExistingDesktopBackendRegistry,
 } from "./app-server/backend-registry";
 import { interruptStartupStorageMaintenance, runStartupStorageMaintenance } from "./storage-maintenance";
+import { removeRetiredCiArtifactStore } from "./pr-status/forge-artifact-download";
 import { hadExistingAppStateDatabase, getAppStateDb } from "./state/app-state";
 import { observeStorageArchive } from "./state/storage-maintenance";
 import { runOneTimeArchivedWorktreeRepair } from "./state/archived-worktree-repair";
@@ -178,7 +179,7 @@ import {
   resolveMainLogProfileName,
 } from "./log";
 import { StartupCpuProfiler } from "./diagnostics/startup-cpu-profiler";
-import { stopRenderingDiagnostics } from "./diagnostics/rendering-capture";
+import { isRenderingDiagnosticsWindow, stopRenderingDiagnostics } from "./diagnostics/rendering-capture";
 import { recordStartupProfileEvent } from "./diagnostics/startup-profile-events";
 import {
   disposeDesktopMessagingRuntime,
@@ -1196,7 +1197,7 @@ function installApplicationMenu(): void {
     && isFederationWindowWebContents(focusedWindow.webContents),
   );
   const windows = BrowserWindow.getAllWindows()
-    .filter((window) => !window.isDestroyed())
+    .filter((window) => !window.isDestroyed() && !isRenderingDiagnosticsWindow(window))
     .map((window) => ({
       focused: window.isFocused(),
       id: window.id,
@@ -1233,7 +1234,7 @@ function installApplicationMenu(): void {
       copyLocalDiagnosticsInfo: requestCopyLocalDiagnosticsInfo,
       focusWindow: (windowId) => {
         const window = BrowserWindow.fromId(windowId);
-        if (!window || window.isDestroyed()) {
+        if (!window || window.isDestroyed() || isRenderingDiagnosticsWindow(window)) {
           installApplicationMenu();
           return;
         }
@@ -1581,6 +1582,7 @@ export function bootstrapApp(): void {
     getDesktopConfigStore();
     if (bootMode === "active-profile") {
       const registry = getDesktopBackendRegistry();
+      void removeRetiredCiArtifactStore();
       registry.onEvent(async (event) => {
         const method = event.notification.method;
         if (method === "thread/archived" || method === "thread/unarchived") {
@@ -1756,8 +1758,16 @@ export function bootstrapApp(): void {
     });
     registerAgentIpcHandlers();
     registerScheduledActionIpcHandlers();
-    // A to-do's "Start thread on" runs through the same federation tools.
-    registerThreadTodoIpcHandlers({ federation: federationAgentToolsHandler });
+    // A to-do's "Start thread on" runs through the same federation tools,
+    // with the card's origin on the started thread's prompt.
+    registerThreadTodoIpcHandlers({
+      federation: federationAgentToolsHandler,
+      federationWithOrigin: (messageOrigin) =>
+        createFederationAgentToolsHandler({
+          ...federationAgentToolOptions,
+          resolveMessageOrigin: () => messageOrigin,
+        }),
+    });
     registerCodexEnvironmentEditorIpcHandlers();
     registerOperatorRequestIpcHandlers();
     registerApplicationIpcHandlers();

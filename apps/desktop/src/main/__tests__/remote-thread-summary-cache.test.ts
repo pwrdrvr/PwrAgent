@@ -1925,6 +1925,14 @@ it("scopes subagent metadata and worktree invalidations to mounted rows", async 
     cache.invalidate("peer", { backend: "codex", notification: { method: "navigation/invalidated", params: {
       sourceMethod: "navigation/directoryGitStatus/updated", directoryKey: "directory:/mounted",
     } } });
+    // A project's Forge Automation rides only on rows in that project, and
+    // an owner that names no project names none on its rows either.
+    cache.invalidate("peer", { backend: "codex", notification: { method: "navigation/invalidated", params: {
+      sourceMethod: "directory/forgeAutomation/updated",
+    } } });
+    cache.invalidate("peer", { backend: "codex", notification: { method: "navigation/invalidated", params: {
+      sourceMethod: "directory/forgeAutomation/updated", directoryKey: "directory:/other",
+    } } });
     await settle();
     expect(fetchPinnedSnapshot).not.toHaveBeenCalled();
     cache.invalidate("peer", { backend: "codex", notification: { method: "navigation/invalidated", params: {
@@ -1932,6 +1940,35 @@ it("scopes subagent metadata and worktree invalidations to mounted rows", async 
     } } });
     await settle();
     expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(1);
+  } finally { cache.dispose(); }
+});
+
+it("re-reads pins when the Forge Automation of a held row's project changes", async () => {
+  const root = { ...stampedThread({ instanceId: "peer", threadId: "root", title: "Root" }),
+    homeProject: { directoryKey: "directory:/peer/repo" } };
+  const paused = { ...root, homeProject: { directoryKey: "directory:/peer/repo",
+    forgeAutomation: { paused: true, pausedAt: 1, autoFixMergeConflicts: true, autoFixCiFailures: true,
+      prWatches: true, refuseThreadMessages: false, wakeupPolicy: "hold" as const } } };
+  const fetchPinnedSnapshot = vi.fn(async () => snapshotOf([root]));
+  const refreshed = vi.fn();
+  const cache = new RemoteThreadSummaryCache({ peers: () => [peer("peer")], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
+    fetchArchivedThreads: noArchivedThreads, peerStatus: () => ({ status: "connected" }), hasNavigationSubscription: () => true,
+    onPinnedSummariesRefreshed: refreshed });
+  const pins = [pin({ instanceId: "peer", threadId: "root" })];
+  try {
+    await cache.resolvePinnedThreads(pins);
+    await settle();
+    fetchPinnedSnapshot.mockClear();
+    refreshed.mockClear();
+    fetchPinnedSnapshot.mockResolvedValue(snapshotOf([paused]));
+    cache.invalidate("peer", { backend: "codex", notification: { method: "navigation/invalidated", params: {
+      sourceMethod: "directory/forgeAutomation/updated", directoryKey: "directory:/peer/repo",
+    } } });
+    for (let i = 0; i < 3; i++) await settle();
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(1);
+    expect(refreshed).toHaveBeenCalledWith("peer");
+    const resolved = await cache.resolvePinnedThreads(pins);
+    expect(resolved.threads[0]?.homeProject?.forgeAutomation?.paused).toBe(true);
   } finally { cache.dispose(); }
 });
 

@@ -13,7 +13,7 @@ import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb } from "./sqlite-test-utils";
-import type { ForgePrToolHandler } from "../agent-tools/pwragent-forge-pr-agent-tools";
+import type { ForgePrToolHandler, ForgePrToolPreflight } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import { ForgeReadError } from "../pr-status/forge-tool-contract";
 
@@ -100,7 +100,7 @@ describe("backend forge tool dispatch", () => {
 
   it.each(["github", "gitlab"] as const)("asks once per CI rerun with the %s scope and repository on the card", async (provider) => {
     const repository = { provider, host: provider === "github" ? "github.com" : "gitlab.example.test", owner: "fixture", repo: "project" };
-    registry.setForgePrToolHandler(github, async () => repository);
+    registry.setForgePrToolHandler(github, async (_operation, args) => ({ repository, args }));
     const prompt = nextApproval();
     const pending = internals.handleServerRequest("codex", request("rerun_failed_ci_jobs", { runId: 42 }, "call-rerun"));
     const notification = await prompt;
@@ -166,25 +166,29 @@ describe("backend forge tool dispatch", () => {
 
   it("asks before opening a pull request, then links it to the thread", async () => {
     const prompt = nextApproval();
-    const pending = internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests", draft: true }, "call-pr"));
+    const pending = internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests", head: "fix/tests", draft: true }, "call-pr"));
     const notification = await prompt;
     expect(notification.params.message).toBe("Allow the agent to open a pull request on GitHub?");
-    expect(notification.params._meta).toMatchObject({ pwragent_approval_kind: "mcp_tool_call", tool_params_display: [{ name: "title", value: "fix: tests" }, { name: "draft", value: "true" }] });
+    expect(notification.params._meta).toMatchObject({ pwragent_approval_kind: "mcp_tool_call", tool_params_display: [{ name: "title", value: "fix: tests" }, { name: "head", value: "fix/tests" }, { name: "draft", value: "true" }] });
     expect(notification.params._meta).not.toHaveProperty("persist");
     expect(github).not.toHaveBeenCalled();
     await answer(notification, "accept");
     const result = await pending;
     expect(result.success).toBe(true);
     expect(text(result)).toMatch(/"attachedToThread":\s*true/);
-    expect(attach).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", url: "https://github.com/fixture/project/pull/9" });
+    // The forge returned this URL, so the attach does not ask it again.
+    expect(attach).toHaveBeenCalledWith(
+      { backend: "codex", threadId: "thread-1", url: "https://github.com/fixture/project/pull/9" },
+      { forgeUrl: true },
+    );
   });
 
   it("shows the whole body and every inline comment on the approval card", async () => {
     const body = `## Summary\n\n${"Moves every macOS job onto the hosted runner. ".repeat(20)}\n\n<!-- end -->`;
     const pr = nextApproval();
-    const opening = internals.handleServerRequest("codex", request("create_pull_request", { title: "ci: hosted runners", body }, "call-pr-body"));
+    const opening = internals.handleServerRequest("codex", request("create_pull_request", { title: "ci: hosted runners", head: "ci/hosted-runners", body }, "call-pr-body"));
     const prNotification = await pr;
-    expect(prNotification.params._meta).toMatchObject({ tool_params_display: [{ name: "title", value: "ci: hosted runners" }, { name: "body", value: body, format: "markdown" }] });
+    expect(prNotification.params._meta).toMatchObject({ tool_params_display: [{ name: "title", value: "ci: hosted runners" }, { name: "head", value: "ci/hosted-runners" }, { name: "body", value: body, format: "markdown" }] });
     await answer(prNotification, "decline");
     await opening;
 
@@ -214,13 +218,13 @@ describe("backend forge tool dispatch", () => {
     internals.handleAttachThreadPullRequestInspectionRequest = realAttach;
 
     const { result, writes } = await measureSqliteWrites(() => internals.handleServerRequest(
-      "codex", request("create_pull_request", { title: "fix: tests", draft: true }, "call-pr-budget"),
+      "codex", request("create_pull_request", { title: "fix: tests", head: "fix/tests", draft: true }, "call-pr-budget"),
     ));
 
     expect(result.success).toBe(true);
     expect(JSON.parse(text(result))).toMatchObject({ created: true, attachedToThread: true });
     expect(github).toHaveBeenCalledExactlyOnceWith(
-      "create_pull_request", { title: "fix: tests", draft: true },
+      "create_pull_request", { title: "fix: tests", head: "fix/tests", draft: true },
       expect.objectContaining({ backend: "codex", threadId: "thread-1", turnId: "turn-1" }),
     );
     const overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" });
@@ -237,7 +241,7 @@ describe("backend forge tool dispatch", () => {
   });
 
   it("names the GitLab repository and merge request on the card", async () => {
-    registry.setForgePrToolHandler(github, async () => ({ provider: "gitlab", host: "gitlab.example.test", owner: "group/sub", repo: "project" }));
+    registry.setForgePrToolHandler(github, async (_operation, args) => ({ repository: { provider: "gitlab", host: "gitlab.example.test", owner: "group/sub", repo: "project" }, args }));
     const prompt = nextApproval();
     const pending = internals.handleServerRequest("codex", request("merge_pull_request", { number: 4, expectedHeadSha: "b".repeat(40) }, "call-gitlab"));
     const notification = await prompt;
@@ -251,7 +255,7 @@ describe("backend forge tool dispatch", () => {
     const repoA = { provider: "github" as const, host: "github.com", owner: "acme", repo: "app" };
     const repoB = { provider: "github" as const, host: "github.com", owner: "acme", repo: "site" };
     let next = repoA;
-    registry.setForgePrToolHandler(github, async () => next);
+    registry.setForgePrToolHandler(github, async (_operation, args) => ({ repository: next, args }));
     const first = nextApproval();
     const pendingA = internals.handleServerRequest("codex", request("add_issue_comment", { number: 1, body: "Fixed." }, "call-grant-a"));
     await answer(await first, "accept", "session");
@@ -276,6 +280,40 @@ describe("backend forge tool dispatch", () => {
     expect(text(result)).toContain("ambiguous_repository");
     expect(prompts).not.toHaveBeenCalled();
     expect(github).not.toHaveBeenCalled();
+  });
+
+  it("refuses a pull request without head before asking, so the agent names the branch it opens from", async () => {
+    const prompts = vi.fn();
+    registry.onEvent((event) => { if (event.notification.method === "mcpServer/elicitation/request") prompts(); });
+    const preflight = vi.fn<ForgePrToolPreflight>(async (_operation, args) => ({ repository: { provider: "github", host: "github.com", owner: "fixture", repo: "project" }, args }));
+    registry.setForgePrToolHandler(github, preflight);
+    const result = await internals.handleServerRequest("codex", request("create_pull_request", { title: "Fix" }, "call-no-head"));
+    expect(text(result)).toContain("requires head");
+    expect(preflight).not.toHaveBeenCalled();
+    expect(prompts).not.toHaveBeenCalled();
+    expect(github).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unpushed head before asking, so a retry after pushing is the only card", async () => {
+    const prompts = vi.fn();
+    registry.onEvent((event) => { if (event.notification.method === "mcpServer/elicitation/request") prompts(); });
+    registry.setForgePrToolHandler(github, async () => { throw new ForgeReadError("invalid_arguments", "Branch fix/local-only is not on fixture/project. Push it, then open the pull request."); });
+    const result = await internals.handleServerRequest("codex", request("create_pull_request", { title: "Fix", head: "fix/local-only" }, "call-unpushed"));
+    expect(text(result)).toContain("Push it");
+    expect(prompts).not.toHaveBeenCalled();
+    expect(github).not.toHaveBeenCalled();
+  });
+
+  it("shows the head on the card and opens from it", async () => {
+    const repository = { provider: "github" as const, host: "github.com", owner: "fixture", repo: "project" };
+    registry.setForgePrToolHandler(github, async (_operation, args) => ({ repository, args }));
+    const prompt = nextApproval();
+    const pending = internals.handleServerRequest("codex", request("create_pull_request", { title: "Fix", head: "fix/pushed" }, "call-head"));
+    const notification = await prompt;
+    expect(notification.params._meta?.tool_params_display).toEqual(expect.arrayContaining([{ name: "head", value: "fix/pushed" }]));
+    await answer(notification, "accept");
+    expect((await pending).success).toBe(true);
+    expect(github).toHaveBeenCalledWith("create_pull_request", { title: "Fix", head: "fix/pushed", repository }, expect.anything());
   });
 
   it("does not run a declined write", async () => {
@@ -303,7 +341,7 @@ describe("backend forge tool dispatch", () => {
     internals.activeCodexTurnModes.set("thread-1:turn-1", "auto");
     const prompts = vi.fn();
     registry.onEvent((event) => { if (event.notification.method === "mcpServer/elicitation/request") prompts(); });
-    const created = await internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests", draft: true }, "call-auto-pr"));
+    const created = await internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests", head: "fix/tests", draft: true }, "call-auto-pr"));
     expect(created.success).toBe(true);
     const comment = await internals.handleServerRequest("codex", request("add_issue_comment", { number: 3, body: "Fixed." }, "call-auto-comment"));
     expect(comment.success).toBe(true);
@@ -329,9 +367,85 @@ describe("backend forge tool dispatch", () => {
     (registry as unknown as { headlessAutomationTurns: Map<string, unknown> }).headlessAutomationTurns.set("codex:thread-1:turn-1", {
       agentThreadId: "thread-1", automationRunId: "run-1", executionMode: "auto", queueEntryId: "queue-1",
     });
-    const result = await internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests", draft: true }, "call-automation-pr"));
+    const result = await internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests", head: "fix/tests", draft: true }, "call-automation-pr"));
     expect(text(result)).toContain("approval_required");
     expect(github).not.toHaveBeenCalled();
+  });
+
+  describe("in a Claude thread", () => {
+    type ClaudeModes = {
+      liveExecutionMode(threadId: string): ThreadExecutionMode | undefined;
+      executionMode(threadId: string): Promise<ThreadExecutionMode>;
+    };
+    let live: ThreadExecutionMode | undefined;
+    let saved: ThreadExecutionMode;
+    let prompts: ReturnType<typeof vi.fn<() => void>>;
+    const claudeCall = (operation: Parameters<ForgePrToolHandler>[0], args: Parameters<ForgePrToolHandler>[1]) =>
+      (registry as unknown as { gatedForgePrToolHandler: ForgePrToolHandler }).gatedForgePrToolHandler(
+        operation, args, { backend: "claude", threadId: "thread-1", turnId: "turn-1", transport: "mcp" });
+    const createPr = () => claudeCall("create_pull_request", { title: "fix: tests", head: "fix/tests", draft: true });
+    const merge = () => claudeCall("merge_pull_request", { number: 9, expectedHeadSha: "a".repeat(40) });
+    async function decline(call: Promise<unknown>, approval: Promise<AppServerMcpElicitationRequestNotification>) {
+      const notification = await approval;
+      await registry.submitServerRequest({
+        backend: "claude", threadId: "thread-1", turnId: "turn-1", requestId: String(notification.params.requestId),
+        response: { action: "decline", content: null, _meta: null },
+      });
+      await expect(call).rejects.toMatchObject({ code: "declined" });
+    }
+
+    beforeEach(() => {
+      live = undefined;
+      saved = "default";
+      const claude = (registry as unknown as { claudeBackend: ClaudeModes }).claudeBackend;
+      vi.spyOn(claude, "liveExecutionMode").mockImplementation(() => live);
+      vi.spyOn(claude, "executionMode").mockImplementation(async () => saved);
+      prompts = vi.fn<() => void>();
+      registry.onEvent((event) => { if (event.notification.method === "mcpServer/elicitation/request") prompts(); });
+    });
+
+    it("runs every Auto group without asking under bypass permissions, merging included", async () => {
+      live = "full-access";
+      policy.access.approve_merge = "auto";
+      await createPr();
+      await merge();
+      expect(prompts).not.toHaveBeenCalled();
+      expect(github).toHaveBeenCalledTimes(2);
+    });
+
+    it("runs Auto groups without asking in Claude's Auto mode, except approve and merge", async () => {
+      live = "auto";
+      policy.access.approve_merge = "auto";
+      await createPr();
+      expect(prompts).not.toHaveBeenCalled();
+      await decline(merge(), nextApproval());
+      expect(github).toHaveBeenCalledTimes(1);
+    });
+
+    it("asks in a Default Access turn", async () => {
+      live = "default";
+      await decline(createPr(), nextApproval());
+      expect(github).not.toHaveBeenCalled();
+    });
+
+    it("follows the open process over the saved mode, and the saved mode with no process", async () => {
+      saved = "full-access";
+      live = "default";
+      await decline(createPr(), nextApproval());
+      expect(github).not.toHaveBeenCalled();
+      live = undefined;
+      await createPr();
+      expect(github).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses Auto writes from an Auto-mode automation, which no one can review", async () => {
+      live = "auto";
+      (registry as unknown as { headlessAutomationTurns: Map<string, unknown> }).headlessAutomationTurns.set("claude:thread-1:turn-1", {
+        agentThreadId: "thread-1", automationRunId: "run-1", executionMode: "auto", queueEntryId: "queue-1",
+      });
+      await expect(createPr()).rejects.toMatchObject({ code: "approval_required" });
+      expect(github).not.toHaveBeenCalled();
+    });
   });
 
   it("treats an approving review as an approve-and-merge decision", async () => {
@@ -372,7 +486,7 @@ describe("backend forge tool dispatch", () => {
 
     it("leaves the operator a to-do saying the request was withdrawn", async () => {
       const prompt = nextApproval();
-      const pending = internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests" }, "call-pr-ended"));
+      const pending = internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests", head: "fix/tests" }, "call-pr-ended"));
       await prompt;
       await endTurn("completed");
       await pending;
@@ -389,7 +503,7 @@ describe("backend forge tool dispatch", () => {
 
     it("leaves the to-do when the turn fails while the card waits", async () => {
       const prompt = nextApproval();
-      const pending = internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests" }, "call-pr-failed"));
+      const pending = internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests", head: "fix/tests" }, "call-pr-failed"));
       await prompt;
       await registry.publishLocalEvent({
         backend: "codex",
@@ -401,7 +515,7 @@ describe("backend forge tool dispatch", () => {
 
     it("leaves no to-do when the operator stopped the turn", async () => {
       const prompt = nextApproval();
-      const pending = internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests" }, "call-pr-stopped"));
+      const pending = internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests", head: "fix/tests" }, "call-pr-stopped"));
       await prompt;
       await endTurn("interrupted");
       await pending;
@@ -411,7 +525,7 @@ describe("backend forge tool dispatch", () => {
 
     it("tells the agent in get_thread_status that its call waits on the operator", async () => {
       const prompt = nextApproval();
-      const pending = internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests" }, "call-pr-status"));
+      const pending = internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests", head: "fix/tests" }, "call-pr-status"));
       await prompt;
       const status = JSON.parse(text(await internals.handleServerRequest("codex", request("get_thread_status", {}, "call-status")))) as {
         thread: { pendingApprovals?: Array<{ serverName?: string; message?: string }>; pendingApprovalGuidance?: string };

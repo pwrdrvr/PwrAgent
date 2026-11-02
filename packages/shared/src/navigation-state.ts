@@ -30,7 +30,7 @@ type AppServerThreadSummaryWithEnvironmentOptions = AppServerThreadSummary & {
 };
 
 /** Check whether a linked directory was created by the handoff service. */
-function isHandoffDirectory(directory: LinkedDirectorySummary): boolean {
+export function isWorkspaceHandoffDirectory(directory: LinkedDirectorySummary): boolean {
   return (
     directory.id.startsWith("pwragent-handoff:") ||
     directory.id.startsWith("pwragnt-handoff:")  // legacy prefix from pre-rebrand data
@@ -44,7 +44,7 @@ export function mergeThreadLinkedDirectories(
   const normalizedDirectories = directories.map(normalizeLinkedDirectoryKind);
   let overlayWorkspace: LinkedDirectorySummary | undefined;
   for (const directory of normalizedDirectories) {
-    if (isHandoffDirectory(directory)) {
+    if (isWorkspaceHandoffDirectory(directory)) {
       overlayWorkspace = directory;
     }
   }
@@ -97,7 +97,7 @@ function normalizeLinkedDirectoryKind(
 }
 
 function hasHandoffWorkspace(directories: LinkedDirectorySummary[]): boolean {
-  return directories.map(normalizeLinkedDirectoryKind).some(isHandoffDirectory);
+  return directories.map(normalizeLinkedDirectoryKind).some(isWorkspaceHandoffDirectory);
 }
 
 function resolveNavigationGitBranch(params: {
@@ -555,6 +555,8 @@ export function serializeNavigationSnapshotForHash(params: {
             setupOutput: thread.codexEnvironmentRuntime.setupOutput ?? null,
             setupExitCode: thread.codexEnvironmentRuntime.setupExitCode ?? null,
             setupDurationMs: thread.codexEnvironmentRuntime.setupDurationMs ?? null,
+            setupStartedAt: thread.codexEnvironmentRuntime.setupStartedAt ?? null,
+            setupFinishedAt: thread.codexEnvironmentRuntime.setupFinishedAt ?? null,
             setupFailureAcknowledgedAt:
               thread.codexEnvironmentRuntime.setupFailureAcknowledgedAt ?? null,
             actions: (thread.codexEnvironmentRuntime.actions ?? []).map(
@@ -728,6 +730,9 @@ export function serializeNavigationSnapshotForHash(params: {
       // the same overlay and must invalidate the snapshot cache too.
       directoryThreadsCollapsed:
         directory.directoryThreadsCollapsed ?? null,
+      // Forge Automation lives in the same overlay; a Save must get past
+      // the unchanged-snapshot short-circuit too.
+      forgeAutomation: directory.forgeAutomation ?? null,
       launchpad: directory.launchpad
         ? {
             backend: directory.launchpad.backend,

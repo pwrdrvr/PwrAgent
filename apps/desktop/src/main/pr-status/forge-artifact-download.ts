@@ -1,26 +1,29 @@
-import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, open, rename, rm } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, open, rename, rm, rmdir } from "node:fs/promises";
 import path from "node:path";
+import { resolveActiveProfilePath } from "../profile";
 import { FORGE_ARTIFACT_MAX_BYTES } from "./forge-read-limits";
 import { ForgeReadError } from "./forge-tool-contract";
 
-/** Stream an opaque ZIP into a private, unique directory. Never use names from the archive. */
-export async function saveForgeArtifact(response: Response, root: string, signal: AbortSignal) {
+/**
+ * Stream an opaque ZIP to `archivePath` through a unique partial file, then
+ * rename it into place. A repeat download replaces the earlier archive.
+ * Names from the archive or provider metadata never choose a path.
+ */
+export async function saveForgeArtifact(response: Response, archivePath: string, signal: AbortSignal) {
   const reader = response.body?.getReader();
   if (!reader) throw new ForgeReadError("invalid_response", "The artifact response has no body.");
   const cancel = () => { void reader.cancel().catch(() => {}); };
   signal.addEventListener("abort", cancel, { once: true });
-  let directory: string | undefined;
+  let partial: string | undefined;
   let complete = false;
   try {
     signal.throwIfAborted();
     if (Number(response.headers.get("content-length")) > FORGE_ARTIFACT_MAX_BYTES) {
       throw new ForgeReadError("response_too_large", "Artifact exceeds the 128 MiB download limit.");
     }
-    await mkdir(root, { recursive: true, mode: 0o700 });
-    directory = await mkdtemp(path.join(root, "download-"));
-    const partial = path.join(directory, "artifact.zip.partial");
-    const archivePath = path.join(directory, "artifact.zip");
+    await mkdir(path.dirname(archivePath), { recursive: true, mode: 0o700 });
+    partial = `${archivePath}.${randomUUID()}.partial`;
     const file = await open(partial, "wx", 0o600);
     const hash = createHash("sha256");
     let sizeBytes = 0;
@@ -57,10 +60,25 @@ export async function saveForgeArtifact(response: Response, root: string, signal
   } catch (error) {
     if (signal.aborted) throw error;
     if (error instanceof ForgeReadError) throw error;
-    throw new ForgeReadError("download_failed", "Artifact download failed. Check connectivity and available disk space on the thread owner.");
+    throw new ForgeReadError("download_failed", "Artifact download failed. Check connectivity, available disk space, and that the existing archive is not open on the thread owner.");
   } finally {
     signal.removeEventListener("abort", cancel);
     await reader.cancel().catch(() => {});
-    if (!complete && directory) await rm(directory, { recursive: true, force: true });
+    if (!complete && partial) await rm(partial, { force: true });
+  }
+}
+
+/**
+ * v1.3.7 and v1.3.8 saved archives under `artifacts/ci/` with no thread owner.
+ * They can be downloaded again, so the retired store is removed outright.
+ */
+export async function removeRetiredCiArtifactStore(): Promise<void> {
+  try {
+    const store = resolveActiveProfilePath(path.join("artifacts", "ci"));
+    await rm(store, { recursive: true, force: true });
+    // Remove the parent only when nothing else has been stored beside it.
+    await rmdir(path.dirname(store)).catch(() => undefined);
+  } catch {
+    // Best effort: a failure leaves only inert files behind.
   }
 }

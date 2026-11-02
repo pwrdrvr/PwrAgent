@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { appendFileSync, mkdirSync, writeFileSync, writeSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { observeWindowsLauncher } from "./windows-pipe-observation.mjs";
 
 const key = Symbol.for("pwragent.playwrightShutdownDiagnostics");
 const require = createRequire(import.meta.url);
@@ -232,24 +233,27 @@ export function installShutdownDiagnostics({ outputDir, currentTest, captureAfte
       hook.disable();
     }),
     launched: safe((child, close) => {
+      const launchId = process.platform === "win32" ? observeWindowsLauncher(child, {
+        directory: process.env.PWRAGENT_WINDOWS_PIPE_REQUESTS, logEvidence,
+      }) : undefined;
       // Keep pending launches plus twenty completed launches for context.
       const completed = [...processes.entries()].filter(([, value]) => value.details.cleanupComplete);
       for (const [old] of completed.slice(0, Math.max(0, completed.length - 20))) processes.delete(old);
-      const details = { pid: child.pid, executable: path.basename(child.spawnfile), owner: testOwner(), launchStack: stack(), stage: "launched", exitObserved: false, closeObserved: false, cleanupComplete: false };
+      const details = { launchId, pid: child.pid, executable: path.basename(child.spawnfile), owner: testOwner(), launchStack: stack(), stage: "launched", exitObserved: false, closeObserved: false, cleanupComplete: false };
       processes.set(close, { child, details });
       event({ kind: "launch", ...details });
       child.once("exit", safe((code, signal) => {
         details.exitObserved = true;
-        event({ kind: "process-exit", pid: child.pid, code, signal });
+        event({ kind: "process-exit", launchId, pid: child.pid, code, signal });
       }));
       child.once("close", safe(() => {
         details.closeObserved = true;
-        event({ kind: "process-close", pid: child.pid });
+        event({ kind: "process-close", launchId, pid: child.pid });
       }));
       return { stage: safe((next) => {
         details.stage = next;
         if (next === "cleaned") details.cleanupComplete = true;
-        event({ kind: "process-stage", pid: child.pid, stage: next });
+        event({ kind: "process-stage", launchId, pid: child.pid, stage: next });
       }) };
     }),
   };

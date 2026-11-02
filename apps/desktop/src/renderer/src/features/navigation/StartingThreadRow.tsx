@@ -9,6 +9,7 @@ import type {
   SubthreadLaunchpadDraft,
 } from "../../lib/useThreadNavigation";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
+import { StartupTiming } from "../composer/StartupTiming";
 
 /**
  * A row a list draws before its thread exists: a sub-thread still being
@@ -23,14 +24,16 @@ export function isSubthreadLaunchpadDraft(
 }
 
 /**
- * The title a pending row shows: the first line of what was typed. The draft
+ * The title a pending row shows: the first meaningful line of what was typed. The draft
  * row and the starting row that replaces it both use it, so sending does not
  * rename the row.
  */
 export function pendingThreadTitleLine(text: string | undefined): string {
   for (const line of text?.split("\n") ?? []) {
     const trimmed = line.trim();
-    if (trimmed) return trimmed;
+    // Rich-text pastes can put list markers or Markdown separators on their
+    // own line. They carry no title; continue to the actual prompt text.
+    if (trimmed && !/^(?:[-*+]|#{1,6}|\d+[.)]|(?:[-*_]\s*){3,})$/.test(trimmed)) return trimmed;
   }
   return "";
 }
@@ -120,7 +123,7 @@ export function StartingThreadRow(props: {
             </span>
             <span className="thread-row__title">{title}</span>
           </span>
-          <span className="thread-row__time">Starting</span>
+          <span className="thread-row__time"><StartupTiming submittedAt={creation.submittedAt} startedAt={creation.startup?.startedAt} compact /></span>
         </span>
         <span aria-hidden="true" className="thread-row__chips">
           {showProvider ? (

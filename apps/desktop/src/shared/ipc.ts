@@ -254,6 +254,7 @@ export const AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL =
   "agent:retain-thread-branch-drift";
 export const AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL =
   "agent:materialize-directory-launchpad";
+export const AGENT_LAUNCHPAD_CREATION_CHANNEL = "agent:launchpad-creation";
 export const CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL =
   "codex-environment:setup-progress";
 export const AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL =
@@ -404,6 +405,16 @@ export const NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL =
   "navigation:reorder-directory-pins";
 export const NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL =
   "navigation:set-directory-threads-collapsed";
+/**
+ * Per-project Forge Automation (pause, Auto-fix kinds, PR watches, and the
+ * while-paused policies). Local `directory:` keys only; the owner enforces.
+ */
+export const NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL =
+  "navigation:set-project-forge-automation";
+export const NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL =
+  "navigation:list-project-held-wakeups";
+export const NAVIGATION_RESOLVE_PROJECT_HELD_WAKEUPS_CHANNEL =
+  "navigation:resolve-project-held-wakeups";
 export const NAVIGATION_REFRESH_THREAD_PRS_CHANNEL =
   "navigation:refresh-thread-prs";
 export const NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL =

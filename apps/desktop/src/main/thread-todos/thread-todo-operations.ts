@@ -21,6 +21,7 @@ import type {
 import {
   buildThreadIdentityKey,
   parseThreadTodoItemTexts,
+  parseThreadTodoMessageTarget,
   THREAD_TODO_TITLE_MAX_LENGTH,
   isThreadTodoMergeMethod,
   isThreadTodoResolution,
@@ -143,27 +144,32 @@ export const localThreadTodoOperations = {
   },
   runAction: async (
     request: RunThreadTodoActionRequest,
-  ): Promise<ThreadTodoMutationResponse> => ({
-    todo: await getThreadTodoService().runAction(request.id, {
-      ...(isThreadTodoMergeMethod(request.mergeMethod)
-        ? {
-            mergeMethod: request.mergeMethod,
-            rememberMergeMethod: request.rememberMergeMethod === true,
-          }
-        : {}),
-      ...(typeof request.startOnInstanceId === "string"
-        && request.startOnInstanceId.trim()
-        ? { startOnInstanceId: request.startOnInstanceId.trim() }
-        : {}),
-      ...(request.allowOpenItems === true ? { allowOpenItems: true } : {}),
-      ...(request.modelSettings ? { modelSettings: parseDispatchSettings(request.modelSettings) } : {}),
-      ...(request.workMode === "local" || request.workMode === "worktree" ? { workMode: request.workMode } : {}),
-      ...(typeof request.environment === "string" && request.environment.trim()
-        ? { environment: request.environment.trim() }
-        : {}),
-      ...(isCodexSpeed(request.speed) ? { speed: request.speed } : {}),
-    }),
-  }),
+  ): Promise<ThreadTodoMutationResponse> => {
+    const messageTarget = request.messageTarget === undefined ? undefined : parseThreadTodoMessageTarget(request.messageTarget);
+    if (request.messageTarget !== undefined && !messageTarget) throw new Error("Choose a valid destination thread.");
+    return {
+      todo: await getThreadTodoService().runAction(request.id, {
+        ...(messageTarget ? { messageTarget } : {}),
+        ...(isThreadTodoMergeMethod(request.mergeMethod)
+          ? {
+              mergeMethod: request.mergeMethod,
+              rememberMergeMethod: request.rememberMergeMethod === true,
+            }
+          : {}),
+        ...(typeof request.startOnInstanceId === "string"
+          && request.startOnInstanceId.trim()
+          ? { startOnInstanceId: request.startOnInstanceId.trim() }
+          : {}),
+        ...(request.allowOpenItems === true ? { allowOpenItems: true } : {}),
+        ...(request.modelSettings ? { modelSettings: parseDispatchSettings(request.modelSettings) } : {}),
+        ...(request.workMode === "local" || request.workMode === "worktree" ? { workMode: request.workMode } : {}),
+        ...(typeof request.environment === "string" && request.environment.trim()
+          ? { environment: request.environment.trim() }
+          : {}),
+        ...(isCodexSpeed(request.speed) ? { speed: request.speed } : {}),
+      }),
+    };
+  },
   listDispatchEnvironments: async (
     request: ListThreadTodoDispatchEnvironmentsRequest,
   ): Promise<ListThreadTodoDispatchEnvironmentsResponse> => await listThreadTodoDispatchEnvironments(request, {

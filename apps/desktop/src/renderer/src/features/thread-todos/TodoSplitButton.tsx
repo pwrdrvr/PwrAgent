@@ -38,6 +38,7 @@ export type TodoSplitButtonProps = {
   label: string;
   Icon?: ComponentType<IconProps>;
   onClick: () => void;
+  disabled?: boolean;
   /** Names the chevron, e.g. "Merge options". */
   menuLabel: string;
   entries: TodoSplitMenuEntry[];
@@ -111,7 +112,7 @@ export function TodoSplitButton(props: TodoSplitButtonProps) {
         >
           <ChevronDownIcon size={12} />
         </button>
-        <button type="button" className="todo-split__primary" onClick={props.onClick}>
+        <button type="button" className="todo-split__primary" disabled={props.disabled} onClick={props.onClick}>
           {PrimaryIcon ? <PrimaryIcon size={12} /> : null}
           {props.label}
         </button>

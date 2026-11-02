@@ -36,6 +36,7 @@ import {
 } from "@pwragent/messaging-interface";
 import type { MessagingResolvedThreadState } from "./messaging-thread-state.js";
 import {
+  acpBackendUsesExecutionModePermissions,
   buildMessagingAcpRuntimeModeSummary,
   type MessagingAcpRuntimeModeChoice,
 } from "./messaging-acp-runtime.js";
@@ -216,7 +217,10 @@ export function buildBindingStatusIntent(params: {
     params.binding.channel.conversation.kind !== "dm" &&
     params.binding.channel.conversation.isDirectMessage !== true &&
     params.capabilityProfile?.conversationInput?.reportsBotMention === true;
+  const acpExecutionModePermissions = isAcpBackendId(params.binding.backend)
+    && acpBackendUsesExecutionModePermissions(params.backendSummary);
   const acpRuntimeMode = isAcpBackendId(params.binding.backend)
+    && !acpExecutionModePermissions
     ? buildMessagingAcpRuntimeModeSummary({
         backend: params.backendSummary,
         runtime: params.threadState.acpRuntime,
@@ -304,6 +308,7 @@ export function buildBindingStatusIntent(params: {
       permissionsChoices: acpRuntimeChoices,
       supportsLegacyPermissionsAction:
         !isAcpBackendId(params.binding.backend) ||
+        acpExecutionModePermissions ||
         permissionsMode === "full-access",
       queuedExecutionMode,
       reasoning,

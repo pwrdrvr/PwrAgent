@@ -102,13 +102,30 @@ describe("Claude executable discovery", () => {
 
   it("does not pass application credentials to the CLI", () => {
     const input = { PATH: "/bin", ANTHROPIC_API_KEY: "key", CLAUDE_CODE_OAUTH_TOKEN: "token" };
-    expect(claudeEnvironment(input)).toEqual({ PATH: "/bin", CLAUDE_CODE_REPORT_FINDINGS: "1", CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1" });
+    expect(claudeEnvironment(input)).toEqual({
+      PATH: "/bin", CLAUDE_CODE_REPORT_FINDINGS: "1", CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
+      CLAUDE_CODE_ARTIFACT: "1", CLAUDE_CODE_ARTIFACT_AUTO_OPEN: "0",
+    });
     expect(input.ANTHROPIC_API_KEY).toBe("key");
   });
 
   it("declares that PwrAgent renders typed code-review findings", () => {
     // Without the declaration, /code-review forks and returns plain text.
     expect(claudeEnvironment({ PATH: "/bin" }).CLAUDE_CODE_REPORT_FINDINGS).toBe("1");
+  });
+
+  it("turns on artifacts without opening the browser on publish", () => {
+    // Claude Code turns artifacts off in SDK hosts unless asked.
+    expect(claudeEnvironment({ PATH: "/bin" })).toMatchObject({
+      CLAUDE_CODE_ARTIFACT: "1", CLAUDE_CODE_ARTIFACT_AUTO_OPEN: "0",
+    });
+  });
+
+  it("keeps the operator's own artifact settings", () => {
+    expect(claudeEnvironment({ PATH: "/bin", CLAUDE_CODE_ARTIFACT: "0", CLAUDE_CODE_ARTIFACT_AUTO_OPEN: "1" }))
+      .toMatchObject({ CLAUDE_CODE_ARTIFACT: "0", CLAUDE_CODE_ARTIFACT_AUTO_OPEN: "1" });
+    expect(claudeEnvironment({ PATH: "/bin", CLAUDE_CODE_DISABLE_ARTIFACT: "1" }))
+      .toMatchObject({ CLAUDE_CODE_DISABLE_ARTIFACT: "1" });
   });
 });
 

@@ -269,7 +269,7 @@ describe("McpConnectionGatewayService", () => {
     });
   });
 
-  it("opens an installed PwrSnap and explains when Local Agent Access is off", async () => {
+  it("requires the operator to start an installed PwrSnap before connecting", async () => {
     const openPath = vi.fn(async () => "");
     const service = new McpConnectionGatewayService({
       sandboxer: sandboxerStub(),
@@ -277,7 +277,6 @@ describe("McpConnectionGatewayService", () => {
         throw new Error("connection refused");
       }),
       openPath,
-      launchPollAttempts: 0,
       resolveInstallPaths: () => [fileURLToPath(import.meta.url)],
       settings: createSettings(),
       leaseManager: null,
@@ -288,7 +287,7 @@ describe("McpConnectionGatewayService", () => {
       outcome: "needs_local_agent_access",
       status: { availability: "installed", configured: false },
     });
-    expect(openPath).toHaveBeenCalledOnce();
+    expect(openPath).not.toHaveBeenCalled();
   });
 
   it("reuses one revocable stdio bridge grant for a configured thread", async () => {

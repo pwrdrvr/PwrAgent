@@ -78,3 +78,22 @@ export function buildPullRequestReferenceUrl(ref: PullRequestRepositoryRef & { n
   return `${base}/${encodedPath}/${marker}/${ref.number}`;
 }
 
+
+/**
+ * Whether two PR URLs name the same number on the same forge under different
+ * repositories. That is what a renamed repository leaves behind: a URL saved
+ * under the old name beside the PR stored under the new one. Only the forge
+ * can say whether they are one PR.
+ */
+export function isSameNumberInAnotherRepository(
+  left: string | undefined,
+  right: string | undefined,
+): boolean {
+  const a = parsePullRequestReferenceUrl(left);
+  const b = parsePullRequestReferenceUrl(right);
+  return a !== undefined
+    && b !== undefined
+    && a.provider === b.provider
+    && a.number === b.number
+    && `${a.org}/${a.repo}`.toLowerCase() !== `${b.org}/${b.repo}`.toLowerCase();
+}

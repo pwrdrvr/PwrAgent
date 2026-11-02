@@ -4,6 +4,7 @@ import type {
   AppServerCollaborationModeRequest,
   AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
+  ProjectHeldWakeupSource,
   ThreadExecutionMode,
   ThreadIdentifier,
 } from "@pwragent/shared";
@@ -49,11 +50,25 @@ export type ThreadTurnQueueEntry = {
    */
   pauseRevision?: number;
   /**
+   * A wake-up held because forge activity in its project is paused. The
+   * entry is also `paused`, so the operator's own sends pass it; resuming it
+   * sends it and clears this marker.
+   */
+  projectHold?: ThreadTurnQueueProjectHold;
+  /**
    * Display-only label from `queued-message-title.ts`, set after admission
    * for messages too long to show as typed. Never sent with the turn.
    */
   title?: string;
   createdAt: number;
+};
+
+export type ThreadTurnQueueProjectHold = {
+  /** `directory:<path>` key of the paused project. */
+  directoryKey: string;
+  source: ProjectHeldWakeupSource;
+  /** One line for the resume list. */
+  summary: string;
 };
 
 type QueuedAgentMessage = {
@@ -309,6 +324,10 @@ export class ThreadTurnQueue {
       const holdReason = this.heldQueues.get(key);
       // A title named the batch before this message joined it.
       const { title: _staleTitle, ...base } = current ?? input;
+      // A to-do marker labels one message. A batch keeps each message's own
+      // origin in agentMessages, so the batch origin must not claim it.
+      const { threadTodo: _threadTodo, ...batchOrigin }: Partial<AppServerThreadMessageOrigin> =
+        input.messageOrigin ?? {};
       const entry: ThreadTurnQueueEntry = {
         ...base,
         id: current?.id ?? input.id ?? `thread-turn:${randomUUID()}`,
@@ -320,7 +339,7 @@ export class ThreadTurnQueue {
           ...(message.origin ? [message.origin] : []),
         ],
         input: groupedAgentInput(messages),
-        messageOrigin: { ...input.messageOrigin, kind: "agent",
+        messageOrigin: { ...(messages.length > 1 ? batchOrigin : input.messageOrigin), kind: "agent",
           ...mergeCausalMessagingContext(current ? [current.messageOrigin, message.origin] : [message.origin]) },
         ...(holdReason ? { manualReleaseRequired: true, holdReason } : {}),
       };
@@ -478,6 +497,62 @@ export class ThreadTurnQueue {
       entry: this.queueFor(key)[0] ?? entry,
       position: 1,
     };
+  }
+
+  /**
+   * Queue a wake-up that its paused project holds. Unlike `submitHeld`, this
+   * holds only the entry: it waits paused at the back of the FIFO, so turns
+   * the operator sends start or queue as usual. Reusing an id that is still
+   * queued returns that entry.
+   */
+  async submitProjectHeld(
+    input: Omit<ThreadTurnQueueEntry, "id" | "createdAt" | "paused" | "pauseRevision" | "holdReason" | "projectHold"> &
+      Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
+    hold: { reason: string; projectHold: ThreadTurnQueueProjectHold },
+    options?: { onAdmission?: () => void },
+  ): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
+    const entry: ThreadTurnQueueEntry = {
+      ...input,
+      id: input.id ?? `thread-turn:${randomUUID()}`,
+      createdAt: input.createdAt ?? this.now(),
+      paused: true,
+      pauseRevision: 1,
+      holdReason: hold.reason,
+      projectHold: hold.projectHold,
+    };
+    const existing = this.findQueuedEntry(entry.id);
+    if (existing) {
+      options?.onAdmission?.();
+      return { status: "queued", entry: existing.entry, position: existing.position };
+    }
+    const queue = this.queueFor(this.keyFor(entry));
+    queue.push(entry);
+    options?.onAdmission?.();
+    const position = queue.length;
+    await this.emit({ type: "queued", entry, position });
+    return { status: "queued", entry, position };
+  }
+
+  /**
+   * Puts back project-held wake-ups that an earlier process held, at
+   * startup and before any window reads the queue, so it emits nothing.
+   * They wait paused at the back of their FIFOs in hold order. An id that
+   * is already queued is skipped.
+   */
+  restoreProjectHeld(
+    entries: ReadonlyArray<Omit<ThreadTurnQueueEntry, "paused" | "pauseRevision"> & {
+      holdReason: string;
+      projectHold: ThreadTurnQueueProjectHold;
+    }>,
+  ): ThreadTurnQueueEntry[] {
+    const restored: ThreadTurnQueueEntry[] = [];
+    for (const input of [...entries].sort((left, right) => left.createdAt - right.createdAt)) {
+      if (this.findQueuedEntry(input.id)) continue;
+      const entry: ThreadTurnQueueEntry = { ...input, paused: true, pauseRevision: 1 };
+      this.queueFor(this.keyFor(entry)).push(entry);
+      restored.push(entry);
+    }
+    return restored;
   }
 
   /**
@@ -644,9 +719,14 @@ export class ThreadTurnQueue {
       }
       const { paused: _previous, ...rest } = entry;
       const pauseRevision = (entry.pauseRevision ?? 0) + 1;
+      // Resuming a project-held wake-up is the operator sending it, so it
+      // stops reading as held.
+      const { projectHold: _projectHold, holdReason: _holdReason, ...released } = rest;
       const updated: ThreadTurnQueueEntry = paused
         ? { ...rest, paused: true, pauseRevision }
-        : { ...rest, pauseRevision };
+        : entry.projectHold
+          ? { ...released, pauseRevision }
+          : { ...rest, pauseRevision };
       queue[index] = updated;
       return { disposition: "updated", entryId, entry: updated };
     });

@@ -1,5 +1,46 @@
 # Changelog
 
+## v1.3.9 - 2026-11-02
+
+- Forge Tool Rules - Set project-specific permissions for each agent or model, covering PRs, comments, issues, CI reruns, and merges. Claude Auto and Full Access turns honor the configured policies.
+- Forge Automation - Pause a project's PR activity or independently disable automatic conflict repairs, CI repairs, and PR-watch wake-ups. Review held wake-ups when resuming; held work survives restarts. Manage these controls from a connected project's window too.
+- Claude Artifacts - Enable Claude Code's artifact tools in Claude threads, including design and slide workflows. Show named activity rows and links to published pages without automatically opening a browser.
+- MCP Forms and Approvals - Route supported forms from managed MCP servers to the requesting thread, preserve discovery through reconnects, and avoid duplicate Claude gateway approvals while honoring connection consent.
+- Claude Usage and History - Report usage during running turns, prevent stale readings from moving plan limits backward, and show each provider's own allowance in the Pricing rail. Page long Claude transcripts and load history when opening a thread mid-turn.
+- Task Monitors - Let Claude monitors wait through watchers, preserve their brief and last observed state during recovery, and prevent unrelated turns from entering monitor recovery.
+- Pull Requests and Auto-fix - Find and attach PRs after GitHub or GitLab repository renames, including from checkouts with old remote names or moved workspaces. Restore CI watches after reruns and give new Auto-fix problems their own repair attempts.
+- Remote Thread Families - Reorder and nest peer-owned sub-threads in local trays, including moving grandchildren in one drop. Preserve live ordering and children when archiving across machines.
+- Navigation and To-dos - Show recent activity in the thread jump palette, keep To-do group headers and lens controls visible, and offer new-thread actions on peer-only projects. Sidebar actions use the owning machine's providers and refreshed capabilities.
+- Prompt Attribution - Clearly label monitor, To-do, and other PwrAgent-originated prompts. Preserve message origins through steering and recovery without attributing them to an operator's own prompt.
+- Reviews and Messaging - Start and report agent-scheduled reviews on Claude threads, require a pushed head before offering PR creation, and expose Grok's Default and Full Access permissions in messaging.
+- Transcript and Terminal Polish - Keep a stopped turn's last work expanded when no final reply follows. Initialize terminal renderers when first shown, reuse idle terminal snapshots on reattachment, and reduce tooltip observation overhead.
+
+## v1.3.8 - 2026-11-01
+
+- Scheduled Sends - Schedule a message for after the selected model's short-term rate limit resets, with a buffer before sending.
+- To-do Delivery - Send a To-do request to an existing thread instead of starting a new one, including across connected machines. Review the destination before sending.
+- Image Previews - Automatically display supported local images referenced in Codex and Claude replies, including Windows paths and images on connected machines.
+- Remote Startup - Show submission time, owner-side startup progress, and elapsed time when starting a remote thread. Cancel startup while it is still cancellable, with clear status when the owner disconnects.
+- Worktree Safety - Preserve attached worktrees during directory reconciliation and inherit repository trust for verified registered worktrees when moving threads.
+- Thread Families - Preserve children on connected machines when archiving nested threads.
+- Review Queue - Keep review requests queued while a new thread or Environment is starting, preserving the selected reviewer and scheduled send time.
+- Diagnostics and UI - Keep rendering captures from taking over existing Chromium traces or debugger sessions. Share status-dot timing and stop usage-warning pulses after two cycles to reduce unnecessary animation work.
+- Outpost Publishing - Separate accepted npm submissions from delayed, read-only registry verification so processing lag is not mistaken for a failed publish. Preserve receipts for recovery without republishing or rebuilding desktop assets.
+
+## v1.3.7 - 2026-10-31
+
+- Navigation - Add configurable shortcuts for sidebar lenses, including a quick Attention toggle. Restore the selected thread and expanded projects after restart, keep new threads at the top of project pins, and prevent long directory names from overlapping the new-thread button.
+- To-do Plans - Give a thread started from a To-do card its own plan checklist, including on compatible connected machines. Fold long plans and collapse dispatch settings to keep cards compact.
+- CI Tools - Let agents download GitHub Actions artifacts and request failed CI job reruns through PwrAgent's forge tools, with operator-controlled rerun permissions.
+- Job Monitors - Give lightweight monitors read-only access to selected MCP connections for cloud status checks. Improve monitor handoff reminders and drain Claude monitor work during shutdown.
+- Claude Feedback - Show recovery notices, output-limit stops, and refusals instead of leaving unexplained stalled turns.
+- Claude Images - Store transcript images separately from conversation history to avoid repeatedly loading large inline payloads, with safer concurrent image writes on Windows.
+- Thread Families - Preserve child groups and ordering when archiving a nested thread.
+- Pull Requests and Remote Work - Track explicitly attached fork PRs and their CI, and retry failed Environment launches on the machine that owns the thread.
+- Usage and Responsiveness - Bound Usage Activity history reads, reduce thinking-indicator redraws and Git branch-probe overhead, and merge duplicate Fable usage limits.
+- Rendering Diagnostics - Capture rendering activity from Troubleshooting settings without enabling Developer Mode or restarting, and save a sanitized local summary.
+- MCP Workflow Guides - Make built-in tool-selection and waiting-on-work guides discoverable to compatible MCP clients.
+
 ## v1.3.6 - 2026-10-30
 
 - Thread Families - Drag an existing thread onto another sidebar thread to make it a sub-thread. Reorganize parent-child relationships locally and on connected machines, with protection against circular links.

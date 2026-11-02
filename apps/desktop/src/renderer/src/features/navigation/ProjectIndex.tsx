@@ -11,6 +11,7 @@ import {
   type RefObject,
 } from "react";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { PauseIcon } from "../../icons";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 import {
   clampProjectIndexWidth,
@@ -32,6 +33,8 @@ export type ProjectIndexEntry = {
   active: boolean;
   /** One of its threads finished a turn the operator has not read. */
   review: boolean;
+  /** Forge Automation is paused for the project. */
+  forgeActivityPaused?: boolean;
 };
 
 /** How long typed letters keep building one typeahead query. */
@@ -73,6 +76,11 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
   width: number | null;
   onWidthChange: (width: number | null) => void;
   onJump: (key: string) => void;
+  /** The project's own menu, the one its header opens. Absent: no menu. */
+  onOpenContextMenu?: (
+    key: string,
+    position: { x: number; y: number; anchorTop: number },
+  ) => void;
 }): ReactElement {
   const { scrollRegionRef, spy: spyEnabled } = props;
   const tooltip = useViewportTooltip({ className: "viewport-tooltip", placement: "beside" });
@@ -345,11 +353,22 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
                   // they mean.
                   aria-label={`Jump to ${project.label}${
                     project.active ? ", turn running" : project.review ? ", unread" : ""
-                  }`}
+                  }${project.forgeActivityPaused ? ", forge activity paused" : ""}`}
                   onClick={() => {
                     tooltip.hide();
                     props.onJump(project.key);
                   }}
+                  onContextMenu={props.onOpenContextMenu
+                    ? (event) => {
+                        event.preventDefault();
+                        tooltip.hide();
+                        props.onOpenContextMenu?.(project.key, {
+                          x: event.clientX,
+                          y: event.clientY,
+                          anchorTop: event.currentTarget.getBoundingClientRect().top,
+                        });
+                      }
+                    : undefined}
                   onMouseEnter={(event) => showIfCut(event.currentTarget)}
                   onMouseLeave={tooltip.hide}
                   onFocus={(event) => {
@@ -366,6 +385,15 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
                   ) : project.review ? (
                     <span className="project-index__mark" aria-hidden="true">
                       <span className="thread-row__status-cookie" />
+                    </span>
+                  ) : null}
+                  {project.forgeActivityPaused ? (
+                    <span
+                      aria-hidden="true"
+                      className="project-index__paused tooltip-target"
+                      data-tooltip="Forge activity paused"
+                    >
+                      <PauseIcon size={11} strokeWidth={2.5} />
                     </span>
                   ) : null}
                 </button>

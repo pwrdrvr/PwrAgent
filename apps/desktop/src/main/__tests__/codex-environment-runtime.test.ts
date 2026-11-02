@@ -20,7 +20,7 @@ import {
   waitForCodexEnvironmentDetachedCommandGone,
   wrapPowerShellCommand,
 } from "../app-server/codex-environment-runtime";
-import { collectProcessTreeIds } from "../process-tree";
+import { collectProcessTreeIds, isProcessIdAlive } from "../process-tree";
 import { WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS } from "../windows-job-wrapper";
 import { resolveWindowsBashShell } from "../windows-shell";
 
@@ -1333,6 +1333,50 @@ describe("codex environment runtime", () => {
       mode: "wait",
       timeoutMs: undefined,
     }));
+  });
+
+  it("cancels setup and its owned descendants without imposing a setup timeout", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-cancel-"));
+    const fixture = path.join(root, "owned.cjs");
+    await writeFile(fixture, [
+      'const { spawn } = require("node:child_process");',
+      'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "inherit" });',
+      'console.log(`owned:${process.pid}:${child.pid}`);',
+      'setInterval(() => {}, 1000);',
+    ].join("\n"));
+    const controller = new AbortController();
+    let announce!: (pids: number[]) => void;
+    const ready = new Promise<number[]>((resolve) => { announce = resolve; });
+    let output = "";
+    const running = applyLocalCodexEnvironmentSelection({
+      cwd: root, signal: controller.signal,
+      env: { ...process.env, SHELL: spawnableShell("/bin/sh") },
+      onSetupProgress: (event) => {
+        output += event.chunk ?? "";
+        const match = /owned:(\d+):(\d+)/.exec(output);
+        if (match) announce([Number(match[1]), Number(match[2])]);
+      },
+      selection: { environment: { id: "env", name: "Env", sourcePath: path.join(root, "env.toml"), actions: [],
+        setupScript: `${JSON.stringify(process.execPath.replace(/\\/g, "/"))} ${JSON.stringify(fixture.replace(/\\/g, "/"))}` },
+        executionTarget: "local", runSetup: true },
+    });
+    const outcome = running.then(
+      (result) => ({ result, error: undefined }),
+      (error: unknown) => ({ result: undefined, error }),
+    );
+    try {
+      const pids = await Promise.race([ready, outcome.then(({ error }) => {
+        throw error ?? new Error("Setup exited before the owned descendants announced readiness");
+      })]);
+      expect(pids.every(isProcessIdAlive)).toBe(true);
+      controller.abort();
+      expect((await outcome).error).toMatchObject({ name: "AbortError" });
+      await expectEventually(async () => { expect(pids.filter(isProcessIdAlive)).toEqual([]); });
+    } finally {
+      controller.abort();
+      await outcome;
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   });
 
   it("times out setup commands that do not finish", async () => {

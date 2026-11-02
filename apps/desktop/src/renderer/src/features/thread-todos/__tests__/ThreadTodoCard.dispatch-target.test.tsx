@@ -6,6 +6,7 @@ import type {
   ListBackendsRequest,
   ListThreadTodoDispatchEnvironmentsRequest,
   ListThreadTodoDispatchEnvironmentsResponse,
+  ThreadSearchResponse,
   ThreadTodo,
 } from "@pwragent/shared";
 import { ThreadTodoCard } from "../ThreadTodoCard";
@@ -65,6 +66,13 @@ function setup(options: {
   const todo = options.todo ?? card;
   const onRun = vi.fn();
   const api = {
+    searchThreads: vi.fn(async (): Promise<ThreadSearchResponse> => ({
+      backend: "all", fetchedAt: 0, query: "42", filters: {}, contentMode: "metadata", semanticMode: "disabled",
+      searchedScopes: ["metadata"], unavailableScopes: [], results: [{
+        backend: "codex", threadId: "pr-owner", identityKey: "codex:pr-owner", title: "Refresh PR #42", linkedDirectories: [],
+        source: "codex", score: 1, confidence: "high", matchReasons: [], snippets: [],
+      }],
+    })),
     listBackends: vi.fn(async (request?: ListBackendsRequest) => ({
       fetchedAt: 0,
       backends: request?.federationTarget?.scope === "remote" && request.federationTarget.instanceId === "win"
@@ -104,6 +112,57 @@ async function settle() {
 }
 
 describe("to-do dispatch target", () => {
+  it("previews an existing thread request without sending until the operator clicks Send", async () => {
+    const { onRun, api } = setup();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Handoff options" })); });
+    await act(async () => { fireEvent.click(screen.getByRole("menuitemradio", { name: "Send to thread…" })); });
+    expect((screen.getByRole("button", { name: "Send request" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: /^Machine:/ })).toBeNull();
+    fireEvent.change(screen.getByRole("textbox", { name: "Find destination thread" }), { target: { value: "42" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Search" })); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Refresh PR #42/ })); });
+    expect(onRun).not.toHaveBeenCalled();
+    expect(api.searchThreads).toHaveBeenCalledWith(expect.objectContaining({ query: "42", contentMode: "metadata" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show the whole proposed prompt" }));
+    expect(screen.getByRole("region", { name: "Proposed prompt" }).textContent).toContain("Run the focused suite");
+    fireEvent.click(screen.getByRole("button", { name: "Send request" }));
+    expect(onRun).toHaveBeenCalledWith(card, { messageTarget: {
+      backend: "codex", threadId: "pr-owner", title: "Refresh PR #42", instanceLabel: "studio",
+    } });
+  });
+
+  it("shows the agent's proposed destination before sending", async () => {
+    const target = { backend: "codex" as const, threadId: "owner", title: "Existing PR owner" };
+    const { onRun } = setup({ todo: { ...card, action: { type: "send_message", prompt: "Refresh the PR", target } } });
+    expect(screen.getByText("Existing PR owner")).toBeTruthy();
+    expect(onRun).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Send request" }));
+    expect(onRun).toHaveBeenCalledWith(expect.objectContaining({ action: { type: "send_message", prompt: "Refresh the PR", target } }), { messageTarget: target });
+  });
+
+  it.each([false, true])("addresses a remote card's search result relative to its owner (result on owner: %s)", async (onOwner) => {
+    const remote = { ...card, id: "remote-todo:win:card", federationTarget: { scope: "remote" as const, instanceId: "win" } };
+    const { api, onRun } = setup({ todo: remote, instances: [{ ...WIN, messageTarget: true }] });
+    await settle();
+    const response = await api.searchThreads();
+    api.searchThreads.mockResolvedValueOnce({ ...response, results: response.results.map((result) => ({
+      ...result,
+      ...(onOwner ? { federation: {
+        ref: { backend: result.backend, threadId: result.threadId, target: { scope: "remote" as const, instanceId: "win" } },
+        instanceLabel: "win-lab / dev",
+      } } : {}),
+    })) });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Handoff options" })); });
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Send to thread…" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Find destination thread" }), { target: { value: "42" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Search" })); });
+    fireEvent.click(screen.getByRole("button", { name: /Refresh PR #42/ }));
+    expect(onRun).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Send request" }));
+    const selected = onRun.mock.calls[0]?.[1]?.messageTarget;
+    expect(selected).toMatchObject({ backend: "codex", threadId: "pr-owner" });
+    expect(selected?.instanceId).toBe(onOwner ? undefined : "mac");
+  });
   it("expands the chips to the labelled grid, moves focus with the toggle, and keeps it across a remount", async () => {
     const { container, rerender, tree } = setup();
     await settle();

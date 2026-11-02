@@ -46,6 +46,7 @@ describe("thread orchestration tool contracts", () => {
       "ambiguous_workspace",
       "requires_confirmation",
       "turn_start_failed",
+      "project_paused",
       "internal_error",
     ]);
   });

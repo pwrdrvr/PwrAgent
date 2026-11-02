@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type {
-  BackendSummary, CodexSpeed, FederationTarget, ThreadTodo, ThreadTodoModelSettings, ThreadTodoWorkMode,
+  BackendSummary, CodexSpeed, FederationTarget, ThreadTodo, ThreadTodoModelSettings, ThreadTodoWorkMode, ThreadTodoMessageTarget,
 } from "@pwragent/shared";
 import { threadTodoThreadKey } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -20,12 +20,14 @@ export type TodoDispatchChoices = {
   workMode?: ThreadTodoWorkMode;
   /** The start settings show as the labelled grid instead of the chip row. */
   settingsExpanded?: boolean;
+  dispatchMode?: "message" | "new_thread";
+  messageTarget?: ThreadTodoMessageTarget;
 };
 
 type DispatchContext = {
   /** False for the default context, which keeps no choices. */
   provided: boolean;
-  api?: Pick<DesktopApi, "listBackends" | "listModelSettingsRecents" | "listThreadTodoDispatchEnvironments">;
+  api?: Pick<DesktopApi, "listBackends" | "listModelSettingsRecents" | "listThreadTodoDispatchEnvironments" | "searchThreads">;
   /** Settings → Models → Allow Fast mode, on this window's own machine. */
   localCodexFastAllowed: boolean;
   choices: ReadonlyMap<string, TodoDispatchChoices>;

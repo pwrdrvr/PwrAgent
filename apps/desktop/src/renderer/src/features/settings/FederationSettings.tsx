@@ -1866,6 +1866,8 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   thread_grouping: "reorder and collapse sub-threads",
   // Owner-validated grouping negotiation; thread_grouping grants the action.
   thread_parent_mutation_v1: "",
+  // Archive promotion negotiation; thread_grouping grants the action.
+  archive_subthread_promotion_v1: "",
   thread_detail: "read transcripts",
   turn_control: "prompt, steer, and interrupt",
   durable_turn_requests_v1: "reconcile durable prompt receipts",
@@ -1896,6 +1898,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   thread_todo_feed: "stream To-do changes",
   // Handoff dispatch fields are negotiation, not a remote action.
   thread_todo_dispatch_target: "",
+  thread_todo_message: "",
   // Plan cards for handoffs ride on turn_control, which the operator grants.
   thread_todo_plan: "",
   operator_requests: "operator request queue",
@@ -1906,6 +1909,8 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   // Display read sizes are negotiation, not a remote action.
   thread_display_bulk_reads: "",
   turn_assistant_reply: "read a turn's reply images",
+  thread_pr_watch_control_v1: "stop and start PR watches",
+  project_forge_automation: "pause project forge activity",
 };
 
 function formatFederationCapabilities(

@@ -125,6 +125,7 @@ export type CodexEnvironmentSelection = {
 };
 
 export type CodexEnvironmentCommandParams = {
+  signal?: AbortSignal;
   shell?: "powershell";
   cwd?: string;
   command: string;
@@ -411,6 +412,7 @@ export function stopCodexEnvironmentDetachedCommand(
 }
 
 export async function applyLocalCodexEnvironmentSelection(params: {
+  signal?: AbortSignal;
   commandRunner?: CodexEnvironmentCommandRunner;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -433,6 +435,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
   setupTimeoutMs?: number;
 }): Promise<CodexThreadEnvironmentRuntime | undefined> {
   const { cwd, selection } = params;
+  params.signal?.throwIfAborted();
   if (!selection) {
     return undefined;
   }
@@ -477,6 +480,8 @@ export async function applyLocalCodexEnvironmentSelection(params: {
     })?.shellEnvironment;
 
   if (selection.runSetup && selection.environment.setupScript) {
+    const startedAt = Date.now();
+    runtime.setupStartedAt = startedAt;
     const emitSetupProgress = (
       event: Omit<
         CodexEnvironmentSetupProgressEvent,
@@ -488,6 +493,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
         environmentName: selection.environment.name,
         command: selection.environment.setupScript!,
         cwd,
+        startedAt,
         ...event,
       });
     };
@@ -499,6 +505,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
       });
       const commandEnv = buildPwrAgentChildProcessEnv(params.env ?? process.env);
       const result = await (params.commandRunner ?? runShellCommand)({
+        signal: params.signal,
         cwd,
         command: selection.environment.setupScript,
         shell: selection.environment.shell,
@@ -512,7 +519,9 @@ export async function applyLocalCodexEnvironmentSelection(params: {
           emitSetupProgress(event);
         },
       });
+      params.signal?.throwIfAborted();
       runtime.setupStatus = "completed";
+      runtime.setupFinishedAt = Date.now();
       runtime.setupOutput = result.output;
       runtime.setupExitCode = result.exitCode;
       runtime.setupDurationMs = result.durationMs;
@@ -534,7 +543,9 @@ export async function applyLocalCodexEnvironmentSelection(params: {
         at: Date.now(),
       });
     } catch (error) {
+      params.signal?.throwIfAborted();
       runtime.setupStatus = "failed";
+      runtime.setupFinishedAt = Date.now();
       if (error instanceof CodexEnvironmentCommandError) {
         runtime.setupOutput = error.output;
         runtime.setupExitCode = error.exitCode;
@@ -581,6 +592,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
   );
 
   if (selection.action) {
+    params.signal?.throwIfAborted();
     const runId = params.actionRunId ?? randomUUID();
     const startedAt = Date.now();
     const run: CodexEnvironmentActionRun = {
@@ -595,6 +607,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
     };
     try {
       const result = await (params.commandRunner ?? runShellCommand)({
+        signal: params.signal,
         cwd,
         command: selection.action.command,
         shell: selection.action.shell,
@@ -757,6 +770,7 @@ export async function startLocalCodexEnvironmentAction(params: {
 function runShellCommand(
   params: CodexEnvironmentCommandParams,
 ): Promise<CodexEnvironmentCommandResult> {
+  params.signal?.throwIfAborted();
   const commandEnv = sanitizeLocalEnvironmentCommandEnv(params.env ?? process.env);
   const cwdProblem = inspectCommandCwd(params.cwd);
   if (cwdProblem) {
@@ -779,7 +793,7 @@ function runShellCommand(
     : undefined;
   const useWindowsJob =
     process.platform === "win32"
-    && (params.mode === "detach" || Boolean(params.timeoutMs));
+    && (params.mode === "detach" || Boolean(params.timeoutMs) || Boolean(params.signal));
   const shellArgs = params.shell === "powershell"
     ? [
         "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand",
@@ -815,7 +829,7 @@ function runShellCommand(
         // second detached process group is both unnecessary and harmful.
         detached:
           !windowsJobLaunch
-          && (params.mode === "detach" || Boolean(params.timeoutMs)),
+          && (params.mode === "detach" || Boolean(params.timeoutMs) || Boolean(params.signal)),
         env: launch.env,
         // Pipe output even in detach mode so we can drain to a ring buffer,
         // stream to the renderer's anchored output UI, and log non-zero exits.
@@ -899,6 +913,7 @@ function runShellCommand(
         return;
       }
       settled = true;
+      params.signal?.removeEventListener("abort", abort);
       if (timeoutHandle) {
         clearTimeout(timeoutHandle);
         timeoutHandle = undefined;
@@ -916,6 +931,14 @@ function runShellCommand(
       cleanupShellEnvironmentCaptureTarget(capture);
       callback();
     };
+
+    // Own the group/Job from spawn, including a cold Windows wrapper before
+    // readiness. Killing that Job's host closes KILL_ON_JOB_CLOSE atomically.
+    const abort = () => {
+      if (!closed) terminateChild("SIGKILL");
+    };
+    params.signal?.addEventListener("abort", abort, { once: true });
+    if (params.signal?.aborted) abort();
 
     const rejectTimeout = () => {
       settle(() => {
@@ -1260,6 +1283,10 @@ function runShellCommand(
       }
       const durationMs = Date.now() - startedAt;
       const output = combinedOutput.trimEnd();
+      if (params.signal?.aborted) {
+        settle(() => reject(params.signal!.reason));
+        return;
+      }
       if (timedOut) {
         environmentRuntimeLog.error("codex-environment-command-exit", {
           processId,
