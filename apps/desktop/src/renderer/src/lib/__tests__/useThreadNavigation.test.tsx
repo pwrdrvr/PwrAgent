@@ -7260,6 +7260,29 @@ describe("useThreadNavigation", () => {
       return { ...rendered, materializations, materializeDirectoryLaunchpad };
     };
 
+    it("uses every submitted text part for the starting title", async () => {
+      const { result, materializations } = renderStartingLaunchpad();
+      await waitFor(() => expect(result.current.selectedThread?.id).toBe("thread-existing"));
+      await act(async () => {
+        await result.current.openDirectoryLaunchpad(result.current.directories[0]!);
+      });
+
+      let start: Promise<void> | undefined;
+      act(() => {
+        start = result.current.materializeDirectoryLaunchpad(directoryKey, [
+          { type: "text", text: "-" },
+          { type: "text", text: "Prepare dependency updates" },
+        ]);
+      });
+      await waitFor(() => expect(materializations).toHaveLength(1));
+      expect(result.current.pendingLaunchpadCreations[0]?.title).toBe("-\n\nPrepare dependency updates");
+
+      await act(async () => {
+        materializations[0]!.resolve({ backend: "codex", threadId: "created", executionMode: "default", workMode: "worktree" });
+        await start;
+      });
+    });
+
     it("frees the directory's launchpad for another thread", async () => {
       const { result, materializations, materializeDirectoryLaunchpad } =
         renderStartingLaunchpad();
