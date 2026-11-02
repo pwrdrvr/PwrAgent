@@ -50382,10 +50382,13 @@ export class DesktopBackendRegistry {
     this.invalidateArchiveCleanupForNotification(event.backend, event.notification);
     if (event.notification.method === "navigation/threadDirectories/updated") {
       // Managed local MCP servers in these threads are told their roots moved.
-      this.mcpConnectionService?.noteThreadDirectoriesChanged?.(
-        event.backend,
-        event.notification.params.threadIds,
-      );
+      const threadIds = readRecord(event.notification.params)?.threadIds;
+      if (Array.isArray(threadIds)) {
+        this.mcpConnectionService?.noteThreadDirectoriesChanged?.(
+          event.backend,
+          threadIds.filter((threadId): threadId is string => typeof threadId === "string"),
+        );
+      }
     }
     if (event.notification.method === "thread/unarchived" || event.notification.method === "thread/deleted") {
       this.archiveCleanupQueue.cancel(buildThreadIdentityKey(event.backend, event.notification.params.threadId));
