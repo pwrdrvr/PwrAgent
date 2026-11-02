@@ -9615,8 +9615,8 @@ export function useThreadNavigation(
     [publishThreadActionError, setDirectoryThreadsCollapsedRequest, setUnpinnedExpandedByKey, noteDirectoryPatch],
   );
 
-  // Owner-scoped and local only: the owner refuses a federation target, so
-  // none is sent. Not optimistic: a pause changes what the owner polls and
+  // Owner-scoped: a peer window's request names that peer, and main sends it
+  // there. Not optimistic: a pause changes what the owner polls and
   // dispatches, so the row shows what the owner stored.
   const setProjectForgeAutomation = useCallback(
     async (
@@ -9630,9 +9630,11 @@ export function useThreadNavigation(
       }
       if (reportError) publishThreadActionError("forge-automation");
       try {
+        const federationTarget = readRendererFederationTarget();
         const result = await setProjectForgeAutomationRequest({
           directoryKey: directory.key,
           automation,
+          ...(federationTarget ? { federationTarget } : {}),
         });
         noteDirectoryPatch([result.directoryKey]);
         setState((current) => ({
@@ -9660,8 +9662,10 @@ export function useThreadNavigation(
       if (!listProjectHeldWakeupsRequest) {
         return [];
       }
+      const federationTarget = readRendererFederationTarget();
       const result = await listProjectHeldWakeupsRequest({
         directoryKey: directory.key,
+        ...(federationTarget ? { federationTarget } : {}),
       });
       return result.wakeups;
     },
@@ -9676,9 +9680,11 @@ export function useThreadNavigation(
       if (!resolveProjectHeldWakeupsRequest) {
         throw new Error("Held wake-ups cannot be resolved in this window.");
       }
+      const federationTarget = readRendererFederationTarget();
       return await resolveProjectHeldWakeupsRequest({
         directoryKey: directory.key,
         resolutions,
+        ...(federationTarget ? { federationTarget } : {}),
       });
     },
     [resolveProjectHeldWakeupsRequest],

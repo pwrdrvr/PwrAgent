@@ -124,6 +124,10 @@ import {
   type ProjectHeldWakeupSource,
   type ResolveProjectHeldWakeupsRequest,
   type ResolveProjectHeldWakeupsResponse,
+  type ListProjectHeldWakeupsRequest,
+  type ListProjectHeldWakeupsResponse,
+  type SetProjectForgeAutomationRequest,
+  type SetProjectForgeAutomationResponse,
 } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
 import {
@@ -2229,6 +2233,19 @@ type ThreadPullRequestDetachHandler = (
 type ThreadPrWatchesPeerHandler = (
   request: import("@pwragent/shared").FederationThreadPrWatchesRequestV1,
 ) => Promise<import("@pwragent/shared").ThreadPrWatchesResponse>;
+
+/** The desktop app-server service's owner-side Forge Automation requests. */
+type ProjectForgeAutomationHandler = {
+  set(
+    request: Omit<SetProjectForgeAutomationRequest, "federationTarget">,
+  ): Promise<SetProjectForgeAutomationResponse>;
+  listHeldWakeups(
+    request: Omit<ListProjectHeldWakeupsRequest, "federationTarget">,
+  ): Promise<ListProjectHeldWakeupsResponse>;
+  resolveHeldWakeups(
+    request: Omit<ResolveProjectHeldWakeupsRequest, "federationTarget">,
+  ): Promise<ResolveProjectHeldWakeupsResponse>;
+};
 
 type ThreadPullRequestRefreshHandler = (
   request: RefreshOwnedThreadPullRequestsRequest,
@@ -10574,6 +10591,9 @@ export class DesktopBackendRegistry {
     | ThreadPullRequestDetachHandler
     | undefined;
   private threadPrWatchesPeerHandler: ThreadPrWatchesPeerHandler | undefined;
+  private projectForgeAutomationHandler:
+    | ProjectForgeAutomationHandler
+    | undefined;
   private threadPullRequestRefreshHandler:
     | ThreadPullRequestRefreshHandler
     | undefined;
@@ -12752,6 +12772,26 @@ export class DesktopBackendRegistry {
       };
     }
     return await handler(request);
+  }
+
+  setProjectForgeAutomationHandler(
+    handler: ProjectForgeAutomationHandler | null | undefined,
+  ): void {
+    this.projectForgeAutomationHandler = handler ?? undefined;
+  }
+
+  /**
+   * The desktop app-server service, which validates, stores and applies a
+   * peer's Forge Automation requests for this instance's projects.
+   * Federation uses this mediator so its runtime does not import the IPC
+   * module.
+   */
+  ownedProjectForgeAutomation(): ProjectForgeAutomationHandler {
+    const handler = this.projectForgeAutomationHandler;
+    if (!handler) {
+      throw new Error("Forge Automation service is not available yet.");
+    }
+    return handler;
   }
 
   setThreadPullRequestRefreshHandler(

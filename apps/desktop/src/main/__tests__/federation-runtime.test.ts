@@ -1855,6 +1855,43 @@ describe("DesktopFederationRuntime", () => {
     });
   });
 
+  it("tells a navigation viewer to re-read a project when its Forge Automation changes", () => {
+    const forwarded: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "owner_one" });
+    router.registerConnection(createConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_navigation", "event_subscriptions"],
+      sendEnvelope: (envelope) => forwarded.push(envelope),
+    }));
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "owner_one";
+    runtime.router = router;
+    applyEventSubscription({
+      runtime,
+      sourceInstanceId: "owner_one",
+      subscriberInstanceId: "viewer_one",
+      eventClasses: ["navigation"],
+      threadSelection: { kind: "threads", threads: [{ backend: "codex", threadId: "thread-1" }] },
+    });
+
+    runtime.forwardLocalBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "directory/forgeAutomation/updated",
+        params: { directoryKey: "directory:/repo", automation: null },
+      },
+    } as AgentEvent);
+
+    // The viewer re-reads the owner's rows, which carry the stored settings.
+    expect(forwarded).toHaveLength(1);
+    expect(forwarded[0]).toMatchObject({
+      params: { notification: {
+        method: "navigation/invalidated",
+        params: { sourceMethod: "directory/forgeAutomation/updated" },
+      } },
+    });
+  });
+
   it("replaces viewer subscriptions when retargeted and unsubscribes on close", () => {
     const sentToOne: FederationProtocolEnvelope[] = [];
     const sentToTwo: FederationProtocolEnvelope[] = [];
@@ -4750,6 +4787,10 @@ describe("advertised capabilities", () => {
 
   it("advertises PR watch control, which viewers need before they offer Stop or Watch CI", () => {
     expect(DEFAULT_CAPABILITIES).toContain("thread_pr_watch_control_v1");
+  });
+
+  it("advertises project Forge Automation, which viewers need before they offer its menu", () => {
+    expect(DEFAULT_CAPABILITIES).toContain("project_forge_automation");
   });
 });
 

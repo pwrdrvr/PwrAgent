@@ -3,6 +3,7 @@ import type {
   ThreadIdentifier,
 } from "./contracts/normalized-app-server";
 import type { ThreadPrAutoDispatchEventKind } from "./contracts/navigation";
+import type { FederationTarget } from "./contracts/federation";
 
 /**
  * Per-project control over turns that the forge, other threads, and
@@ -191,6 +192,8 @@ export type SetProjectForgeAutomationRequest = {
   /** `directory:<path>` key of a local Directories project. */
   directoryKey: string;
   automation: ProjectForgeAutomation;
+  /** A peer window's owner. Main routes the request there; never sent on. */
+  federationTarget?: FederationTarget;
 };
 
 export type SetProjectForgeAutomationResponse = {
@@ -217,6 +220,8 @@ export type ProjectHeldWakeup = {
 
 export type ListProjectHeldWakeupsRequest = {
   directoryKey: string;
+  /** As on `SetProjectForgeAutomationRequest`. */
+  federationTarget?: FederationTarget;
 };
 
 export type ListProjectHeldWakeupsResponse = {
@@ -232,6 +237,8 @@ export type ResolveProjectHeldWakeupsRequest = {
     threadId: ThreadIdentifier;
     action: "send" | "discard";
   }>;
+  /** As on `SetProjectForgeAutomationRequest`. */
+  federationTarget?: FederationTarget;
 };
 
 export type ResolveProjectHeldWakeupsResponse = {

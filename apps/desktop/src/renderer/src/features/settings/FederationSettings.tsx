@@ -1910,6 +1910,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   thread_display_bulk_reads: "",
   turn_assistant_reply: "read a turn's reply images",
   thread_pr_watch_control_v1: "stop and start PR watches",
+  project_forge_automation: "pause project forge activity",
 };
 
 function formatFederationCapabilities(

@@ -10,12 +10,17 @@ import {
 const PAUSED: ProjectForgeAutomation = { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 1_000 };
 
 describe("canEditProjectForgeAutomation", () => {
-  it("offers the setting only on a configured local directory project", () => {
+  it("offers the setting only on a configured directory project of the window's owner", () => {
     expect(canEditProjectForgeAutomation({ kind: "directory" }, false)).toBe(true);
     expect(canEditProjectForgeAutomation({ kind: "directory", localAvailability: "unconfigured" }, false)).toBe(false);
     expect(canEditProjectForgeAutomation({ kind: "workspace" }, false)).toBe(false);
     expect(canEditProjectForgeAutomation({ kind: "unlinked" }, false)).toBe(false);
     expect(canEditProjectForgeAutomation({ kind: "directory" }, true)).toBe(false);
+    // A peer window, once its owner advertises project_forge_automation.
+    expect(canEditProjectForgeAutomation({ kind: "directory" }, true, true)).toBe(true);
+    expect(canEditProjectForgeAutomation({ kind: "workspace" }, true, true)).toBe(false);
+    expect(canEditProjectForgeAutomation({ kind: "directory", localAvailability: "unconfigured" }, true, true))
+      .toBe(false);
   });
 });
 

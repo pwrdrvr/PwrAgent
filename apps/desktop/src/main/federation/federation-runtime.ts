@@ -656,6 +656,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "turn_queue_reorder",
   "turn_queue_pause",
   "turn_assistant_reply",
+  "project_forge_automation",
   "thread_mcp_connections",
   "thread_todos",
   "thread_todo_feed",
@@ -748,6 +749,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "directory/pin/removed",
   "directory/pin/reordered",
   "directory/threadsCollapsed/updated",
+  "directory/forgeAutomation/updated",
   "navigation/directoryGitStatus/updated",
   "navigation/threadDirectories/updated",
   "navigation/threadGitWorkingState/updated",
@@ -7466,6 +7468,18 @@ function localBackendOperations(): FederationBackendOperations {
     async manageThreadPrWatchesV1(request) {
       // The router already required the viewer's turn_control grant.
       return await getDesktopBackendRegistry().manageThreadPrWatchesForPeer(request);
+    },
+    // A peer's requests for this instance's projects. The router already
+    // required turn_control; the service validates and applies them exactly
+    // as it does this instance's own window's.
+    async setProjectForgeAutomation(request) {
+      return await getDesktopBackendRegistry().ownedProjectForgeAutomation().set(request);
+    },
+    async listProjectHeldWakeups(request) {
+      return await getDesktopBackendRegistry().ownedProjectForgeAutomation().listHeldWakeups(request);
+    },
+    async resolveProjectHeldWakeups(request) {
+      return await getDesktopBackendRegistry().ownedProjectForgeAutomation().resolveHeldWakeups(request);
     },
     async reorderThreadPins(
       request: ReorderThreadPinsRequest,

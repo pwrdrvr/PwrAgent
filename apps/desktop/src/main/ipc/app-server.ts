@@ -469,6 +469,14 @@ import {
   readFederationThreadPrWatchesRequest,
   readThreadPrWatchesRemoteTarget,
 } from "../pr-status/thread-pr-watches-federation";
+import {
+  PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE,
+  type FederationRemoteBackendClient,
+} from "../federation/federation-backend-bridge";
+import {
+  assertProjectHeldWakeupResolutions,
+  readProjectForgeDirectoryKey,
+} from "../app-server/project-forge-automation-requests";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
@@ -655,18 +663,40 @@ const appServerLog = getMainLogger("pwragent:app-server");
  * window's request belongs to the peer that owns the project, which v1 does
  * not reach.
  */
-function readLocalProjectDirectoryKey(request: {
-  directoryKey?: unknown;
+/**
+ * The peer that owns the project a Forge Automation request names, or
+ * undefined when this instance owns it. A peer that does not advertise
+ * `project_forge_automation`, or grants no `turn_control`, is refused here
+ * rather than asked.
+ */
+function remoteProjectForgeOwner(request: {
   federationTarget?: FederationTarget;
-}): string {
-  if (request?.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
-    throw new Error("Forge Automation can only be changed on the instance that owns the project.");
+}): FederationRemoteBackendClient | undefined {
+  const target = request?.federationTarget;
+  if (!target || !isRemoteFederationTarget(target)) return undefined;
+  const runtime = getDesktopFederationRuntime();
+  if (!runtime.remoteTargetSupportsCapability(target, "project_forge_automation")) {
+    throw new Error(PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE);
   }
-  const directoryKey = typeof request?.directoryKey === "string" ? request.directoryKey : "";
-  if (!directoryKey.startsWith("directory:") || directoryKey.length <= "directory:".length) {
-    throw new Error("Forge Automation applies to a Directories project (directory:<path>).");
+  if (!runtime.remoteTargetSupportsCapability(target, "turn_control")) {
+    throw new Error("The owning instance does not allow this machine to control its turns.");
   }
-  return directoryKey;
+  return runtime.remoteBackend(target);
+}
+
+/**
+ * A remote window's Forge Automation requests always go to the peer it
+ * fronts, whatever target the renderer stamped: the window's target was
+ * fixed when main created it.
+ */
+function withProjectForgeWindowOwner<
+  Request extends { federationTarget?: FederationTarget },
+>(
+  event: { sender?: IpcMainInvokeEvent["sender"] } | undefined,
+  request: Request,
+): Request {
+  const windowTarget = federationWindowTargetForWebContents(event?.sender);
+  return windowTarget ? { ...request, federationTarget: windowTarget } : request;
 }
 
 /**
@@ -2415,12 +2445,12 @@ class DesktopAppServerService {
         instanceId: request.federationTarget.instanceId, directoryKeys,
       });
       rpcOptions?.signal.throwIfAborted();
+      // The owner's Forge Automation rides on its rows as stored there; only
+      // the disclosure is this viewer's own.
       const apply = (directory: NavigationDirectoryRow): NavigationDirectoryRow => {
         const collapsed = overlays[directory.key]?.directoryThreadsCollapsed;
-        // Forge Automation is owner-only in v1: a peer's row never shows it.
-        const { forgeAutomation: _ownerOnly, ...row } = directory;
-        return collapsed === undefined || collapsed === row.directoryThreadsCollapsed
-          ? row : { ...row, directoryThreadsCollapsed: collapsed };
+        return collapsed === undefined || collapsed === directory.directoryThreadsCollapsed
+          ? directory : { ...directory, directoryThreadsCollapsed: collapsed };
       };
       const result = { ...page, directories: page.directories?.map(apply),
         selectionDirectory: page.selectionDirectory ? apply(page.selectionDirectory) : undefined };
@@ -2846,18 +2876,13 @@ class DesktopAppServerService {
     let changed = false;
     const directories = snapshot.directories.map((directory) => {
       const collapsed = overlays[directory.key]?.directoryThreadsCollapsed;
-      // Forge Automation is owner-only in v1: a peer's row never shows it.
-      const { forgeAutomation: ownerOnly, ...row } = directory;
-      if (
-        !ownerOnly
-        && (collapsed === undefined || directory.directoryThreadsCollapsed === collapsed)
-      ) {
+      // The owner's Forge Automation stays on its rows; only the disclosure
+      // is this viewer's own.
+      if (collapsed === undefined || directory.directoryThreadsCollapsed === collapsed) {
         return directory;
       }
       changed = true;
-      return collapsed === undefined
-        ? row
-        : { ...row, directoryThreadsCollapsed: collapsed };
+      return { ...directory, directoryThreadsCollapsed: collapsed };
     });
     return changed
       ? {
@@ -9196,11 +9221,18 @@ class DesktopAppServerService {
    * on its next tick, since every tick reads the index.
    */
   async setProjectForgeAutomation(
-    request: SetProjectForgeAutomationRequest & { federationTarget?: FederationTarget },
+    request: SetProjectForgeAutomationRequest,
   ): Promise<SetProjectForgeAutomationResponse> {
-    const directoryKey = readLocalProjectDirectoryKey(request);
+    const directoryKey = readProjectForgeDirectoryKey(request);
     if (!request.automation || typeof request.automation !== "object") {
       throw new Error("Forge Automation settings are required.");
+    }
+    const owner = remoteProjectForgeOwner(request);
+    if (owner) {
+      return await owner.setProjectForgeAutomation({
+        directoryKey,
+        automation: resolveProjectForgeAutomation(request.automation),
+      });
     }
     const index = getProjectForgeAutomationIndex();
     const previous = index.get(directoryKey);
@@ -9239,10 +9271,12 @@ class DesktopAppServerService {
   }
 
   /** Wake-ups the project's paused threads hold, for the resume dialog. */
-  listProjectHeldWakeups(
-    request: ListProjectHeldWakeupsRequest & { federationTarget?: FederationTarget },
-  ): ListProjectHeldWakeupsResponse {
-    const directoryKey = readLocalProjectDirectoryKey(request);
+  async listProjectHeldWakeups(
+    request: ListProjectHeldWakeupsRequest,
+  ): Promise<ListProjectHeldWakeupsResponse> {
+    const directoryKey = readProjectForgeDirectoryKey(request);
+    const owner = remoteProjectForgeOwner(request);
+    if (owner) return await owner.listProjectHeldWakeups({ directoryKey });
     return {
       directoryKey,
       wakeups: getDesktopBackendRegistry().listProjectHeldWakeups(directoryKey),
@@ -9251,24 +9285,21 @@ class DesktopAppServerService {
 
   /** Send or discard held wake-ups; an operator action, allowed while paused. */
   async resolveProjectHeldWakeups(
-    request: ResolveProjectHeldWakeupsRequest & { federationTarget?: FederationTarget },
+    request: ResolveProjectHeldWakeupsRequest,
   ): Promise<ResolveProjectHeldWakeupsResponse> {
-    readLocalProjectDirectoryKey(request);
-    if (!Array.isArray(request.resolutions) || request.resolutions.length > 500) {
-      throw new Error("Provide at most 500 held wake-up resolutions.");
+    const directoryKey = readProjectForgeDirectoryKey(request);
+    assertProjectHeldWakeupResolutions(request.resolutions);
+    const owner = remoteProjectForgeOwner(request);
+    if (owner) {
+      return await owner.resolveProjectHeldWakeups({
+        directoryKey,
+        resolutions: request.resolutions,
+      });
     }
-    for (const resolution of request.resolutions) {
-      if (
-        !resolution
-        || typeof resolution.entryId !== "string"
-        || typeof resolution.threadId !== "string"
-        || !isAppServerBackendKind(resolution.backend)
-        || (resolution.action !== "send" && resolution.action !== "discard")
-      ) {
-        throw new Error("Each resolution needs entryId, backend, threadId and action send or discard.");
-      }
-    }
-    return await getDesktopBackendRegistry().resolveProjectHeldWakeups(request);
+    return await getDesktopBackendRegistry().resolveProjectHeldWakeups({
+      directoryKey,
+      resolutions: request.resolutions,
+    });
   }
 
   /** Threads filed under a project: the last scan's, plus any newer ones. */
@@ -10598,6 +10629,20 @@ export function registerAppServerIpcHandlers(): void {
     async (request) =>
       await appServerService.refreshOwnedThreadPullRequests(request),
   );
+  // A peer's requests name no target, so the service answers them here.
+  getDesktopBackendRegistry().setProjectForgeAutomationHandler({
+    set: async (request) => await appServerService.setProjectForgeAutomation({
+      directoryKey: request.directoryKey,
+      automation: request.automation,
+    }),
+    listHeldWakeups: async (request) => await appServerService.listProjectHeldWakeups({
+      directoryKey: request.directoryKey,
+    }),
+    resolveHeldWakeups: async (request) => await appServerService.resolveProjectHeldWakeups({
+      directoryKey: request.directoryKey,
+      resolutions: request.resolutions,
+    }),
+  });
   getDesktopBackendRegistry().setThreadGitWorkingStateRefreshHandler(
     async (request) =>
       await appServerService.refreshThreadGitWorkingState(request),
@@ -11327,10 +11372,9 @@ export function registerAppServerIpcHandlers(): void {
       event,
       request: SetProjectForgeAutomationRequest,
     ): Promise<SetProjectForgeAutomationResponse> => {
-      if (isFederationWindowWebContents(event?.sender)) {
-        throw new Error("Forge Automation can only be changed on the instance that owns the project.");
-      }
-      return await appServerService.setProjectForgeAutomation(request);
+      return await appServerService.setProjectForgeAutomation(
+        withProjectForgeWindowOwner(event, request),
+      );
     },
   );
   ipcMain.removeHandler(NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL);
@@ -11340,10 +11384,9 @@ export function registerAppServerIpcHandlers(): void {
       event,
       request: ListProjectHeldWakeupsRequest,
     ): Promise<ListProjectHeldWakeupsResponse> => {
-      if (isFederationWindowWebContents(event?.sender)) {
-        throw new Error("Held wake-ups are listed on the instance that owns the project.");
-      }
-      return appServerService.listProjectHeldWakeups(request);
+      return await appServerService.listProjectHeldWakeups(
+        withProjectForgeWindowOwner(event, request),
+      );
     },
   );
   ipcMain.removeHandler(NAVIGATION_RESOLVE_PROJECT_HELD_WAKEUPS_CHANNEL);
@@ -11353,10 +11396,9 @@ export function registerAppServerIpcHandlers(): void {
       event,
       request: ResolveProjectHeldWakeupsRequest,
     ): Promise<ResolveProjectHeldWakeupsResponse> => {
-      if (isFederationWindowWebContents(event?.sender)) {
-        throw new Error("Held wake-ups are resolved on the instance that owns the project.");
-      }
-      return await appServerService.resolveProjectHeldWakeups(request);
+      return await appServerService.resolveProjectHeldWakeups(
+        withProjectForgeWindowOwner(event, request),
+      );
     },
   );
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
@@ -11993,6 +12035,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   registry?.setThreadPullRequestDetachHandler(undefined);
   registry?.setThreadPrWatchesPeerHandler(undefined);
   registry?.setThreadPullRequestRefreshHandler(undefined);
+  registry?.setProjectForgeAutomationHandler(undefined);
   await appServerService.close();
 }
 

@@ -1,5 +1,5 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "../../test/phase-probes";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { DEFAULT_PROJECT_FORGE_AUTOMATION, type AgentEvent, type NavigationQueryPage, type NavigationRow, type NavigationSelectedDetailResponse, type PrSummary, type ProjectForgeAutomation } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadNavigation } from "../useThreadNavigation";
@@ -804,6 +804,34 @@ it("saves a project's Forge Automation without a federation target and shows wha
   // Back to the defaults: the row carries nothing, as the owner sends it.
   await act(() => result.current.setProjectForgeAutomation(project()!, { ...DEFAULT_PROJECT_FORGE_AUTOMATION }));
   expect(project()?.forgeAutomation).toBeUndefined();
+  unmount();
+});
+
+it("names a peer window's owner on every Forge Automation request", async () => {
+  const { f, key } = forgeAutomationOwner();
+  const target = { scope: "remote" as const, instanceId: "peer-owner" };
+  const setProjectForgeAutomation = vi.fn<NonNullable<DesktopApi["setProjectForgeAutomation"]>>(async (request) => ({
+    directoryKey: request.directoryKey, automation: request.automation,
+  }));
+  const listProjectHeldWakeups = vi.fn<NonNullable<DesktopApi["listProjectHeldWakeups"]>>(async (request) => ({
+    directoryKey: request.directoryKey, wakeups: [],
+  }));
+  const resolveProjectHeldWakeups = vi.fn<NonNullable<DesktopApi["resolveProjectHeldWakeups"]>>(async () => ({ results: [] }));
+  const api = { ...f.api, setProjectForgeAutomation, listProjectHeldWakeups, resolveProjectHeldWakeups };
+  const { result, unmount } = renderHook(() => useThreadNavigation(api));
+  const project = () => result.current.directories.find((directory) => directory.key === key);
+  await waitFor(() => expect(project()).toBeDefined());
+  const targetWindow = window as unknown as { __pwragentFederationTarget?: unknown };
+  targetWindow.__pwragentFederationTarget = target;
+  onTestFinished(() => { delete targetWindow.__pwragentFederationTarget; });
+
+  await act(() => result.current.setProjectForgeAutomation(project()!, PAUSED));
+  await act(async () => { await result.current.listProjectHeldWakeups(project()!); });
+  await act(async () => { await result.current.resolveProjectHeldWakeups(project()!, []); });
+
+  expect(setProjectForgeAutomation).toHaveBeenCalledWith({ directoryKey: key, automation: PAUSED, federationTarget: target });
+  expect(listProjectHeldWakeups).toHaveBeenCalledWith({ directoryKey: key, federationTarget: target });
+  expect(resolveProjectHeldWakeups).toHaveBeenCalledWith({ directoryKey: key, resolutions: [], federationTarget: target });
   unmount();
 });
 

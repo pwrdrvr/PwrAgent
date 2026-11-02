@@ -1925,6 +1925,10 @@ it("scopes subagent metadata and worktree invalidations to mounted rows", async 
     cache.invalidate("peer", { backend: "codex", notification: { method: "navigation/invalidated", params: {
       sourceMethod: "navigation/directoryGitStatus/updated", directoryKey: "directory:/mounted",
     } } });
+    // A project's Forge Automation changes no pinned row or membership either.
+    cache.invalidate("peer", { backend: "codex", notification: { method: "navigation/invalidated", params: {
+      sourceMethod: "directory/forgeAutomation/updated",
+    } } });
     await settle();
     expect(fetchPinnedSnapshot).not.toHaveBeenCalled();
     cache.invalidate("peer", { backend: "codex", notification: { method: "navigation/invalidated", params: {

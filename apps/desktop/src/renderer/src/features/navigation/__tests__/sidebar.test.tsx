@@ -9150,6 +9150,7 @@ describe("Sidebar directory pinning", () => {
       onSetProjectForgeAutomation?: ComponentProps<typeof Sidebar>["onSetProjectForgeAutomation"];
       onListProjectHeldWakeups?: ComponentProps<typeof Sidebar>["onListProjectHeldWakeups"];
       onResolveProjectHeldWakeups?: ComponentProps<typeof Sidebar>["onResolveProjectHeldWakeups"];
+      federationOwnerForgeAutomation?: boolean;
       checkFederationTargetProject?: CheckFederationTargetProject;
     } = {},
   ): void {
@@ -9161,6 +9162,7 @@ describe("Sidebar directory pinning", () => {
         onSetProjectForgeAutomation={overrides.onSetProjectForgeAutomation}
         onListProjectHeldWakeups={overrides.onListProjectHeldWakeups}
         onResolveProjectHeldWakeups={overrides.onResolveProjectHeldWakeups}
+        federationOwnerForgeAutomation={overrides.federationOwnerForgeAutomation}
         inboxThreads={[]}
         loading={false}
         creatingThread={undefined}
@@ -10308,7 +10310,7 @@ describe("Sidebar directory pinning", () => {
       expect(screen.queryByRole("menuitem", { name: "Forge Automation…" })).not.toBeInTheDocument();
     });
 
-    it("leaves both items out of a peer window", async () => {
+    it("leaves both items out of a peer window whose owner does not advertise them", async () => {
       (window as unknown as { __pwragentFederationTarget?: unknown }).__pwragentFederationTarget = {
         scope: "remote",
         instanceId: "remote-instance",
@@ -10320,6 +10322,38 @@ describe("Sidebar directory pinning", () => {
       fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
       expect(await screen.findByRole("menuitem", { name: "Pin Directory" })).toBeInTheDocument();
       expect(screen.queryByRole("menuitemcheckbox", { name: "Pause Forge Activity" })).not.toBeInTheDocument();
+    });
+
+    it("offers both items in a peer window whose owner advertises them, and pauses there", async () => {
+      (window as unknown as { __pwragentFederationTarget?: unknown }).__pwragentFederationTarget = {
+        scope: "remote",
+        instanceId: "remote-instance",
+      };
+      const onSetProjectForgeAutomation = vi.fn(async () => undefined);
+      renderSidebar([projectBDirectory], {
+        onSetDirectoryPin: async () => undefined,
+        onSetProjectForgeAutomation,
+        federationOwnerForgeAutomation: true,
+      });
+      fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+      const menu = await screen.findByRole("menu");
+      expect(within(menu).getByRole("menuitem", { name: "Forge Automation…" })).toBeInTheDocument();
+      await clickElement(within(menu).getByRole("menuitemcheckbox", { name: "Pause Forge Activity" }));
+      expect(onSetProjectForgeAutomation).toHaveBeenCalledWith(
+        expect.objectContaining({ key: projectBDirectory.key }),
+        { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: expect.any(Number) },
+      );
+    });
+
+    it("marks a peer's paused project with the owner's state", () => {
+      (window as unknown as { __pwragentFederationTarget?: unknown }).__pwragentFederationTarget = {
+        scope: "remote",
+        instanceId: "remote-instance",
+      };
+      renderSidebar([{ ...projectBDirectory, forgeAutomation: PAUSED }], {
+        onSetDirectoryPin: async () => undefined,
+      });
+      expect(getDirectorySummary(/ProjectB/i)).toHaveAccessibleName("ProjectB, forge activity paused");
     });
 
     it("pauses in place, keeping the stored switches and the menu open", async () => {

@@ -56,6 +56,9 @@ export const FEDERATION_BACKEND_METHODS = {
   sendThreadPrAutoDispatchNow: "backend.sendThreadPrAutoDispatchNow",
   // A new method, so an owner that predates it answers method_not_found.
   manageThreadPrWatchesV1: "backend.manageThreadPrWatchesV1",
+  setProjectForgeAutomation: "backend.setProjectForgeAutomation",
+  listProjectHeldWakeups: "backend.listProjectHeldWakeups",
+  resolveProjectHeldWakeups: "backend.resolveProjectHeldWakeups",
   archiveThread: "backend.archiveThread",
   restoreThread: "backend.restoreThread",
   startThread: "backend.startThread",
@@ -207,6 +210,12 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   // A watch wakes the thread with an agent turn, and stopping one cancels
   // that wake, so both sit with Auto-fix under turn control.
   [FEDERATION_BACKEND_METHODS.manageThreadPrWatchesV1]: "turn_control",
+  // A project's Forge Automation decides which turns the owner starts on its
+  // own, and a held wake-up's Send starts one, so all three take the
+  // turn-control grant. Listing rides with them: only the resume flow asks.
+  [FEDERATION_BACKEND_METHODS.setProjectForgeAutomation]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.listProjectHeldWakeups]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.resolveProjectHeldWakeups]: "turn_control",
   [FEDERATION_BACKEND_METHODS.archiveThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.restoreThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startThread]: "turn_control",

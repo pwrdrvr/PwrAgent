@@ -21,6 +21,7 @@ import {
   FEDERATION_RESPONSE_BYTE_BUDGET,
   FederationRemoteBackendClient,
   QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE,
+  PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE,
   QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE,
   registerFederationBackendHandlers,
   additionalFederationBackendCapabilities,
@@ -5125,6 +5126,127 @@ describe("backend.setQueuedTurnPaused", () => {
       new FederationRemoteBackendClient({ request: offline } as unknown as FederationRpcEndpoint)
         .setQueuedTurnPaused({ queueEntryId: "a", paused: true }),
     ).rejects.toThrow("Peer disconnected.");
+  });
+});
+
+describe("project Forge Automation methods", () => {
+  const directoryKey = "directory:/Users/owner/repos/PwrAgent";
+  const automation = {
+    paused: true,
+    pausedAt: 1_000,
+    autoFixMergeConflicts: true,
+    autoFixCiFailures: true,
+    prWatches: true,
+    refuseThreadMessages: true,
+    wakeupPolicy: "hold" as const,
+  };
+  const envelope = (
+    id: string,
+    method: string,
+    params: unknown,
+  ): FederationProtocolEnvelope => ({
+    id,
+    kind: "request",
+    method,
+    params,
+    protocolVersion: 1,
+    sourceInstanceId: "viewer_one",
+    targetInstanceId: "owner_one",
+    createdAt: 1_000,
+  });
+  const ownerRouter = (params: {
+    backend: Partial<FederationBackendOperations>;
+    viewerCapabilities: FederationCapability[];
+  }) => {
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: params.viewerCapabilities,
+      sendEnvelope: (reply) => replies.push(reply),
+    });
+    registerFederationBackendHandlers({
+      router,
+      backend: params.backend as FederationBackendOperations,
+    });
+    return { router, replies };
+  };
+
+  it("gates all three on turn control", () => {
+    expect(FEDERATION_BACKEND_METHOD_CAPABILITIES[FEDERATION_BACKEND_METHODS.setProjectForgeAutomation])
+      .toBe("turn_control");
+    expect(FEDERATION_BACKEND_METHOD_CAPABILITIES[FEDERATION_BACKEND_METHODS.listProjectHeldWakeups])
+      .toBe("turn_control");
+    expect(FEDERATION_BACKEND_METHOD_CAPABILITIES[FEDERATION_BACKEND_METHODS.resolveProjectHeldWakeups])
+      .toBe("turn_control");
+  });
+
+  it("saves, lists and resolves on the owner for a viewer granted turn control", async () => {
+    const setProjectForgeAutomation = vi.fn(async () => ({ directoryKey, automation }));
+    const listProjectHeldWakeups = vi.fn(async () => ({ directoryKey, wakeups: [] }));
+    const resolveProjectHeldWakeups = vi.fn(async () => ({ results: [{ entryId: "held-1", status: "discarded" as const }] }));
+    const { router, replies } = ownerRouter({
+      backend: { setProjectForgeAutomation, listProjectHeldWakeups, resolveProjectHeldWakeups },
+      viewerCapabilities: ["turn_control"],
+    });
+    const resolutions = [{ entryId: "held-1", backend: "codex", threadId: "thread-1", action: "discard" }];
+
+    await router.routeEnvelope({ sourcePeerId: "viewer_one",
+      envelope: envelope("forge-1", FEDERATION_BACKEND_METHODS.setProjectForgeAutomation, { directoryKey, automation }) });
+    await router.routeEnvelope({ sourcePeerId: "viewer_one",
+      envelope: envelope("forge-2", FEDERATION_BACKEND_METHODS.listProjectHeldWakeups, { directoryKey }) });
+    await router.routeEnvelope({ sourcePeerId: "viewer_one",
+      envelope: envelope("forge-3", FEDERATION_BACKEND_METHODS.resolveProjectHeldWakeups, { directoryKey, resolutions }) });
+
+    expect(setProjectForgeAutomation).toHaveBeenCalledWith({ directoryKey, automation });
+    expect(listProjectHeldWakeups).toHaveBeenCalledWith({ directoryKey });
+    expect(resolveProjectHeldWakeups).toHaveBeenCalledWith({ directoryKey, resolutions });
+    expect(replies.map((reply) => reply.kind)).toEqual(["response", "response", "response"]);
+    expect(replies[0]).toMatchObject({ result: { directoryKey, automation } });
+  });
+
+  it("refuses a viewer without turn control, without touching the owner's project", async () => {
+    const setProjectForgeAutomation = vi.fn();
+    const resolveProjectHeldWakeups = vi.fn();
+    const { router, replies } = ownerRouter({
+      backend: { setProjectForgeAutomation, resolveProjectHeldWakeups },
+      viewerCapabilities: ["thread_navigation", "thread_detail", "project_forge_automation"],
+    });
+
+    await router.routeEnvelope({ sourcePeerId: "viewer_one",
+      envelope: envelope("forge-4", FEDERATION_BACKEND_METHODS.setProjectForgeAutomation, { directoryKey, automation }) });
+    await router.routeEnvelope({ sourcePeerId: "viewer_one",
+      envelope: envelope("forge-5", FEDERATION_BACKEND_METHODS.resolveProjectHeldWakeups, { directoryKey, resolutions: [] }) });
+
+    expect(replies.map((reply) => reply.kind)).toEqual(["error", "error"]);
+    expect(setProjectForgeAutomation).not.toHaveBeenCalled();
+    expect(resolveProjectHeldWakeups).not.toHaveBeenCalled();
+  });
+
+  it("tells the viewer to update an older owner, and passes other failures through", async () => {
+    const olderOwner = vi.fn(async () => {
+      throw Object.assign(new Error("No handler"), { code: "method_not_found" });
+    });
+    const older = new FederationRemoteBackendClient({ request: olderOwner } as unknown as FederationRpcEndpoint);
+    await expect(older.setProjectForgeAutomation({ directoryKey, automation }))
+      .rejects.toThrow(PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE);
+    await expect(older.listProjectHeldWakeups({ directoryKey }))
+      .rejects.toThrow(PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE);
+    await expect(older.resolveProjectHeldWakeups({ directoryKey, resolutions: [] }))
+      .rejects.toThrow(PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE);
+
+    const offline = vi.fn(async () => { throw new Error("Peer disconnected."); });
+    await expect(
+      new FederationRemoteBackendClient({ request: offline } as unknown as FederationRpcEndpoint)
+        .setProjectForgeAutomation({ directoryKey, automation }),
+    ).rejects.toThrow("Peer disconnected.");
+    expect(olderOwner).toHaveBeenCalledWith({
+      method: FEDERATION_BACKEND_METHODS.setProjectForgeAutomation,
+      params: { directoryKey, automation },
+    });
   });
 });
 

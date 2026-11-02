@@ -496,8 +496,9 @@ type SidebarProps = {
     collapsed: boolean,
   ) => Promise<void>;
   /**
-   * Per-project Forge Automation, owned by this instance. Without it the
-   * project menu offers neither Pause Forge Activity nor Forge Automation….
+   * Per-project Forge Automation, saved on the instance that owns the
+   * project. Without it the project menu offers neither Pause Forge
+   * Activity nor Forge Automation….
    */
   onSetProjectForgeAutomation?: (
     directory: NavigationDirectorySummary,
@@ -511,6 +512,12 @@ type SidebarProps = {
     directory: NavigationDirectorySummary,
     resolutions: ResolveProjectHeldWakeupsRequest["resolutions"],
   ) => Promise<ResolveProjectHeldWakeupsResponse>;
+  /**
+   * In a peer's window, whether that peer advertises
+   * `project_forge_automation`. Its projects offer no Forge Automation
+   * items without it. Ignored in this instance's own windows.
+   */
+  federationOwnerForgeAutomation?: boolean;
   /**
    * Remove an empty directory (no linked threads) from the Directories list.
    * Offered in the directory context menu only when the directory has no
@@ -3078,7 +3085,11 @@ export function Sidebar(props: SidebarProps) {
     !directoryContextMenuIsBulk
       && directoryMenuDirectory
       && props.onSetProjectForgeAutomation
-      && canEditProjectForgeAutomation(directoryMenuDirectory, federationTarget !== undefined),
+      && canEditProjectForgeAutomation(
+        directoryMenuDirectory,
+        federationTarget !== undefined,
+        props.federationOwnerForgeAutomation === true,
+      ),
   );
   const directoryMenuHasForgeSection =
     directoryMenuCanForgeAutomation || directoryMenuForgeRepository !== undefined;
