@@ -24,7 +24,7 @@ const EXPIRING_LIMITS = new Set(["iguana_necktie"]);
 const NON_WINDOW_KEYS = new Set(["model_scoped", "extra_usage"]);
 
 /** Fable's named snapshot and stream window describe the same allowance. */
-function canonicalClaudeRateLimit(limit: BackendRateLimitSummary): BackendRateLimitSummary {
+export function canonicalClaudeRateLimit(limit: BackendRateLimitSummary): BackendRateLimitSummary {
   return limit.limitId === "model_scoped:Fable" || limit.limitId === "seven_day_overage_included"
     ? { ...limit, limitId: "seven_day_overage_included", name: LIMIT_LABELS.seven_day_overage_included }
     : limit;
@@ -123,80 +123,10 @@ export function claudeStreamRateLimits(info: SDKRateLimitInfo): BackendRateLimit
 /**
  * A stream reset is rounded up to the hour, so one window's resets can differ
  * by up to an hour. The next window starts at the first use after the reset,
- * at least five hours later, so a larger move is a new window.
+ * at least five hours later, so a larger move is a new window. Claude's limits
+ * merge in PlanLimitStore with this tolerance.
  */
-const SAME_WINDOW_RESET_TOLERANCE_MS = 2 * 60 * 60 * 1000;
-
-/**
- * Claude reports one account's limits from several places: each CLI's stream
- * events and each CLI's usage probe. Readings arrive out of order and at
- * different ages, and none says when it was taken. Within one window usage
- * only grows, so merge window by window and only move forward:
- *
- * - A window the reading leaves out keeps its last value until it resets.
- * - The same window keeps the higher utilization. A lower one is older.
- * - A reset well past the known one is a new window and replaces it. A reset
- *   well before it is a reading from the previous window, and is ignored.
- *
- * A precise reading (the usage probe: fractional percent, exact reset) also
- * takes over the window's reset and labels. A stream reading (whole percent,
- * reset rounded up to the hour) only raises utilization.
- */
-export function mergeClaudeRateLimits(
-  current: BackendRateLimitSummary[], reading: BackendRateLimitSummary[], now: number,
-  options: { precise?: boolean } = {},
-): BackendRateLimitSummary[] {
-  const limits = new Map<string | undefined, BackendRateLimitSummary>();
-  const apply = (raw: BackendRateLimitSummary, precise: boolean) => {
-    const limit = canonicalClaudeRateLimit(raw);
-    // A window past its reset no longer describes the account.
-    if (limit.resetAt !== undefined && limit.resetAt <= now) return;
-    const known = limits.get(limit.limitId);
-    if (!known) {
-      limits.set(limit.limitId, limit);
-      return;
-    }
-    const order = claudeWindowOrder(known.resetAt, limit.resetAt);
-    if (order < 0) return;
-    if (order > 0) {
-      limits.set(limit.limitId, limit);
-      return;
-    }
-    const usedPercent = known.usedPercent === undefined || limit.usedPercent === undefined
-      ? known.usedPercent ?? limit.usedPercent
-      : Math.max(known.usedPercent, limit.usedPercent);
-    const merged = precise ? { ...known, ...limit } : { ...known };
-    limits.set(limit.limitId, usedPercent === undefined ? merged : { ...merged, usedPercent });
-  };
-  for (const limit of current) apply(limit, false);
-  for (const limit of reading) apply(limit, options.precise ?? false);
-  return [...limits.values()];
-}
-
-/** -1: the reading is from an earlier window; 0: the same window; 1: a later one. */
-function claudeWindowOrder(known: number | undefined, reading: number | undefined): -1 | 0 | 1 {
-  // A window without a reset cannot be ordered, so the latest reading wins.
-  // A reading without one is taken to describe the known window.
-  if (known === undefined) return 1;
-  if (reading === undefined) return 0;
-  if (reading > known + SAME_WINDOW_RESET_TOLERANCE_MS) return 1;
-  if (reading < known - SAME_WINDOW_RESET_TOLERANCE_MS) return -1;
-  return 0;
-}
-
-/** The earliest reset still ahead, when a shown window will stop describing the account. */
-export function nextClaudeRateLimitReset(limits: BackendRateLimitSummary[], now: number): number | undefined {
-  let next: number | undefined;
-  for (const { resetAt } of limits) {
-    if (resetAt !== undefined && resetAt > now && (next === undefined || resetAt < next)) next = resetAt;
-  }
-  return next;
-}
-
-/** A window past its reset no longer describes the account; hide it until Claude reports again. */
-export function liveClaudeRateLimits(limits: BackendRateLimitSummary[], now: number): BackendRateLimitSummary[] {
-  return mergeClaudeRateLimits([], limits, now);
-}
+export const CLAUDE_RESET_TOLERANCE_MS = 2 * 60 * 60 * 1000;
 
 /** Optional control methods must never prevent a turn from completing. */
 export async function claudeTelemetry<T>(read: () => Promise<T>): Promise<T | undefined> {

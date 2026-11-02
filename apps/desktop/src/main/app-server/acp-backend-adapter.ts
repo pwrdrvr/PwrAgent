@@ -46,6 +46,7 @@ import {
   type AcpPromptContentBlock,
 } from "../acp/acp-client";
 import type { AcpProviderStatus } from "../acp/acp-provider-status";
+import { PlanLimitStore } from "./plan-limit-store";
 import {
   MAX_TURN_INPUT_ATTACHMENT_BYTES,
   stageLocalTurnInputAttachment,
@@ -299,6 +300,8 @@ export type AcpRuntimeCapabilityProbe = (
 ) => Promise<AcpInstalledAgentRecord>;
 
 export type AcpBackendAdapterOptions = {
+  /** Account plan limits shared with the other providers; a private store when absent. */
+  planLimits?: PlanLimitStore;
   acpAgentStore?: Pick<
     AcpAgentStoreLike,
     "getInstalledAgent" | "listInstalledAgents" | "upsertInstalledAgent"
@@ -1235,9 +1238,11 @@ export class AcpBackendAdapter {
   private readonly liveToolUpdateResolver = new AcpLiveToolUpdateResolver();
   private readonly modelRetryTracker = new AcpModelRetryTracker();
   private readonly liveNotificationFingerprints = new Map<string, string>();
-  private readonly providerStatuses = new Map<AcpBackendId, AcpProviderStatus>();
-  /** When each provider status was read, for Usage Activity's limit history. */
-  private readonly providerStatusObservedAt = new Map<AcpBackendId, number>();
+  /** Each agent's account; its limits live in `planLimits`, keyed by backend. */
+  private readonly providerStatuses = new Map<AcpBackendId, Pick<AcpProviderStatus, "account">>();
+  private readonly planLimits: PlanLimitStore;
+  private readonly ownsPlanLimits: boolean;
+  private readonly unsubscribePlanLimits: () => void;
   private readonly providerStatusRefreshAttempts = new Map<AcpBackendId, number>();
   private readonly providerStatusRefreshes = new Map<AcpBackendId, Promise<void>>();
   private readonly grokUpdateChecker?: typeof checkGrokCliUpdate;
@@ -1260,6 +1265,21 @@ export class AcpBackendAdapter {
   private readonly invalidatedProviderRegistryIds = new Set<string>();
 
   constructor(options: AcpBackendAdapterOptions) {
+    this.ownsPlanLimits = !options.planLimits;
+    this.planLimits = options.planLimits ?? new PlanLimitStore();
+    // A summary hides a window once it resets; tell listeners when it does.
+    this.unsubscribePlanLimits = this.planLimits.subscribe((provider) => {
+      if (!isAcpBackendId(provider) || !this.providerStatuses.has(provider)) return;
+      void this.emit({
+        backend: provider,
+        notification: { method: "backend/providerStatus/updated", params: { backend: provider } },
+      }).catch((error: unknown) => {
+        acpBackendAdapterLog.debug("acp_provider_status_expiry_unreported", {
+          backend: provider,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    });
     this.captureStores = options.captureStores;
     this.agentToolMcpServer = options.agentToolMcpServer;
     this.automationInspectionMcpCommand = options.automationInspectionMcpCommand;
@@ -1335,7 +1355,7 @@ export class AcpBackendAdapter {
         ? {
             ...summary,
             account: providerStatus.account,
-            rateLimits: providerStatus.rateLimits,
+            rateLimits: this.planLimits.limits(agent.backendId),
           }
         : summary;
     });
@@ -1456,12 +1476,21 @@ export class AcpBackendAdapter {
   ): Promise<void> {
     try {
       const client = await clientPromise;
+      // Reads run one at a time, so each answer is newer than the last.
+      let since = this.planLimits.mark(backend);
       const providerStatus = await client.readProviderStatus?.();
       if (!providerStatus || this.closed) {
         return;
       }
-      this.providerStatuses.set(backend, providerStatus);
-      this.providerStatusObservedAt.set(backend, Date.now());
+      this.providerStatuses.set(backend, { account: providerStatus.account });
+      // A new plan changes the allowance and clears the limits; this reading
+      // is the first of the new plan's.
+      if (this.planLimits.setAccount(backend, { plan: providerStatus.account?.planType })) {
+        since = this.planLimits.mark(backend);
+      }
+      this.planLimits.record(backend, {
+        limits: providerStatus.rateLimits ?? [], since, precise: true, dated: true,
+      });
       await this.emit({
         backend,
         notification: {
@@ -1483,16 +1512,16 @@ export class AcpBackendAdapter {
    * stay with the instance that read them.
    */
   limitObservation(backend: AcpBackendId): UsageLimitObservation | undefined {
-    const status = this.providerStatuses.get(backend);
-    const observedAt = this.providerStatusObservedAt.get(backend);
+    const reading = this.planLimits.snapshot(backend);
+    const observedAt = reading?.observedAt;
     const provider = usageLimitProviderForBackend(backend);
-    if (!provider || !status?.rateLimits?.length || observedAt === undefined
+    if (!provider || !reading?.limits.length || observedAt === undefined
       || (this.isAcpAgentEnabled && !this.isAcpAgentEnabled(backend.slice("acp:".length)))) return undefined;
     return {
       observedAt,
       provider,
-      planType: status.account?.planType,
-      limits: status.rateLimits.map((limit) => ({
+      planType: reading.plan,
+      limits: reading.limits.map((limit) => ({
         name: limit.name, limitId: limit.limitId, usedPercent: limit.usedPercent,
         resetAt: limit.resetAt, windowMinutes: limit.windowMinutes,
       })),
@@ -2688,8 +2717,10 @@ export class AcpBackendAdapter {
     this.acpClientResolutions.clear();
     this.liveToolUpdateResolver.clear();
     this.liveNotificationFingerprints.clear();
+    for (const backend of this.providerStatuses.keys()) this.planLimits.forget(backend);
     this.providerStatuses.clear();
-    this.providerStatusObservedAt.clear();
+    this.unsubscribePlanLimits();
+    if (this.ownsPlanLimits) this.planLimits.close();
     this.providerStatusRefreshAttempts.clear();
     this.providerStatusRefreshes.clear();
     this.grokUpdateRefreshes.clear();

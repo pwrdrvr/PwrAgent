@@ -1318,6 +1318,42 @@ describe("Claude SDK backend", () => {
     await vi.waitFor(async () => expect(await f.store.readRateLimits()).toEqual({ limits: [] }));
   });
 
+  it("keeps limits moving forward across CLIs and starts over when the plan changes", async () => {
+    const resetsAt = Date.now() + 86_400_000;
+    let utilization = 56;
+    let plan = "pro";
+    const usage = vi.fn().mockImplementation(async () => ({ rate_limits_available: true, rate_limits: {
+      seven_day: { utilization, resets_at: new Date(resetsAt).toISOString() },
+    }, session: { model_usage: {} } }));
+    const accountInfo = vi.fn().mockImplementation(async () =>
+      ({ apiProvider: "firstParty", email: "first@example.com", subscriptionType: plan }));
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
+    }, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: usage, accountInfo });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const turn = async () => {
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+      await f.waitForTurn();
+    };
+    await turn();
+    expect(f.backend.summary().rateLimits).toEqual([expect.objectContaining({ limitId: "seven_day", usedPercent: 56 })]);
+    // Another CLI answers from an older reading of the same window.
+    utilization = 50;
+    await turn();
+    expect(f.backend.summary().rateLimits).toEqual([expect.objectContaining({ limitId: "seven_day", usedPercent: 56 })]);
+
+    // A new plan has a new allowance, so usage can fall within the window.
+    plan = "max";
+    utilization = 20;
+    await turn();
+    await turn();
+    expect(f.backend.summary().rateLimits).toEqual([expect.objectContaining({ limitId: "seven_day", usedPercent: 20 })]);
+    await vi.waitFor(async () => expect(await f.store.readRateLimits()).toMatchObject({
+      plan: "max", limits: [expect.objectContaining({ usedPercent: 20 })],
+    }));
+  });
+
   it("keeps limits when an account of unknown method reports none, and clears them for an API key", async () => {
     const saved = [{ name: "Weekly limit", limitId: "seven_day", usedPercent: 40, resetAt: Date.now() + 86_400_000 }];
     const f = await fixture(undefined, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: vi.fn()
