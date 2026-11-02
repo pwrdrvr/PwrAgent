@@ -11,6 +11,10 @@
  * of its longest name, is capped at the sidebar's width past the list's
  * 280px floor, and a container query hides it when that cap falls below its
  * 7-character minimum. See `.sidebar__lanes` in app.css.
+ *
+ * Names drag to reorder the pinned projects, as the Directories list's
+ * folders do, through the same rules (`directory-pin-drop.ts`). Design: the
+ * PwrAgent Claude Design project, "Project Index Reorder UX Review".
  */
 
 /** One project section's box, in px from the top of the list's scrollport. */
