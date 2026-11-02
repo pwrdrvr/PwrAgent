@@ -12,7 +12,9 @@ import { Profiler, StrictMode, useMemo, useState, type ComponentProps } from "re
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildFederatedThreadRef,
+  DEFAULT_PROJECT_FORGE_AUTOMATION,
   type BackendSummary,
+  type ProjectForgeAutomation,
   type AgentEvent,
   type CompactThreadRequest,
   type ComposerDraftRecoveryCandidate,
@@ -1326,6 +1328,109 @@ describe("Composer", () => {
       "data-tooltip",
       "Auto-fix PR — starts a repair turn when a new push fails CI or hits a merge conflict. To hear about a pass or a re-run, ask the agent to watch CI.",
     );
+  });
+
+  it("mutes Auto-fix PR while its project pauses forge activity, without changing the thread's value", () => {
+    const onSetThreadPrAutoDispatch = vi.fn(async () => undefined);
+    const thread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Fix CI",
+      titleSource: "explicit",
+      source: "codex",
+      gitOriginUrl: "git@github.com:openclaw/openclaw.git",
+      linkedDirectories: [
+        {
+          id: "directory-1",
+          kind: "local",
+          label: "openclaw",
+          path: "/repo/openclaw",
+        },
+      ],
+      inbox: { inInbox: false },
+      prAutoDispatchEnabled: true,
+    };
+    const project = (forgeAutomation?: ProjectForgeAutomation): NavigationDirectorySummary => ({
+      key: "directory:/repo/openclaw",
+      kind: "directory",
+      label: "openclaw",
+      path: "/repo/openclaw",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      ...(forgeAutomation ? { forgeAutomation } : {}),
+    });
+    const { rerender } = render(
+      <Composer
+        backgroundPrPollingEnabled
+        directories={[project({ ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 1_000 })]}
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: "Auto-fix PR" });
+    expect(toggle).toHaveClass("is-project-overridden");
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(toggle).toHaveAttribute(
+      "data-tooltip",
+      "Auto-fix is paused for openclaw. This thread's own setting returns on resume. Change it from the project menu: Forge Automation…",
+    );
+    expect(toggle).toHaveAttribute(
+      "aria-description",
+      "Auto-fix is paused for openclaw. This thread's own setting returns on resume. Change it from the project menu: Forge Automation…",
+    );
+    expect(onSetThreadPrAutoDispatch).not.toHaveBeenCalled();
+
+    // A tool-managed worktree files under the project with its name, as the
+    // sidebar files it.
+    const worktreePath = "/Users/fixture/.pwragent/worktrees/mabc123/openclaw";
+    rerender(
+      <Composer
+        backgroundPrPollingEnabled
+        directories={[project({ ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 1_000 })]}
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={{
+          ...thread,
+          linkedDirectories: [{ id: worktreePath, kind: "local", label: "openclaw", path: worktreePath }],
+        }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveClass("is-project-overridden");
+
+    rerender(
+      <Composer
+        backgroundPrPollingEnabled
+        directories={[project({ ...DEFAULT_PROJECT_FORGE_AUTOMATION, autoFixMergeConflicts: false })]}
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveClass("is-project-overridden");
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+      "data-tooltip",
+      "Auto-fix skips merge conflicts in openclaw.",
+    );
+
+    rerender(
+      <Composer
+        backgroundPrPollingEnabled
+        directories={[project()]}
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+      "data-tooltip",
+      "Auto-fix PR — starts when a PR for this workspace is linked",
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).not.toHaveAttribute("aria-description");
   });
 
   it("shows Auto-fix PR when main resolved the primary repository for a worktree", () => {

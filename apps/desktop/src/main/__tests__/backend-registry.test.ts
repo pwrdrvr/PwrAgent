@@ -9,6 +9,14 @@ import { AcpLiveToolUpdateResolver, acpToolUpdateNotifications } from "../acp/ac
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
 import { threadLockRefusalMessage } from "@pwragent/shared";
+import {
+  DEFAULT_PROJECT_FORGE_AUTOMATION,
+  type ProjectForgeAutomation,
+} from "@pwragent/shared";
+import {
+  getProjectForgeAutomationIndex,
+  resetProjectForgeAutomationIndexForTests,
+} from "../app-server/project-forge-automation-index";
 import { launchpadStorageKey } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
 import { stageTurnInputAttachment } from "../app-server/turn-input-attachment-files";
@@ -3984,6 +3992,141 @@ describe("DesktopBackendRegistry", () => {
 
     await new Promise((resolve) => setImmediate(resolve));
     expect(codexClient.startTurnCallCount).toBe(0);
+  });
+
+  describe("project Forge Automation", () => {
+    const PROJECT = "directory:/Users/fixture/src/openclaw";
+    const paused: ProjectForgeAutomation = { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 1_000 };
+    const pauseProject = (automation: ProjectForgeAutomation = paused): void => {
+      onTestFinished(() => resetProjectForgeAutomationIndexForTests());
+      const index = getProjectForgeAutomationIndex();
+      index.set(PROJECT, automation);
+      index.rememberDirectories([{
+        key: PROJECT,
+        kind: "directory",
+        label: "openclaw",
+        path: "/Users/fixture/src/openclaw",
+        threadKeys: ["codex:parked"],
+        needsAttentionCount: 0,
+      }]);
+    };
+    const wake = (project = getProjectForgeAutomationIndex().resolveThread({ backend: "codex", threadId: "parked" })!) => ({
+      project,
+      queueEntryId: "task-monitor:nightly",
+      backend: "codex" as const,
+      threadId: "parked",
+      input: [{ type: "text" as const, text: "Monitor finished" }],
+      origin: "manual" as const,
+      source: "monitor" as const,
+      summary: "Monitor finished: \"Watch the nightly run\"",
+    });
+
+    it("refuses an agent's message into a paused project, never the operator's or a messaging app's", async () => {
+      pauseProject();
+      const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
+      onTestFinished(() => registry.close());
+      const target = { backend: "codex" as const, threadId: "parked" };
+
+      expect(() => registry.assertProjectAcceptsThreadMessage({
+        ...target,
+        messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "orchestrator" } },
+      })).toThrow(/openclaw, where forge activity is paused/);
+      expect(() => registry.assertProjectAcceptsThreadMessage({ ...target, messageOrigin: { kind: "messaging" } }))
+        .not.toThrow();
+      // A to-do card's send is the operator's, even routed as an agent message.
+      expect(() => registry.assertProjectAcceptsThreadMessage({
+        ...target,
+        messageOrigin: { kind: "agent", operatorApproved: true, sourceThread: { backend: "codex", threadId: "orchestrator" } },
+      })).not.toThrow();
+      expect(() => registry.assertProjectAcceptsThreadMessage(target)).not.toThrow();
+      expect(registry.projectPausedThreadMessageRefusal({ backend: "codex", threadId: "elsewhere" })).toBeUndefined();
+
+      await expect(registry.controlActiveTurn({
+        ...target,
+        operation: "steer",
+        requestId: "steer-1",
+        input: [{ type: "text", text: "Rebase now" }],
+        messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "orchestrator" } },
+      })).resolves.toMatchObject({ ok: false, error: { code: "project_paused" } });
+    });
+
+    it("lets messages through when the paused project does not refuse them", () => {
+      pauseProject({ ...paused, refuseThreadMessages: false });
+      const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
+      onTestFinished(() => registry.close());
+      expect(registry.projectPausedThreadMessageRefusal({ backend: "codex", threadId: "parked" })).toBeUndefined();
+    });
+
+    it("holds a wake-up without blocking the operator, lists it, and sends it on request", async () => {
+      pauseProject();
+      const codexClient = new MockBackendClient({});
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      onTestFinished(() => registry.close());
+
+      await expect(registry.deliverProjectPausedWakeup(wake())).resolves.toMatchObject({
+        status: "queued",
+        entry: { id: "task-monitor:nightly", paused: true },
+      });
+      expect(registry.listProjectHeldWakeups(PROJECT)).toEqual([expect.objectContaining({
+        entryId: "task-monitor:nightly",
+        backend: "codex",
+        threadId: "parked",
+        source: "monitor",
+        summary: "Monitor finished: \"Watch the nightly run\"",
+      })]);
+      expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId: "parked" })[0])
+        .toMatchObject({ paused: true, holdReason: expect.stringContaining("openclaw is paused") });
+      expect(codexClient.startTurnCallCount).toBe(0);
+
+      await expect(registry.resolveProjectHeldWakeups({
+        directoryKey: PROJECT,
+        resolutions: [
+          { entryId: "task-monitor:nightly", backend: "codex", threadId: "parked", action: "send" },
+          { entryId: "missing", backend: "codex", threadId: "parked", action: "discard" },
+        ],
+      })).resolves.toEqual({ results: [
+        { entryId: "task-monitor:nightly", status: "sent" },
+        { entryId: "missing", status: "not_found" },
+      ] });
+      await vi.waitFor(() => expect(codexClient.startTurnCallCount).toBe(1));
+      expect(registry.listProjectHeldWakeups(PROJECT)).toEqual([]);
+    });
+
+    it("starts the operator's own message past a held wake-up, and discards the wake on request", async () => {
+      pauseProject();
+      const codexClient = new MockBackendClient({});
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      onTestFinished(() => registry.close());
+      await registry.deliverProjectPausedWakeup(wake());
+
+      await expect(registry.submitTurn({
+        backend: "codex",
+        threadId: "parked",
+        input: [{ type: "text", text: "Operator reply" }],
+      })).resolves.toMatchObject({ status: "started" });
+
+      await expect(registry.resolveProjectHeldWakeups({
+        directoryKey: PROJECT,
+        resolutions: [{ entryId: "task-monitor:nightly", backend: "codex", threadId: "parked", action: "discard" }],
+      })).resolves.toEqual({ results: [{ entryId: "task-monitor:nightly", status: "discarded" }] });
+      expect(registry.listProjectHeldWakeups(PROJECT)).toEqual([]);
+      expect(codexClient.startTurnCallCount).toBe(1);
+    });
+
+    it("discards a wake-up by policy and leaves a note in the thread", async () => {
+      pauseProject({ ...paused, wakeupPolicy: "discard" });
+      const codexClient = new MockBackendClient({});
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      onTestFinished(() => registry.close());
+
+      await expect(registry.deliverProjectPausedWakeup(wake())).resolves.toEqual({ status: "discarded" });
+
+      expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId: "parked" })).toEqual([]);
+      expect(codexClient.startTurnCallCount).toBe(0);
+      expect(JSON.stringify(codexClient.injectedThreadItems)).toContain(
+        "because forge activity in openclaw is paused",
+      );
+    });
   });
 
   it("publishes each lock change and keeps the original time and source when the note changes", async () => {
@@ -46975,6 +47118,7 @@ script = "printf setup"
         backend: "codex", threadId: "sender", title: "sender",
         messageId: expect.stringMatching(/^correspondence:/),
       },
+      operatorApproved: true,
       threadTodo: todo,
     });
     expect(codexClient.startTurnCalls).toHaveLength(0);
@@ -47006,6 +47150,7 @@ script = "printf setup"
         backend: "codex", threadId: "sender", title: "Sender",
         messageId: expect.stringMatching(/^correspondence:/),
       },
+      operatorApproved: true,
       threadTodo: { id: "todo-8", title: "Hand it over" },
     });
   });
@@ -47042,6 +47187,7 @@ script = "printf setup"
     expect(federatedSend).toHaveBeenCalled();
     for (const [request] of federatedSend.mock.calls) {
       expect(request.messageOrigin).not.toHaveProperty("threadTodo");
+      expect(request.messageOrigin).not.toHaveProperty("operatorApproved");
     }
     expect(federatedSend.mock.lastCall?.[0].messageOrigin?.sourceThread).toMatchObject({ threadId: "sender", turnId: "turn-1" });
   });
@@ -47062,6 +47208,7 @@ script = "printf setup"
     })).resolves.toEqual({
       kind: "agent",
       sourceThread: { backend: "codex", threadId: "named", title: "Named" },
+      operatorApproved: true,
       threadTodo: { id: "todo-9", title: "Ship it" },
     });
     await expect(registry.buildThreadTodoMessageOrigin({
@@ -47069,6 +47216,7 @@ script = "printf setup"
     })).resolves.toEqual({
       kind: "agent",
       sourceThread: { backend: "codex", threadId: "unnamed" },
+      operatorApproved: true,
       threadTodo: { id: "todo-10" },
     });
   });
@@ -67806,6 +67954,92 @@ script = "printf setup"
       threadId: monitorThreadId,
       messageId: `user:${recoveryTurnId}`,
       origin,
+    });
+
+    await registry.close();
+  });
+
+  it("gates an ACP tool call made before the turn's origin row is written", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const threadId = "acp-messaging-turn";
+    const causalMessagingSource = { ownerId: "owner-1", requestId: "request-1" };
+    const overlayStore = createOverlayStoreMock();
+    // Hold the origin write open, so the tool call can only see the origin
+    // through the registry's memory.
+    let releaseOriginWrite!: () => void;
+    const originWriteGate = new Promise<void>((resolve) => { releaseOriginWrite = resolve; });
+    const writeOrigin = vi.mocked(overlayStore.upsertThreadMessageOrigin!);
+    const persistOrigin = writeOrigin.getMockImplementation()!;
+    writeOrigin.mockImplementation(async (params) => {
+      await originWriteGate;
+      return await persistOrigin(params);
+    });
+    let toolCall: Promise<string | null> | undefined;
+    let registry!: DesktopBackendRegistry;
+    // The agent calls a gated tool before startPrompt returns its turn id.
+    const startPrompt = vi.fn((params: { sessionId: string; turnId?: string }) => {
+      const turnId = params.turnId ?? `turn:${params.sessionId}`;
+      toolCall = (registry as unknown as {
+        authorizeAgentToolMcpCall(params: {
+          backend: AppServerBackendKind;
+          catalogId?: string;
+          threadId: string;
+          tool: string;
+          turnId: string;
+        }): Promise<string | null>;
+      }).authorizeAgentToolMcpCall({
+        backend: acpBackendId,
+        catalogId: "thread_inspection",
+        threadId: params.sessionId,
+        tool: "read_thread",
+        turnId,
+      });
+      return { sessionId: params.sessionId, turnId };
+    });
+    ({ registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessions: [{
+        backendId: acpBackendId,
+        sessionId: threadId,
+        title: "Messaging turn",
+        cwd: "/repo/app",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      }],
+      sessionId: threadId,
+      startPrompt,
+      overlayStore,
+    }));
+    const authorizeRetainedTool = vi.fn(async () => ({ allowed: false, permission: "thread.read" }));
+    const checkDynamicToolPermission = vi.fn(() => ({ allowed: true }));
+    registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: vi.fn(),
+      checkDynamicToolPermission,
+      authorizeRetainedTool,
+    });
+
+    const started = registry.startTurn({
+      backend: acpBackendId,
+      threadId,
+      input: [{ type: "text", text: "Summarize the open threads" }],
+      messageOrigin: { kind: "messaging", causalMessagingSource },
+    });
+    await vi.waitFor(() => expect(toolCall).toBeDefined());
+    await expect(toolCall).resolves.toBe("thread.read");
+    expect(authorizeRetainedTool).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId, causalMessagingSource }),
+      expect.objectContaining({ category: "thread_inspection", tool: "read_thread" }),
+    );
+    expect(checkDynamicToolPermission).not.toHaveBeenCalled();
+
+    releaseOriginWrite();
+    const turn = await started;
+    expect(writeOrigin).toHaveBeenCalledWith({
+      backend: acpBackendId,
+      threadId,
+      messageId: `user:${turn.turnId}`,
+      origin: { kind: "messaging", causalMessagingSource },
     });
 
     await registry.close();

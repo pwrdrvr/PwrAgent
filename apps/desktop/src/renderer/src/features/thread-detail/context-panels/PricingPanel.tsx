@@ -57,7 +57,7 @@ import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
 import { TokenMiserSavingsBreakdown } from "./TokenMiserSavingsBreakdown";
 import { TokenMiserSummaryCard } from "./TokenMiserSummaryCard";
 import { ThreadFamilyPricingCard } from "./ThreadFamilyPricingCard";
-import { ClaudeUsageLimits, UsagePaceCard } from "./UsagePaceCard";
+import { AcpUsageLimits, ClaudeUsageLimits, UsagePaceCard } from "./UsagePaceCard";
 import {
   exactSummaryMoneyTitle,
   formatRoundedSummaryMoney,
@@ -75,6 +75,11 @@ type PricingPanelProps = {
   desktopApi?: DesktopApi;
   /** Supplies the Codex limits that tell the Usage Activity card to reread. */
   backends?: BackendSummary[];
+  /**
+   * The owning peer's providers for a remote thread. A provider's own limits
+   * are that account's, never this machine's.
+   */
+  ownerBackends?: BackendSummary[];
   thread?: PricingGateSource["thread"];
   display?: ThreadPricingDisplay;
   onLoadMore?: () => void;
@@ -204,6 +209,9 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
   const familyTarget = federation?.ref.target ?? readRendererFederationTarget();
   const familyOwner = familyTarget?.scope === "remote" ? familyTarget : undefined;
   const ownerLabel = familyOwner ? federation?.instanceLabel ?? readRendererFederationLabel() ?? "Remote machine" : undefined;
+  const threadBackends = props.ownerBackends ?? props.backends;
+  const threadBackend = source === undefined ? undefined : threadBackends?.find((backend) => backend.kind === source);
+  const isAcp = source?.startsWith("acp:") ?? false;
   const snapshotVersion = federation?.ref.target.scope === "remote" && !federation.capabilities?.includes("event_subscriptions") ? updatedAt : undefined;
   const gateSource = useMemo<PricingGateSource>(() => ({
     desktopApi: props.desktopApi,
@@ -322,11 +330,16 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
       ) : null}
 
       {/* This thread's bill; the account's limit and its pace are the card,
-          and every thread's spend across instances is the window it opens. */}
+          and every thread's spend across instances is the window it opens.
+          Only Codex has that pace history. A provider that reports its own
+          limits shows them as meters instead. Any other ACP thread keeps the
+          way into the window but never shows the Codex account's limit. */}
       {source === "claude"
-        ? <ClaudeUsageLimits backend={props.backends?.find((backend) => backend.kind === "claude")} />
-        : <UsagePaceCard desktopApi={props.desktopApi} backends={props.backends} ownerLabel={ownerLabel}
-          ownerInstanceId={familyOwner?.instanceId} />}
+        ? <ClaudeUsageLimits backend={threadBackend} />
+        : isAcp && source && (source === "acp:grok" || threadBackend?.rateLimits?.length)
+          ? <AcpUsageLimits backend={threadBackend} provider={formatBackendLabel(source, threadBackends)} />
+          : <UsagePaceCard desktopApi={props.desktopApi} backends={props.backends} ownerLabel={ownerLabel}
+            ownerInstanceId={familyOwner?.instanceId} codexLimit={!isAcp} />}
 
       {/* Under the spend breakdown, above the turn rows: the gate's result is
           part of reading the bill, not a footnote to one turn of it. */}

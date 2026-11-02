@@ -91,40 +91,30 @@ test.each(
 });
 
 test.each([
-  ...["install-deps", "lint", "test"].map((job) => ({ file: "release.yml", job })),
+  ...["install-deps", "lint", "test", "prepare", "sign"].map((job) => ({ file: "release.yml", job })),
   { file: "ci.yml", job: "macos-install-deps" },
   { file: "ci.yml", job: "test-macos" },
+  { file: "ci.yml", job: "desktop-e2e-macos" },
   { file: "preview-build.yml", job: "preview" },
-])("rejects GitHub-hosted Mac compute in $file $job", ({ file, job }) => {
+])("rejects self-hosted Mac compute in $file $job", ({ file, job }) => {
   const root = fixture();
   const path = `.github/workflows/${file}`;
   const source = readFileSync(join(root, path), "utf8");
   const body = source.split(`\n  ${job}:\n`)[1].split(/\n  [A-Za-z0-9_-]+:\n/)[0];
-  const hosted = body.replace("runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]", "runs-on: macos-26");
-  expect(hosted).not.toBe(body);
-  replace(root, path, body, hosted);
-  const result = check(root);
-  expect(result.status).toBe(1);
-  expect(result.stderr).toContain(`${job} must run on [self-hosted, macOS, ARM64, pwrdrvr-macos]`);
-});
-
-test("rejects a release dependency install that loses the persistent store", () => {
-  const root = fixture();
-  replace(root, ".github/workflows/release.yml", "          persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}\n", "");
-  const result = check(root);
-  expect(result.status).toBe(1);
-  expect(result.stderr).toContain("persistent-store-dir");
-});
-
-test.each(["prepare", "sign"])("rejects self-hosted macOS %s", (job) => {
-  const root = fixture();
-  const path = ".github/workflows/release.yml";
-  const workflow = readFileSync(join(root, path), "utf8");
-  const body = workflow.split(`\n  ${job}:\n`)[1].split(/\n  [A-Za-z0-9_-]+:\n/)[0];
-  replace(root, path, body, body.replace("runs-on: macos-26", "runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]"));
+  const selfHosted = body.replace("runs-on: macos-26", "runs-on: [self-hosted, macOS, ARM64]");
+  expect(selfHosted).not.toBe(body);
+  replace(root, path, body, selfHosted);
   const result = check(root);
   expect(result.status).toBe(1);
   expect(result.stderr).toContain(`${job} must run on macos-26`);
+});
+
+test("rejects a release dependency install that downloads the cache on a hit", () => {
+  const root = fixture();
+  replace(root, ".github/workflows/release.yml", '          lookup-only: "true"\n', "");
+  const result = check(root);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("lookup-only");
 });
 
 test.each(["windows-sign", "publish-release-assets", "publish-release-notes"])(

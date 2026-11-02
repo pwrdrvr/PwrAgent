@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ArchiveWorktreeRequest,
   ArchiveThreadRequest,
@@ -36,7 +36,11 @@ import type {
   WatchThreadPullRequestToolArgs,
   ThreadSearchResponse,
 } from "@pwragent/shared";
-import { buildPullRequestStatusKey } from "@pwragent/shared";
+import { buildPullRequestStatusKey, DEFAULT_PROJECT_FORGE_AUTOMATION } from "@pwragent/shared";
+import {
+  getProjectForgeAutomationIndex,
+  resetProjectForgeAutomationIndexForTests,
+} from "../app-server/project-forge-automation-index";
 import type { ThreadSearchService } from "../thread-search/thread-search-service";
 import type { DesktopFederationRuntime } from "../federation/federation-runtime";
 import {
@@ -1301,6 +1305,25 @@ vi.mock("../pr-status/git-remote", async () => {
     resolveGitHubRepoForDirectory,
     resolveGitHubReposForDirectory,
     readForgeRepositoryRemotes: resolveGitHubReposForDirectory,
+  };
+});
+
+// The service is one module singleton for the whole file, and the file runs
+// in far less than the minute its PR request budget needs to refill. Every
+// lookup or by-URL fetch spends a token, so with the real bucket a test only
+// passes while fewer than PR_STATUS_TOKEN_BUCKET_CAPACITY spends precede it.
+// No test here is about the budget; pr-status-token-bucket.test.ts covers it.
+vi.mock("../pr-status/pr-status-token-bucket", async () => {
+  const actual = await vi.importActual<typeof import("../pr-status/pr-status-token-bucket")>(
+    "../pr-status/pr-status-token-bucket",
+  );
+  return {
+    ...actual,
+    PrStatusTokenBucket: class UnlimitedPrStatusTokenBucket extends actual.PrStatusTokenBucket {
+      override tryTake(): boolean {
+        return true;
+      }
+    },
   };
 });
 
@@ -3880,6 +3903,78 @@ describe("app server ipc", () => {
       removeTempStateDbDir(temp.tempDir);
       vi.unstubAllEnvs();
     }
+  });
+
+  it("refuses a watch, defers a PR prerequisite and stops background polling in a paused project", async () => {
+    const attached = githubPr({
+      number: 3180, org: "pwrdrvr", repo: "PwrAgent", state: "pending",
+      headRefName: "feat/paused-project", headSha: "9".repeat(40),
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3180",
+    });
+    onTestFinished(() => resetProjectForgeAutomationIndexForTests());
+    const index = getProjectForgeAutomationIndex();
+    const project = "directory:/repo/PwrAgent";
+    index.set(project, { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 1_000 });
+    index.rememberDirectories([{
+      key: project, kind: "directory", label: "PwrAgent", path: "/repo/PwrAgent",
+      threadKeys: ["codex:thread-1"], needsAttentionCount: 0,
+    }]);
+    registerThreadPrStatusWatch.mockClear();
+
+    const response = await requestWatchForAttachedPr(attached, ["success", "failure"], { url: attached.url });
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: "project_paused", message: expect.stringContaining("PR #3180 is in PwrAgent, where forge activity is paused") },
+    });
+    expect(registerThreadPrStatusWatch).not.toHaveBeenCalled();
+
+    const { appServerService } = await import("../ipc/app-server");
+    const service = appServerService as unknown as {
+      collectPrPollTargets: () => { prKey: string; threadKeys: string[] }[];
+    };
+    expect(service.collectPrPollTargets().filter((target) => target.threadKeys.includes("codex:thread-1")))
+      .toEqual([]);
+    // A PR prerequisite is stored and waits; the agent is told why.
+    expect(appServerService.dependencyProjectNotice({
+      action: "create",
+      backend: "codex",
+      threadId: "thread-1",
+      conditions: [{ backend: "codex", threadId: "prerequisite", when: "pr_merged" }],
+      continuation: "Deploy it",
+    })).toContain("PwrAgent, where forge activity is paused");
+    // A turn prerequisite is held or discarded at wake time instead.
+    expect(appServerService.dependencyProjectNotice({
+      action: "create",
+      backend: "codex",
+      threadId: "thread-1",
+      conditions: [{ backend: "codex", threadId: "prerequisite", when: "turn_completed", turnId: "turn-1" }],
+      continuation: "Deploy it",
+    })).toBeUndefined();
+
+    // Active again, with only PR watches off: polling resumes, watches stay refused.
+    index.set(project, { ...DEFAULT_PROJECT_FORGE_AUTOMATION, prWatches: false });
+    expect(service.collectPrPollTargets().some((target) => target.threadKeys.includes("codex:thread-1")))
+      .toBe(true);
+    const watchHandler = setThreadPullRequestWatchToolHandler.mock.calls.at(-1)?.[0];
+    await expect(watchHandler?.({ backend: "codex", threadId: "thread-1", url: attached.url }))
+      .resolves.toMatchObject({ ok: false, error: { code: "forbidden", message: expect.stringContaining("PR watches are turned off") } });
+  });
+
+  it("changes Forge Automation only for a local Directories project", async () => {
+    const { appServerService } = await import("../ipc/app-server");
+    const automation = { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true };
+    await expect(appServerService.setProjectForgeAutomation({ directoryKey: "workspace:/Users/fixture/.pwragent/projects", automation }))
+      .rejects.toThrow("Directories project");
+    await expect(appServerService.setProjectForgeAutomation({ directoryKey: "unlinked", automation }))
+      .rejects.toThrow("Directories project");
+    await expect(appServerService.setProjectForgeAutomation({
+      directoryKey: "directory:/repo/PwrAgent",
+      automation,
+      federationTarget: { scope: "remote", instanceId: "peer-1" },
+    } as never)).rejects.toThrow("instance that owns the project");
+    expect(() => appServerService.listProjectHeldWakeups({ directoryKey: "workspace:/x" }))
+      .toThrow("Directories project");
   });
 
   it("watches an explicitly attached upstream fork PR and reports active primary monitoring", async () => {

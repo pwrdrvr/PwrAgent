@@ -1492,6 +1492,9 @@ export class ClaudeBackend {
   /** Re-read metadata so a live rename/mode change cannot be overwritten. */
   private async saveSessionMetadata(live: LiveSession): Promise<void> {
     const { session } = live;
+    // A monitor that calls complete_monitoring ends its own thread before
+    // that turn ends. Nothing is left to save, as for the turn's entries.
+    if (this.store.isForgotten(session.thread.id)) return;
     const current = await this.store.read(session.thread.id);
     current.sdkSessionId = session.sdkSessionId;
     current.modelUsage = session.modelUsage;

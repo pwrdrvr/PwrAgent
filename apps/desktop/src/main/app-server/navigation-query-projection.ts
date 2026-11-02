@@ -455,6 +455,11 @@ function buildDirectoryRows(params: {
       ...(directory.directoryThreadsCollapsed !== undefined
         ? { directoryThreadsCollapsed: directory.directoryThreadsCollapsed }
         : {}),
+      // Owner-only: a placeholder row stands for a peer's project, which
+      // this instance neither stores nor enforces.
+      ...(directory.forgeAutomation && !directory.localAvailability
+        ? { forgeAutomation: directory.forgeAutomation }
+        : {}),
       ...(gitStatus ? { gitStatus } : {}),
       launchpadPresent: Boolean(directory.launchpad),
       ...(directory.launchpad?.backend ? { launchpadBackend: directory.launchpad.backend } : {}),

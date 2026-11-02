@@ -144,6 +144,8 @@ type ThreadContextPanelProps = {
   activeTurnId?: string;
   backendError?: string;
   backends: BackendSummary[];
+  /** The owning peer's providers, for a thread that runs on another instance. */
+  ownerBackends?: BackendSummary[];
   desktopApi?: DesktopApi;
   initialLoadDurationMs?: number;
   onOpenAutomations?: () => void;
@@ -904,6 +906,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           <PricingPanel
             desktopApi={props.desktopApi}
             backends={props.backends}
+            ownerBackends={props.ownerBackends}
             thread={{ id: props.thread.id, source: props.thread.source, federation: props.thread.federation, updatedAt: props.thread.updatedAt }}
             subThreadCount={props.thread.ordinaryChildCount}
             activeTurnId={props.activeTurnId}

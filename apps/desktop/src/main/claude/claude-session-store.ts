@@ -127,6 +127,11 @@ export class ClaudeSessionStore {
     if (this.forgotten.size > 256) this.forgotten.delete(this.forgotten.values().next().value!);
   }
 
+  /** Whether an ephemeral session was dropped. Its late writes do nothing, and a read fails. */
+  isForgotten(id: string): boolean {
+    return this.forgotten.has(id);
+  }
+
   private file(id: string, suffix: string): string {
     if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error("Invalid Claude thread id.");
     return path.join(this.root, `${id}.${suffix}`);

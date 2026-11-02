@@ -305,6 +305,12 @@ import type {
   SetDirectoryPinResponse,
   SetDirectoryThreadsCollapsedRequest,
   SetDirectoryThreadsCollapsedResponse,
+  SetProjectForgeAutomationRequest,
+  SetProjectForgeAutomationResponse,
+  ListProjectHeldWakeupsRequest,
+  ListProjectHeldWakeupsResponse,
+  ResolveProjectHeldWakeupsRequest,
+  ResolveProjectHeldWakeupsResponse,
   SetThreadParentRequest,
   SetThreadParentResponse,
   SetThreadPinRequest,
@@ -1023,6 +1029,9 @@ import {
   NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL,
   NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
   NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL,
+  NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL,
+  NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL,
+  NAVIGATION_RESOLVE_PROJECT_HELD_WAKEUPS_CHANNEL,
   NAVIGATION_SET_THREAD_PARENT_CHANNEL,
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL,
@@ -2859,6 +2868,27 @@ const desktopApi = Object.freeze({
   ): Promise<SetDirectoryThreadsCollapsedResponse> =>
     await ipcRenderer.invoke(
       NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL,
+      request,
+    ),
+  setProjectForgeAutomation: async (
+    request: SetProjectForgeAutomationRequest,
+  ): Promise<SetProjectForgeAutomationResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL,
+      request,
+    ),
+  listProjectHeldWakeups: async (
+    request: ListProjectHeldWakeupsRequest,
+  ): Promise<ListProjectHeldWakeupsResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL,
+      request,
+    ),
+  resolveProjectHeldWakeups: async (
+    request: ResolveProjectHeldWakeupsRequest,
+  ): Promise<ResolveProjectHeldWakeupsResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_RESOLVE_PROJECT_HELD_WAKEUPS_CHANNEL,
       request,
     ),
   refreshThreadPullRequests: async (

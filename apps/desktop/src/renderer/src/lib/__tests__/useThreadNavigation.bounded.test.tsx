@@ -1,6 +1,6 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "../../test/phase-probes";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationQueryPage, NavigationRow, NavigationSelectedDetailResponse, PrSummary } from "@pwragent/shared";
+import { DEFAULT_PROJECT_FORGE_AUTOMATION, type AgentEvent, type NavigationQueryPage, type NavigationRow, type NavigationSelectedDetailResponse, type PrSummary, type ProjectForgeAutomation } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadNavigation } from "../useThreadNavigation";
 import { Sidebar } from "../../features/navigation/Sidebar";
@@ -765,5 +765,94 @@ it.each([
   expect([...result.current.pagedNavigation.resources.values()].some((resource) => resource.state.error)).toBe(false);
   expect(result.current.threads.some((thread) => thread.id === claude.id)).toBe(outcome === "failure");
   expect(removeRemoteThreadPin).toHaveBeenCalledTimes(owner === "remote" && outcome === "success" ? 1 : 0);
+  unmount();
+});
+
+/** An owner with one local project whose Forge Automation the test can change. */
+function forgeAutomationOwner() {
+  const f = fixture();
+  const originalRead = f.read.getMockImplementation()!;
+  const key = "directory:/openclaw";
+  const owner: { automation?: ProjectForgeAutomation } = {};
+  f.read.mockImplementation(async (request) => {
+    const page = await originalRead(request);
+    return request.query.kind === "directory-index" ? { ...page, directories: [{ key, kind: "directory", label: "openclaw",
+      path: "/openclaw", counts, pinnedRootCount: 0, unpinnedRootCount: 1, launchpadPresent: false,
+      ...(owner.automation ? { forgeAutomation: owner.automation } : {}) }] } : page;
+  });
+  return { f, key, owner };
+}
+
+const PAUSED: ProjectForgeAutomation = { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 1_000 };
+
+it("saves a project's Forge Automation without a federation target and shows what the owner stored", async () => {
+  const { f, key, owner } = forgeAutomationOwner();
+  const setProjectForgeAutomation = vi.fn<NonNullable<DesktopApi["setProjectForgeAutomation"]>>(async (request) => {
+    owner.automation = request.automation;
+    return { directoryKey: request.directoryKey, automation: request.automation };
+  });
+  const api = { ...f.api, setProjectForgeAutomation };
+  const { result, unmount } = renderHook(() => useThreadNavigation(api));
+  const project = () => result.current.directories.find((directory) => directory.key === key);
+  await waitFor(() => expect(project()).toBeDefined());
+  expect(project()?.forgeAutomation).toBeUndefined();
+
+  await act(() => result.current.setProjectForgeAutomation(project()!, PAUSED));
+  expect(setProjectForgeAutomation).toHaveBeenCalledWith({ directoryKey: key, automation: PAUSED });
+  expect(project()?.forgeAutomation).toEqual(PAUSED);
+
+  // Back to the defaults: the row carries nothing, as the owner sends it.
+  await act(() => result.current.setProjectForgeAutomation(project()!, { ...DEFAULT_PROJECT_FORGE_AUTOMATION }));
+  expect(project()?.forgeAutomation).toBeUndefined();
+  unmount();
+});
+
+it("raises a failed Forge Automation save as a toast unless the caller shows it", async () => {
+  const { f, key } = forgeAutomationOwner();
+  const onThreadActionError = vi.fn();
+  const api = { ...f.api, setProjectForgeAutomation: vi.fn(async () => {
+    throw new Error("Owner refused");
+  }) };
+  const { result, unmount } = renderHook(() => useThreadNavigation(api, { onThreadActionError }));
+  const project = () => result.current.directories.find((directory) => directory.key === key);
+  await waitFor(() => expect(project()).toBeDefined());
+
+  await act(async () => {
+    await expect(result.current.setProjectForgeAutomation(project()!, PAUSED, { reportError: false }))
+      .rejects.toThrow("Owner refused");
+  });
+  expect(onThreadActionError).not.toHaveBeenCalledWith(expect.objectContaining({ message: "Owner refused" }));
+
+  await act(async () => {
+    await expect(result.current.setProjectForgeAutomation(project()!, PAUSED)).rejects.toThrow("Owner refused");
+  });
+  expect(onThreadActionError).toHaveBeenLastCalledWith({ kind: "forge-automation", message: "Owner refused" });
+  expect(project()?.forgeAutomation).toBeUndefined();
+  unmount();
+});
+
+it("applies the owner's directory/forgeAutomation/updated event, and null clears it", async () => {
+  const { f, key, owner } = forgeAutomationOwner();
+  // The hook subscribes more than once, so every subscriber hears the event.
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const emit = (event: AgentEvent) => listeners.forEach((listener) => listener(event));
+  const api = { ...f.api,
+    onAgentEvent: (callback: (event: AgentEvent) => void) => { listeners.add(callback); return () => { listeners.delete(callback); }; } };
+  const { result, unmount } = renderHook(() => useThreadNavigation(api));
+  const project = () => result.current.directories.find((directory) => directory.key === key);
+  await waitFor(() => expect(project()).toBeDefined());
+
+  owner.automation = PAUSED;
+  act(() => emit({ backend: "codex", notification: { method: "directory/forgeAutomation/updated",
+    params: { directoryKey: key, automation: PAUSED } } } as AgentEvent));
+  expect(project()?.forgeAutomation).toEqual(PAUSED);
+
+  owner.automation = undefined;
+  act(() => emit({ backend: "codex", notification: { method: "directory/forgeAutomation/updated",
+    params: { directoryKey: key, automation: null } } } as AgentEvent));
+  expect(project()?.forgeAutomation).toBeUndefined();
+  await waitFor(() => expect([...result.current.pagedNavigation.resources.values()]
+    .every((resource) => !resource.loading && !resource.state.stale)).toBe(true));
+  expect(project()?.forgeAutomation).toBeUndefined();
   unmount();
 });

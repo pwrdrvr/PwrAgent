@@ -19,9 +19,17 @@ import {
  */
 export type ThreadQueuedMessageState = "held" | "scheduled" | "queued";
 
-/** The composer's "Held for retry" and "Failed to send" rows. */
+/**
+ * The composer's "Held for retry", "Held" and "Failed to send" rows. A paused
+ * entry with a hold reason is one its owner keeps, such as a wake-up held
+ * while its project's forge activity is paused.
+ */
 function isHeldQueuedTurn(turn: ComposerQueuedTurnSnapshot): boolean {
-  return Boolean(turn.manualReleaseRequired || turn.errorMessage);
+  return Boolean(
+    turn.manualReleaseRequired
+    || turn.errorMessage
+    || (turn.paused && turn.holdReason),
+  );
 }
 
 /**

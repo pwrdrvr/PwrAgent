@@ -58,6 +58,11 @@ effort. Follow the tool description for monitor-specific controls.
 ## After setting up the wait
 
 Confirm the wait or monitor was successfully created before relying on it.
+A `project_paused` error means the operator paused forge activity or turned off
+PR watches for that project. Do not retry or work around it with another wait
+or message. Stop and tell the operator what you were waiting for. A dependency
+returned with a `projectNotice` is stored, but its PR conditions wait until the
+operator turns them back on; say so when you end the turn.
 Finish unrelated work if any remains, then end the turn and say what will wake
 it. Do not inspect or poll the monitor or prerequisite after success.
 

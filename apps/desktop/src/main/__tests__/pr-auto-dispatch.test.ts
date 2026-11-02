@@ -7,6 +7,7 @@ import {
   type PrAutoDispatchBudgetConfig,
   type PrAutoDispatchBudgetStatus,
   type PrSummary,
+  type ThreadPrAutoDispatchEventKind,
   type ThreadPrAutoDispatchPending,
 } from "@pwragent/shared";
 import { StateDb } from "../state/state-db";
@@ -102,6 +103,7 @@ function createHarness(options: {
   currentPr?: PrSummary;
   pauseGateWhenBudgetPaused?: boolean;
   onPendingChanged?: (pending: ThreadPrAutoDispatchPending | null) => void;
+  allowsEventKind?: (kind: ThreadPrAutoDispatchEventKind) => boolean;
 } = {}) {
   let busy = options.busy ?? false;
   let gate = options.gate ?? true;
@@ -131,6 +133,9 @@ function createHarness(options: {
     },
     isPrAttached: () => true,
     isBackgroundPollingEnabled: () => gate,
+    ...(options.allowsEventKind
+      ? { allowsEventKind: (_identity, kind) => options.allowsEventKind!(kind) }
+      : {}),
     getBudgetConfig: () => budgetConfig,
     now: () => clock,
     onPendingChanged: ({ pending }) => {
@@ -1296,5 +1301,75 @@ describe("PrAutoDispatchCoordinator", () => {
     expect((await observe(harness.coordinator, completed))[0]?.status).toBe(
       "scheduled",
     );
+  });
+});
+
+describe("PrAutoDispatchCoordinator with project Forge Automation", () => {
+  it("schedules nothing for an incident kind the project turned off", async () => {
+    const harness = createHarness({ allowsEventKind: (kind) => kind !== "ci-failure" });
+
+    expect((await observe(harness.coordinator))[0]?.status).toBe("project-off");
+    await runCountdown();
+
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+    expect(await store.getThreadPrAutoDispatchPending({ backend: "codex", threadId: "thread-1" }))
+      .toBeUndefined();
+  });
+
+  it("narrows a two-kind incident to the kinds the project allows", async () => {
+    const conflicting = pr({ mergeState: "conflicting" });
+    const harness = createHarness({
+      currentPr: conflicting,
+      allowsEventKind: (kind) => kind !== "ci-failure",
+    });
+
+    expect((await observe(harness.coordinator, conflicting))[0]?.status).toBe("scheduled");
+    await runCountdown();
+
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+    const text = harness.submitTurnIfIdle.mock.calls[0]![0].input
+      .map((item) => item.type === "text" ? item.text : "")
+      .join("\n");
+    expect(text).toContain("- Event kinds: merge-conflict");
+    expect(text).not.toContain("ci-failure");
+  });
+
+  it("cancels a repair whose kind the project turned off before it was sent, then repairs once allowed again", async () => {
+    let allowed = true;
+    const harness = createHarness({ allowsEventKind: () => allowed });
+    expect((await observe(harness.coordinator))[0]?.status).toBe("scheduled");
+
+    allowed = false;
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+    expect(harness.pendingUpdates.at(-1)).toBeNull();
+
+    // The cancel is deferred, so the still-failing PR schedules afresh.
+    allowed = true;
+    expect((await observe(harness.coordinator))[0]?.status).toBe("scheduled");
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels the pending repair when the project pauses", async () => {
+    let allowed = true;
+    const harness = createHarness({ allowsEventKind: () => allowed });
+    await observe(harness.coordinator);
+
+    expect(await harness.coordinator.cancelPendingDisallowedByProject({
+      backend: "codex",
+      threadId: "thread-1",
+    })).toBe(false);
+    allowed = false;
+    expect(await harness.coordinator.cancelPendingDisallowedByProject({
+      backend: "codex",
+      threadId: "thread-1",
+    })).toBe(true);
+    await runCountdown();
+
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+    expect(harness.onActivity).toHaveBeenCalledWith(expect.objectContaining({
+      message: "Cancelled: off in this project's Forge Automation",
+    }));
   });
 });

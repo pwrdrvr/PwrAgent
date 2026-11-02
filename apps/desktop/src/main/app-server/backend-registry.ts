@@ -111,6 +111,18 @@ import {
 import { codexNativeSubAgentName, readCodexNativeSubAgentName } from "@pwragent/shared";
 import { isThreadLockRefusal, normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
 import { threadTodoMessageOriginFromUnknown } from "@pwragent/shared";
+import {
+  buildProjectPausedThreadMessageRefusal,
+  buildProjectPausedWakeupDiscardNote,
+  buildProjectPausedWakeupHoldReason,
+  isProjectPausedThreadMessageRefusal,
+  PROJECT_PAUSED_ERROR_CODE,
+  projectRefusesThreadMessages,
+  type ProjectHeldWakeup,
+  type ProjectHeldWakeupSource,
+  type ResolveProjectHeldWakeupsRequest,
+  type ResolveProjectHeldWakeupsResponse,
+} from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
 import {
   isRemoteLaunchpadStorageKey,
@@ -845,6 +857,11 @@ import {
   type ThreadTurnQueueSubmissionResult,
 } from "./thread-turn-queue";
 import {
+  getProjectForgeAutomationIndex,
+  summarizeProjectHeldWakeup,
+  type ProjectForgeAutomationResolution,
+} from "./project-forge-automation-index";
+import {
   QueuedMessageTitler,
   queuedMessageTitleContext,
   queuedMessageTitleSource,
@@ -959,6 +976,18 @@ const ACP_LISTINGS_ARE_ENRICHED = true;
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 const backendLifecycleLog = getMainLogger("pwragent:backend-lifecycle");
 class AutomaticArchiveCancelledError extends Error {}
+
+/**
+ * A paused project refused an agent's message from another thread. The
+ * message names the project and how the operator lifts it.
+ */
+export class ProjectPausedThreadMessageError extends Error {
+  readonly code = PROJECT_PAUSED_ERROR_CODE;
+  constructor(message: string) {
+    super(message);
+    this.name = "ProjectPausedThreadMessageError";
+  }
+}
 class ThreadAlreadyActiveError extends Error {}
 const GROK_TITLE_HELPER_SESSION_POLICY = buildMinimalGrokHelperSessionPolicy({
   description: "Generate a concise title for a PwrAgent thread.",
@@ -8681,6 +8710,17 @@ function buildWorkspaceMoveFailurePrompt(params: {
   ].join("\n");
 }
 
+/**
+ * A turn's origin while its `user:<turnId>` row is not yet written. `turnId`
+ * is unset until the provider's start call returns it.
+ */
+type StartingTurnOrigin = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  origin: AppServerThreadMessageOrigin;
+  turnId?: string;
+};
+
 type PendingThreadMessageContext = {
   backend: AppServerBackendKind;
   createdAt: number;
@@ -9323,6 +9363,12 @@ export class DesktopBackendRegistry {
     string,
     PendingThreadMessageContext
   >();
+  /**
+   * A provider can call a tool before its turn-start call returns, and so
+   * before the turn's origin row is written. The causal lookup reads these
+   * first, so that call is gated like the rest of the turn. Memory only.
+   */
+  private readonly startingTurnOrigins = new Set<StartingTurnOrigin>();
   // Keep accepted requests through the active turn, not just while the RPC is
   // in flight. The backend can acknowledge a steer before its user item is
   // observed, and completion signals in that window must not resubmit it.
@@ -9805,14 +9851,81 @@ export class DesktopBackendRegistry {
 
   /**
    * A causal steer writes the turn's routing record under its own key.
-   * Until one does, the turn's first prompt origin is the record.
+   * Until one does, the turn's first prompt origin is the record. While the
+   * turn is starting, that origin is in memory before its row is written.
    */
   private async readTurnCausalMessagingOrigin(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<AppServerThreadMessageOrigin | undefined> {
-    if (!context.turnId || !this.overlayStore.readThreadMessageOrigins) return undefined;
+    if (!context.turnId) return undefined;
+    const starting = this.findStartingTurnOrigin(context);
     const causalId = buildTurnCausalMessagingContextId(context.turnId);
     const promptId = buildTurnUserMessageOriginId(context.turnId);
-    const origins = await this.overlayStore.readThreadMessageOrigins({ ...context, messageIds: [causalId, promptId] });
-    return origins[causalId] ?? origins[promptId];
+    const origins = this.overlayStore.readThreadMessageOrigins
+      ? await this.overlayStore.readThreadMessageOrigins({ ...context, messageIds: [causalId, promptId] })
+      : {};
+    // Before the start call returns, the turn id is unknown. A thread starts
+    // one turn at a time, so an unbound origin belongs to the turn calling.
+    return origins[causalId]
+      ?? (starting?.turnId ? starting.origin : undefined)
+      ?? origins[promptId]
+      ?? starting?.origin;
+  }
+
+  /** The origin bound to this turn, else the thread's origin still awaiting its turn id. */
+  private findStartingTurnOrigin(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): StartingTurnOrigin | undefined {
+    let unbound: StartingTurnOrigin | undefined;
+    for (const entry of this.startingTurnOrigins) {
+      if (entry.backend !== context.backend || entry.threadId !== context.threadId) continue;
+      if (entry.turnId === undefined) unbound = entry;
+      else if (entry.turnId === context.turnId) return entry;
+    }
+    return unbound;
+  }
+
+  /**
+   * Call before the provider starts the turn. Every path must end in
+   * `persistStartingTurnOrigin` or `dropStartingTurnOrigin`.
+   */
+  private beginStartingTurnOrigin(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    origin?: AppServerThreadMessageOrigin;
+  }): StartingTurnOrigin | undefined {
+    if (!params.origin) return undefined;
+    const entry: StartingTurnOrigin = { backend: params.backend, threadId: params.threadId, origin: params.origin };
+    this.startingTurnOrigins.add(entry);
+    return entry;
+  }
+
+  /** Bind as soon as the start call returns, so the origin matches this turn only. */
+  private bindStartingTurnOrigin(
+    entry: StartingTurnOrigin | undefined,
+    turn: { threadId: string; turnId: string },
+  ): void {
+    if (!entry) return;
+    entry.threadId = turn.threadId;
+    entry.turnId = turn.turnId;
+  }
+
+  private dropStartingTurnOrigin(entry: StartingTurnOrigin | undefined): void {
+    if (entry) this.startingTurnOrigins.delete(entry);
+  }
+
+  /** Writes the bound origin as the turn's `user:<turnId>` row, then forgets it. */
+  private async persistStartingTurnOrigin(entry: StartingTurnOrigin | undefined): Promise<void> {
+    if (!entry?.turnId) {
+      this.dropStartingTurnOrigin(entry);
+      return;
+    }
+    try {
+      await this.persistThreadMessageOrigin({
+        backend: entry.backend,
+        threadId: entry.threadId,
+        messageId: buildTurnUserMessageOriginId(entry.turnId),
+        origin: entry.origin,
+      });
+    } finally {
+      this.dropStartingTurnOrigin(entry);
+    }
   }
 
   private forgeReadHandler?: ForgeReadHandler;
@@ -12669,6 +12782,9 @@ export class DesktopBackendRegistry {
     this.navigationDirectoriesByKey = new Map(
       snapshot.directories.map((directory) => [directory.key, directory]),
     );
+    // Forge Automation files each thread under the project this complete
+    // scan shows it in, worktrees included.
+    getProjectForgeAutomationIndex().rememberDirectories(snapshot.directories);
   }
 
   async publishLocalEvent(event: AgentEvent): Promise<void> {
@@ -20110,6 +20226,11 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /** Whether the operator locked the thread; a lock outranks a project pause. */
+  async isThreadLocked(params: { backend: AppServerBackendKind; threadId: string }): Promise<boolean> {
+    return Boolean(await this.readThreadLock(params.backend, params.threadId));
+  }
+
   private async readThreadLock(backend: AppServerBackendKind, threadId: string): Promise<ThreadLock | undefined> {
     return (await this.overlayStore.getThreadOverlayState({ backend, threadId }))?.lock;
   }
@@ -20606,6 +20727,194 @@ export class DesktopBackendRegistry {
       id: queueEntryId,
       origin,
     }, holdReason, { onAdmission }));
+  }
+
+  /**
+   * The thread's Directories project and its Forge Automation, when that
+   * project stores a setting. Owner-local and synchronous: it reads only the
+   * in-memory index and this registry's cached summary.
+   */
+  resolveThreadForgeProject(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): ProjectForgeAutomationResolution | undefined {
+    return getProjectForgeAutomationIndex().resolveThread(
+      params,
+      () => this.getCachedThreadSummary(params),
+    );
+  }
+
+  /** The thread's project when it is paused; undefined otherwise. */
+  resolvePausedThreadProject(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): ProjectForgeAutomationResolution | undefined {
+    const project = this.resolveThreadForgeProject(params);
+    return project?.automation.paused ? project : undefined;
+  }
+
+  /**
+   * Refusal text when the target's paused project refuses messages from
+   * other threads, or undefined when the message may go through.
+   */
+  projectPausedThreadMessageRefusal(target: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): string | undefined {
+    const project = this.resolveThreadForgeProject(target);
+    if (!project || !projectRefusesThreadMessages(project.automation)) return undefined;
+    const title = this.getCachedThreadSummary(target)?.title.trim();
+    return buildProjectPausedThreadMessageRefusal({
+      projectLabel: project.label,
+      ...(title ? { threadTitle: title } : {}),
+    });
+  }
+
+  /**
+   * Throws when an agent's message from another thread reaches a local
+   * thread whose paused project refuses them. Operator, messaging-app and
+   * PwrAgent deliveries always pass.
+   */
+  assertProjectAcceptsThreadMessage(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    messageOrigin?: AppServerThreadMessageOrigin;
+  }): void {
+    if (params.messageOrigin?.kind !== "agent" || params.messageOrigin.operatorApproved) return;
+    const refusal = this.projectPausedThreadMessageRefusal(params);
+    if (refusal) throw new ProjectPausedThreadMessageError(refusal);
+  }
+
+  /**
+   * Deliver a wake-up, such as a finished monitor or a Continue After
+   * dependency, to a thread whose project is paused. `hold` queues it as a
+   * paused, project-held entry the operator's own sends pass; `discard`
+   * drops it and leaves a note in the thread.
+   */
+  async deliverProjectPausedWakeup(params: {
+    project: ProjectForgeAutomationResolution;
+    queueEntryId: string;
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    origin: ThreadTurnQueueOrigin;
+    messageOrigin?: AppServerThreadMessageOrigin;
+    source: ProjectHeldWakeupSource;
+    summary: string;
+  }): Promise<
+    | Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>
+    | { status: "discarded" }
+  > {
+    const projectLabel = params.project.label;
+    if (params.project.automation.wakeupPolicy === "discard") {
+      backendRegistryLog.info("project paused: wake-up discarded", {
+        backend: params.backend,
+        threadId: params.threadId,
+        directoryKey: params.project.directoryKey,
+        source: params.source,
+      });
+      // The note is history only. Codex accepts injected items only between
+      // turns; a busy Codex thread keeps the log line above instead.
+      if (params.backend !== "codex" || this.canStartThreadTurnImmediately(params)) {
+        await this.injectTaskMonitorCompletionMessage({
+          backend: params.backend,
+          monitorId: `project-pause:${randomUUID()}`,
+          parentThreadId: params.threadId,
+          text: buildProjectPausedWakeupDiscardNote({ projectLabel, summary: params.summary }),
+        }).catch((error: unknown) => {
+          backendRegistryLog.warn("project paused: discard note failed", {
+            backend: params.backend,
+            threadId: params.threadId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+      return { status: "discarded" };
+    }
+    this.assertThreadNotHandingOff(params.backend, params.threadId);
+    const entry = {
+      backend: params.backend,
+      threadId: params.threadId,
+      input: params.input,
+      origin: params.origin,
+      ...(params.messageOrigin ? { messageOrigin: params.messageOrigin } : {}),
+    };
+    return await this.admitThreadAttachments(entry, (input, onAdmission) =>
+      this.threadTurnQueue.submitProjectHeld({
+        ...entry,
+        input,
+        id: params.queueEntryId,
+      }, {
+        reason: buildProjectPausedWakeupHoldReason({ projectLabel }),
+        projectHold: {
+          directoryKey: params.project.directoryKey,
+          source: params.source,
+          summary: params.summary,
+        },
+      }, { onAdmission }));
+  }
+
+  /** Every wake-up a paused project holds, across its threads. */
+  listProjectHeldWakeups(directoryKey: string): ProjectHeldWakeup[] {
+    return this.threadTurnQueue.getAllQueuedEntries()
+      .flatMap((entry): ProjectHeldWakeup[] => {
+        if (entry.projectHold?.directoryKey !== directoryKey) return [];
+        const threadTitle = this.getCachedThreadSummary(entry)?.title.trim();
+        return [{
+          entryId: entry.id,
+          backend: entry.backend,
+          threadId: entry.threadId,
+          ...(threadTitle ? { threadTitle } : {}),
+          source: entry.projectHold.source,
+          summary: entry.projectHold.summary,
+          createdAt: entry.createdAt,
+        }];
+      })
+      .sort((left, right) => left.createdAt - right.createdAt);
+  }
+
+  /**
+   * The operator's answers from the resume dialog. `send` releases the entry
+   * for normal dispatch, an operator action that is allowed while the
+   * project is still paused; `discard` deletes it.
+   */
+  async resolveProjectHeldWakeups(
+    request: ResolveProjectHeldWakeupsRequest,
+  ): Promise<ResolveProjectHeldWakeupsResponse> {
+    const results: ResolveProjectHeldWakeupsResponse["results"] = [];
+    for (const resolution of request.resolutions) {
+      const entry = this.threadTurnQueue.getQueuedEntries(resolution)
+        .find((candidate) => candidate.id === resolution.entryId);
+      if (entry?.projectHold?.directoryKey !== request.directoryKey) {
+        results.push({ entryId: resolution.entryId, status: "not_found" });
+        continue;
+      }
+      try {
+        if (resolution.action === "discard") {
+          const cancelled = this.cancelQueuedTurn(
+            resolution.entryId,
+            "Discarded while resuming forge activity.",
+          );
+          results.push({ entryId: resolution.entryId, status: cancelled ? "discarded" : "not_found" });
+          continue;
+        }
+        const resumed = await this.setQueuedTurnPaused({
+          queueEntryId: resolution.entryId,
+          paused: false,
+        });
+        results.push({
+          entryId: resolution.entryId,
+          status: resumed.disposition === "updated" ? "sent" : "not_found",
+        });
+      } catch (error) {
+        results.push({
+          entryId: resolution.entryId,
+          status: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return { results };
   }
 
   async submitTurnIfIdle(params: {
@@ -21804,6 +22113,7 @@ export class DesktopBackendRegistry {
       const registrations = await this.registerMcpConnections(overlay?.mcpConnectionIds, params.threadId);
       // Once handed over, the Claude session revokes them when it closes.
       let handedOver = false;
+      let startingOrigin: StartingTurnOrigin | undefined;
       let revoked = false;
       const revokeConnections = () => {
         if (revoked) return;
@@ -21832,6 +22142,7 @@ export class DesktopBackendRegistry {
         const instructions = (await this.getThreadAgentMetadata(params))?.instructions;
         handedOver = true;
         const messageOrigin = resolveThreadMessageOrigin(params);
+        startingOrigin = this.beginStartingTurnOrigin({ backend: "claude", threadId: params.threadId, origin: messageOrigin });
         const result = await this.claudeBackend.startTurn({
           ...params, input, model: modelSettings.model, reasoningEffort: modelSettings.reasoningEffort,
           messageOrigin,
@@ -21847,14 +22158,16 @@ export class DesktopBackendRegistry {
           ),
           onSessionClosed: revokeConnections,
         });
-        await this.persistThreadMessageOrigin({ backend: "claude", threadId: params.threadId,
-          messageId: `user:${result.turnId}`, origin: messageOrigin });
+        this.bindStartingTurnOrigin(startingOrigin, { threadId: params.threadId, turnId: result.turnId });
+        await this.persistStartingTurnOrigin(startingOrigin);
         return result;
       } catch (error) {
         // A live session shares the thread's grants, so it alone revokes them.
         if (!handedOver) revokeConnections();
         if (error instanceof ClaudeTurnActiveError) throw new ThreadAlreadyActiveError(error.message);
         throw error;
+      } finally {
+        this.dropStartingTurnOrigin(startingOrigin);
       }
     }
     // A selection already in flight must finish before this turn reads its runtime.
@@ -21904,6 +22217,7 @@ export class DesktopBackendRegistry {
       }
       this.reservedAcpStartThreadKeys.add(reservationKey);
       let pendingMessageContextId: string | undefined;
+      let startingOrigin: StartingTurnOrigin | undefined;
       try {
         const preparedPdfInput = await preparePdfTurnInput({
           handling: this.resolvePdfTurnInputHandling({
@@ -21949,6 +22263,11 @@ export class DesktopBackendRegistry {
           origin: resolveThreadMessageOrigin(params),
           text: extractFirstMeaningfulTextInput(params.input),
         });
+        startingOrigin = this.beginStartingTurnOrigin({
+          backend: params.backend,
+          threadId: params.threadId,
+          origin: resolveThreadMessageOrigin(params),
+        });
         const result = await this.startAcpTurn({
           backend: params.backend,
           threadId: params.threadId,
@@ -21956,6 +22275,7 @@ export class DesktopBackendRegistry {
           model: modelSettings.model,
           reasoningEffort: modelSettings.reasoningEffort,
         });
+        this.bindStartingTurnOrigin(startingOrigin, result);
         await this.overlayStore.consumeManagedReviewContexts({
           backend: params.backend,
           threadId: params.threadId,
@@ -21978,12 +22298,7 @@ export class DesktopBackendRegistry {
           pendingMessageContextId,
           result.turnId,
         );
-        await this.persistThreadMessageOrigin({
-          backend: params.backend,
-          threadId: result.threadId,
-          messageId: buildTurnUserMessageOriginId(result.turnId),
-          origin: resolveThreadMessageOrigin(params),
-        });
+        await this.persistStartingTurnOrigin(startingOrigin);
         await this.rememberTurnInputAttachments({
           backend: params.backend,
           threadId: result.threadId,
@@ -21996,6 +22311,7 @@ export class DesktopBackendRegistry {
         this.forgetPendingThreadMessageContext(pendingMessageContextId);
         throw error;
       } finally {
+        this.dropStartingTurnOrigin(startingOrigin);
         this.reservedAcpStartThreadKeys.delete(reservationKey);
       }
     }
@@ -22194,6 +22510,11 @@ export class DesktopBackendRegistry {
         retryableCodexTurnStart,
       );
     }
+    const startingOrigin = this.beginStartingTurnOrigin({
+      backend: params.backend,
+      threadId: params.threadId,
+      origin: resolveThreadMessageOrigin(params),
+    });
     try {
       result = await this.withCodexThreadClient(
         params.threadId,
@@ -22258,6 +22579,7 @@ export class DesktopBackendRegistry {
         params.executionMode,
       );
     } catch (error) {
+      this.dropStartingTurnOrigin(startingOrigin);
       await this.emit({
         backend: params.backend,
         notification: {
@@ -22314,6 +22636,7 @@ export class DesktopBackendRegistry {
       }
       throw error;
     }
+    this.bindStartingTurnOrigin(startingOrigin, result);
     if (retryableCodexTurnStart) {
       retryableCodexTurnStart.turnId = result.turnId;
     }
@@ -22326,12 +22649,7 @@ export class DesktopBackendRegistry {
       pdfAttachments,
     );
     this.bindPendingThreadMessageContext(pendingMessageContextId, result.turnId);
-    await this.persistThreadMessageOrigin({
-      backend: params.backend,
-      threadId: result.threadId,
-      messageId: buildTurnUserMessageOriginId(result.turnId),
-      origin: resolveThreadMessageOrigin(params),
-    });
+    await this.persistStartingTurnOrigin(startingOrigin);
     this.rebindPendingReviewStartsForStartedTurn({
       backend: params.backend,
       threadId: params.threadId,
@@ -23771,6 +24089,20 @@ export class DesktopBackendRegistry {
   async controlActiveTurn(
     request: ControlActiveTurnRequest,
   ): Promise<ControlActiveTurnResponse> {
+    // A peer's agent steering a thread here meets the same project pause a
+    // local agent does. Stopping starts nothing, so it passes.
+    const projectRefusal = request.operation === "steer" && request.messageOrigin?.kind === "agent"
+      ? this.projectPausedThreadMessageRefusal(request)
+      : undefined;
+    if (projectRefusal) {
+      return {
+        ok: false,
+        backend: request.backend,
+        threadId: request.threadId,
+        requestId: request.requestId,
+        error: { code: PROJECT_PAUSED_ERROR_CODE, message: projectRefusal },
+      };
+    }
     const requestKey = [
       request.backend,
       request.threadId,
@@ -42809,7 +43141,13 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
     });
     const threadTodo = threadTodoMessageOriginFromUnknown(params.todo);
-    return threadTodo ? { ...messageOrigin, threadTodo } : messageOrigin;
+    // The operator clicked the card, so a paused project's refusal of
+    // messages from other threads lets it through.
+    return {
+      ...messageOrigin,
+      operatorApproved: true,
+      ...(threadTodo ? { threadTodo } : {}),
+    };
   }
 
   /** Operator-approved to-do dispatch uses the same routing, queue and receipts as agent messages. */
@@ -42828,7 +43166,7 @@ export class DesktopBackendRegistry {
         includeRemote: params.target.instanceId !== undefined,
         prompt: params.prompt,
       },
-    }, { threadTodo: params.todo });
+    }, { threadTodo: params.todo, operatorApproved: true });
     if (!response.ok) throw new Error(response.error.message);
   }
 
@@ -42848,13 +43186,32 @@ export class DesktopBackendRegistry {
         "Thread orchestration tools must be invoked from a live turn.",
       );
     }
+    const refusal = this.agentMessageProjectRefusal(request.args);
+    if (refusal) return threadOrchestrationFailure(PROJECT_PAUSED_ERROR_CODE, refusal);
     return await this.deliverMessageToThread(request);
+  }
+
+  /**
+   * A paused project's refusal of an agent message addressed to one of its
+   * local threads. An explicit instanceId addresses a peer's thread, which
+   * that peer gates.
+   */
+  private agentMessageProjectRefusal(args: {
+    backend: string;
+    threadId: string;
+    instanceId?: string;
+  }): string | undefined {
+    if (args.instanceId?.trim() || !isAppServerBackendKind(args.backend)) return undefined;
+    const threadId = args.threadId.trim();
+    return threadId
+      ? this.projectPausedThreadMessageRefusal({ backend: args.backend, threadId })
+      : undefined;
   }
 
   private async deliverMessageToThread(
     request: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">,
     /** Set only by the operator's to-do dispatch, never from tool arguments. */
-    options?: { threadTodo?: { id: string; title?: string } },
+    options?: { threadTodo?: { id: string; title?: string }; operatorApproved?: boolean },
   ): Promise<PwrAgentThreadOrchestrationResponse> {
     const backend = request.args.backend;
     if (!isAppServerBackendKind(backend)) {
@@ -42929,6 +43286,8 @@ export class DesktopBackendRegistry {
       if (messageOrigin.sourceThread) {
         messageOrigin.sourceThread = { ...messageOrigin.sourceThread, messageId: correspondenceId };
       }
+      // A peer's paused project lets a to-do card's send through.
+      if (options?.operatorApproved) messageOrigin.operatorApproved = true;
       if (!request.args.replaceQueueEntryId) this.correspondenceStore.record({
         id: correspondenceId,
         source,
@@ -43126,11 +43485,14 @@ export class DesktopBackendRegistry {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return threadOrchestrationFailure(
-        error instanceof PwrAgentFederatedThreadMessageError
-          ? error.code
-          : /not found/i.test(message)
-            ? "not_found"
-            : "turn_start_failed",
+        // A peer's paused project refuses through its startTurn error text.
+        isProjectPausedThreadMessageRefusal(message)
+          ? PROJECT_PAUSED_ERROR_CODE
+          : error instanceof PwrAgentFederatedThreadMessageError
+            ? error.code
+            : /not found/i.test(message)
+              ? "not_found"
+              : "turn_start_failed",
         message,
       );
     }
@@ -43139,6 +43501,11 @@ export class DesktopBackendRegistry {
   private async controlThreadTurn(
     request: PwrAgentThreadOrchestrationRequest<"steer_thread" | "stop_thread">,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
+    // Steering is a message; stopping starts nothing, so a pause allows it.
+    const refusal = request.operation === "steer_thread"
+      ? this.agentMessageProjectRefusal(request.args)
+      : undefined;
+    if (refusal) return threadOrchestrationFailure(PROJECT_PAUSED_ERROR_CODE, refusal);
     const requestKey = [
       request.operation,
       request.args.backend,
@@ -43530,6 +43897,27 @@ export class DesktopBackendRegistry {
     return await promise;
   }
 
+  /**
+   * A handoff into a paused project that refuses messages from other
+   * threads. A handoff within the source thread's own project is that
+   * thread's own work, which the operator is driving, so it passes.
+   */
+  private handoffProjectRefusal(
+    request: PwrAgentThreadOrchestrationRequest<"handoff_task">,
+  ): string | undefined {
+    const cwd = request.args.cwd?.trim();
+    if (!cwd) return undefined;
+    const index = getProjectForgeAutomationIndex();
+    const target = index.resolvePath(cwd);
+    if (!target || !projectRefusesThreadMessages(target.automation)) return undefined;
+    const source = index.directoryKeyForThread(
+      request.context,
+      () => this.getCachedThreadSummary(request.context),
+    );
+    if (source === target.directoryKey) return undefined;
+    return buildProjectPausedThreadMessageRefusal({ projectLabel: target.label });
+  }
+
   private async performHandoffTaskToThread(
     request: PwrAgentThreadOrchestrationRequest<"handoff_task">,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
@@ -43549,6 +43937,8 @@ export class DesktopBackendRegistry {
         "Thread handoff tools must be invoked from a live turn.",
       );
     }
+    const handoffRefusal = this.handoffProjectRefusal(request);
+    if (handoffRefusal) return threadOrchestrationFailure(PROJECT_PAUSED_ERROR_CODE, handoffRefusal);
     const backend = request.args.backend ?? sourceBackend;
     if (!isAppServerBackendKind(backend)) {
       return threadOrchestrationFailure(
@@ -45458,16 +45848,22 @@ export class DesktopBackendRegistry {
         hidden: true,
       });
       this.bindTaskMonitorMcpThread(params.monitorId, thread.threadId, executionMode);
-      const turn = await this.startAcpTurn({
-        backend: params.context.backend,
-        threadId: thread.threadId,
-        input: [{ type: "text", text: params.prompt }],
-        model: params.runtimeModel,
-        reasoningEffort,
-      });
-      await this.persistThreadMessageOrigin({ backend: params.context.backend, threadId: turn.threadId,
-        messageId: buildTurnUserMessageOriginId(turn.turnId),
-        origin: buildTaskMonitorPromptOrigin(params.causalContext) });
+      const startingOrigin = this.beginStartingTurnOrigin({ backend: params.context.backend,
+        threadId: thread.threadId, origin: buildTaskMonitorPromptOrigin(params.causalContext) });
+      let turn: { threadId: string; turnId: string };
+      try {
+        turn = await this.startAcpTurn({
+          backend: params.context.backend,
+          threadId: thread.threadId,
+          input: [{ type: "text", text: params.prompt }],
+          model: params.runtimeModel,
+          reasoningEffort,
+        });
+        this.bindStartingTurnOrigin(startingOrigin, turn);
+        await this.persistStartingTurnOrigin(startingOrigin);
+      } finally {
+        this.dropStartingTurnOrigin(startingOrigin);
+      }
       return {
         cwd,
         executionMode,
@@ -45500,6 +45896,11 @@ export class DesktopBackendRegistry {
     });
     this.bindTaskMonitorMcpThread(params.monitorId, thread.threadId, executionMode);
     this.reservedCodexStartThreadIds.add(thread.threadId);
+    const causalContext = params.causalContext ?? {};
+    const startingOrigin = causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous
+      ? this.beginStartingTurnOrigin({ backend: "codex", threadId: thread.threadId,
+        origin: buildTaskMonitorPromptOrigin(causalContext) })
+      : undefined;
     let turn: { threadId: string; turnId: string };
     try {
       turn = await client.startTurn({
@@ -45527,6 +45928,10 @@ export class DesktopBackendRegistry {
         buildActiveTurnModeKey(turn.threadId, turn.turnId),
         executionMode,
       );
+      this.bindStartingTurnOrigin(startingOrigin, turn);
+    } catch (error) {
+      this.dropStartingTurnOrigin(startingOrigin);
+      throw error;
     } finally {
       this.reservedCodexStartThreadIds.delete(thread.threadId);
     }
@@ -45542,11 +45947,7 @@ export class DesktopBackendRegistry {
       parentThreadId: params.context.threadId,
     });
 
-    const causalContext = params.causalContext ?? {};
-    if (causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous) {
-      await this.persistThreadMessageOrigin({ backend: "codex", threadId: turn.threadId,
-        messageId: buildTurnUserMessageOriginId(turn.turnId), origin: buildTaskMonitorPromptOrigin(causalContext) });
-    }
+    await this.persistStartingTurnOrigin(startingOrigin);
 
     return {
       cwd,
@@ -45773,6 +46174,9 @@ export class DesktopBackendRegistry {
         messageOrigin,
       };
       const parentLock = await this.readThreadLock(parentWake.backend, parentWake.threadId);
+      // A paused project holds or discards the wake by its policy. A lock
+      // already holds everything, so it wins.
+      const pausedProject = parentLock ? undefined : this.resolvePausedThreadProject(parentWake);
       // A locked parent holds the result rather than refusing it: the monitor
       // finishes either way, and an unlock delivers what it found.
       const submitted = parentLock
@@ -45781,19 +46185,29 @@ export class DesktopBackendRegistry {
             queueEntryId: `task-monitor:${params.record.monitorId}`,
             holdReason: threadLockRefusalMessage(parentLock),
           })
-        : await this.submitTurn(parentWake);
+        : pausedProject
+          ? await this.deliverProjectPausedWakeup({
+              ...parentWake,
+              project: pausedProject,
+              queueEntryId: `task-monitor:${params.record.monitorId}`,
+              source: "monitor",
+              summary: summarizeProjectHeldWakeup(`Monitor finished: "${params.record.task}"`),
+            })
+          : await this.submitTurn(parentWake);
       parentTurn =
-        submitted.status === "started"
-          ? {
-              status: "started",
-              turnId: submitted.turnId,
-              queueEntryId: submitted.entry.id,
-            }
-          : {
-              status: "queued",
-              queueEntryId: submitted.entry.id,
-              position: submitted.position,
-            };
+        submitted.status === "discarded"
+          ? undefined
+          : submitted.status === "started"
+            ? {
+                status: "started",
+                turnId: submitted.turnId,
+                queueEntryId: submitted.entry.id,
+              }
+            : {
+                status: "queued",
+                queueEntryId: submitted.entry.id,
+                position: submitted.position,
+              };
     }
 
     this.taskMonitorDelegations.delete(params.record.monitorId);
@@ -46034,33 +46448,36 @@ export class DesktopBackendRegistry {
         return;
       }
       if (isAcpBackendId(record.backend)) {
-        const turn = await this.startAcpTurn({
-          backend: record.backend,
-          threadId: record.monitorThreadId,
-          input: [
-            {
-              type: "text",
-              text: buildTaskMonitorRecoveryPrompt({
-                monitorId: record.monitorId,
-                task: record.task,
-                terminalStatus: params.terminalStatus,
-              }),
-            },
-          ],
-          model: record.runtimeModel,
-          reasoningEffort:
-            record.preferredReasoningEffort === "provider-default"
-              ? undefined
-              : record.preferredReasoningEffort,
-        });
-        record.monitorTurnId = turn.turnId;
-        record.lastActivityAt = Date.now();
-        await this.persistThreadMessageOrigin({
-          backend: record.backend,
-          threadId: turn.threadId,
-          messageId: buildTurnUserMessageOriginId(turn.turnId),
-          origin: buildTaskMonitorPromptOrigin(record.causalContext),
-        });
+        const startingOrigin = this.beginStartingTurnOrigin({ backend: record.backend,
+          threadId: record.monitorThreadId, origin: buildTaskMonitorPromptOrigin(record.causalContext) });
+        let turn: { threadId: string; turnId: string };
+        try {
+          turn = await this.startAcpTurn({
+            backend: record.backend,
+            threadId: record.monitorThreadId,
+            input: [
+              {
+                type: "text",
+                text: buildTaskMonitorRecoveryPrompt({
+                  monitorId: record.monitorId,
+                  task: record.task,
+                  terminalStatus: params.terminalStatus,
+                }),
+              },
+            ],
+            model: record.runtimeModel,
+            reasoningEffort:
+              record.preferredReasoningEffort === "provider-default"
+                ? undefined
+                : record.preferredReasoningEffort,
+          });
+          this.bindStartingTurnOrigin(startingOrigin, turn);
+          record.monitorTurnId = turn.turnId;
+          record.lastActivityAt = Date.now();
+          await this.persistStartingTurnOrigin(startingOrigin);
+        } finally {
+          this.dropStartingTurnOrigin(startingOrigin);
+        }
         backendRegistryLog.warn("started ACP task monitor recovery turn", {
           backend: record.backend,
           monitorId: record.monitorId,

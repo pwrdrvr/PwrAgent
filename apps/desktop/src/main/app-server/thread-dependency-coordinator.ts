@@ -51,7 +51,15 @@ type Options = {
     input: { type: "text"; text: string }[];
     origin: "automation";
     messageOrigin: AppServerThreadMessageOrigin;
-  }): Promise<{ status: "started" | "busy"; turnId?: string }>;
+  }): Promise<{
+    /**
+     * `held` and `discarded`: the consumer's project is paused, and its
+     * wake-up policy kept the prompt as a held message or dropped it. Either
+     * way the dependency is delivered; nothing retries it.
+     */
+    status: "started" | "busy" | "held" | "discarded";
+    turnId?: string;
+  }>;
   changed(dependency: ThreadDependency): Promise<void>;
   canDispatch?: (dependency: ThreadDependency) => boolean;
   isConsumerBusy?: (dependency: ThreadDependency) => boolean;

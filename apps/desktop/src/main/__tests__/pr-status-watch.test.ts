@@ -1367,3 +1367,63 @@ describe("PrStatusWatchCoordinator merge/close watches", () => {
     expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
   });
 });
+
+describe("PrStatusWatchCoordinator with project Forge Automation", () => {
+  it("lets a CI watch sleep while its project holds watches, then fires it once allowed", async () => {
+    await registerWatch();
+    let allowed = false;
+    const submitTurnIfIdle: Mock<SubmitTurnIfIdle> = vi.fn(async () => ({
+      status: "started" as const,
+      turnId: "turn-watch-1",
+    }));
+    const coordinator = new PrStatusWatchCoordinator({
+      store,
+      registry: { submitTurnIfIdle },
+      allowsWatchDispatch: () => allowed,
+      now: () => now,
+    });
+    const passing = pr({ state: "passing", checkState: "passing" });
+
+    // Released without spending an attempt, more times than the attempt cap.
+    for (let poll = 0; poll <= PR_STATUS_WATCH_MAX_DISPATCH_ATTEMPTS; poll += 1) {
+      await coordinator.handleStatusSnapshot(passing, now);
+      now += 1;
+    }
+    expect(submitTurnIfIdle).not.toHaveBeenCalled();
+    expect(await store.listActiveThreadPrStatusWatches({ backend: "codex", threadId: "thread-1" }))
+      .toHaveLength(1);
+
+    allowed = true;
+    await coordinator.handleStatusSnapshot(passing, now);
+    expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds a merge watch before any wake work, then wakes once allowed", async () => {
+    await registerTerminalWatch();
+    let allowed = false;
+    const submitTurnIfIdle: Mock<SubmitTurnIfIdle> = vi.fn(async () => ({
+      status: "started" as const,
+      turnId: "turn-terminal-1",
+    }));
+    const fetchTerminalDetails = vi.fn(async (_pr: PrSummary) => squashDetails());
+    const prepareTerminalWake = vi.fn(async () => ["cleanup ran"]);
+    const coordinator = new PrStatusWatchCoordinator({
+      store,
+      registry: { submitTurnIfIdle },
+      allowsWatchDispatch: () => allowed,
+      fetchTerminalDetails,
+      prepareTerminalWake,
+      now: () => now,
+    });
+
+    await expect(coordinator.handleTerminalSnapshot(mergedPr(), now)).resolves.toBe(0);
+    expect(fetchTerminalDetails).not.toHaveBeenCalled();
+    expect(prepareTerminalWake).not.toHaveBeenCalled();
+    expect(submitTurnIfIdle).not.toHaveBeenCalled();
+
+    allowed = true;
+    now += 1;
+    await expect(coordinator.handleTerminalSnapshot(mergedPr(), now)).resolves.toBe(1);
+    expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
+  });
+});

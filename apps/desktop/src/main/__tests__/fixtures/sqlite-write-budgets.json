@@ -971,6 +971,13 @@
     "rowsChanged": 110,
     "statements": 106
   },
+  "project-forge-automation-save": {
+    "commits": 2,
+    "note": "Two operator Saves (pause, then resume) commit one overlay row each (~0.012 MB per Save); a few Saves a day cost well under 0.1 MB/day, with no per-poll, per-turn or idle writes.",
+    "observedWalBytes": 24720,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "project-move-parent-detachment": {"commits": 1, "note": "One workspace boundary commit also clears the parent (~0.0165 MB/move, ~1.65 MB/day at 100 moves); no timer or per-turn writes.", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
   "provider-branch-adoption": {"commits": 1, "note": "One turn-end branch change: 1 commit, ~16.5 KB WAL; ~1.65 MB/day at 100 changes/day; unchanged turns write zero.", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
   "provider-branch-observation": {"commits": 1, "note": "One hover/timer branch change preserves the expected named branch: 1 commit, ~16.5 KB WAL; ~1.65 MB/day at 100 changes/day; idle writes zero.", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},

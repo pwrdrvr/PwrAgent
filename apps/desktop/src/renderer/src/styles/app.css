@@ -5589,6 +5589,13 @@ textarea,
   align-items: center;
 }
 
+.project-index__paused {
+  display: flex;
+  flex: none;
+  align-items: center;
+  color: var(--text-muted);
+}
+
 /* The seam between the index and the list, drawn like the sidebar's own:
    an 11px hit area centred on the border, lit 1px on hover or focus. */
 .project-index__grip {
@@ -8801,6 +8808,23 @@ a.button {
   text-align: right;
 }
 
+/* Forge activity paused: one quiet mark on the project header. Neutral and
+   outlined, the Held chip's shape without its danger tone, because a pause is
+   the operator's own choice, not something waiting on them. */
+.directory-row__paused {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 16px;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+}
+
 /* The header count cookie inherits the base 10px size — it used to be a
    9px one-off, which made the thread rows' (then-12px) cookie read as a
    different, chunkier mark for the same state. */
@@ -10052,6 +10076,171 @@ a.button {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+/* Forge Automation and its Resume step: the lock dialog's frame. The
+   eyebrow labels, hints and status row copy `.thread-lock-dialog`'s. */
+.forge-automation-dialog {
+  width: min(480px, 100%);
+}
+
+.forge-automation-dialog--resume {
+  width: min(560px, 100%);
+}
+
+.forge-automation-dialog__subtitle {
+  margin: 4px 0 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forge-automation-dialog__lede {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.forge-automation-dialog__group {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+/* Keeps `.forge-automation-dialog__group`'s top margin when both apply. */
+.forge-automation-dialog__fieldset {
+  min-width: 0;
+  margin-inline: 0;
+  margin-bottom: 0;
+  padding: 0;
+  border: 0;
+}
+
+.forge-automation-dialog__fieldset > legend {
+  margin-bottom: 4px;
+}
+
+.forge-automation-dialog__group > .forge-automation-dialog__fieldset {
+  margin-top: 6px;
+}
+
+.forge-automation-dialog__label {
+  margin: 0;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.forge-automation-dialog__hint {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.forge-automation-dialog__hint--lead {
+  margin: 2px 0 2px;
+}
+
+.forge-automation-dialog__option {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  padding: 5px 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.3;
+  cursor: pointer;
+}
+
+.forge-automation-dialog__option input {
+  width: 14px;
+  height: 14px;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+}
+
+.forge-automation-dialog__option input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.forge-automation-dialog__option:has(input:disabled) {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.forge-automation-dialog__option-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.forge-automation-dialog__option-text small {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.forge-automation-dialog__status {
+  margin: 14px 0 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.forge-automation-dialog__held {
+  max-height: 280px;
+  margin: 12px 0 0;
+  padding: 0;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  list-style: none;
+}
+
+.forge-automation-dialog__held-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 12px;
+  padding: 8px 10px;
+}
+
+.forge-automation-dialog__held-row + .forge-automation-dialog__held-row {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.forge-automation-dialog__held-title {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forge-automation-dialog__held-actions {
+  display: inline-flex;
+  grid-row: span 2;
+  gap: 6px;
+}
+
+.forge-automation-dialog__held-meta {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 /* Continue After: the rename dialog's frame, wide enough to pick threads on
@@ -44964,6 +45153,15 @@ button.composer__subthread-source-parent:hover {
 .composer__toggle:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+/* The project's Forge Automation has Auto-fix paused or off: the thread keeps
+   its own value (aria-pressed) but the chip drops its accent. */
+.composer__toggle.is-project-overridden,
+.composer__toggle.is-active.is-project-overridden {
+  border-color: var(--border-subtle);
+  background: var(--bg-input);
+  color: var(--text-muted);
 }
 
 /* A shell remains alive behind a collapsed integrated terminal panel. */

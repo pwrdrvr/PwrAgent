@@ -11,7 +11,7 @@ import {
   type NavigationRow,
 } from "@pwragent/shared";
 
-type FixtureDirectory = Pick<NavigationDirectorySummary, "key" | "kind" | "label" | "path" | "latestUpdatedAt" | "pinnedRank" | "directoryThreadsCollapsed" | "gitStatus" | "launchpad" | "localAvailability"> & {
+type FixtureDirectory = Pick<NavigationDirectorySummary, "key" | "kind" | "label" | "path" | "latestUpdatedAt" | "pinnedRank" | "directoryThreadsCollapsed" | "gitStatus" | "launchpad" | "localAvailability" | "forgeAutomation"> & {
   threadKeys?: string[];
   repositoryKey?: string;
   repositoryKeys?: string[];
@@ -140,6 +140,7 @@ export function navigationQueryFixture(
         ...(directory.repositoryKey ? { repositoryKey: directory.repositoryKey } : {}),
         ...(directory.repositoryKeys ? { repositoryKeys: directory.repositoryKeys } : {}),
         pinnedRank: directory.pinnedRank, directoryThreadsCollapsed: directory.directoryThreadsCollapsed, localAvailability: directory.localAvailability,
+        ...(directory.forgeAutomation ? { forgeAutomation: directory.forgeAutomation } : {}),
         gitStatus: directory.gitStatus, latestUpdatedAt: directory.latestUpdatedAt, counts: counts(members),
         pinnedRootCount: roots.filter((thread) => thread.pinnedRank).length,
         unpinnedRootCount: roots.filter((thread) => !thread.pinnedRank).length,

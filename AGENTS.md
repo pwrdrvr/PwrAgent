@@ -152,10 +152,11 @@
 - Optimistic renderer synchronization has caused expensive Windows-only failures.
 - Do not substitute retries, longer timeouts, fewer workers, or serial lanes for an ownership fix.
 - Do not substitute those workarounds for an evidence-based readiness fix.
-- The macOS CI lane uses the selected-repository **PwrDrvr macOS** runner group.
-- Only PwrAgent and PwrSnap share this group.
-- Do not add a repository-scoped runner.
-- Do not give the full organization access to this group.
+- macOS CI and release jobs run on free GitHub-hosted `macos-26` runners.
+  - Use `macos-26`: actool 26 compiles the app icon and needs a macOS 26 host.
+  - Do not use a paid larger size or `macos-26-intel`.
+  - Do not move a CI job onto self-hosted machines. This repository is public,
+    and fork pull requests run every macOS job.
 - For branch-drift dialog screenshots, run `pnpm --filter @pwragent/desktop inspect:e2e:branch-drift`.
 - This command opens a replay-backed Electron fixture.
 - Close the application to end the command.
