@@ -7939,9 +7939,26 @@ class DesktopAppServerService {
    * is cancelled. The next eligible thread is elected now rather than at the
    * next poll. An unlock re-enters the election behind the threads that hold
    * the PRs by then, so it never takes a repair back from the agent that
-   * picked it up.
+   * picked it up. The lock has already landed when this runs, so a failure
+   * here is logged rather than failing the lock; the next poll re-elects.
    */
   async handleThreadLockChanged(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    locked: boolean;
+  }): Promise<void> {
+    try {
+      await this.applyThreadLockToPrAutoDispatch(request);
+    } catch (error) {
+      appServerLog.warn("failed to move Auto-fix after a thread lock change", {
+        threadKey: buildThreadIdentityKey(request.backend, request.threadId),
+        locked: request.locked,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async applyThreadLockToPrAutoDispatch(request: {
     backend: AppServerBackendKind;
     threadId: string;
     locked: boolean;
@@ -7959,10 +7976,11 @@ class DesktopAppServerService {
     const prs = this.canonicalizePrs(attachment?.prs ?? [])
       .filter((pr) => changedPrKeys.has(getPrStatusKey(pr)));
     if (prs.length === 0) return;
+    // Not operator-initiated: a repair the operator cancelled on the newly
+    // elected thread stays cancelled.
     await this.handlePrAutoDispatchSnapshots(
       dedupePrsByStatusKey(prs),
       this.nextPrObservationTimestamp(),
-      request.locked,
     );
   }
 

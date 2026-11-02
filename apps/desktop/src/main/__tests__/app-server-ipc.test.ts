@@ -2474,8 +2474,13 @@ describe("app server ipc", () => {
       prAutoDispatchAllowed: boolean;
     };
     // Owner startup reads both gates from settings; this test skips startup.
+    const gates = { polling: service.backgroundPrPollingEnabled, allowed: service.prAutoDispatchAllowed };
     service.backgroundPrPollingEnabled = true;
     service.prAutoDispatchAllowed = true;
+    onTestFinished(() => {
+      service.backgroundPrPollingEnabled = gates.polling;
+      service.prAutoDispatchAllowed = gates.allowed;
+    });
     service.setThreadPrAttachment("codex:parent", {
       backend: "codex", primaryRepoKey: "github.com/pwrdrvr/pwragent", prs: [pr],
     });
@@ -2495,7 +2500,7 @@ describe("app server ipc", () => {
     }));
     expect(getPrAutoDispatchCandidateWinner).toHaveBeenCalledWith({ prKey });
     expect(scheduleThreadPrAutoDispatch).toHaveBeenCalledWith(expect.objectContaining({
-      backend: "codex", threadId: "child",
+      backend: "codex", threadId: "child", allowCancelledRearm: false,
     }));
 
     // A lock that leaves the candidacy as it was, such as a note edit, does
@@ -2504,6 +2509,11 @@ describe("app server ipc", () => {
     syncThreadPrAutoDispatchCandidates.mockResolvedValueOnce([]);
     await handler.lockChanged({ backend: "codex", threadId: "parent", locked: true });
     expect(scheduleThreadPrAutoDispatch).not.toHaveBeenCalled();
+
+    // The lock has already landed, so a failed election is logged, not thrown.
+    syncThreadPrAutoDispatchCandidates.mockRejectedValueOnce(new Error("disk full"));
+    await expect(handler.lockChanged({ backend: "codex", threadId: "parent", locked: false }))
+      .resolves.toBeUndefined();
   });
 
   it("does not advertise Auto-fix as active without a primary Git repository", async () => {
