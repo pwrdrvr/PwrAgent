@@ -1,6 +1,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import dugite from "dugite";
 import { describe, expect, it } from "vitest";
 import { bundledGitFiles, verifyBundledGit } from "./verify-bundled-git.mjs";
 import { pruneMacCredentialManager } from "./beforepack-bundled-git.mjs";
@@ -19,6 +20,16 @@ describe("packaged Git distribution", () => {
     expect(bundledGitFiles("root", platform, "x64")).toEqual({
       git: join("root", "bin/git"),
       lfs: join("root", "libexec/git-core/git-lfs"),
+    });
+  });
+
+  it("matches the installed Dugite resolver for the packaging host", () => {
+    const root = resolve("staged-native", "node_modules", "dugite", "git");
+    // CI runs on Windows too: a dependency layout change must fail here
+    // before a release reaches beforePack. Ignore inherited Git overrides.
+    expect(bundledGitFiles(root, process.platform, process.arch)).toEqual({
+      git: dugite.resolveGitBinary(root),
+      lfs: join(dugite.resolveGitExecPath(root, ""), process.platform === "win32" ? "git-lfs.exe" : "git-lfs"),
     });
   });
 
