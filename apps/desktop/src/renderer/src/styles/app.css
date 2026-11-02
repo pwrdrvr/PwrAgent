@@ -5596,6 +5596,121 @@ textarea,
   color: var(--text-muted);
 }
 
+/* Names drag to reorder the pins (`ProjectIndex`), with the folder drag's
+   parts: the source dims in place, a 3px accent line on the edge between two
+   names, and a tilted clone of the name. The values are the folder drag's
+   (`.directory-row.is-drop-target-*`, `.thread-row--drag-image`). */
+.project-index__list > li {
+  position: relative;
+}
+
+.project-index__list > li.is-pointer-dragging > .project-index__item {
+  opacity: 0.38;
+  cursor: grabbing;
+}
+
+.project-index__list > li.is-drop-target-before::before,
+.project-index__list > li.is-drop-target-after::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  left: 6px;
+  z-index: 6;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--row-active-tint-strong),
+    0 0 14px var(--accent-shadow);
+  pointer-events: none;
+}
+
+.project-index__list > li.is-drop-target-before::before {
+  top: -2px;
+}
+
+.project-index__list > li.is-drop-target-after::after {
+  bottom: -2px;
+}
+
+/* Where the pins end: the Directories divider without its label, which a
+   7-character column has no room for. A held pin anywhere at or below it
+   unpins, and it lights like the divider does. */
+.project-index__seam {
+  position: relative;
+  height: 9px;
+}
+
+.project-index__seam::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  left: 11px;
+  height: 1px;
+  background: var(--border-subtle);
+}
+
+.project-index__seam.is-drop-target::after {
+  top: 3px;
+  right: 4px;
+  left: 6px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--row-active-tint-strong),
+    0 0 14px var(--accent-shadow);
+}
+
+.project-index__pin-slot-row {
+  padding: 2px 4px 4px 6px;
+}
+
+/* The held name. It is appended to <body>, so it carries the column's type
+   itself. Listed after the item's state rules so a selected or current
+   name's tint and rail do not ride along. */
+.project-index__item.project-index__drag-image {
+  --thread-row-drag-tilt: -1.2deg;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 10000;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  box-shadow:
+    0 0 0 1px var(--surface-border-faint),
+    0 18px 44px var(--shadow-tint-strong);
+  font: 500 calc(var(--sidebar-title-size) - 1px) / 1.25 var(--font-sans);
+  pointer-events: none;
+}
+
+.project-index__item.project-index__drag-image::before {
+  content: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-index__item.project-index__drag-image {
+    --thread-row-drag-tilt: 0deg;
+  }
+}
+
+/* A dropped name keeps the list reveal's fading outline for a moment. */
+.project-index__item.is-revealed {
+  outline: 1px solid transparent;
+  outline-offset: -1px;
+  animation: directory-row-revealed 1200ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-index__item.is-revealed {
+    animation: none;
+    outline-color: var(--accent);
+  }
+}
+
 /* The seam between the index and the list, drawn like the sidebar's own:
    an 11px hit area centred on the border, lit 1px on hover or focus. */
 .project-index__grip {
@@ -8662,6 +8777,49 @@ a.button {
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--bg-row-active) 72%, transparent),
     0 0 14px var(--accent-shadow);
+}
+
+/* The ghost Pin slot a project drag opens while nothing is pinned, in the
+   Directories list and the project index. It is the Keep at top slot
+   (`.directory-row__keep-top-slot`) with its own label: mounted only while
+   a project is held, and only a drop inside its own box pins. */
+.directories-pin-slot,
+.project-index__pin-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1.5px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--text-muted);
+  cursor: grabbing;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.directories-pin-slot {
+  height: 34px;
+  margin: 2px 2px 6px;
+  border-radius: 8px;
+}
+
+.project-index__pin-slot {
+  gap: 5px;
+  height: 26px;
+  border-radius: 6px;
+}
+
+.directories-pin-slot path,
+.project-index__pin-slot path {
+  fill: currentColor;
+}
+
+.directories-pin-slot.is-drop-target,
+.project-index__pin-slot.is-drop-target {
+  border-style: solid;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  color: var(--text-primary);
 }
 
 .directory-row__summary {

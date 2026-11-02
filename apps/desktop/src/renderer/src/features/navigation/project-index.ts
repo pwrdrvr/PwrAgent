@@ -11,7 +11,13 @@
  * of its longest name, is capped at the sidebar's width past the list's
  * 280px floor, and a container query hides it when that cap falls below its
  * 7-character minimum. See `.sidebar__lanes` in app.css.
+ *
+ * Names drag to reorder the pinned projects, as the Directories list's
+ * folders do. Design: the PwrAgent Claude Design project, "Project Index
+ * Reorder UX Review".
  */
+
+import type { DirectoryDrop } from "./directory-pin-drop";
 
 /** One project section's box, in px from the top of the list's scrollport. */
 export type ProjectBlockBox = { key: string; top: number; bottom: number };
@@ -105,6 +111,72 @@ export function projectTypeaheadIndex(
     if (names[index]!.toLocaleLowerCase().startsWith(needle)) return index;
   }
   return -1;
+}
+
+/** A name's box in the index while a project is held, in viewport px. */
+export type ProjectIndexItemBox = { key: string; top: number; bottom: number; pinned: boolean };
+
+/** Where a held name would land, and what the drop does. */
+export type ProjectIndexDropHit =
+  /** The insertion line, on the edge of the name `anchorKey`. */
+  | { kind: "line"; anchorKey: string; position: "before" | "after"; drop: DirectoryDrop; label?: string }
+  /** The hairline after the pins, lit as the Unpin target. */
+  | { kind: "seam"; drop: DirectoryDrop; label: string }
+  /** The ghost Pin slot, offered while nothing is pinned. */
+  | { kind: "slot"; drop: DirectoryDrop; label: string };
+
+/**
+ * The index's half of the folder drag (`DirectoriesList.beginDirectoryDrag`),
+ * against the names' boxes instead of the folded headers:
+ *
+ * - Among the pins, the line goes on the nearer edge of the name under the
+ *   pointer. A pin's own edges are no move.
+ * - At or below the hairline, a held pin unpins. A held unpinned name over
+ *   the hairline itself joins the pins at the end; below it there is nothing
+ *   to drop on, because the rest are in name order.
+ * - With no pins, only a drop inside the ghost Pin slot's own box pins.
+ */
+export function resolveProjectIndexDrop(input: {
+  y: number;
+  source: { key: string; pinned: boolean };
+  items: readonly ProjectIndexItemBox[];
+  seam?: { top: number; bottom: number };
+  pinSlot?: { top: number; bottom: number };
+}): ProjectIndexDropHit | undefined {
+  const { y, source } = input;
+  if (input.pinSlot) {
+    const slot = input.pinSlot;
+    return !source.pinned && y >= slot.top && y <= slot.bottom
+      ? { kind: "slot", drop: { kind: "pin" }, label: "Pin" }
+      : undefined;
+  }
+  const pins = input.items.filter((item) => item.pinned);
+  if (input.seam && y >= input.seam.top) {
+    if (source.pinned) return { kind: "seam", drop: { kind: "unpin" }, label: "Unpin" };
+    const last = pins[pins.length - 1];
+    if (y > input.seam.bottom || last === undefined) return undefined;
+    return {
+      kind: "line",
+      anchorKey: last.key,
+      position: "after",
+      drop: { kind: "move", anchorKey: last.key, placement: "after" },
+      label: "Pin",
+    };
+  }
+  if (pins.length === 0) return undefined;
+  const before = pins.findIndex((pin) => y < (pin.top + pin.bottom) / 2);
+  const insertAt = before < 0 ? pins.length : before;
+  const sourceIndex = pins.findIndex((pin) => pin.key === source.key);
+  if (sourceIndex >= 0 && (insertAt === sourceIndex || insertAt === sourceIndex + 1)) return undefined;
+  const anchor = pins[before < 0 ? pins.length - 1 : before]!;
+  const placement = before < 0 ? "after" : "before";
+  return {
+    kind: "line",
+    anchorKey: anchor.key,
+    position: placement,
+    drop: { kind: "move", anchorKey: anchor.key, placement },
+    ...(source.pinned ? {} : { label: "Pin" }),
+  };
 }
 
 /**

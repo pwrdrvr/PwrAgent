@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createRef } from "react";
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PROJECT_FORGE_AUTOMATION, type BackendSummary, type NavigationThreadSummary } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../../lib/navigation-loaded-rows";
@@ -11,6 +12,7 @@ import {
   jumpScrollPlan,
   jumpTailIsOffscreen,
   projectTypeaheadIndex,
+  resolveProjectIndexDrop,
   spyProjects,
 } from "../project-index";
 
@@ -417,5 +419,288 @@ describe("Project index Forge Automation", () => {
     renderSidebar({ directories: [directory("quill", "t-quill"), paused] });
     const nav = screen.getByRole("navigation", { name: "Project index" });
     expect(within(nav).getByRole("button", { name: /^Jump to relay.*, forge activity paused$/ })).toBeInTheDocument();
+  });
+});
+
+describe("project index reorder rules", () => {
+  // Three pins, the 9px hairline, then the rest in name order.
+  const items = [
+    { key: "meridian", top: 0, bottom: 20, pinned: true },
+    { key: "quill", top: 20, bottom: 40, pinned: true },
+    { key: "lighthouse", top: 40, bottom: 60, pinned: true },
+    { key: "harbor", top: 69, bottom: 89, pinned: false },
+    { key: "tern", top: 89, bottom: 109, pinned: false },
+  ];
+  const seam = { top: 60, bottom: 69 };
+  const pin = { key: "lighthouse", pinned: true };
+  const loose = { key: "harbor", pinned: false };
+
+  it("puts the line on the nearer edge of the pin under the pointer", () => {
+    expect(resolveProjectIndexDrop({ y: 24, source: pin, items, seam })).toEqual({
+      kind: "line",
+      anchorKey: "quill",
+      position: "before",
+      drop: { kind: "move", anchorKey: "quill", placement: "before" },
+    });
+  });
+
+  it("offers no move on a held pin's own edges", () => {
+    expect(resolveProjectIndexDrop({ y: 35, source: pin, items, seam })).toBeUndefined();
+    expect(resolveProjectIndexDrop({ y: 58, source: pin, items, seam })).toBeUndefined();
+  });
+
+  it("unpins a held pin anywhere at or below the hairline", () => {
+    for (const y of [62, 100]) {
+      expect(resolveProjectIndexDrop({ y, source: pin, items, seam })).toEqual({
+        kind: "seam", drop: { kind: "unpin" }, label: "Unpin",
+      });
+    }
+  });
+
+  it("pins an unpinned name dropped among the pins, or over the hairline at the end", () => {
+    expect(resolveProjectIndexDrop({ y: 5, source: loose, items, seam })).toEqual({
+      kind: "line",
+      anchorKey: "meridian",
+      position: "before",
+      drop: { kind: "move", anchorKey: "meridian", placement: "before" },
+      label: "Pin",
+    });
+    expect(resolveProjectIndexDrop({ y: 64, source: loose, items, seam })).toEqual({
+      kind: "line",
+      anchorKey: "lighthouse",
+      position: "after",
+      drop: { kind: "move", anchorKey: "lighthouse", placement: "after" },
+      label: "Pin",
+    });
+  });
+
+  it("has nothing for an unpinned name held among the unpinned, which keep name order", () => {
+    expect(resolveProjectIndexDrop({ y: 95, source: { key: "tern", pinned: false }, items, seam })).toBeUndefined();
+  });
+
+  it("pins only inside the ghost slot's own box while nothing is pinned", () => {
+    const unpinned = items.map((item) => ({ ...item, pinned: false }));
+    const pinSlot = { top: 0, bottom: 26 };
+    expect(resolveProjectIndexDrop({ y: 12, source: loose, items: unpinned, pinSlot })).toEqual({
+      kind: "slot", drop: { kind: "pin" }, label: "Pin",
+    });
+    expect(resolveProjectIndexDrop({ y: 40, source: loose, items: unpinned, pinSlot })).toBeUndefined();
+    expect(resolveProjectIndexDrop({ y: 40, source: loose, items: unpinned })).toBeUndefined();
+  });
+});
+
+describe("ProjectIndex drag", () => {
+  const POINTER = 7;
+  const reorderEntries: ProjectIndexEntry[] = [
+    { key: "dir:meridian", label: "meridian", containsSelection: false, active: false, review: false, pinned: true, movable: true },
+    { key: "dir:quill", label: "quill", containsSelection: false, active: false, review: false, pinned: true, movable: true },
+    { key: "dir:harbor", label: "harbor", containsSelection: false, active: false, review: false, movable: true },
+    { key: "dir:tern", label: "tern", containsSelection: false, active: false, review: false, movable: true },
+  ];
+
+  function rect(element: Element, top: number, height: number): void {
+    vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
+      top, bottom: top + height, height, left: 0, right: 100, width: 100, x: 0, y: top, toJSON: () => ({}),
+    });
+  }
+
+  /** jsdom has no layout: 20px names, the 9px hairline after the pins. */
+  function layout(): void {
+    rect(screen.getByRole("navigation", { name: "Project index" }), 0, 400);
+    let top = 0;
+    for (const row of document.querySelectorAll(".project-index__list > li")) {
+      const height = row.classList.contains("project-index__seam") ? 9 : 20;
+      rect(row, top, height);
+      top += height;
+    }
+  }
+
+  function renderDraggable(projects: ProjectIndexEntry[] = reorderEntries) {
+    const onDropProject = vi.fn();
+    const onMoveProject = vi.fn();
+    const onJump = vi.fn();
+    const ui = (list: ProjectIndexEntry[]): ReactElement => (
+      <ProjectIndex
+        projects={list}
+        scrollRegionRef={createRef()}
+        scrollRegionId="lanes"
+        spy={false}
+        width={null}
+        onJump={onJump}
+        onWidthChange={() => undefined}
+        onDropProject={onDropProject}
+        onMoveProject={onMoveProject}
+      />
+    );
+    render(ui(projects));
+    layout();
+    return { onDropProject, onMoveProject, onJump };
+  }
+
+  function name(label: string): HTMLElement {
+    return screen.getByRole("button", { name: `Jump to ${label}` });
+  }
+  const press = (element: Element, y: number) =>
+    fireEvent.pointerDown(element, { button: 0, clientX: 20, clientY: y, pointerId: POINTER });
+  const move = (y: number) =>
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 20, clientY: y, pointerId: POINTER });
+  const release = (y: number) =>
+    fireEvent.pointerUp(window, { button: 0, clientX: 20, clientY: y, pointerId: POINTER });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("draws a hairline after the last pin", () => {
+    renderDraggable();
+    const seam = document.querySelector(".project-index__seam");
+    expect(seam).toHaveAttribute("aria-hidden", "true");
+    expect(seam?.previousElementSibling).toContainElement(name("quill"));
+    expect(seam?.nextElementSibling).toContainElement(name("harbor"));
+  });
+
+  it("draws no hairline when nothing is pinned", () => {
+    renderDraggable(reorderEntries.map((entry) => ({ ...entry, pinned: false })));
+    expect(document.querySelector(".project-index__seam")).toBeNull();
+  });
+
+  it("moves a held pin to the line, then outlines it once", async () => {
+    const { onDropProject, onJump } = renderDraggable();
+    press(name("quill"), 30);
+    move(20);
+    expect(document.querySelector(".project-index__drag-image")).toHaveTextContent("quill");
+    expect(name("quill").closest("li")).toHaveClass("is-pointer-dragging");
+    move(5);
+    await waitFor(() => expect(name("meridian").closest("li")).toHaveClass("is-drop-target-before"));
+    await act(async () => {
+      release(5);
+    });
+    expect(onDropProject).toHaveBeenCalledWith("dir:quill", {
+      kind: "move", anchorKey: "dir:meridian", placement: "before",
+    });
+    expect(document.querySelector(".project-index__drag-image")).toBeNull();
+    expect(name("quill")).toHaveClass("is-revealed");
+    // The release's click is swallowed, so a drop never jumps the list.
+    fireEvent.click(name("quill"));
+    expect(onJump).not.toHaveBeenCalled();
+  });
+
+  it("unpins a held pin over the hairline, and says so on the card", async () => {
+    const { onDropProject } = renderDraggable();
+    const seam = document.querySelector(".project-index__seam")!;
+    press(name("quill"), 30);
+    move(45);
+    await waitFor(() => expect(seam).toHaveClass("is-drop-target"));
+    expect(document.querySelector(".thread-row__drop-label")).toHaveTextContent("Unpin");
+    await act(async () => {
+      release(45);
+    });
+    expect(onDropProject).toHaveBeenCalledWith("dir:quill", { kind: "unpin" });
+  });
+
+  it("opens a ghost Pin slot while nothing is pinned, and pins only inside it", async () => {
+    const { onDropProject } = renderDraggable(reorderEntries.map((entry) => ({ ...entry, pinned: false })));
+    expect(document.querySelector(".project-index__pin-slot")).toBeNull();
+    press(name("tern"), 70);
+    move(60);
+    const slot = document.querySelector(".project-index__pin-slot")!;
+    expect(slot).toHaveTextContent("Pin");
+    rect(slot, 0, 26);
+    move(50);
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(slot).not.toHaveClass("is-drop-target");
+    move(10);
+    await waitFor(() => expect(slot).toHaveClass("is-drop-target"));
+    expect(document.querySelector(".thread-row__drop-label")).toHaveTextContent("Pin");
+    await act(async () => {
+      release(10);
+    });
+    expect(onDropProject).toHaveBeenCalledWith("dir:tern", { kind: "pin" });
+    expect(document.querySelector(".project-index__pin-slot")).toBeNull();
+  });
+
+  it("puts the card back on Escape, with no drop", () => {
+    const { onDropProject } = renderDraggable();
+    press(name("quill"), 30);
+    move(5);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(document.querySelector(".project-index__drag-image")).toBeNull();
+    release(5);
+    expect(onDropProject).not.toHaveBeenCalled();
+  });
+
+  it("still jumps on a press that does not move", () => {
+    const { onJump, onDropProject } = renderDraggable();
+    press(name("harbor"), 50);
+    release(50);
+    fireEvent.click(name("harbor"));
+    expect(onJump).toHaveBeenCalledWith("dir:harbor");
+    expect(onDropProject).not.toHaveBeenCalled();
+  });
+
+  it("moves a focused pin with ⌘⇧↑/↓ and leaves the rest to the arrows", () => {
+    const { onMoveProject } = renderDraggable();
+    fireEvent.keyDown(name("quill"), { key: "ArrowUp", metaKey: true, shiftKey: true });
+    expect(onMoveProject).toHaveBeenCalledWith("dir:quill", "up");
+    fireEvent.keyDown(name("harbor"), { key: "ArrowUp", metaKey: true, shiftKey: true });
+    expect(onMoveProject).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no drag without an owner that can reorder", () => {
+    render(
+      <ProjectIndex
+        projects={reorderEntries}
+        scrollRegionRef={createRef()}
+        scrollRegionId="lanes"
+        spy={false}
+        width={null}
+        onJump={() => undefined}
+        onWidthChange={() => undefined}
+      />,
+    );
+    press(name("quill"), 30);
+    move(5);
+    expect(document.querySelector(".project-index__drag-image")).toBeNull();
+    release(5);
+  });
+});
+
+describe("Sidebar project index reorder", () => {
+  it("applies an index drop to the pinned-directory order, as a folder drop does", async () => {
+    const onReorderDirectoryPins = vi.fn(async () => undefined);
+    const onSetDirectoryPin = vi.fn(async () => undefined);
+    renderSidebar({
+      directories: [
+        { ...directory("quill", "t-quill"), pinnedRank: "1024" },
+        { ...directory("relay", "t-relay"), pinnedRank: "2048" },
+      ],
+      onReorderDirectoryPins,
+      onSetDirectoryPin,
+    });
+    const nav = screen.getByRole("navigation", { name: "Project index" });
+    const relay = within(nav).getByRole("button", { name: /^Jump to relay/ });
+    const quill = within(nav).getByRole("button", { name: /^Jump to quill/ });
+    vi.spyOn(nav, "getBoundingClientRect").mockReturnValue({
+      top: 0, bottom: 400, height: 400, left: 0, right: 100, width: 100, x: 0, y: 0, toJSON: () => ({}),
+    });
+    for (const [button, top] of [[quill, 0], [relay, 20]] as const) {
+      vi.spyOn(button.closest("li")!, "getBoundingClientRect").mockReturnValue({
+        top, bottom: top + 20, height: 20, left: 0, right: 100, width: 100, x: 0, y: top, toJSON: () => ({}),
+      });
+    }
+    fireEvent.pointerDown(relay, { button: 0, clientX: 20, clientY: 30, pointerId: 3 });
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 20, clientY: 20, pointerId: 3 });
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 20, clientY: 4, pointerId: 3 });
+    await waitFor(() => expect(quill.closest("li")).toHaveClass("is-drop-target-before"));
+    await act(async () => {
+      fireEvent.pointerUp(window, { button: 0, clientX: 20, clientY: 4, pointerId: 3 });
+    });
+    expect(onReorderDirectoryPins).toHaveBeenCalledWith(
+      ["directory:/fixture/relay", "directory:/fixture/quill"],
+      { key: "directory:/fixture/relay", anchorKey: "directory:/fixture/quill", placement: "before" },
+    );
+    expect(onSetDirectoryPin).not.toHaveBeenCalled();
   });
 });

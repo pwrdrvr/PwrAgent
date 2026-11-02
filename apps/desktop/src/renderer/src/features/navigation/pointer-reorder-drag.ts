@@ -1,7 +1,11 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { beginNativeDragInteraction, endNativeDragInteraction } from "../../lib/native-drag-interaction";
 import type { DropIndicatorController, DropIndicatorPosition } from "./drag-drop";
-import { createThreadRowPointerDragPreview, type ThreadRowPointerDragPreview } from "./thread-row-drag-preview";
+import {
+  createThreadRowPointerDragPreview,
+  type PointerDragPreviewOptions,
+  type ThreadRowPointerDragPreview,
+} from "./thread-row-drag-preview";
 
 const POST_DRAG_CLICK_SUPPRESS_MS = 150;
 const POINTER_DRAG_ACTIVATION_PX = 4;
@@ -30,6 +34,8 @@ export type PointerReorderDragOptions<T> = {
   previewSource: HTMLElement;
   /** Keeps the clone's compact geometry (a project header). */
   compactPreview?: boolean;
+  /** Clone something other than a `.thread-row` (a project index name). */
+  preview?: Pick<PointerDragPreviewOptions, "rowSelector" | "className">;
   /** Swallows the click a browser synthesizes on release. */
   clickSuppressionRoot: HTMLElement;
   scrollElement?: HTMLElement;
@@ -131,6 +137,7 @@ export function beginPointerReorderDrag<T>(options: PointerReorderDragOptions<T>
     beginNativeDragInteraction();
     // Measure the held card before `onLift` changes the layout under it.
     preview = createThreadRowPointerDragPreview(options.previewSource, startPoint, {
+      ...options.preview,
       compact: options.compactPreview,
     });
     sourceElement.classList.add("is-pointer-dragging");

@@ -128,8 +128,10 @@ import {
 import {
   buildLaunchpadSelectionKey,
   DirectoriesList,
+  isPinnableDirectoryKind,
   type ProjectRevealRequest,
 } from "./DirectoriesList";
+import { applyDirectoryDrop, type DirectoryDrop } from "./directory-pin-drop";
 import { ProjectIndex, type ProjectIndexEntry } from "./ProjectIndex";
 import { ForgeAutomationDialog } from "../forge-automation/ForgeAutomationDialog";
 import { ResumeForgeAutomationDialog } from "../forge-automation/ResumeForgeAutomationDialog";
@@ -1052,6 +1054,8 @@ export function Sidebar(props: SidebarProps) {
       active: (directory.counts?.active ?? 0) > 0,
       review: (directory.counts?.review ?? 0) > 0,
       ...(isProjectForgeActivityPaused(directory) ? { forgeActivityPaused: true } : {}),
+      ...(isPinnedDirectory(directory) ? { pinned: true } : {}),
+      ...(isPinnableDirectoryKind(directory) ? { movable: true } : {}),
     }));
   }, [indexSelectedItemKey, projectIndexEnabled, renderedDirectories, selectedThreadDirectoryKeys]);
   // One project needs no map.
@@ -2283,6 +2287,25 @@ export function Sidebar(props: SidebarProps) {
     void hoverReleasedListHandlers.reorderThreadPins?.(nextKeys, { key: threadKey, direction });
   };
 
+  // A name dropped in the project index, applied as a folder drop in the
+  // Directories list is, so the two can never order projects differently.
+  const dropProjectFromIndex = useEventCallback((key: string, drop: DirectoryDrop): void => {
+    const directory = renderedDirectories.find((candidate) => candidate.key === key);
+    if (!directory) return;
+    void applyDirectoryDrop({
+      directory,
+      drop,
+      pinnedKeys: pinnedDirectoryKeysInOrder,
+      setPin: hoverReleasedListHandlers.setDirectoryPin,
+      reorderPins: hoverReleasedListHandlers.reorderDirectoryPins,
+    });
+  });
+  const moveProjectFromIndex = useEventCallback((key: string, direction: "up" | "down"): void => {
+    const directory = renderedDirectories.find((candidate) => candidate.key === key);
+    if (directory) moveDirectoryFromContextMenu(directory, direction);
+  });
+  const projectIndexReorders = Boolean(props.onSetDirectoryPin && props.onReorderDirectoryPins);
+
   const moveDirectoryFromContextMenu = (
     directory: NavigationDirectorySummary,
     direction: "up" | "down",
@@ -3445,6 +3468,8 @@ export function Sidebar(props: SidebarProps) {
             onWidthChange={onProjectIndexWidthChange}
             onJump={jumpToProject}
             onOpenContextMenu={openProjectIndexContextMenu}
+            onDropProject={projectIndexReorders ? dropProjectFromIndex : undefined}
+            onMoveProject={projectIndexReorders ? moveProjectFromIndex : undefined}
           />
         ) : null}
         <div
