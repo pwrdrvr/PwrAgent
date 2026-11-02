@@ -71,6 +71,25 @@ describe("GitLab merge request tools", () => {
     expect(result).not.toHaveProperty("headSha");
   });
 
+  it("reports no head for a retried merged-results or merge-train pipeline", async () => {
+    // Its sha is the merge commit GitLab made, not the merge request's head,
+    // so a re-run recorded against it would match no merge request.
+    for (const ref of ["refs/merge-requests/7/merge", "refs/merge-requests/7/train"]) {
+      const { client, readCalls } = harness(
+        () => { throw new Error("Unexpected read"); },
+        () => ({ id: 42, ref, sha: "e".repeat(40), status: "running" }),
+      );
+      const result = await client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx());
+      expect(result).toMatchObject({ requested: true, runId: 42, providerRequests: 1 });
+      expect(result).not.toHaveProperty("headSha");
+      expect(readCalls).toEqual([]);
+    }
+    // A detached merge request pipeline runs on the head itself.
+    const detached = harness(() => ({ id: 42, ref: "refs/merge-requests/7/head", sha: "f".repeat(40) }));
+    await expect(detached.client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx())).resolves
+      .toMatchObject({ headSha: "f".repeat(40), providerRequests: 2 });
+  });
+
   it("finds the thread's merge request by source branch and reads it back", async () => {
     const { client, readCalls } = harness((endpoint) => endpoint.includes("/merge_requests?") ? [mr(7)] : mr(7));
     const result = await client.execute("get_pull_request", {}, ctx()) as { pullRequest: Record<string, unknown> };

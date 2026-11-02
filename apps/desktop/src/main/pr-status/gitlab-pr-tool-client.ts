@@ -24,9 +24,16 @@ function usernames(value: unknown): string[] {
 function labels(value: unknown): string[] {
   return Array.isArray(value) ? value.map((label) => typeof label === "string" ? label.slice(0, 200) : label && typeof label === "object" ? str((label as Payload).name, 200) : undefined).filter((name): name is string => Boolean(name)) : [];
 }
-/** A pipeline payload's head commit. */
-function pipelineSha(value: unknown): string | undefined {
-  return value && typeof value === "object" ? str((value as Payload).sha, 64) : undefined;
+/**
+ * A pipeline payload's merge request head commit. Null for a merged-results
+ * or merge-train pipeline: its sha is a merge commit GitLab made, not the
+ * head. Undefined when the payload has no sha.
+ */
+function pipelineHeadSha(value: unknown): string | null | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const ref = str((value as Payload).ref, 300);
+  if (ref && /^refs\/merge-requests\/\d+\/(?:merge|train)$/.test(ref)) return null;
+  return str((value as Payload).sha, 64);
 }
 /** GitLab says "opened"; the shared contract says "open", as GitHub does. */
 function state(value: unknown): string | undefined {
@@ -143,10 +150,10 @@ export class GitlabPrToolClient {
       // attempts: the pipeline id is the re-run's identity, so no runAttempt.
       // The head lets a later watch tell the retry's result from the one it
       // replaced. Best effort: the retry was accepted either way.
-      let headSha = pipelineSha(retried);
-      if (!headSha) {
+      let headSha = pipelineHeadSha(retried);
+      if (headSha === undefined) {
         try {
-          headSha = pipelineSha(await get(`/pipelines/${args.runId}`));
+          headSha = pipelineHeadSha(await get(`/pipelines/${args.runId}`));
         } catch (error) {
           if (ctx.signal?.aborted) throw error;
         }
