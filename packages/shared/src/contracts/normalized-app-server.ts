@@ -1,4 +1,5 @@
 import type { SubAgentLens } from "../subagent-kind";
+import type { ProjectForgeAutomation } from "../project-forge-automation";
 import type { ToolAccountingTotals } from "../thread-tool-display";
 import type { ThreadIncidentSummary } from "../thread-incident-summary";
 import type { ThreadPricingDisplay } from "../thread-pricing-display";
@@ -696,6 +697,11 @@ export type AppServerThreadMessageOrigin = {
   /** Durable cross-thread prerequisite admission. */
   dependencyId?: string;
   systemReason?: "monitor-job-suggestion" | "thread-correspondence";
+  /**
+   * The operator sent this agent-routed message by acting on a to-do card,
+   * so a paused project's refusal of messages from other threads skips it.
+   */
+  operatorApproved?: boolean;
   sourceThread?: {
     /** Sender correspondence message, when PwrAgent has a durable breadcrumb. */
     messageId?: string;
@@ -2836,6 +2842,14 @@ export type AppServerNotification =
       params: {
         directoryKey: string;
         collapsed: boolean;
+      };
+    }
+  | {
+      method: "directory/forgeAutomation/updated";
+      params: {
+        directoryKey: string;
+        /** Null when the project is back to the defaults. */
+        automation: ProjectForgeAutomation | null;
       };
     }
   | { method: "federation/shutdown/changed"; params: { notices: FederationPeerShutdown[] } }

@@ -730,6 +730,9 @@ export function serializeNavigationSnapshotForHash(params: {
       // the same overlay and must invalidate the snapshot cache too.
       directoryThreadsCollapsed:
         directory.directoryThreadsCollapsed ?? null,
+      // Forge Automation lives in the same overlay; a Save must get past
+      // the unchanged-snapshot short-circuit too.
+      forgeAutomation: directory.forgeAutomation ?? null,
       launchpad: directory.launchpad
         ? {
             backend: directory.launchpad.backend,

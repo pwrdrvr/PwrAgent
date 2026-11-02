@@ -14,11 +14,14 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  BackendSummary,
-  DesktopPwrAgentProfileSummary,
-  NavigationDirectorySummary,
-  NavigationThreadSummary,
+import {
+  DEFAULT_PROJECT_FORGE_AUTOMATION,
+  type BackendSummary,
+  type DesktopPwrAgentProfileSummary,
+  type NavigationDirectorySummary,
+  type NavigationThreadSummary,
+  type ProjectForgeAutomation,
+  type ProjectHeldWakeup,
 } from "@pwragent/shared";
 import type { FederationThreadTarget } from "../../chrome/federation-thread-targets";
 import type { FederationProjectDirectory } from "../../chrome/useFederationProjectStates";
@@ -8964,6 +8967,9 @@ describe("Sidebar directory pinning", () => {
         directory?: FederationProjectDirectory,
       ) => Promise<void>;
       newThreadFederationTargets?: readonly FederationThreadTarget[];
+      onSetProjectForgeAutomation?: ComponentProps<typeof Sidebar>["onSetProjectForgeAutomation"];
+      onListProjectHeldWakeups?: ComponentProps<typeof Sidebar>["onListProjectHeldWakeups"];
+      onResolveProjectHeldWakeups?: ComponentProps<typeof Sidebar>["onResolveProjectHeldWakeups"];
     } = {},
   ): void {
     render(
@@ -8971,6 +8977,9 @@ describe("Sidebar directory pinning", () => {
         backends={backends}
         browseMode="directories"
         directories={directoriesArg}
+        onSetProjectForgeAutomation={overrides.onSetProjectForgeAutomation}
+        onListProjectHeldWakeups={overrides.onListProjectHeldWakeups}
+        onResolveProjectHeldWakeups={overrides.onResolveProjectHeldWakeups}
         inboxThreads={[]}
         loading={false}
         creatingThread={undefined}
@@ -9990,6 +9999,158 @@ describe("Sidebar directory pinning", () => {
     expect(
       screen.queryByRole("menuitem", { name: /Unpin Directory/i }),
     ).not.toBeInTheDocument();
+  });
+
+  describe("Forge Automation", () => {
+    const PAUSED: ProjectForgeAutomation = {
+      ...DEFAULT_PROJECT_FORGE_AUTOMATION,
+      autoFixMergeConflicts: false,
+      paused: true,
+      pausedAt: 1_000,
+    };
+    const heldWakeup: ProjectHeldWakeup = {
+      entryId: "entry-1",
+      backend: "codex",
+      threadId: "thread-1",
+      threadTitle: "Shared GitHub rate limits",
+      source: "monitor",
+      summary: "Monitor finished: \"Watch the nightly run\"",
+      createdAt: 1_500,
+    };
+
+    it("offers Pause Forge Activity and Forge Automation… on a local project", async () => {
+      renderSidebar([projectBDirectory], {
+        onSetDirectoryPin: async () => undefined,
+        onSetProjectForgeAutomation: vi.fn(async () => undefined),
+      });
+      fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+      const menu = await screen.findByRole("menu");
+      expect(menu).toHaveClass("thread-context-menu--check-column");
+      const pause = within(menu).getByRole("menuitemcheckbox", { name: "Pause Forge Activity" });
+      expect(pause).toHaveAttribute("aria-checked", "false");
+      expect(within(menu).getByRole("menuitem", { name: "Forge Automation…" })).toBeInTheDocument();
+    });
+
+    it("leaves both items off a workspace row, and off every row without an owner to save to", async () => {
+      renderSidebar([workspaceDirectory, projectBDirectory], {
+        onSetDirectoryPin: async () => undefined,
+        onSetProjectForgeAutomation: vi.fn(async () => undefined),
+      });
+      fireEvent.contextMenu(getDirectorySummary(/Workspace/i));
+      expect(await screen.findByRole("menuitem", { name: "Pin Directory" })).toBeInTheDocument();
+      expect(screen.queryByRole("menuitemcheckbox", { name: "Pause Forge Activity" })).not.toBeInTheDocument();
+      expect(screen.getByRole("menu")).not.toHaveClass("thread-context-menu--check-column");
+      cleanup();
+
+      renderSidebar([projectBDirectory], { onSetDirectoryPin: async () => undefined });
+      fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+      expect(await screen.findByRole("menuitem", { name: "Pin Directory" })).toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: "Forge Automation…" })).not.toBeInTheDocument();
+    });
+
+    it("leaves both items out of a peer window", async () => {
+      (window as unknown as { __pwragentFederationTarget?: unknown }).__pwragentFederationTarget = {
+        scope: "remote",
+        instanceId: "remote-instance",
+      };
+      renderSidebar([projectBDirectory], {
+        onSetDirectoryPin: async () => undefined,
+        onSetProjectForgeAutomation: vi.fn(async () => undefined),
+      });
+      fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+      expect(await screen.findByRole("menuitem", { name: "Pin Directory" })).toBeInTheDocument();
+      expect(screen.queryByRole("menuitemcheckbox", { name: "Pause Forge Activity" })).not.toBeInTheDocument();
+    });
+
+    it("pauses in place, keeping the stored switches and the menu open", async () => {
+      const onSetProjectForgeAutomation = vi.fn(async () => undefined);
+      const narrowed: ProjectForgeAutomation = { ...DEFAULT_PROJECT_FORGE_AUTOMATION, autoFixCiFailures: false };
+      renderSidebar([{ ...projectBDirectory, forgeAutomation: narrowed }], {
+        onSetDirectoryPin: async () => undefined,
+        onSetProjectForgeAutomation,
+      });
+      fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+      await clickElement(await screen.findByRole("menuitemcheckbox", { name: "Pause Forge Activity" }));
+      expect(onSetProjectForgeAutomation).toHaveBeenCalledWith(
+        expect.objectContaining({ key: projectBDirectory.key }),
+        { ...narrowed, paused: true, pausedAt: expect.any(Number) },
+      );
+      expect(screen.getByRole("menuitemcheckbox", { name: "Pause Forge Activity" })).toBeInTheDocument();
+    });
+
+    it("marks a paused project's header and resumes at once when nothing is held", async () => {
+      const onSetProjectForgeAutomation = vi.fn(async () => undefined);
+      const onListProjectHeldWakeups = vi.fn(async () => []);
+      renderSidebar([{ ...projectBDirectory, forgeAutomation: PAUSED }], {
+        onSetDirectoryPin: async () => undefined,
+        onSetProjectForgeAutomation,
+        onListProjectHeldWakeups,
+      });
+      const header = getDirectorySummary(/ProjectB/i);
+      expect(header).toHaveAccessibleName("ProjectB, forge activity paused");
+      const pill = header.querySelector(".directory-row__paused");
+      expect(pill).toHaveTextContent("Paused");
+      expect(pill).toHaveAttribute("data-tooltip", "Forge activity paused. Right-click for Forge Automation.");
+
+      fireEvent.contextMenu(header);
+      const pause = await screen.findByRole("menuitemcheckbox", { name: "Pause Forge Activity" });
+      expect(pause).toHaveAttribute("aria-checked", "true");
+      await clickElement(pause);
+      await waitFor(() => expect(onSetProjectForgeAutomation).toHaveBeenCalledTimes(1));
+      expect(onListProjectHeldWakeups).toHaveBeenCalledWith(expect.objectContaining({ key: projectBDirectory.key }));
+      const { pausedAt: _pausedAt, ...resumed } = PAUSED;
+      expect(onSetProjectForgeAutomation).toHaveBeenCalledWith(
+        expect.objectContaining({ key: projectBDirectory.key }),
+        { ...resumed, paused: false },
+        expect.anything(),
+      );
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("lists held wake-ups before resuming", async () => {
+      const onSetProjectForgeAutomation = vi.fn(async () => undefined);
+      renderSidebar([{ ...projectBDirectory, forgeAutomation: PAUSED }], {
+        onSetDirectoryPin: async () => undefined,
+        onSetProjectForgeAutomation,
+        onListProjectHeldWakeups: vi.fn(async () => [heldWakeup]),
+        onResolveProjectHeldWakeups: vi.fn(async () => ({ results: [] })),
+      });
+      fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+      await clickElement(await screen.findByRole("menuitemcheckbox", { name: "Pause Forge Activity" }));
+      const dialog = await screen.findByRole("dialog", { name: "Resume forge activity in ProjectB?" });
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(within(dialog).getByText("Shared GitHub rate limits")).toBeInTheDocument();
+      expect(onSetProjectForgeAutomation).not.toHaveBeenCalled();
+
+      await clickElement(within(dialog).getByRole("button", { name: "Resume" }));
+      await waitFor(() => expect(onSetProjectForgeAutomation).toHaveBeenCalledWith(
+        expect.objectContaining({ key: projectBDirectory.key }),
+        expect.objectContaining({ paused: false, autoFixMergeConflicts: false }),
+        { reportError: false },
+      ));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
+
+    it("opens Forge Automation… as a dialog and saves it", async () => {
+      const onSetProjectForgeAutomation = vi.fn(async () => undefined);
+      renderSidebar([{ ...projectBDirectory, repositoryKey: "github.com/fixture/ProjectB" } as NavigationDirectorySummary], {
+        onSetDirectoryPin: async () => undefined,
+        onSetProjectForgeAutomation,
+      });
+      fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+      await clickElement(await screen.findByRole("menuitem", { name: "Forge Automation…" }));
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      const dialog = screen.getByRole("dialog", { name: "Forge Automation" });
+      expect(within(dialog).getByText("ProjectB · github.com/fixture/ProjectB")).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole("checkbox", { name: "Merge conflicts" }));
+      await clickElement(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(onSetProjectForgeAutomation).toHaveBeenCalledWith(
+        expect.objectContaining({ key: projectBDirectory.key }),
+        { ...DEFAULT_PROJECT_FORGE_AUTOMATION, autoFixMergeConflicts: false },
+        { reportError: false },
+      ));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
   });
 });
 

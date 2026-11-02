@@ -52,6 +52,10 @@ import type {
   NavigationThreadSummary,
   NavigationRelativeChildMove,
   PrSummary,
+  ProjectForgeAutomation,
+  ProjectHeldWakeup,
+  ResolveProjectHeldWakeupsRequest,
+  ResolveProjectHeldWakeupsResponse,
   ThreadAgentMetadata,
   ThreadExecutionMode,
   ThreadLock,
@@ -68,6 +72,7 @@ import {
   buildThreadIdentityKey,
   canonicalizeNavigationPath,
   classifyDirectory,
+  isDefaultProjectForgeAutomation,
   parseOwnedComposerScopeKey,
   compareThreadsByCreatedAtDesc,
   DEFAULT_NAVIGATION_BROWSE_MODE,
@@ -1662,6 +1667,43 @@ function updateDirectoryThreadsCollapsedInLoadedRows(
     return {
       ...directory,
       directoryThreadsCollapsed: params.collapsed,
+    };
+  });
+
+  return changed ? { ...snapshot, directoryRows: indexLoadedDirectoryRows(directories) } : snapshot;
+}
+
+function updateDirectoryForgeAutomationInLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
+  params: {
+    directoryKey: string;
+    /** Null returns the project to the defaults. */
+    automation: ProjectForgeAutomation | null;
+  },
+): NavigationLoadedRows | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const directories = loadedDirectoryRows(snapshot).map((directory) => {
+    if (directory.key !== params.directoryKey) {
+      return directory;
+    }
+    if (
+      JSON.stringify(directory.forgeAutomation ?? null)
+      === JSON.stringify(params.automation)
+    ) {
+      return directory;
+    }
+    changed = true;
+    if (params.automation === null) {
+      const { forgeAutomation: _cleared, ...rest } = directory;
+      return rest;
+    }
+    return {
+      ...directory,
+      forgeAutomation: params.automation,
     };
   });
 
@@ -3267,6 +3309,23 @@ export function useThreadNavigation(
     directory: NavigationDirectorySummary,
     collapsed: boolean,
   ) => Promise<void>;
+  /**
+   * The owner's Forge Automation for a local project, applied on the
+   * response. Rejects with the owner's message; a failure is also raised as
+   * a toast unless `reportError` is false, as from a dialog that shows it.
+   */
+  setProjectForgeAutomation: (
+    directory: NavigationDirectorySummary,
+    automation: ProjectForgeAutomation,
+    options?: { reportError?: boolean },
+  ) => Promise<void>;
+  listProjectHeldWakeups: (
+    directory: NavigationDirectorySummary,
+  ) => Promise<ProjectHeldWakeup[]>;
+  resolveProjectHeldWakeups: (
+    directory: NavigationDirectorySummary,
+    resolutions: ResolveProjectHeldWakeupsRequest["resolutions"],
+  ) => Promise<ResolveProjectHeldWakeupsResponse>;
   loadedRows?: NavigationLoadedRows;
   pagedNavigation: ReturnType<typeof useBoundedNavigationWindow>;
   /**
@@ -3890,7 +3949,8 @@ export function useThreadNavigation(
             const previous = current.rows?.directoryRows.get(key);
             if (!previous || changedDirectoryKeys.has(key)) continue;
             nextDirectoryRows.set(key, { ...directory, pinnedRank: previous.pinnedRank,
-              directoryThreadsCollapsed: previous.directoryThreadsCollapsed });
+              directoryThreadsCollapsed: previous.directoryThreadsCollapsed,
+              forgeAutomation: previous.forgeAutomation });
           }
         }
         const next: NavigationLoadedRows = { threadRows, directoryRows: nextDirectoryRows,
@@ -5086,6 +5146,25 @@ export function useThreadNavigation(
           rows: updateDirectoryPinsInLoadedRows(current.rows, {
             pinnedRanks,
           }),
+        }));
+        return;
+      }
+
+      if (method === "directory/forgeAutomation/updated") {
+        const { directoryKey, automation } = event.notification.params as {
+          directoryKey: string;
+          automation: ProjectForgeAutomation | null;
+        };
+        noteDirectoryPatch([directoryKey]);
+        setState((current) => ({
+          ...current,
+          rows: updateDirectoryForgeAutomationInLoadedRows(
+            current.rows,
+            {
+              directoryKey,
+              automation,
+            },
+          ),
         }));
         return;
       }
@@ -8943,6 +9022,11 @@ export function useThreadNavigation(
   const reorderDirectoryPinsRequest = desktopApi?.reorderDirectoryPins;
   const setDirectoryThreadsCollapsedRequest =
     desktopApi?.setDirectoryThreadsCollapsed;
+  const setProjectForgeAutomationRequest =
+    desktopApi?.setProjectForgeAutomation;
+  const listProjectHeldWakeupsRequest = desktopApi?.listProjectHeldWakeups;
+  const resolveProjectHeldWakeupsRequest =
+    desktopApi?.resolveProjectHeldWakeups;
   const setThreadReaction = useCallback(
     async (
       thread: NavigationThreadSummary,
@@ -9505,6 +9589,75 @@ export function useThreadNavigation(
     [publishThreadActionError, setDirectoryThreadsCollapsedRequest, setUnpinnedExpandedByKey, noteDirectoryPatch],
   );
 
+  // Owner-scoped and local only: the owner refuses a federation target, so
+  // none is sent. Not optimistic: a pause changes what the owner polls and
+  // dispatches, so the row shows what the owner stored.
+  const setProjectForgeAutomation = useCallback(
+    async (
+      directory: NavigationDirectorySummary,
+      automation: ProjectForgeAutomation,
+      options?: { reportError?: boolean },
+    ): Promise<void> => {
+      const reportError = options?.reportError ?? true;
+      if (!setProjectForgeAutomationRequest) {
+        throw new Error("Forge Automation is not available in this window.");
+      }
+      if (reportError) publishThreadActionError("forge-automation");
+      try {
+        const result = await setProjectForgeAutomationRequest({
+          directoryKey: directory.key,
+          automation,
+        });
+        noteDirectoryPatch([result.directoryKey]);
+        setState((current) => ({
+          ...current,
+          rows: updateDirectoryForgeAutomationInLoadedRows(
+            current.rows,
+            {
+              directoryKey: result.directoryKey,
+              automation: isDefaultProjectForgeAutomation(result.automation)
+                ? null
+                : result.automation,
+            },
+          ),
+        }));
+      } catch (error) {
+        if (reportError) publishThreadActionError("forge-automation", error);
+        throw error;
+      }
+    },
+    [publishThreadActionError, setProjectForgeAutomationRequest, noteDirectoryPatch],
+  );
+
+  const listProjectHeldWakeups = useCallback(
+    async (directory: NavigationDirectorySummary): Promise<ProjectHeldWakeup[]> => {
+      if (!listProjectHeldWakeupsRequest) {
+        return [];
+      }
+      const result = await listProjectHeldWakeupsRequest({
+        directoryKey: directory.key,
+      });
+      return result.wakeups;
+    },
+    [listProjectHeldWakeupsRequest],
+  );
+
+  const resolveProjectHeldWakeups = useCallback(
+    async (
+      directory: NavigationDirectorySummary,
+      resolutions: ResolveProjectHeldWakeupsRequest["resolutions"],
+    ): Promise<ResolveProjectHeldWakeupsResponse> => {
+      if (!resolveProjectHeldWakeupsRequest) {
+        throw new Error("Held wake-ups cannot be resolved in this window.");
+      }
+      return await resolveProjectHeldWakeupsRequest({
+        directoryKey: directory.key,
+        resolutions,
+      });
+    },
+    [resolveProjectHeldWakeupsRequest],
+  );
+
   const updateThreadExecutionMode = useCallback(
     async (
       thread: NavigationThreadSummary,
@@ -9934,6 +10087,9 @@ export function useThreadNavigation(
     setDirectoryPin,
     reorderDirectoryPins,
     setDirectoryThreadsCollapsed,
+    setProjectForgeAutomation,
+    listProjectHeldWakeups,
+    resolveProjectHeldWakeups,
     loadedRows: state.rows,
     pagedNavigation: boundedNavigation,
     pagesAwaitingRows,

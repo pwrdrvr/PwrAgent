@@ -19,6 +19,7 @@ const ROW_CHANGE_METHODS = new Set([
   "thread/executionMode/queueCleared", "thread/prAutoDispatch/updated", "thread/prAutoDispatch/pendingUpdated",
   "thread/automations/updated", "automation/run/updated",
   "directory/pin/added", "directory/pin/removed", "directory/pin/reordered", "directory/threadsCollapsed/updated",
+  "directory/forgeAutomation/updated",
   "navigation/providerThreads/refreshed", "navigation/remoteThreadPins/changed",
   "navigation/directory/seen", "navigation/directory/removed", "navigation/directoryGitStatus/updated",
   "navigation/threadGitWorkingState/updated", "navigation/threadDirectories/updated",

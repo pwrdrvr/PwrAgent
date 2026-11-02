@@ -25,6 +25,10 @@ import {
 import { useLaunchpadComposerFocusHandoff } from "./useLaunchpadComposerFocusHandoff";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
+  describeProjectAutoFixOverride,
+  findThreadProjectDirectory,
+} from "../forge-automation/forge-automation-view";
+import {
   beginLaunchpadComposition,
   getLaunchpadComposerDestination,
   notifyLaunchpadAttachmentHandoff,
@@ -6265,7 +6269,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         const manualReleaseRequired =
           turnQueueRecord.manualReleaseRequired === true
           || turnQueueRecord.status === "held";
-        const holdReason = manualReleaseRequired
+        // A paused entry with a reason is held by its owner, such as a
+        // wake-up its paused project keeps; the reason says why.
+        const holdReason = (manualReleaseRequired || turnQueueRecord.paused === true)
           && typeof turnQueueRecord.errorMessage === "string"
             ? turnQueueRecord.errorMessage
             : undefined;
@@ -11354,13 +11360,28 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const hasAttachedPullRequest = props.thread
     ? hasPrimaryWorkspacePullRequest(props.thread)
     : false;
+  // A project's Forge Automation can only narrow Auto-fix. It mutes the
+  // control and explains itself; the thread's own value is left alone. A
+  // peer's thread is governed by its owner's projects, which this window
+  // does not hold, so a local project of the same path must not claim it.
+  const prAutoDispatchProject = props.thread && showPrAutoDispatchToggle && !props.thread.federation
+    ? findThreadProjectDirectory(props.thread, props.directories)
+    : undefined;
+  const prAutoDispatchProjectOverride = prAutoDispatchProject
+    ? describeProjectAutoFixOverride(prAutoDispatchProject.forgeAutomation, prAutoDispatchProject.label)
+    : undefined;
   const prAutoDispatchTooltip = !backgroundPrPollingEnabled
     ? "Auto-fix PR paused — turn on background PR polling in Settings"
     : !prAutoDispatchAllowed
       ? "Auto-fix PR disabled globally — allow it in Git settings"
-      : hasAttachedPullRequest
-        ? "Auto-fix PR — handle new CI failures or merge conflicts"
-        : "Auto-fix PR — starts when a PR for this workspace is linked";
+      : prAutoDispatchProjectOverride
+        ? prAutoDispatchProjectOverride.tooltip
+        : hasAttachedPullRequest
+          ? "Auto-fix PR — handle new CI failures or merge conflicts"
+          : "Auto-fix PR — starts when a PR for this workspace is linked";
+  const prAutoDispatchProjectMuted = Boolean(
+    prAutoDispatchAvailable && prAutoDispatchProjectOverride?.muted,
+  );
   // Environments are edited on the machine that runs them, so a peer's
   // thread or a remote execution workspace gets no editor here.
   const environmentEditPath =
@@ -12749,6 +12770,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           ? "Steer when ready"
           : queued.manualReleaseRequired
           ? "Held for retry"
+          : queued.paused && queued.holdReason
+          ? "Held"
           : queued.errorMessage
           ? "Failed to send"
           : scheduledSendAt
@@ -12779,7 +12802,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             onKeyDown={(event) => queuedReorder.onKeyDown(event, queued.id)}
             onPointerDown={(event) => queuedReorder.onPointerDown(event, queued.id)}
             aria-label={
-              queued.paused
+              queued.paused && queued.holdReason
+                ? index === 0
+                  ? "Held queued message"
+                  : `Held queued message ${index + 1}`
+                : queued.paused
                 ? index === 0
                   ? "Paused queued message"
                   : `Paused queued message ${index + 1}`
@@ -14679,9 +14706,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               type="button"
               className={`composer__toggle tooltip-target${
                 props.thread.prAutoDispatchEnabled ? " is-active" : ""
-              }`}
+              }${prAutoDispatchProjectMuted ? " is-project-overridden" : ""}`}
               aria-label="Auto-fix PR"
               aria-pressed={Boolean(props.thread.prAutoDispatchEnabled)}
+              // aria-pressed keeps the thread's own value; this says what the
+              // project does to it, which the tooltip only shows on hover.
+              aria-description={prAutoDispatchAvailable ? prAutoDispatchProjectOverride?.tooltip : undefined}
               data-tooltip={prAutoDispatchTooltip}
               disabled={!prAutoDispatchAvailable}
               onClick={() => {

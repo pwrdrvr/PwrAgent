@@ -46,6 +46,7 @@ export const PWRAGENT_THREAD_ORCHESTRATION_ERROR_CODES = [
   "ambiguous_workspace",
   "requires_confirmation",
   "turn_start_failed",
+  "project_paused",
   "internal_error",
 ] as const;
 

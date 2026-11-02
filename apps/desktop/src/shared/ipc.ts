@@ -405,6 +405,16 @@ export const NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL =
   "navigation:reorder-directory-pins";
 export const NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL =
   "navigation:set-directory-threads-collapsed";
+/**
+ * Per-project Forge Automation (pause, Auto-fix kinds, PR watches, and the
+ * while-paused policies). Local `directory:` keys only; the owner enforces.
+ */
+export const NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL =
+  "navigation:set-project-forge-automation";
+export const NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL =
+  "navigation:list-project-held-wakeups";
+export const NAVIGATION_RESOLVE_PROJECT_HELD_WAKEUPS_CHANNEL =
+  "navigation:resolve-project-held-wakeups";
 export const NAVIGATION_REFRESH_THREAD_PRS_CHANNEL =
   "navigation:refresh-thread-prs";
 export const NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL =

@@ -36,6 +36,7 @@ import {
 import {
   ChevronDownIcon,
   NewThreadIcon,
+  PauseIcon,
   UnlinkedDotIcon,
 } from "../../icons";
 import { useEventCallback } from "../../lib/useEventCallback";
@@ -1074,9 +1075,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const pinResource = props.pagedNavigation?.resources.get(pinResourceId);
     const rootResourceId = `directory:${directory.key}`;
     const rootResource = props.pagedNavigation?.resources.get(rootResourceId);
+    const forgeActivityPaused = directory.forgeAutomation?.paused === true;
     const directorySummaryLabel = [
       directory.label,
       directoryUnconfigured ? "not configured on this instance" : undefined,
+      forgeActivityPaused ? "forge activity paused" : undefined,
       activeThreadCount > 0 ? activeThreadLabel : undefined,
       remoteActiveThreadCount > 0 ? formatRemoteActiveThreadCount(remoteActiveThreadCount) : undefined,
       reviewThreadCount > 0 ? formatReviewThreadCount(reviewThreadCount) : undefined,
@@ -1536,6 +1539,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
             </span>
 
             <span className="directory-row__summary-meta">
+              {forgeActivityPaused ? (
+                <span
+                  aria-hidden="true"
+                  className="directory-row__paused tooltip-target"
+                  data-tooltip="Forge activity paused. Right-click for Forge Automation."
+                >
+                  <PauseIcon size={10} strokeWidth={2.5} />
+                  Paused
+                </span>
+              ) : null}
               {activeThreadCount > 0 ? (
                 <DirectoryCount
                   activeCount={activeThreadCount}
