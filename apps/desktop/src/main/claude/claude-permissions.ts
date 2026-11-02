@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { CanUseTool, Options, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import { PWRAGENT_TOOL_NAMESPACE, type AppServerPendingRequestNotification, type ThreadExecutionMode } from "@pwragent/shared";
-import { FORGE_PR_TOOL_OPERATIONS } from "../pr-status/forge-pr-tool-contract";
+import { FORGE_PR_TOOL_OPERATIONS, FORGE_PR_WRITE_OPERATIONS } from "../pr-status/forge-pr-tool-contract";
 import { FORGE_READ_OPERATIONS } from "../pr-status/forge-tool-contract";
 import { CLAUDE_ARTIFACT_TOOLS } from "./claude-tool-activity";
 
@@ -14,6 +14,10 @@ export const CLAUDE_MCP_GATEWAY_TOOL = `mcp__${PWRAGENT_TOOL_NAMESPACE}__call_mc
  */
 export const CLAUDE_FORGE_TOOLS: readonly string[] = [...FORGE_READ_OPERATIONS, ...FORGE_PR_TOOL_OPERATIONS]
   .map((operation) => `mcp__${PWRAGENT_TOOL_NAMESPACE}__${operation}`);
+
+/** The forge tools that change the forge, as Claude names them. */
+const CLAUDE_FORGE_WRITE_TOOLS: ReadonlySet<string> = new Set(FORGE_PR_WRITE_OPERATIONS
+  .map((operation) => `mcp__${PWRAGENT_TOOL_NAMESPACE}__${operation}`));
 
 /**
  * Tools Claude runs without asking, because PwrAgent decides them itself.
@@ -33,8 +37,9 @@ export const CLAUDE_FORGE_TOOLS: readonly string[] = [...FORGE_READ_OPERATIONS, 
  * relaunching the process, and an Off tool stays unadvertised.
  *
  * The rules name exact tools on PwrAgent's own server, so they are set only
- * when that server is attached. Claude still applies its plan mode and the
- * operator's own `ask` and `deny` rules for these tools.
+ * when that server is attached. Claude still applies the operator's own
+ * `ask` and `deny` rules for these tools, and its plan mode still asks for a
+ * write, which a plan turn refuses without a card.
  */
 export function claudeAllowedTools(mcpServers: Options["mcpServers"]): string[] {
   return mcpServers && Object.hasOwn(mcpServers, PWRAGENT_TOOL_NAMESPACE)
@@ -73,6 +78,18 @@ export const CLAUDE_EXIT_PLAN_TOOL = "ExitPlanMode";
  */
 const CLAUDE_PLAN_HANDOFF = "The operator has your plan and will reply when it should be implemented. "
   + "Stay in plan mode and end your turn now.";
+
+/**
+ * A plan turn is read-only, so a forge write is refused here, without a
+ * card. Claude's plan mode still asks for a write it allows, and accepting
+ * that card led to the forge policy's card for the same call. The forge
+ * reads are read-only tools, which plan mode runs without asking.
+ */
+function claudePlanForgeWriteRefusal(toolName: string): string {
+  const operation = toolName.slice(`mcp__${PWRAGENT_TOOL_NAMESPACE}__`.length);
+  return `This is a plan turn, which is read-only, so PwrAgent did not run ${operation}. `
+    + "Put this step in your plan. The operator will reply when the plan should be implemented.";
+}
 
 /**
  * The input a card shows. Claude Code adds its own `__`-prefixed fields to an
@@ -116,6 +133,8 @@ export function createClaudePermissionHandler(options: {
   /**
    * Whether the operator asked for this turn to plan. Claude can also enter
    * plan mode on its own, and then leaving it needs the operator's approval.
+   * Only a plan turn refuses forge writes: the handler cannot see a plan
+   * mode Claude entered itself, so those writes keep Claude's card.
    */
   planTurn?: () => boolean;
   request: (request: AppServerPendingRequestNotification, signal: AbortSignal) => Promise<unknown>;
@@ -124,6 +143,9 @@ export function createClaudePermissionHandler(options: {
   return async (toolName, input, context) => {
     if (context.signal.aborted) return { behavior: "deny", message: "Turn cancelled.", interrupt: true };
     if (toolName === CLAUDE_EXIT_PLAN_TOOL && options.planTurn?.()) return { behavior: "deny", message: CLAUDE_PLAN_HANDOFF };
+    if (CLAUDE_FORGE_WRITE_TOOLS.has(toolName) && options.planTurn?.()) {
+      return { behavior: "deny", message: claudePlanForgeWriteRefusal(toolName) };
+    }
     const requestId = randomUUID();
     const turnId = options.turnId();
     const request: AppServerPendingRequestNotification = toolName === "AskUserQuestion"

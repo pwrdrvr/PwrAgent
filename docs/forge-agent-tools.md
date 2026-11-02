@@ -31,7 +31,10 @@ Agent forge tools**:
 - `auto` follows the thread's own approval mode:
   - Full Access runs every group. For Claude, that is bypass permissions.
   - A Codex or Claude Auto turn runs every group except `approve_merge`.
-  - Any other mode asks, including Claude's plan and accept-edits modes.
+  - Any other mode asks, including Claude's accept-edits mode.
+  - A Claude plan turn (the composer's **Plan** toggle) runs no write, at any
+    level. PwrAgent declines it without a card and tells Claude to put the
+    step in its plan. Reads run as in any other turn.
   - A Claude thread's mode is read from its open Claude process, so a change
     during the turn applies to the next call.
 - A group that is off, or the family switched off, is not advertised to new
@@ -54,8 +57,10 @@ Agent forge tools**:
   this card in every mode but Full Access. The list covers the whole family,
   not the levels in effect at launch, so a Settings change applies to the
   next call without relaunching Claude, and `off` tools stay unadvertised.
-  Claude's `plan` mode and the operator's own Claude `ask` and `deny` rules
-  still apply. See [Claude provider](claude-provider.md).
+  The operator's own Claude `ask` and `deny` rules still apply. Claude's
+  `plan` mode still calls `canUseTool` for a write, so a plan turn declines
+  the write there instead of showing Claude's card and then this one. See
+  [Claude provider](claude-provider.md).
 - Automations cannot answer a prompt. An `auto` or `ask` write in an
   automation fails with `approval_required` unless the automation runs in
   Full Access and the level is `auto`.

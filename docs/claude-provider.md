@@ -127,9 +127,9 @@ it led to the gateway card for the same call, or to the forge card for an
 the upstream tool and follows the connection's Tool approval setting,
 conversation approvals and automation allowlists. The forge card follows
 `[git.agent_tools]`, its project rules and the turn's mode, and keeps
-`approve_merge` asking in every mode but Full Access. Claude still decides
-these tools in `plan` mode and applies the operator's own `ask` and `deny`
-rules for them. The rules are fixed when the process starts and do not
+`approve_merge` asking in every mode but Full Access. Claude still applies
+the operator's own `ask` and `deny` rules for these tools, and its `plan` mode
+still asks for a forge write; a plan turn refuses that write (below). The rules are fixed when the process starts and do not
 depend on the forge levels, so a Settings change never relaunches Claude.
 A live session that lacks them relaunches for them, or keeps asking until
 its next launch while a task runs. Other PwrAgent tools still ask through
@@ -142,6 +142,15 @@ with the plan as its input. PwrAgent shows that plan as the turn's plan card,
 as it shows a Codex plan, and declines the call without an approval card, so
 the turn ends with the plan in front of the operator, who replies to
 implement it.
+
+A plan turn does not write to GitHub or GitLab. Claude's `plan` mode still
+calls `canUseTool` for a forge write, although `allowedTools` lists it.
+Accepting Claude's card then led to the forge card for the same call. In a
+plan turn PwrAgent declines every forge write itself, with no card, and tells
+Claude to put the step in its plan. The forge reads are read-only tools, so
+plan mode runs them without asking, and the forge policy decides them as in
+any other turn. The handler knows only the operator's Plan toggle: if Claude
+enters plan mode on its own, a forge write there keeps Claude's card.
 
 A thread's linked directories other than its working directory, including
 directories attached later with `attach_thread_directory`, are passed as
