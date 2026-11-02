@@ -12,9 +12,9 @@ import {
   jumpScrollPlan,
   jumpTailIsOffscreen,
   projectTypeaheadIndex,
-  resolveProjectIndexDrop,
   spyProjects,
 } from "../project-index";
+import { resolveDirectoryDrop } from "../directory-pin-drop";
 
 /**
  * The sidebar's project index (PwrAgent Claude Design: "Sidebar Project
@@ -436,7 +436,7 @@ describe("project index reorder rules", () => {
   const loose = { key: "harbor", pinned: false };
 
   it("puts the line on the nearer edge of the pin under the pointer", () => {
-    expect(resolveProjectIndexDrop({ y: 24, source: pin, items, seam })).toEqual({
+    expect(resolveDirectoryDrop({ y: 24, source: pin, items, seam })).toEqual({
       kind: "line",
       anchorKey: "quill",
       position: "before",
@@ -445,27 +445,27 @@ describe("project index reorder rules", () => {
   });
 
   it("offers no move on a held pin's own edges", () => {
-    expect(resolveProjectIndexDrop({ y: 35, source: pin, items, seam })).toBeUndefined();
-    expect(resolveProjectIndexDrop({ y: 58, source: pin, items, seam })).toBeUndefined();
+    expect(resolveDirectoryDrop({ y: 35, source: pin, items, seam })).toBeUndefined();
+    expect(resolveDirectoryDrop({ y: 58, source: pin, items, seam })).toBeUndefined();
   });
 
   it("unpins a held pin anywhere at or below the hairline", () => {
     for (const y of [62, 100]) {
-      expect(resolveProjectIndexDrop({ y, source: pin, items, seam })).toEqual({
+      expect(resolveDirectoryDrop({ y, source: pin, items, seam })).toEqual({
         kind: "seam", drop: { kind: "unpin" }, label: "Unpin",
       });
     }
   });
 
   it("pins an unpinned name dropped among the pins, or over the hairline at the end", () => {
-    expect(resolveProjectIndexDrop({ y: 5, source: loose, items, seam })).toEqual({
+    expect(resolveDirectoryDrop({ y: 5, source: loose, items, seam })).toEqual({
       kind: "line",
       anchorKey: "meridian",
       position: "before",
       drop: { kind: "move", anchorKey: "meridian", placement: "before" },
       label: "Pin",
     });
-    expect(resolveProjectIndexDrop({ y: 64, source: loose, items, seam })).toEqual({
+    expect(resolveDirectoryDrop({ y: 64, source: loose, items, seam })).toEqual({
       kind: "line",
       anchorKey: "lighthouse",
       position: "after",
@@ -475,17 +475,17 @@ describe("project index reorder rules", () => {
   });
 
   it("has nothing for an unpinned name held among the unpinned, which keep name order", () => {
-    expect(resolveProjectIndexDrop({ y: 95, source: { key: "tern", pinned: false }, items, seam })).toBeUndefined();
+    expect(resolveDirectoryDrop({ y: 95, source: { key: "tern", pinned: false }, items, seam })).toBeUndefined();
   });
 
   it("pins only inside the ghost slot's own box while nothing is pinned", () => {
     const unpinned = items.map((item) => ({ ...item, pinned: false }));
     const pinSlot = { top: 0, bottom: 26 };
-    expect(resolveProjectIndexDrop({ y: 12, source: loose, items: unpinned, pinSlot })).toEqual({
+    expect(resolveDirectoryDrop({ y: 12, source: loose, items: unpinned, pinSlot })).toEqual({
       kind: "slot", drop: { kind: "pin" }, label: "Pin",
     });
-    expect(resolveProjectIndexDrop({ y: 40, source: loose, items: unpinned, pinSlot })).toBeUndefined();
-    expect(resolveProjectIndexDrop({ y: 40, source: loose, items: unpinned })).toBeUndefined();
+    expect(resolveDirectoryDrop({ y: 40, source: loose, items: unpinned, pinSlot })).toBeUndefined();
+    expect(resolveDirectoryDrop({ y: 40, source: loose, items: unpinned })).toBeUndefined();
   });
 });
 
@@ -532,9 +532,13 @@ describe("ProjectIndex drag", () => {
         onMoveProject={onMoveProject}
       />
     );
-    render(ui(projects));
+    const view = render(ui(projects));
     layout();
-    return { onDropProject, onMoveProject, onJump };
+    const rerender = (list: ProjectIndexEntry[]): void => {
+      view.rerender(ui(list));
+      layout();
+    };
+    return { onDropProject, onMoveProject, onJump, rerender };
   }
 
   function name(label: string): HTMLElement {
@@ -557,6 +561,20 @@ describe("ProjectIndex drag", () => {
     expect(seam).toHaveAttribute("aria-hidden", "true");
     expect(seam?.previousElementSibling).toContainElement(name("quill"));
     expect(seam?.nextElementSibling).toContainElement(name("harbor"));
+  });
+
+  it("draws the hairline after the last name when every project is pinned, so a pin can still leave", async () => {
+    const { onDropProject } = renderDraggable(reorderEntries.map((entry) => ({ ...entry, pinned: true })));
+    const seam = document.querySelector(".project-index__seam")!;
+    expect(seam.previousElementSibling).toContainElement(name("tern"));
+    expect(seam.nextElementSibling).toBeNull();
+    press(name("quill"), 30);
+    move(85);
+    await waitFor(() => expect(seam).toHaveClass("is-drop-target"));
+    await act(async () => {
+      release(85);
+    });
+    expect(onDropProject).toHaveBeenCalledWith("dir:quill", { kind: "unpin" });
   });
 
   it("draws no hairline when nothing is pinned", () => {
@@ -646,6 +664,26 @@ describe("ProjectIndex drag", () => {
     expect(onMoveProject).toHaveBeenCalledWith("dir:quill", "up");
     fireEvent.keyDown(name("harbor"), { key: "ArrowUp", metaKey: true, shiftKey: true });
     expect(onMoveProject).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps focus on a name ⌘⇧↓ moved, once its new place renders", () => {
+    const { onMoveProject, rerender } = renderDraggable();
+    name("meridian").focus();
+    fireEvent.keyDown(name("meridian"), { key: "ArrowDown", metaKey: true, shiftKey: true });
+    expect(onMoveProject).toHaveBeenCalledWith("dir:meridian", "down");
+    // Chromium drops focus from the <li> React moves; jsdom does not.
+    act(() => name("meridian").blur());
+    rerender([reorderEntries[1]!, reorderEntries[0]!, ...reorderEntries.slice(2)]);
+    expect(name("meridian")).toHaveFocus();
+  });
+
+  it("leaves focus alone once the operator has moved on", () => {
+    const { rerender } = renderDraggable();
+    name("meridian").focus();
+    fireEvent.keyDown(name("meridian"), { key: "ArrowDown", metaKey: true, shiftKey: true });
+    name("harbor").focus();
+    rerender([reorderEntries[1]!, reorderEntries[0]!, ...reorderEntries.slice(2)]);
+    expect(name("harbor")).toHaveFocus();
   });
 
   it("offers no drag without an owner that can reorder", () => {

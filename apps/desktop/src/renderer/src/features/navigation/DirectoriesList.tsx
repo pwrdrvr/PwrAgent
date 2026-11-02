@@ -47,7 +47,12 @@ import {
   matchMoveHotkey,
   type RenamingThreadRow,
 } from "./thread-action-hotkeys";
-import { applyDirectoryDrop, type DirectoryDrop } from "./directory-pin-drop";
+import {
+  applyDirectoryDrop,
+  resolveDirectoryDrop,
+  type DirectoryDrop,
+  type DirectoryDropBox,
+} from "./directory-pin-drop";
 import { useDropIndicatorController } from "./drag-drop";
 import { beginPointerReorderDrag, type Point, type PointerReorderTarget } from "./pointer-reorder-drag";
 import type { NestThreadHandler } from "./thread-nest-drop";
@@ -731,43 +736,41 @@ export function DirectoriesList(props: DirectoriesListProps) {
       if (point.x < bounds.left || point.x > bounds.right || point.y < bounds.top || point.y > bounds.bottom) {
         return undefined;
       }
-      if (offersPinSlot) {
-        const slot = directoryPinSlotRef.current;
-        const slotBounds = slot?.getBoundingClientRect();
-        if (!slot || !slotBounds || point.y < slotBounds.top || point.y > slotBounds.bottom) return undefined;
-        return { element: slot, key: "directories:pin", label: "Pin", value: { kind: "pin" } };
-      }
-      const pinnedRows = Array.from(
-        list.querySelectorAll<HTMLElement>(".directory-row[data-directory-pinned=\"true\"]"),
-      );
-      const keys = pinnedRows.map((row) => row.dataset.directoryKey ?? "");
-      const divider = directoryDividerRef.current;
-      const dividerBounds = divider?.getBoundingClientRect();
-      if (divider && dividerBounds && point.y >= dividerBounds.top) {
-        // Below the pins: the unpinned group has no manual order, so the drop
-        // goes to the group. A pinned folder leaves the pins; an unpinned one
-        // over the divider itself joins them at the end.
-        if (sourcePinned) {
-          return { element: divider, key: "directories:unpin", label: "Unpin", value: { kind: "unpin" } };
-        }
-        if (point.y > dividerBounds.bottom || keys.length === 0) return undefined;
-        return { element: pinnedRows[pinnedRows.length - 1], key: `directory:${keys[keys.length - 1]}`,
-          position: "after", label: "Pin",
-          value: { kind: "move", anchorKey: keys[keys.length - 1], placement: "after" } };
-      }
-      if (keys.length === 0) return undefined;
-      const before = pinnedRows.findIndex((row) => {
+      const rows = new Map<string, HTMLElement>();
+      const items: DirectoryDropBox[] = [];
+      for (const row of list.querySelectorAll<HTMLElement>(".directory-row[data-directory-pinned=\"true\"]")) {
+        const key = row.dataset.directoryKey ?? "";
         const rect = row.getBoundingClientRect();
-        return point.y < rect.top + rect.height / 2;
+        rows.set(key, row);
+        items.push({ key, top: rect.top, bottom: rect.bottom, pinned: true });
+      }
+      const divider = directoryDividerRef.current;
+      const slot = offersPinSlot ? directoryPinSlotRef.current : null;
+      const dividerRect = divider?.getBoundingClientRect();
+      const slotRect = slot?.getBoundingClientRect();
+      // The rules the project index uses too (`resolveDirectoryDrop`).
+      const hit = resolveDirectoryDrop({
+        y: point.y,
+        source: { key: directory.key, pinned: sourcePinned },
+        items,
+        ...(dividerRect ? { seam: { top: dividerRect.top, bottom: dividerRect.bottom } } : {}),
+        ...(slotRect ? { pinSlot: { top: slotRect.top, bottom: slotRect.bottom } } : {}),
       });
-      const insertAt = before < 0 ? keys.length : before;
-      const sourceIndex = keys.indexOf(directory.key);
-      if (sourceIndex >= 0 && (insertAt === sourceIndex || insertAt === sourceIndex + 1)) return undefined;
-      const index = before < 0 ? keys.length - 1 : before;
-      const placement = before < 0 ? "after" : "before";
-      return { element: pinnedRows[index], key: `directory:${keys[index]}`, position: placement,
-        label: sourcePinned ? undefined : "Pin",
-        value: { kind: "move", anchorKey: keys[index], placement } };
+      if (hit === undefined) return undefined;
+      if (hit.kind === "line") {
+        const anchor = rows.get(hit.anchorKey);
+        if (anchor === undefined) return undefined;
+        return {
+          element: anchor,
+          key: `directory:${hit.anchorKey}`,
+          position: hit.position,
+          ...(hit.label ? { label: hit.label } : {}),
+          value: hit.drop,
+        };
+      }
+      const element = hit.kind === "seam" ? divider : slot;
+      if (!element) return undefined;
+      return { element, key: hit.kind === "seam" ? "directories:unpin" : "directories:pin", label: hit.label, value: hit.drop };
     };
 
     directoryDragDisposeRef.current = beginPointerReorderDrag({

@@ -5663,8 +5663,13 @@ textarea,
     0 0 14px var(--accent-shadow);
 }
 
-.project-index__pin-slot-row {
+/* Stuck to the top, so a scrolled index still shows its only target. */
+.project-index__list > li.project-index__pin-slot-row {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   padding: 2px 4px 4px 6px;
+  background: var(--bg-sidebar);
 }
 
 /* The held name. It is appended to <body>, so it carries the column's type
@@ -8782,7 +8787,9 @@ a.button {
 /* The ghost Pin slot a project drag opens while nothing is pinned, in the
    Directories list and the project index. It is the Keep at top slot
    (`.directory-row__keep-top-slot`) with its own label: mounted only while
-   a project is held, and only a drop inside its own box pins. */
+   a project is held, and only a drop inside its own box pins. It is the
+   only target while it is open, so it sticks to the top of a scrolled list
+   (above the folded headers) instead of opening out of view. */
 .directories-pin-slot,
 .project-index__pin-slot {
   display: flex;
@@ -8798,9 +8805,14 @@ a.button {
 }
 
 .directories-pin-slot {
+  position: sticky;
+  top: 2px;
+  z-index: 6;
+  flex: none;
   height: 34px;
   margin: 2px 2px 6px;
   border-radius: 8px;
+  background: var(--bg-sidebar);
 }
 
 .project-index__pin-slot {
@@ -8818,7 +8830,10 @@ a.button {
 .project-index__pin-slot.is-drop-target {
   border-style: solid;
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  /* The tint over the sidebar, opaque: the stuck slot covers rows. */
+  background:
+    linear-gradient(color-mix(in srgb, var(--accent) 9%, transparent) 0 0),
+    var(--bg-sidebar);
   color: var(--text-primary);
 }
 

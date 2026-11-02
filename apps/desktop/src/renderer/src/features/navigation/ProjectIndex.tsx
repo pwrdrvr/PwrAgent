@@ -14,7 +14,11 @@ import { flushSync } from "react-dom";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { PauseIcon, PinIcon } from "../../icons";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
-import type { DirectoryDrop } from "./directory-pin-drop";
+import {
+  resolveDirectoryDrop,
+  type DirectoryDrop,
+  type DirectoryDropBox,
+} from "./directory-pin-drop";
 import { useDropIndicatorController } from "./drag-drop";
 import { beginPointerReorderDrag, type Point, type PointerReorderTarget } from "./pointer-reorder-drag";
 import {
@@ -22,11 +26,9 @@ import {
   NO_PROJECT_SPY,
   PROJECT_INDEX_KEYBOARD_STEP,
   projectTypeaheadIndex,
-  resolveProjectIndexDrop,
   sameProjectSpy,
   spyProjects,
   type ProjectBlockBox,
-  type ProjectIndexItemBox,
   type ProjectSpy,
 } from "./project-index";
 import { matchMoveHotkey } from "./thread-action-hotkeys";
@@ -105,6 +107,11 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
   const navRef = useRef<HTMLElement | null>(null);
   const [spy, setSpy] = useState<ProjectSpy>(NO_PROJECT_SPY);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
+  // A name moved by ⌘⇧↑/↓, until its new place renders. React reorders by
+  // moving <li>s, and Chromium drops focus from a node it moves, so ⌘⇧↓
+  // would leave focus on <body>. The move lands after a round trip to the
+  // owner, so this waits for the reorder instead of refocusing at once.
+  const movedRef = useRef<{ key: string; from: number } | null>(null);
   const pointerInside = useRef(false);
   const typed = useRef<{ query: string; at: number }>({ query: "", at: 0 });
 
@@ -295,6 +302,8 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
       : null;
     if (direction !== null) {
       event.preventDefault();
+      const to = direction === "up" ? at - 1 : at + 1;
+      if (props.projects[to]?.pinned) movedRef.current = { key: keys[at]!, from: at };
       props.onMoveProject?.(keys[at]!, direction);
       return;
     }
@@ -357,8 +366,24 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
     const timer = window.setTimeout(() => setFlashKey(null), DROP_FLASH_MS);
     return () => window.clearTimeout(timer);
   }, [flashKey]);
+  useLayoutEffect(() => {
+    const moved = movedRef.current;
+    const nav = navRef.current;
+    if (moved === null || nav === null) return;
+    const at = props.projects.findIndex((project) => project.key === moved.key);
+    if (at === moved.from) return;
+    movedRef.current = null;
+    const active = document.activeElement;
+    if (at !== -1 && (active === null || active === document.body)) {
+      findItem(nav, moved.key)?.focus({ preventScroll: true });
+    }
+  }, [props.projects]);
   const pinnedCount = props.projects.filter((project) => project.pinned).length;
-  const showSeam = pinnedCount > 0 && pinnedCount < props.projects.length;
+  const lastPinned = props.projects.findLastIndex((project) => project.pinned);
+  // The hairline follows the last pin. It is drawn even with nothing below
+  // it while a pin can be dragged out, as the Directories divider is.
+  const showSeam = lastPinned >= 0
+    && (lastPinned < props.projects.length - 1 || Boolean(props.onDropProject));
 
   const beginDrag = (
     event: ReactPointerEvent<HTMLElement>,
@@ -380,7 +405,7 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
         return undefined;
       }
       const rows = new Map<string, HTMLElement>();
-      const items: ProjectIndexItemBox[] = [];
+      const items: DirectoryDropBox[] = [];
       for (const row of nav.querySelectorAll<HTMLElement>("li[data-project-row]")) {
         const key = row.dataset["projectRow"];
         if (key === undefined) continue;
@@ -392,7 +417,7 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
       const slot = nav.querySelector<HTMLElement>(".project-index__pin-slot");
       const seamRect = seam?.getBoundingClientRect();
       const slotRect = slot?.getBoundingClientRect();
-      const hit = resolveProjectIndexDrop({
+      const hit = resolveDirectoryDrop({
         y: point.y,
         source: { key: project.key, pinned: sourcePinned },
         items,
@@ -543,7 +568,7 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
             );
             // The hairline where the pins end: a mark for the eye and the
             // Unpin target for the pointer, hidden from screen readers.
-            return showSeam && index === pinnedCount - 1
+            return showSeam && index === lastPinned
               ? [row, <li key="project-index:seam" className="project-index__seam" aria-hidden="true" />]
               : row;
           })}
