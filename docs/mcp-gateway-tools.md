@@ -176,8 +176,11 @@ timer. An owner never sends progress to a request that did not opt in. A
 request from an older bridge keeps its old behavior: its token goes to the
 server as sent, and the call has a fixed 12-minute limit.
 
-Native Codex hosts still get `tool_timeout_sec` of 12 minutes. That limit
-belongs to Codex, and progress through PwrAgent does not change it.
+Native Codex hosts get an absolute `tool_timeout_sec` of 61 minutes. Codex
+does not reset that limit on progress, so the extra minute lets the gateway's
+60-minute deadline return first. The gateway and bridge still stop a silent
+call after 12 minutes. If the bridge wedges and cannot return a timeout,
+Codex can wait up to 61 minutes.
 
 ### Automation MCP grants
 

@@ -18155,7 +18155,7 @@ script = "echo setup"
         PWRAGENT_MCP_CONNECTION_TOKEN: "local-grant",
       },
       startup_timeout_sec: 75,
-      tool_timeout_sec: 720,
+      tool_timeout_sec: 3660,
     });
     await expect(overlayStore.getThreadOverlayState({
       backend: "codex",
