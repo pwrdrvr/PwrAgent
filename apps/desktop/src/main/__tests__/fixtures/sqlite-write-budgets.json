@@ -138,6 +138,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "claude-live-turn-usage": {"commits": 4, "note": "Three live usage reports and the result's, each in its own flush window: one commit per report. Reports run at most every 30 s and only while Claude streams, so ~120 commits per streaming hour (~6.8 MB at ~57 KB each); 0 MB/day idle", "observedWalBytes": 226632, "rowsChanged": 12, "statements": 12},
   "claude-permission-selection": {"commits": 1, "note": "one operator mode selection; 100 duplicate selections add no writes", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
   "claude-result-usage": {"commits": 1, "note": "100 context updates plus one result usage event and ledger flush; context does not write SQLite; 1 commit/turn, measured 65,920 bytes: ~6.6 MB/day at 100 turns/day, zero idle writes", "observedWalBytes": 65920, "rowsChanged": 3, "statements": 3},
   "claude-steer": {"commits": 1, "note": "one steer with agent origin plus one idempotent retry; 1 commit, measured 12,360 bytes (~1.24 MB/day at 100 steers/day), zero idle writes", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
