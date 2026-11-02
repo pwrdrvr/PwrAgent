@@ -9150,6 +9150,7 @@ describe("Sidebar directory pinning", () => {
       onSetProjectForgeAutomation?: ComponentProps<typeof Sidebar>["onSetProjectForgeAutomation"];
       onListProjectHeldWakeups?: ComponentProps<typeof Sidebar>["onListProjectHeldWakeups"];
       onResolveProjectHeldWakeups?: ComponentProps<typeof Sidebar>["onResolveProjectHeldWakeups"];
+      federationOwnerForgeAutomation?: boolean;
       checkFederationTargetProject?: CheckFederationTargetProject;
     } = {},
   ): void {
@@ -9161,6 +9162,7 @@ describe("Sidebar directory pinning", () => {
         onSetProjectForgeAutomation={overrides.onSetProjectForgeAutomation}
         onListProjectHeldWakeups={overrides.onListProjectHeldWakeups}
         onResolveProjectHeldWakeups={overrides.onResolveProjectHeldWakeups}
+        federationOwnerForgeAutomation={overrides.federationOwnerForgeAutomation}
         inboxThreads={[]}
         loading={false}
         creatingThread={undefined}
