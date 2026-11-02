@@ -187,6 +187,38 @@ describe("Claude SDK backend", () => {
     }
   });
 
+  it("waits for an ended session's last turn report before close resolves", async () => {
+    const f = await fixture();
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    // The session leaves the live set before its terminal event is reported,
+    // and the report's listeners still read the store and the workspace.
+    const reporting = Promise.withResolvers<void>();
+    const releaseReport = Promise.withResolvers<void>();
+    const emit = f.backendOptions.emit;
+    f.backendOptions.emit = async (event) => {
+      if (event.notification.method === "turn/completed") {
+        reporting.resolve();
+        await releaseReport.promise;
+      }
+      await emit(event);
+    };
+    let closing: Promise<void> | undefined;
+    try {
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+      await reporting.promise;
+      let closed = false;
+      closing = f.backend.close().then(() => { closed = true; });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closed).toBe(false);
+      releaseReport.resolve();
+      await closing;
+      expect(closed).toBe(true);
+    } finally {
+      releaseReport.resolve();
+      await closing;
+    }
+  });
+
   it("refuses to move a thread while its turn runs", async () => {
     const finish = Promise.withResolvers<void>();
     const f = await fixture(async function* () {

@@ -418,6 +418,11 @@ export class ClaudeBackend {
   private readonly starting = new Map<string, AbortController>();
   /** Turn starts can still read the store before they enter sessions. */
   private readonly turnStarts = new Set<Promise<ClaudeTurnStart>>();
+  /**
+   * Every session's message pump until it settles. A session leaves
+   * `sessions` before its last turn's terminal event has reached listeners.
+   */
+  private readonly sessionRuns = new Set<Promise<void>>();
   private closing = false;
   private closeOperation?: Promise<void>;
   /** Threads a rewind is changing; a message for one waits in the queue. */
@@ -884,9 +889,10 @@ export class ClaudeBackend {
       } finally { releasePrompt(); }
       turn.usageBaseline = session.modelUsage;
       turn.needsUsageBaseline = Boolean(session.sdkSessionId ?? session.forkFromSdkSessionId) && !session.modelUsage;
-      current.done = this.consume(current);
+      const done = current.done = this.consume(current);
       // consume owns every error after launch, including terminal notification.
-      void current.done.catch(() => {});
+      this.sessionRuns.add(done);
+      void done.catch(() => {}).finally(() => this.sessionRuns.delete(done));
       return { backend: "claude", threadId, turnId: turn.turnId };
     } catch (error) {
       const failure = claudeExceptionMessage(error, live?.stderr ?? "");
@@ -2741,6 +2747,9 @@ export class ClaudeBackend {
       Promise.allSettled([...this.turnStarts]),
       Promise.all([...this.sessions.values()].map((live) => this.closeSession(live))),
     ]);
+    // A session already gone from `sessions` may still be reporting its last
+    // turn, and that report's listeners read the store and the workspace.
+    await Promise.allSettled([...this.sessionRuns]);
     await this.rateLimitWrites;
   }
 }

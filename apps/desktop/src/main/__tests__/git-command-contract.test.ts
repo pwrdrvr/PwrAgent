@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runGitCommand, streamGitCommand } from "../app-server/git-executable";
 import { GitWorkingStateService } from "../app-server/git-working-state-service";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
@@ -74,6 +74,42 @@ describe("Git command contract", () => {
       env, maxBuffer: 1_024, ownProcessTree: true,
     })).rejects.toMatchObject({ code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" });
   });
+
+  it("settles an aborted owned run only after its tree has left the workspace", async () => {
+    // Git's own child holds the workspace open, as a Git for Windows
+    // descendant does. A caller removes the workspace once the run settles.
+    const workspace = path.join(root, "workspace");
+    await mkdir(workspace);
+    const script = path.join(root, "held.cjs");
+    const pidFile = path.join(root, "held.pid");
+    await writeFile(script, [
+      'require("node:fs").writeFileSync(process.argv[2], String(process.pid));',
+      "setInterval(() => {}, 1000);",
+    ].join("\n"));
+    const quote = (value: string) => `'${value.replace(/\\/g, "/").replace(/'/g, "'\\''")}'`;
+    const abort = new AbortController();
+    let pid = 0;
+    try {
+      const running = runGitCommand(workspace, [
+        "-c", `alias.held=!${quote(process.execPath)} ${quote(script)} ${quote(pidFile)}`, "held",
+      ], { env, ownProcessTree: true, signal: abort.signal });
+      const settled = running.then(() => "resolved", () => "rejected");
+      await vi.waitFor(async () => {
+        pid = Number(await readFile(pidFile, "utf8"));
+        expect(pid).toBeGreaterThan(0);
+      }, { timeout: 20_000, interval: 50 });
+      abort.abort();
+      await expect(running).rejects.toMatchObject({ name: "AbortError" });
+      expect(await settled).toBe("rejected");
+      expect(() => process.kill(pid, 0)).toThrow();
+      await expect(rm(workspace, { recursive: true })).resolves.toBeUndefined();
+    } finally {
+      abort.abort();
+      if (pid > 0) {
+        try { process.kill(pid, "SIGKILL"); } catch { /* Already reaped. */ }
+      }
+    }
+  }, 30_000);
 
   it.skipIf(process.platform === "win32")("reaps a stream helper that ignores SIGTERM when the consumer stops", async () => {
     const script = path.join(root, "stubborn.cjs");
