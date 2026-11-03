@@ -47,6 +47,9 @@ test("Back skips the archived thread after automatic fallback and Forward return
       await expect(page.getByRole("heading", { level: 2, name: `History fixture ${id}` })).toBeVisible();
     }
     await expect(page.getByTestId("history-nav-back")).toHaveAttribute("aria-description", "History fixture A");
+    // The title and history commit before the composer focus handoff.
+    // Wait for the native shortcut's input target after switching threads.
+    await expect(page.getByRole("textbox", { name: "Reply", exact: true })).toBeFocused();
     const nativeWindow = await app.electronApp.browserWindow(page);
     await nativeWindow.evaluate((window) => {
       const modifiers = [process.platform === "darwin" ? "meta" : "control", "shift"];
