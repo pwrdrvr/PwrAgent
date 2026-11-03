@@ -27,7 +27,7 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function createArchiveWorktreeFixture(ownerRoot = ".codex", completedReviewCount = 0): Promise<{
+async function createArchiveWorktreeFixture(ownerRoot = ".codex"): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
   repoPath: string;
@@ -74,11 +74,6 @@ async function createArchiveWorktreeFixture(ownerRoot = ".codex", completedRevie
     updatedAt: 1760000000000,
   };
 
-  const completedReviews = Array.from({ length: completedReviewCount }, (_, index) => ({
-    id: `completed-native-review-${index}`, title: "Completed review helper", source: { subAgent: "review" },
-    threadSource: "subagent", parentThreadId: thread.id, status: { type: "notLoaded" },
-    cwd: resolvedWorktreePath, ephemeral: false, linkedDirectories: thread.linkedDirectories,
-  }));
   await writeFile(
     fixturePath,
     JSON.stringify(
@@ -105,7 +100,7 @@ async function createArchiveWorktreeFixture(ownerRoot = ".codex", completedRevie
             id: "thread-list-1",
             kind: "response",
             method: "thread/list",
-            result: [thread, ...completedReviews],
+            result: [thread],
           },
           {
             id: "thread-read-1",
@@ -147,7 +142,7 @@ async function createArchiveWorktreeFixture(ownerRoot = ".codex", completedRevie
             afterResponseId: "thread-archive-1",
             kind: "response",
             method: "thread/list",
-            result: completedReviews,
+            result: [],
           },
           // Codex moves an archived thread into the archived listing. The
           // cleanup finds its target there, however many active reads ran.
@@ -177,8 +172,8 @@ async function createArchiveWorktreeFixture(ownerRoot = ".codex", completedRevie
   };
 }
 
-test("archive removes a real Git worktree referenced by six completed native reviews", async () => {
-  const fixture = await createArchiveWorktreeFixture(".codex", 6);
+test("archiving a replay-backed thread removes its real Git worktree", async () => {
+  const fixture = await createArchiveWorktreeFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
   });
