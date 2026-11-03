@@ -13,7 +13,7 @@ const layers = [
   { path: "federation", imports: ["shared"] },
   { path: "agent-tools", imports: ["shared"] },
   { path: "messaging/interface", imports: ["shared"] },
-  { path: "owner-core", imports: reusable },
+  { path: "owner-core", imports: ["shared"] },
   ...providers.map((path) => ({ path, imports: ["messaging/interface"] })),
   { path: "pwragent", imports: [...reusable, "owner-core"] },
 ];
@@ -96,7 +96,7 @@ describe("workspace dependency layers", () => {
     expect(unresolved).toEqual([]);
   });
 
-  it("enforces the layer matrix for package and relative imports, including the reserved owner-core", () => {
+  it("enforces the layer matrix for package and relative imports, including owner-core", () => {
     const mismatches = [];
     for (const { from, to, allowed } of cases) {
       const dependency = result.modules.find((module) => module.source === from)

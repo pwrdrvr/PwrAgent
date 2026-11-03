@@ -328,7 +328,7 @@ bottom to top — leaves at the bottom import nothing else internal.
 graph TB
     DesktopApp["apps/desktop"]
     Outpost["packages/pwragent · src/federation-core.ts"]
-    OwnerCore["packages/owner-core · reserved"]
+    OwnerCore["packages/owner-core"]
     Federation["packages/federation"]
     AgentTools["packages/agent-tools"]
     MsgProviders["packages/messaging/providers/*"]
@@ -340,16 +340,13 @@ graph TB
     DesktopApp --> Shared
     DesktopApp --> Federation
     DesktopApp --> AgentTools
-    DesktopApp -.-> OwnerCore
+    DesktopApp --> OwnerCore
     DesktopApp --> CodexProto["@pwrdrvr/codex-app-server-protocol"]
     Outpost --> Federation
     Outpost --> AgentTools
     Outpost --> Shared
     Outpost --> MsgInterface
     Outpost -.-> OwnerCore
-    OwnerCore --> Federation
-    OwnerCore --> AgentTools
-    OwnerCore --> MsgInterface
     OwnerCore --> Shared
     Federation --> Shared
     AgentTools --> Shared
@@ -370,9 +367,10 @@ Run `pnpm lint:boundaries` locally before pushing; CI fails the build on
 any violation.
 
 Federation, agent-tools, and the messaging interface are independent siblings
-above shared. The reserved owner-core layer may use those reusable libraries;
-it cannot import provider adapters or hosts. The Outpost has the same library
-dependencies, all through its bundle entry; its JavaScript consumes the bundle.
+above shared. The owner-core package imports only shared and holds navigation
+projection, Attention ordering, and thread-title policy. The Outpost may use the
+reusable libraries and owner-core through its bundle entry; its JavaScript
+consumes the bundle.
 Every package under `packages/` is forbidden from importing `apps/`.
 
 ## Workspace map
@@ -383,7 +381,7 @@ Every package under `packages/` is forbidden from importing `apps/`.
 | `packages/shared` | Cross-package types: app-server enums, navigation snapshots, thread identifiers |
 | `packages/federation` | Owner contract, federation transport, enrollment, routing and RPC |
 | `packages/agent-tools` | Agent tool definitions, routing and messaging tool contracts |
-| `packages/owner-core` (reserved) | Shared owner policies and lifecycle, implemented by the Owner Core project |
+| `packages/owner-core` | Shared navigation projection, Attention ordering, and thread-title policy (`@pwragent/owner-core`) |
 | `packages/pwragent` | Headless Outpost daemon and CLI, with reusable libraries bundled through `src/federation-core.ts` |
 | `packages/messaging/interface` | Generic messaging types, capability profile, layout helpers |
 | `packages/messaging/providers/telegram` | Telegram adapter (`grammy`) |

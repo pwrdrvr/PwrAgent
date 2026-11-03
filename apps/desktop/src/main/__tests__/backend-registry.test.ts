@@ -16125,6 +16125,95 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("refuses a launchpad whose required worktree resolved to the project checkout", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const prepareLaunchpadWorkspace = vi.fn(async (_launchpad: object) => ({
+      cwd: "/repo/project",
+      workMode: "local" as const,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: { prepareLaunchpadWorkspace } as never,
+    });
+    const launchpad = {
+      directoryKey: "directory:/repo/project",
+      directoryKind: "directory" as const,
+      directoryLabel: "project",
+      directoryPath: "/repo/project",
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      workMode: "worktree" as const,
+      createdAt: 1000,
+      updatedAt: 2000,
+    };
+
+    // A peer's New worktree card must not share the peer's checkout.
+    await expect(registry.materializeDirectoryLaunchpad({
+      directoryKey: launchpad.directoryKey,
+      launchpad,
+      requiredWorkMode: "worktree",
+      input: [{ type: "text", text: "Rewrite the CLI" }],
+    })).rejects.toThrow(/worktree/);
+    expect(codexClient.lastStartThreadParams).toBeUndefined();
+
+    // Without the requirement the fallback is unchanged.
+    await expect(registry.materializeDirectoryLaunchpad({
+      directoryKey: launchpad.directoryKey,
+      launchpad,
+    })).resolves.toMatchObject({ workMode: "local" });
+
+    await registry.close();
+  });
+
+  it("keeps a required worktree and removes it when the requirement fails", async () => {
+    const rollback = vi.fn(async () => {});
+    const prepareLaunchpadWorkspace = vi.fn(async (_launchpad: object) => ({
+      cwd: "/worktrees/abc/project",
+      repositoryPath: "/repo/project",
+      workMode: "worktree" as const,
+      rollback,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace,
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+    const launchpad = {
+      directoryKey: "directory:/repo/project",
+      directoryKind: "directory" as const,
+      directoryLabel: "project",
+      directoryPath: "/repo/project",
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      workMode: "worktree" as const,
+      createdAt: 1000,
+      updatedAt: 2000,
+    };
+
+    await expect(registry.materializeDirectoryLaunchpad({
+      directoryKey: launchpad.directoryKey,
+      launchpad,
+      requiredWorkMode: "worktree",
+    })).resolves.toMatchObject({ workMode: "worktree" });
+    expect(rollback).not.toHaveBeenCalled();
+
+    // The workspace prepared for a refused request is not left behind.
+    await expect(registry.materializeDirectoryLaunchpad({
+      directoryKey: launchpad.directoryKey,
+      launchpad,
+      requiredWorkMode: "local",
+    })).rejects.toThrow(/local/);
+    expect(rollback).toHaveBeenCalledTimes(1);
+
+    await registry.close();
+  });
+
   it("preserves the project Working Updates override after materialization", async () => {
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
@@ -17003,6 +17092,50 @@ script = "echo setup"
     expect(methods).toContain("thread/executionMode/queueCleared");
 
     await registry.close();
+  });
+
+  it("asks each ACP process to close idle sessions, keeping a thread with a live turn", async () => {
+    const { acpBackendId, acpClient, registry } = createKimiAcpRegistry({
+      sessions: [{
+        backendId: "acp:kimi" as AcpBackendId,
+        sessionId: "kimi-session-1",
+        title: "ACP session",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      }],
+    });
+    const closeIdleSessions = vi.fn(async (_params: {
+      idleMs: number;
+      isSessionBusy?: (sessionId: string) => boolean;
+    }) => [] as string[]);
+    Object.assign(acpClient, { closeIdleSessions });
+    const busyDuringSweep = (sessionId: string) =>
+      closeIdleSessions.mock.lastCall?.[0].isSessionBusy?.(sessionId);
+
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      input: [{ type: "text", text: "work" }],
+    });
+    await registry.closeIdleAcpSessions();
+
+    expect(closeIdleSessions).toHaveBeenCalledTimes(1);
+    expect(closeIdleSessions.mock.lastCall?.[0].idleMs).toBe(10 * 60_000);
+    expect(busyDuringSweep("kimi-session-1")).toBe(true);
+    expect(busyDuringSweep("kimi-session-2")).toBe(false);
+
+    await emitCompletedTurn(registry, acpBackendId, "kimi-session-1");
+    await registry.closeIdleAcpSessions();
+
+    expect(closeIdleSessions).toHaveBeenCalledTimes(2);
+    expect(busyDuringSweep("kimi-session-1")).toBe(false);
+
+    await registry.close();
+    // A closed registry starts no sweep.
+    await registry.closeIdleAcpSessions();
+    expect(closeIdleSessions).toHaveBeenCalledTimes(2);
   });
 
   it("serializes Kimi control prompts before starting the next ACP turn", async () => {
@@ -34436,7 +34569,7 @@ command = "pnpm dev"
         line: ThreadUsageLineRecord;
         observationSequence: number;
       }): void;
-      writePendingLiveThreadUsageLines(): Promise<void>;
+      flushLiveThreadUsageLines(): Promise<void>;
     };
     lines.forEach((line, index) => {
       usageBatch.bufferLiveThreadUsageLine({
@@ -34446,7 +34579,7 @@ command = "pnpm dev"
       });
     });
 
-    await usageBatch.writePendingLiveThreadUsageLines();
+    await usageBatch.flushLiveThreadUsageLines();
 
     const pricingEvents = events.filter(
       (event) => event.notification.method === "thread/pricing/updated",
@@ -60686,6 +60819,7 @@ script = "printf setup"
         expect((await registry.listThreads({ backend: "codex" }))[0]?.codexNativeSubAgents).toBeUndefined();
       }
       await registry.readThread({ backend: "codex", threadId: parent.id });
+      await (registry as unknown as { transcriptRepairs: Map<string, Promise<void>> }).transcriptRepairs.get(parent.id);
       const overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId: parent.id });
       expect(overlay?.subAgents).toEqual(expect.arrayContaining([expect.objectContaining({
         monitorThreadId: worker.id, agentName: "Noether", status: expected, outcome: expected,
@@ -60792,6 +60926,7 @@ script = "printf setup"
     const unsubscribe = registry.onEvent((event) => { events.push(event); });
     try {
       await registry.readThread({ backend: "codex", threadId: parent.id });
+      await (registry as unknown as { transcriptRepairs: Map<string, Promise<void>> }).transcriptRepairs.get(parent.id);
       expect(discovery).toHaveBeenCalledWith({ ancestorThreadId: parent.id });
       const overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId: parent.id });
       expect(overlay?.subAgents?.[0]).toMatchObject({
@@ -60807,6 +60942,7 @@ script = "printf setup"
       // The card has its model now, so reopening the parent asks nothing.
       discovery.mockClear();
       await registry.readThread({ backend: "codex", threadId: parent.id });
+      await (registry as unknown as { transcriptRepairs: Map<string, Promise<void>> }).transcriptRepairs.get(parent.id);
       expect(discovery).not.toHaveBeenCalled();
     } finally {
       unsubscribe();

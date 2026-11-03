@@ -86,6 +86,7 @@ import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-struc
 import type { PendingThreadApprovalSummary } from "@pwragent/shared";
 import { USAGE_ANALYSIS_MODEL_BACKENDS, type ReadUsageActivityRequest, type ReadUsageActivityResponse, type AnalyzeUsageActivityRequest, type AnalyzeUsageActivityResponse, type UsageLimitObservation } from "@pwragent/shared";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
+import { joinConcurrent, collectConcurrent } from "../../shared/concurrent-work";
 import {
   buildMonitorJobHeuristicPrompt,
   MonitorJobHeuristicDetector,
@@ -809,7 +810,7 @@ import {
   type ThreadTitleAdapterResult,
   type ThreadTitleGenerator,
   type ThreadTitleGenerationResult,
-} from "./thread-title-generation-service";
+} from "@pwragent/owner-core/thread-title-generation-service";
 import { AcpThreadTitleGenerator } from "./acp-thread-title-generator";
 import { buildMinimalGrokHelperSessionPolicy } from "../acp/minimal-helper-session";
 import { ensureAcpHelperWorkspace } from "../acp/acp-capability-probe";
@@ -3392,6 +3393,10 @@ function readNotificationItemType(notification: AppServerNotification): string |
 }
 
 const TASK_MONITOR_STALE_CHECK_INTERVAL_MS = 15_000;
+// An ACP agent keeps an open session's MCP servers running. Close a session
+// nothing has touched for this long; its next request reloads it.
+const ACP_SESSION_IDLE_CLOSE_MS = 10 * 60_000;
+const ACP_SESSION_IDLE_CLOSE_CHECK_INTERVAL_MS = 2 * 60_000;
 // Codex keeps a subscribed thread loaded, MCP servers and all. Release a
 // thread nothing has touched for this long; its next use resumes it.
 const CODEX_THREAD_IDLE_UNSUBSCRIBE_MS = 10 * 60_000;
@@ -6847,6 +6852,28 @@ function isEmptyDirectoryLaunchpadDraft(launchpad: NavigationLaunchpadDraft): bo
   );
 }
 
+/**
+ * Refuse a thread whose workspace resolved to another mode than the caller
+ * required, after removing what was prepared. A worktree request otherwise
+ * falls back to sharing the project checkout.
+ */
+async function refuseResolvedWorkMode(params: {
+  required: LaunchpadWorkMode;
+  resolved: LaunchpadWorkMode | undefined;
+  rollback: (() => Promise<void>) | undefined;
+  backend: AppServerBackendKind;
+}): Promise<never> {
+  await params.rollback?.().catch((error) => {
+    backendRegistryLog.warn("required work mode rollback failed", {
+      backend: params.backend,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+  throw new Error(
+    `Requested ${params.required} workspace, but workspace preparation resolved to ${params.resolved ?? "none"}. Verify the source directory is a Git repository and any branchName resolves to an existing branch or ref.`,
+  );
+}
+
 function defaultLaunchpadWorkMode(
   request: Pick<EnsureDirectoryLaunchpadRequest, "directoryKind" | "directoryPath">,
   defaults: NavigationLaunchpadDefaults
@@ -9162,6 +9189,11 @@ type PendingLiveThreadUsageLine = {
   observationSequence: number;
 };
 
+type LiveThreadUsageBatch = {
+  deferredPricing?: DeferredThreadPricing;
+  pricingTargets: { activeTurnIds: Set<string>; backend: AppServerBackendKind; threadId: string }[];
+};
+
 /**
  * A running native worker's latest usage, not yet in sqlite: the card's copy,
  * and its priced usage lines by id (one per worker turn).
@@ -9766,6 +9798,10 @@ export class DesktopBackendRegistry {
    * a flush therefore also waits for any batch that was already in flight.
    */
   private liveThreadUsageFlushChain: Promise<void> = Promise.resolve();
+  private liveThreadUsagePricingChain: Promise<void> = Promise.resolve();
+  private readonly threadPricingPublications = new Map<string, Promise<void>>();
+  private readonly transcriptRepairs = new Map<string, Promise<void>>();
+  private readonly pendingTranscriptRepairReplays = new Map<string, AppServerThreadReplay>();
   private readonly taskMonitorDelegations = new Map<
     string,
     TaskMonitorDelegationRecord
@@ -10737,6 +10773,9 @@ export class DesktopBackendRegistry {
   private readonly codexModelProviderCatalog: CodexModelProviderCatalog;
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
   private readonly resolveTokenMiserEnabledFn: () => boolean;
+  private readonly acpSessionIdleCloseMs: number;
+  private acpIdleSessionTimer?: NodeJS.Timeout;
+  private acpIdleSessionSweep?: Promise<void>;
   private readonly resolveCodexAppServerRecycleSettingsFn: () => CodexAppServerRecycleSettings;
   private codexAppServerRecycleTimer?: NodeJS.Timeout;
   private codexAppServerRecycleCheck?: Promise<void>;
@@ -10892,6 +10931,8 @@ export class DesktopBackendRegistry {
     resolvePdfAnalysisEnabled?: () => boolean;
     resolveTokenMiserEnabled?: () => boolean;
     resolveTokenMiserPollingReviewsEnabled?: () => boolean;
+    /** Test seam: how long an ACP session idles before it is closed. */
+    acpSessionIdleCloseMs?: number;
     resolveCodexAppServerRecycleSettings?: () => CodexAppServerRecycleSettings;
     /** Test seam: how long a Codex thread idles before it is released. */
     codexThreadIdleUnsubscribeMs?: number;
@@ -11093,6 +11134,8 @@ export class DesktopBackendRegistry {
           return true;
         }
       });
+    this.acpSessionIdleCloseMs =
+      options?.acpSessionIdleCloseMs ?? ACP_SESSION_IDLE_CLOSE_MS;
     this.codexThreadIdleUnsubscribeMs =
       options?.codexThreadIdleUnsubscribeMs ?? CODEX_THREAD_IDLE_UNSUBSCRIBE_MS;
     this.resolveTokenMiserEnabledFn = options?.resolveTokenMiserEnabled ?? (() => {
@@ -16268,6 +16311,47 @@ export class DesktopBackendRegistry {
     if (!this.closed) this.getThreadArchiveSweeper().start();
   }
 
+  /**
+   * Close idle ACP sessions on a timer (`closeIdleAcpSessions`). Started by
+   * the app after startup discovery, like the archive sweeper; tests that
+   * never call this get no timer.
+   */
+  startAcpIdleSessionCloser(): void {
+    if (this.closed || this.shutdownRequested || this.acpIdleSessionTimer) return;
+    this.acpIdleSessionTimer = setInterval(() => {
+      void this.closeIdleAcpSessions();
+    }, ACP_SESSION_IDLE_CLOSE_CHECK_INTERVAL_MS);
+    this.acpIdleSessionTimer.unref?.();
+  }
+
+  /** One pass over the ACP sessions every live agent process keeps open. */
+  async closeIdleAcpSessions(): Promise<void> {
+    if (this.closed || this.shutdownRequested || this.acpIdleSessionSweep) return;
+    const sweep = this.acpBackend.closeIdleSessions({
+      idleMs: this.acpSessionIdleCloseMs,
+      isSessionBusy: (backend, threadId) => this.closed
+        || this.shutdownRequested
+        || this.acpSessionNeedsLiveEvents(backend, threadId),
+    }).catch((error) => {
+      backendRegistryLog.warn("idle ACP session close failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }).finally(() => {
+      this.acpIdleSessionSweep = undefined;
+    });
+    this.acpIdleSessionSweep = sweep;
+    await sweep;
+  }
+
+  /**
+   * Work on an ACP thread that needs its session open: a turn, a reserved
+   * turn start or a review (`threadHasActiveTurn`), or queued input.
+   */
+  private acpSessionNeedsLiveEvents(backend: AcpBackendId, threadId: string): boolean {
+    return this.threadHasActiveTurn(threadId, backend)
+      || !this.threadTurnQueue.iterateQueuedEntries({ backend, threadId }).next().done;
+  }
+
   async sweepInactiveThreads(): Promise<void> {
     if (!this.closed) await this.getThreadArchiveSweeper().sweep();
   }
@@ -18611,12 +18695,13 @@ export class DesktopBackendRegistry {
   }
 
   async readThread(request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse> {
+    const read = () => listingDiagnostics.trace("workflow", { query: !request.display || request.display.resource === "transcript" ? "transcript" : "thread-detail" }, () => this.readThreadDisplay(request));
     return await (request.countsAsActivity === false
-      ? withCodexRequestActivity({ countsAsActivity: false }, () => this.readThreadResponse(request))
-      : this.readThreadResponse(request));
+      ? withCodexRequestActivity({ countsAsActivity: false }, read)
+      : read());
   }
 
-  private async readThreadResponse(request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse> {
+  private async readThreadDisplay(request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse> {
     this.cancelAutomaticArchive(request.backend ?? "codex", request.threadId);
     if (!request.display) return await this.readThreadData(request);
     const backend = request.backend ?? "codex";
@@ -18778,6 +18863,37 @@ export class DesktopBackendRegistry {
     });
   }
 
+  private scheduleTranscriptRepairs(threadId: string, replay: AppServerThreadReplay): void {
+    if (this.closed) return;
+    // Keep only the newest pending replay while a repair runs. Repeated opens
+    // must not retain a queue of whole transcripts or repeat stale discovery.
+    this.pendingTranscriptRepairReplays.set(threadId, replay);
+    if (this.transcriptRepairs.has(threadId)) return;
+    const repair = Promise.resolve().then(async () => {
+      while (!this.closed) {
+        const next = this.pendingTranscriptRepairReplays.get(threadId);
+        if (!next) break;
+        this.pendingTranscriptRepairReplays.delete(threadId);
+        try {
+          await joinConcurrent([
+            this.repairCodexThreadDirectoryRelationship({ reason: "selected-thread", threadId }),
+            this.restoreCodexNativeSubAgentsFromReplay(threadId, next),
+          ]);
+        } catch (error) {
+          backendRegistryLog.warn("codex transcript metadata repair failed", {
+            threadId, error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }).finally(() => {
+      this.transcriptRepairs.delete(threadId);
+      const latest = this.pendingTranscriptRepairReplays.get(threadId);
+      this.pendingTranscriptRepairReplays.delete(threadId);
+      if (latest && !this.closed) this.scheduleTranscriptRepairs(threadId, latest);
+    });
+    this.transcriptRepairs.set(threadId, repair);
+  }
+
   private async readThreadData(
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> {
@@ -18858,20 +18974,10 @@ export class DesktopBackendRegistry {
       !request.before &&
       request.includeTurns !== false
     ) {
-      await this.repairCodexThreadDirectoryRelationship({
-        reason: "selected-thread",
-        threadId: request.threadId,
-      });
-      // Best effort: a worker card that cannot be repaired must not fail the
-      // read of the thread itself.
-      await this.restoreCodexNativeSubAgentsFromReplay(request.threadId, replay).catch(
-        (error: unknown) => {
-          backendRegistryLog.warn("codex native sub-agent restore from replay failed", {
-            threadId: request.threadId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        },
-      );
+      // Navigation repairs publish their own updates. Neither directory
+      // discovery nor native-worker metadata is needed to render this replay.
+      // Retain/drain the work so shutdown cannot close its store underneath it.
+      this.scheduleTranscriptRepairs(request.threadId, replay);
     }
 
     const overlay = await this.overlayStore.getThreadOverlayState({
@@ -18976,12 +19082,11 @@ export class DesktopBackendRegistry {
       // flush the batch before hydration marks those rows superseded. Without
       // this boundary, the delayed live insert lands afterward and both rows
       // remain active in pricing.
-      await this.waitForLiveThreadUsageEmitWork({
-        backend,
-        threadId: request.threadId,
+      await listingDiagnostics.trace("workflow", { query: "usage-durability" }, async () => {
+        await this.waitForLiveThreadUsageEmitWork({ backend, threadId: request.threadId });
+        await this.flushLiveThreadUsageLines({ durabilityOnly: true });
+        await this.persistReplayUsageLines(replayWithEnvironment);
       });
-      await this.flushLiveThreadUsageLines();
-      await this.persistReplayUsageLines(replayWithEnvironment);
     }
     const includeAccounting = request.includeAccounting !== false;
     const pricing = includeAccounting
@@ -19551,6 +19656,20 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<void> {
+    const key = buildThreadIdentityKey(params.backend, params.threadId);
+    const previous = this.threadPricingPublications.get(key);
+    const pending = (previous ?? Promise.resolve()).catch(() => undefined)
+      .then(() => this.publishThreadPricingUpdated(params));
+    this.threadPricingPublications.set(key, pending);
+    try { await pending; }
+    finally { if (this.threadPricingPublications.get(key) === pending) this.threadPricingPublications.delete(key); }
+  }
+
+  private async publishThreadPricingUpdated(params: {
+    activeTurnIds?: readonly string[];
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<void> {
     const pricing = await this.readThreadPricingWithLiveTokenMiser({
       backend: params.backend,
       threadId: params.threadId,
@@ -20023,6 +20142,10 @@ export class DesktopBackendRegistry {
     rerunCodexEnvironmentSetup?: boolean;
     linkedDirectories?: LinkedDirectorySummary[];
   }): Promise<StartThreadResponse> {
+    return await listingDiagnostics.trace("workflow", { query: "thread-start" }, () => this.startThreadPrepared(params));
+  }
+
+  private async startThreadPrepared(params: Parameters<DesktopBackendRegistry["startThread"]>[0]): Promise<StartThreadResponse> {
     this.assertNotBootstrap("startThread");
     const {
       backend,
@@ -20085,15 +20208,12 @@ export class DesktopBackendRegistry {
           : buildLocalLinkedDirectory(cwd);
     }
     if (requiredWorkMode && effectiveWorkMode !== requiredWorkMode) {
-      await preparedWorkspaceRollback?.().catch((error) => {
-        backendRegistryLog.warn("startThread workspace rollback failed", {
-          backend,
-          error: error instanceof Error ? error.message : String(error),
-        });
+      await refuseResolvedWorkMode({
+        required: requiredWorkMode,
+        resolved: effectiveWorkMode,
+        rollback: preparedWorkspaceRollback,
+        backend,
       });
-      throw new Error(
-        `Requested ${requiredWorkMode} workspace, but workspace preparation resolved to ${effectiveWorkMode ?? "none"}. Verify the source directory is a Git repository and branchName resolves to an existing branch or ref.`,
-      );
     }
     let codexEnvironmentRuntime = request.codexEnvironmentRuntime;
     let codexEnvironmentStartupFailure: CodexEnvironmentStartupFailure | undefined;
@@ -20174,9 +20294,7 @@ export class DesktopBackendRegistry {
       : undefined;
     const tokenMiserEnabled = backend === "codex"
       && this.resolveTokenMiserEnabledForOverride(tokenMiserOverride);
-    if (tokenMiserEnabled) {
-      await this.prepareTokenMiserRuntime();
-    }
+    const runtimePreparation = tokenMiserEnabled ? this.prepareTokenMiserRuntime() : Promise.resolve();
     const agentToolCatalogs = resolveAgentToolCatalogs({
       appManagementHandler: this.appManagementHandler,
       automationInspectionHandler: this.automationInspectionHandler,
@@ -20200,10 +20318,17 @@ export class DesktopBackendRegistry {
       starMapHandler: this.starMapHandler,
       threadTodoHandler: this.threadTodoHandler,
     });
-    const pdfMcpRegistration =
+    const pdfMcpPreparation =
       backend === "codex" && this.resolvePdfAnalysisEnabledFn()
-        ? await this.registerPdfMcpClient({})
-        : undefined;
+        ? this.registerPdfMcpClient({})
+        : Promise.resolve(undefined);
+    const connectionPreparation = backend === "codex" || isAcpBackendId(backend)
+      ? this.registerMcpConnections(mcpConnectionIds, undefined, backend)
+      : Promise.resolve([]);
+    const isolateFromInherited = backend === "codex" && mcpProviderServersEnabled === false;
+    const inventoryPreparation = backend === "codex" && (mcpConnectionIds?.length || isolateFromInherited)
+      ? this.readConfiguredCodexMcpServerNames(cwd)
+      : Promise.resolve(undefined);
     const resolvedDynamicTools =
       backend === "codex"
         ? withPwrAgentToolDiscovery(buildCodexParentDynamicToolSpecs(agentToolCatalogs), this.resolveCodexToolDiscoveryFn())
@@ -20213,20 +20338,12 @@ export class DesktopBackendRegistry {
     const dynamicTools = resolvedDynamicTools?.length
       ? resolvedDynamicTools
       : undefined;
+    const [pdfMcpRegistration, mcpConnectionRegistrations, inheritedCodexMcpServerNames] = await joinConcurrent([
+      pdfMcpPreparation, connectionPreparation, inventoryPreparation, runtimePreparation,
+    ]);
     const pdfMcpConfig = pdfMcpRegistration
       ? buildCodexPdfMcpConfig(pdfMcpRegistration)
       : undefined;
-    const mcpConnectionRegistrations =
-      backend === "codex" || isAcpBackendId(backend)
-        ? await this.registerMcpConnections(mcpConnectionIds, undefined, backend)
-        : [];
-    const isolateFromInherited =
-      backend === "codex" && mcpProviderServersEnabled === false;
-    const inheritedCodexMcpServerNames =
-      backend === "codex"
-      && (mcpConnectionRegistrations.length > 0 || isolateFromInherited)
-        ? await this.readConfiguredCodexMcpServerNames(cwd)
-        : undefined;
     if (isolateFromInherited && inheritedCodexMcpServerNames === undefined) {
       throw codexMcpIsolationUnavailableError();
     }
@@ -22463,29 +22580,35 @@ export class DesktopBackendRegistry {
     /** The thread's backend, so a managed local server can be given its directories. */
     backend?: AppServerBackendKind,
   ): Promise<McpConnectionBridgeRegistration[]> {
+    return await listingDiagnostics.trace("workflow", { query: "mcp-registration" }, () => this.registerSelectedMcpConnections(connectionIds, threadId, backend));
+  }
+
+  private async registerSelectedMcpConnections(
+    connectionIds: string[] | undefined,
+    threadId?: string,
+    backend?: AppServerBackendKind,
+  ): Promise<McpConnectionBridgeRegistration[]> {
     const selected = [
       ...new Set(
         (connectionIds ?? []).map((connectionId) => connectionId.trim()),
       ),
     ].filter(Boolean);
     if (selected.length === 0) return [];
-    const registrations: McpConnectionBridgeRegistration[] = [];
-    for (const connectionId of selected) {
-      const service = this.mcpConnectionService;
-      if (!service) {
-        // A selected connection with no service behind it is a runtime that
-        // cannot honor the thread's setting, so the turn fails rather than
-        // starting without the connection the operator chose. This used to
-        // throw only for the built-in-id guard, which matches the two built-in
-        // ids alone -- so every remote connection took the "unknown id"
-        // branch and was dropped with a warning instead. Nothing here can
-        // tell a stale id from a live one anyway: that is what the catch
-        // below does, and it needs a service to do it.
-        throw new Error("MCP connections are unavailable in this PwrAgent runtime.");
-      }
+    const service = this.mcpConnectionService;
+    if (!service) {
+      // A selected connection with no service behind it is a runtime that
+      // cannot honor the thread's setting, so the turn fails rather than
+      // starting without the connection the operator chose. This used to
+      // throw only for the built-in-id guard, which matches the two built-in
+      // ids alone -- so every remote connection took the "unknown id"
+      // branch and was dropped with a warning instead. Nothing here can
+      // tell a stale id from a live one anyway: that is what the catch
+      // below does, and it needs a service to do it.
+      throw new Error("MCP connections are unavailable in this PwrAgent runtime.");
+    }
+    const registered = await collectConcurrent(selected, 4, async (connectionId) => {
       try {
-        const registration = await service.registerBridge(connectionId, threadId, undefined, backend);
-        if (registration) registrations.push(registration);
+        return await service.registerBridge(connectionId, threadId, undefined, backend);
       } catch (error) {
         // A connection the operator parked, removed, or locked behind the
         // gateway switch must drop out of the turn, not fail it. The
@@ -22497,8 +22620,10 @@ export class DesktopBackendRegistry {
           error: error instanceof Error ? error.message : String(error),
           threadId: threadId ?? null,
         });
+        return undefined;
       }
-    }
+    });
+    const registrations = registered.filter((registration): registration is McpConnectionBridgeRegistration => registration !== undefined);
     // An ACP agent cannot be asked what it loaded, so the moment PwrAgent
     // handed the selection over is the only evidence a verification surface
     // will ever have for those backends. Record it for every backend, and
@@ -22516,9 +22641,8 @@ export class DesktopBackendRegistry {
       return undefined;
     }
     try {
-      return await this.codexClient.readConfiguredMcpServerNames(
-        cwd ? { cwd } : undefined,
-      );
+      return await listingDiagnostics.trace("workflow", { query: "mcp-inventory" }, () =>
+        this.codexClient.readConfiguredMcpServerNames!(cwd ? { cwd } : undefined));
     } catch (error) {
       // A compatibility fallback must not prevent a selected connection from
       // starting. Without an inventory, omit disable entries rather than
@@ -22611,6 +22735,10 @@ export class DesktopBackendRegistry {
     agentMessages?: ThreadTurnQueueEntry["agentMessages"];
     invalidIdRecoveryAttempted?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    return await listingDiagnostics.trace("workflow", { query: "submit-acceptance" }, () => this.prepareAndStartTurn(params));
+  }
+
+  private async prepareAndStartTurn(params: Parameters<DesktopBackendRegistry["startTurnNow"]>[0]): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertThreadNotHandingOff(params.backend, params.threadId);
     const key = buildThreadIdentityKey(params.backend, params.threadId);
     this.handoffTurnStarts.set(key, (this.handoffTurnStarts.get(key) ?? 0) + 1);
@@ -22903,7 +23031,6 @@ export class DesktopBackendRegistry {
     let activeTurnMode: ThreadExecutionMode | undefined;
     let codexThreadConfig: CodexThreadStartParams["config"] | undefined;
     let tokenMiserEnabledForThread = false;
-    let pdfMcpAvailable = false;
     try {
       if (params.backend === "codex") {
         await this.flushQueuedAgentChange(params.threadId, true);
@@ -22917,76 +23044,54 @@ export class DesktopBackendRegistry {
         tokenMiserEnabledForThread = this.resolveTokenMiserEnabledForOverride(
           overlay?.tokenMiserEnabled,
         );
-        // Existing threads reach the gate through here, not through
-        // startThread. Await the bridge before this turn's first code-mode or
-        // direct tool result. A per-thread override can opt out, but cannot
-        // bypass the global experimental gate.
-        if (tokenMiserEnabledForThread) {
-          await this.prepareTokenMiserRuntime();
-        }
       }
-      cwd =
+      // Permission/agent changes above own the lifecycle boundary. Everything
+      // here uses that resulting overlay; only input preparation needs the PDF
+      // bridge result, and only config inventory needs the resolved cwd.
+      const cwdPreparation =
         params.backend === "codex"
-          ? await this.resolveThreadEnvironmentCwd(
+          ? this.resolveThreadEnvironmentCwd(
               params.backend,
               params.threadId,
               overlay,
             )
-          : undefined;
+          : Promise.resolve(undefined);
+      const runtimePreparation = tokenMiserEnabledForThread
+        ? this.prepareTokenMiserRuntime()
+        : Promise.resolve();
       const hasPdfMcpToolCatalog =
         params.backend === "codex" && this.hasPdfMcpToolCatalog(overlay);
-      if (hasPdfMcpToolCatalog) {
-        const registration = this.resolvePdfAnalysisEnabledFn()
-          ? await this.registerPdfMcpClient({ threadId: params.threadId })
-          : undefined;
-        pdfMcpAvailable = registration !== undefined;
-        codexThreadConfig = registration
-          ? buildCodexPdfMcpConfig(registration)
-          : buildCodexPdfMcpDisabledConfig();
-      }
+      const pdfPreparation = hasPdfMcpToolCatalog && this.resolvePdfAnalysisEnabledFn()
+        ? this.registerPdfMcpClient({ threadId: params.threadId })
+        : Promise.resolve(undefined);
       // Re-read per turn so a mid-thread change to the selection or the
       // provider policy lands on the operator's next message.
       const isolateFromInherited =
         params.backend === "codex"
         && overlay?.mcpProviderServersEnabled === false;
-      if (
-        params.backend === "codex"
-        && (overlay?.mcpConnectionIds?.length || isolateFromInherited)
-      ) {
-        const registrations = await this.registerMcpConnections(
-          overlay?.mcpConnectionIds ?? [],
-          params.threadId,
-          params.backend,
+      const connectionPreparation = (async () => {
+        if (params.backend !== "codex" || !(overlay?.mcpConnectionIds?.length || isolateFromInherited)) return undefined;
+        const [registrations, inheritedNames] = await joinConcurrent([
+          this.registerMcpConnections(overlay?.mcpConnectionIds ?? [], params.threadId, params.backend),
+          cwdPreparation.then((resolvedCwd) => this.readConfiguredCodexMcpServerNames(resolvedCwd)),
+        ]);
+        if (isolateFromInherited && inheritedNames === undefined) throw codexMcpIsolationUnavailableError();
+        return buildCodexConnectionMcpConfig(registrations, inheritedNames, { isolateFromInherited });
+      })();
+      const inputPreparation = listingDiagnostics.trace("workflow", { query: "input-preparation" }, async () => {
+        const registration = await pdfPreparation;
+        const preparedPdfInput = await preparePdfTurnInput({
+          handling: this.resolvePdfTurnInputHandling({ backend: params.backend, overlay, pdfMcpAvailable: registration !== undefined }),
+          input: params.input,
+        });
+        const owned = await ownThreadInputAttachments(
+          await enrichLocalFileInputs(preparedPdfInput.input, { privateStorageRoots: this.localFilePrivateStorageRoots }),
+          params,
+          this.localFilePrivateStorageRoots,
         );
-        const inheritedNames =
-          await this.readConfiguredCodexMcpServerNames(cwd);
-        if (isolateFromInherited && inheritedNames === undefined) {
-          throw codexMcpIsolationUnavailableError();
-        }
-        codexThreadConfig = mergeCodexThreadConfigs(
-          codexThreadConfig,
-          buildCodexConnectionMcpConfig(registrations, inheritedNames, {
-            isolateFromInherited,
-          }),
-        );
-      }
-      const preparedPdfInput = await preparePdfTurnInput({
-        handling: this.resolvePdfTurnInputHandling({
-          backend: params.backend,
-          overlay,
-          pdfMcpAvailable,
-        }),
-        input: params.input,
+        return { input: owned, pdfAttachments: preparedPdfInput.pdfAttachments };
       });
-      pdfAttachments = preparedPdfInput.pdfAttachments;
-      input = await ownThreadInputAttachments(
-        await enrichLocalFileInputs(preparedPdfInput.input, {
-          privateStorageRoots: this.localFilePrivateStorageRoots,
-        }),
-        params,
-        this.localFilePrivateStorageRoots,
-      );
-      turnParams = await this.resolveModelSettings(params.backend, {
+      const settingsPreparation = this.resolveModelSettings(params.backend, {
         ...params,
         model: migrationApplied
           ? overlay?.model
@@ -22997,6 +23102,17 @@ export class DesktopBackendRegistry {
           : params.reasoningEffort ?? overlay?.reasoningEffort,
         fastMode: params.backend === "codex" ? params.fastMode ?? overlay?.fastMode : undefined,
       });
+      const [, connectionConfig, preparedInput, settings, resolvedCwd, pdfRegistration] = await joinConcurrent([
+        runtimePreparation, connectionPreparation, inputPreparation, settingsPreparation, cwdPreparation, pdfPreparation,
+      ]);
+      cwd = resolvedCwd;
+      turnParams = settings;
+      input = preparedInput.input;
+      pdfAttachments = preparedInput.pdfAttachments;
+      codexThreadConfig = mergeCodexThreadConfigs(
+        hasPdfMcpToolCatalog ? (pdfRegistration ? buildCodexPdfMcpConfig(pdfRegistration) : buildCodexPdfMcpDisabledConfig()) : undefined,
+        connectionConfig,
+      );
       await this.emit({
         backend: params.backend,
         notification: {
@@ -23108,7 +23224,7 @@ export class DesktopBackendRegistry {
             codexThreadConfig,
             tokenMiserConfig,
           );
-          const started = await client.startTurn({
+          const started = await listingDiagnostics.trace("workflow", { query: "provider-turn-start" }, () => client.startTurn({
             threadId: params.threadId,
             ...delegatedTurnAttribution(params.messageOrigin,
               params.agentMessages?.map((message) => message.origin) ?? params.agentMessageOrigins),
@@ -23136,7 +23252,7 @@ export class DesktopBackendRegistry {
             ...(pwrdrvrTokenMiser !== undefined
               ? { pwrdrvrTokenMiser }
               : {}),
-          });
+          }));
           activeTurnMode = effectiveMode;
           return started;
         },
@@ -29715,6 +29831,14 @@ export class DesktopBackendRegistry {
     },
     operation?: LaunchpadCreationOperation,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
+    return await listingDiagnostics.trace("workflow", { query: "first-send" }, () => this.materializeLaunchpadDraftPrepared(request, options, operation));
+  }
+
+  private async materializeLaunchpadDraftPrepared(
+    request: MaterializeDirectoryLaunchpadRequest,
+    options?: MaterializeDirectoryLaunchpadOptions & { sourceInstanceId?: FederationInstanceId },
+    operation?: LaunchpadCreationOperation,
+  ): Promise<MaterializeDirectoryLaunchpadResponse> {
     const draft =
       request.launchpad ??
       (await this.overlayStore.getDirectoryLaunchpad({
@@ -29734,9 +29858,10 @@ export class DesktopBackendRegistry {
     ) {
       throw new Error("Scheduled time must be a finite Unix timestamp.");
     }
-    const codexEnvironmentOptions = await listCodexEnvironmentOptions(
-      launchpad.directoryPath,
-    );
+    const [codexEnvironmentOptions] = await joinConcurrent([
+      listCodexEnvironmentOptions(launchpad.directoryPath),
+      this.getBackendLaunchpadOptions(launchpad.backend, "thread-start-defaults"),
+    ]);
     if (request.codexEnvironmentSelector?.trim()) {
       // An agent names an environment by id or name; only this machine has
       // the project's config to resolve it. Refuse before any workspace work.
@@ -29762,14 +29887,25 @@ export class DesktopBackendRegistry {
 
     operation?.check();
     const preparedWorkspace =
-      await this.gitDirectoryService.prepareLaunchpadWorkspace(
+      await listingDiagnostics.trace("workflow", { query: "workspace-preparation" }, () => this.gitDirectoryService.prepareLaunchpadWorkspace(
         request.worktreeBase
           ? { ...launchpad, worktreeBase: request.worktreeBase }
           : launchpad,
-      );
+      ));
     // Retain ownership before the next await/check: cancellation may have
     // overtaken preparation. Existing/local workspaces supply no rollback.
     if (operation) operation.workspaceRollback = preparedWorkspace.rollback;
+    if (request.requiredWorkMode && preparedWorkspace.workMode !== request.requiredWorkMode) {
+      // Refuse before a thread exists. A worktree request that falls back
+      // would otherwise share the project checkout.
+      if (operation) operation.workspaceRollback = undefined;
+      await refuseResolvedWorkMode({
+        required: request.requiredWorkMode,
+        resolved: preparedWorkspace.workMode,
+        rollback: preparedWorkspace.rollback,
+        backend: launchpad.backend,
+      });
+    }
     const workspace =
       launchpad.directoryKind === "workspace" && !preparedWorkspace.cwd
         ? {
@@ -29846,7 +29982,7 @@ export class DesktopBackendRegistry {
       queuedActionDetachedOutputs.push(event);
     };
     try {
-      codexEnvironmentRuntime = await applyLocalCodexEnvironmentSelection({
+      codexEnvironmentRuntime = await listingDiagnostics.trace("workflow", { query: "environment-setup" }, () => applyLocalCodexEnvironmentSelection({
         signal: operation?.controller.signal,
         commandRunner: this.codexEnvironmentCommandRunner,
         cwd: workspace.cwd,
@@ -29881,7 +30017,7 @@ export class DesktopBackendRegistry {
         owner: { backend: codexActionBackend },
         hydrationStore: this.codexEnvironmentHydrationStore,
         selection: codexEnvironmentSelection,
-      });
+      }));
     } catch (error) {
       operation?.check();
       if (!(error instanceof CodexEnvironmentStartupError)) {
@@ -30359,6 +30495,7 @@ export class DesktopBackendRegistry {
       for (const registration of run.mcpRegistrations ?? []) registration.revoke();
     }
     this.closed = true;
+    await Promise.all(this.transcriptRepairs.values());
     this.flushCodexEnvironmentActionLiveOutputsForShutdown();
     this.threadTurnQueue.close();
     this.queuedMessageTitler.close();
@@ -30395,6 +30532,10 @@ export class DesktopBackendRegistry {
     this.workingStateCacheLoad = undefined;
     if (this.taskMonitorWatchdogTimer) {
       clearInterval(this.taskMonitorWatchdogTimer);
+    }
+    if (this.acpIdleSessionTimer) {
+      clearInterval(this.acpIdleSessionTimer);
+      this.acpIdleSessionTimer = undefined;
     }
     if (this.codexAppServerRecycleTimer) {
       clearTimeout(this.codexAppServerRecycleTimer);
@@ -35339,18 +35480,43 @@ export class DesktopBackendRegistry {
    * its later writes.
    */
   private flushLiveThreadUsageLines(
-    options: { deferPricingFor?: { backend: AppServerBackendKind; threadId: string } } = {},
+    options: { deferPricingFor?: { backend: AppServerBackendKind; threadId: string }; durabilityOnly?: boolean } = {},
   ): Promise<DeferredThreadPricing | undefined> {
     const flushed = this.liveThreadUsageFlushChain.then(() =>
       this.writePendingLiveThreadUsageLines(options),
     );
     this.liveThreadUsageFlushChain = flushed.then(() => undefined, () => undefined);
-    return flushed;
+    return flushed.then(async (batch) => {
+      const published = this.liveThreadUsagePricingChain.then(async () => {
+        for (const target of batch?.pricingTargets ?? []) {
+          try {
+            await this.emitThreadPricingUpdated({
+              ...(target.activeTurnIds.size > 0 ? { activeTurnIds: [...target.activeTurnIds] } : {}),
+              backend: target.backend, threadId: target.threadId,
+            });
+          } catch (error) {
+            backendRegistryLog.warn("live thread pricing update failed", {
+              backend: target.backend, threadId: target.threadId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      });
+      this.liveThreadUsagePricingChain = published.catch(() => undefined);
+      if (!options.durabilityOnly) await published;
+      return batch?.deferredPricing;
+    }).catch(async (error: unknown) => {
+      // Hydration must not supersede rows whose delayed insert could still
+      // land afterward. Timer/terminal callers retain their retry behavior.
+      if (options.durabilityOnly) throw error;
+      await this.liveThreadUsagePricingChain;
+      return undefined;
+    });
   }
 
   private async writePendingLiveThreadUsageLines(
     options: { deferPricingFor?: { backend: AppServerBackendKind; threadId: string } } = {},
-  ): Promise<DeferredThreadPricing | undefined> {
+  ): Promise<LiveThreadUsageBatch | undefined> {
     if (this.pendingLiveThreadUsageTimer) {
       clearTimeout(this.pendingLiveThreadUsageTimer);
       this.pendingLiveThreadUsageTimer = undefined;
@@ -35379,7 +35545,7 @@ export class DesktopBackendRegistry {
           .slice(0, 10)
           .map((entry) => entry.line.usageLineId),
       });
-      return undefined;
+      throw error;
     }
 
     const pricingTargets = new Map<
@@ -35405,6 +35571,7 @@ export class DesktopBackendRegistry {
     }
     const deferred = options.deferPricingFor;
     let deferredPricing: DeferredThreadPricing | undefined;
+    const publishTargets: LiveThreadUsageBatch["pricingTargets"] = [];
     for (const target of pricingTargets.values()) {
       if (
         deferred
@@ -35414,25 +35581,9 @@ export class DesktopBackendRegistry {
         deferredPricing = { activeTurnIds: [...target.activeTurnIds] };
         continue;
       }
-      try {
-        // The notification embeds a fresh store read, so observers can never
-        // receive pricing for a usage line that has not committed yet.
-        await this.emitThreadPricingUpdated({
-          ...(target.activeTurnIds.size > 0
-            ? { activeTurnIds: [...target.activeTurnIds] }
-            : {}),
-          backend: target.backend,
-          threadId: target.threadId,
-        });
-      } catch (error) {
-        backendRegistryLog.warn("live thread pricing update failed", {
-          backend: target.backend,
-          error: error instanceof Error ? error.message : String(error),
-          threadId: target.threadId,
-        });
-      }
+      publishTargets.push(target);
     }
-    return deferredPricing;
+    return { deferredPricing, pricingTargets: publishTargets };
   }
 
   private requeueFailedLiveThreadUsageLine(

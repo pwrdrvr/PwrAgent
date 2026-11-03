@@ -52,6 +52,7 @@ async function buildGitCandidate(
   options: {
     env: NodeJS.ProcessEnv;
     platform?: NodeJS.Platform;
+    signal?: AbortSignal;
   },
 ): Promise<DesktopGitDiscoveryCandidate | undefined> {
   const probeEnv = input.source === "bundled" ? bundledGitEnvironment(options.env) : customGitEnvironment(options.env, input.command ?? "git");
@@ -60,16 +61,18 @@ async function buildGitCandidate(
     {
       env: probeEnv,
       platform: options.platform,
+      signal: options.signal,
       parseVersion: parseGitVersionOutput,
     },
   );
-  if (!candidate) {
+  if (!candidate || options.signal?.aborted) {
     return undefined;
   }
 
   if (candidate.version) {
     try {
       if (input.source === "bundled") await validateBundledGit();
+      if (options.signal?.aborted) return undefined;
       const { stdout } = await promisify(execFile)(candidate.command, ["lfs", "version"], {
         env: probeEnv, cwd: os.tmpdir(), timeout: 5000, maxBuffer: 64 * 1024,
         encoding: "utf8", windowsHide: true,
@@ -113,6 +116,7 @@ export async function discoverGitCommands(params?: {
   configuredCommand?: string;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
+  signal?: AbortSignal;
 }): Promise<DesktopGitDiscoverySnapshot> {
   const env = params?.env ?? process.env;
   const configuredCommand = params?.configuredCommand?.trim();
@@ -120,7 +124,7 @@ export async function discoverGitCommands(params?: {
     command: string | undefined;
     source: DesktopGitCandidateSource;
   }): Promise<DesktopGitDiscoveryCandidate | undefined> =>
-    buildGitCandidate(input, { env, platform: params?.platform });
+    buildGitCandidate(input, { env, platform: params?.platform, signal: params?.signal });
 
   const inputs = gitCandidateInputs(env);
   const [configured, ...discovered] = await Promise.all([

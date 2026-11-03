@@ -9,7 +9,7 @@ import {
   GROK_DISCARD_SESSION_METHOD,
 } from "../acp/minimal-helper-session";
 import { parseAcpJsonAnswer } from "./acp-json-answer";
-import type { ThreadTitleAdapterResult } from "./thread-title-generation-service";
+import type { ThreadTitleAdapterResult } from "@pwragent/owner-core/thread-title-generation-service";
 
 type AcpStructuredHelper = {
   label: string;

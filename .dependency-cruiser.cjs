@@ -92,13 +92,13 @@ module.exports = {
       },
     },
     {
-      name: "owner-core-only-imports-reusable-libraries",
+      name: "owner-core-only-imports-shared",
       severity: "error",
       comment:
-        "Reserve owner-core above shared, federation, agent-tools and messaging/interface, below providers and hosts.",
+        "Owner policy depends only on shared, never transports, tool routing, providers or hosts.",
       from: { path: "^packages/owner-core/" },
       to: {
-        path: "^(@pwragent/(?!owner-core(?:/|$)|shared(?:/|$)|federation(?:/|$)|agent-tools(?:/|$)|messaging-interface(?:/|$))|pwragent(?:/|$)|packages/(?!owner-core/|shared/|federation/|agent-tools/|messaging/interface/))",
+        path: "^(@pwragent/(?!owner-core(?:/|$)|shared(?:/|$))|pwragent(?:/|$)|packages/(?!owner-core/|shared/))",
       },
     },
     {

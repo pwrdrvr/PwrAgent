@@ -29,6 +29,39 @@ afterEach(async () => {
 });
 
 describe("thread-owned attachments", () => {
+  it.each(["short", "much longer"])("refuses a mutable file whose size changes while waiting for its read budget: %s", async (replacement) => {
+    const externalPath = path.join(testRoot, "changing.txt");
+    await writeFile(externalPath, "original");
+    await expect(stageLocalTurnInputAttachment({ type: "localFile", path: externalPath }, {
+      owner: source,
+      readBudget: async (_bytes, action) => {
+        await writeFile(externalPath, replacement);
+        return await action();
+      },
+    })).rejects.toThrow("Attachment changed while it was being retained.");
+  });
+
+  it("retains mixed attachment order and all explicit references after concurrent ownership", async () => {
+    const paths = await Promise.all(["first", "second", "third"].map(async (name, index) => {
+      const filePath = path.join(testRoot, `${name}.txt`);
+      await writeFile(filePath, name.repeat((index + 1) * 1024));
+      return filePath;
+    }));
+    const retained = await ownThreadInputAttachments([
+      { type: "text", text: paths.map((filePath) => `[@file](${filePath})`).join(" ") },
+      ...paths.map((filePath) => ({ type: "localFile" as const, path: filePath, name: path.basename(filePath) })),
+      { type: "text", text: "trailing text" },
+    ], source);
+    expect(retained.map((item) => item.type)).toEqual(["text", "localFile", "localFile", "localFile", "text"]);
+    for (const [index, name] of ["first", "second", "third"].entries()) {
+      const item = retained[index + 1];
+      if (item?.type !== "localFile" || retained[0]?.type !== "text") throw new Error("Expected retained files.");
+      expect(item.name).toBe(`${name}.txt`);
+      expect(decodeURIComponent(retained[0].text)).toContain(item.path);
+      expect(await readFile(item.path, "utf8")).toBe(name.repeat((index + 1) * 1024));
+    }
+  });
+
   it.each(["encoded-path", "file-url"])("updates matching explicit file references after ownership without changing unrelated text: %s", async (kind) => {
     const filePath = path.join(testRoot, "report with spaces.pdf");
     await writeFile(filePath, "%PDF-1.7\n");

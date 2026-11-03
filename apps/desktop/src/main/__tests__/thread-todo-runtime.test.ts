@@ -609,6 +609,7 @@ describe("operator dispatch choices", () => {
     });
     // A card that shares the peer's checkout names no worktree base.
     expect(created?.args).not.toHaveProperty("worktreeBase");
+    expect(created?.args).not.toHaveProperty("requiredWorkMode");
   });
 
   it("starts a peer's new worktree from its default branch", async () => {
@@ -639,8 +640,48 @@ describe("operator dispatch choices", () => {
       .map(([request]) => request as { operation: string; args: Record<string, unknown> })
       .find((request) => request.operation === "create_instance_thread");
     // The peer's checkout can sit on a branch with another thread's
-    // unpublished work, as the raising thread's can here.
-    expect(created?.args).toMatchObject({ workMode: "worktree", worktreeBase: "default_branch" });
+    // unpublished work, as the raising thread's can here. A card that says
+    // New worktree must not fall back to sharing that checkout either.
+    expect(created?.args).toMatchObject({
+      workMode: "worktree", worktreeBase: "default_branch", requiredWorkMode: "worktree",
+    });
+  });
+
+  it("says when an older peer started a worktree card in its project checkout", async () => {
+    const registry = {
+      readThreadHandoffSettings: vi.fn(async () => FULL_ACCESS_SOL),
+      startThread: vi.fn(), renameThread: vi.fn(), startTurn: vi.fn(),
+      buildThreadTodoMessageOrigin: buildThreadTodoMessageOrigin(),
+    };
+    const run = async (peerWorkMode: "local" | "worktree") => {
+      const federation = vi.fn(async (request: { operation: string }) =>
+        request.operation === "list_instance_projects"
+          ? { ok: true as const, data: {
+              instanceLabel: "win-lab", complete: true,
+              projects: [{ key: "peer-repo", label: "repo", path: "C:\\repo", kind: "directory" }],
+            } }
+          : { ok: true as const, data: {
+              backend: "codex", threadId: "peer-thread", isLocal: false, instanceId: "win", instanceLabel: "win-lab",
+              workMode: peerWorkMode,
+            } });
+      const runners = createThreadTodoRunners({
+        registry: registry as unknown as ThreadTodoRunnerRegistry, federation: federation as never,
+      });
+      return await runners.startThreadOnInstance!({
+        instanceId: "win", sourceBackend: "codex", sourceThreadId: "source",
+        project: { key: "local-repo", label: "repo", path: "/repo" }, crossProject: false,
+        todo: CARD,
+        action: { type: "start_thread", prompt: "Rewrite the CLI", workMode: "worktree" },
+      });
+    };
+
+    // An owner that predates requiredWorkMode ignores it and falls back.
+    // The thread already exists, so the card reports where it runs.
+    await expect(run("local")).resolves.toMatchObject({
+      threadId: "peer-thread",
+      notice: expect.stringMatching(/win-lab.*project checkout/),
+    });
+    await expect(run("worktree")).resolves.not.toHaveProperty("notice");
   });
 
   it("refuses Ultrafast on a peer, which create_instance_thread cannot carry", async () => {

@@ -236,6 +236,12 @@ export type CreateInstanceThreadToolArgs = {
    */
   worktreeBase?: LaunchpadWorktreeBase;
   /**
+   * Fail instead of starting in another mode, as when `workMode=worktree`
+   * cannot create a worktree and would share the project checkout. Owners
+   * that predate this field fall back; check the result's `workMode`.
+   */
+  requiredWorkMode?: LaunchpadWorkMode;
+  /**
    * Group the created thread beneath the calling thread, even when the two
    * threads live on different federation instances. Defaults to ungrouped.
    */

@@ -16,7 +16,7 @@ import {
   projectNavigationQuery,
   type NavigationQueryIndex,
   type NavigationQueryMaterialization,
-} from "./navigation-query-projection";
+} from "@pwragent/owner-core/navigation-query-projection";
 import {
   navigationAttentionOrderBytes,
   navigationAttentionOrderFollows,
@@ -25,7 +25,7 @@ import {
   reconcileNavigationAttentionOrder,
   removeNavigationAttentionMember,
   type NavigationAttentionOrder,
-} from "./navigation-attention-order";
+} from "@pwragent/owner-core/navigation-attention-order";
 import { currentNavigationObservation, nextNavigationObservation } from "./navigation-observation-clock";
 
 const NAVIGATION_QUERY_CURSOR_IDLE_MS = 60_000;

@@ -9,6 +9,36 @@ import {
 } from "../process-tree";
 
 const posixOnly = process.platform === "win32" ? it.skip : it;
+const windowsOnly = process.platform === "win32" ? it : it.skip;
+
+describe("collectProcessTreeIds", () => {
+  windowsOnly("observes a real child without adopting its owner's other processes", async () => {
+    const leaf = "process.stdin.resume(); process.stdin.once('end', () => process.exit(0));";
+    const script = [
+      "const { spawn } = require('node:child_process');",
+      `const child = spawn(process.execPath, ['-e', ${JSON.stringify(leaf)}], { stdio: ['pipe', 'ignore', 'ignore'] });`,
+      "process.stdout.write(String(child.pid) + '\\n');",
+      "process.stdin.resume();",
+      "process.stdin.once('end', () => child.stdin.end());",
+      "child.once('close', () => process.exit(0));",
+    ].join(" ");
+    const child = spawn(process.execPath, ["-e", script], { stdio: ["pipe", "pipe", "ignore"] });
+    const closed = once(child, "close");
+    try {
+      const [line] = await once(child.stdout!, "data");
+      const leafPid = Number(String(line).trim());
+      expect(leafPid).toBeGreaterThan(0);
+      const snapshot = collectProcessTreeIds(child.pid!);
+      expect(snapshot).toContain(child.pid);
+      expect(snapshot).toContain(leafPid);
+      expect(snapshot).not.toContain(process.pid);
+    } finally {
+      // The root closes its child's stdin and awaits that child's close.
+      child.stdin!.end();
+      await closed;
+    }
+  }, 30_000);
+});
 
 describe("terminateOwnedProcessTree", () => {
   posixOnly("kills a resistant descendant after its group leader exits", async () => {

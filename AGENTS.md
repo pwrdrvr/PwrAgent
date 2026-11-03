@@ -811,8 +811,8 @@ Use this dependency order from lowest to highest:
 - `packages/federation` imports only `packages/shared`.
 - `packages/agent-tools` imports only `packages/shared`.
 - The three packages above are independent siblings; none imports another.
-- `packages/owner-core` is reserved for the shared owner implementation. It
-  may import `shared`, `federation`, `agent-tools`, and `messaging/interface`.
+- `packages/owner-core` (`@pwragent/owner-core`) holds shared navigation,
+  Attention ordering, and title policies. It may import only `shared`.
 - `packages/messaging/providers/{discord,feishu,line,mattermost,slack,telegram}`
   each imports only `packages/messaging/interface`, never another provider.
 - `packages/pwragent` (the Outpost) may import `shared`, `federation`,

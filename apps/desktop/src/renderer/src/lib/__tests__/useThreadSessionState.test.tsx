@@ -3219,6 +3219,7 @@ describe("useThreadSessionState", () => {
     { transition: "active", interaction: true, expectedTurn: "turn-1" },
     { transition: "idle", interaction: true, expectedTurn: undefined },
     { transition: "completed then active", interaction: true, expectedTurn: undefined },
+    { transition: "completed twice then active", interaction: true, expectedTurn: undefined },
     { transition: "new turn then active", interaction: true, expectedTurn: "turn-2" },
   ])("hydrates compatible mid-turn state after $transition (interaction: $interaction)", async ({
     transition, interaction, expectedTurn,
@@ -3262,11 +3263,17 @@ describe("useThreadSessionState", () => {
     await waitFor(() => expect(readThread).toHaveBeenCalledTimes(1));
 
     act(() => {
-      if (transition === "completed then active") {
+      if (transition === "completed then active" || transition === "completed twice then active") {
         emit({ backend: "codex", notification: { method: "turn/completed", params: {
           threadId: "thread-1", turnId: "turn-1",
           turn: { id: "turn-1", status: "completed", output: [{ type: "text", text: "Done." }] },
         } } });
+        if (transition === "completed twice then active") {
+          emit({ backend: "codex", notification: { method: "turn/completed", params: {
+            threadId: "thread-1", turnId: "turn-1",
+            turn: { id: "turn-1", status: "completed", output: [{ type: "text", text: "Done." }] },
+          } } });
+        }
       } else if (transition === "new turn then active") {
         emit({ backend: "codex", notification: { method: "turn/started", params: {
           threadId: "thread-1", turn: { id: "turn-2", status: "inProgress" },
@@ -3281,6 +3288,7 @@ describe("useThreadSessionState", () => {
 
     expect(result.current.activeTurnId).toBe(expectedTurn);
     expect(result.current.threadBusy).toBe(transition !== "idle");
+    expect(result.current.response?.replay.entries.some((entry) => entry.id === "commentary-1")).toBe(true);
     if (transition === "active" && interaction) {
       expect(result.current.pendingUserInput?.requestId).toBe("request-1");
       expect(result.current.pendingStatusText).toBe("Waiting for input");

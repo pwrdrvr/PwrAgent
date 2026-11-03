@@ -3,7 +3,7 @@ import { buildFederatedThreadRef, buildThreadIdentityKey, classifyDirectory, fed
   orderByHomePreference } from "@pwragent/shared";
 import type { FederationRemoteTarget, LinkedDirectorySummary, NavigationDirectorySummary, NavigationIdentity,
   NavigationThreadSummary } from "@pwragent/shared";
-import type { NavigationQueryIndex } from "./navigation-query-projection";
+import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import type { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
 import type { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 

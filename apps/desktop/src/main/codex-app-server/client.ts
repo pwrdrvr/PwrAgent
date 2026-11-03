@@ -198,7 +198,7 @@ import {
 import type {
   ThreadTitleAdapterParams,
   ThreadTitleAdapterResult,
-} from "../app-server/thread-title-generation-service";
+} from "@pwragent/owner-core/thread-title-generation-service";
 import {
   normalizeCompatibleApprovalPolicy,
   resolveCodexProtocolCompatibility,
@@ -7763,6 +7763,9 @@ export class CodexAppServerClient {
   private readonly modelProviderTranslator?: CodexModelProviderTranslator;
   private lifecycleBarrier: Promise<void> | null = null;
   private readonly activeRequests = new Set<Promise<unknown>>();
+  // closeGeneration invalidates admitted work across close; serverGeneration
+  // identifies one transport incarnation, including exits during initialization.
+  // Neither replaces the lifecycle barrier or draining active requests.
   private closeGeneration = 0;
   private pendingCloses = 0;
   private serverGeneration = 0;
@@ -7801,6 +7804,8 @@ export class CodexAppServerClient {
    * subscriber leaves, so `unsubscribeIdleThreads` must let go of them.
    */
   private readonly subscribedThreads = new Map<string, number>();
+  /** Keep parent-addressable children without re-reading them on every sweep. */
+  private readonly keptSubAgentThreads = new Set<string>();
   /** Bumped each time a thread unloads, so operations resume it again. */
   private readonly threadUnloadGenerations = new Map<string, number>();
   /** Requests from Codex (approvals, user input, tool calls) per thread. */
@@ -8087,6 +8092,7 @@ export class CodexAppServerClient {
       if (helperThreadId && method === "thread/closed") {
         // Codex unloaded it; the next operation must resume it first.
         this.subscribedThreads.delete(helperThreadId);
+        this.keptSubAgentThreads.delete(helperThreadId);
         this.noteThreadUnloaded(helperThreadId);
       } else if (helperThreadId && this.subscribedThreads.has(helperThreadId)) {
         this.subscribedThreads.set(helperThreadId, this.now());
@@ -8248,7 +8254,10 @@ export class CodexAppServerClient {
   private observeThreadSubscription(method: string, params: unknown, result: unknown): void {
     if (method === "thread/unsubscribe") {
       const threadId = pickString(asRecord(params) ?? {}, ["threadId"]);
-      if (threadId) this.subscribedThreads.delete(threadId);
+      if (threadId) {
+        this.subscribedThreads.delete(threadId);
+        this.keptSubAgentThreads.delete(threadId);
+      }
       return;
     }
     if (method !== "thread/start" && method !== "thread/resume" && method !== "thread/fork") return;
@@ -8281,8 +8290,10 @@ export class CodexAppServerClient {
    * input, background terminals, live tool items, reviews) says no. Each is
    * checked again under the lifecycle barrier, together with Codex's own
    * status for the thread; a sub-agent thread stays, since its parent may
-   * still address it. The next operation on the thread resumes it, as every
-   * thread operation does, and one already in flight replays its resume.
+   * still address it. Cache that classification until it closes or this
+   * connection unsubscribes, so later sweeps need no read. The next operation
+   * on a released thread resumes it, as every thread operation does, and one
+   * already in flight replays its resume.
    */
   async unsubscribeIdleThreads(params: {
     idleMs: number;
@@ -8294,6 +8305,7 @@ export class CodexAppServerClient {
     const isIdle = (threadId: string): boolean => {
       const lastActiveAt = this.subscribedThreads.get(threadId);
       return lastActiveAt !== undefined
+        && !this.keptSubAgentThreads.has(threadId)
         && this.now() - lastActiveAt >= params.idleMs
         && !this.threadKeepsSubscription(threadId)
         && !params.isThreadBusy(threadId);
@@ -8330,12 +8342,19 @@ export class CodexAppServerClient {
         this.subscribedThreads.delete(threadId);
         return "kept";
       }
+      if (typeof thread?.parentThreadId === "string"
+        || asRecord(thread?.source)?.subAgent !== undefined) {
+        // Codex 0.153 unload removes the child from the agent controller's
+        // thread manager; send_input and wait do not implicitly resume it.
+        // A thread/closed notification may have arrived during the read.
+        if (this.subscribedThreads.has(threadId)) this.keptSubAgentThreads.add(threadId);
+        return "kept";
+      }
       // A thread stopped by a system error runs nothing and can go too.
       const systemError = thread?.status === "systemError"
         || asRecord(thread?.status)?.type === "systemError";
-      if ((status !== "idle" && !systemError) || typeof thread?.parentThreadId === "string"
-        || asRecord(thread?.source)?.subAgent !== undefined) {
-        // Busy, or owned by a parent thread: look again next pass.
+      if (status !== "idle" && !systemError) {
+        // Busy: look again next pass.
         this.subscribedThreads.set(threadId, this.now());
         return "kept";
       }
@@ -8711,6 +8730,7 @@ export class CodexAppServerClient {
     // A new process has loaded nothing; operations replay their own resume,
     // keyed on the server generation, so unload counts can start over.
     this.subscribedThreads.clear();
+    this.keptSubAgentThreads.clear();
     this.threadUnloadGenerations.clear();
     this.helperThreadIds.clear();
     this.helperThreadToolHandlers.clear();
@@ -12233,6 +12253,7 @@ export class CodexAppServerClient {
           },
         };
         const result = await this.rawConnection.request("initialize", initializeParams);
+        assertNotClosed();
         this.initializeResult = parseInitializeResponse(result);
         this.tokenMiserActivationNegotiated = Boolean(activationNonce);
       } catch (error) {

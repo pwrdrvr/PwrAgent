@@ -102,6 +102,37 @@ describe("backend MCP gateway dispatch", () => {
     internals.activeTurnKeys.add("codex:thread-1:turn-1");
   }
 
+  it("bounds bridge registration, retains selected order and starts cwd inventory while bridges wait", async () => {
+    const ids = Array.from({ length: 7 }, (_, index) => `selected-${index}`);
+    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-2", connectionIds: ids });
+    const releases = new Map<string, () => void>();
+    let running = 0;
+    let peak = 0;
+    registerBridge.mockImplementation(async (id) => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise<void>((resolve) => releases.set(id, resolve));
+      running -= 1;
+      if (id === "selected-2") throw new Error("connection removed");
+      return { server: { name: id, command: "fixture", args: [], env: {} }, bindThread: vi.fn(), revoke: vi.fn() };
+    });
+    const pending = registry.startTurn({ backend: "codex", threadId: "thread-2", input: [{ type: "text", text: "fixture" }] });
+    await vi.waitFor(() => expect(releases.size).toBe(4));
+    expect(readConfiguredMcpServerNames).toHaveBeenCalledOnce();
+    expect(startTurn).not.toHaveBeenCalled();
+    releases.get("selected-3")!();
+    await vi.waitFor(() => expect(releases.has("selected-4")).toBe(true));
+    releases.get("selected-2")!();
+    await vi.waitFor(() => expect(releases.has("selected-5")).toBe(true));
+    releases.get("selected-1")!();
+    await vi.waitFor(() => expect(releases.has("selected-6")).toBe(true));
+    for (const release of releases.values()) release();
+    await pending;
+    expect(peak).toBe(4);
+    const config = (startTurn.mock.calls[0] as unknown as [{ config: { mcp_servers: Record<string, unknown> } }])[0].config;
+    expect(Object.keys(config.mcp_servers).filter((key) => key.includes("selected"))).toEqual(ids.filter((id) => id !== "selected-2").map((id) => buildCodexConnectionMcpServerName({ name: id, command: "fixture", args: [], env: {} })));
+  });
+
   afterEach(async () => {
     await registry.close();
     await Promise.all(brokers.splice(0).map((broker) => broker.close()));
