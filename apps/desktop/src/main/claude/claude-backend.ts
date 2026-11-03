@@ -175,6 +175,9 @@ const CLAUDE_INTERRUPT_GRACE_MS = 5_000;
  */
 const CLAUDE_REWIND_PREVIEW_TIMEOUT_MS = 30_000;
 
+/** The longest wait before re-reading the wakes Claude scheduled. */
+const CLAUDE_WAKE_EXPIRY_MAX_DELAY_MS = 24 * 60 * 60_000;
+
 /** The CLI drops queued messages along with the interrupted turn. */
 const CLAUDE_INTERRUPT_CANCEL_QUEUED = "interrupt_cancel_queued_v1";
 
@@ -1779,12 +1782,14 @@ export class ClaudeBackend {
     const wakes = live.sessionWakes.pending();
     const expiry = live.sessionWakes.nextExpiry();
     if (expiry !== undefined) {
+      // A longer delay overflows setTimeout and fires at once; an early
+      // timer only re-reads the wakes and arms again.
       live.wakeExpiryTimer = setTimeout(() => {
         live.wakeExpiryTimer = undefined;
         void this.publishSessionWakes(live).catch(() => {});
         // The pump re-checks whether anything still holds the session.
         live.wake.wake();
-      }, Math.max(1_000, expiry - Date.now() + 1_000));
+      }, Math.min(CLAUDE_WAKE_EXPIRY_MAX_DELAY_MS, Math.max(1_000, expiry - Date.now() + 1_000)));
       live.wakeExpiryTimer.unref?.();
     }
     const key = JSON.stringify(wakes);
