@@ -88,9 +88,11 @@ their existing per-turn budgets. Adapter input callbacks retain their ordering.
 Provider/model inventory can overlap launchpad environment-option reads.
 Workspace creation, environment setup, permission changes, lifecycle locks,
 and resume-before-turn ordering remain sequential where required. Messaging
-admission reads overlap authorized media preparation, while the owner's shared
-FIFO revalidates occupancy at dispatch and concurrent-start refusals still
-queue the prepared input. Existing permission checks precede dispatch.
+admission reads follow authorized media preparation so a completion during
+media work cannot leave input queued against an earlier busy snapshot. The
+owner's shared FIFO revalidates occupancy at dispatch and concurrent-start
+refusals still queue the prepared input. Existing permission checks precede
+dispatch.
 
 A successful remote launchpad publishes its optimistic thread before viewer
 draft reset, pin persistence, and subthread ordering. Pin persistence precedes

@@ -270,8 +270,7 @@ describe("MessagingController", () => {
       (call) => call[0] === "messaging starting turn",
     );
     expect(startingTurn?.[1]).toMatchObject({
-      inputPrepAdmissionReadMs: 700,
-      inputPreparedToAdmissionStateMs: 0,
+      inputPreparedToAdmissionStateMs: 700,
     });
     // Everything the admission read did not spend is attributed elsewhere, so
     // the stages sum to the end-to-end number rather than overlapping it.
@@ -16364,12 +16363,12 @@ describe("MessagingController", () => {
     }
     expect(harness.startTurn).toHaveBeenCalledTimes(2);
     expect(harness.startTurn).toHaveBeenLastCalledWith(expect.objectContaining({
-      input: expect.arrayContaining([{ type: "text", text: "Read this file" }, expect.objectContaining({ type: "localFile" })]),
+      input: [{ type: "text", text: expect.stringMatching(/Read this file[\s\S]*fixture file/u) }],
     }));
     expect(harness.delivered).not.toContainEqual(expect.objectContaining({ kind: "confirmation", title: "Message queued" }));
   });
 
-  it("overlaps authorized admission reads with media preparation and waits for both before dispatch", async () => {
+  it("reads admission after media preparation and waits for it before dispatch", async () => {
     let releaseMedia!: () => void;
     let releaseAdmission!: () => void;
     const mediaGate = new Promise<void>((resolve) => { releaseMedia = resolve; });
@@ -16388,10 +16387,10 @@ describe("MessagingController", () => {
     });
     try {
       await vi.waitFor(() => expect(downloadAttachment).toHaveBeenCalled());
-      expect(harness.getThreadAdmissionState).toHaveBeenCalled();
+      expect(harness.getThreadAdmissionState).not.toHaveBeenCalled();
       expect(harness.startTurn).not.toHaveBeenCalled();
-      releaseAdmission();
-      await Promise.resolve();
+      releaseMedia();
+      await vi.waitFor(() => expect(harness.getThreadAdmissionState).toHaveBeenCalledOnce());
       expect(harness.startTurn).not.toHaveBeenCalled();
     } finally {
       releaseAdmission();
@@ -16399,6 +16398,7 @@ describe("MessagingController", () => {
       await handling;
     }
     expect(harness.startTurn).toHaveBeenCalledOnce();
+    expect(harness.getThreadAdmissionState).toHaveBeenCalledOnce();
   });
 
   it("logs bounded PDF preparation subspans on the start-turn event", async () => {
