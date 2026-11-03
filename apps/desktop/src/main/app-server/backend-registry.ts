@@ -7403,6 +7403,12 @@ function mergeThreadMessageOrigins(
   };
 }
 
+function isCausalMessagingContext(
+  context: TaskMonitorDelegationRecord["causalContext"],
+): boolean {
+  return Boolean(context?.causalMessagingSource || context?.causalMessagingAmbiguous);
+}
+
 /**
  * Origin of a prompt PwrAgent writes into a monitor thread: its brief and
  * any recovery instruction. The sub-agent details link Claude and ACP
@@ -25362,8 +25368,7 @@ export class DesktopBackendRegistry {
         // Read-modify-write: overlapping steers must merge, not overwrite.
         await this.turnCausalContextLocks.run(`${turn.backend}:${turn.threadId}:${turn.turnId}`, async () => {
           const previous = await this.readTurnCausalMessagingOrigin(turn);
-          if (previous?.causalMessagingSource || previous?.causalMessagingAmbiguous
-            || messageOrigin.causalMessagingSource || messageOrigin.causalMessagingAmbiguous) {
+          if (isCausalMessagingContext(previous) || isCausalMessagingContext(messageOrigin)) {
             // `user:<turnId>` is also the first prompt's displayed origin, and
             // the steerer did not write that prompt. Keep routing in its own row.
             await this.persistThreadMessageOrigin({ backend: turn.backend, threadId: turn.threadId,
@@ -42401,7 +42406,7 @@ export class DesktopBackendRegistry {
   ): Promise<string | null> {
     const service = this.messagingAgentToolService;
     const causalContext = await this.readCausalMessagingContext({ backend, ...call });
-    if (!service) return causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous ? "message.reply" : null;
+    if (!service) return isCausalMessagingContext(causalContext) ? "message.reply" : null;
     const args =
       call.arguments && typeof call.arguments === "object"
         ? (call.arguments as Record<string, unknown>)
@@ -42414,7 +42419,7 @@ export class DesktopBackendRegistry {
       tool: call.tool,
       arguments: args,
     };
-    const result = causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous
+    const result = isCausalMessagingContext(causalContext)
       ? await service.authorizeRetainedTool?.({ backend, ...call, ...causalContext }, permissionCheck)
         ?? { allowed: false, permission: "message.reply" }
       : service.checkDynamicToolPermission(permissionCheck);
@@ -46293,6 +46298,29 @@ export class DesktopBackendRegistry {
     record.executionMode = executionMode;
   }
 
+  private async startCodexTaskMonitorTurn(params: {
+    causalContext: TaskMonitorDelegationRecord["causalContext"];
+    threadId: string;
+    start: () => Promise<{ threadId: string; turnId: string }>;
+    afterStart: (turn: { threadId: string; turnId: string }) => void;
+  }): Promise<{ threadId: string; turnId: string }> {
+    const startingOrigin = isCausalMessagingContext(params.causalContext)
+      ? this.beginStartingTurnOrigin({ backend: "codex", threadId: params.threadId,
+        origin: buildTaskMonitorPromptOrigin(params.causalContext) })
+      : undefined;
+    let turn: { threadId: string; turnId: string };
+    try {
+      turn = await params.start();
+      this.bindStartingTurnOrigin(startingOrigin, turn);
+      params.afterStart(turn);
+    } catch (error) {
+      this.dropStartingTurnOrigin(startingOrigin);
+      throw error;
+    }
+    await this.persistStartingTurnOrigin(startingOrigin);
+    return turn;
+  }
+
   private async startManagedTaskMonitor(params: {
     rootTurnId?: string;
     causalContext?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
@@ -46487,58 +46515,57 @@ export class DesktopBackendRegistry {
     });
     this.bindTaskMonitorMcpThread(params.monitorId, thread.threadId, executionMode);
     this.reservedCodexStartThreadIds.add(thread.threadId);
-    const causalContext = params.causalContext ?? {};
-    const startingOrigin = causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous
-      ? this.beginStartingTurnOrigin({ backend: "codex", threadId: thread.threadId,
-        origin: buildTaskMonitorPromptOrigin(causalContext) })
-      : undefined;
+    let ownsStartReservation = true;
+    const releaseStartReservation = () => {
+      if (!ownsStartReservation) return;
+      ownsStartReservation = false;
+      this.reservedCodexStartThreadIds.delete(thread.threadId);
+    };
     let turn: { threadId: string; turnId: string };
     try {
-      turn = await client.startTurn({
+      turn = await this.startCodexTaskMonitorTurn({
+        causalContext: params.causalContext,
         threadId: thread.threadId,
-        parentTurnId: params.context.turnId,
-        ...(params.rootTurnId ? { rootTurnId: params.rootTurnId } : {}),
-        input: [{ type: "text", text: params.prompt }],
-        ...(cwd ? { cwd } : {}),
-        approvalPolicy: modeSettings.approvalPolicy,
-        model: params.preferredModel,
-        reasoningEffort: params.preferredReasoningEffort,
-        approvalsReviewer: modeSettings.approvalsReviewer,
-        sandbox: modeSettings.sandbox,
-        ...(sourceOverlay?.codexEnvironmentRuntime
-          ? {
-              codexEnvironmentRuntime:
-                sourceOverlay.codexEnvironmentRuntime,
-            }
-          : {}),
+        start: () => client.startTurn({
+          threadId: thread.threadId,
+          parentTurnId: params.context.turnId,
+          ...(params.rootTurnId ? { rootTurnId: params.rootTurnId } : {}),
+          input: [{ type: "text", text: params.prompt }],
+          ...(cwd ? { cwd } : {}),
+          approvalPolicy: modeSettings.approvalPolicy,
+          model: params.preferredModel,
+          reasoningEffort: params.preferredReasoningEffort,
+          approvalsReviewer: modeSettings.approvalsReviewer,
+          sandbox: modeSettings.sandbox,
+          ...(sourceOverlay?.codexEnvironmentRuntime
+            ? {
+                codexEnvironmentRuntime:
+                  sourceOverlay.codexEnvironmentRuntime,
+              }
+            : {}),
+        }),
+        afterStart: (startedTurn) => {
+          this.activeTurnKeys.add(
+            buildActiveTurnKey("codex", startedTurn.threadId, startedTurn.turnId),
+          );
+          this.activeCodexTurnModes.set(
+            buildActiveTurnModeKey(startedTurn.threadId, startedTurn.turnId),
+            executionMode,
+          );
+          releaseStartReservation();
+          backendRegistryLog.info("managed task monitor turn started", {
+            executionMode,
+            hasCodexEnvironmentRuntime: Boolean(sourceOverlay?.codexEnvironmentRuntime),
+            monitorId: params.monitorId,
+            monitorThreadId: startedTurn.threadId,
+            monitorTurnId: startedTurn.turnId,
+            parentThreadId: params.context.threadId,
+          });
+        },
       });
-      this.activeTurnKeys.add(
-        buildActiveTurnKey("codex", turn.threadId, turn.turnId),
-      );
-      this.activeCodexTurnModes.set(
-        buildActiveTurnModeKey(turn.threadId, turn.turnId),
-        executionMode,
-      );
-      this.bindStartingTurnOrigin(startingOrigin, turn);
-    } catch (error) {
-      this.dropStartingTurnOrigin(startingOrigin);
-      throw error;
     } finally {
-      this.reservedCodexStartThreadIds.delete(thread.threadId);
+      releaseStartReservation();
     }
-
-    backendRegistryLog.info("managed task monitor turn started", {
-      executionMode,
-      hasCodexEnvironmentRuntime: Boolean(
-        sourceOverlay?.codexEnvironmentRuntime,
-      ),
-      monitorId: params.monitorId,
-      monitorThreadId: turn.threadId,
-      monitorTurnId: turn.turnId,
-      parentThreadId: params.context.threadId,
-    });
-
-    await this.persistStartingTurnOrigin(startingOrigin);
 
     return {
       cwd,
@@ -47160,15 +47187,12 @@ export class DesktopBackendRegistry {
       // Like the monitor's first turn, a recovery turn delegated from a
       // messaging turn carries that turn's origin, so its tool calls stay
       // gated by the messaging user's role.
-      const causalContext = record.causalContext ?? {};
-      const startingOrigin = causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous
-        ? this.beginStartingTurnOrigin({ backend: "codex", threadId: record.monitorThreadId,
-          origin: buildTaskMonitorPromptOrigin(causalContext) })
-        : undefined;
-      let turn: { threadId: string; turnId: string };
-      try {
-        turn = await client.startTurn({
-          threadId: record.monitorThreadId,
+      const monitorThreadId = record.monitorThreadId;
+      await this.startCodexTaskMonitorTurn({
+        causalContext: record.causalContext,
+        threadId: monitorThreadId,
+        start: () => client.startTurn({
+          threadId: monitorThreadId,
           parentTurnId: record.parentTurnId,
           ...(record.rootTurnId ? { rootTurnId: record.rootTurnId } : {}),
           input: [
@@ -47190,15 +47214,12 @@ export class DesktopBackendRegistry {
           ...(overlay?.codexEnvironmentRuntime
             ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
             : {}),
-        });
-        this.bindStartingTurnOrigin(startingOrigin, turn);
-      } catch (error) {
-        this.dropStartingTurnOrigin(startingOrigin);
-        throw error;
-      }
-      record.monitorTurnId = turn.turnId;
-      record.lastActivityAt = Date.now();
-      await this.persistStartingTurnOrigin(startingOrigin);
+        }),
+        afterStart: (turn) => {
+          record.monitorTurnId = turn.turnId;
+          record.lastActivityAt = Date.now();
+        },
+      });
       backendRegistryLog.warn("started task monitor recovery turn", {
         monitorId: record.monitorId,
         monitorThreadId: record.monitorThreadId,
