@@ -4323,6 +4323,8 @@ export function useThreadNavigation(
           || method === "thread/executionMode/updated"
           || method === "thread/executionMode/queued"
           || method === "thread/executionMode/queueCleared"
+          || method === "thread/archived"
+          || method === "thread/unarchived"
           || method === "thread/name/updated"
           || method === "thread/pullRequests/updated"
           || method === "thread/reactions/updated"
