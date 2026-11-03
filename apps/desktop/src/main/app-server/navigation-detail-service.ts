@@ -10,6 +10,7 @@ import type {
   NavigationSelectedDetailRequest,
   NavigationSelectedDetailResponse,
   ThreadSubAgentSummary,
+  ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
 import {
   NAVIGATION_DETAIL_COLLECTION_NAMES,
@@ -27,6 +28,7 @@ import { detectMissingThreadWorkspace } from "./missing-thread-workspace";
 import { readMergedSubAgentPage } from "./thread-display";
 import { collectConcurrent } from "../../shared/concurrent-work";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
+import { boundThreadPendingWakes } from "./thread-pending-wakes";
 
 /** The most records one selected-collection page holds, before the byte budget. */
 const SELECTED_COLLECTION_PAGE_RECORDS = 100;
@@ -145,11 +147,15 @@ export class NavigationDetailService {
 
   async readSelectedDetail(
     request: NavigationSelectedDetailRequest,
+    options: { includePendingWakes?: boolean } = {},
   ): Promise<NavigationSelectedDetailResponse> {
-    return await listingDiagnostics.trace("workflow", { query: "selected-detail" }, () => this.readSelectedDetailData(request));
+    return await listingDiagnostics.trace("workflow", { query: "selected-detail" }, () => this.readSelectedDetailData(request, options));
   }
 
-  private async readSelectedDetailData(request: NavigationSelectedDetailRequest): Promise<NavigationSelectedDetailResponse> {
+  private async readSelectedDetailData(
+    request: NavigationSelectedDetailRequest,
+    options: { includePendingWakes?: boolean },
+  ): Promise<NavigationSelectedDetailResponse> {
     if (request.protocol !== NAVIGATION_QUERY_PROTOCOL_VERSION) {
       throw new NavigationQueryError(
         "navigation_invalid_request",
@@ -266,9 +272,10 @@ export class NavigationDetailService {
     if (request.includeWorkspaceConfiguration && thread.linkedDirectories.length > 100) {
       throw new NavigationQueryError("navigation_item_too_large", "Selected workspace configuration exceeds the 100-directory detail budget.");
     }
-    // These reads have no data dependencies on one another. The SQLite
-    // wrappers still execute synchronously; the overlap is in Git/stat and
-    // any owner reads. GitReadCache continues to own physical Git admission.
+    // Ancillary reads and directory probes overlap. Peer wake projection
+    // reuses the active-watch read. SQLite wrappers still execute synchronously;
+    // GitReadCache continues to own physical Git admission.
+    const activePrWatchesRead = getDesktopOverlayStore().listActiveThreadPrStatusWatches({ backend: summary.source, threadId: summary.id });
     const [subAgentCollection, workspaceMissing, activeCards, activePrWatches, pendingWakes, workspaceDirectories] = await Promise.all([
       this.subAgentCollectionManifest(request.ref, summary),
       detectMissingThreadWorkspace(thread, {
@@ -276,8 +283,10 @@ export class NavigationDetailService {
           (await this.registry.readSelectedWorkspaceGitStatus(repositoryPath))?.currentBranch,
       }),
       getDesktopOverlayStore().listActiveThreadSubAgents({ backend: summary.source, threadId: summary.id }),
-      getDesktopOverlayStore().listActiveThreadPrStatusWatches({ backend: summary.source, threadId: summary.id }),
-      readPendingWakesForDetail({ backend: summary.source, threadId: summary.id }),
+      activePrWatchesRead,
+      options.includePendingWakes
+        ? activePrWatchesRead.then((watches) => readPendingWakesForDetail({ backend: summary.source, threadId: summary.id }, watches))
+        : undefined,
       request.includeWorkspaceConfiguration
         ? collectConcurrent(thread.linkedDirectories, 4, async (directory) => ({
             key: directory.id, label: directory.label, path: directory.path,
@@ -304,11 +313,17 @@ export class NavigationDetailService {
     // The owner's watches, so a peer viewer reads the same list. Detail only:
     // it is projected per read and never stored with the navigation row.
     if (activePrWatches.length > 0) configuration.activePrWatches = activePrWatches;
-    // The owner's Waiting for list, for the same reason. An empty list says
-    // nothing waits; an owner that predates it sends none.
+    // Only peer viewers need this projection; local windows use the pending
+    // wakes IPC channel. Keep its live activity out of local detail revisions.
     if (pendingWakes) {
       configuration.pendingWakes = pendingWakes.wakes;
       if (pendingWakes.incomplete) configuration.pendingWakesIncomplete = true;
+    }
+    if (configuration.pendingWakes) {
+      const baseBytes = responseBytes({ ref: request.ref, thread: { ...configuration, pendingWakes: [] }, collections, workspaceDirectories }) + 512;
+      const bounded = boundThreadPendingWakes({ wakes: configuration.pendingWakes }, Math.max(0, NAVIGATION_QUERY_MAX_RESULT_BYTES - baseBytes));
+      configuration.pendingWakes = bounded.wakes;
+      if (bounded.incomplete) configuration.pendingWakesIncomplete = true;
     }
     const detailRevision = revision({ thread: configuration, workspaceDirectories });
     if (request.knownRevision === detailRevision) {
@@ -491,7 +506,7 @@ export class NavigationDetailService {
 type PendingWakesProjector = (thread: {
   backend: AppServerBackendKind;
   threadId: string;
-}) => Promise<Pick<ThreadPendingWakesList, "wakes" | "incomplete">>;
+}, activePrWatches: readonly ThreadPullRequestWatchSummary[]) => Promise<Pick<ThreadPendingWakesList, "wakes" | "incomplete">>;
 
 let pendingWakesProjector: PendingWakesProjector | undefined;
 
@@ -504,10 +519,10 @@ export function setNavigationDetailPendingWakesProjector(projector: PendingWakes
 async function readPendingWakesForDetail(thread: {
   backend: AppServerBackendKind;
   threadId: string;
-}): Promise<Pick<ThreadPendingWakesList, "wakes" | "incomplete"> | undefined> {
+}, activePrWatches: readonly ThreadPullRequestWatchSummary[]): Promise<Pick<ThreadPendingWakesList, "wakes" | "incomplete"> | undefined> {
   if (!pendingWakesProjector) return undefined;
   try {
-    return await pendingWakesProjector(thread);
+    return await pendingWakesProjector(thread, activePrWatches);
   } catch {
     return undefined;
   }

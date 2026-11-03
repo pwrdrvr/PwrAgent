@@ -3,8 +3,17 @@ import {
   navigationInvalidationMayChangeMembership,
   navigationQueryEventRequiresRefresh,
 } from "../navigation-query-events";
+import { isThreadPendingWakeInvalidation } from "../contracts/thread-pending-wakes";
 
 describe("navigation query events", () => {
+  it("recognizes direct and federated wake-source changes without membership churn", () => {
+    for (const sourceMethod of ["thread/dependencies/updated", "thread/scheduledAction/updated"]) {
+      expect(isThreadPendingWakeInvalidation(sourceMethod, {})).toBe(true);
+      expect(isThreadPendingWakeInvalidation("navigation/invalidated", { sourceMethod })).toBe(true);
+      expect(navigationInvalidationMayChangeMembership(sourceMethod)).toBe(false);
+    }
+    expect(isThreadPendingWakeInvalidation("thread/subAgents/updated", { navigationChanged: false })).toBe(false);
+  });
   // Background tasks that outlive a turn mark the owning row (working for
   // Claude, a running command for Codex), so their start and end must reach
   // the thread list.

@@ -151,6 +151,15 @@ describe("pwragent federation agent tools", () => {
       },
     },
     {
+      name: "rejects an unknown worktreeBase before dispatching create_instance_thread",
+      tool: "create_instance_thread",
+      arguments: {
+        instanceId: "pwr_studio",
+        projectKey: "dir:/repo",
+        worktreeBase: "main",
+      },
+    },
+    {
       name: "rejects a blank environment before dispatching create_instance_thread",
       tool: "create_instance_thread",
       arguments: {
@@ -266,6 +275,7 @@ describe("pwragent federation agent tools", () => {
           backend: " codex ",
           workMode: "worktree",
           branchName: " origin/main ",
+          worktreeBase: "default_branch",
           groupingMode: "subthread",
           fastMode: true,
           tokenMiserEnabled: false,
@@ -289,6 +299,7 @@ describe("pwragent federation agent tools", () => {
         backend: "codex",
         workMode: "worktree",
         branchName: "origin/main",
+        worktreeBase: "default_branch",
         groupingMode: "subthread",
         fastMode: true,
         tokenMiserEnabled: false,

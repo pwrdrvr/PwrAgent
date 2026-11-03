@@ -7,7 +7,8 @@ import {
   parseThreadPendingWakeKey,
   type AppServerBackendKind,
   type AppServerBackgroundTask,
-  type ScheduledThreadAction,
+  type PendingWakeScheduledAction,
+  type PendingWakeScheduledActions,
   type ThreadDependency,
   type ProjectHeldWakeupSource,
   type ThreadPendingHeldMessageSource,
@@ -57,14 +58,14 @@ export type ThreadPendingWakeReaders = {
   /** Auto-fix states for this thread's PRs. */
   autoFix: (thread: PendingWakeThread) => Promise<ThreadPrAutoFixState[]>;
   /** Every registration this thread waits on, active and ended. */
-  dependencies: (thread: PendingWakeThread) => Promise<ThreadDependency[]>;
+  dependencies: (thread: PendingWakeThread, endedLimit: number) => Promise<ThreadDependency[]>;
   /** The thread's active scheduled actions, plus recently ended ones when asked. */
   scheduledActions: (
     thread: PendingWakeThread,
-    includeEnded: boolean,
-  ) => ScheduledThreadAction[] | Promise<ScheduledThreadAction[]>;
+    endedLimit: number,
+  ) => PendingWakeScheduledActions | Promise<PendingWakeScheduledActions>;
   monitors: (thread: PendingWakeThread) => PendingTaskMonitorWake[];
-  /** The thread's newest sub-agent cards, for monitors that ended. */
+  /** Ended monitor summaries, newest completion first. */
   recentSubAgents: (thread: PendingWakeThread, limit: number) => Promise<ThreadSubAgentSummary[]>;
   /** Tasks the backend runs for the thread; only background ones wake it. */
   backendTasks: (thread: PendingWakeThread) => Promise<AppServerBackgroundTask[]>;
@@ -85,7 +86,12 @@ const DETAIL_MAX_CHARS = 80;
 export async function buildThreadPendingWakes(
   readers: ThreadPendingWakeReaders,
   thread: PendingWakeThread,
-  options: { endedLimit?: number; onReadError?: (source: string, error: unknown) => void } = {},
+  options: {
+    endedLimit?: number;
+    /** Selected detail already read the owner's watches. Reuse even an empty list. */
+    activePrWatches?: readonly ThreadPullRequestWatchSummary[];
+    onReadError?: (source: string, error: unknown) => void;
+  } = {},
 ): Promise<ThreadPendingWakesList> {
   const endedLimit = clampEndedLimit(options.endedLimit);
   let incomplete = false;
@@ -101,26 +107,26 @@ export async function buildThreadPendingWakes(
   const [
     prWatches, prHistory, autoFix, dependencies, scheduled, monitors, subAgents, tasks, hold, heldEntries,
   ] = await Promise.all([
-    read("prWatches", [] as ThreadPullRequestWatchSummary[], () => readers.prWatches(thread)),
-    read("prWatchHistory", [] as ThreadPrWatchHistoryEntry[], () => readers.prWatchHistory(thread, endedLimit)),
+    options.activePrWatches ?? read("prWatches", [] as ThreadPullRequestWatchSummary[], () => readers.prWatches(thread)),
+    endedLimit === 0 ? [] : read("prWatchHistory", [] as ThreadPrWatchHistoryEntry[], () => readers.prWatchHistory(thread, endedLimit)),
     read("autoFix", [] as ThreadPrAutoFixState[], () => readers.autoFix(thread)),
-    read("dependencies", [] as ThreadDependency[], () => readers.dependencies(thread)),
-    read("scheduledActions", [] as ScheduledThreadAction[], () => readers.scheduledActions(thread, endedLimit > 0)),
+    read("dependencies", [] as ThreadDependency[], () => readers.dependencies(thread, endedLimit)),
+    read("scheduledActions", { actions: [] } as PendingWakeScheduledActions, () => readers.scheduledActions(thread, endedLimit)),
     read("monitors", [] as PendingTaskMonitorWake[], () => readers.monitors(thread)),
-    read("recentSubAgents", [] as ThreadSubAgentSummary[], () => readers.recentSubAgents(thread, endedLimit * 2)),
+    endedLimit === 0 ? [] : read("recentSubAgents", [] as ThreadSubAgentSummary[], () => readers.recentSubAgents(thread, endedLimit)),
     read("backendTasks", [] as AppServerBackgroundTask[], () => readers.backendTasks(thread)),
     read("hold", undefined as ThreadPendingWakeHold | undefined, () => readers.hold(thread)),
     read("heldEntries", [] as PendingHeldQueueEntry[], () => readers.heldEntries(thread)),
   ]);
   // A held scheduled action is listed as itself, not as its queue entry.
-  const scheduledEntryIds = new Set(scheduled.flatMap((action) =>
+  const scheduledEntryIds = new Set(scheduled.actions.flatMap((action) =>
     action.status === "held" && action.queueEntryId ? [action.queueEntryId] : []));
   const wakes = [
     ...heldEntries
       .filter((entry) => !scheduledEntryIds.has(entry.entryId))
       .sort((left, right) => left.createdAt - right.createdAt)
       .map((entry) => heldMessageWake(entry, hold)),
-    ...withHold(scheduledWakes(scheduled), hold),
+    ...withHold(scheduledWakes(scheduled.actions), hold),
     ...withHold(pullRequestWakes(prWatches, autoFix.filter((state) =>
       state.backend === thread.backend && state.threadId === thread.threadId)), hold),
     ...withHold(dependencyWakes(dependencies), hold),
@@ -130,10 +136,26 @@ export async function buildThreadPendingWakes(
   const ended = [
     ...prHistory.flatMap(endedPrWatch),
     ...dependencies.flatMap(endedDependency),
-    ...scheduled.flatMap(endedScheduledAction),
+    ...scheduled.actions.flatMap(endedScheduledAction),
     ...subAgents.flatMap(endedMonitor),
   ].sort((left, right) => right.endedAt - left.endedAt).slice(0, endedLimit);
-  return { wakes, ended, ...(incomplete ? { incomplete: true as const } : {}) };
+  return boundThreadPendingWakes({ wakes, ended, ...(incomplete || scheduled.incomplete ? { incomplete: true as const } : {}) });
+}
+
+/** A compact projection must never grow with command text or an unbounded source. */
+export function boundThreadPendingWakes<T extends Pick<ThreadPendingWakesList, "wakes" | "incomplete">>(
+  list: T,
+  maxBytes = 64 * 1024,
+): T & { incomplete?: true } {
+  let bytes = 2;
+  const wakes: ThreadPendingWake[] = [];
+  for (const wake of list.wakes) {
+    const size = Buffer.byteLength(JSON.stringify(wake), "utf8") + 1;
+    if (bytes + size > maxBytes || wakes.length >= 128) break;
+    bytes += size;
+    wakes.push(wake);
+  }
+  return { ...list, wakes, ...(wakes.length < list.wakes.length ? { incomplete: true as const } : {}) };
 }
 
 function clampEndedLimit(limit: number | undefined): number {
@@ -142,7 +164,7 @@ function clampEndedLimit(limit: number | undefined): number {
 }
 
 /** Timed actions by time; held ones, which wait for the operator, after. */
-function scheduledWakes(actions: readonly ScheduledThreadAction[]): ThreadPendingWake[] {
+function scheduledWakes(actions: readonly PendingWakeScheduledAction[]): ThreadPendingWake[] {
   return actions
     .filter((action) => action.status === "scheduled" || action.status === "held")
     .sort((left, right) => (left.status === right.status ? 0 : left.status === "scheduled" ? -1 : 1)
@@ -167,9 +189,17 @@ function pullRequestWakes(
   watches: readonly ThreadPullRequestWatchSummary[],
   autoFix: readonly ThreadPrAutoFixState[],
 ): ThreadPendingWake[] {
-  const prKeys = [...new Set([...watches.map((watch) => watch.prKey), ...autoFix.map((state) => state.prKey)])];
-  return prKeys.flatMap((prKey) => {
-    const forPr = watches.filter((watch) => watch.prKey === prKey)
+  const groups = new Map<string, { watches: ThreadPullRequestWatchSummary[]; states: ThreadPrAutoFixState[] }>();
+  for (const watch of watches) {
+    if (!groups.has(watch.prKey)) groups.set(watch.prKey, { watches: [], states: [] });
+    groups.get(watch.prKey)!.watches.push(watch);
+  }
+  for (const state of autoFix) {
+    if (!groups.has(state.prKey)) groups.set(state.prKey, { watches: [], states: [] });
+    groups.get(state.prKey)!.states.push(state);
+  }
+  return [...groups].flatMap(([prKey, group]) => {
+    const forPr = group.watches
       .sort((left, right) => watchRank(left) - watchRank(right) || left.createdAt - right.createdAt);
     const prNumber = forPr[0]?.prNumber;
     const rows: ThreadPendingWake[] = forPr.map((watch) => ({
@@ -181,7 +211,7 @@ function pullRequestWakes(
       durable: true,
       stop: "stop",
     }));
-    for (const state of autoFix.filter((candidate) => candidate.prKey === prKey)) {
+    for (const state of group.states) {
       rows.push({
         kind: "pr_auto_fix",
         key: buildThreadPendingWakeKey("pr_auto_fix", prKey),
@@ -313,7 +343,8 @@ function backendTaskWake(task: AppServerBackgroundTask): ThreadPendingWake {
   return {
     kind: "backend_task",
     key: buildThreadPendingWakeKey("backend_task", task.processId),
-    task,
+    task: { ...task, command: clip(task.command, THREAD_PENDING_WAKE_TEXT_MAX_CHARS),
+      ...(task.progress ? { progress: clip(task.progress, THREAD_PENDING_WAKE_TEXT_MAX_CHARS) } : {}) },
     ...(task.startedAt !== undefined ? { createdAt: task.startedAt } : {}),
     createdBy: "agent",
     durable: false,
@@ -381,7 +412,7 @@ function endedDependency(dependency: ThreadDependency): ThreadPendingWakeEnded[]
   }];
 }
 
-function endedScheduledAction(action: ScheduledThreadAction): ThreadPendingWakeEnded[] {
+function endedScheduledAction(action: PendingWakeScheduledAction): ThreadPendingWakeEnded[] {
   if (action.status !== "started" && action.status !== "cancelled" && action.status !== "failed") return [];
   const noun = action.kind === "review" ? "Scheduled review" : "Scheduled message";
   const summary = action.status === "started"

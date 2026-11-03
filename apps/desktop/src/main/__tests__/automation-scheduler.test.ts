@@ -107,6 +107,70 @@ function buildSchedulerWithGate(gateRunner: AutomationGateRunner): AutomationSch
 }
 
 describe("AutomationScheduler", () => {
+  it.each(["started", "queued", "failed"] as const)(
+    "preserves completion when a %s submission result arrives after lifecycle events",
+    async (submissionStatus) => {
+      const automation = createIntervalAutomation();
+      let beforeReturnStatus: string | undefined;
+      const scheduler = new AutomationScheduler({
+        store,
+        now: () => now,
+        runner: {
+          async submitRun({ run }) {
+            await scheduler.handleTurnQueueUpdate({
+              automationRunId: run.id,
+              status: "started",
+              turnId: "turn-1",
+              now: 500,
+            });
+            await scheduler.handleTurnQueueUpdate({
+              automationRunId: run.id,
+              status: "terminal",
+              terminalStatus: "turn/completed",
+              now: 1_000,
+            });
+            beforeReturnStatus = store.getRun(run.id)?.status;
+            if (submissionStatus === "failed") {
+              throw new Error("Submission acknowledgement failed");
+            }
+            const entry: ThreadTurnQueueEntry = {
+              id: "queue-1",
+              backend: automation.backend,
+              threadId: automation.threadId,
+              origin: "automation",
+              automationRunId: run.id,
+              input: [],
+              createdAt: 0,
+            };
+            return submissionStatus === "queued"
+              ? { status: "queued", entry, position: 1 }
+              : { status: "started", entry, turnId: "turn-1", backendThreadId: "headless-1" };
+          },
+        },
+      });
+
+      const result = await scheduler.runNow(automation.id);
+
+      expect(beforeReturnStatus).toBe("completed");
+      expect(result?.status).toBe(submissionStatus === "failed" ? undefined : submissionStatus);
+      const [run] = store.listRunsForAutomation(automation.id);
+      expect(run).toMatchObject({
+        status: "completed",
+        startedAt: 500,
+        completedAt: 1_000,
+        backendTurnId: "turn-1",
+      });
+      expect(run?.errorMessage).toBeUndefined();
+      if (submissionStatus !== "failed") expect(run?.queueEntryId).toBe("queue-1");
+      if (submissionStatus === "started") expect(run?.backendThreadId).toBe("headless-1");
+      expect(store.findActiveRunForAutomation(automation.id)).toBeUndefined();
+      expect(store.getAutomation(automation.id)).toMatchObject({
+        lastRunAt: 1_000,
+        lastRunStatus: "completed",
+      });
+    },
+  );
+
   it("replays a captured message as a manual run carrying the source", async () => {
     const automation = createIntervalAutomation({
       backend: "codex",

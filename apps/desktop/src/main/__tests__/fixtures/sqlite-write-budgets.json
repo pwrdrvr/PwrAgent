@@ -115,6 +115,8 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "automation-run-duplicate-lifecycle": {"commits":0,"note":"100 repeated started/queued acknowledgements and conflicting terminal outcomes: zero commits, 0 MB/day.","observedWalBytes":0,"rowsChanged":0,"statements":0},
+  "automation-run-lifecycle": {"commits":4,"note":"One start, one terminal outcome and one late identity acknowledgement: 4 boundary commits, ~86.5 KB/run or ~8.7 MB/day at 100 runs/day; 0 MB/day idle.","observedWalBytes":86520,"rowsChanged":4,"statements":4},
   "automation-run-prune-retain-usage-title": {
     "commits": 2,
     "note": "Creating a run and pruning an older run retains its usage title in the existing prune transaction",
@@ -1217,6 +1219,7 @@
     "statements": 0
   },
   "thread-pending-wakes-list": {"commits": 0, "note": "50 Waiting for list reads over real dependency and scheduled-action stores; a read writes nothing: 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "thread-pending-wakes-monitor-completion": {"commits": 1, "note": "One existing monitor completion, including the ended-history index; no extra transaction for Waiting for.", "observedWalBytes": 24752, "rowsChanged": 1, "statements": 1},
   "thread-pricing-lazy-repair": {
     "commits": 1,
     "note": "one thread load lazily reprices 25 usage rows in ten-row progress batches; a second load is read-only",

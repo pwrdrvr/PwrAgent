@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
 import type {
   NavigationThreadSummary,
@@ -10,6 +10,11 @@ import type {
   ThreadSubAgentSummary,
 } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import * as backendRegistry from "../app-server/backend-registry";
+import * as navigationDetail from "../app-server/navigation-detail-service";
+import { ThreadPendingWakesCache } from "../app-server/thread-pending-wakes-cache";
+import { expectPendingWakeReadBudget } from "./fixtures/pending-wake-read-budget";
+import { buildThreadPendingWakes, type PendingWakeThread, type ThreadPendingWakeReaders } from "../app-server/thread-pending-wakes";
 
 const mocks = vi.hoisted(() => ({
   /** The selected thread's stored cards, as the store's card reads see them. */
@@ -26,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   getLaunchpadDefaults: vi.fn(),
   getDirectoryLaunchpad: vi.fn(),
   listCodexEnvironmentOptions: vi.fn(),
+  listActiveThreadPrStatusWatches: vi.fn(),
 }));
 
 vi.mock("../app-server/desktop-overlay-store", () => ({
@@ -43,7 +49,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
       mocks.cards.find((card) => card.monitorId === monitorId),
     getThreadSubAgents: async ({ monitorIds }: { monitorIds: readonly string[] }) =>
       mocks.cards.filter((card) => monitorIds.includes(card.monitorId)),
-    listActiveThreadPrStatusWatches: async () => mocks.prWatches,
+    listActiveThreadPrStatusWatches: mocks.listActiveThreadPrStatusWatches,
     listActiveThreadSubAgents: async () => mocks.cards.filter((card) =>
       card.completedAt === undefined || card.status === "failed" || card.status === "failure"),
     readThreadSubAgentRevision: async () => {
@@ -131,15 +137,23 @@ describe("NavigationDetailService", () => {
     mocks.getThreadOverlayState.mockReset();
     mocks.cards = [];
     mocks.prWatches = [];
+    mocks.listActiveThreadPrStatusWatches.mockReset().mockImplementation(async () => mocks.prWatches);
     mocks.getLaunchpadDefaults.mockReset().mockResolvedValue({ backend: "codex", executionMode: "default" });
     mocks.getDirectoryLaunchpad.mockReset().mockResolvedValue(undefined);
     mocks.listCodexEnvironmentOptions.mockReset().mockResolvedValue([]);
   });
 
-  it("bounds selected Git reads and keeps directory order and revision after out-of-order completion", async () => {
+  afterEach(() => {
+    navigationDetail.setNavigationDetailPendingWakesProjector(undefined);
+    vi.restoreAllMocks();
+  });
+
+  it.each([false, true])("bounds selected Git reads and keeps directory order and revision after out-of-order completion (peer wakes: %s)", async (includePendingWakes) => {
     const selected = thread("selected");
     selected.linkedDirectories = Array.from({ length: 9 }, (_, index) => ({ id: String(index), kind: "local", label: String(index), path: `/repo/${index}` }));
     mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
+    const project = vi.fn(async () => ({ wakes: [] }));
+    navigationDetail.setNavigationDetailPendingWakesProjector(project);
     const releases = new Map<string, () => void>();
     let active = 0;
     let peak = 0;
@@ -162,22 +176,27 @@ describe("NavigationDetailService", () => {
     } as unknown as DesktopBackendRegistry;
     const service = new NavigationDetailService(registry);
     const request = { protocol: 2 as const, ref: { backend: "codex" as const, threadId: "selected" }, includeWorkspaceConfiguration: true };
-    const pending = service.readSelectedDetail(request);
+    const options = { includePendingWakes };
+    const pending = service.readSelectedDetail(request, options);
     await vi.waitFor(() => expect(releases.size).toBe(4));
+    if (includePendingWakes) expect(project).toHaveBeenCalledExactlyOnceWith(request.ref, mocks.prWatches);
+    else expect(project).not.toHaveBeenCalled();
+    expect(mocks.listActiveThreadPrStatusWatches).toHaveBeenCalledExactlyOnceWith(request.ref);
     releases.get("/repo/3")!();
     await vi.waitFor(() => expect(releases.has("/repo/4")).toBe(true));
     gated = false;
     for (const release of releases.values()) release();
     const result = await pending;
+    expect(result.thread?.pendingWakes).toEqual(includePendingWakes ? [] : undefined);
     expect(peak).toBe(4);
     expect(result.workspaceDirectories?.map((directory) => directory.key)).toEqual(selected.linkedDirectories.map((directory) => directory.id));
-    const unchanged = await service.readSelectedDetail({ ...request, knownRevision: result.revision });
+    const unchanged = await service.readSelectedDetail({ ...request, knownRevision: result.revision }, options);
     expect(unchanged).toMatchObject({ unchanged: true, revision: result.revision });
     read.mockRejectedValueOnce(new Error("git failed"));
-    await expect(service.readSelectedDetail(request)).rejects.toThrow("git failed");
+    await expect(service.readSelectedDetail(request, options)).rejects.toThrow("git failed");
     read.mockClear();
     selected.linkedDirectories = Array.from({ length: 101 }, () => selected.linkedDirectories[0]!);
-    await expect(service.readSelectedDetail(request)).rejects.toMatchObject({ code: "navigation_item_too_large" });
+    await expect(service.readSelectedDetail(request, options)).rejects.toMatchObject({ code: "navigation_item_too_large" });
     expect(read).not.toHaveBeenCalled();
   });
 
@@ -525,6 +544,108 @@ describe("NavigationDetailService", () => {
     const stopped = await service.readSelectedDetail({ ...request, knownRevision: first.revision });
     expect(stopped.unchanged).not.toBe(true);
     expect(stopped.thread).not.toHaveProperty("activePrWatches");
+  });
+
+  it("skips wake readers locally and projects them for the existing federation detail request", async () => {
+    const selected = thread("selected");
+    mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
+    const service = new NavigationDetailService({
+      getCachedThreadSummary: () => selected,
+      getQueuedExecutionModeForThread: () => undefined,
+      canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
+      hydrateThreadGitWorkingStates: async (threads: unknown[]) => threads,
+      mergeLiveTokenMiserSubAgents: (_id: string, cards: ThreadSubAgentSummary[]) => cards,
+      listLiveTokenMiserSubAgents: () => [],
+      readLiveSubAgentRevisionSource: () => [],
+    } as unknown as DesktopBackendRegistry);
+    const monitor = { monitorId: "monitor-1", task: "Wait for CI", backend: "codex" as const,
+      createdAt: 1, lastActivityAt: 2, pollIntervalSeconds: 60 };
+    const readers = {
+      prWatches: vi.fn(async () => []),
+      prWatchHistory: vi.fn(async () => []),
+      autoFix: vi.fn(async () => []),
+      dependencies: vi.fn(async () => []),
+      scheduledActions: vi.fn(() => ({ actions: [] })),
+      monitors: vi.fn(() => [monitor]),
+      recentSubAgents: vi.fn(async () => []),
+      backendTasks: vi.fn(async () => []),
+      hold: vi.fn(async () => undefined),
+      heldEntries: vi.fn(() => []),
+    } satisfies ThreadPendingWakeReaders;
+    const project = vi.fn(async (ref: PendingWakeThread, activePrWatches: readonly ThreadPullRequestWatchSummary[]) =>
+      buildThreadPendingWakes(readers, ref, { endedLimit: 0, activePrWatches }));
+    navigationDetail.setNavigationDetailPendingWakesProjector(project);
+    const request = { protocol: 2 as const, ref: { backend: "codex" as const, threadId: selected.id } };
+    const local = await service.readSelectedDetail(request);
+    expect(local.thread).not.toHaveProperty("pendingWakes");
+    expect(local.thread).not.toHaveProperty("pendingWakesIncomplete");
+    monitor.lastActivityAt = 3;
+    const refreshed = await service.readSelectedDetail({ ...request, knownRevision: local.revision });
+    expect(refreshed).toMatchObject({ revision: local.revision, unchanged: true });
+    expect(project).not.toHaveBeenCalled();
+    for (const reader of Object.values(readers)) expect(reader).not.toHaveBeenCalled();
+
+    // Exercise the peer-serving bridge with the request old peers already send.
+    // The projection option stays inside the owner, outside the signed request.
+    vi.spyOn(navigationDetail, "getDesktopNavigationDetailService").mockReturnValue(service);
+    vi.spyOn(backendRegistry, "getDesktopBackendRegistry").mockReturnValue({} as DesktopBackendRegistry);
+    const { DesktopFederationRuntime, navigationInvalidationForLocalEvent } = await import("../federation/federation-runtime");
+    expect(navigationInvalidationForLocalEvent({ backend: "codex", notification: {
+      method: "thread/dependencies/updated", params: { threadId: selected.id, dependencyId: "dep-1" },
+    } })?.notification).toMatchObject({ method: "navigation/invalidated", params: { threadId: selected.id, sourceMethod: "thread/dependencies/updated" } });
+    const peer = new DesktopFederationRuntime().localBackend();
+    mocks.listActiveThreadPrStatusWatches.mockClear();
+    const detail = await peer.getNavigationSelectedDetail!(request);
+    expect(detail.thread?.pendingWakes).toEqual([expect.objectContaining({ kind: "monitor", lastActivityAt: 3 })]);
+    expect(project).toHaveBeenCalledExactlyOnceWith(request.ref, mocks.prWatches);
+    expect(mocks.listActiveThreadPrStatusWatches).toHaveBeenCalledExactlyOnceWith(request.ref);
+    expect(readers.prWatches).not.toHaveBeenCalled();
+    for (const [name, reader] of Object.entries(readers)) {
+      if (name === "prWatchHistory" || name === "recentSubAgents" || name === "prWatches") expect(reader).not.toHaveBeenCalled();
+      else expect(reader).toHaveBeenCalledTimes(1);
+    }
+    monitor.lastActivityAt = 4;
+    const updated = await peer.getNavigationSelectedDetail!({ ...request, knownRevision: detail.revision });
+    expect(updated.revision).not.toBe(detail.revision);
+    expect(updated.thread?.pendingWakes).toEqual([expect.objectContaining({ lastActivityAt: 4 })]);
+    expect(selected).not.toHaveProperty("pendingWakes");
+    expect(await service.readSelectedDetail({ ...request, knownRevision: local.revision }))
+      .toMatchObject({ revision: local.revision, unchanged: true });
+    // Exercise sequential completed reads, which the query pool's in-flight
+    // coalescing cannot protect. Both paths use the owner's production cache.
+    vi.useFakeTimers();
+    try {
+      let builds = 0;
+      const cache = new ThreadPendingWakesCache(async (ref, options) => {
+        builds += 1;
+        return await buildThreadPendingWakes(readers, ref, options);
+      });
+      navigationDetail.setNavigationDetailPendingWakesProjector((ref, activePrWatches) =>
+        cache.read(ref, { endedLimit: 0, activePrWatches }));
+      for (const reader of Object.values(readers)) reader.mockClear();
+      for (let requestIndex = 0; requestIndex < 96; requestIndex += 1) await service.readSelectedDetail(request);
+      expectPendingWakeReadBudget("local-detail-burst", { requests: 96, builds,
+        sourceCalls: Object.values(readers).reduce((sum, reader) => sum + reader.mock.calls.length, 0) });
+      for (let requestIndex = 0; requestIndex < 96; requestIndex += 1) {
+        const projected = await peer.getNavigationSelectedDetail!(request);
+        expect(projected.thread?.pendingWakes).toEqual([expect.objectContaining({ kind: "monitor" })]);
+      }
+      expectPendingWakeReadBudget("peer-detail-burst", { requests: 96, builds,
+        sourceCalls: Object.values(readers).reduce((sum, reader) => sum + reader.mock.calls.length, 0) });
+      cache.clear();
+    } finally {
+      vi.useRealTimers();
+    }
+    selected.title = "é".repeat(100_000);
+    navigationDetail.setNavigationDetailPendingWakesProjector(async () => ({ wakes: Array.from({ length: 500 }, (_, index) => ({
+      kind: "monitor", key: `monitor:${index}`, monitorId: String(index), monitorBackend: "codex",
+      task: "x".repeat(600), createdAt: 1, lastActivityAt: 2, pollIntervalSeconds: 60, durable: false,
+    })) }));
+    const large = await peer.getNavigationSelectedDetail!(request);
+    expect(large.identity).toBe("present");
+    expect(large.thread?.pendingWakesIncomplete).toBe(true);
+    expect(large.thread?.pendingWakes?.length).toBeGreaterThan(0);
+    expect(Buffer.byteLength(JSON.stringify(large))).toBeLessThanOrEqual(NAVIGATION_QUERY_MAX_RESULT_BYTES);
   });
 
   it("pages a complete FIFO projection with its own revision", () => {
