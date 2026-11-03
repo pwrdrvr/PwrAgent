@@ -297,6 +297,28 @@ The diagnostic entry point forwards the same desktop build, test arguments,
 shards, workers, retries and deadlines. No Electron close promise or cleanup
 phase waits for this recorder. PDBs are not downloaded in either mode.
 
+The controller also enables `worker-shutdown/main-children.jsonl` in each
+Electron main process. Node's child-process constructor channel captures up to
+128 launch call sites per main, with at most eight app-relative frames each.
+The record omits arguments, environment, output and absolute call-site paths.
+Only a fixed set of diagnostic executable names is retained; others are `other`.
+Synchronous launches and children created outside Node's child-process API are
+not covered by this trace; the native journal remains the process-tree source.
+
+Each main has an `ownerPid` and fixture `launchId`. A local `childId` joins the
+synchronous `launch` record to the later `spawn` event, when Node has assigned
+the child's PID. Separate `exit` and `close` events distinguish process exit
+from final stdio closure. Snapshots at shutdown start/completion, `will-quit`
+and the JavaScript process-exit hook retain children whose `close` callback has
+not run, plus an omitted-launch count. These observations do not delay shutdown
+or stop children.
+
+Join those records to native PID **and creation FILETIME**, using the verified
+root lifetime and parent creation. A PID or missing JavaScript `close` event
+alone does not establish a surviving process. Native and fixture launch UUIDs
+are different namespaces. Call-site and Node event times identify the launch
+path and callback timing; they do not replace the native identity/exit checks.
+
 An external controller starts native process observation before starting pnpm,
 before Electron launcher pipes exist. Native x64 process snapshots are sampled
 with a 50 ms pause. Identities use PID plus creation FILETIME; retained,
