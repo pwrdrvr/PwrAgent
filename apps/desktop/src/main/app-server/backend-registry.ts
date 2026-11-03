@@ -3391,6 +3391,10 @@ function readNotificationItemType(notification: AppServerNotification): string |
 }
 
 const TASK_MONITOR_STALE_CHECK_INTERVAL_MS = 15_000;
+// An ACP agent keeps an open session's MCP servers running. Close a session
+// nothing has touched for this long; its next request reloads it.
+const ACP_SESSION_IDLE_CLOSE_MS = 10 * 60_000;
+const ACP_SESSION_IDLE_CLOSE_CHECK_INTERVAL_MS = 2 * 60_000;
 // Codex keeps a subscribed thread loaded, MCP servers and all. Release a
 // thread nothing has touched for this long; its next use resumes it.
 const CODEX_THREAD_IDLE_UNSUBSCRIBE_MS = 10 * 60_000;
@@ -10736,6 +10740,9 @@ export class DesktopBackendRegistry {
   private readonly codexModelProviderCatalog: CodexModelProviderCatalog;
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
   private readonly resolveTokenMiserEnabledFn: () => boolean;
+  private readonly acpSessionIdleCloseMs: number;
+  private acpIdleSessionTimer?: NodeJS.Timeout;
+  private acpIdleSessionSweep?: Promise<void>;
   private readonly resolveCodexAppServerRecycleSettingsFn: () => CodexAppServerRecycleSettings;
   private codexAppServerRecycleTimer?: NodeJS.Timeout;
   private codexAppServerRecycleCheck?: Promise<void>;
@@ -10891,6 +10898,8 @@ export class DesktopBackendRegistry {
     resolvePdfAnalysisEnabled?: () => boolean;
     resolveTokenMiserEnabled?: () => boolean;
     resolveTokenMiserPollingReviewsEnabled?: () => boolean;
+    /** Test seam: how long an ACP session idles before it is closed. */
+    acpSessionIdleCloseMs?: number;
     resolveCodexAppServerRecycleSettings?: () => CodexAppServerRecycleSettings;
     /** Test seam: how long a Codex thread idles before it is released. */
     codexThreadIdleUnsubscribeMs?: number;
@@ -11092,6 +11101,8 @@ export class DesktopBackendRegistry {
           return true;
         }
       });
+    this.acpSessionIdleCloseMs =
+      options?.acpSessionIdleCloseMs ?? ACP_SESSION_IDLE_CLOSE_MS;
     this.codexThreadIdleUnsubscribeMs =
       options?.codexThreadIdleUnsubscribeMs ?? CODEX_THREAD_IDLE_UNSUBSCRIBE_MS;
     this.resolveTokenMiserEnabledFn = options?.resolveTokenMiserEnabled ?? (() => {
@@ -16265,6 +16276,47 @@ export class DesktopBackendRegistry {
 
   startThreadArchiveSweeper(): void {
     if (!this.closed) this.getThreadArchiveSweeper().start();
+  }
+
+  /**
+   * Close idle ACP sessions on a timer (`closeIdleAcpSessions`). Started by
+   * the app after startup discovery, like the archive sweeper; tests that
+   * never call this get no timer.
+   */
+  startAcpIdleSessionCloser(): void {
+    if (this.closed || this.shutdownRequested || this.acpIdleSessionTimer) return;
+    this.acpIdleSessionTimer = setInterval(() => {
+      void this.closeIdleAcpSessions();
+    }, ACP_SESSION_IDLE_CLOSE_CHECK_INTERVAL_MS);
+    this.acpIdleSessionTimer.unref?.();
+  }
+
+  /** One pass over the ACP sessions every live agent process keeps open. */
+  async closeIdleAcpSessions(): Promise<void> {
+    if (this.closed || this.shutdownRequested || this.acpIdleSessionSweep) return;
+    const sweep = this.acpBackend.closeIdleSessions({
+      idleMs: this.acpSessionIdleCloseMs,
+      isSessionBusy: (backend, threadId) => this.closed
+        || this.shutdownRequested
+        || this.acpSessionNeedsLiveEvents(backend, threadId),
+    }).catch((error) => {
+      backendRegistryLog.warn("idle ACP session close failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }).finally(() => {
+      this.acpIdleSessionSweep = undefined;
+    });
+    this.acpIdleSessionSweep = sweep;
+    await sweep;
+  }
+
+  /**
+   * Work on an ACP thread that needs its session open: a turn, a reserved
+   * turn start or a review (`threadHasActiveTurn`), or queued input.
+   */
+  private acpSessionNeedsLiveEvents(backend: AcpBackendId, threadId: string): boolean {
+    return this.threadHasActiveTurn(threadId, backend)
+      || !this.threadTurnQueue.iterateQueuedEntries({ backend, threadId }).next().done;
   }
 
   async sweepInactiveThreads(): Promise<void> {
@@ -30386,6 +30438,10 @@ export class DesktopBackendRegistry {
     this.workingStateCacheLoad = undefined;
     if (this.taskMonitorWatchdogTimer) {
       clearInterval(this.taskMonitorWatchdogTimer);
+    }
+    if (this.acpIdleSessionTimer) {
+      clearInterval(this.acpIdleSessionTimer);
+      this.acpIdleSessionTimer = undefined;
     }
     if (this.codexAppServerRecycleTimer) {
       clearTimeout(this.codexAppServerRecycleTimer);

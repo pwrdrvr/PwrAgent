@@ -565,6 +565,14 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
       error: error instanceof Error ? error.message : String(error),
     });
   });
+  // And for idle ACP sessions.
+  void startupProviderRefresh.then(() => {
+    getExistingDesktopBackendRegistry()?.startAcpIdleSessionCloser();
+  }).catch((error) => {
+    mainLog.warn("startup idle ACP session closer initialization failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
   void startupProviderRefresh.then(() => {
     getExistingDesktopBackendRegistry()?.startThreadArchiveSweeper();
   }).catch((error) => {

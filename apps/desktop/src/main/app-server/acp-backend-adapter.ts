@@ -170,6 +170,7 @@ export type AcpRuntimeClient = Pick<
   Partial<
     Pick<
       AcpAgentClient,
+      | "closeIdleSessions"
       | "closeSessionForArchive"
       | "didSessionLoadReplayHistory"
       | "configureWorkflowBudget"
@@ -2091,6 +2092,39 @@ export class AcpBackendAdapter {
     });
     if (previous) {
       await this.disposeAcpClient(previous.entry);
+    }
+  }
+
+  /**
+   * Close sessions idle for `idleMs` on every live ACP process, so each agent
+   * stops their MCP servers (`AcpAgentClient.closeIdleSessions`). The next
+   * request for a closed session reloads it. Never throws.
+   */
+  async closeIdleSessions(params: {
+    idleMs: number;
+    isSessionBusy: (backend: AcpBackendId, sessionId: string) => boolean;
+  }): Promise<void> {
+    if (this.closed) return;
+    const owners = new Map<AcpClientEntry, AcpBackendId>();
+    for (const { backend, entry } of this.environmentClients.values()) owners.set(entry, backend);
+    for (const [backend, entry] of this.acpClients) owners.set(entry, backend);
+    for (const [backend, entries] of this.retainedAcpClients) {
+      for (const entry of entries) owners.set(entry, backend);
+    }
+    for (const [entry, backend] of owners) {
+      if (this.closed) return;
+      if (entry.disposePromise || !entry.client.closeIdleSessions) continue;
+      try {
+        await entry.client.closeIdleSessions({
+          idleMs: params.idleMs,
+          isSessionBusy: (sessionId) => params.isSessionBusy(backend, sessionId),
+        });
+      } catch (error) {
+        acpBackendAdapterLog.warn("acp_idle_session_close_failed", {
+          backend,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
 
