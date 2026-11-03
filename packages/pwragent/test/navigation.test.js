@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { NavigationQueryStore } from "../dist/federation-core.js";
+import { NavigationQueryStore, NAVIGATION_QUERY_MAX_RESULT_BYTES } from "../dist/federation-core.js";
 import { HeadlessBackend } from "../src/federation-backend.js";
 
 function backendFixture(t, jobs, published = []) {
@@ -195,6 +195,30 @@ test("continuation cursors retain their snapshot across global count changes and
   assert.equal(next.countsRevision, refreshed.countsRevision);
   now = 60_001;
   await assert.rejects(backend.handle("getNavigationQueryPage", { ...request, cursor: next.nextCursor || refreshed.nextCursor }), /cursor expired/);
+});
+
+test("navigation pages fit the shared byte budget and scope retained cursors to their requester and owner", async (t) => {
+  const jobs = new Map(Array.from({ length: 60 }, (_, i) => [`job-${i}`, job(`job-${i}`, `thread-${i}`, "2026-01-01T00:00:00.000Z")]));
+  const backend = backendFixture(t, jobs);
+  for (const thread of backend.threads.values()) thread.title = "x".repeat(6000);
+  const request = { protocol: 2, query: { kind: "lens", lens: "inbox" }, pageSize: 100 };
+  const envelope = { sourceInstanceId: "viewer-a" };
+  let page = await backend.handle("getNavigationQueryPage", request, envelope);
+  assert.ok(page.entries.length > 0 && page.entries.length < 60, "the byte budget shortens the requested page");
+  const cursor = page.nextCursor;
+  const ids = [];
+  for (let pages = 0; ; pages++) {
+    assert.ok(pages < 60, "every page must advance");
+    assert.ok(Buffer.byteLength(JSON.stringify(page)) <= NAVIGATION_QUERY_MAX_RESULT_BYTES);
+    ids.push(...page.entries.map((entry) => entry.row.id));
+    if (page.complete) break;
+    page = await backend.handle("getNavigationQueryPage", { ...request, cursor: page.nextCursor }, envelope);
+  }
+  assert.equal(ids.length, 60);
+  assert.equal(new Set(ids).size, 60);
+  await assert.rejects(backend.handle("getNavigationQueryPage", { ...request, cursor }, { sourceInstanceId: "viewer-b" }), /does not belong/);
+  const reopened = new HeadlessBackend(backend.runtime, () => {});
+  await assert.rejects(reopened.handle("getNavigationQueryPage", { ...request, cursor }, envelope), /cursor expired/);
 });
 
 for (const promoteOnTurnEnd of [true, false]) {

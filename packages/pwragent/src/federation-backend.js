@@ -126,7 +126,7 @@ export class HeadlessBackend {
     if (message.method === "headless/jobChanged") {
       this.syncJobs([message.params]);
       const job = message.params;
-      if (job.threadId && this.latest(job.threadId) === job) {
+      if (job.threadId && this.latest(job.threadId) === job && (job.turnId || job.status !== "starting")) {
         this.navigation.observeAttentionEvent({ backend: "codex", notification: {
           method: ACTIVE.has(job.status) ? "turn/started" : "turn/completed",
           params: { threadId: job.threadId, turnId: job.turnId || job.id },
@@ -232,7 +232,6 @@ export class HeadlessBackend {
         const thread = this.owned(params.threadId);
         const title = params.title || params.name;
         if (typeof title !== "string" || !title.trim() || title.length > 200) throw new Error("Invalid title");
-        thread.updatedAt = Date.now();
         this.setTitle(thread, title.trim(), "explicit");
         return { backend: "codex", threadId: thread.id, title: thread.title };
       }
