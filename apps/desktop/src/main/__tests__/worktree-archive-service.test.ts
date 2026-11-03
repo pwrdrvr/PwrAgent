@@ -35,16 +35,21 @@ async function pathExists(filePath: string): Promise<boolean> {
 }
 
 describe("WorktreeArchiveService", () => {
-  it("keeps oversized uncommitted work intact before writing any snapshot objects", async () => {
+  it.each(["tracked", "staged", "untracked"])("keeps oversized %s work intact before writing any snapshot objects", async (kind) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-snapshot-budget-"));
     const repoPath = path.join(root, "repo");
     const worktreePath = path.join(root, "worktree");
     try {
       await mkdir(repoPath);
       await git(repoPath, ["init", "-b", "main"]);
+      if (kind === "tracked") {
+        await writeFile(path.join(repoPath, "large.bin"), "base");
+        await git(repoPath, ["add", "large.bin"]);
+      }
       await git(repoPath, ["-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "--allow-empty", "-m", "initial"]);
       await git(repoPath, ["worktree", "add", "--detach", worktreePath]);
       await writeFile(path.join(worktreePath, "large.bin"), "x".repeat(1025));
+      if (kind === "staged") await git(worktreePath, ["add", "large.bin"]);
       const before = await git(repoPath, ["count-objects", "-v"]);
       const service = new WorktreeArchiveService({ maxSnapshotBytes: 1024 });
       await expect(service.archive({ backend: "codex", threadId: "oversized", repositoryPath: repoPath, worktreePath }))

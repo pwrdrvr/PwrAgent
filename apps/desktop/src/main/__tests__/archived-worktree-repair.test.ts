@@ -67,8 +67,12 @@ describe("one-time archived worktree repair", () => {
   it("leaves failed cleanups eligible for another pass", async () => {
     const { db, report, repair } = fixture();
     repair.mockResolvedValue({ ...report, cleanup: [{ removedWorktree: false, deletedBranch: false, error: "Protected checkout" }] });
-    await runOneTimeArchivedWorktreeRepair({ db: db.raw, repair });
-    await runOneTimeArchivedWorktreeRepair({ db: db.raw, repair });
+    const { writes } = await measureSqliteWrites(async () => {
+      await runOneTimeArchivedWorktreeRepair({ db: db.raw, repair });
+      await runOneTimeArchivedWorktreeRepair({ db: db.raw, repair });
+    });
     expect(repair).toHaveBeenCalledTimes(2);
+    expectSqliteWriteBudget({ scenario: "archived-worktree-repair-retry-marker",
+      note: "Two failed passes: 4 boundary commits, no per-item or timer writes. At 2 commits/hour and about 0.012 MB/pass, persistent failures cost about 0.30 MB/day; completed idle passes cost 0 MB/day.", writes });
   });
 });
