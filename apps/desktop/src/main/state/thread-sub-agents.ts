@@ -47,6 +47,9 @@ CREATE INDEX IF NOT EXISTS thread_sub_agents_child
 CREATE INDEX IF NOT EXISTS thread_sub_agents_attention
   ON thread_sub_agents(thread_id)
   WHERE completed_at IS NULL OR status IN ('failed', 'failure');
+CREATE INDEX IF NOT EXISTS thread_sub_agents_ended_monitors
+  ON thread_sub_agents(thread_id, completed_at DESC, monitor_id)
+  WHERE monitor_id >= 'monitor-' AND monitor_id < 'monitor.' AND completed_at IS NOT NULL;
 CREATE TABLE IF NOT EXISTS thread_sub_agent_revisions (
   thread_id TEXT PRIMARY KEY,
   revision INTEGER NOT NULL,
@@ -577,6 +580,15 @@ export class ThreadSubAgentTable {
       WHERE thread_id = ? AND monitor_id NOT IN (SELECT value FROM json_each(?))
       ORDER BY created_at DESC, monitor_id LIMIT ? OFFSET ?`)
       .all(params.storageKey, excluded, params.limit, params.offset) as CardRow[]);
+  }
+
+  endedMonitors(storageKey: string, limit: number): ThreadSubAgentSummary[] {
+    return this.db.prepare(`SELECT monitor_id AS monitorId, substr(json_extract(card, '$.task'), 1, 600) AS task,
+      status, created_at AS createdAt, updated_at AS updatedAt, completed_at AS completedAt,
+      json_extract(card, '$.outcome') AS outcome
+      FROM thread_sub_agents WHERE thread_id = ?
+        AND monitor_id >= 'monitor-' AND monitor_id < 'monitor.' AND completed_at IS NOT NULL
+      ORDER BY completed_at DESC, monitor_id LIMIT ?`).all(storageKey, limit) as ThreadSubAgentSummary[];
   }
 
   /**

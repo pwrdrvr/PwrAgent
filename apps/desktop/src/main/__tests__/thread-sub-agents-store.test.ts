@@ -9,6 +9,7 @@ import {
   type TokenMiserSubAgentAccounting,
 } from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { statSync } from "node:fs";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../app-server/desktop-overlay-store";
 import { NavigationDetailService } from "../app-server/navigation-detail-service";
@@ -74,6 +75,30 @@ describe("thread sub-agent table", () => {
     cleanups.push(() => stateDb.close());
     return { dbPath: temp.dbPath, stateDb, store: new SqliteOverlayStore(stateDb) };
   }
+
+  it("reads ended monitors by completion time without sampling unrelated card history", async () => {
+    const { store } = openStore();
+    await store.upsertThreadSubAgents({ backend: "codex", threadId: "waiting", subAgents: [
+      ...Array.from({ length: 100 }, (_, index) => card(index)),
+      card(0, { monitorId: "monitor-long", createdAt: 1, completedAt: 100, task: "Long monitor" }),
+      card(0, { monitorId: "monitor-short", createdAt: 90, completedAt: 95, task: "Short monitor" }),
+    ] });
+    const ended = await store.listEndedThreadTaskMonitors({ backend: "codex", threadId: "waiting", limit: 1 });
+    expect(ended).toEqual([expect.objectContaining({ monitorId: "monitor-long", completedAt: 100 })]);
+    expect(ended[0]).not.toHaveProperty("monitorUsage");
+  });
+
+  it("budgets completion of a monitor with the ended-history index", async () => {
+    const { store, stateDb } = openStore({ metrics: true });
+    const pending = card(0, { monitorId: "monitor-budget", status: "running", completedAt: undefined, outcome: undefined });
+    await store.upsertThreadSubAgent({ backend: "codex", threadId: "waiting", subAgent: pending });
+    stateDb.raw.pragma("wal_checkpoint(TRUNCATE)");
+    const { writes } = await measureSqliteWrites(() => store.upsertThreadSubAgent({ backend: "codex", threadId: "waiting",
+      subAgent: { ...pending, status: "success", outcome: "success", completedAt: 100, updatedAt: 100 } }));
+    expectSqliteWriteBudget({ scenario: "thread-pending-wakes-monitor-completion",
+      note: "One existing monitor completion, including the ended-history index; no extra transaction for Waiting for.",
+      writes: { ...writes, walBytes: statSync(`${stateDb.raw.name}-wal`).size } });
+  });
 
   /** Two threads with overlay rows: one with no cards, one with `BIG`. */
   async function seedSmallAndLarge(store: SqliteOverlayStore, stateDb: StateDb) {
