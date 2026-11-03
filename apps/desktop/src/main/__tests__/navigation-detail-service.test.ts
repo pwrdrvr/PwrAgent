@@ -12,6 +12,8 @@ import type {
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import * as backendRegistry from "../app-server/backend-registry";
 import * as navigationDetail from "../app-server/navigation-detail-service";
+import { ThreadPendingWakesCache } from "../app-server/thread-pending-wakes-cache";
+import { expectPendingWakeReadBudget } from "./fixtures/pending-wake-read-budget";
 import { buildThreadPendingWakes, type PendingWakeThread, type ThreadPendingWakeReaders } from "../app-server/thread-pending-wakes";
 
 const mocks = vi.hoisted(() => ({
@@ -557,6 +559,31 @@ describe("NavigationDetailService", () => {
     expect(selected).not.toHaveProperty("pendingWakes");
     expect(await service.readSelectedDetail({ ...request, knownRevision: local.revision }))
       .toMatchObject({ revision: local.revision, unchanged: true });
+    // Exercise sequential completed reads, which the query pool's in-flight
+    // coalescing cannot protect. Both paths use the owner's production cache.
+    vi.useFakeTimers();
+    try {
+      let builds = 0;
+      const cache = new ThreadPendingWakesCache(async (ref, options) => {
+        builds += 1;
+        return await buildThreadPendingWakes(readers, ref, options);
+      });
+      navigationDetail.setNavigationDetailPendingWakesProjector((ref, activePrWatches) =>
+        cache.read(ref, { endedLimit: 0, activePrWatches }));
+      for (const reader of Object.values(readers)) reader.mockClear();
+      for (let requestIndex = 0; requestIndex < 96; requestIndex += 1) await service.readSelectedDetail(request);
+      expectPendingWakeReadBudget("local-detail-burst", { requests: 96, builds,
+        sourceCalls: Object.values(readers).reduce((sum, reader) => sum + reader.mock.calls.length, 0) });
+      for (let requestIndex = 0; requestIndex < 96; requestIndex += 1) {
+        const projected = await peer.getNavigationSelectedDetail!(request);
+        expect(projected.thread?.pendingWakes).toEqual([expect.objectContaining({ kind: "monitor" })]);
+      }
+      expectPendingWakeReadBudget("peer-detail-burst", { requests: 96, builds,
+        sourceCalls: Object.values(readers).reduce((sum, reader) => sum + reader.mock.calls.length, 0) });
+      cache.clear();
+    } finally {
+      vi.useRealTimers();
+    }
     selected.title = "é".repeat(100_000);
     navigationDetail.setNavigationDetailPendingWakesProjector(async () => ({ wakes: Array.from({ length: 500 }, (_, index) => ({
       kind: "monitor", key: `monitor:${index}`, monitorId: String(index), monitorBackend: "codex",

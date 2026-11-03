@@ -1,3 +1,4 @@
+import { ThreadPendingWakesCache } from "../app-server/thread-pending-wakes-cache";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
 import { ForgeReadService, repositoryFromPr } from "../pr-status/forge-read-service";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
@@ -305,6 +306,7 @@ import {
   federatedThreadIdentityKey,
   forgeRuleProjectLabel,
   isAppServerBackendKind,
+  isThreadPendingWakeInvalidation,
   isFederationInstanceId,
   isRemoteFederationTarget,
   type FederationTarget,
@@ -1697,6 +1699,14 @@ function pullRequestStatusFreshness(
 const threadSearchControllers = new Map<number, AbortController>();
 
 class DesktopAppServerService {
+  private readonly pendingWakesCache = new ThreadPendingWakesCache(async (thread, options) =>
+    await buildThreadPendingWakes(this.pendingWakeReaders(), thread, {
+      ...options,
+      onReadError: (source, error) => appServerLog.warn("pending wake source unreadable", {
+        source, backend: thread.backend, threadId: thread.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    }));
   private focusedDiffService: FocusedDiffService | null = null;
   private prFetcher: ForgePrFetcher | undefined;
   private readonly pendingNavigationSnapshots = new Map<
@@ -5300,14 +5310,15 @@ class DesktopAppServerService {
   ): Promise<ThreadPendingWakesList> {
     // Before a profile's state opens nothing can wake a thread.
     if (!getAppStateMode()) return { wakes: [], ended: [] };
-    return await buildThreadPendingWakes(this.pendingWakeReaders(), thread, {
-      endedLimit,
-      activePrWatches,
-      onReadError: (source, error) => appServerLog.warn("pending wake source unreadable", {
-        source, backend: thread.backend, threadId: thread.threadId,
-        error: error instanceof Error ? error.message : String(error),
-      }),
-    });
+    return await this.pendingWakesCache.read(thread, { endedLimit, activePrWatches });
+  }
+
+  invalidateThreadPendingWakes(event: AgentEvent): void {
+    if (event.federationTarget?.scope === "remote"
+      || !isThreadPendingWakeInvalidation(event.notification.method, event.notification.params)) return;
+    const params = event.notification.params as { threadId?: unknown; action?: { threadId?: unknown } } | undefined;
+    const threadId = params?.threadId ?? params?.action?.threadId;
+    this.pendingWakesCache.invalidate(typeof threadId === "string" ? { backend: event.backend, threadId } : undefined);
   }
 
   /** The Waiting for list and its Stop, for a thread this instance owns. */
@@ -5331,38 +5342,42 @@ class DesktopAppServerService {
       return { ok: false, error: { code: "invalid_arguments", message: "key is required." } };
     }
     const registry = getDesktopBackendRegistry();
-    return await stopThreadPendingWake({
-      cancelPrWatch: async (owner, watchId) => {
-        const response = await this.manageThreadPrWatches({ action: "cancel", ...owner, watchId });
-        return response.ok ? { ok: true } : { ok: false, code: response.error.code === "not_found" ? "not_found" : "failed", message: response.error.message };
-      },
-      cancelDependency: async (owner, dependencyId) => {
-        await this.manageThreadDependencies({ action: "cancel", ...owner, dependencyId });
-      },
-      stopMonitor: async (owner, monitorId) => {
-        await registry.stopSubAgent({ ...owner, monitorId });
-      },
-      cancelScheduledAction: async (owner, actionId) => {
-        const service = getScheduledThreadActionService();
-        // Cancel takes a bare id; a stop names this thread's wake only.
-        if (!getAppScheduledThreadActionStore().ownsPendingWake(owner, actionId)) {
-          throw new Error("That scheduled action is no longer waiting on this thread.");
-        }
-        await service.cancel({ id: actionId });
-      },
-      stopBackendTask: async (owner, processId) => {
-        const { terminated } = await registry.terminateBackgroundTerminal({ ...owner, processId });
-        if (!terminated) throw new Error("The task has already ended.");
-      },
-      discardHeldMessage: async (owner, entryId) => {
-        // The queue cancels by bare id; a stop names this thread's entry only.
-        // Cancelling a project-held entry also drops its stored copy.
-        if (!registry.listHeldThreadQueueEntries(owner).some((entry) => entry.entryId === entryId)
-          || !registry.cancelQueuedTurn(entryId, "Discarded from Waiting for.")) {
-          throw new Error("That message is no longer held on this thread.");
-        }
-      },
-    }, thread, request.key);
+    try {
+      return await stopThreadPendingWake({
+        cancelPrWatch: async (owner, watchId) => {
+          const response = await this.manageThreadPrWatches({ action: "cancel", ...owner, watchId });
+          return response.ok ? { ok: true } : { ok: false, code: response.error.code === "not_found" ? "not_found" : "failed", message: response.error.message };
+        },
+        cancelDependency: async (owner, dependencyId) => {
+          await this.manageThreadDependencies({ action: "cancel", ...owner, dependencyId });
+        },
+        stopMonitor: async (owner, monitorId) => {
+          await registry.stopSubAgent({ ...owner, monitorId });
+        },
+        cancelScheduledAction: async (owner, actionId) => {
+          const service = getScheduledThreadActionService();
+          // Cancel takes a bare id; a stop names this thread's wake only.
+          if (!getAppScheduledThreadActionStore().ownsPendingWake(owner, actionId)) {
+            throw new Error("That scheduled action is no longer waiting on this thread.");
+          }
+          await service.cancel({ id: actionId });
+        },
+        stopBackendTask: async (owner, processId) => {
+          const { terminated } = await registry.terminateBackgroundTerminal({ ...owner, processId });
+          if (!terminated) throw new Error("The task has already ended.");
+        },
+        discardHeldMessage: async (owner, entryId) => {
+          // The queue cancels by bare id; a stop names this thread's entry only.
+          // Cancelling a project-held entry also drops its stored copy.
+          if (!registry.listHeldThreadQueueEntries(owner).some((entry) => entry.entryId === entryId)
+            || !registry.cancelQueuedTurn(entryId, "Discarded from Waiting for.")) {
+            throw new Error("That message is no longer held on this thread.");
+          }
+        },
+      }, thread, request.key);
+    } finally {
+      this.pendingWakesCache.invalidate(thread);
+    }
   }
 
   /**
@@ -10008,6 +10023,7 @@ class DesktopAppServerService {
   }
 
   async close(): Promise<void> {
+    this.pendingWakesCache.clear();
     this.ownerNavigationActive = false;
     this.ownerNavigationMetadataVersion += 1;
     this.ownerNavigationMetadataAbort?.abort();
@@ -10659,6 +10675,7 @@ let unsubscribeThreadArchiveSweepStatus: (() => void) | undefined;
 let unsubscribeNavigationRemoteEvents: (() => void) | undefined;
 
 function invalidateNavigationEvent(event: AgentEvent): void {
+  appServerService.invalidateThreadPendingWakes(event);
   getDesktopNavigationQueryStore().observeAttentionEvent(event);
   if (!navigationQueryEventRequiresRefresh(event.notification.method)) return;
   const params = event.notification.params as { threadId?: string; parentThreadId?: string; thread?: { id?: string } } | undefined;

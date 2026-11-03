@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
+  AgentEvent,
   ArchiveWorktreeRequest,
   ArchiveThreadRequest,
   AppServerListThreadsRequest,
@@ -47,6 +48,7 @@ import {
   BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
   selectStaleWorktreeWorkingStatePaths,
 } from "../app-server/thread-working-state-refresh-policy";
+import { expectPendingWakeReadBudget } from "./fixtures/pending-wake-read-budget";
 import { resolvePwragentRoot } from "../profile";
 import type { DirectoryGitStatusEntry } from "../app-server/git-directory-service";
 
@@ -3654,12 +3656,32 @@ describe("app server ipc", () => {
     const candidates = vi.spyOn(store, "listPrAutoDispatchCandidates");
     service.backgroundPrPollingEnabled = true;
     service.prAutoDispatchAllowed = true;
+    const summaries = vi.spyOn(scheduled, "listPendingWakes");
+    vi.useFakeTimers();
     try {
       const list = await appServerService.listThreadPendingWakes({ backend: "codex", threadId: "selected" }, 0);
       expect(list.wakes).toContainEqual(expect.objectContaining({ kind: "scheduled_action", actionId: "wake-1", displayText: "Follow up" }));
       expect(candidates).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "selected" });
       expect(startScheduler).not.toHaveBeenCalled();
+      for (let requestIndex = 0; requestIndex < 96; requestIndex += 1) {
+        expect(await appServerService.manageThreadPendingWakes({ action: "list", backend: "codex", threadId: "selected", endedLimit: 0 }))
+          .toMatchObject({ ok: true, wakes: list.wakes });
+      }
+      expectPendingWakeReadBudget("ipc-active-burst", { requests: 97, elections: candidates.mock.calls.length,
+        scheduledSummaries: summaries.mock.calls.length });
+      scheduled.cancel("wake-1", 2);
+      appServerService.invalidateThreadPendingWakes({ backend: "codex", notification: {
+        method: "thread/scheduledAction/updated", params: { action: { threadId: "selected" } },
+      } } as unknown as AgentEvent);
+      const refresh = appServerService.listThreadPendingWakes({ backend: "codex", threadId: "selected" }, 0);
+      await vi.advanceTimersByTimeAsync(199);
+      expect(candidates).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await refresh).wakes).toEqual([]);
+      expect(candidates).toHaveBeenCalledTimes(2);
     } finally {
+      vi.useRealTimers();
+      summaries.mockRestore();
       candidates.mockRestore(); startScheduler.mockRestore(); scheduledStore.mockRestore();
       state.mockRestore(); mode.mockRestore(); overlay.mockRestore(); db.close();
     }

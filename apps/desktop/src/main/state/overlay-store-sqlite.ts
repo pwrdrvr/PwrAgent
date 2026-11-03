@@ -7053,35 +7053,46 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     backend: ThreadOverlayState["backend"];
     threadId: string;
   }): Promise<PrAutoDispatchCandidate[]> {
-    const rows = this.stateDb.raw
-      .prepare(thread
-        ? `SELECT pr_key, backend, thread_id, eligible_since
-         FROM pr_auto_dispatch_candidates
-         WHERE pr_key IN (
-           SELECT pr_key FROM pr_auto_dispatch_candidates WHERE backend = ? AND thread_id = ?
-         )
-         ORDER BY pr_key ASC, eligible_since ASC, backend ASC, thread_id ASC`
-        : `SELECT pr_key, backend, thread_id, eligible_since
-           FROM pr_auto_dispatch_candidates
-           ORDER BY pr_key ASC, eligible_since ASC, backend ASC, thread_id ASC`,
-      )
-      .iterate(...(thread ? [thread.backend, thread.threadId] : [])) as Iterable<{
-        backend: ThreadOverlayState["backend"];
-        eligible_since: number;
-        pr_key: string;
-        thread_id: string;
-      }>;
+    type CandidateRow = { backend: ThreadOverlayState["backend"]; eligible_since: number; pr_key: string; thread_id: string };
     const eligibility = new Map<string, boolean>();
-    const winners = new Set<string>();
-    const candidates: PrAutoDispatchCandidate[] = [];
-    for (const row of rows) {
-      if (thread && winners.has(row.pr_key) && !(row.backend === thread.backend && row.thread_id === thread.threadId)) continue;
+    const eligible = (row: CandidateRow): boolean => {
       const key = buildThreadIdentityKey(row.backend, row.thread_id);
       if (!eligibility.has(key)) eligibility.set(key, isPrAutoDispatchCandidateEligible(this.getThread(key)));
-      if (!eligibility.get(key)) continue;
-      winners.add(row.pr_key);
-      candidates.push({ backend: row.backend, eligibleSince: row.eligible_since, prKey: row.pr_key, threadId: row.thread_id });
+      return eligibility.get(key)!;
+    };
+    const candidate = (row: CandidateRow): PrAutoDispatchCandidate => ({
+      backend: row.backend, eligibleSince: row.eligible_since, prKey: row.pr_key, threadId: row.thread_id,
+    });
+    if (thread) {
+      const own = this.stateDb.raw.prepare(
+        `SELECT pr_key, backend, thread_id, eligible_since FROM pr_auto_dispatch_candidates
+         WHERE backend = ? AND thread_id = ? ORDER BY pr_key`,
+      ).all(thread.backend, thread.threadId) as CandidateRow[];
+      const election = this.stateDb.raw.prepare(
+        `SELECT pr_key, backend, thread_id, eligible_since FROM pr_auto_dispatch_candidates
+         WHERE pr_key = ? ORDER BY eligible_since, backend, thread_id`,
+      );
+      const candidates: PrAutoDispatchCandidate[] = [];
+      for (const row of own) {
+        let winner: CandidateRow | undefined;
+        for (const competitor of election.iterate(row.pr_key) as Iterable<CandidateRow>) {
+          if (!eligible(competitor)) continue;
+          winner = competitor;
+          candidates.push(candidate(competitor));
+          break;
+        }
+        if (eligible(row) && (winner?.backend !== row.backend || winner.thread_id !== row.thread_id)) {
+          candidates.push(candidate(row));
+        }
+      }
+      return candidates;
     }
+    const rows = this.stateDb.raw.prepare(
+      `SELECT pr_key, backend, thread_id, eligible_since FROM pr_auto_dispatch_candidates
+       ORDER BY pr_key, eligible_since, backend, thread_id`,
+    ).iterate() as Iterable<CandidateRow>;
+    const candidates: PrAutoDispatchCandidate[] = [];
+    for (const row of rows) if (eligible(row)) candidates.push(candidate(row));
     return candidates;
   }
 
