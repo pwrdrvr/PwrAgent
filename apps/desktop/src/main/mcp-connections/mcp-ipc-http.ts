@@ -21,10 +21,16 @@ export function createMcpIpcTransport(serverUrl: string, options: { executable?:
   });
   const close = transport.close.bind(transport);
   let closed = false;
-  const terminal = (): void => { void transport.close().catch(() => undefined); };
+  let terminalClose: ReturnType<typeof setTimeout> | undefined;
+  const terminal = (): void => {
+    // Let a failing fetch report its original peer/HTTP error before SDK
+    // closure rejects the session's other outstanding requests.
+    terminalClose = setTimeout(() => { void transport.close().catch(() => undefined); }, 0);
+  };
   transport.close = async () => {
     if (closed) return;
     closed = true;
+    clearTimeout(terminalClose);
     ipc.signal.removeEventListener("abort", terminal);
     ipc.close();
     // SDK onclose rejects pending requests and lets the gateway evict the

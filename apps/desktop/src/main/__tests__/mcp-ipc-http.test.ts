@@ -62,7 +62,7 @@ async function fixture() {
       heldCalls.set(body.id, res);
       if (sse) {
         res.writeHead(200, { "content-type": "text/event-stream" });
-        res.write(": waiting for tool result\n\n");
+        res.write('event: message\ndata: {"jsonrpc":"2.0","method":"notifications/tools/list_changed"}\n\n');
       }
       return;
     }
@@ -241,9 +241,11 @@ describe("verified HTTP MCP over local IPC", () => {
     // Match the gateway's metadata observer: closure must cross this wrapper.
     await client.connect(new McpInitializationTransport(transport));
     await expect.poll(() => !!f.notice()).toBe(true);
+    let readingToolStream = false;
+    client.setNotificationHandler(ToolListChangedNotificationSchema, () => { readingToolStream = true; });
     const call = client.callTool({ name: "echo" }, undefined, { timeout: 60_000 });
     const rejected = expect(call).rejects.toMatchObject({ code: ErrorCode.ConnectionClosed });
-    await expect.poll(() => !!f.heldCall()?.headersSent).toBe(true);
+    await expect.poll(() => readingToolStream).toBe(true);
     const count = f.connections();
     if (failure === "notification end") f.notice()!.end();
     else if (failure === "notification failure") f.notice()!.destroy();
@@ -297,6 +299,12 @@ describe("verified HTTP MCP over local IPC", () => {
     const missing = createMcpIpcHttp(f.url.replace("server.sock", "missing.sock").replace("pwragent-test-", "missing-"), { executable });
     cleanups.push(missing.close);
     await expect(missing.fetch(missing.url)).rejects.toThrow();
+    const transport = createMcpIpcTransport(f.url.replace("server.sock", "missing.sock").replace("pwragent-test-", "missing-"), { executable });
+    const client = new Client({ name: "missing-test", version: "1" }, { capabilities: {} });
+    cleanups.push(async () => { await client.close(); await transport.close(); });
+    // Terminal lifecycle propagation must retain native verification errors
+    // instead of replacing the failed initialize with generic SDK closure.
+    await expect(client.connect(transport)).rejects.toThrow("MCP IPC:");
   });
 
   it.skipIf(process.platform === "win32")("rejects unsafe paths, symlinks, broad permissions and regular-file squatters before HTTP", async () => {
