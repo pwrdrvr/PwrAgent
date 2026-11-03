@@ -271,4 +271,40 @@ for (const promoteOnTurnEnd of [true, false]) {
     await assert.rejects(page(), /Attention view has closed/);
     assert.equal((await backend.handle("getNavigationQueryPage", { ...request, attentionView: { ...request.attentionView, id: "new-window" } })).entries.length, 2);
   });
+  for (const readDuringStartup of [true, false]) {
+    test(`startup keeps one Attention rank with promotion ${promoteOnTurnEnd} and startup read ${readDuringStartup}`, async (t) => {
+      const old = { ...job("old-job", "thread", "2026-01-01T00:00:00.000Z"), status: "running", turnId: "turn-old" };
+      const jobs = new Map([[old.id, old]]);
+      const backend = backendFixture(t, jobs);
+      const request = { protocol: 2, query: { kind: "lens", lens: "attention" },
+        attentionView: { id: "window", promoteOnTurnEnd } };
+      const rank = async () => (await backend.handle("getNavigationQueryPage", request)).entries[0].attentionRank;
+      const update = (value) => { jobs.set(value.id, value); backend.event({ method: "headless/jobChanged", params: value }); };
+      await rank();
+      update(old);
+      update({ ...old, status: "completed", updatedAt: "2026-01-02T00:00:00.000Z" });
+      const previousRank = await rank();
+
+      // Runtime saves the accepted job before Codex assigns its turn ID.
+      const starting = { ...job("next-job", "thread", "2026-01-03T00:00:00.000Z"), status: "starting" };
+      update(starting);
+      if (readDuringStartup) {
+        assert.equal(await rank(), previousRank + 1);
+        // Resuming the provider thread saves the same starting job again.
+        update({ ...starting, updatedAt: "2026-01-04T00:00:00.000Z" });
+        assert.equal(await rank(), previousRank + 1);
+      }
+      backend.event({ method: "turn/started", params: { threadId: "thread", turn: { id: "turn-next" } } });
+      const startedRank = await rank();
+      assert.equal(startedRank, previousRank + 1, "the provider turn ID adopts the accepted start's rank");
+      const running = { ...starting, status: "running", turnId: "turn-next", updatedAt: "2026-01-05T00:00:00.000Z" };
+      update(running);
+      assert.equal(await rank(), startedRank, "saving the canonical turn ID cannot allocate another start rank");
+
+      update({ ...running, status: "completed", updatedAt: "2026-01-06T00:00:00.000Z" });
+      backend.event({ method: "turn/completed", params: { threadId: "thread", turn: { id: "turn-next", status: "completed" } } });
+      assert.equal(await rank(), startedRank + Number(promoteOnTurnEnd), "only completion promotion can move the turn again");
+    });
+  }
+
 }
