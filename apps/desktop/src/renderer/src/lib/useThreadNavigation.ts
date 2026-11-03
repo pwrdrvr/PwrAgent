@@ -3051,6 +3051,8 @@ export function useThreadNavigation(
   /** Open a sub-thread launchpad's parent. The launchpad and its row stay. */
   selectSubthreadLaunchpadParent: (directoryKey: string) => void;
   selectPendingLaunchpad: (selectionKey: string) => void;
+  /** Explicit archives, independent of the bounded navigation page population. */
+  archivedThreadKeys: ReadonlySet<string>;
   archiveThreadNotice?: ArchiveThreadNotice;
   dismissArchiveThreadNotice: () => void;
   worktreeArchiveError?: string;
@@ -3656,6 +3658,16 @@ export function useThreadNavigation(
     | undefined
   >(undefined);
   const suppressedArchivedThreadKeysRef = useRef<Set<string>>(new Set());
+  const archivedThreadKeysRef = useRecoverableRef("navigation.archivedThreadKeys", () => new Set<string>());
+  const [archivedThreadKeys, setArchivedThreadKeys] = useState<ReadonlySet<string>>(archivedThreadKeysRef.current);
+  const updateArchivedThreadKey = useCallback((key: string, archived: boolean): void => {
+    if (archivedThreadKeysRef.current.has(key) === archived) return;
+    const next = new Set(archivedThreadKeysRef.current);
+    if (archived) next.add(key);
+    else next.delete(key);
+    archivedThreadKeysRef.current = next;
+    setArchivedThreadKeys(next);
+  }, [archivedThreadKeysRef]);
   const deferredArchiveRemovalsRef = useRef(new Map<string, {
     resourceId: string; request: unknown; sequence: number;
   }>());
@@ -4678,6 +4690,7 @@ export function useThreadNavigation(
           threadId: string;
         };
         const threadKey = agentEventThreadIdentityKey(event, threadId);
+        updateArchivedThreadKey(threadKey, true);
         const row = stateRef.current.rows?.threadRows.get(threadKey);
         const deferRemoval = row && deferNestedArchiveRemoval(row);
         if (!deferRemoval) suppressedArchivedThreadKeysRef.current.add(threadKey);
@@ -5211,6 +5224,7 @@ export function useThreadNavigation(
         const { threadId } = event.notification.params as {
           threadId: string;
         };
+        updateArchivedThreadKey(agentEventThreadIdentityKey(event, threadId), false);
         suppressedArchivedThreadKeysRef.current.delete(
           agentEventThreadIdentityKey(event, threadId)
         );
@@ -5240,6 +5254,7 @@ export function useThreadNavigation(
     state.rows,
     invalidateNavigation,
     deferNestedArchiveRemoval,
+    updateArchivedThreadKey,
     noteDirectoryPatch,
     setSelectedItemKey,
   ]);
@@ -8645,6 +8660,7 @@ export function useThreadNavigation(
       const deferRemoval = !options?.includeSubthreads && deferNestedArchiveRemoval(thread);
 
       for (const targetKey of targetThreadKeys) {
+        updateArchivedThreadKey(targetKey, true);
         if (!deferRemoval) suppressedArchivedThreadKeysRef.current.add(targetKey);
       }
       setArchiveThreadError(undefined);
@@ -8745,6 +8761,7 @@ export function useThreadNavigation(
       } catch (error) {
         for (const targetKey of targetThreadKeys) {
           if (!archivedKeys.has(targetKey)) {
+            updateArchivedThreadKey(targetKey, false);
             suppressedArchivedThreadKeysRef.current.delete(targetKey);
             deferredArchiveRemovalsRef.current.delete(targetKey);
           }
@@ -8756,6 +8773,7 @@ export function useThreadNavigation(
     },
     [
       archiveThreadRequest,
+      updateArchivedThreadKey,
       deferNestedArchiveRemoval,
       desktopApi,
       optimisticThread,
@@ -8785,6 +8803,7 @@ export function useThreadNavigation(
         for (const thread of threads) {
           if (thread.remote) continue;
           await restoreThreadRequest({ backend: thread.backend, threadId: thread.threadId });
+          updateArchivedThreadKey(buildThreadIdentityKey(thread.backend, thread.threadId), false);
           // The `thread/unarchived` event lifts this too; a backend that
           // does not send one would otherwise keep the row hidden.
           suppressedArchivedThreadKeysRef.current.delete(
@@ -8798,7 +8817,7 @@ export function useThreadNavigation(
         await refresh();
       }
     },
-    [desktopApi, refresh],
+    [desktopApi, refresh, updateArchivedThreadKey],
   );
 
   const archiveWorktree = useCallback(
@@ -10034,6 +10053,7 @@ export function useThreadNavigation(
     subthreadLaunchpadDrafts,
     detachSubthreadLaunchpad,
     selectSubthreadLaunchpadParent,
+    archivedThreadKeys,
     archiveThreadNotice,
     dismissArchiveThreadNotice,
     worktreeArchiveError,

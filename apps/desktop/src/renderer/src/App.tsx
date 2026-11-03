@@ -2462,10 +2462,11 @@ function DesktopAppShell(props: {
     },
     [navigation, newThreadFederationTargets, selectDirectoryLaunchpad, setMainView],
   );
-  // Loaded navigation pages cannot prove a history entry was deleted.
+  // Loaded pages cannot prove deletion; explicit archive identities can.
   const history = useNavigationHistory({
     current: historyLocation,
     restore: restoreHistoryLocation,
+    archivedThreadKeys: navigation.archivedThreadKeys,
   });
   useHistoryNavHotkeys({ onBack: history.goBack, onForward: history.goForward });
   useLensHotkeys({
