@@ -1096,6 +1096,11 @@ export function projectNavigationQuery(params: {
       backends: query.kind === "directory-index"
         || (query.kind === "star-map" && query.projectKey === undefined),
     }),
+    ...(query.kind === "directory" ? {
+      selectionDirectory: buildDirectoryRows({ snapshot: { ...params.index,
+        directories: params.index.directories.filter((directory) => directory.key === query.directoryKey),
+      }, threadsByLegacyKey, parentCandidates })[0],
+    } : {}),
     ...(query.kind === "exact" && selectedThreads.length ? {
       // Resolve the canonical home from the complete compact index. A linked
       // worktree path is not necessarily the directory key shown by the viewer.

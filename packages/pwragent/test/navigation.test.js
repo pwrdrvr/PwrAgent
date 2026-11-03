@@ -40,6 +40,8 @@ test("10,000-thread navigation indexes jobs once and updates the index at job bo
   const page = await backend.handle("getNavigationQueryPage", request);
   assert.equal(page.entries.length, 10);
   assert.equal(page.counts.total, 10000);
+  assert.equal(page.selectionDirectory.path, backend.runtime.workspace);
+  assert.equal(page.selectionDirectory.counts.total, 10000);
   assert.equal((await backend.handle("getNavigationQueryPage", { ...request, cursor: page.nextCursor })).rangeStart, 10);
   const latest = { ...job("continued", "thread-0", "2026-01-01T00:00:00.000Z"), status: "running", turnId: "turn-1" };
   jobs.set(latest.id, latest);
