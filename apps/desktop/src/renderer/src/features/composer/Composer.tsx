@@ -391,6 +391,8 @@ export type ComposerProps = {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     text: string;
+    /** Queue behind an active turn even when the backend supports steering. */
+    busyBehavior?: "queue";
   };
   onReplySubmissionSettled?: (id: number, accepted: boolean) => void;
   /**
@@ -4280,7 +4282,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     // that gate opens instead of consuming its id and rejecting it silently.
     if (props.disabled) return;
     appliedReplySubmissionId.current = submission.id;
-    void submitReplyText(submission.text)
+    void submitReplyText(submission.text, submission.busyBehavior)
       .catch(() => false)
       .then((accepted) => props.onReplySubmissionSettled?.(submission.id, accepted));
     // submitReplyText is recreated each render; the id guard sends once.
@@ -8858,7 +8860,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
    * as its own queued draft, so a failure never restores it into the
    * operator's reply and a success never clears what they were typing.
    */
-  const submitReplyText = async (text: string): Promise<boolean> => {
+  const submitReplyText = async (text: string, busyBehavior?: "queue"): Promise<boolean> => {
     if (
       !props.thread
       || props.launchpad
@@ -8881,7 +8883,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
     if (shouldQueueThreadSubmit()) {
       const turnId = activeTurnIdRef.current;
-      if (turnId && supportsSteering && !pendingSteer) {
+      if (busyBehavior !== "queue" && turnId && supportsSteering && !pendingSteer) {
         const created = createPendingSteer(reply, turnId, composerScopeKey);
         const pending = isPromiseLike(created) ? await created : created;
         if (pending) {
