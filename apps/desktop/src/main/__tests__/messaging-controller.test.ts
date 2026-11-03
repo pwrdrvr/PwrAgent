@@ -16053,9 +16053,9 @@ describe("MessagingController", () => {
     }
   });
 
-  it("rehydrates enabled Monitor bindings on controller startup", async () => {
+  it("keeps rehydrated binding Monitor reads outside request activity", async () => {
     vi.useFakeTimers();
-    const harness = await createHarness();
+    const harness = await createHarness({ readThreadLastAssistantMessage: async () => "Fixture reply" });
     try {
       await bindThread(harness);
       const binding = await harness.store.findActiveBindingForChannel(
@@ -16068,7 +16068,8 @@ describe("MessagingController", () => {
         ...binding,
         monitor: {
           enabled: true,
-          intervalMs: 1,
+          intervalMs: 60_000,
+          showLastResponseSnippet: true,
           updatedAt: 1000,
         },
         updatedAt: 1000,
@@ -16086,15 +16087,28 @@ describe("MessagingController", () => {
         text: expect.stringContaining("Monitor: Recent threads"),
       });
       expect(vi.getTimerCount()).toBe(1);
+      expect(harness.readThreadStatus).toHaveBeenLastCalledWith(expect.objectContaining({ countsAsActivity: false }));
+      expect(harness.readThreadLastAssistantMessage).toHaveBeenLastCalledWith(expect.objectContaining({ countsAsActivity: false }));
+      harness.readThreadStatus.mockClear();
+      harness.readThreadLastAssistantMessage.mockClear();
+
+      await vi.advanceTimersByTimeAsync(60_001);
+
+      expect(harness.readThreadStatus).toHaveBeenCalledExactlyOnceWith({
+        backend: "codex", threadId: "thread-1", countsAsActivity: false,
+      });
+      expect(harness.readThreadLastAssistantMessage).toHaveBeenCalledExactlyOnceWith({
+        backend: "codex", threadId: "thread-1", countsAsActivity: false,
+      });
     } finally {
       harness.controller.dispose();
       vi.useRealTimers();
     }
   });
 
-  it("renders enabled channel Monitor subscriptions immediately on controller startup", async () => {
+  it("keeps rehydrated channel Monitor reads outside request activity", async () => {
     vi.useFakeTimers();
-    const harness = await createHarness({ channel: "telegram" });
+    const harness = await createHarness({ channel: "telegram", readThreadLastAssistantMessage: async () => "Fixture reply" });
     try {
       await harness.store.upsertMonitorSubscription({
         id: "monitor:telegram:dm::chat-1",
@@ -16105,6 +16119,7 @@ describe("MessagingController", () => {
         monitor: {
           enabled: true,
           intervalMs: 60_000,
+          showLastResponseSnippet: true,
           updatedAt: 1000,
         },
       });
@@ -16120,6 +16135,19 @@ describe("MessagingController", () => {
         text: expect.stringContaining("Monitor: Recent threads"),
       });
       expect(vi.getTimerCount()).toBe(1);
+      expect(harness.readThreadStatus).toHaveBeenLastCalledWith(expect.objectContaining({ countsAsActivity: false }));
+      expect(harness.readThreadLastAssistantMessage).toHaveBeenLastCalledWith(expect.objectContaining({ countsAsActivity: false }));
+      harness.readThreadStatus.mockClear();
+      harness.readThreadLastAssistantMessage.mockClear();
+
+      await vi.advanceTimersByTimeAsync(60_001);
+
+      expect(harness.readThreadStatus).toHaveBeenCalledExactlyOnceWith({
+        backend: "codex", threadId: "thread-1", countsAsActivity: false,
+      });
+      expect(harness.readThreadLastAssistantMessage).toHaveBeenCalledExactlyOnceWith({
+        backend: "codex", threadId: "thread-1", countsAsActivity: false,
+      });
     } finally {
       harness.controller.dispose();
       vi.useRealTimers();

@@ -643,6 +643,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
+    countsAsActivity?: boolean;
   }): Promise<AppServerThreadStatus | undefined> {
     const response = await this.readThread({
       ...request,
@@ -690,6 +691,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
+    countsAsActivity?: boolean;
   }): Promise<string | undefined> {
     return (await this.readThreadLastAssistantReply(request))?.text;
   }
@@ -698,6 +700,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
+    countsAsActivity?: boolean;
   }): Promise<MessagingLastAssistantReply | undefined> {
     const response = await this.readThread({
       ...request,
@@ -1299,6 +1302,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
+    countsAsActivity?: boolean;
     includeTurns?: boolean;
     limit?: number;
   }) {

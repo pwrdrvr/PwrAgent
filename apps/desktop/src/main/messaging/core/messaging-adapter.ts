@@ -207,6 +207,7 @@ export type MessagingBackendBridge = {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
+    countsAsActivity?: boolean;
   }): Promise<AppServerThreadStatus | undefined>;
   readActiveTurn?(request: {
     backend: AppServerBackendKind;
@@ -217,11 +218,13 @@ export type MessagingBackendBridge = {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
+    countsAsActivity?: boolean;
   }): Promise<string | undefined>;
   readThreadLastAssistantReply?(request: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
+    countsAsActivity?: boolean;
   }): Promise<MessagingLastAssistantReply | undefined>;
   resolveAssistantMessageImages?(request: {
     backend: AppServerBackendKind;
