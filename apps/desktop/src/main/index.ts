@@ -325,7 +325,6 @@ const childProcessDiagnostics = installE2eChildProcessDiagnostics({
 });
 process.once("exit", () => {
   childProcessDiagnostics.snapshot("process-exit");
-  childProcessDiagnostics.dispose();
 });
 
 // Tart's AppleParavirtGPU can reset under sustained Electron E2E load,
@@ -1097,8 +1096,15 @@ function installProcessShutdownHandlers(): void {
   process.once("SIGTERM", handleSignal);
   process.once("SIGINT", handleSignal);
   process.once("exit", () => {
-    disposeMainProcessResourcesSync();
-    disposeAppState();
+    try {
+      childProcessDiagnostics.snapshot("synchronous-cleanup-started");
+      disposeMainProcessResourcesSync();
+      childProcessDiagnostics.snapshot("app-state-close-started");
+      disposeAppState();
+      childProcessDiagnostics.snapshot("app-state-close-completed");
+    } finally {
+      childProcessDiagnostics.dispose();
+    }
   });
 }
 

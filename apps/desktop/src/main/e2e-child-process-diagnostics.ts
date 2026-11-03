@@ -13,7 +13,14 @@ type ChildCallSite = {
   lineNumber: number;
   columnNumber: number;
 };
-type ChildProcessStage = "shutdown-started" | "shutdown-completed" | "will-quit" | "process-exit";
+type ChildProcessStage =
+  | "shutdown-started"
+  | "shutdown-completed"
+  | "will-quit"
+  | "process-exit"
+  | "synchronous-cleanup-started"
+  | "app-state-close-started"
+  | "app-state-close-completed";
 
 export function childProcessCallSites(sites: readonly ChildCallSite[]) {
   return sites.flatMap((site) => {

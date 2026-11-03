@@ -313,6 +313,11 @@ and the JavaScript process-exit hook retain children whose `close` callback has
 not run, plus an omitted-launch count. These observations do not delay shutdown
 or stop children.
 
+The exit hook also records synchronous-cleanup start, state-database close
+start, and state-database close completion. Join a native capture's interval to
+these markers to distinguish final SQLite closure from the preceding cleanup;
+a missing completion marker alone does not identify a blocked operation.
+
 Join those records to native PID **and creation FILETIME**, using the verified
 root lifetime and parent creation. A PID or missing JavaScript `close` event
 alone does not establish a surviving process. Native and fixture launch UUIDs
