@@ -1584,7 +1584,7 @@ export class AcpBackendAdapter {
 
   worktreeArchiveBlockedReason(backend: AcpBackendId, sessionId: string): string | undefined {
     const session = this.getSession(backend, sessionId);
-    if (!session?.archivedAt || session.status === "active") return "ACP session is live; the checkout was kept.";
+    if (!session?.archivedAt || (session.status !== "idle" && session.status !== "failed")) return "ACP session is live; the checkout was kept.";
     if (session.requiresAgentSessionRebind
       || this.getInstalledAgent(backend)?.runtimeCapabilities?.agentCapabilities?.loadSession !== true) {
       return "Archived ACP session cannot reload its original identity through session/load; the checkout was kept.";
@@ -1618,18 +1618,25 @@ export class AcpBackendAdapter {
     if (live.some((session) => owner.client.ownsSession?.(session.sessionId) !== false)) {
       throw new Error("ACP session/close is unavailable and the process owns another live session; the checkout was kept.");
     }
-    await this.disposeAcpClient(owner);
+    // Remove routing before yielding to process shutdown, so a new session
+    // cannot acquire a client whose transport is being closed.
     if (this.acpClients.get(backend) === owner) this.acpClients.delete(backend);
     this.retainedAcpClients.get(backend)?.delete(owner);
     for (const [key, value] of this.environmentClients) {
       if (value.entry === owner) this.environmentClients.delete(key);
     }
+    await this.disposeAcpClient(owner);
   }
 
   /** A new process avoids retaining an OS cwd handle to the deleted checkout.
    * Load the original protocol id at the original cwd; never create a blank
    * replacement session or edit a provider-owned session file. */
   async restoreWorktreeSession(backend: AcpBackendId, sessionId: string): Promise<void> {
+    await this.environmentClientLocks.run(JSON.stringify([backend, sessionId]),
+      async () => await this.restoreWorktreeSessionLocked(backend, sessionId));
+  }
+
+  private async restoreWorktreeSessionLocked(backend: AcpBackendId, sessionId: string): Promise<void> {
     const session = this.getSession(backend, sessionId);
     if (!session?.archivedAt) throw new Error("Archived ACP session metadata was not found.");
     if (session.requiresAgentSessionRebind) throw new Error("The original ACP session identity is unavailable.");

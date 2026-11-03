@@ -17021,8 +17021,8 @@ export class DesktopBackendRegistry {
     threadId: string;
   }): Promise<RestoreThreadResponse> {
     const session = this.acpBackend.getSession(params.backend, params.threadId);
-    if (!session) {
-      throw new Error(`ACP thread not found: ${params.threadId}`);
+    if (!session?.archivedAt) {
+      throw new Error(`Archived ACP thread not found: ${params.threadId}`);
     }
     const thread = this.acpBackend.sessionToThreadSummary(session);
     const worktrees = await this.restoreThreadWorktrees({ ...params, thread });
@@ -17043,7 +17043,7 @@ export class DesktopBackendRegistry {
     delete restoredSession.archivedAt;
     this.acpBackend.upsertSession({
       ...restoredSession,
-      updatedAt: Math.max(session.updatedAt, restoredAt),
+      updatedAt: Math.max(restoredSession.updatedAt, restoredAt),
     });
     await this.overlayStore.setThreadArchiveTombstone({ ...params, restoredAt });
     this.invalidateThreadListCache(params.backend, true);
@@ -37892,10 +37892,11 @@ export class DesktopBackendRegistry {
         }
         continue;
       }
-      if (this.archivedAcpWorktreeBlocker(worktreePath, inventory)) {
+      const acpBlocker = this.archivedAcpWorktreeBlocker(worktreePath, inventory);
+      if (acpBlocker) {
         report.protectedWorktrees += 1;
         report.cleanup.push({ worktreePath, removedWorktree: false, deletedBranch: false,
-          skippedReason: this.archivedAcpWorktreeBlocker(worktreePath, inventory) });
+          skippedReason: acpBlocker });
         continue;
       }
       if (inventory.worktreeEvidence?.externalPaths.has(worktreePath)
@@ -38471,9 +38472,10 @@ export class DesktopBackendRegistry {
     const cleanupCandidate = async (candidate: WorktreeArchiveCandidate): Promise<ArchiveThreadCleanupResult> => {
       await params.context?.checkpoint();
       try {
-        if (this.archivedAcpWorktreeBlocker(candidate.worktreePath, params)) {
+        const acpBlocker = this.archivedAcpWorktreeBlocker(candidate.worktreePath, params);
+        if (acpBlocker) {
           return { worktreePath: candidate.worktreePath, removedWorktree: false, deletedBranch: false,
-            skippedReason: this.archivedAcpWorktreeBlocker(candidate.worktreePath, params) };
+            skippedReason: acpBlocker };
         }
         if (externalWorktreePaths.has(normalizeWorktreePathForComparison(candidate.worktreePath))) {
           return {
@@ -38851,6 +38853,9 @@ export class DesktopBackendRegistry {
               };
             }
 
+            if (isAcpBackendId(params.backend) && !candidate.snapshot) {
+              throw new Error("No recovery snapshot is available for the missing ACP checkout.");
+            }
             const restoredSnapshot = candidate.snapshot
               ? await this.worktreeArchiveService.restore({
                   backend: params.backend,

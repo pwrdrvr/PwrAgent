@@ -325,12 +325,14 @@ rl.on("line", (line) => {
     await expect(app.window.getByRole("button", { name: /ACP archive fixture/i })).toBeVisible();
     const archived = await app.window.evaluate(async (owner) => {
       const api = (window as Window & { pwragent?: DesktopApi }).pwragent!;
+      if (!api.archiveThread) throw new Error("Desktop archive bridge is unavailable.");
       return await api.archiveThread({ ...owner, backgroundCleanup: false });
     }, { backend, threadId });
     expect(archived.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
     expect(await pathExists(fixture.worktreePath)).toBe(false);
     const restored = await app.window.evaluate(async (owner) => {
       const api = (window as Window & { pwragent?: DesktopApi }).pwragent!;
+      if (!api.restoreThread) throw new Error("Desktop restore bridge is unavailable.");
       return await api.restoreThread(owner);
     }, { backend, threadId });
     expect(restored.worktrees).toEqual([expect.objectContaining({ restored: true })]);
