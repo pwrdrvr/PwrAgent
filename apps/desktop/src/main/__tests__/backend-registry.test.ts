@@ -36179,6 +36179,61 @@ command = "pnpm dev"
     }
   });
 
+  it.each([0.007023, 0, undefined, -1, Number.NaN])(
+    "retains Claude monitor provider costs (%s) across usage normalization", async (reportedCost) => {
+      const overlayStore = createOverlayStoreMock();
+      const registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/read"] } }),
+        overlayStore,
+      });
+      const internals = registry as unknown as {
+        completedTaskMonitorsByThread: Map<string, Record<string, unknown>>;
+        recordTaskMonitorUsage: (event: AgentEvent) => Promise<void>;
+      };
+      internals.completedTaskMonitorsByThread.set("claude:haiku-monitor", {
+        backend: "claude", parentBackend: "claude", parentThreadId: "parent-thread",
+        monitorId: "monitor-1", monitorThreadId: "haiku-monitor", monitorTurnId: "monitor-turn",
+        createdAt: Date.now(), task: "Check the build", preferredModel: "claude-haiku-5-5",
+      });
+      try {
+        await internals.recordTaskMonitorUsage({
+          backend: "claude",
+          notification: {
+            method: "thread/tokenUsage/updated",
+            params: {
+              threadId: "haiku-monitor", turnId: "monitor-turn", model: "claude-haiku-5-5",
+              tokenUsage: {
+                claudeCostUSD: reportedCost,
+                last: { inputTokens: 121_054, cachedInputTokens: 120_220, outputTokens: 238, totalTokens: 121_292 },
+              },
+            },
+          },
+        });
+        const pricing = await overlayStore.readThreadPricing({ backend: "claude", threadId: "parent-thread" });
+        expect(pricing.lines).toHaveLength(1);
+        const valid = reportedCost !== undefined && Number.isFinite(reportedCost) && reportedCost >= 0;
+        expect(pricing.lines[0]).toMatchObject({
+          scope: "monitor", model: "claude-haiku-5-5", provider: "anthropic",
+          inputTokens: 121_054, cachedInputTokens: 120_220, outputTokens: 238,
+          priceStatus: valid ? "priced" : "unpriced",
+          totalCostMicros: valid ? Math.round(reportedCost! * 1_000_000) : 0,
+          cachedInputCostMicros: 0, uncachedInputCostMicros: 0, outputCostMicros: 0,
+        });
+        expect(pricing.lines[0]?.pricingBasis).toBe(valid ? "provider-reported" : undefined);
+        expect(pricing.lines[0]?.priceUnavailableReason).toBe(valid ? undefined : "insufficient-token-breakdown");
+        expect(pricing.lines[0]?.pricingRateId).toBeUndefined();
+        if (valid) {
+          const card = await overlayStore.getThreadSubAgent({ backend: "claude", threadId: "parent-thread", monitorId: "monitor-1" });
+          expect(card?.monitorUsage?.summary).toContain("provider estimate");
+          expect(card?.monitorUsage?.cost).toMatchObject({ pricingBasis: "provider-reported", totalUsd: reportedCost });
+        }
+      } finally {
+        internals.completedTaskMonitorsByThread.clear();
+        await registry.close();
+      }
+    },
+  );
+
   it("persists live thread pricing from turn usage, not cumulative thread totals", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },
