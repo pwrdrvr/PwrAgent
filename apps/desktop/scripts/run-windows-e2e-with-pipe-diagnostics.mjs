@@ -19,6 +19,7 @@ const cdbExecutable = process.env.PWRAGENT_WINDOWS_CDB_EXE;
 const symchkExecutable = process.env.PWRAGENT_WINDOWS_SYMCHK_EXE;
 // Never copy this directory into evidence/test-results or print its contents.
 const privateSymbols = path.join(root, "private-symbols");
+const captureSymbols = path.join(root, "capture-symbols");
 const rows = new Map();
 const launches = new Map();
 const launchEvents = new Map();
@@ -214,10 +215,12 @@ async function captureNativeStack(event) {
   if (before.value?.process?.created !== created || before.value?.process?.liveAfter !== true) return;
   const started = Date.now();
   const result = await new Promise((resolve) => {
-    const child = execFile(cdbExecutable, nativeStackArguments(event.pid, nativeSymbols),
+    // Loading Electron's multi-GB PDB can outlive the capture window. Retain
+    // image-relative code locations now; resolve them after measured tests.
+    const child = execFile(cdbExecutable, nativeStackArguments(event.pid, captureSymbols, "lm;~* kn 40;q"),
       { timeout: 1000, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
         scanners.delete(child);
-        resolve({ stack: parseNativeStacks(stdout), stderrBytes: Buffer.byteLength(stderr),
+        resolve({ stack: parseNativeStacks(stdout, { moduleOffsets: true }), stderrBytes: Buffer.byteLength(stderr),
           execution: error && { code: error.code, signal: error.signal, killed: error.killed } });
       });
     scanners.add(child);
@@ -225,7 +228,7 @@ async function captureNativeStack(event) {
   const ended = Date.now();
   const after = await run(executable, ["identity", String(event.pid)], 1000, true);
   const verified = verifiedNativeStack(before.value?.process, after.value?.process, created, result.stack);
-  const report = { event, expectedCreated: created, due, started, ended,
+  const report = { event, expectedCreated: created, due, started, ended, captureFormat: "module-offsets",
     before: before.value?.process, after: after.value?.process, verified,
     execution: result.execution, stderrBytes: result.stderrBytes,
     stack: verified ? result.stack : undefined,
@@ -239,6 +242,7 @@ async function prepareNativeStacks() {
   if (!cdbExecutable || !symchkExecutable) { write("native-stack-setup.json", { enabled: false, error: "Signed debugger tools unavailable." }); return; }
   // Warm only the matching executable's symbols before launcher pipes exist.
   mkdirSync(privateSymbols, { recursive: true });
+  mkdirSync(captureSymbols, { recursive: true });
   const electron = createRequire(new URL("../package.json", import.meta.url))("electron");
   const symbols = `srv*${privateSymbols}*https://msdl.microsoft.com/download/symbols;srv*${privateSymbols}*https://symbols.electronjs.org`;
   const warmed = await run(symchkExecutable, [electron, "/s", symbols], 90000);
@@ -250,6 +254,8 @@ async function prepareNativeStacks() {
   catch (error) { probeFailed = true; probeFailure = nativeProbeFailure(error); }
   nativeStackEnabled = !probeFailed && probe?.noninvasiveDebuggerVerified === true && probe?.debuggerQuitVerified === true;
   write("native-stack-setup.json", { enabled: nativeStackEnabled,
+    captureFormat: "module-offsets",
+    electronSha256: createHash("sha256").update(readFileSync(electron)).digest("hex"),
     symbolPreload: { started: warmed.started, ended: warmed.ended, code: warmed.error?.code, stdoutBytes: warmed.stdoutBytes },
     localSymbolDirectoryCount: nativeSymbols.length, probe, probeFailed, probeFailure });
 }

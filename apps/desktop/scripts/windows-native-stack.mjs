@@ -76,26 +76,52 @@ export function verifiedNativeStack(before, after, expectedCreated, stack) {
 
 // CDB output includes local paths, arguments and addresses. Keep only bounded
 // thread identities and call-site symbols; never persist its raw output.
-export function parseNativeStacks(output) {
+export function parseNativeStacks(output, { moduleOffsets = false } = {}) {
+  const lines = output.split(/\r?\n/);
+  const modules = [];
+  const address = (value) => {
+    const hex = value.replaceAll("`", "");
+    return /^[a-f0-9]{1,16}$/i.test(hex) ? BigInt("0x" + hex) : undefined;
+  };
+  if (moduleOffsets) {
+    for (const line of lines) {
+      const module = /^\s*([a-f0-9`]{8,17})\s+([a-f0-9`]{8,17})\s+([a-z0-9_.-]{1,128})\s+\(/i.exec(line);
+      if (!module || modules.length >= 512) continue;
+      const start = address(module[1]);
+      const end = address(module[2]);
+      if (start !== undefined && end !== undefined && start < end) modules.push({ start, end, name: module[3] });
+    }
+  }
   const threads = [];
-  let current, omittedThreads = 0, omittedFrames = 0, symbolWarnings = 0;
-  for (const line of output.split(/\r?\n/)) {
+  let current, previousReturn, previousIndex;
+  let omittedThreads = 0, omittedFrames = 0, symbolWarnings = 0;
+  for (const line of lines) {
     if (/\*\*\* (?:ERROR|WARNING):.*(?:symbol|timestamp)/i.test(line)) symbolWarnings++;
     const thread = /^\s*[.#]?\s*(\d+)\s+Id:\s*([a-f0-9]+)\.([a-f0-9]+)\b/i.exec(line);
     if (thread) {
       current = undefined;
+      previousReturn = undefined;
+      previousIndex = undefined;
       if (threads.length >= 128) { omittedThreads++; continue; }
       current = { index: Number(thread[1]), pid: thread[2].toLowerCase(), tid: thread[3].toLowerCase(), frames: [] };
       threads.push(current);
       continue;
     }
-    const frame = /^\s*([a-f0-9]{2,3})\s+[a-f0-9`]+\s+[a-f0-9`]+\s+(\S+)/i.exec(line);
+    const frame = /^\s*([a-f0-9]{2,3})\s+[a-f0-9`]+\s+([a-f0-9`]{1,17})\s+(\S+)/i.exec(line);
     if (!frame || !current) continue;
-    const symbol = frame[2];
+    const index = parseInt(frame[1], 16);
+    // A stack row's return address is the next row's code location. Convert
+    // it against lm's image bounds in memory; never retain virtual addresses.
+    const code = index === previousIndex + 1 ? previousReturn : undefined;
+    previousReturn = address(frame[2]);
+    previousIndex = index;
+    const module = moduleOffsets && code !== undefined
+      ? modules.find((image) => code >= image.start && code < image.end) : undefined;
+    const symbol = module ? `${module.name}+0x${(code - module.start).toString(16)}` : frame[3];
     // Accept module!symbol or module+offset. No paths, arguments or raw memory.
     if (!/^[a-z0-9_.-]+(?:![a-z0-9_.$~?@:+<>,*&()={}\[\]`'-]+|\+0x[a-f0-9]+)$/i.test(symbol)
       || current.frames.length >= 40) { omittedFrames++; continue; }
-    current.frames.push({ index: parseInt(frame[1], 16), symbol });
+    current.frames.push({ index, symbol });
   }
   return { threads, omittedThreads, omittedFrames, symbolWarnings,
     frameCount: threads.reduce((count, thread) => count + thread.frames.length, 0) };

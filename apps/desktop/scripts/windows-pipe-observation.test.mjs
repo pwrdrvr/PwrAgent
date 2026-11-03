@@ -100,6 +100,29 @@ describe("Windows natural pipe evidence", () => {
     expect(parseNativeStacks("unknown debugger format secret-token").frameCount).toBe(0);
   });
 
+  it("retains exact code offsets for later symbolization without exposing virtual addresses", () => {
+    const parsed = parseNativeStacks([
+      "start             end                 module name",
+      "00000001`00000000 00000001`10000000 electron (export symbols)",
+      "00000002`00000000 00000002`01000000 ntdll (export symbols)",
+      ". 0 Id: 1abc.2def Suspend: 0 Teb: 00000000`12345678 Unfrozen",
+      "00 00000000`12345678 00000001`00000180 ntdll!NtWait+0x14",
+      "01 00000000`12345690 00000001`00000240 electron!AmbiguousExport+0x9999",
+      "02 00000000`123456a0 00000000`deadbeef electron!AnotherExport+0x8888",
+      // A missing row must not associate the preceding return with this row.
+      "04 00000000`123456b0 00000001`00000300 ntdll!Wait+0x2",
+      "1 Id: 1abc.3fed Suspend: 0",
+      "00 00000000`123456c0 00000000`deadbeef ntdll!Wait+0x3",
+      "01 00000000`123456d0 00000000`deadbeef 00000000`feedface",
+    ].join("\n"), { moduleOffsets: true });
+    expect(parsed.threads.map((thread) => thread.frames.map((frame) => frame.symbol))).toEqual([
+      ["ntdll!NtWait+0x14", "electron+0x180", "electron+0x240", "ntdll!Wait+0x2"],
+      ["ntdll!Wait+0x3"],
+    ]);
+    expect(JSON.stringify(parsed)).not.toMatch(/123456|deadbeef|feedface|00000001|AmbiguousExport|AnotherExport/);
+    expect(parsed.omittedFrames).toBe(1);
+  });
+
   it("launches pnpm native executables directly and JavaScript entries through Node", () => {
     const args = ["--filter", "@pwragent/desktop", "test:e2e", "--shard=4/4"];
     const native = path.resolve("pnpm-native.exe");
