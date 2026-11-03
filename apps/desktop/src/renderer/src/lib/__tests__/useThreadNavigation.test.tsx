@@ -3815,37 +3815,6 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it.each([false, true])("shows deliberate worktree retention on background completion and prioritizes failures (failure=%s)", async (failure) => {
-    let listener: ((event: AgentEvent) => void) | undefined;
-    const desktopApi: DesktopApi = {
-      readPopulation: async () => ({ backend: "all", fetchedAt: Date.now(), unchanged: false,
-        inboxThreadKeys: [], threads: [], directories: [],
-        launchpadDefaults: { backend: "claude", executionMode: "default" } }),
-      onAgentEvent: (callback) => { listener = callback; return () => {}; },
-    };
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
-    await waitFor(() => expect(listener).toBeDefined());
-    act(() => {
-      listener?.({ backend: "claude", notification: {
-        method: "thread/archiveCleanup/completed",
-        params: { threadId: "archived-claude", archivedAt: 3000, cleanup: [
-          { worktreePath: "/contrived/worktrees/example/repo", removedWorktree: false, deletedBranch: false,
-            preservedReason: "Worktrees stay on disk so this backend can restore archived threads." },
-          ...(failure ? [{ worktreePath: "/contrived/worktrees/failed/repo", removedWorktree: false,
-            deletedBranch: false, error: "Metadata unavailable" }] : []),
-        ] },
-      } });
-    });
-    expect(result.current.archiveThreadNotice).toMatchObject(failure ? {
-      title: "Worktree cleanup skipped",
-      detail: "/contrived/worktrees/failed/repo: Metadata unavailable",
-    } : {
-      title: "Worktree kept",
-      message: "Thread archived. Its worktree was kept for restoration.",
-      detail: "/contrived/worktrees/example/repo: Worktrees stay on disk so this backend can restore archived threads.",
-    });
-  });
-
   it("keeps expected shared-worktree results silent while surfacing cleanup failures", async () => {
     let archived = false;
     const readPopulation = vi.fn(async () => ({

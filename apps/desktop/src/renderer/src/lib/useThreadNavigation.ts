@@ -684,17 +684,14 @@ function formatArchiveCleanupNotice(
     (item) => (item.error || !item.skippedReason?.startsWith("Worktree is still used by"))
       && (!item.removedWorktree || item.error || item.skippedReason)
   );
-  const firstFailure = failures.find((item) => item.error || !item.preservedReason) ?? failures[0];
+  const firstFailure = failures[0];
   if (!firstFailure) {
     return undefined;
   }
 
-  const preserved = !firstFailure.error && Boolean(firstFailure.preservedReason);
-  const reason = firstFailure.error ?? firstFailure.skippedReason ?? firstFailure.preservedReason ?? "cleanup was skipped";
-  const title = preserved ? "Worktree kept" : "Worktree cleanup skipped";
-  const message = preserved
-    ? "Thread archived. Its worktree was kept for restoration."
-    : "Thread archived. The worktree cleanup did not complete.";
+  const reason = firstFailure.error ?? firstFailure.skippedReason ?? "cleanup was skipped";
+  const title = "Worktree cleanup skipped";
+  const message = "Thread archived. The worktree cleanup did not complete.";
   const detail = firstFailure.worktreePath
     ? `${firstFailure.worktreePath}: ${reason}`
     : reason;

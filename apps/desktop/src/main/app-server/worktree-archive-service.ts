@@ -42,6 +42,8 @@ type RestoreWorktreeParams = {
   snapshotCommit: string;
   snapshot?: WorktreeSnapshotSummary;
   allowDetachedFallback?: boolean;
+  /** Reattach the unchanged source branch and restore edits outside its HEAD. */
+  restoreSourceCheckout?: boolean;
   now?: number;
 };
 
@@ -301,13 +303,30 @@ export class WorktreeArchiveService {
       await this.resolveRestoreCommit(params);
 
     await mkdir(path.dirname(worktreePath), { recursive: true });
-    await this.runGit(repositoryPath, [
-      "worktree",
-      "add",
-      "--detach",
-      worktreePath,
-      restoreCommit,
-    ]);
+    let sourceBranch: string | undefined;
+    const sourceHead = params.restoreSourceCheckout ? params.snapshot?.sourceHead : undefined;
+    let branchReason: string | undefined;
+    if (sourceHead && params.snapshot?.sourceBranch) {
+      const branch = params.snapshot.sourceBranch;
+      const worktrees = await this.listWorktrees(repositoryPath);
+      try {
+        const branchHead = trimGitOutput((await this.runGit(repositoryPath, ["rev-parse", `refs/heads/${branch}^{commit}`])).stdout);
+        if (branchHead === sourceHead && !worktrees.some((worktree) => worktree.branch === branch)) sourceBranch = branch;
+        else branchReason = "The original branch moved or is in use; restored its saved HEAD detached.";
+      } catch {
+        branchReason = "The original branch is unavailable; restored its saved HEAD detached.";
+      }
+    }
+    await this.runGit(repositoryPath, sourceBranch
+      ? ["worktree", "add", worktreePath, sourceBranch]
+      : ["worktree", "add", "--detach", worktreePath, sourceHead ?? restoreCommit]);
+    if (sourceHead && sourceHead !== restoreCommit) {
+      // Populate the saved file tree, then return the index to the original
+      // HEAD. Dirty and non-ignored untracked files remain working-tree edits;
+      // the source branch and its unpublished commits are never advanced.
+      await this.runGit(worktreePath, ["read-tree", "--reset", "-u", restoreCommit]);
+      await this.runGit(worktreePath, ["read-tree", sourceHead]);
+    }
 
     const restoredAt = params.now ?? Date.now();
     return {
@@ -330,7 +349,7 @@ export class WorktreeArchiveService {
       snapshotCommit: restoreCommit,
       restoredAt,
       state: "restored",
-      unavailableReason: fallbackReason,
+      unavailableReason: [fallbackReason, branchReason].filter(Boolean).join(" ") || undefined,
     };
   }
 

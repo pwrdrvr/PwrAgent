@@ -162,7 +162,7 @@ function buildArchiveBurst(active: AppServerThreadSummary[], targets: AppServerT
 }
 
 describe("archive cleanup pipeline", () => {
-  it.each(["provider", "overlay"] as const)("reports Claude worktrees kept for restoration from %s metadata, excluding an additional local directory", async (source) => {
+  it.each(["provider", "overlay"] as const)("snapshots and removes Claude worktrees from %s metadata, excluding an additional local directory", async (source) => {
     vi.useFakeTimers();
     const fixture = build([]);
     const worktree = { id: "repo", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktrees/example/repo" };
@@ -181,16 +181,16 @@ describe("archive cleanup pipeline", () => {
     expect(response).toMatchObject({ cleanup: [], cleanupPending: true });
     const event = await drivePacer(fixture.registry, fixture.completion);
     expect(event.notification.params).toMatchObject({ cleanup: [{
-      worktreePath: worktree.worktreePath, removedWorktree: false, deletedBranch: false,
-      preservedReason: expect.stringContaining("restore archived threads"),
+      worktreePath: worktree.worktreePath, removedWorktree: true, deletedBranch: false,
     }] });
     expect(registryLog.info).toHaveBeenCalledWith("archive cleanup worktree outcome", expect.objectContaining({
-      backend: "claude", worktreePath: worktree.worktreePath, preservedReason: expect.any(String),
+      backend: "claude", worktreePath: worktree.worktreePath, removedWorktree: true,
     }));
-    expect(fixture.archiveWorktree).not.toHaveBeenCalled();
-    await fixture.registry.restoreThread({ backend: "claude", threadId: session.thread.id });
-    expect(session.thread.archivedAt).toBeUndefined();
-    expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+    expect(fixture.archiveWorktree).toHaveBeenCalledOnce();
+    expect(fixture.archiveWorktree).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "claude", threadId: session.thread.id, worktreePath: worktree.worktreePath,
+      repositoryPath: worktree.path, beforeRemove: expect.any(Function),
+    }));
   });
 
   it("reports Claude archive metadata failure instead of an empty successful cleanup", async () => {

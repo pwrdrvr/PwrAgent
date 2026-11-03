@@ -42,6 +42,7 @@ async function createArchiveWorktreeFixture(ownerRoot = ".codex"): Promise<{
   git(repoPath, ["init", "-b", "main"]);
   git(repoPath, ["config", "user.email", "pwragent-tests@example.invalid"]);
   git(repoPath, ["config", "user.name", "PwrAgent Tests"]);
+  git(repoPath, ["config", "core.autocrlf", "false"]);
   await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
   git(repoPath, ["add", "README.md"]);
   git(repoPath, ["commit", "-m", "Seed archive fixture"]);
@@ -211,14 +212,19 @@ test("archiving a replay-backed thread removes its real Git worktree", async () 
 });
 
 
-test("Claude archive explains retained worktrees and leaves an additional local directory intact", async () => {
-  const testInfo = test.info();
+test("Claude archive removes its snapshotted worktree and restores its branch and files", async () => {
   const fixture = await createArchiveWorktreeFixture(".pwragent");
   const threadId = "11111111-1111-4111-8111-111111111111";
   const localPath = path.join(path.dirname(fixture.repoPath), "LinkedLocal");
   await mkdir(localPath);
   await writeFile(path.join(localPath, "keep.txt"), "Linked local directory\n");
-  const before = await stat(fixture.worktreePath);
+  await writeFile(path.join(fixture.worktreePath, "README.md"), "Saved Claude edits\n");
+  await writeFile(path.join(fixture.worktreePath, "notes.txt"), "Untracked Claude file\n");
+  // The replay Codex thread is unrelated to this native Claude fixture.
+  const replay = JSON.parse(await readFile(fixture.fixturePath, "utf8"));
+  replay.steps = replay.steps.filter((step: { method: string }) => step.method === "initialize");
+  replay.steps.push({ id: "empty-list", kind: "response", method: "thread/list", result: [] });
+  await writeFile(fixture.fixturePath, JSON.stringify(replay));
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
     preLaunchHook: async (homeRoot) => {
@@ -243,16 +249,9 @@ test("Claude archive explains retained worktrees and leaves an additional local 
       return await api.archiveThread({ backend: "claude", threadId: id, backgroundCleanup: true });
     }, threadId);
     expect(response.cleanupPending).toBe(true);
-    const notice = app.window.locator(".app-notice-toast").filter({ hasText: "Worktree kept" });
-    await expect(notice).toBeVisible();
-    await expect(notice).toContainText("Its worktree was kept for restoration.");
-    await expect(notice).toContainText(fixture.worktreePath);
-    await expect(notice).not.toContainText(localPath);
-    await expect(notice).not.toContainText("did not complete");
-    await notice.screenshot({ path: testInfo.outputPath("claude-worktree-kept.png") });
-    const after = await stat(fixture.worktreePath);
-    expect({ ino: after.ino, dev: after.dev }).toEqual({ ino: before.ino, dev: before.dev });
-    expect(git(fixture.repoPath, ["worktree", "list", "--porcelain"])).toContain(fixture.worktreePath.replaceAll(path.sep, "/"));
+    await expect.poll(() => pathExists(fixture.worktreePath)).toBe(false);
+    expect(git(fixture.repoPath, ["worktree", "list", "--porcelain"])).not.toContain(fixture.worktreePath.replaceAll(path.sep, "/"));
+    await expect(app.window.getByText("Worktree kept", { exact: true })).toHaveCount(0);
     expect(await readFile(path.join(localPath, "keep.txt"), "utf8")).toBe("Linked local directory\n");
     await app.window.evaluate(async (id) => {
       const api = (window as Window & { pwragent?: DesktopApi }).pwragent;
@@ -261,6 +260,9 @@ test("Claude archive explains retained worktrees and leaves an additional local 
     }, threadId);
     await expect(app.window.getByRole("button", { name: /Claude archive retention/i })).toBeVisible();
     expect(await pathExists(fixture.worktreePath)).toBe(true);
+    expect(git(fixture.worktreePath, ["branch", "--show-current"])).toBe("feat/archive-cleanup");
+    expect(await readFile(path.join(fixture.worktreePath, "README.md"), "utf8")).toBe("Saved Claude edits\n");
+    expect(await readFile(path.join(fixture.worktreePath, "notes.txt"), "utf8")).toBe("Untracked Claude file\n");
   } finally {
     await app.close();
     await fixture.cleanup();

@@ -37,6 +37,14 @@ describe("one-time archived worktree repair", () => {
     expectSqliteWriteBudget({ scenario: "archived-worktree-repair-once-marker", note: "One claim and one completion for a 501-thread pass plus a completed-startup no-op: 2 commits total, no per-item or timer writes; about 0.02 MB once and 0 MB/day afterward.", writes });
   });
 
+  it("runs the Claude-capable pass after the previous repair version completed", async () => {
+    const { db, repair } = fixture();
+    db.raw.prepare("INSERT INTO meta(key,value) VALUES (?,?)").run("archived_worktree_repair_v1", JSON.stringify({ completedAt: 1 }));
+    await runOneTimeArchivedWorktreeRepair({ db: db.raw, repair });
+    expect(repair).toHaveBeenCalledOnce();
+    expect(await runOneTimeArchivedWorktreeRepair({ db: db.raw, repair })).toBeUndefined();
+  });
+
   it("defers to a live owner and resumes a dead owner's interrupted pass", async () => {
     const { db, repair } = fixture();
     db.raw.prepare("INSERT INTO meta(key,value) VALUES (?,?)").run(ARCHIVED_WORKTREE_REPAIR_KEY, JSON.stringify({ ownerPid: 123, attemptedAt: 1 }));

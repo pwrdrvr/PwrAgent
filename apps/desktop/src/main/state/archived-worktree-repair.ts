@@ -2,7 +2,7 @@ import type Database from "better-sqlite3";
 import type { ArchivedWorktreeRepairReport } from "../app-server/backend-registry";
 import { storageProcessAlive } from "./storage-maintenance";
 
-export const ARCHIVED_WORKTREE_REPAIR_KEY = "archived_worktree_repair_v1";
+export const ARCHIVED_WORKTREE_REPAIR_KEY = "archived_worktree_repair_v2";
 
 type RepairRecord = { ownerPid?: number; completedAt?: number; attemptedAt?: number };
 
