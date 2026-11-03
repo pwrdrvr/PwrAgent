@@ -160,6 +160,31 @@ it("keeps the saved depth when the startup budget cuts a restore short", async (
   } finally { queries.dispose(); clock.mockRestore(); }
 });
 
+it("does not lower the saved depth when Load more follows a restore cut short", async () => {
+  let now = 0;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const read = vi.fn(async (request: NavigationQueryRequest) => {
+    if (now === 0) now = 10_000;
+    return owner("fresh", 1000)(request);
+  });
+  const key = navigationResumeQueryKey(pins());
+  const onLoadMore = vi.fn();
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined,
+    { loadedRowsByQuery: { [key]: 310 }, onLoadMore });
+  const project = new Map([["directory-pins:project", pins()]]);
+  try {
+    queries.setDemand(project);
+    await settled(queries, "directory-pins:project");
+    await queries.loadMore("directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(110);
+    expect(onLoadMore).toHaveBeenCalledExactlyOnceWith(key, 310);
+    queries.setDemand(new Map());
+    queries.setDemand(project);
+    await settled(queries, "directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(310);
+  } finally { queries.dispose(); clock.mockRestore(); }
+});
+
 it("restores a longer cached range without first showing only the first page", async () => {
   let now = 0;
   let slow = true;
