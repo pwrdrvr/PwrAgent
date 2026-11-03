@@ -38627,10 +38627,11 @@ export class DesktopBackendRegistry {
   }): Promise<void> {
     const archivedWorktreePath = normalizeWorktreePathForComparison(params.worktreePath);
     const siblingThreads = params.archivedThreads.filter((thread) => {
-      if (thread.source !== params.backend || thread.id === params.archivedThreadId) {
+      if (thread.source === params.backend && thread.id === params.archivedThreadId) {
         return false;
       }
 
+      if (thread.projectKey && normalizeWorktreePathForComparison(thread.projectKey) === archivedWorktreePath) return true;
       return thread.linkedDirectories.some((directory) => {
         const candidatePath = linkedDirectoryWorktreePath(directory);
         return (
@@ -38647,10 +38648,11 @@ export class DesktopBackendRegistry {
     for (const thread of siblingThreads) {
       await params.context?.settleCheckpoint();
       await this.overlayStore.upsertWorktreeSnapshot({
-          backend: params.backend,
+          backend: thread.source,
           threadId: thread.id,
           snapshot: {
             ...params.snapshot,
+            backend: thread.source,
             threadId: thread.id,
           },
       });
@@ -38743,8 +38745,15 @@ export class DesktopBackendRegistry {
         async (candidate): Promise<RestoreThreadWorktreeResult> => {
           try {
             if (await pathExists(candidate.worktreePath)) {
-              if (params.backend === "claude" && candidate.snapshot?.state === "archived") {
-                throw new Error("An unexpected or incomplete checkout already exists at the archived worktree path; it was kept without modification.");
+              if (candidate.snapshot?.state === "archived") {
+                const sharedRestore = await this.findSharedWorktreeRestore(candidate.snapshot);
+                if (sharedRestore) {
+                  await this.overlayStore.upsertWorktreeSnapshot({ backend: params.backend, threadId: params.threadId,
+                    snapshot: { ...candidate.snapshot, state: "restored", restoredAt: sharedRestore.restoredAt,
+                      restoredCheckoutIdentity: sharedRestore.restoredCheckoutIdentity } });
+                } else if (params.backend === "claude") {
+                  throw new Error("An unexpected or incomplete checkout already exists at the archived worktree path; it was kept without modification.");
+                }
               }
               return {
                 worktreePath: candidate.worktreePath,
@@ -38817,6 +38826,19 @@ export class DesktopBackendRegistry {
         },
       ),
     );
+  }
+
+  private async findSharedWorktreeRestore(snapshot: WorktreeSnapshotSummary): Promise<WorktreeSnapshotSummary | undefined> {
+    const owners = await this.overlayStore.listThreadArchiveStates?.() ?? [];
+    for (const owner of owners) {
+      if (owner.backend === snapshot.backend && owner.threadId === snapshot.threadId) continue;
+      const restored = owner.worktreeSnapshots?.find((candidate) => candidate.state === "restored"
+        && candidate.snapshotRef === snapshot.snapshotRef && candidate.snapshotCommit === snapshot.snapshotCommit
+        && candidate.archivedAt === snapshot.archivedAt
+        && normalizeWorktreePathForComparison(candidate.worktreePath) === normalizeWorktreePathForComparison(snapshot.worktreePath));
+      if (restored && await this.worktreeArchiveService.isRestoredCheckout(restored)) return restored;
+    }
+    return undefined;
   }
 
   private async buildRestoreThreadWorktreeCandidates(params: {
