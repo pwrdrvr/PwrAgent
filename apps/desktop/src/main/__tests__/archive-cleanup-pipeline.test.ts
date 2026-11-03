@@ -650,7 +650,7 @@ describe("archive cleanup pipeline", () => {
         if (change === "repeated cursor") fixture.client.listArchiveCleanupThreadsPage.mockResolvedValue({ threads: [], nextCursor: "repeat" });
       } });
       await vi.advanceTimersByTimeAsync(100_000);
-      const result = await repair;
+      const result = await drivePacer(fixture.registry, repair);
       expect(result.cleanup[0]?.removedWorktree).toBe(true);
       expect(result.cleanup[1]?.removedWorktree).toBe(false);
       expect(fixture.removed.has("/contrived/second")).toBe(false);

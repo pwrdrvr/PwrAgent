@@ -550,7 +550,7 @@ describe("archive worktrees across a desktop restart", () => {
       title: "Archived ACP owner", cwd: fixture.worktree, createdAt: 1, updatedAt: 1, executionMode: "default", status: "idle", archivedAt: 1 });
     if (scenario === "late ACP owner") {
       let activeReads = 0;
-      ArchiveWorktreeTransport.onList = (params) => { if (!params.archived && ++activeReads === 3) addAcpOwner(); };
+      ArchiveWorktreeTransport.onList = (params) => { if (!params.archived && ++activeReads === 2) addAcpOwner(); };
     } else addAcpOwner();
     await writeFile(path.join(fixture.worktree, "file.txt"), "preserve ACP edits\n");
     const report = await instance.registry.repairArchivedThreadWorktrees();
@@ -577,7 +577,8 @@ describe("archive worktrees across a desktop restart", () => {
     await instance.store.addLinkedDirectory({ backend: "codex", threadId: "invalid", directory: { ...fixture.directory, worktreePath: invalid } });
     const first = await runOneTimeArchivedWorktreeRepair({ db: instance.db.raw, repair: async () => await instance.registry.repairArchivedThreadWorktrees() });
     // Windows reports ENOENT below a file; POSIX reports ENOTDIR. Both must
-    // retain the file, continue the valid repair, and complete the once marker.
+    // retain the file and continue the valid repair. A reported failure keeps
+    // the pass eligible for retry; an absent checkout is a completed skip.
     const missingBelowFile = scenario === "non-directory ancestor" && process.platform === "win32";
     const retained = expect.objectContaining({ worktreePath: invalid, removedWorktree: false, error: expect.any(String) });
     const removed = expect.objectContaining({ worktreePath: fixture.worktree, removedWorktree: true });
@@ -586,8 +587,14 @@ describe("archive worktrees across a desktop restart", () => {
     expect(await readFile(replaced, "utf8")).toBe("retain this file\n");
     await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
     const again = vi.fn(async () => await instance.registry.repairArchivedThreadWorktrees());
-    expect(await runOneTimeArchivedWorktreeRepair({ db: instance.db.raw, repair: again })).toBeUndefined();
-    expect(again).not.toHaveBeenCalled();
+    const retried = await runOneTimeArchivedWorktreeRepair({ db: instance.db.raw, repair: again });
+    if (missingBelowFile) {
+      expect(retried).toBeUndefined();
+      expect(again).not.toHaveBeenCalled();
+    } else {
+      expect(retried?.cleanup).toEqual([retained]);
+      expect(again).toHaveBeenCalledOnce();
+    }
   });
 
   it("archives, prunes and restores through a symlinked Codex home", async () => {
@@ -784,7 +791,7 @@ describe("archive worktrees across a desktop restart", () => {
     ArchiveWorktreeTransport.threads = [{ id: "old-target", cwd: fixture.worktree, source: "cli", archived: true }];
     let activeReads = 0;
     ArchiveWorktreeTransport.onList = (params) => {
-      if (!params.archived && ++activeReads === 3) ArchiveWorktreeTransport.threads.push({ id: "new-owner", cwd: fixture.worktree, source: "appServer" });
+      if (!params.archived && ++activeReads === 2) ArchiveWorktreeTransport.threads.push({ id: "new-owner", cwd: fixture.worktree, source: "appServer" });
     };
     const instance = fixture.reopen();
     const result = await instance.registry.repairArchivedThreadWorktrees();
@@ -1077,8 +1084,9 @@ describe("archive worktrees across a desktop restart", () => {
 
     expect(result.cleanup[0]?.removedWorktree).toBe(true);
     const pages = ArchiveWorktreeTransport.requests.filter((request) => request.method === "thread/list");
-    expect(pages.filter((request) => request.params.archived && request.params.cursor)).toHaveLength(2);
-    expect(pages.every((request) => request.params.limit === 25 && request.params.useStateDbOnly === true)).toBe(true);
+    expect(pages.filter((request) => request.params.archived && request.params.cursor)).toHaveLength(1);
+    expect(pages.filter((request) => request.params.limit === 250)).toHaveLength(2);
+    expect(pages.every((request) => [25, 250].includes(Number(request.params.limit)) && request.params.useStateDbOnly === true)).toBe(true);
   });
 
   it("accepts a delayed matching archive notification through the production provider subscriber", async () => {

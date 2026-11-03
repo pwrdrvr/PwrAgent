@@ -39021,11 +39021,12 @@ export class DesktopBackendRegistry {
         }
         let removalMetadata: ArchiveCleanupMetadata | undefined;
         let removalRevision = this.archiveWorkspaceRevision;
+        const managedContainerPath = params.backend === "codex" ? await this.worktreeContainerService.containerPath(candidate.worktreePath) : undefined;
         const admission = {
           backend: params.backend, threadId: params.thread.id,
           worktreePath: normalizeWorktreePathForComparison(candidate.worktreePath),
+          containerPath: managedContainerPath,
         };
-        const managedContainerPath = params.backend === "codex" ? await this.worktreeContainerService.containerPath(candidate.worktreePath) : undefined;
         const containerBefore = managedContainerPath ? await this.worktreeContainerService.inspect(candidate.worktreePath) : undefined;
         if (containerBefore?.error) backendRegistryLog.warn("archive worktree container inspection failed", containerBefore);
         const snapshot = await this.worktreeArchiveService.archive({

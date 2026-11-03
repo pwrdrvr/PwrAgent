@@ -14,7 +14,8 @@ export function archiveCleanupWorkspaceFilter(scopePath: string): (cwd: string |
         try {
           return await realpath(resolved);
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
           const parent = path.dirname(resolved);
           if (parent === resolved) throw error;
           return path.join(await canonical(parent), path.basename(resolved));

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, realpath, rm, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { archiveCleanupWorkspaceFilter } from "../app-server/archive-cleanup-workspace-scope";
@@ -31,6 +31,9 @@ describe("archive admission workspace scope", () => {
     expect(await filter(path.join(root, "unrelated", "missing"))).toBe(false);
     expect(await filter(undefined)).toBe(true);
     expect(await filter("relative")).toBe(true);
+    const replaced = path.join(root, "replaced-checkout");
+    await writeFile(replaced, "file, not a directory");
+    expect(await filter(path.join(replaced, "missing-child"))).toBe(false);
   });
 
   it("resolves missing empty-container descendants through a symlinked root", async () => {

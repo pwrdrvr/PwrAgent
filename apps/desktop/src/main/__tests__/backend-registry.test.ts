@@ -62083,6 +62083,10 @@ script = "printf setup"
       getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "count", keepPerProject: 1 }),
       codexClient: client, overlayStore: createOverlayStoreMock(),
     });
+    vi.spyOn(registry, "repairArchivedThreadWorktrees").mockResolvedValue({
+      archivedThreads: 0, discoveredWorktrees: 0, missingWorktrees: 0, protectedWorktrees: 0,
+      protectedWorktreeDetails: [], candidates: [], cleanup: [], emptyContainerCandidates: [], containerCleanup: [],
+    });
     const archive = vi.spyOn(client, "archiveThread");
     try {
       await registry.sweepInactiveThreads();
