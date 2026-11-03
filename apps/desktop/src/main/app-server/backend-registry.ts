@@ -123,6 +123,7 @@ import {
   projectRefusesThreadMessages,
   type ProjectHeldWakeup,
   type ProjectHeldWakeupSource,
+  type ThreadPendingWakeHold,
   type ResolveProjectHeldWakeupsRequest,
   type ResolveProjectHeldWakeupsResponse,
   type ListProjectHeldWakeupsRequest,
@@ -20381,6 +20382,66 @@ export class DesktopBackendRegistry {
   /** Whether the operator locked the thread; a lock outranks a project pause. */
   async isThreadLocked(params: { backend: AppServerBackendKind; threadId: string }): Promise<boolean> {
     return Boolean(await this.readThreadLock(params.backend, params.threadId));
+  }
+
+  /**
+   * What keeps the thread's wakes from starting a turn now, for its Waiting
+   * for list. A lock outranks a paused project, as it does at admission.
+   */
+  async readThreadWakeHold(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<ThreadPendingWakeHold | undefined> {
+    const lock = await this.readThreadLock(params.backend, params.threadId);
+    if (lock) return { kind: "thread_locked", ...(lock.note ? { note: lock.note } : {}) };
+    const project = this.resolvePausedThreadProject(params);
+    if (!project) return undefined;
+    return {
+      kind: "project_paused",
+      projectLabel: project.label,
+      directoryKey: project.directoryKey,
+      ...(project.automation.wakeupPolicy === "discard" ? { discardsWakeups: true as const } : {}),
+    };
+  }
+
+  /**
+   * The thread's queue entries that wait for a release rather than for the
+   * thread to be free: a project hold, a lock, or a failed turn. From memory.
+   */
+  listHeldThreadQueueEntries(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Array<{
+    entryId: string;
+    origin: ThreadTurnQueueOrigin;
+    createdAt: number;
+    holdReason?: string;
+    projectHold?: { directoryKey: string; projectLabel: string; source: ProjectHeldWakeupSource; summary: string };
+    text: string;
+  }> {
+    const held: ReturnType<DesktopBackendRegistry["listHeldThreadQueueEntries"]> = [];
+    for (const entry of this.threadTurnQueue.iterateQueuedEntries(params)) {
+      if (!entry.projectHold && !entry.manualReleaseRequired) continue;
+      const text = entry.title
+        ?? entry.input.find((item): item is Extract<AppServerTurnInputItem, { type: "text" }> => item.type === "text")?.text
+        ?? "";
+      held.push({
+        entryId: entry.id,
+        origin: entry.origin,
+        createdAt: entry.createdAt,
+        ...(entry.holdReason ? { holdReason: entry.holdReason } : {}),
+        ...(entry.projectHold
+          ? {
+              projectHold: {
+                ...entry.projectHold,
+                projectLabel: getProjectForgeAutomationIndex().label(entry.projectHold.directoryKey),
+              },
+            }
+          : {}),
+        text,
+      });
+    }
+    return held;
   }
 
   private async readThreadLock(backend: AppServerBackendKind, threadId: string): Promise<ThreadLock | undefined> {

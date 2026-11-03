@@ -210,4 +210,97 @@ describe("WaitingForPanel", () => {
     // A peer's history stays on the owner.
     expect(screen.queryByRole("button", { name: /Recently ended/ })).not.toBeInTheDocument();
   });
+
+  describe("held wakes", () => {
+    const LOCKED = { kind: "thread_locked" as const, note: "Parked for the release" };
+    const PAUSED = { kind: "project_paused" as const, projectLabel: "widgets", directoryKey: "directory:/repo/widgets" };
+    const lockHeld: ThreadPendingWake = {
+      kind: "held_message", key: "held_message:thread-turn:1", entryId: "thread-turn:1", source: "operator",
+      displayText: "Rebase on main.", createdAt: at(15, 30), createdBy: "operator", durable: false, stop: "discard",
+      held: LOCKED,
+    };
+    const pauseHeld: ThreadPendingWake = {
+      kind: "held_message", key: "held_message:dependency:d9", entryId: "dependency:d9", source: "dependency",
+      displayText: "Continue After: Lease cleanup finished", createdAt: at(15, 40), createdBy: "agent", durable: true,
+      stop: "discard", held: PAUSED,
+    };
+
+    it("says a lock holds the thread, unlocks it, and discards what it holds", async () => {
+      const stop = vi.fn(async (): Promise<ThreadPendingWakesResponse> => ({ ok: true, stopped: true }));
+      const unlock = vi.fn(async () => {});
+      const locked: NavigationThreadSummary = {
+        ...thread,
+        lock: { lockedAt: at(15), note: "Parked for the release", source: "operator" },
+      };
+      render(
+        <WaitingForPanel thread={locked} now={NOW} onUnlockThread={unlock} onSendHeldNow={vi.fn()}
+          controller={controller(ready([lockHeld, { ...WAKES[1]!, held: LOCKED }], []), stop)} />,
+      );
+
+      expect(screen.getByRole("note")).toHaveTextContent("This thread is locked: Parked for the release");
+      const heldGroup = screen.getByRole("group", { name: "Held" });
+      expect(within(heldGroup).getByText(/Held while this thread is locked; unlocking sends it\./)).toBeInTheDocument();
+      expect(within(heldGroup).getByText(/Ends if PwrAgent quits\./)).toBeInTheDocument();
+      // A lock refuses a release, so only Discard and Unlock are offered.
+      expect(within(heldGroup).queryByRole("button", { name: /^Send Now/ })).not.toBeInTheDocument();
+      const prs = screen.getByRole("group", { name: "Pull requests" });
+      expect(within(prs).getByText(/Held while this thread is locked\./)).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Discard: Your queued message: Rebase on main." }));
+      });
+      expect(stop).toHaveBeenCalledWith("held_message:thread-turn:1");
+      await act(async () => {
+        fireEvent.click(within(screen.getByRole("note")).getByRole("button", { name: "Unlock" }));
+      });
+      expect(unlock).toHaveBeenCalledTimes(1);
+    });
+
+    it("sends a paused project's held wake-up through the project, and says what the pause holds", async () => {
+      const sendHeld = vi.fn(async () => {});
+      render(
+        <WaitingForPanel thread={thread} now={NOW} onSendHeldNow={sendHeld}
+          controller={controller(ready([pauseHeld, { ...WAKES[1]!, held: { ...PAUSED, discardsWakeups: true } }, { ...WAKES[3]!, held: { ...PAUSED, discardsWakeups: true } }], []))} />,
+      );
+
+      expect(screen.getByRole("note")).toHaveTextContent("widgets is paused.");
+      expect(screen.getByRole("note")).toHaveTextContent("Continue After results are held");
+      expect(screen.getByText(/Held while widgets is paused\. Send it now, or resume the project\./)).toBeInTheDocument();
+      expect(screen.getByText(/Waits while widgets is paused\./)).toBeInTheDocument();
+      expect(screen.getByText(/Dropped if it ends while widgets is paused\./)).toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Send Now: Continue After result: Continue After: Lease cleanup finished" }));
+      });
+      expect(sendHeld).toHaveBeenCalledWith(pauseHeld);
+    });
+
+    it("discards a peer's held message only when its owner accepts turn control", () => {
+      const peerThread = (capabilities: string[]): NavigationThreadSummary => ({
+        ...thread,
+        federation: {
+          instanceId: "studio", instanceLabel: "studio-mac", capabilities,
+          ref: { backend: "claude", threadId: "waiting", target: { scope: "remote", instanceId: "studio" } },
+        } as NavigationThreadSummary["federation"],
+      });
+      const { rerender } = render(
+        <WaitingForPanel thread={peerThread([])} now={NOW} ownerLabel="studio-mac"
+          controller={controller(ready([pauseHeld], [], true))} onSendHeldNow={vi.fn()} />,
+      );
+      expect(screen.queryByRole("button", { name: /^Discard/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^Send Now/ })).not.toBeInTheDocument();
+      rerender(
+        <WaitingForPanel thread={peerThread(["turn_control"])} now={NOW} ownerLabel="studio-mac"
+          controller={controller(ready([pauseHeld], [], true))} onSendHeldNow={vi.fn()} />,
+      );
+      expect(screen.getByRole("button", { name: /^Discard/ })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^Send Now/ })).toBeInTheDocument();
+    });
+
+    it("leaves out a kind this window cannot draw", () => {
+      const future = { ...WAKES[0]!, kind: "something_new", key: "something_new:1" } as unknown as ThreadPendingWake;
+      render(<WaitingForPanel thread={thread} now={NOW} controller={controller(ready([future, WAKES[4]!], []))} />);
+      expect(screen.getByText("1")).toHaveClass("waiting-for-panel__count");
+      expect(screen.getAllByRole("group").map((group) => group.getAttribute("aria-label"))).toEqual(["Running"]);
+    });
+  });
 });

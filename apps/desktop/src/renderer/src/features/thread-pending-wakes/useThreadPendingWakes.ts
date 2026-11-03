@@ -48,7 +48,14 @@ const SOURCE_EVENTS = new Set<string>([
   "thread/scheduledAction/updated",
   "thread/subAgents/updated",
   "thread/backgroundTasks/updated",
+  // Holds: a lock, the queue it holds, and a project paused or resumed.
+  "thread/lock/updated",
+  "thread/turnQueue/updated",
+  "directory/forgeAutomation/updated",
 ]);
+
+/** Events that name no thread but can change any thread's holds. */
+const ANY_THREAD_EVENTS = new Set<string>(["directory/forgeAutomation/updated"]);
 
 /**
  * The selected thread's pending wakes. A local thread's list is read from
@@ -172,9 +179,12 @@ function readThreadFederationTarget(
 
 /** The thread an event names: most carry `threadId`; scheduled actions nest it. */
 function isSourceEventFor(event: AgentEvent, backend: string, threadId: string): boolean {
-  if (event.federationTarget?.scope === "remote" || event.backend !== backend) return false;
+  if (event.federationTarget?.scope === "remote") return false;
   const { method } = event.notification;
   if (!SOURCE_EVENTS.has(method)) return false;
+  // A project's change is stamped with whichever backend published it.
+  if (ANY_THREAD_EVENTS.has(method)) return true;
+  if (event.backend !== backend) return false;
   const params = event.notification.params as { threadId?: unknown; action?: { threadId?: unknown } } | undefined;
   return params?.threadId === threadId || params?.action?.threadId === threadId;
 }

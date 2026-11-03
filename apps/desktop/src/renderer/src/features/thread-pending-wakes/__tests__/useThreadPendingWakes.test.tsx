@@ -111,6 +111,25 @@ describe("useThreadPendingWakes", () => {
     expect(requests.filter((request) => request.action === "list")).toHaveLength(2);
   });
 
+  it("reads again when a hold changes: the thread's lock, its queue, or any project's pause", async () => {
+    const { api, requests, emit } = fakeApi([
+      { ok: true, wakes: [], ended: [] },
+      { ok: true, wakes: [wake], ended: [] },
+      { ok: true, wakes: [], ended: [] },
+      { ok: true, wakes: [wake], ended: [] },
+    ]);
+    const { result } = renderHook(() => useThreadPendingWakes(thread, api as never));
+    await waitFor(() => expect(result.current.state).toMatchObject({ status: "ready", wakes: [] }));
+    emit({ backend: "claude", notification: { method: "thread/lock/updated", params: { threadId: "waiting" } } } as unknown as AgentEvent);
+    await waitFor(() => expect(result.current.state).toMatchObject({ wakes: [wake] }));
+    emit({ backend: "claude", notification: { method: "thread/turnQueue/updated", params: { threadId: "waiting", queueEntryId: "q1" } } } as unknown as AgentEvent);
+    await waitFor(() => expect(result.current.state).toMatchObject({ wakes: [] }));
+    // A project event names no thread, and any backend may stamp it.
+    emit({ backend: "codex", notification: { method: "directory/forgeAutomation/updated", params: { directoryKey: "directory:/repo" } } } as unknown as AgentEvent);
+    await waitFor(() => expect(result.current.state).toMatchObject({ wakes: [wake] }));
+    expect(requests.filter((request) => request.action === "list")).toHaveLength(4);
+  });
+
   it("hides a peer's stopped wake until the owner's next projection, and says when it is incomplete", async () => {
     const { api, requests } = fakeApi([]);
     const federation = {

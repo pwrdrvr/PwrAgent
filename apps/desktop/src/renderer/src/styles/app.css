@@ -38894,6 +38894,43 @@ div.composer-error-row__toggle {
   line-height: 1.35;
 }
 
+/* What holds the thread's wakes: the lock card's accent edge, at rail size. */
+.waiting-for-panel__hold {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-panel-elevated));
+}
+
+.waiting-for-panel__hold-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.waiting-for-panel__hold-text {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.waiting-for-panel__hold-title {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.waiting-for-panel__held {
+  color: var(--text-secondary);
+}
+
 .waiting-for-panel__ended {
   display: flex;
   flex-direction: column;
