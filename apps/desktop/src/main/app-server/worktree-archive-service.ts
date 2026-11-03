@@ -499,33 +499,34 @@ export class WorktreeArchiveService {
     worktree: WorktreeInfo;
     worktreePath: string;
   }): Promise<string> {
-    // Bound new content before git add writes blobs. Existing committed content
-    // is already retained by HEAD; ignored files are deliberately excluded.
-    const changed = await this.runGit(params.worktreePath, ["diff", "--name-only", "-z", "HEAD", "--", "."]);
-    const untracked = await this.runGit(params.worktreePath, ["ls-files", "--others", "--exclude-standard", "-z"]);
-    const files = new Set(`${changed.stdout}${untracked.stdout}`.split("\0").filter(Boolean));
-    if (files.size > MAX_WORKTREE_SNAPSHOT_FILES) {
-      throw new Error(`Snapshot file limit exceeded (${MAX_WORKTREE_SNAPSHOT_FILES}); the worktree was kept.`);
-    }
-    let bytes = 0;
-    for (const file of files) {
-      try {
-        const info = await lstat(path.join(params.worktreePath, file));
-        // Do not follow links into dependencies or unrelated directories.
-        if (info.isFile() || info.isSymbolicLink()) bytes += info.size;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-      if (bytes > this.maxSnapshotBytes) {
-        throw new Error(`Snapshot size limit exceeded (${this.maxSnapshotBytes} bytes); the worktree was kept.`);
-      }
-    }
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-index-"));
     const indexPath = path.join(tempDir, "index");
 
     try {
       const env = { GIT_INDEX_FILE: indexPath };
       await this.runGit(params.worktreePath, ["read-tree", "HEAD"], { env });
+      // Measure exactly what this fresh index will stage, before git add writes
+      // blobs. The live index can hide edits with assume-unchanged or skip-worktree
+      // flags that are absent here. Committed and ignored content is excluded.
+      const changed = await this.runGit(params.worktreePath, ["diff", "--name-only", "-z", "HEAD", "--", "."], { env });
+      const untracked = await this.runGit(params.worktreePath, ["ls-files", "--others", "--exclude-standard", "-z"], { env });
+      const files = new Set(`${changed.stdout}${untracked.stdout}`.split("\0").filter(Boolean));
+      if (files.size > MAX_WORKTREE_SNAPSHOT_FILES) {
+        throw new Error(`Snapshot file limit exceeded (${MAX_WORKTREE_SNAPSHOT_FILES}); the worktree was kept.`);
+      }
+      let bytes = 0;
+      for (const file of files) {
+        try {
+          const info = await lstat(path.join(params.worktreePath, file));
+          // Do not follow links into dependencies or unrelated directories.
+          if (info.isFile() || info.isSymbolicLink()) bytes += info.size;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        if (bytes > this.maxSnapshotBytes) {
+          throw new Error(`Snapshot size limit exceeded (${this.maxSnapshotBytes} bytes); the worktree was kept.`);
+        }
+      }
       await this.runGit(params.worktreePath, ["add", "-A", "--", "."], { env });
       const tree = trimGitOutput(
         (await this.runGit(params.worktreePath, ["write-tree"], { env })).stdout,
