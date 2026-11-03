@@ -188,10 +188,16 @@ function resolveNavigationParentThread(params: {
   const directParentThreadInstanceId = params.overlay?.parentThreadInstanceId;
   let parentThreadBackend = directParentThreadBackend ?? params.source;
   const seen = new Set([buildThreadIdentityKey(params.source, params.threadId)]);
-  let parentKey = buildThreadIdentityKey(parentThreadBackend, parentThreadId);
   // Overlays are keyed locally. A peer's parent has none here, and a local
   // row that shares its id is a different thread.
-  if (directParentThreadInstanceId) seen.add(parentKey);
+  if (directParentThreadInstanceId) {
+    return {
+      ...(directParentThreadBackend ? { parentThreadBackend: directParentThreadBackend } : {}),
+      parentThreadInstanceId: directParentThreadInstanceId,
+      parentThreadId: directParentThreadId,
+    };
+  }
+  let parentKey = buildThreadIdentityKey(parentThreadBackend, parentThreadId);
   while (!seen.has(parentKey)) {
     seen.add(parentKey);
     const parentOverlay =
@@ -200,10 +206,11 @@ function resolveNavigationParentThread(params: {
     // Stop at the last local ancestor. Walking on to its peer parent would
     // drop that parent's owner and name a local thread that does not exist.
     if (!nextParentThreadId || parentOverlay?.parentThreadInstanceId) {
+      // A legacy overlay without a backend still names the ancestor's
+      // backend once the walk has crossed onto another provider.
       return {
-        ...(directParentThreadBackend ? { parentThreadBackend } : {}),
-        ...(directParentThreadInstanceId
-          ? { parentThreadInstanceId: directParentThreadInstanceId }
+        ...(directParentThreadBackend || parentThreadBackend !== params.source
+          ? { parentThreadBackend }
           : {}),
         parentThreadId,
       };

@@ -583,8 +583,7 @@ it.each([true, false])("nests a handoff from a local creator whose parent is on 
   const provider = (id: string): AppServerThreadSummary => ({ source: "claude", id, title: id, titleSource: "derived",
     createdAt: 1, updatedAt: 1, linkedDirectories: [{ id: "repo", kind: "local", label: "repo", path: "/repo" }] });
   const local = materializeNavigationThreads({ firstSnapshot: false, previousKnownThreadKeys: [], overlayByThreadKey: overlays,
-    threads: [provider("creator"), provider("handoff"), provider("other")] })
-    .map((row) => ({ ...row, pinnedRank: overlays[`claude:${row.id}`]?.pinnedRank }));
+    threads: [provider("creator"), provider("handoff"), provider("other")] });
   const peerRoot = thread("peer-root", { pinnedRank: "-80896", federation: {
     ref: { backend: "codex", threadId: "peer-root", target: { scope: "remote", instanceId: "peer" } }, instanceLabel: "Peer",
   } });

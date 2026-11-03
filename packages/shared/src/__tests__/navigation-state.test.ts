@@ -183,6 +183,39 @@ describe("materializeNavigationThreads", () => {
     expect(handoff?.parentThreadInstanceId).toBeUndefined();
   });
 
+  it("names the ancestor's backend when a legacy overlay omitted its own", () => {
+    const overlayByThreadKey: Record<string, ThreadOverlayState> = {
+      "claude:creator": {
+        backend: "claude",
+        threadId: "creator",
+        executionMode: "auto",
+        extraLinkedDirectories: [],
+        parentThreadId: "codex-root",
+        parentThreadBackend: "codex",
+      },
+      // Written before overlays recorded the parent's backend.
+      "claude:legacy": {
+        backend: "claude",
+        threadId: "legacy",
+        executionMode: "auto",
+        extraLinkedDirectories: [],
+        parentThreadId: "creator",
+      },
+    };
+
+    const [legacy] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey,
+      previousKnownThreadKeys: [],
+      threads: [{ ...appServerThread(), source: "claude", id: "legacy" }],
+    });
+
+    expect(legacy).toMatchObject({
+      parentThreadId: "codex-root",
+      parentThreadBackend: "codex",
+    });
+  });
+
   it("never reads a local overlay for a parent that lives on a peer", () => {
     const overlayByThreadKey: Record<string, ThreadOverlayState> = {
       "codex:child": {
