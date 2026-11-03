@@ -482,6 +482,143 @@ describe("ThreadView", () => {
     expect(screen.getByText("Rewound prompt")).toBeInTheDocument();
   });
 
+  it.each(["submitted", "edited"] as const)(
+    "does not restore a rewound prompt again after it is %s and the composer remounts",
+    async (action) => {
+      const thread = rewindThread("claude");
+      const startTurn = vi.fn(async () => ({ backend: "claude" as const, threadId: thread.id, turnId: "resubmitted" }));
+      const { result } = renderHook(() => useComposerDraftStore());
+      const props: Omit<ThreadViewProps, "terminals"> = {
+        addOptimisticUserMessage: () => "optimistic-1",
+        backends: [rewindBackend("claude", "Claude")],
+        clearPendingRequest: () => undefined,
+        composerDisabled: false,
+        composerDraftStore: result.current,
+        desktopApi: {
+          startTurn,
+          rewindThread: async () => ({
+            backend: "claude", threadId: thread.id,
+            target: { messageId: "prompt-2", turnId: "turn-2" },
+            mode: "conversation", updatedAt: 2000,
+          }),
+        },
+        loading: false,
+        loadingMore: false,
+        messageCount: 4,
+        onLoadOlder: async () => undefined,
+        removeOptimisticMessage: () => undefined,
+        selectedThread: thread,
+        skills: [],
+        transcriptEntries: rewindTranscript,
+      };
+      const view = render(<ThreadView {...props} />);
+      const prompt = screen.getByText("Try holding the lock until the child exits instead.")
+        .closest(".transcript-list__item") as HTMLElement;
+      fireEvent.click(within(prompt).getByRole("button", { name: "Rewind to before this message" }));
+      const confirm = screen.getByRole("dialog", { name: "Rewind to before this message?" });
+      fireEvent.click(within(confirm).getByRole("button", { name: "Rewind and edit" }));
+      const reply = screen.getByRole("textbox", { name: "Reply" });
+      await waitFor(() => expect(reply).toHaveTextContent("Try holding the lock until the child exits instead."));
+
+      if (action === "submitted") {
+        fireEvent.keyDown(reply, { key: "Enter" });
+        await waitFor(() => {
+          expect(startTurn).toHaveBeenCalledOnce();
+          expect(reply.textContent).toBe("");
+        });
+      } else {
+        fireEvent.change(reply, { target: { value: "Keep this edited draft" } });
+      }
+
+      view.rerender(<ThreadView {...props} selectedThread={undefined} />);
+      expect(screen.queryByRole("textbox", { name: "Reply" })).not.toBeInTheDocument();
+      view.rerender(<ThreadView {...props} />);
+      const reopenedReply = screen.getByRole("textbox", { name: "Reply" });
+      expect(reopenedReply).not.toBe(reply);
+      await waitFor(() => {
+        if (action === "submitted") expect(reopenedReply.textContent).toBe("");
+        else expect(reopenedReply).toHaveTextContent("Keep this edited draft");
+      });
+      if (action === "edited") expect(screen.getByText("Rewound prompt")).toBeInTheDocument();
+      else expect(screen.queryByText("Rewound prompt")).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["restored", "edited", "replaced"] as const)(
+    "recognizes a %s rewound draft when Undo follows a launchpad visit",
+    async (draftState) => {
+      const thread = rewindThread("claude");
+      const undoThreadRewind = vi.fn(async () => ({
+        backend: "claude" as const, threadId: thread.id, rewindId: "rewind-1", updatedAt: 4000,
+      }));
+      const { result } = renderHook(() => useComposerDraftStore());
+      const props: Omit<ThreadViewProps, "terminals"> = {
+        addOptimisticUserMessage: () => "optimistic-1",
+        backends: [rewindBackend("claude", "Claude", { files: false, undo: true })],
+        clearPendingRequest: () => undefined,
+        composerDisabled: false,
+        composerDraftStore: result.current,
+        desktopApi: {
+          undoThreadRewind,
+          rewindThread: async () => ({
+            backend: "claude", threadId: thread.id, rewindId: "rewind-1",
+            target: { messageId: "prompt-2", turnId: "turn-2" },
+            mode: "conversation", updatedAt: 2000,
+          }),
+        },
+        loading: false,
+        loadingMore: false,
+        messageCount: 4,
+        onLoadOlder: async () => undefined,
+        removeOptimisticMessage: () => undefined,
+        selectedThread: thread,
+        skills: [],
+        transcriptEntries: rewindTranscript,
+      };
+      const view = render(<ThreadView {...props} />);
+      const prompt = screen.getByText("Try holding the lock until the child exits instead.")
+        .closest(".transcript-list__item") as HTMLElement;
+      fireEvent.click(within(prompt).getByRole("button", { name: "Rewind to before this message" }));
+      const confirm = screen.getByRole("dialog", { name: "Rewind to before this message?" });
+      fireEvent.click(within(confirm).getByRole("button", { name: "Rewind and edit" }));
+      const reply = screen.getByRole("textbox", { name: "Reply" });
+      await waitFor(() => expect(reply).toHaveTextContent("Try holding the lock until the child exits instead."));
+      if (draftState === "edited") {
+        fireEvent.change(reply, { target: { value: "Keep holding the lock" } });
+      } else if (draftState === "replaced") {
+        fireEvent.change(reply, { target: { value: "Discard this edited draft" } });
+        fireEvent.change(reply, { target: { value: "" } });
+        await waitFor(() => expect(screen.queryByText("Rewound prompt")).not.toBeInTheDocument());
+        fireEvent.change(reply, { target: { value: "Unrelated draft" } });
+      }
+
+      view.rerender(<ThreadView
+        {...props}
+        selectedThread={undefined}
+        selectedDirectory={{ key: "directory:/repo", kind: "directory", label: "Example", path: "/repo" }}
+        selectedLaunchpad={{
+          backend: "claude", directoryKey: "directory:/repo", directoryKind: "directory",
+          directoryLabel: "Example", directoryPath: "/repo", executionMode: "default",
+          prompt: "", workMode: "local", createdAt: 1, updatedAt: 1,
+        }}
+      />);
+      expect(screen.getByRole("textbox", { name: "New thread" })).toBeInTheDocument();
+      view.rerender(<ThreadView
+        {...props}
+        selectedThread={{ ...thread, rewindLog: [{ id: "rewind-1", occurredAt: 2000, undoable: true }] }}
+        transcriptEntries={rewindTranscript.slice(0, 2).map((entry, index) => ({ ...entry, createdAt: 1000 + index }))}
+      />);
+      const reopenedReply = screen.getByRole("textbox", { name: "Reply" });
+      expect(reopenedReply).not.toBe(reply);
+      fireEvent.click(screen.getByRole("button", { name: "Undo rewind" }));
+      await waitFor(() => {
+        expect(undoThreadRewind).toHaveBeenCalledOnce();
+        expect(reopenedReply.textContent).toBe(draftState === "replaced" ? "Unrelated draft" : "");
+      });
+      expect(screen.queryByText("Rewound prompt")).not.toBeInTheDocument();
+    },
+  );
+
   function renderGrokDialogThread(desktopApi: ThreadViewProps["desktopApi"]) {
     return render(
       <ThreadView
