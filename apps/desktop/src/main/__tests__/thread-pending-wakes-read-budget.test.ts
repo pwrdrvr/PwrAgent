@@ -92,7 +92,7 @@ it.each([0, 160])("budgets owner projection reads under repeated local and peer 
       dependencies: async (thread, limit) => dependencies.listPendingWakes(thread.backend, thread.threadId, limit),
       scheduledActions: (thread, endedLimit) => scheduled.listPendingWakes({ ...thread, endedLimit }),
       recentSubAgents: (thread, limit) => overlay.listEndedThreadTaskMonitors({ ...thread, limit }),
-      monitors: () => [], backendTasks: async () => [],
+      monitors: () => [], backendTasks: async () => [], backendWakes: () => [],
       // The registry's lock check reads this overlay; paused-project and queue state are in memory.
       hold: async (thread) => { await overlay.getThreadOverlayState(thread); return undefined; },
       heldEntries: () => [],

@@ -569,6 +569,7 @@ describe("NavigationDetailService", () => {
       monitors: vi.fn(() => [monitor]),
       recentSubAgents: vi.fn(async () => []),
       backendTasks: vi.fn(async () => []),
+      backendWakes: vi.fn(() => []),
       hold: vi.fn(async () => undefined),
       heldEntries: vi.fn(() => []),
     } satisfies ThreadPendingWakeReaders;
