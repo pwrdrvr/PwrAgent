@@ -24800,6 +24800,42 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /**
+   * The live monitor delegations whose handoff will wake this thread, from
+   * memory. One that is finishing or being cancelled is no longer waiting.
+   */
+  listPendingTaskMonitorWakes(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Array<{
+    monitorId: string;
+    task: string;
+    backend: AppServerBackendKind;
+    monitorThreadId?: string;
+    model?: string;
+    createdAt: number;
+    lastActivityAt: number;
+    pollIntervalSeconds: number;
+  }> {
+    return [...this.taskMonitorDelegations.values()]
+      .filter((record) => record.parentBackend === params.backend
+        && record.parentThreadId === params.threadId
+        && !record.finalizationStarted
+        && !record.cancellation)
+      .map((record) => ({
+        monitorId: record.monitorId,
+        task: record.task,
+        backend: record.backend,
+        ...(record.monitorThreadId ? { monitorThreadId: record.monitorThreadId } : {}),
+        ...(record.runtimeModel ?? record.preferredModel
+          ? { model: record.runtimeModel ?? record.preferredModel }
+          : {}),
+        createdAt: record.createdAt,
+        lastActivityAt: record.lastActivityAt,
+        pollIntervalSeconds: record.pollIntervalSeconds,
+      }));
+  }
+
   async stopSubAgent(
     params: StopSubAgentRequest,
   ): Promise<StopSubAgentResponse> {

@@ -2165,6 +2165,7 @@ describe("Claude SDK backend", () => {
     expect(f.backend.backgroundTaskThreadIds()).toEqual([threadId]);
     expect(f.backend.listBackgroundTasks(threadId).terminals).toEqual([{
       itemId: "tool-bash", processId: "task-1", command: "pnpm dev", cwd: f.root,
+      background: true, startedAt: expect.any(Number),
     }]);
     const between = await f.backend.readThread(threadId);
     expect(between.threadStatus).toBe("idle");
@@ -2812,6 +2813,7 @@ describe("Claude SDK backend", () => {
     await vi.waitFor(() => expect(f.backend.listBackgroundTasks(threadId).terminals).toEqual([{
       itemId: "tool-agent", processId: "agent-1", command: "Audit the SDK", cwd: f.root,
       kind: "agent", agentType: "Explore", progress: "3 tool uses · last Grep",
+      background: true, startedAt: expect.any(Number),
     }]));
     expect(f.events.filter((event) => event.notification.method === "turn/started")).toHaveLength(1);
     agentDone.resolve();

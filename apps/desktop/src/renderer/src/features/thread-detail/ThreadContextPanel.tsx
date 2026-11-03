@@ -39,6 +39,7 @@ import {
   EditsIcon,
   InfoIcon,
   HistoryIcon,
+  HourglassIcon,
   PricingIcon,
   ProjectsIcon,
   PullRequestIcon,
@@ -68,6 +69,9 @@ import { ProviderStatusPanel } from "./context-panels/ProviderStatusPanel";
 import { SubAgentsPanel } from "./context-panels/SubAgentsPanel";
 import { PullRequestsPanel } from "./context-panels/PullRequestsPanel";
 import { useThreadPrWatches } from "../pr-watches/useThreadPrWatchIndicators";
+import { useThreadPendingWakes } from "../thread-pending-wakes/useThreadPendingWakes";
+import { useThreadDependencyIndicatorsContext } from "../thread-dependencies/useThreadDependencyIndicators";
+import { WaitingForPanel } from "./context-panels/WaitingForPanel";
 import { LinkedProjectsPanel } from "./context-panels/LinkedProjectsPanel";
 import { EditsPanel } from "./context-panels/EditsPanel";
 import { PricingPanel } from "./context-panels/PricingPanel";
@@ -100,6 +104,7 @@ const CONTEXT_TABS: ContextTab[] = [
   { id: "connections", label: "Connections", Icon: ConnectionsIcon },
   { id: "info", label: "Thread info", Icon: InfoIcon },
   { id: "todos", label: "To-dos", Icon: TodoIcon },
+  { id: "waiting", label: "Waiting for", Icon: HourglassIcon },
   { id: "edits", label: "Edits", Icon: EditsIcon },
   { id: "pricing", label: "Pricing", Icon: PricingIcon },
   { id: "tool-calls", label: "Tool calls", Icon: ToolCallsIcon },
@@ -255,6 +260,11 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       ? props.thread.activePrWatches?.length ?? 0
       : localPrWatches?.watches.length ?? 0
     : 0;
+  // The Waiting for tab counts every pending wake, so a waiting thread says
+  // so before the tab opens. Unknown (an older owner) draws no badge.
+  const pendingWakes = useThreadPendingWakes(props.thread, props.desktopApi);
+  const pendingWakeCount = pendingWakes.state.status === "ready" ? pendingWakes.state.wakes.length : 0;
+  const dependencyContext = useThreadDependencyIndicatorsContext();
   const toolCallsFederationTarget = props.thread?.federation?.ref.target
     ?? readRendererFederationTarget();
   const toolCallsInstanceId = toolCallsFederationTarget?.scope === "remote"
@@ -747,9 +757,11 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     const todoBadge = tab.id === "todos" && props.todos
       ? readTodoTabBadge(props.todos.view, props.todos.threadKey)
       : undefined;
-    const watchCount = tab.id === "prs" ? prWatchCount : 0;
+    const watchCount = tab.id === "prs" ? prWatchCount : tab.id === "waiting" ? pendingWakeCount : 0;
     const label = commandCount
       ? `${tab.label} · ${commandCount} agent command${commandCount === 1 ? "" : "s"} running`
+      : watchCount && tab.id === "waiting"
+        ? `${tab.label} · ${watchCount} pending wake${watchCount === 1 ? "" : "s"}`
       : watchCount
         ? `${tab.label} · ${watchCount} watch${watchCount === 1 ? "" : "es"} waking this thread`
         : todoBadge?.unread
@@ -1003,6 +1015,30 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             thread={props.thread}
           />
         );
+      case "waiting": {
+        if (!props.thread) return null;
+        const thread = props.thread;
+        const federationTarget = thread.federation?.ref.target ?? readRendererFederationTarget();
+        const ownerLabel = thread.federation
+          ? thread.federation.instanceLabel
+          : readRendererFederationTarget() ? "the thread's own machine" : undefined;
+        const sendNow = props.desktopApi?.sendScheduledThreadActionNow;
+        const turnOffAutoFix = props.onSetThreadPrAutoDispatch;
+        const openContinueAfter = dependencyContext?.open;
+        return (
+          <WaitingForPanel
+            thread={thread}
+            controller={pendingWakes}
+            ownerLabel={ownerLabel}
+            onTurnOffAutoFix={turnOffAutoFix ? async () => await turnOffAutoFix(false) : undefined}
+            onSendScheduledNow={sendNow ? async (id) => {
+              await sendNow({ id, ...(federationTarget ? { federationTarget } : {}) });
+            } : undefined}
+            onShowTab={selectTab}
+            onOpenContinueAfter={openContinueAfter && !ownerLabel ? () => openContinueAfter(thread) : undefined}
+          />
+        );
+      }
       case "projects":
         if (!props.thread) return null;
         return (

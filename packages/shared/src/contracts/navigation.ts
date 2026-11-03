@@ -308,6 +308,14 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * written to the navigation store.
    */
   prCiWatches?: import("./thread-pr-watches").ThreadPrCiWatchMark[];
+  /**
+   * Owner-projected pending wakes, on selected detail only, like
+   * `activePrWatches`. Absent from an owner that predates them. Never written
+   * to the navigation store.
+   */
+  pendingWakes?: import("./thread-pending-wakes").ThreadPendingWake[];
+  /** The owner could not read every wake source, so `pendingWakes` may miss one. */
+  pendingWakesIncomplete?: true;
   /** Durable origin metadata for threads created by an Agent handoff tool. */
   handoffOrigin?: ThreadHandoffOrigin;
   /**

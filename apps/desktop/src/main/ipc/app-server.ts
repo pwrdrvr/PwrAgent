@@ -14,6 +14,14 @@ import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import { THREAD_PR_WATCHES_CHANNEL, THREAD_PR_WATCH_HISTORY_MAX_LIMIT, type ThreadPrAutoFixState, type ThreadPrWatchesRequest, type ThreadPrWatchesResponse, type WatchThreadPullRequestReason } from "@pwragent/shared";
 import { THREAD_DEPENDENCIES_CHANNEL, type ManageThreadDependenciesRequest, type ManageThreadDependenciesResponse, type ThreadDependencyCondition, type AppServerThreadTurnMetadata, type AppServerNotification } from "@pwragent/shared";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
+import { THREAD_PENDING_WAKES_CHANNEL, type ThreadPendingWakesList, type ThreadPendingWakesRequest, type ThreadPendingWakesResponse } from "@pwragent/shared";
+import {
+  buildThreadPendingWakes,
+  stopRemoteThreadPendingWake,
+  stopThreadPendingWake,
+  type ThreadPendingWakeReaders,
+} from "../app-server/thread-pending-wakes";
+import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ThreadDependencyCoordinator, validateDependencyCreate, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
 import {
   getProjectForgeAutomationIndex,
@@ -486,7 +494,7 @@ import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, find
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import { readLocalNavigationDirectoryIndex } from "../app-server/navigation-directory-index";
 import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
-import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
+import { getDesktopNavigationDetailService, setNavigationDetailPendingWakesProjector } from "../app-server/navigation-detail-service";
 import {
   isFederationPeerUnavailableError,
 } from "../federation/federation-peer-unavailable-error";
@@ -659,6 +667,8 @@ type ThreadPrRefreshContext = {
 };
 
 const appServerLog = getMainLogger("pwragent:app-server");
+/** How far back the Waiting for list reads ended scheduled actions. */
+const PENDING_WAKES_SCHEDULED_HISTORY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Forge Automation is owner-local and per Directories project. A remote
@@ -5255,6 +5265,99 @@ class DesktopAppServerService {
     }
     await this.publishPrWatchesUpdated([cancelled]);
     return { ok: true, cancelled: true };
+  }
+
+  /** The readers the Waiting for list draws on, all reads of existing state. */
+  private pendingWakeReaders(): ThreadPendingWakeReaders {
+    const registry = getDesktopBackendRegistry();
+    return {
+      prWatches: async (thread) => await this.getOverlayStore().listActiveThreadPrStatusWatches(thread),
+      prWatchHistory: async (thread, limit) => limit === 0 ? []
+        : await this.getOverlayStore().listThreadPrStatusWatchHistory({
+          ...thread, limit: Math.min(limit, THREAD_PR_WATCH_HISTORY_MAX_LIMIT),
+        }),
+      autoFix: async () => await this.listThreadPrAutoFixStates(),
+      // A plain store read: the coordinator's list waits behind evaluations,
+      // and selected detail reads this list.
+      dependencies: async (thread) => new ThreadDependencyStore(getAppStateDb().raw)
+        .list(thread.backend, thread.threadId),
+      // Each action reads its payload file, so ended ones are read only for
+      // the history, and only from the last day.
+      scheduledActions: (thread, includeEnded) => getScheduledThreadActionService().list({
+        ...thread,
+        ...(includeEnded ? { terminalUpdatedAfter: Date.now() - PENDING_WAKES_SCHEDULED_HISTORY_MS } : {}),
+      }).actions,
+      monitors: (thread) => registry.listPendingTaskMonitorWakes(thread),
+      recentSubAgents: async (thread, limit) => limit === 0 ? []
+        : await this.getOverlayStore().listThreadSubAgentPage({ ...thread, offset: 0, limit }),
+      // Only Claude continues a thread when a background task ends.
+      backendTasks: async (thread) => thread.backend === "claude"
+        ? (await registry.listBackgroundTerminals(thread)).terminals
+        : [],
+    };
+  }
+
+  /** The thread's pending wakes, for its owner's windows and its detail. */
+  async listThreadPendingWakes(
+    thread: { backend: AppServerBackendKind; threadId: string },
+    endedLimit?: number,
+  ): Promise<ThreadPendingWakesList> {
+    // Before a profile's state opens nothing can wake a thread.
+    if (!getAppStateMode()) return { wakes: [], ended: [] };
+    return await buildThreadPendingWakes(this.pendingWakeReaders(), thread, {
+      endedLimit,
+      onReadError: (source, error) => appServerLog.warn("pending wake source unreadable", {
+        source, backend: thread.backend, threadId: thread.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    });
+  }
+
+  /** The Waiting for list and its Stop, for a thread this instance owns. */
+  async manageThreadPendingWakes(
+    request: ThreadPendingWakesRequest,
+  ): Promise<ThreadPendingWakesResponse> {
+    if (
+      !request
+      || (request.action !== "list" && request.action !== "stop")
+      || !isAppServerBackendKind(request.backend)
+      || typeof request.threadId !== "string"
+      || !request.threadId.trim()
+    ) {
+      return { ok: false, error: { code: "invalid_arguments", message: "action, backend and threadId are required." } };
+    }
+    const thread = { backend: request.backend, threadId: request.threadId.trim() };
+    if (request.action === "list") {
+      return { ok: true, ...await this.listThreadPendingWakes(thread, request.endedLimit) };
+    }
+    if (typeof request.key !== "string") {
+      return { ok: false, error: { code: "invalid_arguments", message: "key is required." } };
+    }
+    const registry = getDesktopBackendRegistry();
+    return await stopThreadPendingWake({
+      cancelPrWatch: async (owner, watchId) => {
+        const response = await this.manageThreadPrWatches({ action: "cancel", ...owner, watchId });
+        return response.ok ? { ok: true } : { ok: false, code: response.error.code === "not_found" ? "not_found" : "failed", message: response.error.message };
+      },
+      cancelDependency: async (owner, dependencyId) => {
+        await this.manageThreadDependencies({ action: "cancel", ...owner, dependencyId });
+      },
+      stopMonitor: async (owner, monitorId) => {
+        await registry.stopSubAgent({ ...owner, monitorId });
+      },
+      cancelScheduledAction: async (owner, actionId) => {
+        const service = getScheduledThreadActionService();
+        // Cancel takes a bare id; a stop names this thread's wake only.
+        if (!service.list(owner).actions.some((action) => action.id === actionId)) {
+          throw new Error("That scheduled action is no longer waiting on this thread.");
+        }
+        await service.cancel({ id: actionId });
+      },
+      stopBackendTask: async (owner, processId) => {
+        const { terminated } = await registry.terminateBackgroundTerminal({ ...owner, processId });
+        if (!terminated) throw new Error("The task has already ended.");
+      },
+    }, thread, request.key);
   }
 
   /**
@@ -10662,6 +10765,47 @@ export function registerAppServerIpcHandlers(): void {
     }
     return await appServerService.manageThreadPrWatches(request);
   });
+  setNavigationDetailPendingWakesProjector(async (thread) =>
+    await appServerService.listThreadPendingWakes(thread, 0));
+  ipcMain.removeHandler(THREAD_PENDING_WAKES_CHANNEL);
+  ipcMain.handle(THREAD_PENDING_WAKES_CHANNEL, async (event, request: ThreadPendingWakesRequest): Promise<ThreadPendingWakesResponse> => {
+    const target = request?.federationTarget;
+    if (target && isRemoteFederationTarget(target)) {
+      // A peer's list arrives with its selected detail; only Stop comes here.
+      if (request.action !== "stop" || typeof request.key !== "string") {
+        return {
+          ok: false,
+          error: { code: "federation_unsupported", message: "A peer's pending wakes come with its thread detail." },
+        };
+      }
+      const runtime = getDesktopFederationRuntime();
+      const owner = { backend: request.backend, threadId: request.threadId };
+      return await stopRemoteThreadPendingWake({
+        cancelPrWatch: async (watchId) => {
+          const response = await manageRemoteThreadPrWatches({ action: "cancel", ...owner, watchId }, target, runtime);
+          return response.ok ? { ok: true }
+            : { ok: false, code: response.error.code === "federation_unsupported" ? "federation_unsupported" : "failed", message: response.error.message };
+        },
+        cancelScheduledAction: async (actionId) => {
+          await runtime.remoteBackend(target).cancelScheduledThreadAction({ id: actionId });
+        },
+        stopMonitor: async (monitorId) => {
+          await runtime.remoteBackend(target).stopSubAgent({ ...owner, monitorId });
+        },
+        stopBackendTask: async (processId) => {
+          const { terminated } = await runtime.remoteBackend(target).terminateBackgroundTerminal({ ...owner, processId });
+          if (!terminated) throw new Error("The task has already ended.");
+        },
+      }, request.key);
+    }
+    if (isFederationWindowWebContents(event.sender)) {
+      return {
+        ok: false,
+        error: { code: "federation_unsupported", message: "Pending wakes are managed on the instance that owns the thread." },
+      };
+    }
+    return await appServerService.manageThreadPendingWakes(request);
+  });
   getDesktopBackendRegistry().setThreadPrWatchesPeerHandler(async (request) => {
     // Envelope params are the viewer's; only the named fields reach the store.
     const owned = readFederationThreadPrWatchesRequest(request);
@@ -11994,6 +12138,8 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL);
   ipcMain.removeHandler(THREAD_DEPENDENCIES_CHANNEL);
   ipcMain.removeHandler(THREAD_PR_WATCHES_CHANNEL);
+  ipcMain.removeHandler(THREAD_PENDING_WAKES_CHANNEL);
+  setNavigationDetailPendingWakesProjector(undefined);
   ipcMain.removeHandler(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL);
   await navigationAttentionViewLeases.dispose();

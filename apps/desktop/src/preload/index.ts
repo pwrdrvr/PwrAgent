@@ -1258,6 +1258,8 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke("thread:dependencies", request),
   manageThreadPrWatches: async (request: import("@pwragent/shared").ThreadPrWatchesRequest): Promise<import("@pwragent/shared").ThreadPrWatchesResponse> =>
     await ipcRenderer.invoke("thread:prWatches", request),
+  manageThreadPendingWakes: async (request: import("@pwragent/shared").ThreadPendingWakesRequest): Promise<import("@pwragent/shared").ThreadPendingWakesResponse> =>
+    await ipcRenderer.invoke("thread:pendingWakes", request),
   nativeVoiceCapability: () => ipcRenderer.invoke(NATIVE_VOICE_CAPABILITY_CHANNEL),
   startNativeVoice: (request: NativeVoiceStart) => ipcRenderer.invoke(NATIVE_VOICE_START_CHANNEL, request),
   stopNativeVoice: (request: NativeVoiceTarget) => ipcRenderer.invoke(NATIVE_VOICE_STOP_CHANNEL, request),

@@ -14,6 +14,8 @@ export type ClaudeTask = {
   backgrounded: boolean;
   status: ClaudeTaskStatus;
   progress?: string;
+  /** When this process first saw the task; held in memory only. */
+  startedAt?: number;
 };
 
 /** A settled task, for the tool call that started it. */
@@ -34,6 +36,8 @@ export class ClaudeTaskTracker {
   private readonly tasks = new Map<string, ClaudeTask>();
   private liveBackground?: Set<string>;
 
+  constructor(private readonly now: () => number = Date.now) {}
+
   /** Returns the task a notification settled. */
   apply(message: SDKMessage): { settled?: ClaudeTaskSettlement } {
     if (message.type !== "system") return {};
@@ -52,6 +56,7 @@ export class ClaudeTaskTracker {
         backgrounded: message.is_backgrounded
           ?? (previous?.backgrounded === true || this.liveBackground?.has(message.task_id) === true),
         status: "running",
+        startedAt: previous?.startedAt ?? this.now(),
       });
     } else if (message.subtype === "task_updated") {
       const task = this.tasks.get(message.task_id);
@@ -73,7 +78,7 @@ export class ClaudeTaskTracker {
     } else if (message.subtype === "task_notification") {
       const task = this.tasks.get(message.task_id) ?? {
         taskId: message.task_id, toolUseId: message.tool_use_id, description: "",
-        ambient: false, backgrounded: true, status: "running" as const,
+        ambient: false, backgrounded: true, status: "running" as const, startedAt: this.now(),
       };
       task.toolUseId ??= message.tool_use_id;
       task.ambient ||= message.ambient === true || message.skip_transcript === true;
@@ -95,7 +100,7 @@ export class ClaudeTaskTracker {
           this.tasks.set(entry.task_id, {
             taskId: entry.task_id, taskType: entry.task_type, subagentType: entry.subagent_type,
             description: entry.description, ambient: entry.ambient === true,
-            backgrounded: true, status: "running",
+            backgrounded: true, status: "running", startedAt: this.now(),
           });
         }
       }
@@ -144,5 +149,7 @@ export function claudeTaskRow(task: ClaudeTask, params: { cwd: string; command?:
     ...(kind === "command" ? {} : { kind }),
     ...(task.subagentType ? { agentType: task.subagentType } : {}),
     ...(task.progress ? { progress: task.progress } : {}),
+    ...(task.backgrounded ? { background: true } : {}),
+    ...(task.startedAt !== undefined ? { startedAt: task.startedAt } : {}),
   };
 }
