@@ -499,6 +499,11 @@ function main() {
   lines.push("");
   lines.push("Bundled Git runtime (approved separate-executable license exception)");
   lines.push("------------------------------------------------------------------");
+  const customGit = JSON.parse(readFileSync(join(repoRoot, "apps/desktop/custom-git-runtime.json"), "utf8"));
+  lines.push(`macOS/Linux: Custom Git ${customGit.version}; exact source https://github.com/huntharo/git/tree/${customGit.source_revision}.`);
+  lines.push(`Matching source archives, dependency sources, symbols, build recipes and checksums: https://github.com/huntharo/git/releases/tag/v${customGit.version}.`);
+  lines.push("The custom Git payload includes exact SOURCES, build provenance, Git/LFS licenses and Linux dependency notices. Git/LFS remain separate command-line programs; PwrAgent remains MIT licensed.");
+  lines.push("The following existing Dugite distribution and notices apply to Windows:", "");
   const gitNotices = join(repoRoot, "apps/desktop/resources/embedded-git");
   for (const file of ["SOURCES", "COPYING", "LICENSE.git-lfs", "LICENSE.git-credential-manager", "NOTICE"]) {
     lines.push(readFileSync(join(gitNotices, file), "utf8").trim(), "");

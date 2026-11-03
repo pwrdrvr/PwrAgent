@@ -884,6 +884,7 @@ if (!signStageOnly) {
     join(stageDir, "electron-builder.yml"),
   );
   configureStageGithubReleaseType();
+  copyFileSync(join(desktopRoot, "custom-git-runtime.json"), join(stageDir, "custom-git-runtime.json"));
   for (const file of ["LICENSE", "THIRD_PARTY_LICENSES", "CHANGELOG.md"]) {
     copyFileSync(join(repoRoot, file), join(stageDir, file));
   }

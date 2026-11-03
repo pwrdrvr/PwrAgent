@@ -20,7 +20,9 @@
     "apps/desktop/scripts/asar-entry-paths.mjs",
     "apps/desktop/scripts/stage-native-prebuilds.mjs",
     "apps/desktop/node_modules",
-    "node_modules"
+    "node_modules",
+    "apps/desktop/scripts/stage-runtime.mjs",
+    "apps/desktop/custom-git-runtime.json"
   ],
   "windows": [
     "apps/desktop/release-stage",
@@ -36,6 +38,8 @@
     "apps/desktop/scripts/asar-entry-paths.mjs",
     "apps/desktop/scripts/stage-native-prebuilds.mjs",
     "apps/desktop/scripts/windows-release-artifacts.mjs",
-    "scripts/release/install-trusted-signing.ps1"
+    "scripts/release/install-trusted-signing.ps1",
+    "apps/desktop/scripts/stage-runtime.mjs",
+    "apps/desktop/custom-git-runtime.json"
   ]
 }
