@@ -2,7 +2,7 @@ name: Windows Native Quit Reproduction
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
     inputs:
       samples:
@@ -24,6 +24,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ci:windows-shutdown-diagnostics') &&
       contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics'))
     runs-on: windows-latest
     timeout-minutes: 15
