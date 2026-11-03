@@ -54,6 +54,18 @@ describe("one-time archived worktree repair", () => {
     expect(repair).toHaveBeenCalledTimes(1);
   });
 
+  it("allows manual re-audit of a completed pass but never overlaps a live instance", async () => {
+    const { db, repair } = fixture();
+    await runOneTimeArchivedWorktreeRepair({ db: db.raw, repair });
+    await runOneTimeArchivedWorktreeRepair({ db: db.raw, repair, force: true });
+    expect(repair).toHaveBeenCalledTimes(2);
+    db.raw.prepare("UPDATE meta SET value=? WHERE key=?").run(
+      JSON.stringify({ version: 4, ownerPid: 123, attemptedAt: 1 }), ARCHIVED_WORKTREE_REPAIR_KEY);
+    await expect(runOneTimeArchivedWorktreeRepair({ db: db.raw, repair, force: true, processAlive: () => true }))
+      .rejects.toThrow("already running in another instance");
+    expect(repair).toHaveBeenCalledTimes(2);
+  });
+
   it("does not mark incomplete discovery as completed or retry it in the same invocation", async () => {
     const { db, report } = fixture();
     const repair = vi.fn<() => Promise<ArchivedWorktreeRepairReport>>(async () => { throw new Error("Provider inventory unavailable"); });

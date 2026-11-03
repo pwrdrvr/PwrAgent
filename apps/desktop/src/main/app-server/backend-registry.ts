@@ -16385,8 +16385,9 @@ export class DesktopBackendRegistry {
             if (report) publishProgress(completed, report);
           },
         });
-        const report = manual ? await repair() : isAppStateInitialized()
-          ? await runOneTimeArchivedWorktreeRepair({ db: getAppStateDb().raw, repair }) : undefined;
+        const report = isAppStateInitialized()
+          ? await runOneTimeArchivedWorktreeRepair({ db: getAppStateDb().raw, repair, force: manual })
+          : manual ? await repair() : undefined;
         if (!report) return;
         publishProgress(report.candidates.length + report.emptyContainerCandidates.length, report);
         for (const item of [...report.cleanup, ...report.containerCleanup]) {

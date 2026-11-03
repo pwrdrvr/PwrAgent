@@ -38,16 +38,22 @@ export async function runOneTimeArchivedWorktreeRepair(options: {
   now?: () => number;
   processId?: number;
   processAlive?: (pid: number) => boolean;
+  /** Re-audit on operator request, while still respecting a live claim. */
+  force?: boolean;
 }): Promise<ArchivedWorktreeRepairReport | undefined> {
   const { db } = options;
   const processId = options.processId ?? process.pid;
   const now = options.now ?? Date.now;
   const processAlive = options.processAlive ?? storageProcessAlive;
   const previous = readRecord(db);
-  if (previous.version === REPAIR_VERSION && previous.completedAt !== undefined) return undefined;
+  if (!options.force && previous.version === REPAIR_VERSION && previous.completedAt !== undefined) return undefined;
   const acquired = db.transaction(() => {
     const record = readRecord(db);
-    if ((record.version === REPAIR_VERSION && record.completedAt !== undefined) || (record.ownerPid !== undefined && processAlive(record.ownerPid))) return false;
+    if (record.ownerPid !== undefined && processAlive(record.ownerPid)) {
+      if (options.force) throw new Error("Archived worktree cleanup is already running in another instance.");
+      return false;
+    }
+    if (!options.force && record.version === REPAIR_VERSION && record.completedAt !== undefined) return false;
     writeRecord(db, { version: REPAIR_VERSION, ownerPid: processId, attemptedAt: now() });
     return true;
   }).immediate();
