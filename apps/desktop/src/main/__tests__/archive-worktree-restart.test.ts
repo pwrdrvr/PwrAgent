@@ -38,6 +38,8 @@ afterEach(async () => {
   ArchiveWorktreeTransport.requests = [];
   ArchiveWorktreeTransport.onList = undefined;
   ArchiveWorktreeTransport.rejectSafetySources = false;
+  ArchiveWorktreeTransport.emitArchiveNotifications = false;
+  ArchiveWorktreeTransport.onReviewStart = undefined;
 });
 
 async function createFixture(managed: boolean | "claude" = false) {
@@ -605,6 +607,67 @@ describe("archive worktrees across a desktop restart", () => {
     expect(result.cleanup[0]?.skippedReason).toContain("another active thread: hidden-user");
     expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
     expect((await instance.store.getThreadOverlayState({ backend: "codex", threadId: "old-target" }))?.worktreeSnapshots ?? []).toEqual([]);
+  });
+
+  it.each(["completed", "cancelled", "failed", "early", "new work", "archive failure"])("retires a distinct native review child after its result is retained (%s)", async (terminal) => {
+    vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");
+    const fixture = await createFixture();
+    const parent = { id: "reviewed-parent", cwd: fixture.worktree, source: "cli" };
+    const child: ArchiveWorktreeThread = { id: "native-review", cwd: fixture.worktree, source: "subAgentReview",
+      wireSource: { subAgent: "review" }, threadSource: "subagent", parentThreadId: parent.id, status: { type: "notLoaded" } };
+    ArchiveWorktreeTransport.threads = [parent, child];
+    ArchiveWorktreeTransport.emitArchiveNotifications = true;
+    const instance = fixture.reopen();
+    await instance.registry.listBackends({ includeUnavailable: true });
+    let transport!: ArchiveWorktreeTransport;
+    const notification = { method: terminal === "cancelled" ? "turn/cancelled" as const : terminal === "failed" ? "turn/failed" as const : "turn/completed" as const,
+      params: { threadId: child.id, turnId: "native-review-turn", turn: { id: "native-review-turn",
+        status: terminal === "cancelled" ? "cancelled" as const : terminal === "failed" ? "failed" as const : "completed" as const } } };
+    ArchiveWorktreeTransport.onReviewStart = (_params, connection) => {
+      transport = connection;
+      if (terminal === "early") transport.emitNotification(notification);
+      return { reviewThreadId: child.id, turn: { id: "native-review-turn", status: "inProgress" } };
+    };
+    const archive = terminal === "archive failure" ? vi.spyOn(instance.client, "archiveThread").mockRejectedValueOnce(new Error("Provider archive rejected")) : undefined;
+    const { writes } = await measureSqliteWrites(async () => {
+      await instance.registry.startReview({ backend: "codex", threadId: parent.id, target: { type: "uncommittedChanges" } });
+      if (terminal !== "early") {
+        if (terminal === "new work") child.status = { type: "active", activeFlags: [] };
+        const completed = new Promise<void>((resolve) => instance.registry.onEvent((event) => {
+          if (event.notification.method === notification.method && event.notification.params.turnId === "native-review-turn") resolve();
+        }));
+        transport.emitNotification(notification);
+        await completed;
+      }
+    });
+    archive?.mockRestore();
+    if (terminal === "completed") expectSqliteWriteBudget({ scenario: "native-review-retirement",
+      note: "One native review start and terminal completion, retaining its parent result and archiving only the review helper; no timer or idle writes.", writes });
+    const kept = terminal === "new work" || terminal === "archive failure";
+    expect(child.archived === true).toBe(!kept);
+    expect(parent.archived).toBeUndefined();
+    expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
+    expect(ArchiveWorktreeTransport.requests.filter((request) => request.method === "thread/unsubscribe" && request.params.threadId === child.id)).toHaveLength(kept ? 0 : 1);
+    const subAgents = (await instance.store.getThreadOverlayState({ backend: "codex", threadId: parent.id }))?.subAgents;
+    expect(subAgents?.some((agent) => agent.monitorThreadId === child.id && ["success", "cancelled", "failed"].includes(agent.status))).toBe(true);
+  });
+
+  it.each(["active", "unknown", "ordinary", "late-active"])("preserves a checkout with a real or uncertain review owner (%s)", async (kind) => {
+    const fixture = await createFixture();
+    const child: ArchiveWorktreeThread = { id: "review-child", cwd: fixture.worktree, source: kind === "ordinary" ? "cli" : "subAgentReview",
+      ...(kind === "ordinary" ? {} : { wireSource: { subAgent: "review" as const }, threadSource: "subagent" as const }),
+      status: kind === "active" ? { type: "active", activeFlags: [] } : kind === "unknown" ? undefined : { type: "notLoaded" } };
+    ArchiveWorktreeTransport.threads = [{ id: "reviewed-parent", cwd: fixture.worktree, source: "cli" }, child];
+    if (kind === "late-active") {
+      let activeReads = 0;
+      ArchiveWorktreeTransport.onList = (params) => {
+        if (!params.archived && ++activeReads === 2) child.status = { type: "active", activeFlags: [] };
+      };
+    }
+    const instance = fixture.reopen();
+    const result = await instance.registry.archiveThread({ backend: "codex", threadId: "reviewed-parent" });
+    expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: false })]);
+    expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
   });
 
   it.each([false, true])("does not retain a checkout for six completed native review children after restart (repair=%s)", async (repair) => {

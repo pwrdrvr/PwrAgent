@@ -1123,6 +1123,7 @@ type BackendClient = {
   ): Promise<AppServerThreadSummary[]>;
   deleteThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   archiveThread?(params: { threadId: string }): Promise<{ threadId: string }>;
+  retireReviewThread?: CodexAppServerClient["retireReviewThread"];
   restoreThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   renameThread?(params: { threadId: string; name: string }): Promise<{ threadId: string }>;
   updateThreadMetadata?(params: {
@@ -36396,6 +36397,23 @@ export class DesktopBackendRegistry {
       status: terminal.method,
       ...(terminal.errorMessage ? { errorMessage: terminal.errorMessage } : {}),
     });
+    if (record.mode === "native" && record.backend === "codex" && record.parentBackend === "codex"
+      && record.reviewThreadId !== record.parentThreadId) {
+      try {
+        const retired = await this.withCodexThreadClient(record.reviewThreadId, async (client) =>
+          await client.retireReviewThread?.({ threadId: record.reviewThreadId, parentThreadId: record.parentThreadId }));
+        backendRegistryLog.info("native review thread retirement completed", {
+          parentThreadId: record.parentThreadId, reviewThreadId: record.reviewThreadId, retired: retired === true,
+        });
+      } catch (error) {
+        // Findings and the parent's terminal state have already been retained.
+        // A cleanup failure must not fail the review or its parent's queue.
+        backendRegistryLog.warn("native review thread retirement failed", {
+          parentThreadId: record.parentThreadId, reviewThreadId: record.reviewThreadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   private findReviewForParentTurn(params: {
@@ -50412,7 +50430,7 @@ export class DesktopBackendRegistry {
         || notification.method === "turn/started"
         || notification.method === "navigation/threadDirectories/updated"
         // Idle/notLoaded cannot add a checkout user. Active or uncertain
-        // status can reactivate a Guardian excluded by the safety inventory.
+        // status can reactivate a review helper excluded by the safety inventory.
         || (notification.method === "thread/status/changed"
           && !["idle", "notLoaded"].includes(readStatusType(notification.params.status) ?? "")))
       && !this.archiveCleanupNotifications.has(notification)

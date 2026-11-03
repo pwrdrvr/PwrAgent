@@ -6226,14 +6226,18 @@ function readCodexThreadSourceKind(
   const explicit =
     pickString(record, ["threadSource", "thread_source"]) ??
     pickString(sessionRecord ?? {}, ["threadSource", "thread_source"]);
-  if (explicit) {
-    return explicit;
-  }
-
   const source =
     asRecord(record.source) ??
     asRecord(sessionRecord?.source);
   const subAgent = source?.subAgent ?? source?.sub_agent;
+  // Native review children report the generic durable `subagent` marker.
+  // Their more specific protocol source distinguishes disposable reviews
+  // from ordinary workers that must continue to protect their checkout.
+  if (subAgent === "review" && (!explicit || explicit === "subagent")) return "subAgentReview";
+  if (explicit) {
+    return explicit;
+  }
+
   if (typeof subAgent === "string") {
     switch (subAgent) {
       case "review":
@@ -9504,11 +9508,11 @@ export class CodexAppServerClient {
     });
     const page = extractThreadListPage(result, this.threadListTextCache);
     if (page.threads.length > params.limit) throw new Error("Archive discovery exceeded the requested provider page budget.");
-    // Completed Guardian approval reviews remain unarchived with an inherited
-    // cwd. They are not independent checkout users. Keep active or uncertain
+    // Completed approval and native code-review helpers inherit their parent's
+    // cwd; they are not independent checkout users. Keep active or uncertain
     // reviews, every ordinary thread/worker, and archived ownership evidence.
     const checkoutUsers = params.archived ? page.threads : page.threads.filter((thread) =>
-      thread.codexThreadSourceKind !== "guardian_review"
+      !["guardian_review", "subAgentReview"].includes(thread.codexThreadSourceKind ?? "")
       || (thread.threadStatus !== "idle" && thread.threadStatus !== "notLoaded"),
     );
     const threads = await this.enrichRawThreadDirectories(checkoutUsers, "thread-list", {
@@ -11354,6 +11358,25 @@ export class CodexAppServerClient {
     return {
       threadId: params.threadId,
     };
+  }
+
+  /** Retire an owned native review through Codex, retaining readable findings.
+   * Recheck identity and idleness: a terminal notification must never archive
+   * the parent or a child that has acquired new work. No workspace cleanup is
+   * requested here; the parent owns that lifecycle. */
+  async retireReviewThread(params: { threadId: string; parentThreadId: string }): Promise<boolean> {
+    if (params.threadId === params.parentThreadId) return false;
+    await this.ensureInitialized();
+    const result = await this.connection.request("thread/read", { threadId: params.threadId, includeTurns: false },
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+    const thread = asRecord(asRecord(result)?.thread);
+    if (!thread || thread.parentThreadId !== params.parentThreadId
+      || readCodexThreadSourceKind(thread, null) !== "subAgentReview"
+      || !["idle", "notLoaded"].includes(readThreadStatus(thread) ?? "")) return false;
+    await this.archiveThread({ threadId: params.threadId });
+    await this.connection.request("thread/unsubscribe", { threadId: params.threadId },
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+    return true;
   }
 
   async deleteThread(params: { threadId: string }): Promise<{ threadId: string }> {
