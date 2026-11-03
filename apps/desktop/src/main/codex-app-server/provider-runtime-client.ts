@@ -10,6 +10,9 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   onAppServerUnexpectedExit: "subscribe",
   restartAppServer: "all",
   resetAppServerRestarts: "all",
+  getSubscribedThreadCount: "primary",
+  // Each runtime keeps its own threads loaded and releases its own.
+  unsubscribeIdleThreads: "all",
   recoverInvalidPersistedResponseMessageIds: "thread",
   onRealtimeEvent: "subscribe",
   onRealtimeDisconnect: "subscribe",

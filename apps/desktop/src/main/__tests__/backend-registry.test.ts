@@ -4962,6 +4962,55 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("releases idle Codex threads only when the registry tracks no work for them", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const unsubscribe = vi.fn(async (_params: {
+      idleMs: number;
+      isThreadBusy: (threadId: string) => boolean;
+    }) => [] as string[]);
+    Object.assign(codexClient, { unsubscribeIdleThreads: unsubscribe });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      codexThreadIdleUnsubscribeMs: 123_000,
+    });
+    const internals = registry as unknown as {
+      activeTurnKeys: Set<string>;
+      codexBackgroundTerminals: Map<string, unknown[]>;
+      liveCodexToolItemsByThread: Map<string, Map<string, unknown>>;
+      liveCodexNativeSubAgentUsage: Map<string, Map<string, unknown>>;
+    };
+
+    await registry.unsubscribeIdleCodexThreads();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    const { idleMs, isThreadBusy } = unsubscribe.mock.calls[0]![0];
+    expect(idleMs).toBe(123_000);
+    expect(isThreadBusy("thread-1")).toBe(false);
+
+    internals.activeTurnKeys.add("codex:thread-1:turn-1");
+    expect(isThreadBusy("thread-1")).toBe(true);
+    expect(isThreadBusy("thread-10")).toBe(false);
+    internals.activeTurnKeys.delete("codex:thread-1:turn-1");
+
+    // A command still running after its turn ended dies with an unload.
+    internals.codexBackgroundTerminals.set("thread-1", [{ processId: "p-1" }]);
+    expect(isThreadBusy("thread-1")).toBe(true);
+    internals.codexBackgroundTerminals.clear();
+    internals.liveCodexToolItemsByThread.set("thread-1", new Map());
+    expect(isThreadBusy("thread-1")).toBe(true);
+    internals.liveCodexToolItemsByThread.clear();
+    // A parent whose turn ended while its sub-agent workers still run.
+    internals.liveCodexNativeSubAgentUsage.set("thread-1", new Map([["worker-1", {}]]));
+    expect(isThreadBusy("thread-1")).toBe(true);
+    internals.liveCodexNativeSubAgentUsage.clear();
+    expect(isThreadBusy("thread-1")).toBe(false);
+
+    await registry.close();
+    expect(isThreadBusy("thread-1")).toBe(true);
+    await registry.unsubscribeIdleCodexThreads();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
   it("refreshes only owner-known directory Git state for federation requests", async () => {
     const invalidateDirectoryStatus = vi.fn();
     const readDirectoryStatusEntries = vi.fn(
