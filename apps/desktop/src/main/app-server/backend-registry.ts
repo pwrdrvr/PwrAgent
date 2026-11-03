@@ -28879,11 +28879,16 @@ export class DesktopBackendRegistry {
       updatedAt: Date.now(),
     };
     let nextLaunchpad = patchedLaunchpad;
+    // A peer's draft carries the owner's model choices. The viewer's catalog
+    // cannot normalize them; the owner validates them when creating the thread.
     if (
-      "model" in patch ||
-      "reasoningEffort" in patch ||
-      "serviceTier" in patch ||
-      "fastMode" in patch
+      !isRemoteLaunchpadStorageKey(request.directoryKey)
+      && (
+        "model" in patch
+        || "reasoningEffort" in patch
+        || "serviceTier" in patch
+        || "fastMode" in patch
+      )
     ) {
       const projectedLaunchpad =
         projectNavigationLaunchpadProviderSettings(patchedLaunchpad);

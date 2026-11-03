@@ -14262,8 +14262,30 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     filesystemFederationTarget,
                   );
                 }
+                const nextSummary = props.backends?.find((candidate) => candidate.kind === nextBackend);
+                const remembered = props.launchpad.providerSettings?.[nextBackend];
+                const ownerModels = nextSummary?.launchpadOptions?.models ?? [];
+                const ownerModel = ownerModels.find((candidate) => candidate.id === remembered?.model)
+                  ?? ownerModels.find((candidate) => candidate.id === nextSummary?.modelDefaults?.model)
+                  ?? getDefaultModelOption(nextSummary);
+                const ownerEffort = ownerModel
+                  ? remembered?.reasoningEffortsByModel?.[ownerModel.id]
+                    ?? (remembered?.model === ownerModel.id ? remembered.reasoningEffort : undefined)
+                    ?? nextSummary?.modelDefaults?.reasoningEffortsByModel[ownerModel.id]
+                  : undefined;
                 handleLaunchpadPatch({
                   backend: nextBackend,
+                  ...(filesystemFederationTarget?.scope === "remote" ? {
+                    model: ownerModel?.id,
+                    reasoningEffort: ownerModel?.supportsReasoning
+                      ? getReasoningEffortValue(nextSummary, ownerModel, ownerEffort)
+                      : undefined,
+                    fastMode: ownerModel?.supportsFast ? remembered?.fastMode : undefined,
+                    serviceTier: ownerModel?.serviceTiers?.includes(remembered?.serviceTier ?? "")
+                      || (ownerModel?.supportsFast && ["fast", "priority"].includes(remembered?.serviceTier ?? ""))
+                      ? remembered?.serviceTier
+                      : undefined,
+                  } : {}),
                 });
               }}
             />
