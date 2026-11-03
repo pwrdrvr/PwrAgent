@@ -174,9 +174,15 @@ export function createProviderRuntimeClient(
     const startedAtGeneration = generation;
     const params = record(args[0]);
     const threadId = route === "threadId" ? args[0] : params?.threadId;
+    // A fork from a rollout path reads its history from that file. A thread
+    // handoff passes another machine's thread ID, which this App Server has
+    // never stored, so reading it here fails with "thread not loaded".
+    const forksFromPath = method === "forkThread"
+      && typeof params?.path === "string"
+      && params.path.trim() !== "";
     let owner: string | undefined;
     if (typeof threadId === "string") {
-      if (!owners.has(threadId)) {
+      if (!owners.has(threadId) && !forksFromPath) {
         await primary.readThreadSummary(threadId);
         owners.set(threadId, primary.modelProviderForThread(threadId));
       }
