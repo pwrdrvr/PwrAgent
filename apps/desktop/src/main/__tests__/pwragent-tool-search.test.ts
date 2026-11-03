@@ -27,6 +27,21 @@ describe("PwrAgent tool discovery", () => {
       .toMatchObject({ description: expect.stringContaining(PWRAGENT_IMAGE_REPLY_GUIDANCE) });
     expect(buildPwrAgentMcpInstructions([])).toContain(PWRAGENT_IMAGE_REPLY_GUIDANCE);
   });
+
+  it("advertises each available wait workflow independently in Claude MCP instructions", () => {
+    const workflows = ["watch_thread_pull_request", "manage_thread_dependencies", "create_monitor_delegation"];
+    for (const workflow of workflows) {
+      const instructions = buildPwrAgentMcpInstructions([workflow]);
+      expect(instructions).toContain(workflow);
+      for (const unavailable of workflows.filter((name) => name !== workflow)) {
+        expect(instructions).not.toContain(unavailable);
+      }
+    }
+    const instructions = buildPwrAgentMcpInstructions(workflows);
+    expect(instructions).toContain("Continue After");
+    expect(instructions).toContain("mode all");
+    expect(instructions).not.toContain("Other waits: create_monitor_delegation");
+  });
   it("leaves the default catalog untouched and keeps only search eager when enabled", () => {
     const before = JSON.stringify(catalog);
     expect(withPwrAgentToolDiscovery(catalog, false)).toBe(catalog);
