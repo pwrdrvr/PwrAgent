@@ -395,6 +395,7 @@ type MessagingHandledToRoutedSubspan =
 
 type MessagingInputPreparationSpan =
   | "inputPrepPendingSkillBindingReloadMs"
+  | "inputPrepAdmissionReadMs"
   | "inputPrepPdfHandlingResolutionMs"
   | "inputPrepPdfAnalysisPolicyMs"
   | "inputPrepPdfToolSupportProbeMs"
@@ -4553,6 +4554,20 @@ export class MessagingController {
         );
       }
     }
+    // Admission is a read of an already-authorized target. Start it alongside
+    // media work; retain the failure until preparation succeeds so an empty
+    // or rejected input keeps its existing delivery behavior. Dispatch still
+    // revalidates occupancy in the owner's shared turn FIFO, and a concurrent
+    // start refusal is queued by startPreparedInput.
+    const admissionReadStartedAt = this.now();
+    const admissionRead = this.options.backend.getThreadAdmissionState({
+      backend: currentBinding.backend,
+      federationTarget: federationTargetForBinding(currentBinding),
+      threadId: currentBinding.threadId,
+    }).then(
+      (state) => ({ ok: true as const, state }),
+      (error: unknown) => ({ ok: false as const, error }),
+    ).finally(() => this.addInputPreparationTiming(bundle.events[0], "inputPrepAdmissionReadMs", admissionReadStartedAt));
     const prepared = await this.prepareTurnInput(bundle.events, currentBinding, bundle.events[0]);
     if (!prepared) {
       return;
@@ -4570,11 +4585,9 @@ export class MessagingController {
       : currentBinding;
     let admissionState: MessagingThreadAdmissionState | undefined;
     try {
-      admissionState = await this.options.backend.getThreadAdmissionState({
-        backend: consumedSkillBinding.backend,
-        federationTarget: federationTargetForBinding(consumedSkillBinding),
-        threadId: consumedSkillBinding.threadId,
-      });
+      const admission = await admissionRead;
+      if (!admission.ok) throw admission.error;
+      admissionState = admission.state;
       this.markAdmissionStage(bundle.events[0], "admissionStateResolved");
     } catch (error) {
       await this.deliver(

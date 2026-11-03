@@ -16320,6 +16320,38 @@ describe("MessagingController", () => {
     );
   });
 
+  it("overlaps authorized admission reads with media preparation and waits for both before dispatch", async () => {
+    let releaseMedia!: () => void;
+    let releaseAdmission!: () => void;
+    const mediaGate = new Promise<void>((resolve) => { releaseMedia = resolve; });
+    const admissionGate = new Promise<void>((resolve) => { releaseAdmission = resolve; });
+    const downloadAttachment = vi.fn(async () => {
+      await mediaGate;
+      return { data: new TextEncoder().encode("fixture file"), fileName: "fixture.txt", mimeType: "text/plain", sizeBytes: 12 };
+    });
+    const harness = await createHarness({ downloadAttachment });
+    await bindThread(harness);
+    const state = await harness.getThreadAdmissionState({ backend: "codex", threadId: "thread-1" });
+    harness.getThreadAdmissionState.mockClear().mockImplementation(async () => { await admissionGate; return state; });
+    const handling = harness.controller.handleInboundEvent({
+      ...buildTextEvent("Read this file"), id: "parallel-media", kind: "media", disposition: "available",
+      attachments: [{ id: "fixture-file", kind: "file", name: "fixture.txt", mimeType: "text/plain", disposition: "available", sizeBytes: 12 }],
+    });
+    try {
+      await vi.waitFor(() => expect(downloadAttachment).toHaveBeenCalled());
+      expect(harness.getThreadAdmissionState).toHaveBeenCalled();
+      expect(harness.startTurn).not.toHaveBeenCalled();
+      releaseAdmission();
+      await Promise.resolve();
+      expect(harness.startTurn).not.toHaveBeenCalled();
+    } finally {
+      releaseAdmission();
+      releaseMedia();
+      await handling;
+    }
+    expect(harness.startTurn).toHaveBeenCalledOnce();
+  });
+
   it("logs bounded PDF preparation subspans on the start-turn event", async () => {
     let clock = 1_000;
     const info = vi.fn();

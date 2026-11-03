@@ -25,6 +25,8 @@ import { listCodexEnvironmentOptions } from "./codex-environment-config";
 import { NavigationQueryError } from "./navigation-query-store";
 import { detectMissingThreadWorkspace } from "./missing-thread-workspace";
 import { readMergedSubAgentPage } from "./thread-display";
+import { mapConcurrent } from "../../shared/map-concurrent";
+import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 
 /** The most records one selected-collection page holds, before the byte budget. */
 const SELECTED_COLLECTION_PAGE_RECORDS = 100;
@@ -144,6 +146,10 @@ export class NavigationDetailService {
   async readSelectedDetail(
     request: NavigationSelectedDetailRequest,
   ): Promise<NavigationSelectedDetailResponse> {
+    return await listingDiagnostics.trace("workflow", { query: "selected-detail" }, () => this.readSelectedDetailData(request));
+  }
+
+  private async readSelectedDetailData(request: NavigationSelectedDetailRequest): Promise<NavigationSelectedDetailResponse> {
     if (request.protocol !== NAVIGATION_QUERY_PROTOCOL_VERSION) {
       throw new NavigationQueryError(
         "navigation_invalid_request",
@@ -257,7 +263,28 @@ export class NavigationDetailService {
         identity: "unresolved",
       };
     }
-    const subAgentCollection = await this.subAgentCollectionManifest(request.ref, summary);
+    if (request.includeWorkspaceConfiguration && thread.linkedDirectories.length > 100) {
+      throw new NavigationQueryError("navigation_item_too_large", "Selected workspace configuration exceeds the 100-directory detail budget.");
+    }
+    // These reads have no data dependencies on one another. The SQLite
+    // wrappers still execute synchronously; the overlap is in Git/stat and
+    // any owner reads. GitReadCache continues to own physical Git admission.
+    const [subAgentCollection, workspaceMissing, activeCards, activePrWatches, pendingWakes, workspaceDirectories] = await Promise.all([
+      this.subAgentCollectionManifest(request.ref, summary),
+      detectMissingThreadWorkspace(thread, {
+        readBranch: async (repositoryPath) =>
+          (await this.registry.readSelectedWorkspaceGitStatus(repositoryPath))?.currentBranch,
+      }),
+      getDesktopOverlayStore().listActiveThreadSubAgents({ backend: summary.source, threadId: summary.id }),
+      getDesktopOverlayStore().listActiveThreadPrStatusWatches({ backend: summary.source, threadId: summary.id }),
+      readPendingWakesForDetail({ backend: summary.source, threadId: summary.id }),
+      request.includeWorkspaceConfiguration
+        ? mapConcurrent(thread.linkedDirectories, 4, async (directory) => ({
+            key: directory.id, label: directory.label, path: directory.path,
+            gitStatus: directory.path ? await this.registry.readSelectedWorkspaceGitStatus(directory.path) : undefined,
+          }))
+        : undefined,
+    ]);
     const collections = NAVIGATION_DETAIL_COLLECTION_NAMES.map((name) => name === "subAgents"
       ? { name, ...subAgentCollection }
       : {
@@ -266,44 +293,22 @@ export class NavigationDetailService {
         });
     // Checked on every detail read, never stored: one stat while the folder
     // exists. Viewers on other instances get the owner's answer.
-    const workspaceMissing = await detectMissingThreadWorkspace(thread, {
-      readBranch: async (repositoryPath) =>
-        (await this.registry.readSelectedWorkspaceGitStatus(repositoryPath))?.currentBranch,
-    });
     const configuration = { ...thread, ...(workspaceMissing ? { workspaceMissing } : {}) };
     for (const name of NAVIGATION_DETAIL_COLLECTION_NAMES) delete configuration[name];
     // Live gate events and selected-detail refreshes must expose the same
     // helpers before persistence at turn end; active cards come from the
     // partial index, never from the thread's whole card history.
-    const activeCards = await getDesktopOverlayStore().listActiveThreadSubAgents({
-      backend: summary.source, threadId: summary.id,
-    });
     configuration.activeSubAgents = projectActiveThreadSubAgents(summary.source === "codex"
       ? this.registry.mergeLiveTokenMiserSubAgents(summary.id, activeCards)
       : activeCards);
     // The owner's watches, so a peer viewer reads the same list. Detail only:
     // it is projected per read and never stored with the navigation row.
-    const activePrWatches = await getDesktopOverlayStore().listActiveThreadPrStatusWatches({
-      backend: summary.source, threadId: summary.id,
-    });
     if (activePrWatches.length > 0) configuration.activePrWatches = activePrWatches;
     // The owner's Waiting for list, for the same reason. An empty list says
     // nothing waits; an owner that predates it sends none.
-    const pendingWakes = await readPendingWakesForDetail({ backend: summary.source, threadId: summary.id });
     if (pendingWakes) {
       configuration.pendingWakes = pendingWakes.wakes;
       if (pendingWakes.incomplete) configuration.pendingWakesIncomplete = true;
-    }
-    let workspaceDirectories: NavigationSelectedDetailResponse["workspaceDirectories"];
-    if (request.includeWorkspaceConfiguration) {
-      if (thread.linkedDirectories.length > 100) {
-        throw new NavigationQueryError("navigation_item_too_large", "Selected workspace configuration exceeds the 100-directory detail budget.");
-      }
-      workspaceDirectories = [];
-      for (const directory of thread.linkedDirectories) {
-        workspaceDirectories.push({ key: directory.id, label: directory.label, path: directory.path,
-          gitStatus: directory.path ? await this.registry.readSelectedWorkspaceGitStatus(directory.path) : undefined });
-      }
     }
     const detailRevision = revision({ thread: configuration, workspaceDirectories });
     if (request.knownRevision === detailRevision) {

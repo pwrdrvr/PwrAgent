@@ -8196,24 +8196,6 @@ export function useThreadNavigation(
           }
           throw error;
         }
-        let localDraftResetFailure: string | undefined;
-        if (federationTarget && desktopApi.resetDirectoryLaunchpad) {
-          try {
-            // Remote launchpads are composed and persisted on the viewer, then
-            // sent in full to the owning instance for materialization. The owner
-            // clears its overlay row as part of that operation, but it cannot
-            // clear the viewer's local copy. Clear its submitted input after
-            // success while retaining the project's environment selection.
-            await desktopApi.resetDirectoryLaunchpad({
-              federationTarget,
-              directoryKey,
-              preserveEnvironment: true,
-            });
-          } catch (error) {
-            localDraftResetFailure =
-              error instanceof Error ? error.message : String(error);
-          }
-        }
         const optimisticMaterializedThread = buildOptimisticThreadFromLaunchpad({
           directory,
           launchpad,
@@ -8284,56 +8266,9 @@ export function useThreadNavigation(
               titleSource: observedThreadNameEntry.titleSource,
             }
           : optimisticMaterializedThread;
-        if (
-          federationTarget
-          && isRemoteFederationTarget(federationTarget)
-          && !readRendererFederationTarget()
-        ) {
-          try {
-            await desktopApi.addRemoteThreadPin?.({
-              ref: {
-                backend: response.backend,
-                target: federationTarget,
-                threadId: response.threadId,
-              },
-              summary: namedOptimisticMaterializedThread,
-              instanceLabel:
-                namedOptimisticMaterializedThread.federation?.instanceLabel
-                ?? federationTarget.instanceId,
-            });
-          } catch (error) {
-            // Materialization already succeeded on the owner. Keep the created
-            // thread selected even if this viewer cannot persist its list entry.
-            console.warn("Could not add the remote thread to this thread list:", error);
-          }
-        }
         const nextThreadKey = threadSummaryIdentityKey(
           namedOptimisticMaterializedThread,
         );
-        // Sub-thread launchpads drop the new child directly below their source
-        // card. Plain new-thread launchpads have no parent and skip this. Await
-        // so the order write commits before the refresh below reads it back.
-        if (materializeParentThreadId) {
-          // The order belongs to the parent's owner. A child started on a peer
-          // names its parent's machine, which is this one when the parent is
-          // local: that write stays here, where this machine's pin of the
-          // new child places it. Federation cannot address this machine.
-          const parentOwnerIsThisMachine = materializeParentThreadInstanceId !== undefined
-            && materializeParentThreadInstanceId === (localFederationInstanceId
-              ?? await readLocalFederationInstanceId(desktopApi));
-          const subthreadOrderTarget = parentOwnerIsThisMachine
-            ? undefined
-            : materializeParentThreadInstanceId
-              ? { scope: "remote" as const, instanceId: materializeParentThreadInstanceId }
-              : federationTarget;
-          await insertSubthreadBelowSource(
-            materializeParentThreadBackend,
-            materializeParentThreadId,
-            launchpad.sourceThreadId ?? materializeParentThreadId,
-            response.threadId,
-            subthreadOrderTarget,
-          );
-        }
         if (federatedSelection) {
           setFederatedLaunchpad((current) =>
             current
@@ -8387,13 +8322,83 @@ export function useThreadNavigation(
             : current
         );
         if (shouldSelectMaterializedThread) {
+          selectedItemKeyRef.current = nextThreadKey;
           setSelectedItemKey(nextThreadKey);
           setPendingSeenThreadKey(nextThreadKey);
+        }
+        let localDraftResetFailure: string | undefined;
+        let remotePinFailure: string | undefined;
+        if (federationTarget && desktopApi.resetDirectoryLaunchpad) {
+          try {
+            // Remote launchpads are composed and persisted on the viewer, then
+            // sent in full to the owning instance for materialization. The owner
+            // clears its overlay row as part of that operation, but it cannot
+            // clear the viewer's local copy. Clear its submitted input after
+            // success while retaining the project's environment selection.
+            await desktopApi.resetDirectoryLaunchpad({
+              federationTarget,
+              directoryKey,
+              preserveEnvironment: true,
+            });
+          } catch (error) {
+            localDraftResetFailure =
+              error instanceof Error ? error.message : String(error);
+          }
+        }
+        if (
+          federationTarget
+          && isRemoteFederationTarget(federationTarget)
+          && !readRendererFederationTarget()
+        ) {
+          try {
+            await desktopApi.addRemoteThreadPin?.({
+              ref: {
+                backend: response.backend,
+                target: federationTarget,
+                threadId: response.threadId,
+              },
+              summary: namedOptimisticMaterializedThread,
+              instanceLabel:
+                namedOptimisticMaterializedThread.federation?.instanceLabel
+                ?? federationTarget.instanceId,
+            });
+          } catch (error) {
+            // Materialization already succeeded on the owner. Keep the created
+            // thread selected even if this viewer cannot persist its list entry.
+            console.warn("Could not add the remote thread to this thread list:", error);
+            remotePinFailure = error instanceof Error ? error.message : String(error);
+          }
+        }
+        // Sub-thread launchpads drop the new child directly below their source
+        // card. Plain new-thread launchpads have no parent and skip this. Await
+        // so the order write commits before the refresh below reads it back.
+        if (materializeParentThreadId) {
+          // The order belongs to the parent's owner. A child started on a peer
+          // names its parent's machine, which is this one when the parent is
+          // local: that write stays here, where this machine's pin of the
+          // new child places it. Federation cannot address this machine.
+          const parentOwnerIsThisMachine = materializeParentThreadInstanceId !== undefined
+            && materializeParentThreadInstanceId === (localFederationInstanceId
+              ?? await readLocalFederationInstanceId(desktopApi));
+          const subthreadOrderTarget = parentOwnerIsThisMachine
+            ? undefined
+            : materializeParentThreadInstanceId
+              ? { scope: "remote" as const, instanceId: materializeParentThreadInstanceId }
+              : federationTarget;
+          await insertSubthreadBelowSource(
+            materializeParentThreadBackend,
+            materializeParentThreadId,
+            launchpad.sourceThreadId ?? materializeParentThreadId,
+            response.threadId,
+            subthreadOrderTarget,
+          );
         }
         if (response.turnStartFailure) {
           setLaunchpadError(response.turnStartFailure.message);
         } else if (response.autoPinFailure) {
           setLaunchpadError(response.autoPinFailure.message);
+        } else if (remotePinFailure) {
+          setLaunchpadError(`Thread started, but its remote pin could not be saved: ${remotePinFailure}`);
         } else if (localDraftResetFailure) {
           setLaunchpadError(
             `Thread started, but the saved launchpad draft could not be cleared: ${localDraftResetFailure}`,
@@ -8437,8 +8442,8 @@ export function useThreadNavigation(
         }
         try {
           await refresh(
-            shouldSelectMaterializedThread ? nextThreadKey : undefined,
-            shouldProjectOptimisticThread
+            shouldSelectMaterializedThread && selectedItemKeyRef.current === nextThreadKey ? nextThreadKey : undefined,
+            shouldProjectOptimisticThread && (!shouldSelectMaterializedThread || selectedItemKeyRef.current === nextThreadKey)
               ? namedOptimisticMaterializedThread
               : undefined,
           );

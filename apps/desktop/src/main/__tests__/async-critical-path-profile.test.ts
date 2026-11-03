@@ -72,7 +72,7 @@ describe.skipIf(process.env.PWRAGENT_PROFILE_CRITICAL_PATHS !== "1")("async crit
             launchpad: {
               backend: "codex", directoryKey: "fixture-directory", directoryKind: "directory",
               directoryLabel: "Fixture", directoryPath: directory, executionMode: "default", workMode: "local",
-              prompt: "Fixture prompt", mcpConnectionIds: connections,
+              prompt: "Fixture prompt", mcpConnectionIds: connections, createdAt: 1, updatedAt: 1,
             },
           });
           expect(response.turnStartFailure).toBeUndefined();
