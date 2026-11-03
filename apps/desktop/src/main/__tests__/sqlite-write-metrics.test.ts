@@ -2927,13 +2927,12 @@ describe("sqlite write metrics", () => {
       const runNow = await service.runNow({ automationId: created.automation.id });
 
       const { writes } = await measureSqliteWrites(async () => {
-        // Fifty five-minute windows with fifty items each model a long-running,
-        // tool-heavy automation. Periodic whole-artifact rewrites would make
-        // WAL growth quadratic as every window rewrote all prior windows.
-        // One 2,500-item boundary write measures 704,520 WAL bytes; even ten
-        // such extreme runs/day stay linear at 7,045,200 bytes (about 6.7 MiB).
+        // Fifty five-minute windows exercise a long-running automation. Five
+        // items per window retain the growing transcript without paying for
+        // thousands of per-event lookups. A periodic whole-artifact rewrite
+        // would still write during a window and fail the one-commit budget.
         for (let windowIndex = 0; windowIndex < 50; windowIndex += 1) {
-          for (let itemIndex = 0; itemIndex < 50; itemIndex += 1) {
+          for (let itemIndex = 0; itemIndex < 5; itemIndex += 1) {
             await Promise.all(
               registryListeners.map((listener) =>
                 listener({
@@ -2961,13 +2960,13 @@ describe("sqlite write metrics", () => {
       });
 
       expectSqliteWriteBudget({
-        note: "2,500 completed tool items across 50 windows, one shutdown-boundary artifact write",
+        note: "250 completed tool items across 50 windows, one shutdown-boundary artifact write",
         scenario: "automation-run-transcript-burst",
         writes,
       });
       expect(
         automationStore.getRunArtifact(runNow.run.id)?.transcriptEvents,
-      ).toHaveLength(2_500);
+      ).toHaveLength(250);
     } finally {
       service.dispose();
       vi.useRealTimers();

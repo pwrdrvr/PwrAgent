@@ -8800,6 +8800,63 @@ describe("Composer", () => {
       expect(screen.getByLabelText("Queued message")).not.toHaveTextContent("send_user_message");
     });
 
+    it.each([false, true])("honors a to-do's queue choice on a steerable thread (busy: %s)", async (busy) => {
+      const text = "Implement the follow-up task";
+      const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: busy ? "queue-entry-1" : "turn-todo",
+        ...(busy ? { queueStatus: "queued" as const, queueEntryId: "queue-entry-1" } : {}),
+      }));
+      const steerTurn = vi.fn();
+      const onReplySubmissionSettled = vi.fn();
+      const backend = backendSummary("codex");
+      const props = {
+        activeTurnId: busy ? "turn-active" : undefined,
+        threadBusy: busy,
+        backends: [{ ...backend, capabilities: { ...backend.capabilities, steerTurn: true } }],
+        desktopApi: { onAgentEvent: () => () => undefined, startTurn, steerTurn },
+        onReplySubmissionSettled,
+        skills: [],
+        thread,
+      };
+      const view = render(<Composer {...props} />);
+      const textarea = screen.getByLabelText("Reply");
+      fireEvent.change(textarea, { target: { value: "An unrelated draft" } });
+      const submission = { id: 1, threadId: thread.id, backend: "codex" as const, text, busyBehavior: "queue" as const };
+      view.rerender(<Composer {...props} replySubmission={submission} />);
+
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(1, true));
+      expect(steerTurn).not.toHaveBeenCalled();
+      expect(startTurn).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        threadId: thread.id, input: [{ type: "text", text }],
+      }));
+      expect(textarea).toHaveValue("An unrelated draft");
+      if (busy) expect(screen.getByLabelText("Queued message")).toHaveTextContent(text);
+      view.rerender(<Composer {...props} replySubmission={submission} />);
+      expect(startTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("still steers question replies during an active turn", async () => {
+      const startTurn = vi.fn();
+      const steerTurn = vi.fn(async () => ({ backend: "codex" as const, threadId: thread.id, turnId: "turn-active" }));
+      const onReplySubmissionSettled = vi.fn();
+      const backend = backendSummary("codex");
+      render(<Composer
+        activeTurnId="turn-active"
+        threadBusy
+        backends={[{ ...backend, capabilities: { ...backend.capabilities, steerTurn: true } }]}
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn, steerTurn }}
+        onReplySubmissionSettled={onReplySubmissionSettled}
+        replySubmission={{ id: 1, threadId: thread.id, backend: "codex", text: reply }}
+        skills={[]}
+        thread={thread}
+      />);
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(1, true));
+      await waitFor(() => expect(steerTurn).toHaveBeenCalledOnce());
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
     it("refuses a reply addressed to another thread", async () => {
       const startTurn = vi.fn();
       const onReplySubmissionSettled = vi.fn();

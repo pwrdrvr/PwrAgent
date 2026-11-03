@@ -1297,6 +1297,7 @@ export function ThreadView(props: ThreadViewProps) {
     backend: NavigationThreadSummary["source"];
     federationTarget?: FederationRemoteTarget;
     text: string;
+    busyBehavior?: "queue";
   }>();
   // Dismissing Codex's async questions only hides their controls, so it is
   // this window's choice for the session, as skipping is in Codex's own UI.
@@ -2810,7 +2811,7 @@ export function ThreadView(props: ThreadViewProps) {
       setAsyncQuestionReply(undefined);
     };
   }, [asyncQuestionThreadKey]);
-  const handleAnswerAsyncQuestions = useEventCallback((text: string): Promise<boolean> => {
+  const handleAnswerAsyncQuestions = useEventCallback((text: string, busyBehavior?: "queue"): Promise<boolean> => {
     // One answer at a time: the composer applies only the newest submission.
     if (
       props.composerDisabled
@@ -2834,6 +2835,7 @@ export function ThreadView(props: ThreadViewProps) {
         backend: thread.source,
         federationTarget: questionFederationTarget,
         text,
+        busyBehavior,
       });
     });
   });
@@ -2875,8 +2877,8 @@ export function ThreadView(props: ThreadViewProps) {
       (error: unknown) => setPendingRequestError(String(error)),
     );
   });
-  // "Do it here" sends a handoff's prompt through the same reply path an
-  // answered question takes: start, steer or queue, as a typed reply would.
+  // "Do it here" starts a handoff's prompt when idle, or queues it behind
+  // the active turn so the new task does not steer work already in progress.
   // The card resolves only once the composer has taken it.
   // Resolves false when the composer would not take it (disabled, or
   // another answer still sending), so the card can say so.
@@ -2891,7 +2893,7 @@ export function ThreadView(props: ThreadViewProps) {
     const text = prompt ?? handoff;
     if (!text || !selectedThread || threadTodoThreadKey(todo) !== threadSummaryIdentityKey(selectedThread)) return false;
     try {
-      const accepted = await handleAnswerAsyncQuestions(text);
+      const accepted = await handleAnswerAsyncQuestions(text, "queue");
       if (accepted && prompt === undefined) {
         await props.threadTodos?.resolve(todo, "done", "sent_here", resolveOptions);
       }

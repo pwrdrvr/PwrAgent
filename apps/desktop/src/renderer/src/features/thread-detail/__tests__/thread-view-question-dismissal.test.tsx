@@ -47,6 +47,38 @@ function View(props: Partial<Omit<ThreadViewProps, "terminals">>) {
 }
 
 describe("question dismissal ownership", () => {
+  it.each([false, true])("queues Do it here and resolves only after acceptance (remote: %s)", async (remote) => {
+    const todo: ThreadTodo = { id: "todo-handoff", backend: "codex", threadId: thread.id,
+      ...(remote ? { federationTarget: target } : {}),
+      title: "Implement follow-up", kind: "handoff", status: "open", createdAt: 1, updatedAt: 1,
+      action: { type: "start_thread", prompt: "Implement the follow-up task" } };
+    const resolve = vi.fn(async () => undefined);
+    const view: ThreadTodosView = {
+      open: [todo], openByThreadKey: new Map([[threadTodoThreadKey(todo), [todo]]]), revision: 0, runningIds: new Set(),
+      instances: [], threadTitle: () => "Example", resolve, run: vi.fn(), setItemChecked: vi.fn(), openThread: vi.fn(), openStartedThread: vi.fn(),
+      waits: [], waitsByThreadKey: new Map(), seenKeys: new Set(), markSeen: vi.fn(), respond: vi.fn(), dismissQuestion: vi.fn(),
+      dismissedQuestionKeys: new Set(), openWait: vi.fn(), threadTitleForKey: () => "Example", threadProjectForKey: () => undefined,
+    };
+    render(<View threadTodos={view} activeTurnId="turn-active" selectedThread={remote ? thread : { ...thread, federation: undefined }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Do it here" }));
+    const submission = composer.current!.replySubmission!;
+    expect(submission).toEqual(expect.objectContaining({
+      threadId: thread.id, backend: "codex", text: "Implement the follow-up task", busyBehavior: "queue",
+      federationTarget: remote ? target : undefined,
+    }));
+    expect(resolve).not.toHaveBeenCalled();
+    await act(async () => composer.current!.onReplySubmissionSettled!(submission.id, false));
+    expect(resolve).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Do it here" }));
+    const retry = composer.current!.replySubmission!;
+    expect(retry.id).not.toBe(submission.id);
+    await act(async () => composer.current!.onReplySubmissionSettled!(retry.id, true));
+    expect(resolve).toHaveBeenCalledExactlyOnceWith(todo, "done", "sent_here", {});
+  });
+
   it("resolves the original remote review task when acceptance arrives after switching owners", async () => {
     const todo: ThreadTodo = { id: "remote-todo:owner:review-task", backend: "codex", threadId: thread.id,
       federationTarget: target, title: "Review changes", kind: "review", status: "open", createdAt: 1, updatedAt: 1,
