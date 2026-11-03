@@ -162,6 +162,16 @@ function buildArchiveBurst(active: AppServerThreadSummary[], targets: AppServerT
 }
 
 describe("archive cleanup pipeline", () => {
+  it("Run now re-audits existing archived worktrees even with automatic archiving disabled", async () => {
+    const fixture = build([]);
+    const repair = vi.spyOn(fixture.registry, "repairArchivedThreadWorktrees").mockResolvedValue({
+      archivedThreads: 1477, discoveredWorktrees: 501, missingWorktrees: 0, protectedWorktrees: 3,
+      protectedWorktreeDetails: [], candidates: [], cleanup: [], emptyContainerCandidates: [], containerCleanup: [],
+    });
+    await fixture.registry.sweepInactiveThreads();
+    expect(repair).toHaveBeenCalledOnce();
+  });
+
   it.each(["provider", "overlay"] as const)("snapshots and removes Claude worktrees from %s metadata, excluding an additional local directory", async (source) => {
     vi.useFakeTimers();
     const fixture = build([]);
@@ -549,7 +559,7 @@ describe("archive cleanup pipeline", () => {
     expect(result.candidates).toEqual([{ backend: "codex", threadId: "valid", worktreePath: path.normalize("/contrived/valid") }]);
   });
 
-  it("discovers more than 500 archived worktrees in bounded pages without mutating them", async () => {
+  it("discovers more than 500 archived worktrees while excluding live Codex, Claude, and overlay checkout users", async () => {
     vi.useFakeTimers();
     const fixture = build([]);
     const archived = Array.from({ length: 501 }, (_, index) => codexThread({ id: `archived-${index}`, linkedDirectories: [{
@@ -557,18 +567,31 @@ describe("archive cleanup pipeline", () => {
     }] }));
     const pages: number[] = [];
     fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async (params) => {
-      const rows = params.archived ? archived : [];
+      const rows = params.archived ? archived : [
+        codexThread({ id: "live-codex", linkedDirectories: archived[0]!.linkedDirectories }),
+        codexThread({ id: "live-overlay" }),
+      ];
       const offset = Number(params.cursor ?? 0);
       const threads = rows.slice(offset, offset + params.limit);
       pages.push(threads.length);
       return { threads, nextCursor: offset + threads.length < rows.length ? String(offset + threads.length) : undefined };
     });
+    fixture.overlays.set("live-overlay", { backend: "codex", threadId: "live-overlay",
+      extraLinkedDirectories: archived[1]!.linkedDirectories });
+    vi.mocked(fixture.claudeStore.list).mockResolvedValue([{
+      thread: codexThread({ id: "live-claude", source: "claude", linkedDirectories: archived[2]!.linkedDirectories,
+        projectKey: "/contrived/worktree-2" }), cwd: "/contrived/worktree-2",
+    }]);
     vi.mocked(stat).mockImplementation(async () => ({ isDirectory: () => true }) as Awaited<ReturnType<typeof stat>>);
     const scan = fixture.registry.repairArchivedThreadWorktrees({ dryRun: true });
     await vi.advanceTimersByTimeAsync(100_000);
     const result = await scan;
     expect(result.archivedThreads).toBe(501);
-    expect(result.candidates).toHaveLength(501);
+    expect(result.candidates).toHaveLength(498);
+    expect(result.protectedWorktrees).toBe(3);
+    for (let index = 0; index < 3; index++) {
+      expect(result.candidates.map((item) => item.worktreePath)).not.toContain(path.normalize(`/contrived/worktree-${index}`));
+    }
     expect(pages).toHaveLength(22);
     expect(Math.max(...pages)).toBe(25);
     expect(fixture.archiveWorktree).not.toHaveBeenCalled();
