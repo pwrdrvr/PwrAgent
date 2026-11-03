@@ -35,7 +35,8 @@ async function createArchiveHistoryFixture() {
   return { fixturePath, cleanup: () => rm(root, { recursive: true, force: true }) };
 }
 
-test("Back skips the archived thread after automatic fallback and Forward returns directly", async ({}, testInfo) => {
+test("Back skips the archived thread after automatic fallback and Forward returns directly", async () => {
+  const testInfo = test.info();
   const fixture = await createArchiveHistoryFixture();
   const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
   try {
@@ -58,6 +59,7 @@ test("Back skips the archived thread after automatic fallback and Forward return
     await page.getByTestId("history-nav-back").click();
     await page.screenshot({ path: testInfo.outputPath("after-back.png") });
     await expect(page.getByRole("heading", { level: 2, name: "History fixture A" })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("after-back-ready.png") });
     await expect(page.getByText("Select a thread", { exact: true })).toHaveCount(0);
     await expect(page.getByTestId("history-nav-forward")).toHaveAttribute("aria-description", "History fixture C");
     await page.getByTestId("history-nav-forward").click();
