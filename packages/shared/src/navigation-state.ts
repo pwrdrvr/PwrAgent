@@ -189,12 +189,17 @@ function resolveNavigationParentThread(params: {
   let parentThreadBackend = directParentThreadBackend ?? params.source;
   const seen = new Set([buildThreadIdentityKey(params.source, params.threadId)]);
   let parentKey = buildThreadIdentityKey(parentThreadBackend, parentThreadId);
+  // Overlays are keyed locally. A peer's parent has none here, and a local
+  // row that shares its id is a different thread.
+  if (directParentThreadInstanceId) seen.add(parentKey);
   while (!seen.has(parentKey)) {
     seen.add(parentKey);
     const parentOverlay =
       params.overlayByThreadKey[parentKey];
     const nextParentThreadId = parentOverlay?.parentThreadId?.trim();
-    if (!nextParentThreadId) {
+    // Stop at the last local ancestor. Walking on to its peer parent would
+    // drop that parent's owner and name a local thread that does not exist.
+    if (!nextParentThreadId || parentOverlay?.parentThreadInstanceId) {
       return {
         ...(directParentThreadBackend ? { parentThreadBackend } : {}),
         ...(directParentThreadInstanceId
