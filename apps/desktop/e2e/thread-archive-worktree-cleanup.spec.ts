@@ -203,7 +203,7 @@ test("archiving a replay-backed thread removes its real Git worktree", async () 
     ]);
     expect(await pathExists(fixture.worktreePath)).toBe(false);
     expect(git(fixture.repoPath, ["worktree", "list", "--porcelain"]))
-      .not.toContain(fixture.worktreePath);
+      .not.toContain(fixture.worktreePath.replaceAll(path.sep, "/"));
   } finally {
     await app.close();
     await fixture.cleanup();
@@ -252,7 +252,7 @@ test("Claude archive explains retained worktrees and leaves an additional local 
     await notice.screenshot({ path: testInfo.outputPath("claude-worktree-kept.png") });
     const after = await stat(fixture.worktreePath);
     expect({ ino: after.ino, dev: after.dev }).toEqual({ ino: before.ino, dev: before.dev });
-    expect(git(fixture.repoPath, ["worktree", "list", "--porcelain"])).toContain(fixture.worktreePath);
+    expect(git(fixture.repoPath, ["worktree", "list", "--porcelain"])).toContain(fixture.worktreePath.replaceAll(path.sep, "/"));
     expect(await readFile(path.join(localPath, "keep.txt"), "utf8")).toBe("Linked local directory\n");
     await app.window.evaluate(async (id) => {
       const api = (window as Window & { pwragent?: DesktopApi }).pwragent;
