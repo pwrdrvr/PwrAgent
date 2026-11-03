@@ -1529,6 +1529,49 @@ describe("Claude SDK backend", () => {
     expect(backend.summary().launchpadOptions?.models).toEqual(models);
   });
 
+  it.each(["installation", "models"])("drains pending %s discovery before close", async (phase) => {
+    const f = await fixture();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const inspection = vi.fn(async () => {
+      if (phase === "installation") { entered.resolve(); await release.promise; }
+      return { executable: "/fixture/claude", authStatus: "signed-in" as const };
+    });
+    const models = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+      return [{ id: "fable", label: "Fable 5.1" }];
+    });
+    const backend = f.openBackend({ ...f.backendOptions, inspectInstallation: inspection, discoverModels: models });
+    const discovery = backend.discover();
+    await entered.promise;
+    let closed = false;
+    const close = backend.close().then(() => { closed = true; });
+    try {
+      // The old close resolves while this CLI operation still owns its child.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closed).toBe(false);
+      await backend.discover();
+      expect(inspection).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await Promise.all([discovery, close]);
+    }
+    if (phase === "installation") expect(models).not.toHaveBeenCalled();
+    expect(f.events).toEqual([]);
+  });
+
+  it("does not start discovery after a pending environment read resumes during close", async () => {
+    const f = await fixture();
+    const env = Promise.withResolvers<NodeJS.ProcessEnv>();
+    const backend = f.openBackend({ ...f.backendOptions, resolveEnv: () => env.promise });
+    const discovery = backend.discover();
+    await backend.close();
+    env.resolve({ PATH: "/fixture" });
+    await discovery;
+    expect(f.backendOptions.inspectInstallation).not.toHaveBeenCalled();
+  });
+
   it("shares pending global discovery across differently configured projects without publishing either session catalog", async () => {
     const supportedModels = vi.fn()
       .mockResolvedValueOnce([{ value: "haiku", displayName: "Haiku 5.5", description: "Project A only" }])

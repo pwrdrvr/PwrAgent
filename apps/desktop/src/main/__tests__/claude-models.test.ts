@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ChildProcess } from "node:child_process";
 import type { ModelInfo, Query, query } from "@anthropic-ai/claude-agent-sdk";
 import { claudeModelOptions, discoverClaudeModels, readClaudeMetadata } from "../claude/claude-models";
 
@@ -127,6 +128,47 @@ describe("Claude model catalog", () => {
     expect(run.mock.calls[1][0].options).toMatchObject({
       cwd: "/fixture/restricted-project", settingSources: ["user", "project", "local"],
     });
+  });
+
+  it("waits for the metadata process to close after the SDK requests graceful shutdown", async () => {
+    let child: ChildProcess | undefined;
+    let childClosed: Promise<void> | undefined;
+    let spawnAgain: (() => void) | undefined;
+    const closing = Promise.withResolvers<void>();
+    const source = [
+      "process.stdin.setEncoding('utf8'); let input = '';",
+      "process.stdin.on('data', chunk => { input += chunk;",
+      "if (input.includes('close\\n')) process.stdout.write('closing\\n');",
+      "if (input.includes('release\\n')) process.exit(0); });",
+    ].join("\n");
+    const run: typeof query = (args) => {
+      const spawn = args.options!.spawnClaudeCodeProcess!;
+      const options = { command: process.execPath, args: ["-e", source], env: process.env,
+        signal: new AbortController().signal };
+      child = spawn(options) as ChildProcess;
+      childClosed = new Promise((resolve) => child!.once("close", () => resolve()));
+      child.stdout!.once("data", () => closing.resolve());
+      spawnAgain = () => { spawn(options); };
+      return {
+        supportedModels: async () => [model("fable", "Fable 5.1")],
+        close: () => { child!.stdin!.write("close\n"); },
+      } as unknown as Query;
+    };
+    const pending = discoverClaudeModels({ executable: "/fixture/claude", env: {}, query: run });
+    let settled = false;
+    void pending.then(() => { settled = true; });
+    try {
+      await closing.promise;
+      expect(settled).toBe(false);
+      expect(() => spawnAgain!()).toThrow("Claude metadata query is closed");
+      child!.stdin!.write("release\n");
+      await expect(pending).resolves.toMatchObject([{ id: "fable" }]);
+      expect(child!.exitCode).toBe(0);
+    } finally {
+      if (child && child.exitCode === null) child.kill();
+      await childClosed;
+      await pending;
+    }
   });
 
   it.each(["empty", "failure", "timeout"])("closes discovery on %s", async (failure) => {
