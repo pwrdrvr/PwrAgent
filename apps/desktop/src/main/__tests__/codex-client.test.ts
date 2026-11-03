@@ -1,4 +1,3 @@
-import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -3112,6 +3111,9 @@ describe("CodexAppServerClient", () => {
 
   it("shares provider scans and enrichment across concurrent listing consumers", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
+    // Other fixtures reset the module registry. Observe the same singleton
+    // generation as this client rather than retaining the file's first import.
+    const { listingDiagnostics } = await import("../diagnostics/listing-diagnostics");
     const diagnosticStart = listingDiagnostics.snapshot().recorded;
     MockTransport.threadListResultBySearchTerm.set("shared-list", Array.from(
       { length: 500 }, (_, index) => ({
@@ -3127,20 +3129,27 @@ describe("CodexAppServerClient", () => {
     const countLists = () => MockTransport.instances.at(-1)!.sentMessages
       .map((message) => JSON.parse(message)).filter((message) => message.method === "thread/list").length;
     try {
-      const reads = Array.from({ length: 8 }, (_, index) => client.listThreads(params, {
-        callerReason: `consumer-${index}`,
-      }));
+      let listingScopeId!: number;
+      const reads = listingDiagnostics.trace("workflow", {}, () => {
+        // trace records the scope synchronously before invoking its operation.
+        listingScopeId = listingDiagnostics.snapshot().events.at(-1)!.id;
+        return Promise.all(Array.from({ length: 8 }, (_, index) => client.listThreads(params, {
+          callerReason: `consumer-${index}`,
+        })));
+      });
       await vi.waitFor(() => expect(enrich).toHaveBeenCalled());
       expect(countLists()).toBe(1);
       release();
-      const results = await Promise.all(reads);
+      const results = await reads;
       expect(results.every((rows) => rows.length === 500)).toBe(true);
       expect(enrich).toHaveBeenCalledTimes(25);
       const snapshot = listingDiagnostics.snapshot();
       const captured = snapshot.events.slice(-(snapshot.recorded - diagnosticStart));
-      const physical = captured.find((event) => event.stage === "provider" && event.phase === "start")!;
       // Earlier fixtures can still settle background archive work. Select the
-      // causal tree, not all events sharing this wall-clock interval.
+      // provider owned by these consumers, not the first scan in this interval.
+      const physical = captured.find((event) => event.stage === "provider" && event.phase === "start"
+        && event.parentId === listingScopeId)!;
+      expect(physical).toBeDefined();
       const rpcIds = new Set(captured.filter((event) => event.parentId === physical.id).map((event) => event.id));
       const events = captured.filter((event) => event.id === physical.id || event.targetId === physical.id || rpcIds.has(event.id));
       expect(events.filter((event) => event.stage === "provider" && event.phase === "coalesced")).toHaveLength(7);
