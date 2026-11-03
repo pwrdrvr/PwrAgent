@@ -329,7 +329,7 @@ export type ThreadPendingWakeStoppers = {
   cancelPrWatch: (thread: PendingWakeThread, watchId: string) => Promise<StopResult>;
   cancelDependency: (thread: PendingWakeThread, dependencyId: string) => Promise<void>;
   stopMonitor: (thread: PendingWakeThread, monitorId: string) => Promise<void>;
-  cancelScheduledAction: (actionId: string) => Promise<void>;
+  cancelScheduledAction: (thread: PendingWakeThread, actionId: string) => Promise<void>;
   stopBackendTask: (thread: PendingWakeThread, processId: string) => Promise<void>;
 };
 
@@ -359,7 +359,7 @@ export async function stopThreadPendingWake(
         await stoppers.stopMonitor(thread, parsed.sourceId);
         return { ok: true, stopped: true };
       case "scheduled_action":
-        await stoppers.cancelScheduledAction(parsed.sourceId);
+        await stoppers.cancelScheduledAction(thread, parsed.sourceId);
         return { ok: true, stopped: true };
       case "backend_task":
         await stoppers.stopBackendTask(thread, parsed.sourceId);

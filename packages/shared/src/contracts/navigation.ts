@@ -314,6 +314,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * to the navigation store.
    */
   pendingWakes?: import("./thread-pending-wakes").ThreadPendingWake[];
+  /** The owner could not read every wake source, so `pendingWakes` may miss one. */
+  pendingWakesIncomplete?: true;
   /** Durable origin metadata for threads created by an Agent handoff tool. */
   handoffOrigin?: ThreadHandoffOrigin;
   /**

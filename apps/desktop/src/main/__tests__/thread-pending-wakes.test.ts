@@ -216,7 +216,7 @@ describe("stopThreadPendingWake", () => {
       cancelPrWatch: async (_thread, id) => { calls.push(`pr:${id}`); return { ok: true }; },
       cancelDependency: async (_thread, id) => { calls.push(`dependency:${id}`); },
       stopMonitor: async (_thread, id) => { calls.push(`monitor:${id}`); },
-      cancelScheduledAction: async (id) => { calls.push(`scheduled:${id}`); },
+      cancelScheduledAction: async (_thread, id) => { calls.push(`scheduled:${id}`); },
       stopBackendTask: async (_thread, id) => { calls.push(`task:${id}`); },
     };
   };

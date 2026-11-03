@@ -41,6 +41,8 @@ const EMPTY_ENDED: readonly ThreadPendingWakeEnded[] = [];
 
 /** The change events each wake source already sends. */
 const SOURCE_EVENTS = new Set<string>([
+  // Turning a thread's Auto-fix on or off sends only this one.
+  "thread/prAutoDispatch/updated",
   "thread/prWatches/updated",
   "thread/dependencies/updated",
   "thread/scheduledAction/updated",
@@ -63,6 +65,13 @@ export function useThreadPendingWakes(
   const threadId = thread?.id;
   const [local, setLocal] = useState<ThreadPendingWakesState>(UNKNOWN);
   const refreshRef = useRef<() => Promise<void>>(async () => {});
+  // A peer's list arrives with selected detail, which does not re-read for
+  // every source's change. Hide what its owner confirmed stopped until the
+  // next projection arrives.
+  const [peerStopped, setPeerStopped] = useState<{
+    wakes: readonly ThreadPendingWake[] | undefined;
+    keys: ReadonlySet<string>;
+  }>();
 
   useEffect(() => {
     if (peer || !backend || !threadId || !desktopApi?.manageThreadPendingWakes) {
@@ -74,11 +83,18 @@ export function useThreadPendingWakes(
     let disposed = false;
     let latest = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // A failed first read must not leave the panel loading; a later failure
+    // keeps the last list until the next change event reads again.
+    const settleFailedRead = () => setLocal((current) => current.status === "loading" ? UNKNOWN : current);
     const refresh = async () => {
       const sequence = ++latest;
       try {
         const response = await manage({ action: "list", backend, threadId });
-        if (disposed || sequence !== latest || !response.ok) return;
+        if (disposed || sequence !== latest) return;
+        if (!response.ok) {
+          settleFailedRead();
+          return;
+        }
         setLocal({
           status: "ready",
           wakes: response.wakes ?? [],
@@ -87,14 +103,14 @@ export function useThreadPendingWakes(
           peer: false,
         });
       } catch {
-        // Keep the last list; the next change event reads again.
+        if (!disposed && sequence === latest) settleFailedRead();
       }
     };
     refreshRef.current = refresh;
     setLocal({ status: "loading" });
     void refresh();
     const unsubscribe = desktopApi.onAgentEvent?.((event) => {
-      if (!isSourceEventFor(event, threadId)) return;
+      if (!isSourceEventFor(event, backend, threadId)) return;
       clearTimeout(timer);
       timer = setTimeout(() => void refresh(), REFRESH_DEBOUNCE_MS);
     });
@@ -110,24 +126,40 @@ export function useThreadPendingWakes(
       return { ok: false, error: { code: "failed", message: "This window cannot stop wakes." } };
     }
     try {
-      return await desktopApi.manageThreadPendingWakes({
+      const response = await desktopApi.manageThreadPendingWakes({
         action: "stop",
         backend,
         threadId,
         ...(federationTarget ? { federationTarget } : {}),
         key,
       });
+      if (response.ok && federationTarget) {
+        const projected = thread?.pendingWakes;
+        setPeerStopped((current) => ({
+          wakes: projected,
+          keys: new Set(current?.wakes === projected ? [...current.keys, key] : [key]),
+        }));
+      }
+      return response;
     } catch (error) {
       return { ok: false, error: { code: "failed", message: error instanceof Error ? error.message : String(error) } };
     } finally {
       void refreshRef.current();
     }
-  }, [backend, desktopApi, federationTarget, threadId]);
+  }, [backend, desktopApi, federationTarget, thread?.pendingWakes, threadId]);
 
   const peerWakes = thread?.pendingWakes;
+  const peerIncomplete = thread?.pendingWakesIncomplete === true;
+  const hidden = peerStopped?.wakes === peerWakes ? peerStopped?.keys : undefined;
   const peerState = useMemo((): ThreadPendingWakesState => peerWakes
-    ? { status: "ready", wakes: peerWakes, ended: EMPTY_ENDED, incomplete: false, peer: true }
-    : UNKNOWN, [peerWakes]);
+    ? {
+        status: "ready",
+        wakes: hidden ? peerWakes.filter((wake) => !hidden.has(wake.key)) : peerWakes,
+        ended: EMPTY_ENDED,
+        incomplete: peerIncomplete,
+        peer: true,
+      }
+    : UNKNOWN, [hidden, peerIncomplete, peerWakes]);
   return { state: peer ? peerState : local, stop };
 }
 
@@ -139,8 +171,8 @@ function readThreadFederationTarget(
 }
 
 /** The thread an event names: most carry `threadId`; scheduled actions nest it. */
-function isSourceEventFor(event: AgentEvent, threadId: string): boolean {
-  if (event.federationTarget?.scope === "remote") return false;
+function isSourceEventFor(event: AgentEvent, backend: string, threadId: string): boolean {
+  if (event.federationTarget?.scope === "remote" || event.backend !== backend) return false;
   const { method } = event.notification;
   if (!SOURCE_EVENTS.has(method)) return false;
   const params = event.notification.params as { threadId?: unknown; action?: { threadId?: unknown } } | undefined;

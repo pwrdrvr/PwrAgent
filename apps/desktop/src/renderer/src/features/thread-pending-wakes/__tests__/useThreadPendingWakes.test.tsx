@@ -91,4 +91,48 @@ describe("useThreadPendingWakes", () => {
     expect(result.current.state).toMatchObject({ status: "ready", wakes: [wake], peer: true });
     expect(api.manageThreadPendingWakes).not.toHaveBeenCalled();
   });
+
+  it("does not stay loading when the first read fails", async () => {
+    const { api } = fakeApi([{ ok: false, error: { code: "failed", message: "State is closed." } }]);
+    const { result } = renderHook(() => useThreadPendingWakes(thread, api as never));
+    await waitFor(() => expect(result.current.state).toEqual({ status: "unknown" }));
+  });
+
+  it("reads again when the thread's Auto-fix is turned off, and only for its own backend", async () => {
+    const { api, requests, emit } = fakeApi([
+      { ok: true, wakes: [wake], ended: [] },
+      { ok: true, wakes: [], ended: [] },
+    ]);
+    const { result } = renderHook(() => useThreadPendingWakes(thread, api as never));
+    await waitFor(() => expect(result.current.state).toMatchObject({ status: "ready", wakes: [wake] }));
+    emit({ backend: "codex", notification: { method: "thread/prAutoDispatch/updated", params: { threadId: "waiting", enabled: false } } } as unknown as AgentEvent);
+    emit({ backend: "claude", notification: { method: "thread/prAutoDispatch/updated", params: { threadId: "waiting", enabled: false } } } as unknown as AgentEvent);
+    await waitFor(() => expect(result.current.state).toMatchObject({ status: "ready", wakes: [] }));
+    expect(requests.filter((request) => request.action === "list")).toHaveLength(2);
+  });
+
+  it("hides a peer's stopped wake until the owner's next projection, and says when it is incomplete", async () => {
+    const { api, requests } = fakeApi([]);
+    const federation = {
+      instanceLabel: "studio-mac",
+      ref: { backend: "claude", threadId: "waiting", target: { scope: "remote", instanceId: "studio" } },
+    } as NavigationThreadSummary["federation"];
+    const other: ThreadPendingWake = { ...wake, key: "backend_task:t2", task: { ...wake.task, processId: "t2" } };
+    const { result, rerender } = renderHook(
+      ({ current }: { current: NavigationThreadSummary }) => useThreadPendingWakes(current, api as never),
+      { initialProps: { current: { ...thread, federation, pendingWakes: [wake, other], pendingWakesIncomplete: true } } },
+    );
+    expect(result.current.state).toMatchObject({ status: "ready", incomplete: true });
+    await act(async () => {
+      await result.current.stop("backend_task:t1");
+    });
+    expect(requests).toContainEqual({
+      action: "stop", backend: "claude", threadId: "waiting", key: "backend_task:t1",
+      federationTarget: { scope: "remote", instanceId: "studio" },
+    });
+    expect(result.current.state).toMatchObject({ status: "ready", wakes: [other] });
+    // The owner's next projection is the truth again.
+    rerender({ current: { ...thread, federation, pendingWakes: [wake] } });
+    expect(result.current.state).toMatchObject({ status: "ready", wakes: [wake], incomplete: false });
+  });
 });

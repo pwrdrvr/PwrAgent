@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   AppServerBackendKind,
-  ThreadPendingWake,
+  ThreadPendingWakesList,
   NavigationQueueProjection,
   NavigationQueueProjectionRequest,
   NavigationLaunchpadConfiguration,
@@ -290,7 +290,10 @@ export class NavigationDetailService {
     // The owner's Waiting for list, for the same reason. An empty list says
     // nothing waits; an owner that predates it sends none.
     const pendingWakes = await readPendingWakesForDetail({ backend: summary.source, threadId: summary.id });
-    if (pendingWakes) configuration.pendingWakes = pendingWakes;
+    if (pendingWakes) {
+      configuration.pendingWakes = pendingWakes.wakes;
+      if (pendingWakes.incomplete) configuration.pendingWakesIncomplete = true;
+    }
     let workspaceDirectories: NavigationSelectedDetailResponse["workspaceDirectories"];
     if (request.includeWorkspaceConfiguration) {
       if (thread.linkedDirectories.length > 100) {
@@ -483,7 +486,7 @@ export class NavigationDetailService {
 type PendingWakesProjector = (thread: {
   backend: AppServerBackendKind;
   threadId: string;
-}) => Promise<ThreadPendingWake[]>;
+}) => Promise<Pick<ThreadPendingWakesList, "wakes" | "incomplete">>;
 
 let pendingWakesProjector: PendingWakesProjector | undefined;
 
@@ -496,7 +499,7 @@ export function setNavigationDetailPendingWakesProjector(projector: PendingWakes
 async function readPendingWakesForDetail(thread: {
   backend: AppServerBackendKind;
   threadId: string;
-}): Promise<ThreadPendingWake[] | undefined> {
+}): Promise<Pick<ThreadPendingWakesList, "wakes" | "incomplete"> | undefined> {
   if (!pendingWakesProjector) return undefined;
   try {
     return await pendingWakesProjector(thread);

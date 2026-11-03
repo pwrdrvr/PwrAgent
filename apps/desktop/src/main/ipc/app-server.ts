@@ -5345,11 +5345,17 @@ class DesktopAppServerService {
       stopMonitor: async (owner, monitorId) => {
         await registry.stopSubAgent({ ...owner, monitorId });
       },
-      cancelScheduledAction: async (actionId) => {
-        await getScheduledThreadActionService().cancel({ id: actionId });
+      cancelScheduledAction: async (owner, actionId) => {
+        const service = getScheduledThreadActionService();
+        // Cancel takes a bare id; a stop names this thread's wake only.
+        if (!service.list(owner).actions.some((action) => action.id === actionId)) {
+          throw new Error("That scheduled action is no longer waiting on this thread.");
+        }
+        await service.cancel({ id: actionId });
       },
       stopBackendTask: async (owner, processId) => {
-        await registry.terminateBackgroundTerminal({ ...owner, processId });
+        const { terminated } = await registry.terminateBackgroundTerminal({ ...owner, processId });
+        if (!terminated) throw new Error("The task has already ended.");
       },
     }, thread, request.key);
   }
@@ -10760,7 +10766,7 @@ export function registerAppServerIpcHandlers(): void {
     return await appServerService.manageThreadPrWatches(request);
   });
   setNavigationDetailPendingWakesProjector(async (thread) =>
-    (await appServerService.listThreadPendingWakes(thread, 0)).wakes);
+    await appServerService.listThreadPendingWakes(thread, 0));
   ipcMain.removeHandler(THREAD_PENDING_WAKES_CHANNEL);
   ipcMain.handle(THREAD_PENDING_WAKES_CHANNEL, async (event, request: ThreadPendingWakesRequest): Promise<ThreadPendingWakesResponse> => {
     const target = request?.federationTarget;
@@ -10787,7 +10793,8 @@ export function registerAppServerIpcHandlers(): void {
           await runtime.remoteBackend(target).stopSubAgent({ ...owner, monitorId });
         },
         stopBackendTask: async (processId) => {
-          await runtime.remoteBackend(target).terminateBackgroundTerminal({ ...owner, processId });
+          const { terminated } = await runtime.remoteBackend(target).terminateBackgroundTerminal({ ...owner, processId });
+          if (!terminated) throw new Error("The task has already ended.");
         },
       }, request.key);
     }
