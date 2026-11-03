@@ -13,6 +13,7 @@ const EXPECTED_PROJECTS = [
   "desktop-renderer-node",
   "messaging",
   "mobile-client",
+  "owner-core",
   "shared",
 ];
 const EXPECTED_POOLS = {
@@ -21,6 +22,7 @@ const EXPECTED_POOLS = {
   "desktop-renderer-node": "threads",
   messaging: "threads",
   "mobile-client": "threads",
+  "owner-core": "threads",
   shared: "threads",
 } as const;
 const EXPECTED_OS_WORKER_PROCESSES_PER_TEST_FILE = [
@@ -29,6 +31,7 @@ const EXPECTED_OS_WORKER_PROCESSES_PER_TEST_FILE = [
   { name: "desktop-renderer-node", osWorkerProcessesPerTestFile: 0 },
   { name: "messaging", osWorkerProcessesPerTestFile: 0 },
   { name: "mobile-client", osWorkerProcessesPerTestFile: 0 },
+  { name: "owner-core", osWorkerProcessesPerTestFile: 0 },
   { name: "shared", osWorkerProcessesPerTestFile: 0 },
 ];
 

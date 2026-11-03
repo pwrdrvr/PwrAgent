@@ -299,6 +299,28 @@ describe("PrAutoDispatchCoordinator", () => {
     expect(pullRequestMatchesRepositoryKey({ ...contribution, org: "contributor" }, "github.com/upstream/project")).toBe(true);
   });
 
+  it("reads only the selected thread's PR elections and hydrates each owner once", async () => {
+    const first = buildPullRequestStatusKey(pr());
+    const second = buildPullRequestStatusKey(pr({ number: 1106, url: "https://github.com/pwrdrvr/PwrAgent/pull/1106" }));
+    await store.setThreadPrAutoDispatchEnabled({ backend: "codex", threadId: "owner", enabled: true });
+    await store.syncThreadPrAutoDispatchCandidates({ backend: "codex", threadId: "owner", prKeys: [first, second], now: 1 });
+    await store.syncThreadPrAutoDispatchCandidates({ backend: "codex", threadId: "thread-1", prKeys: [first, second], now: 2 });
+    for (let i = 0; i < 100; i += 1) {
+      const threadId = `unrelated-${i}`;
+      await store.setThreadPrAutoDispatchEnabled({ backend: "codex", threadId, enabled: true });
+      await store.syncThreadPrAutoDispatchCandidates({ backend: "codex", threadId, prKeys: [`unrelated-pr-${i}`], now: i });
+      await store.syncThreadPrAutoDispatchCandidates({ backend: "codex", threadId, prKeys: [`unrelated-pr-${i}`, first, second], now: i + 5 });
+    }
+    const prepare = vi.spyOn(stateDb.raw, "prepare");
+    const selected = await store.listPrAutoDispatchCandidates({ backend: "codex", threadId: "thread-1" });
+    expect(selected.map((candidate) => [candidate.prKey, candidate.threadId])).toEqual([
+      [first, "owner"], [first, "thread-1"], [second, "owner"], [second, "thread-1"],
+    ]);
+    expect(prepare.mock.calls.filter(([sql]) => sql === "SELECT payload FROM threads WHERE thread_id = ?")).toHaveLength(2);
+    prepare.mockRestore();
+    expect(await store.listPrAutoDispatchCandidates({ backend: "claude", threadId: "thread-1" })).toEqual([]);
+  });
+
   it("elects the oldest enabled primary attachment and reorders after detach", async () => {
     const dbPath = await useFileStateDb();
     const prKey = buildPullRequestStatusKey(pr());

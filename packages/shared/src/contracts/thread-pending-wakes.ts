@@ -1,6 +1,6 @@
 import type { FederationTarget } from "./federation";
 import type { AppServerBackendKind, AppServerBackgroundTask } from "./normalized-app-server";
-import type { ScheduledThreadActionKind } from "./scheduled-thread-actions";
+import type { ScheduledThreadAction, ScheduledThreadActionKind } from "./scheduled-thread-actions";
 import type { ThreadDependency } from "./thread-dependencies";
 import type { ThreadPrAutoFixState } from "./thread-pr-watches";
 import type { ThreadPullRequestWatchSummary } from "./thread-tools";
@@ -20,6 +20,25 @@ export const THREAD_PENDING_WAKES_ENDED_MAX_LIMIT = 20;
 
 /** Longest continuation text a dependency row carries. */
 export const THREAD_PENDING_WAKE_TEXT_MAX_CHARS = 600;
+
+/** Source-owned compact scheduled rows; execution inputs never enter this list. */
+export type PendingWakeScheduledAction = Pick<ScheduledThreadAction,
+  "id" | "kind" | "origin" | "status" | "scheduledFor" | "displayText" | "createdAt" | "updatedAt" | "queueEntryId">;
+export type PendingWakeScheduledActions = { actions: PendingWakeScheduledAction[]; incomplete?: true };
+
+export const THREAD_PENDING_WAKE_SOURCE_METHODS: ReadonlySet<string> = new Set([
+  "thread/prAutoDispatch/updated", "thread/prWatches/updated", "thread/dependencies/updated",
+  "thread/scheduledAction/updated", "thread/subAgents/updated", "thread/backgroundTasks/updated",
+  "thread/lock/updated", "thread/turnQueue/updated", "directory/forgeAutomation/updated",
+]);
+
+/** A source mutation, or the compact invalidation an owner sends a peer. */
+export function isThreadPendingWakeInvalidation(method: string, params: unknown): boolean {
+  const fields = params && typeof params === "object" ? params as Record<string, unknown> : undefined;
+  if (method === "navigation/invalidated") return typeof fields?.sourceMethod === "string" && THREAD_PENDING_WAKE_SOURCE_METHODS.has(fields.sourceMethod);
+  if (method === "thread/subAgents/updated" && fields?.navigationChanged === false) return false;
+  return THREAD_PENDING_WAKE_SOURCE_METHODS.has(method);
+}
 
 export type ThreadPendingWakeKind =
   | "pr_watch"
@@ -136,7 +155,7 @@ export type ThreadPendingWakesList = {
   wakes: ThreadPendingWake[];
   /** Newest first. */
   ended: ThreadPendingWakeEnded[];
-  /** A source could not be read, so the list may be missing a wake. */
+  /** A source could not be read, or projection bounds omitted rows or text. */
   incomplete?: true;
 };
 

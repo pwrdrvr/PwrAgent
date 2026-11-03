@@ -89,7 +89,12 @@ export type ThreadTodoActionRunners = {
     modelSettings?: ThreadTodoModelSettings;
     /** Raised on the peer when it answers `threadTodos.raisePlan`. */
     plan?: ThreadTodoPlan;
-  } & ThreadTodoStartChoices) => Promise<ThreadTodoStartedThread>;
+  } & ThreadTodoStartChoices) => Promise<ThreadTodoInstanceStartedThread>;
+};
+
+export type ThreadTodoInstanceStartedThread = ThreadTodoStartedThread & {
+  /** Added to the card's result, as when the peer could not honor its Where. */
+  notice?: string;
 };
 
 /**
@@ -741,7 +746,7 @@ export class ThreadTodoService {
       const plan: ThreadTodoPlan | undefined = steps.length > 0
         ? { title: action.title ?? todo.title, items: steps }
         : undefined;
-      const started: Awaited<ReturnType<ThreadTodoActionRunners["startThread"]>> = startOnInstance && options.startOnInstanceId
+      const started: Awaited<ReturnType<ThreadTodoActionRunners["startThread"]>> & Pick<ThreadTodoInstanceStartedThread, "notice"> = startOnInstance && options.startOnInstanceId
         ? await startOnInstance({
             instanceId: options.startOnInstanceId,
             sourceBackend: todo.backend,
@@ -773,10 +778,11 @@ export class ThreadTodoService {
           started.dispatchSettings.settings, started.dispatchSettings.source);
       }
       const { backend, threadId, instanceId, instanceLabel } = started;
+      const result = started.instanceLabel
+        ? `Started thread on ${started.instanceLabel}`
+        : "Started thread";
       return this.finish(id, {
-        result: started.instanceLabel
-          ? `Started thread on ${started.instanceLabel}`
-          : "Started thread",
+        result: started.notice ? `${result}. ${started.notice}` : result,
         startedThread: { backend, threadId, ...(instanceId ? { instanceId } : {}), ...(instanceLabel ? { instanceLabel } : {}) },
       });
     } catch (error) {

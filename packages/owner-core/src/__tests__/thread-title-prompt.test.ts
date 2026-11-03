@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildThreadTitlePrompt,
   readThreadTitlePrompt,
-} from "../app-server/thread-title-prompt";
+} from "../thread-title-prompt";
 
 describe("thread title prompt", () => {
   it("captures desktop thread title constraints", () => {

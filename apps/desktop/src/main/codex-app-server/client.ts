@@ -169,12 +169,25 @@ import {
 import {
   StdioJsonRpcTransport,
   type CodexAppServerExit,
+  type CodexAppServerProcessInfo,
   type StdioJsonRpcTransportOptions,
 } from "./stdio-transport";
 import {
   CodexAppServerRestartPolicy,
   type CodexAppServerRestartPolicyOptions,
 } from "./app-server-restart-policy";
+import {
+  decideCodexAppServerRecycle,
+  type CodexAppServerProcessSample,
+  type CodexAppServerRecycleOutcome,
+  type CodexAppServerRecycleSettings,
+  type CodexAppServerRecycleStatus,
+} from "./app-server-recycle-policy";
+import {
+  collectDescendants,
+  countOpenFileDescriptors,
+  readProcessTable,
+} from "../process-descendants";
 import {
   isCodexInvalidResponseMessageIdError,
   repairCodexInvalidResponseMessageIds,
@@ -184,7 +197,7 @@ import {
 import type {
   ThreadTitleAdapterParams,
   ThreadTitleAdapterResult,
-} from "../app-server/thread-title-generation-service";
+} from "@pwragent/owner-core/thread-title-generation-service";
 import {
   normalizeCompatibleApprovalPolicy,
   resolveCodexProtocolCompatibility,
@@ -368,7 +381,26 @@ type CodexClientOptions = {
   isCodexBootstrapDeferred?: () => boolean;
   /** Test seam for the backoff and circuit breaker after unexpected exits. */
   appServerRestartPolicy?: CodexAppServerRestartPolicyOptions;
+  /** Test seam: counts below the running app server for the idle recycle. */
+  sampleAppServerProcessTree?: (
+    process: CodexAppServerProcessInfo,
+  ) => Promise<{ childProcessCount?: number; openFdCount?: number }>;
+  /** Test seam for the idle recycle and idle-thread unsubscribe clock. */
+  now?: () => number;
 };
+
+async function sampleAppServerProcessTree(
+  process: CodexAppServerProcessInfo,
+): Promise<{ childProcessCount?: number; openFdCount?: number }> {
+  const [table, openFdCount] = await Promise.all([
+    readProcessTable().catch(() => undefined),
+    countOpenFileDescriptors(process.pid),
+  ]);
+  return {
+    ...(table ? { childProcessCount: collectDescendants(table, process.pid).length } : {}),
+    ...(openFdCount !== undefined ? { openFdCount } : {}),
+  };
+}
 
 /**
  * Thrown instead of starting Codex after it exited on its own too many times
@@ -7730,6 +7762,9 @@ export class CodexAppServerClient {
   private readonly modelProviderTranslator?: CodexModelProviderTranslator;
   private lifecycleBarrier: Promise<void> | null = null;
   private readonly activeRequests = new Set<Promise<unknown>>();
+  // closeGeneration invalidates admitted work across close; serverGeneration
+  // identifies one transport incarnation, including exits during initialization.
+  // Neither replaces the lifecycle barrier or draining active requests.
   private closeGeneration = 0;
   private pendingCloses = 0;
   private serverGeneration = 0;
@@ -7755,6 +7790,26 @@ export class CodexAppServerClient {
   private rejectedCodexHome?: string;
   private transportClosePromise: Promise<void> | null = null;
   private readonly restartPolicy: CodexAppServerRestartPolicy;
+  private readonly transport: StdioJsonRpcTransport;
+  /** Last message Codex sent, of any kind; the idle recycle measures from it. */
+  private lastAppServerMessageAt: number;
+  /** Requests from Codex (approvals, user input, tool calls) not yet answered. */
+  private pendingServerRequests = 0;
+  private recycleStatus: CodexAppServerRecycleStatus = { recycleCount: 0 };
+  /**
+   * Threads this connection subscribed to with thread/start, thread/fork or
+   * thread/resume, and when each last saw a request or an event. Codex keeps
+   * a subscribed thread loaded, with its MCP servers running, until every
+   * subscriber leaves, so `unsubscribeIdleThreads` must let go of them.
+   */
+  private readonly subscribedThreads = new Map<string, number>();
+  /** Keep parent-addressable children without re-reading them on every sweep. */
+  private readonly keptSubAgentThreads = new Set<string>();
+  /** Bumped each time a thread unloads, so operations resume it again. */
+  private readonly threadUnloadGenerations = new Map<string, number>();
+  /** Requests from Codex (approvals, user input, tool calls) per thread. */
+  private readonly pendingServerRequestsByThread = new Map<string, number>();
+  private threadUnsubscribeUnsupported = false;
   private restartStatus: CodexAppServerRestartStatus = { stopped: false };
   private readonly restartStatusListeners = new Set<
     (status: CodexAppServerRestartStatus) => void
@@ -7884,27 +7939,29 @@ export class CodexAppServerClient {
 
   constructor(private readonly options: CodexClientOptions = {}) {
     this.restartPolicy = new CodexAppServerRestartPolicy(options.appServerRestartPolicy);
+    this.lastAppServerMessageAt = this.now();
+    this.transport = new StdioJsonRpcTransport({
+      command: options.command?.trim() || "codex",
+      authenticationRecovery: options.authenticationRecovery,
+      onAuthenticationRejected: (home) => {
+        this.rejectedCodexHome = home;
+        const runningTurns = [...this.runningTurnIdsByThread];
+        this.runningTurnIdsByThread.clear();
+        void (async () => {
+          await this.close();
+          await this.failRunningTurns(runningTurns, CODEX_SIGN_IN_REQUIRED);
+        })().catch((error) => codexClientLog.warn("Codex auth shutdown failed", { error: String(error) }));
+      },
+      onUnexpectedExit: (exit) => this.handleUnexpectedExit(exit),
+      args: options.args ?? [],
+      env: options.env,
+      resolveArgs: options.resolveArgs,
+      resolveCommand: options.resolveCommand,
+      resolveEnv: options.resolveEnv,
+      bundledToolsDirectory: options.bundledToolsDirectory,
+    });
     this.rawConnection = new JsonRpcConnection(
-      new StdioJsonRpcTransport({
-        command: options.command?.trim() || "codex",
-        authenticationRecovery: options.authenticationRecovery,
-        onAuthenticationRejected: (home) => {
-          this.rejectedCodexHome = home;
-          const runningTurns = [...this.runningTurnIdsByThread];
-          this.runningTurnIdsByThread.clear();
-          void (async () => {
-            await this.close();
-            await this.failRunningTurns(runningTurns, CODEX_SIGN_IN_REQUIRED);
-          })().catch((error) => codexClientLog.warn("Codex auth shutdown failed", { error: String(error) }));
-        },
-        onUnexpectedExit: (exit) => this.handleUnexpectedExit(exit),
-        args: options.args ?? [],
-        env: options.env,
-        resolveArgs: options.resolveArgs,
-        resolveCommand: options.resolveCommand,
-        resolveEnv: options.resolveEnv,
-        bundledToolsDirectory: options.bundledToolsDirectory,
-      }),
+      this.transport,
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       createCodexObserverWithConfigReadRedaction(options.connectionObserver),
       { logContext: { backend: "codex" }, logger: getMainLogger("pwragent:json-rpc") },
@@ -7922,6 +7979,14 @@ export class CodexAppServerClient {
         return translator.observeResponse(method, translated, result);
       };
     }
+    // Every route to Codex passes here, so this sees each subscription that
+    // any operation, helper or recovery opens or closes.
+    const requestBeforeSubscriptionTracking = this.rawConnection.request.bind(this.rawConnection);
+    this.rawConnection.request = async (method, params, timeoutMs, diagnostics) => {
+      const result = await requestBeforeSubscriptionTracking(method, params, timeoutMs, diagnostics);
+      this.observeThreadSubscription(method, params, result);
+      return result;
+    };
     this.connection = {
       request: (...args) => this.requestWhenAvailable(...args),
     };
@@ -7934,6 +7999,7 @@ export class CodexAppServerClient {
           })
         : enrichThreadDirectory);
     this.rawConnection.setNotificationHandler(async (method, rawParams) => {
+      this.lastAppServerMessageAt = this.now();
       const params = this.modelProviderTranslator
         ? this.modelProviderTranslator.translateNotification(method, rawParams)
         : rawParams;
@@ -8022,6 +8088,14 @@ export class CodexAppServerClient {
       if (navigationQueryEventRequiresRefresh(method)) this.invalidateThreadListings(normalized);
       if (method === "thread/name/updated" && this.consumeThreadNameEcho(params)) return;
       const helperThreadId = extractThreadIdFromNotification(normalized, params);
+      if (helperThreadId && method === "thread/closed") {
+        // Codex unloaded it; the next operation must resume it first.
+        this.subscribedThreads.delete(helperThreadId);
+        this.keptSubAgentThreads.delete(helperThreadId);
+        this.noteThreadUnloaded(helperThreadId);
+      } else if (helperThreadId && this.subscribedThreads.has(helperThreadId)) {
+        this.subscribedThreads.set(helperThreadId, this.now());
+      }
       // Codex can send startup warnings before thread/start returns its ID.
       // Wait only for startup notices, then suppress those belonging to the
       // helper. Interactive turn traffic continues while the RPC is pending.
@@ -8091,7 +8165,11 @@ export class CodexAppServerClient {
         await listener(normalized);
       }
     });
-    this.rawConnection.setRequestHandler(async (method, params, rpcId) => {
+    const handleServerRequest: Parameters<JsonRpcConnection["setRequestHandler"]>[0] = async (
+      method,
+      params,
+      rpcId,
+    ) => {
       const helperToolCallParams = asRecord(params);
       const helperToolHandler = helperToolCallParams
         ? this.resolveHelperThreadToolHandler(method, helperToolCallParams)
@@ -8141,7 +8219,185 @@ export class CodexAppServerClient {
       }
 
       throw new Error(`No desktop request handler registered for ${method}`);
+    };
+    this.rawConnection.setRequestHandler(async (method, params, rpcId) => {
+      this.lastAppServerMessageAt = this.now();
+      this.pendingServerRequests += 1;
+      // A thread waiting on the operator must stay loaded to hear the answer.
+      const threadId = extractRequestMetadata(params).threadId;
+      if (threadId) {
+        this.pendingServerRequestsByThread.set(
+          threadId,
+          (this.pendingServerRequestsByThread.get(threadId) ?? 0) + 1,
+        );
+      }
+      try {
+        return await handleServerRequest(method, params, rpcId);
+      } finally {
+        this.pendingServerRequests -= 1;
+        this.lastAppServerMessageAt = this.now();
+        if (threadId) {
+          const remaining = (this.pendingServerRequestsByThread.get(threadId) ?? 1) - 1;
+          if (remaining > 0) this.pendingServerRequestsByThread.set(threadId, remaining);
+          else this.pendingServerRequestsByThread.delete(threadId);
+          if (this.subscribedThreads.has(threadId)) this.subscribedThreads.set(threadId, this.now());
+        }
+      }
     });
+  }
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
+  }
+
+  private observeThreadSubscription(method: string, params: unknown, result: unknown): void {
+    if (method === "thread/unsubscribe") {
+      const threadId = pickString(asRecord(params) ?? {}, ["threadId"]);
+      if (threadId) {
+        this.subscribedThreads.delete(threadId);
+        this.keptSubAgentThreads.delete(threadId);
+      }
+      return;
+    }
+    if (method !== "thread/start" && method !== "thread/resume" && method !== "thread/fork") return;
+    // A resume names its thread; a start or fork learns it from the result.
+    const threadId = method === "thread/resume"
+      ? pickString(asRecord(params) ?? {}, ["threadId"])
+      : extractThreadIdFromValue(result);
+    if (threadId) this.subscribedThreads.set(threadId, this.now());
+  }
+
+  private noteThreadUnloaded(threadId: string): void {
+    this.threadUnloadGenerations.set(threadId, (this.threadUnloadGenerations.get(threadId) ?? 0) + 1);
+  }
+
+  /** Threads this connection keeps loaded in Codex. */
+  getSubscribedThreadCount(): number {
+    return this.subscribedThreads.size;
+  }
+
+  /**
+   * Let go of threads nothing needs live events for, so Codex can unload them
+   * and stop their MCP servers. Codex unloads a thread only when it is idle
+   * and has no subscriber; before this, every thread a long-lived connection
+   * started or resumed stayed loaded until the server stopped, and a day of
+   * use left hundreds of MCP servers running.
+   *
+   * A thread qualifies after `idleMs` with no request or event, when this
+   * client tracks no turn, pending request, helper turn, voice session or
+   * unstarted first turn for it, and `isThreadBusy` (the owner's view: queued
+   * input, background terminals, live tool items, reviews) says no. Each is
+   * checked again under the lifecycle barrier, together with Codex's own
+   * status for the thread; a sub-agent thread stays, since its parent may
+   * still address it. Cache that classification until it closes or this
+   * connection unsubscribes, so later sweeps need no read. The next operation
+   * on a released thread resumes it, as every thread operation does, and one
+   * already in flight replays its resume.
+   */
+  async unsubscribeIdleThreads(params: {
+    idleMs: number;
+    isThreadBusy: (threadId: string) => boolean;
+    /** Most threads to release in one pass; the barrier holds RPCs meanwhile. */
+    limit?: number;
+  }): Promise<string[]> {
+    if (!this.initialized || this.pendingCloses > 0 || this.threadUnsubscribeUnsupported) return [];
+    const isIdle = (threadId: string): boolean => {
+      const lastActiveAt = this.subscribedThreads.get(threadId);
+      return lastActiveAt !== undefined
+        && !this.keptSubAgentThreads.has(threadId)
+        && this.now() - lastActiveAt >= params.idleMs
+        && !this.threadKeepsSubscription(threadId)
+        && !params.isThreadBusy(threadId);
+    };
+    const candidates = [...this.subscribedThreads.keys()]
+      .filter(isIdle)
+      .slice(0, params.limit ?? 16);
+    if (candidates.length === 0) return [];
+    const serverGeneration = this.serverGeneration;
+    const timeoutMs = this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    // One barrier per thread, so other RPCs wait for at most one thread's
+    // read and unsubscribe rather than the whole pass.
+    const releaseIfIdle = (threadId: string) => this.runLifecycle(async (): Promise<
+      "released" | "kept" | "stop"
+    > => {
+      // No new RPC is admitted, so nothing can start on it from here on.
+      if (!this.initialized || serverGeneration !== this.serverGeneration) return "stop";
+      if (!isIdle(threadId)) return "kept";
+      let thread: Record<string, unknown> | null;
+      try {
+        thread = asRecord(asRecord(await this.rawConnection.request(
+          "thread/read",
+          { threadId, includeTurns: false },
+          timeoutMs,
+        ))?.thread);
+      } catch (error) {
+        if (/not (found|loaded)/i.test(error instanceof Error ? error.message : String(error))) {
+          this.subscribedThreads.delete(threadId);
+        }
+        return "kept";
+      }
+      const status = readThreadStatus(thread);
+      if (status === "notLoaded") {
+        this.subscribedThreads.delete(threadId);
+        return "kept";
+      }
+      if (typeof thread?.parentThreadId === "string"
+        || asRecord(thread?.source)?.subAgent !== undefined) {
+        // Codex 0.153 unload removes the child from the agent controller's
+        // thread manager; send_input and wait do not implicitly resume it.
+        // A thread/closed notification may have arrived during the read.
+        if (this.subscribedThreads.has(threadId)) this.keptSubAgentThreads.add(threadId);
+        return "kept";
+      }
+      // A thread stopped by a system error runs nothing and can go too.
+      const systemError = thread?.status === "systemError"
+        || asRecord(thread?.status)?.type === "systemError";
+      if (status !== "idle" && !systemError) {
+        // Busy: look again next pass.
+        this.subscribedThreads.set(threadId, this.now());
+        return "kept";
+      }
+      if (!isIdle(threadId)) return "kept";
+      try {
+        await this.rawConnection.request("thread/unsubscribe", { threadId }, timeoutMs);
+      } catch (error) {
+        if (isMethodUnavailableError(error, "thread/unsubscribe")) {
+          this.threadUnsubscribeUnsupported = true;
+          return "stop";
+        }
+        codexClientLog.warn("idle Codex thread unsubscribe failed", {
+          threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return "kept";
+      }
+      this.subscribedThreads.delete(threadId);
+      this.noteThreadUnloaded(threadId);
+      return "released";
+    });
+    const released: string[] = [];
+    for (const threadId of candidates) {
+      const outcome = await releaseIfIdle(threadId);
+      if (outcome === "stop") break;
+      if (outcome === "released") released.push(threadId);
+    }
+    if (released.length > 0) {
+      codexClientLog.info("unsubscribed idle Codex threads", {
+        count: released.length,
+        stillSubscribed: this.subscribedThreads.size,
+      });
+    }
+    return released;
+  }
+
+  /** Work this client tracks that needs the thread's live events. */
+  private threadKeepsSubscription(threadId: string): boolean {
+    return this.runningTurnIdsByThread.has(threadId)
+      || this.pendingServerRequestsByThread.has(threadId)
+      || this.helperThreadIds.has(threadId)
+      || this.ownedRealtimeThreads.has(threadId)
+      // Its history exists only in this process until the first turn starts.
+      || this.threadsAwaitingFirstTurn.has(threadId);
   }
 
   async close(): Promise<void> {
@@ -8282,6 +8538,139 @@ export class CodexAppServerClient {
     codexClientLog.info("Codex app server restart history cleared", { reason, wasStopped });
   }
 
+  /**
+   * The running app server's age and what it has started, or `undefined`
+   * when none is running. It never starts Codex.
+   */
+  async readAppServerProcessSample(): Promise<CodexAppServerProcessSample | undefined> {
+    const info = this.initialized ? this.transport.getProcessInfo?.() : undefined;
+    if (!info) return undefined;
+    const sampledAt = this.now();
+    const counts = await (this.options.sampleAppServerProcessTree ?? sampleAppServerProcessTree)(info)
+      .catch(() => ({}));
+    return {
+      pid: info.pid,
+      startedAt: info.startedAt,
+      sampledAt,
+      uptimeMs: Math.max(0, sampledAt - info.startedAt),
+      ...counts,
+    };
+  }
+
+  getAppServerRecycleStatus(): CodexAppServerRecycleStatus {
+    return this.recycleStatus;
+  }
+
+  /**
+   * Replace an idle app server that has run too long or started too much
+   * (`decideCodexAppServerRecycle`). The stop reaps its whole process tree;
+   * the next request starts a fresh server, and thread operations replay
+   * their resume and settings on it, as after a crash.
+   *
+   * Idle means no message from Codex for `settings.idleMs`, nothing this
+   * client is tracking, and `isQuiescent()` from the owner, which knows the
+   * work the client cannot see. All of it is checked again under the
+   * lifecycle barrier, where no new RPC can start, together with Codex's own
+   * report of active threads; any doubt leaves the server running.
+   */
+  async maybeRecycleIdleAppServer(params: {
+    settings: CodexAppServerRecycleSettings;
+    isQuiescent: () => boolean;
+  }): Promise<CodexAppServerRecycleOutcome> {
+    let outcome: CodexAppServerRecycleOutcome;
+    try {
+      outcome = await this.tryRecycleIdleAppServer(params);
+    } catch (error) {
+      codexClientLog.warn("Codex app server idle recycle failed", { error: String(error) });
+      outcome = { kind: "busy", blocker: "error" };
+    }
+    this.recycleStatus = {
+      ...this.recycleStatus,
+      ...(outcome.kind === "recycled"
+        ? { recycleCount: this.recycleStatus.recycleCount + 1, lastRecycle: outcome.record }
+        : {}),
+      lastCheck: {
+        at: this.now(),
+        outcome: outcome.kind,
+        ...(outcome.kind === "busy" ? { blocker: outcome.blocker } : {}),
+      },
+    };
+    return outcome;
+  }
+
+  private async tryRecycleIdleAppServer(params: {
+    settings: CodexAppServerRecycleSettings;
+    isQuiescent: () => boolean;
+  }): Promise<CodexAppServerRecycleOutcome> {
+    const blocker = (requests: boolean): string | undefined =>
+      this.appServerRecycleBlocker(requests)
+      ?? (params.isQuiescent() ? undefined : "registry-work");
+    const early = blocker(true);
+    if (early === "not-running") return { kind: "not-running" };
+    if (early) return { kind: "busy", blocker: early };
+    const idleSince = this.lastAppServerMessageAt;
+    const idleMs = this.now() - idleSince;
+    if (idleMs < params.settings.idleMs) return { kind: "not-idle", idleMs };
+    const sample = await this.readAppServerProcessSample();
+    if (!sample) return { kind: "not-running" };
+    const reasons = decideCodexAppServerRecycle(params.settings, sample);
+    if (reasons.length === 0) return { kind: "healthy", sample };
+
+    const serverGeneration = this.serverGeneration;
+    return await this.runLifecycle<CodexAppServerRecycleOutcome>(async () => {
+      // Admitted RPCs have drained and new ones wait at the barrier.
+      const late = (): string | undefined => {
+        if (serverGeneration !== this.serverGeneration) return "not-running";
+        if (this.lastAppServerMessageAt !== idleSince) return "app-server-activity";
+        return blocker(false);
+      };
+      let stillBlocked = late();
+      if (!stillBlocked) {
+        stillBlocked = (await this.listTurnsBlockingProcessStop()).length > 0
+          ? "codex-active-thread"
+          : late();
+      }
+      if (stillBlocked === "not-running") return { kind: "not-running" };
+      if (stillBlocked) return { kind: "busy", blocker: stillBlocked };
+
+      await this.closeConnection();
+      const stop = this.transport.takeLastStopReport?.();
+      const record = {
+        at: this.now(),
+        reasons,
+        pid: sample.pid,
+        uptimeMs: sample.uptimeMs,
+        idleMs: this.now() - idleSince,
+        ...(sample.childProcessCount !== undefined
+          ? { childProcessCount: sample.childProcessCount }
+          : {}),
+        ...(sample.openFdCount !== undefined ? { openFdCount: sample.openFdCount } : {}),
+        ...(stop ? { orphansReaped: stop.orphansReaped } : {}),
+      };
+      codexClientLog.info("Codex app server recycled while idle", record);
+      return { kind: "recycled", record };
+    });
+  }
+
+  /** Work on this process that a stop would cut short, by name. */
+  private appServerRecycleBlocker(includeRequests: boolean): string | undefined {
+    if (!this.initialized || this.pendingCloses > 0 || this.restartStatus.stopped) {
+      return "not-running";
+    }
+    if (this.runningTurnIdsByThread.size > 0) return "running-turn";
+    if (this.pendingServerRequests > 0) return "pending-server-request";
+    if (this.helperThreadIds.size > 0
+      || this.pendingHelperThreadStarts.size > 0
+      || this.helperTurnWaiters.size > 0) {
+      return "helper-turn";
+    }
+    if (this.ownedRealtimeThreads.size > 0) return "realtime-session";
+    // Its history exists only in this process until the first turn starts.
+    if (this.threadsAwaitingFirstTurn.size > 0) return "thread-awaiting-first-turn";
+    if (includeRequests && this.activeRequests.size > 0) return "in-flight-request";
+    return undefined;
+  }
+
   private setRestartStatus(status: CodexAppServerRestartStatus): void {
     if (!status.stopped && !this.restartStatus.stopped) return;
     this.restartStatus = status;
@@ -8337,6 +8726,11 @@ export class CodexAppServerClient {
     this.pendingFirstTurnShellEnvironments.clear();
     this.recordedThreadNames.clear();
     this.pendingThreadNameEchoes.clear();
+    // A new process has loaded nothing; operations replay their own resume,
+    // keyed on the server generation, so unload counts can start over.
+    this.subscribedThreads.clear();
+    this.keptSubAgentThreads.clear();
+    this.threadUnloadGenerations.clear();
     this.helperThreadIds.clear();
     this.helperThreadToolHandlers.clear();
     this.helperToolTurnThreadIds.clear();
@@ -11676,6 +12070,10 @@ export class CodexAppServerClient {
   private createThreadOperationConnection(): Pick<JsonRpcConnection, "request"> {
     let generation = this.serverGeneration;
     const setup: Array<Parameters<JsonRpcConnection["request"]>> = [];
+    let setupThreadId: string | undefined;
+    let unloadGeneration = 0;
+    const threadUnloaded = () => setupThreadId !== undefined
+      && (this.threadUnloadGenerations.get(setupThreadId) ?? 0) !== unloadGeneration;
     return {
       request: (...args) => this.runAdmittedRequest(async () => {
         const closeGeneration = this.closeGeneration;
@@ -11685,16 +12083,23 @@ export class CodexAppServerClient {
           }
           return this.rawConnection.request(...requestArgs);
         };
-        // Resume and settings belong to a process. Reapply successful setup
-        // after recovery, with setup plus the next RPC admitted as one unit.
+        // Resume and settings belong to a process and to a loaded thread.
+        // Reapply successful setup after recovery or after the thread
+        // unloaded, with setup plus the next RPC admitted as one unit.
         // Never replay the action itself (turn/start, review/start, etc.).
-        if (generation !== this.serverGeneration) {
+        if (generation !== this.serverGeneration || threadUnloaded()) {
           for (const previous of setup) await request(...previous);
           generation = this.serverGeneration;
+          if (setupThreadId) unloadGeneration = this.threadUnloadGenerations.get(setupThreadId) ?? 0;
         }
         const result = await request(...args);
         if (args[0] === "thread/resume" || args[0] === "thread/settings/update") {
           setup.push(args);
+          const threadId = pickString(asRecord(args[1]) ?? {}, ["threadId"]);
+          if (args[0] === "thread/resume" && threadId && setupThreadId === undefined) {
+            setupThreadId = threadId;
+            unloadGeneration = this.threadUnloadGenerations.get(threadId) ?? 0;
+          }
         }
         return result;
       }),
@@ -11843,6 +12248,7 @@ export class CodexAppServerClient {
           },
         };
         const result = await this.rawConnection.request("initialize", initializeParams);
+        assertNotClosed();
         this.initializeResult = parseInitializeResponse(result);
         this.tokenMiserActivationNegotiated = Boolean(activationNonce);
       } catch (error) {

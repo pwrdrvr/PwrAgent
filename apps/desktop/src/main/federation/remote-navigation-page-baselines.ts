@@ -1,5 +1,5 @@
 import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
-import { navigationQueryKey } from "../app-server/navigation-query-projection";
+import { navigationQueryKey } from "@pwragent/owner-core/navigation-query-projection";
 
 /** Owner-only baselines. Viewer overlays are reapplied after every owner read.
  * Never treat a renderer revision as proof of the cached owner's contents.

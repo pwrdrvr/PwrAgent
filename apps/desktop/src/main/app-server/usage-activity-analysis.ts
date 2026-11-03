@@ -4,7 +4,7 @@ import {
   type AppServerReadThreadRequest, type AppServerReadThreadResponse, type AppServerThreadEntry,
   type UsageAnalysisModelBackend,
 } from "@pwragent/shared";
-import type { ThreadTitleAdapterResult } from "./thread-title-generation-service";
+import type { ThreadTitleAdapterResult } from "@pwragent/owner-core/thread-title-generation-service";
 
 // The generator supplies reasoning effort from the Usage analysis row.
 type Generate = (params: {

@@ -3,7 +3,7 @@ import type { AppServerBackendKind } from "@pwragent/shared";
 import {
   ThreadTitleGenerationService,
   type ThreadTitleGenerator,
-} from "../app-server/thread-title-generation-service";
+} from "../thread-title-generation-service";
 
 function makeGenerator(object: unknown): ThreadTitleGenerator {
   return {

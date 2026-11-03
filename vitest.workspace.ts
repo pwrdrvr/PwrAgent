@@ -190,6 +190,17 @@ export default defineConfig({
       },
       {
         test: {
+          name: "owner-core",
+          env: SANDBOX_ENV,
+          pool: "threads",
+          globals: true,
+          testTimeout: TEST_TIMEOUT_MS,
+          environment: "node",
+          include: ["packages/owner-core/src/**/__tests__/**/*.test.ts"]
+        }
+      },
+      {
+        test: {
           name: "shared",
           env: SANDBOX_ENV,
           pool: "threads",

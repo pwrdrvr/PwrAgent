@@ -808,8 +808,18 @@ Use this dependency order from lowest to highest:
 
 - `packages/shared` imports no internal package.
 - `packages/messaging/interface` imports only `packages/shared`.
-- `packages/messaging/providers/*` imports only `packages/messaging/interface`.
+- `packages/federation` imports only `packages/shared`.
+- `packages/agent-tools` imports only `packages/shared`.
+- The three packages above are independent siblings; none imports another.
+- `packages/owner-core` (`@pwragent/owner-core`) holds shared navigation,
+  Attention ordering, and title policies. It may import only `shared`.
+- `packages/messaging/providers/{discord,feishu,line,mattermost,slack,telegram}`
+  each imports only `packages/messaging/interface`, never another provider.
+- `packages/pwragent` (the Outpost) may import `shared`, `federation`,
+  `agent-tools`, `messaging/interface`, and `owner-core`, only through
+  `src/federation-core.ts`. Its JavaScript consumes the resulting bundle.
 - `apps/desktop` can import any package.
+- No package under `packages/` may import an application under `apps/`.
 
 The renderer has an additional boundary.
 

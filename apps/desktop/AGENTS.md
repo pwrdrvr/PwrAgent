@@ -739,6 +739,15 @@ Grok MCP servers; read-only tools run without a permission request in every
 mode; and a closed session stays listed until `_x.ai/session/delete`. See
 `src/main/acp/minimal-helper-session.ts`.
 
+An open ACP session keeps its MCP servers running until `session/close`.
+On Grok 1.0.45-pwragent.2, `session/new` started a session's stdio MCP
+server, `session/close` stopped it, and `session/load` started it again.
+`AcpAgentClient.closeIdleSessions` therefore closes a session after 10
+minutes without a request, update or permission request, and every session
+request reloads a closed session first. A helper session created with an
+agent profile in `_meta` or with no MCP servers stays open, because
+`session/load` cannot recreate either.
+
 Reach for this whenever a question about an agent's wire behavior would
 otherwise be answered by reading its source or guessing. **The committed
 `__tests__/fixtures/acp-transcripts/*-build.json` fixtures cannot answer

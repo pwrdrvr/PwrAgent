@@ -8,7 +8,7 @@ import {
   type ProjectForgeAutomation,
 } from "@pwragent/shared";
 import { appendViewerNavigationPins, loadViewerNavigationPins } from "../app-server/navigation-viewer-pins";
-import { projectNavigationQuery } from "../app-server/navigation-query-projection";
+import { projectNavigationQuery } from "@pwragent/owner-core/navigation-query-projection";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";

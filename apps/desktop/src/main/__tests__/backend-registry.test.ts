@@ -154,6 +154,10 @@ import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-brid
 import { isBindingForThread } from "../messaging/core/messaging-binding-thread-match";
 import { ArchiveCleanupTransport } from "./fixtures/archive-cleanup-transport";
 import type { ManagedCodexSelectionChange } from "../settings/desktop-settings-service";
+import {
+  DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS,
+  type CodexAppServerRecycleSettings,
+} from "../codex-app-server/app-server-recycle-policy";
 import { managedCodexRoot } from "../codex-build-channel";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
@@ -4960,6 +4964,114 @@ describe("DesktopBackendRegistry", () => {
     expect(markSwitchComplete).toHaveBeenCalledOnce();
 
     await registry.close();
+  });
+
+  it("recycles the idle Codex app server only while no Codex work is active", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const recycle = vi.fn(async (_params: {
+      settings: CodexAppServerRecycleSettings;
+      isQuiescent: () => boolean;
+    }) => ({ kind: "not-running" as const }));
+    Object.assign(codexClient, { maybeRecycleIdleAppServer: recycle });
+    let settings: CodexAppServerRecycleSettings = {
+      ...DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS,
+      idleMs: 60_000,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      resolveCodexAppServerRecycleSettings: () => settings,
+    });
+    const internals = registry as unknown as {
+      activeTurnKeys: Set<string>;
+      codexBackgroundTerminals: Map<string, unknown[]>;
+    };
+
+    // A turn makes the owner's answer "not quiescent", so the client records
+    // a busy check instead of recycling.
+    internals.activeTurnKeys.add("codex:thread-1:turn-1");
+    await registry.checkCodexAppServerRecycle();
+    expect(recycle).toHaveBeenCalledOnce();
+    const { settings: passed, isQuiescent } = recycle.mock.calls[0]![0];
+    expect(passed).toEqual(settings);
+    expect(isQuiescent()).toBe(false);
+
+    internals.activeTurnKeys.delete("codex:thread-1:turn-1");
+    expect(isQuiescent()).toBe(true);
+    // A command still running after its turn ended keeps the server.
+    internals.codexBackgroundTerminals.set("thread-1", [{ processId: "p-1" }]);
+    expect(isQuiescent()).toBe(false);
+    internals.codexBackgroundTerminals.clear();
+
+    settings = { ...settings, enabled: false };
+    await registry.checkCodexAppServerRecycle();
+    expect(recycle).toHaveBeenCalledOnce();
+
+    settings = { ...settings, enabled: true };
+    vi.useFakeTimers();
+    try {
+      registry.startCodexAppServerRecycler();
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(recycle).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(recycle).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+    await registry.close();
+    expect((registry as unknown as { codexAppServerRecycleTimer?: unknown })
+      .codexAppServerRecycleTimer).toBeUndefined();
+    await registry.checkCodexAppServerRecycle();
+    expect(recycle).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases idle Codex threads only when the registry tracks no work for them", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const unsubscribe = vi.fn(async (_params: {
+      idleMs: number;
+      isThreadBusy: (threadId: string) => boolean;
+    }) => [] as string[]);
+    Object.assign(codexClient, { unsubscribeIdleThreads: unsubscribe });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      codexThreadIdleUnsubscribeMs: 123_000,
+    });
+    const internals = registry as unknown as {
+      activeTurnKeys: Set<string>;
+      codexBackgroundTerminals: Map<string, unknown[]>;
+      liveCodexToolItemsByThread: Map<string, Map<string, unknown>>;
+      liveCodexNativeSubAgentUsage: Map<string, Map<string, unknown>>;
+    };
+
+    await registry.unsubscribeIdleCodexThreads();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    const { idleMs, isThreadBusy } = unsubscribe.mock.calls[0]![0];
+    expect(idleMs).toBe(123_000);
+    expect(isThreadBusy("thread-1")).toBe(false);
+
+    internals.activeTurnKeys.add("codex:thread-1:turn-1");
+    expect(isThreadBusy("thread-1")).toBe(true);
+    expect(isThreadBusy("thread-10")).toBe(false);
+    internals.activeTurnKeys.delete("codex:thread-1:turn-1");
+
+    // A command still running after its turn ended dies with an unload.
+    internals.codexBackgroundTerminals.set("thread-1", [{ processId: "p-1" }]);
+    expect(isThreadBusy("thread-1")).toBe(true);
+    internals.codexBackgroundTerminals.clear();
+    internals.liveCodexToolItemsByThread.set("thread-1", new Map());
+    expect(isThreadBusy("thread-1")).toBe(true);
+    internals.liveCodexToolItemsByThread.clear();
+    // A parent whose turn ended while its sub-agent workers still run.
+    internals.liveCodexNativeSubAgentUsage.set("thread-1", new Map([["worker-1", {}]]));
+    expect(isThreadBusy("thread-1")).toBe(true);
+    internals.liveCodexNativeSubAgentUsage.clear();
+    expect(isThreadBusy("thread-1")).toBe(false);
+
+    await registry.close();
+    expect(isThreadBusy("thread-1")).toBe(true);
+    await registry.unsubscribeIdleCodexThreads();
+    expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
   it("refreshes only owner-known directory Git state for federation requests", async () => {
@@ -15918,6 +16030,140 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("prepares a launchpad worktree from the base the request names", async () => {
+    const prepareLaunchpadWorkspace = vi.fn(async (_launchpad: object) => ({
+      cwd: "/repo/project",
+      workMode: "local" as const,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: { prepareLaunchpadWorkspace } as never,
+    });
+    const launchpad = {
+      directoryKey: "directory:/repo/project",
+      directoryKind: "directory" as const,
+      directoryLabel: "project",
+      directoryPath: "/repo/project",
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      workMode: "worktree" as const,
+      createdAt: 1000,
+      updatedAt: 2000,
+    };
+
+    // A peer's to-do card asks for this; the owner's checkout may be on a
+    // branch that holds another thread's unpublished work.
+    await registry.materializeDirectoryLaunchpad({
+      directoryKey: launchpad.directoryKey,
+      launchpad,
+      worktreeBase: "default_branch",
+    });
+    await registry.materializeDirectoryLaunchpad({
+      directoryKey: launchpad.directoryKey,
+      launchpad,
+    });
+
+    expect(prepareLaunchpadWorkspace).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      directoryPath: "/repo/project",
+      workMode: "worktree",
+      worktreeBase: "default_branch",
+    }));
+    expect(prepareLaunchpadWorkspace.mock.calls[1]![0]).not.toHaveProperty("worktreeBase");
+
+    await registry.close();
+  });
+
+  it("refuses a launchpad whose required worktree resolved to the project checkout", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const prepareLaunchpadWorkspace = vi.fn(async (_launchpad: object) => ({
+      cwd: "/repo/project",
+      workMode: "local" as const,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: { prepareLaunchpadWorkspace } as never,
+    });
+    const launchpad = {
+      directoryKey: "directory:/repo/project",
+      directoryKind: "directory" as const,
+      directoryLabel: "project",
+      directoryPath: "/repo/project",
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      workMode: "worktree" as const,
+      createdAt: 1000,
+      updatedAt: 2000,
+    };
+
+    // A peer's New worktree card must not share the peer's checkout.
+    await expect(registry.materializeDirectoryLaunchpad({
+      directoryKey: launchpad.directoryKey,
+      launchpad,
+      requiredWorkMode: "worktree",
+      input: [{ type: "text", text: "Rewrite the CLI" }],
+    })).rejects.toThrow(/worktree/);
+    expect(codexClient.lastStartThreadParams).toBeUndefined();
+
+    // Without the requirement the fallback is unchanged.
+    await expect(registry.materializeDirectoryLaunchpad({
+      directoryKey: launchpad.directoryKey,
+      launchpad,
+    })).resolves.toMatchObject({ workMode: "local" });
+
+    await registry.close();
+  });
+
+  it("keeps a required worktree and removes it when the requirement fails", async () => {
+    const rollback = vi.fn(async () => {});
+    const prepareLaunchpadWorkspace = vi.fn(async (_launchpad: object) => ({
+      cwd: "/worktrees/abc/project",
+      repositoryPath: "/repo/project",
+      workMode: "worktree" as const,
+      rollback,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace,
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+    const launchpad = {
+      directoryKey: "directory:/repo/project",
+      directoryKind: "directory" as const,
+      directoryLabel: "project",
+      directoryPath: "/repo/project",
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      workMode: "worktree" as const,
+      createdAt: 1000,
+      updatedAt: 2000,
+    };
+
+    await expect(registry.materializeDirectoryLaunchpad({
+      directoryKey: launchpad.directoryKey,
+      launchpad,
+      requiredWorkMode: "worktree",
+    })).resolves.toMatchObject({ workMode: "worktree" });
+    expect(rollback).not.toHaveBeenCalled();
+
+    // The workspace prepared for a refused request is not left behind.
+    await expect(registry.materializeDirectoryLaunchpad({
+      directoryKey: launchpad.directoryKey,
+      launchpad,
+      requiredWorkMode: "local",
+    })).rejects.toThrow(/local/);
+    expect(rollback).toHaveBeenCalledTimes(1);
+
+    await registry.close();
+  });
+
   it("preserves the project Working Updates override after materialization", async () => {
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
@@ -16796,6 +17042,50 @@ script = "echo setup"
     expect(methods).toContain("thread/executionMode/queueCleared");
 
     await registry.close();
+  });
+
+  it("asks each ACP process to close idle sessions, keeping a thread with a live turn", async () => {
+    const { acpBackendId, acpClient, registry } = createKimiAcpRegistry({
+      sessions: [{
+        backendId: "acp:kimi" as AcpBackendId,
+        sessionId: "kimi-session-1",
+        title: "ACP session",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      }],
+    });
+    const closeIdleSessions = vi.fn(async (_params: {
+      idleMs: number;
+      isSessionBusy?: (sessionId: string) => boolean;
+    }) => [] as string[]);
+    Object.assign(acpClient, { closeIdleSessions });
+    const busyDuringSweep = (sessionId: string) =>
+      closeIdleSessions.mock.lastCall?.[0].isSessionBusy?.(sessionId);
+
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      input: [{ type: "text", text: "work" }],
+    });
+    await registry.closeIdleAcpSessions();
+
+    expect(closeIdleSessions).toHaveBeenCalledTimes(1);
+    expect(closeIdleSessions.mock.lastCall?.[0].idleMs).toBe(10 * 60_000);
+    expect(busyDuringSweep("kimi-session-1")).toBe(true);
+    expect(busyDuringSweep("kimi-session-2")).toBe(false);
+
+    await emitCompletedTurn(registry, acpBackendId, "kimi-session-1");
+    await registry.closeIdleAcpSessions();
+
+    expect(closeIdleSessions).toHaveBeenCalledTimes(2);
+    expect(busyDuringSweep("kimi-session-1")).toBe(false);
+
+    await registry.close();
+    // A closed registry starts no sweep.
+    await registry.closeIdleAcpSessions();
+    expect(closeIdleSessions).toHaveBeenCalledTimes(2);
   });
 
   it("serializes Kimi control prompts before starting the next ACP turn", async () => {

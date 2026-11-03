@@ -764,6 +764,12 @@ export function createThreadTodoRunners(params: {
                   : {}),
                 ...(speed ? { fastMode: speed === "fast" } : {}),
                 ...((workMode ?? action.workMode) ? { workMode: workMode ?? action.workMode } : {}),
+                // As on this machine, the peer's checkout can sit on a branch
+                // with another thread's unpublished work, and a card that
+                // says New worktree must not fall back to sharing it.
+                ...((workMode ?? action.workMode) === "worktree"
+                  ? { worktreeBase: "default_branch" as const, requiredWorkMode: "worktree" as const }
+                  : {}),
                 ...(environment ? { environment } : {}),
                 groupingMode: crossProject ? "none" : "subthread",
               },
@@ -778,12 +784,18 @@ export function createThreadTodoRunners(params: {
                 : peerPlans.raise(thread.instanceId, { ...started, title: plan.title, items: plan.items }),
               { threadId: thread.threadId, instanceId: thread.instanceId });
             }
+            // An owner that predates requiredWorkMode falls back instead of
+            // refusing. The thread exists by now, so say where it runs.
+            const fellBack = (workMode ?? action.workMode) === "worktree" && thread.workMode === "local";
             return {
               backend: thread.backend,
               threadId: thread.threadId,
               ...(thread.isLocal
                 ? {}
                 : { instanceId: thread.instanceId, instanceLabel: thread.instanceLabel }),
+              ...(fellBack
+                ? { notice: `${thread.instanceLabel} could not create a worktree. The thread runs in its project checkout.` }
+                : {}),
             };
           },
         }

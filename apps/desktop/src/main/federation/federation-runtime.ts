@@ -744,6 +744,7 @@ type RelayedEventSubscription = IncomingEventSubscription & {
 };
 
 const NAVIGATION_EVENT_METHODS = new Set<string>([
+  "thread/dependencies/updated",
   "thread/scheduledAction/updated",
   "automation/run/transcript/updated",
   "automation/run/updated",
@@ -1398,9 +1399,11 @@ export class DesktopFederationRuntime {
    * runtime, which dials again.
    */
   private parked = false;
+  // The dial promise owns this token. Its finally cannot clear a newer dial.
   private connectionAttempt?: symbol;
   private reconnectAttempt = 0;
   private readonly connectionFailureLog = new FederationConnectionFailureLog();
+  // Per-client completion fence; separate from the whole endpoint walk epoch.
   private connectionGeneration = 0;
   /** Bumped only by stop(), so an in-flight endpoint walk can detect teardown. */
   private walkEpoch = 0;
@@ -7214,7 +7217,7 @@ function localBackendOperations(): FederationBackendOperations {
           identity: JSON.stringify([request.ref.backend, request.ref.threadId]),
           operation: JSON.stringify([request.knownRevision ?? null, request.probeWorkingStates === true,
             request.includeWorkspaceConfiguration === true, request.collection ?? null]), deadlineAt: rpcOptions?.deadlineAt,
-          load: () => getDesktopNavigationDetailService().readSelectedDetail(request),
+          load: () => getDesktopNavigationDetailService().readSelectedDetail(request, { includePendingWakes: true }),
         }));
     },
     async getNavigationQueueProjection(request, rpcOptions) {

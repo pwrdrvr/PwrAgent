@@ -16,6 +16,12 @@ import { prependBundledToolsToPath } from "../bundled-tools";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { terminateOwnedProcessTree } from "../process-tree";
 import {
+  collectDescendants,
+  readProcessTable,
+  reapSurvivingDescendants,
+  type ProcessTableReader,
+} from "../process-descendants";
+import {
   compareCodexCliVersions,
   resolveCodexCommand,
   type ResolvedCodexCommandCandidate,
@@ -46,6 +52,17 @@ export type CodexAppServerExit = {
   stderrPreview: string[];
 };
 
+/** The running app-server process, for diagnostics and the idle recycle. */
+export type CodexAppServerProcessInfo = { pid: number; startedAt: number };
+
+/** What the last `close()` found below the app server. */
+export type CodexAppServerStopReport = {
+  /** Descendants alive just before the stop. */
+  descendants: number;
+  /** Of those, how many outlived the process-group stop and were killed. */
+  orphansReaped: number;
+};
+
 export type StdioJsonRpcTransportOptions = {
   command: string;
   authenticationRecovery?: boolean;
@@ -69,6 +86,10 @@ export type StdioJsonRpcTransportOptions = {
   commandExists?: (candidate: string) => boolean;
   /** Test seam for the packaged or development bundled-tools directory. */
   bundledToolsDirectory?: string;
+  /** Test seam for the POSIX process table read around a stop. */
+  readProcessTable?: ProcessTableReader;
+  /** Test seam for signalling surviving descendants and the process group. */
+  signalProcess?: (pid: number, signal: NodeJS.Signals) => void;
 };
 
 export { compareCodexCliVersions };
@@ -95,6 +116,8 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
   private requestMethods = new Map<string | number, string>();
   private unsubscribeAuth?: () => void;
   private childProcess: ChildProcessWithoutNullStreams | null = null;
+  private childStartedAt = 0;
+  private lastStopReport?: CodexAppServerStopReport;
   private messageHandler: (message: string) => void = () => undefined;
   private closeHandler: (error?: Error) => void = () => undefined;
   private closeRequested = false;
@@ -205,6 +228,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     });
 
     this.childProcess = child;
+    this.childStartedAt = Date.now();
 
     if (!child.stdin || !child.stdout || !child.stderr) {
       await terminateOwnedProcessTree(child, {
@@ -325,6 +349,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
           signal: exit.signal,
           stderrPreview: exit.stderrPreview.join("\n"),
         });
+        this.stopOrphanedProcessGroup(child.pid);
         this.options.onUnexpectedExit?.(exit);
       }
     });
@@ -343,10 +368,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     if (!child) {
       return;
     }
-    this.closePromise = terminateOwnedProcessTree(child, {
-      gracefulTimeoutMs: PROCESS_CLOSE_TIMEOUT_MS,
-      forceTimeoutMs: PROCESS_FORCE_CLOSE_TIMEOUT_MS,
-    })
+    this.closePromise = this.stopChildProcessTree(child)
       .finally(() => {
         if (this.childProcess === child) {
           this.childProcess = null;
@@ -354,6 +376,76 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
         this.closePromise = undefined;
       });
     return await this.closePromise;
+  }
+
+  /** The running app server, or `undefined` when none is running. */
+  getProcessInfo(): CodexAppServerProcessInfo | undefined {
+    const pid = this.childProcess?.pid;
+    return pid ? { pid, startedAt: this.childStartedAt } : undefined;
+  }
+
+  /** What the most recent `close()` found and reaped, once. */
+  takeLastStopReport(): CodexAppServerStopReport | undefined {
+    const report = this.lastStopReport;
+    this.lastStopReport = undefined;
+    return report;
+  }
+
+  /**
+   * Stop the app server and everything it started. The process group signal
+   * reaches every member at once and lets Codex stop its MCP servers itself.
+   * A descendant that left the group (its own session, `npm exec` wrappers)
+   * would outlive it, so the tree is read first and its survivors killed.
+   */
+  private async stopChildProcessTree(child: ChildProcessWithoutNullStreams): Promise<void> {
+    const pid = child.pid;
+    const readTable = this.options.readProcessTable ?? readProcessTable;
+    const descendants = pid && process.platform !== "win32"
+      ? collectDescendants(await readTable().catch(() => undefined) ?? [], pid)
+      : [];
+    await terminateOwnedProcessTree(child, {
+      gracefulTimeoutMs: PROCESS_CLOSE_TIMEOUT_MS,
+      forceTimeoutMs: PROCESS_FORCE_CLOSE_TIMEOUT_MS,
+    });
+    const orphansReaped = await reapSurvivingDescendants(descendants, {
+      readTable,
+      ...(this.options.signalProcess ? { signal: this.options.signalProcess } : {}),
+    }).catch((error) => {
+      codexTransportLog.warn("app-server descendant cleanup failed", { error: String(error) });
+      return 0;
+    });
+    this.lastStopReport = { descendants: descendants.length, orphansReaped };
+    if (orphansReaped > 0) {
+      codexTransportLog.warn("app-server descendants outlived its stop and were killed", {
+        pid: pid ?? null,
+        descendants: descendants.length,
+        orphansReaped,
+      });
+    }
+  }
+
+  /**
+   * An app server that died on its own leaves its children running. Those
+   * still in its process group are found by the group id, which the OS keeps
+   * reserved while any member lives, so the signal cannot reach a stranger.
+   */
+  private stopOrphanedProcessGroup(pid: number | undefined): void {
+    if (!pid || process.platform === "win32") return;
+    const signal = this.options.signalProcess ?? ((target, value) => process.kill(target, value));
+    try {
+      signal(-pid, "SIGTERM");
+    } catch {
+      // ESRCH: nothing in the group outlived the server.
+      return;
+    }
+    codexTransportLog.info("stopping the exited app-server's process group", { pid });
+    setTimeout(() => {
+      try {
+        signal(-pid, "SIGKILL");
+      } catch {
+        // The group stopped on SIGTERM.
+      }
+    }, PROCESS_CLOSE_TIMEOUT_MS).unref?.();
   }
 
   private observeAuthenticationError(message: string, credentialSource = false): void {

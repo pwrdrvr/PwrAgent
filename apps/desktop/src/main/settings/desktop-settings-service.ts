@@ -1,3 +1,4 @@
+import { CommandDiscoveryLifetime } from "./command-discovery-lifetime";
 import {
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
   DEFAULT_THREAD_TODO_MERGE_METHOD,
@@ -272,6 +273,10 @@ import type {
   ManagedCodexCheckMode,
   ManagedCodexRuntime,
 } from "../codex-managed-runtime";
+import {
+  DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS,
+  type CodexAppServerRecycleSettings,
+} from "../codex-app-server/app-server-recycle-policy";
 
 const LOGIN_SHELL_ENV_MARKER_START = "__PWRAGENT_LOGIN_SHELL_ENV_START__";
 const LOGIN_SHELL_ENV_MARKER_END = "__PWRAGENT_LOGIN_SHELL_ENV_END__";
@@ -610,6 +615,12 @@ function forgeCliPresent(
 }
 
 export class DesktopSettingsService {
+  private readonly commandDiscoveryLifetime = new CommandDiscoveryLifetime();
+
+  closeCommandDiscovery(): Promise<void> {
+    return this.commandDiscoveryLifetime.close();
+  }
+
   private tokenMiserUsageStore?: TokenMiserStore;
   private readonly env: NodeJS.ProcessEnv;
   private readonly argv: readonly string[];
@@ -1954,7 +1965,14 @@ export class DesktopSettingsService {
   ): Promise<DesktopGitDiscoverySnapshot> {
     const key = configuredCommand?.trim() ?? "";
     if (this.gitDiscoveryCache?.key !== key) {
-      const promise = discoverGitCommands({ configuredCommand, env: this.env });
+      const promise = this.commandDiscoveryLifetime.run(
+        () => discoverGitCommands({
+          configuredCommand,
+          env: this.env,
+          signal: this.commandDiscoveryLifetime.signal,
+        }),
+        { candidates: [] },
+      );
       const cache: NonNullable<typeof this.gitDiscoveryCache> = { key, promise };
       void promise.then((result) => {
         cache.result = result;
@@ -1979,7 +1997,14 @@ export class DesktopSettingsService {
   ): ReturnType<typeof discoverGhCommands> {
     const key = configuredCommand ?? "";
     if (this.ghDiscoveryCache?.key !== key) {
-      const promise = discoverGhCommands({ configuredCommand, env: this.env });
+      const promise = this.commandDiscoveryLifetime.run(
+        () => discoverGhCommands({
+          configuredCommand,
+          env: this.env,
+          signal: this.commandDiscoveryLifetime.signal,
+        }),
+        { candidates: [] },
+      );
       const cache: NonNullable<typeof this.ghDiscoveryCache> = { key, promise };
       void promise.then((result) => {
         cache.result = result;
@@ -1994,7 +2019,14 @@ export class DesktopSettingsService {
   ): ReturnType<typeof discoverGlabCommands> {
     const key = configuredCommand ?? "";
     if (this.glabDiscoveryCache?.key !== key) {
-      const promise = discoverGlabCommands({ configuredCommand, env: this.env });
+      const promise = this.commandDiscoveryLifetime.run(
+        () => discoverGlabCommands({
+          configuredCommand,
+          env: this.env,
+          signal: this.commandDiscoveryLifetime.signal,
+        }),
+        { candidates: [] },
+      );
       const cache: NonNullable<typeof this.glabDiscoveryCache> = { key, promise };
       void promise.then((result) => {
         cache.result = result;
@@ -2158,6 +2190,26 @@ export class DesktopSettingsService {
   resolveManagedCodexBuildChannel(): DesktopUpdateChannel {
     return this.configStore.read("models").codex?.managedBuildChannel
       ?? MANAGED_CODEX_BUILD_CHANNEL_DEFAULT;
+  }
+
+  /** `[models.codex.app_server_recycle]` over the defaults. */
+  resolveCodexAppServerRecycleSettings(): CodexAppServerRecycleSettings {
+    const configured = this.configStore.read("models").codex?.appServerRecycle;
+    const defaults = DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS;
+    return {
+      ...defaults,
+      enabled: configured?.enabled ?? defaults.enabled,
+      ...(configured?.idleMinutes !== undefined
+        ? { idleMs: Math.round(configured.idleMinutes * 60_000) }
+        : {}),
+      ...(configured?.maxUptimeHours !== undefined
+        ? { maxUptimeMs: Math.round(configured.maxUptimeHours * 60 * 60_000) }
+        : {}),
+      ...(configured?.maxChildProcesses !== undefined
+        ? { maxChildProcesses: configured.maxChildProcesses }
+        : {}),
+      ...(configured?.maxOpenFds !== undefined ? { maxOpenFds: configured.maxOpenFds } : {}),
+    };
   }
 
   resolveTokenMiserFocusedSummariesEnabled(): boolean {

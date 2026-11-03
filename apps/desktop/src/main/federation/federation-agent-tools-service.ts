@@ -685,6 +685,8 @@ async function createInstanceThread(
       ...(environment.selector
         ? { codexEnvironmentSelector: environment.selector }
         : {}),
+      ...(args.worktreeBase ? { worktreeBase: args.worktreeBase } : {}),
+      ...(args.requiredWorkMode ? { requiredWorkMode: args.requiredWorkMode } : {}),
     },
     { messageOrigin },
   );
@@ -1078,7 +1080,10 @@ function buildLaunchpadDraft(params: {
   const fastMode = stored?.fastMode ?? defaults.fastMode;
   const acpRuntime = stored?.acpRuntime ?? defaults.acpRuntime;
   const providerSettings = stored?.providerSettings ?? defaults.providerSettings;
-  const branchName = args.branchName ?? stored?.branchName;
+  // A default-branch request skips the base saved on the launchpad. That
+  // base belongs to the operator's unsent draft for this project.
+  const branchName = args.branchName
+    ?? (args.worktreeBase === "default_branch" ? undefined : stored?.branchName);
   const tokenMiserEnabled = (args.backend ?? backend) === "codex"
     ? args.tokenMiserEnabled ?? stored?.tokenMiserEnabled
     : undefined;
@@ -1089,7 +1094,8 @@ function buildLaunchpadDraft(params: {
     backend,
     executionMode:
       stored?.executionMode ?? defaults.executionMode,
-    workMode: args.workMode ?? stored?.workMode ?? defaults.workMode ?? "worktree",
+    // A required mode names the mode when the caller gave none.
+    workMode: args.workMode ?? args.requiredWorkMode ?? stored?.workMode ?? defaults.workMode ?? "worktree",
     ...(model !== undefined ? { model } : {}),
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     ...(serviceTier !== undefined ? { serviceTier } : {}),

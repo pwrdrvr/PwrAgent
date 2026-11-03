@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
+  AgentEvent,
   ArchiveWorktreeRequest,
   ArchiveThreadRequest,
   AppServerListThreadsRequest,
@@ -47,6 +48,7 @@ import {
   BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
   selectStaleWorktreeWorkingStatePaths,
 } from "../app-server/thread-working-state-refresh-policy";
+import { expectPendingWakeReadBudget } from "./fixtures/pending-wake-read-budget";
 import { resolvePwragentRoot } from "../profile";
 import type { DirectoryGitStatusEntry } from "../app-server/git-directory-service";
 
@@ -3630,6 +3632,59 @@ describe("app server ipc", () => {
       coveredByAutoFix: [],
       watch: { failureHandledByAutoFix: false, baseline: { outcome: "failure" } },
     });
+  });
+
+  it("reads pending wakes from initialized stores without starting the scheduler or listing unrelated PRs", async () => {
+    const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
+    const { ScheduledThreadActionStore } = await import("../scheduled-actions/scheduled-thread-action-store");
+    const scheduler = await import("../scheduled-actions/scheduled-thread-action-service");
+    const { appServerService } = await import("../ipc/app-server");
+    const appState = await import("../state/app-state");
+    const { openInMemoryStateDb } = await import("./sqlite-test-utils");
+    const db = openInMemoryStateDb();
+    const store = new SqliteOverlayStore(db);
+    const scheduled = new ScheduledThreadActionStore(db);
+    scheduled.create({ id: "wake-1", backend: "codex", threadId: "selected", kind: "turn",
+      origin: "desktop", displayText: "Follow up", scheduledFor: 100, now: 1 });
+    const service = appServerService as unknown as { getOverlayStore: () => typeof store;
+      backgroundPrPollingEnabled: boolean; prAutoDispatchAllowed: boolean };
+    const overlay = vi.spyOn(service, "getOverlayStore").mockReturnValue(store);
+    const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
+    const state = vi.spyOn(appState, "getAppStateDb").mockReturnValue(db);
+    const scheduledStore = vi.spyOn(appState, "getAppScheduledThreadActionStore").mockReturnValue(scheduled);
+    const startScheduler = vi.spyOn(scheduler, "getScheduledThreadActionService");
+    const candidates = vi.spyOn(store, "listPrAutoDispatchCandidates");
+    service.backgroundPrPollingEnabled = true;
+    service.prAutoDispatchAllowed = true;
+    const summaries = vi.spyOn(scheduled, "listPendingWakes");
+    vi.useFakeTimers();
+    try {
+      const list = await appServerService.listThreadPendingWakes({ backend: "codex", threadId: "selected" }, 0);
+      expect(list.wakes).toContainEqual(expect.objectContaining({ kind: "scheduled_action", actionId: "wake-1", displayText: "Follow up" }));
+      expect(candidates).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "selected" });
+      expect(startScheduler).not.toHaveBeenCalled();
+      for (let requestIndex = 0; requestIndex < 96; requestIndex += 1) {
+        expect(await appServerService.manageThreadPendingWakes({ action: "list", backend: "codex", threadId: "selected", endedLimit: 0 }))
+          .toMatchObject({ ok: true, wakes: list.wakes });
+      }
+      expectPendingWakeReadBudget("ipc-active-burst", { requests: 97, elections: candidates.mock.calls.length,
+        scheduledSummaries: summaries.mock.calls.length });
+      scheduled.cancel("wake-1", 2);
+      appServerService.invalidateThreadPendingWakes({ backend: "codex", notification: {
+        method: "thread/scheduledAction/updated", params: { action: { threadId: "selected" } },
+      } } as unknown as AgentEvent);
+      const refresh = appServerService.listThreadPendingWakes({ backend: "codex", threadId: "selected" }, 0);
+      await vi.advanceTimersByTimeAsync(199);
+      expect(candidates).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await refresh).wakes).toEqual([]);
+      expect(candidates).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+      summaries.mockRestore();
+      candidates.mockRestore(); startScheduler.mockRestore(); scheduledStore.mockRestore();
+      state.mockRestore(); mode.mockRestore(); overlay.mockRestore(); db.close();
+    }
   });
 
   it("lists, explains, and stops PR watches over thread:prWatches, and sends a peer's to its owner", async () => {
