@@ -10,6 +10,8 @@ import { filterStoredDiscoveredPullRequests } from "../pr-status/pr-detection";
 import { clearGitHubRemoteCache, resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
 
 const execFileAsync = promisify(execFile);
+// Every async launch reaches this method; Node's public typings omit it.
+const spyOnLaunches = () => vi.spyOn(ChildProcess.prototype as unknown as { spawn(options: unknown): unknown }, "spawn");
 
 describe("PR metadata launch budgets", () => {
   let root: string;
@@ -34,7 +36,7 @@ describe("PR metadata launch budgets", () => {
     if (kind !== "missing") await mkdir(cwd);
     if (kind === "local-only") await git.runGitCommand(cwd, ["init", "-b", "main"]);
     const runner = vi.spyOn(git, "runGitCommand");
-    const launches = vi.spyOn(ChildProcess.prototype, "spawn");
+    const launches = spyOnLaunches();
     const pr = attachment(cwd);
     for (let round = 0; round < 5; round++) {
       expect(await filterStoredDiscoveredPullRequests([pr])).toEqual([pr]);
@@ -47,7 +49,7 @@ describe("PR metadata launch budgets", () => {
     await git.runGitCommand(root, ["init", "-b", "feature"]);
     await git.runGitCommand(root, ["remote", "add", "origin", "https://github.com/fixture/project.git"]);
     const runner = vi.spyOn(git, "runGitCommand");
-    const launches = vi.spyOn(ChildProcess.prototype, "spawn");
+    const launches = spyOnLaunches();
     const pr = attachment(root);
     await Promise.all(Array.from({ length: 12 }, () => filterStoredDiscoveredPullRequests([pr])));
     for (let round = 0; round < 5; round++) await filterStoredDiscoveredPullRequests([pr]);
@@ -90,7 +92,7 @@ describe("PR metadata launch budgets", () => {
       readRemotes: async () => [{ name: "origin", url: "fixture-host:fixture/project.git" }],
       resolveSshHostname, now: () => now,
     };
-    const launches = vi.spyOn(ChildProcess.prototype, "spawn");
+    const launches = spyOnLaunches();
     const reads = await Promise.all([root, path.join(root, "second")].map((cwd) => resolveGitHubRepoForDirectory(cwd, options)));
     expect(reads.map((repo) => repo?.host)).toEqual(["github.com", "github.com"]);
     expect(launches).toHaveBeenCalledTimes(1);
@@ -132,6 +134,8 @@ describe("PR metadata launch budgets", () => {
     await git.runGitCommand(root, ["remote", "add", "origin", "https://github.com/fixture/project.git"]);
     await git.runGitCommand(root, ["worktree", "add", "-b", "sibling", sibling]);
     await git.runGitCommand(root, ["config", "extensions.worktreeConfig", "true"]);
+    await git.runGitCommand(root, ["config", "--unset-all", "remote.origin.url"]);
+    await git.runGitCommand(root, ["config", "--worktree", "remote.origin.url", "https://github.com/fixture/project.git"]);
     await git.runGitCommand(sibling, ["config", "--worktree", "remote.origin.url", "https://github.com/other/project.git"]);
     const [primaryRemotes, siblingRemotes] = await Promise.all([
       resolveGitHubRepoForDirectory(root), resolveGitHubRepoForDirectory(sibling),
