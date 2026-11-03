@@ -16926,6 +16926,18 @@ describe("CodexAppServerClient", () => {
       await client.close();
     });
 
+    it("releases a thread stopped by a system error, which runs nothing", async () => {
+      const { client, transport, open, advance } = await idleFixture();
+      await open("thread-error");
+      MockTransport.threadStatusByThreadId.set("thread-error", { type: "systemError" });
+      advance(idleMs);
+
+      expect(await client.unsubscribeIdleThreads({ idleMs, isThreadBusy: () => false }))
+        .toEqual(["thread-error"]);
+      expect(transport.loadedThreads.size).toBe(0);
+      await client.close();
+    });
+
     it("keeps threads with a turn, a waiting approval, owner-tracked work, or Codex activity", async () => {
       const { client, transport, open, advance } = await idleFixture();
       for (const threadId of ["thread-turn", "thread-approval", "thread-owner", "thread-active", "thread-idle"]) {

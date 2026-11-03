@@ -8260,56 +8260,65 @@ export class CodexAppServerClient {
     if (candidates.length === 0) return [];
     const serverGeneration = this.serverGeneration;
     const timeoutMs = this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-    const released = await this.runLifecycle(async () => {
-      const unsubscribed: string[] = [];
-      for (const threadId of candidates) {
-        // No new RPC is admitted, so nothing can start on it from here on.
-        if (!this.initialized || serverGeneration !== this.serverGeneration) break;
-        if (!isIdle(threadId)) continue;
-        let thread: Record<string, unknown> | null;
-        try {
-          thread = asRecord(asRecord(await this.rawConnection.request(
-            "thread/read",
-            { threadId, includeTurns: false },
-            timeoutMs,
-          ))?.thread);
-        } catch (error) {
-          if (/not (found|loaded)/i.test(error instanceof Error ? error.message : String(error))) {
-            this.subscribedThreads.delete(threadId);
-          }
-          continue;
-        }
-        const status = readThreadStatus(thread);
-        if (status === "notLoaded") {
+    // One barrier per thread, so other RPCs wait for at most one thread's
+    // read and unsubscribe rather than the whole pass.
+    const releaseIfIdle = (threadId: string) => this.runLifecycle(async (): Promise<
+      "released" | "kept" | "stop"
+    > => {
+      // No new RPC is admitted, so nothing can start on it from here on.
+      if (!this.initialized || serverGeneration !== this.serverGeneration) return "stop";
+      if (!isIdle(threadId)) return "kept";
+      let thread: Record<string, unknown> | null;
+      try {
+        thread = asRecord(asRecord(await this.rawConnection.request(
+          "thread/read",
+          { threadId, includeTurns: false },
+          timeoutMs,
+        ))?.thread);
+      } catch (error) {
+        if (/not (found|loaded)/i.test(error instanceof Error ? error.message : String(error))) {
           this.subscribedThreads.delete(threadId);
-          continue;
         }
-        if (status !== "idle" || typeof thread?.parentThreadId === "string"
-          || asRecord(thread?.source)?.subAgent !== undefined) {
-          // Busy, or owned by a parent thread: look again next pass.
-          this.subscribedThreads.set(threadId, this.now());
-          continue;
-        }
-        if (!isIdle(threadId)) continue;
-        try {
-          await this.rawConnection.request("thread/unsubscribe", { threadId }, timeoutMs);
-        } catch (error) {
-          if (isMethodUnavailableError(error, "thread/unsubscribe")) {
-            this.threadUnsubscribeUnsupported = true;
-            break;
-          }
-          codexClientLog.warn("idle Codex thread unsubscribe failed", {
-            threadId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          continue;
-        }
-        this.subscribedThreads.delete(threadId);
-        this.noteThreadUnloaded(threadId);
-        unsubscribed.push(threadId);
+        return "kept";
       }
-      return unsubscribed;
+      const status = readThreadStatus(thread);
+      if (status === "notLoaded") {
+        this.subscribedThreads.delete(threadId);
+        return "kept";
+      }
+      // A thread stopped by a system error runs nothing and can go too.
+      const systemError = thread?.status === "systemError"
+        || asRecord(thread?.status)?.type === "systemError";
+      if ((status !== "idle" && !systemError) || typeof thread?.parentThreadId === "string"
+        || asRecord(thread?.source)?.subAgent !== undefined) {
+        // Busy, or owned by a parent thread: look again next pass.
+        this.subscribedThreads.set(threadId, this.now());
+        return "kept";
+      }
+      if (!isIdle(threadId)) return "kept";
+      try {
+        await this.rawConnection.request("thread/unsubscribe", { threadId }, timeoutMs);
+      } catch (error) {
+        if (isMethodUnavailableError(error, "thread/unsubscribe")) {
+          this.threadUnsubscribeUnsupported = true;
+          return "stop";
+        }
+        codexClientLog.warn("idle Codex thread unsubscribe failed", {
+          threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return "kept";
+      }
+      this.subscribedThreads.delete(threadId);
+      this.noteThreadUnloaded(threadId);
+      return "released";
     });
+    const released: string[] = [];
+    for (const threadId of candidates) {
+      const outcome = await releaseIfIdle(threadId);
+      if (outcome === "stop") break;
+      if (outcome === "released") released.push(threadId);
+    }
     if (released.length > 0) {
       codexClientLog.info("unsubscribed idle Codex threads", {
         count: released.length,
@@ -8522,8 +8531,10 @@ export class CodexAppServerClient {
     this.pendingFirstTurnShellEnvironments.clear();
     this.recordedThreadNames.clear();
     this.pendingThreadNameEchoes.clear();
-    // A new process has loaded nothing; operations replay their own resume.
+    // A new process has loaded nothing; operations replay their own resume,
+    // keyed on the server generation, so unload counts can start over.
     this.subscribedThreads.clear();
+    this.threadUnloadGenerations.clear();
     this.helperThreadIds.clear();
     this.helperThreadToolHandlers.clear();
     this.helperToolTurnThreadIds.clear();

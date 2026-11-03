@@ -1289,7 +1289,6 @@ type BackendClient = {
   ): () => void;
   onAppServerUnexpectedExit?(listener: (threadIds?: ReadonlySet<string>) => void): () => void;
   restartAppServer?(): Promise<void>;
-  getSubscribedThreadCount?(): number;
   unsubscribeIdleThreads?(params: {
     idleMs: number;
     isThreadBusy: (threadId: string) => boolean;
@@ -16125,8 +16124,9 @@ export class DesktopBackendRegistry {
 
   /**
    * Work on a Codex thread that needs its live events: a turn, reserved start
-   * or accepted compaction, its review, a background terminal or live tool
-   * item, queued input, or a history repair waiting to run.
+   * or accepted compaction, its review, live sub-agent workers, a lifecycle
+   * change or handoff in flight, a background terminal or live tool item,
+   * queued input, or a history repair waiting to run.
    */
   private codexThreadNeedsLiveEvents(threadId: string): boolean {
     if (this.threadHasActiveTurn(threadId, "codex")) return true;
@@ -16134,7 +16134,12 @@ export class DesktopBackendRegistry {
     for (const key of this.activeTurnKeys) {
       if (key.startsWith(turnPrefix)) return true;
     }
-    return this.codexBackgroundTerminals.has(threadId)
+    const identityKey = buildThreadIdentityKey("codex", threadId);
+    return this.liveSubAgentMonitorIds("codex", threadId).length > 0
+      || this.threadLifecycleMutationCounts.has(identityKey)
+      || this.threadHandoffReservations.has(identityKey)
+      || this.handoffTurnStarts.has(identityKey)
+      || this.codexBackgroundTerminals.has(threadId)
       || this.liveCodexToolItemsByThread.has(threadId)
       || this.codexRetryableOperations.has(threadId)
       || this.threadTurnQueue.getQueuedEntries({ backend: "codex", threadId }).length > 0

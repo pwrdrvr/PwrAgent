@@ -4978,6 +4978,7 @@ describe("DesktopBackendRegistry", () => {
       activeTurnKeys: Set<string>;
       codexBackgroundTerminals: Map<string, unknown[]>;
       liveCodexToolItemsByThread: Map<string, Map<string, unknown>>;
+      liveCodexNativeSubAgentUsage: Map<string, Map<string, unknown>>;
     };
 
     await registry.unsubscribeIdleCodexThreads();
@@ -4998,6 +4999,10 @@ describe("DesktopBackendRegistry", () => {
     internals.liveCodexToolItemsByThread.set("thread-1", new Map());
     expect(isThreadBusy("thread-1")).toBe(true);
     internals.liveCodexToolItemsByThread.clear();
+    // A parent whose turn ended while its sub-agent workers still run.
+    internals.liveCodexNativeSubAgentUsage.set("thread-1", new Map([["worker-1", {}]]));
+    expect(isThreadBusy("thread-1")).toBe(true);
+    internals.liveCodexNativeSubAgentUsage.clear();
     expect(isThreadBusy("thread-1")).toBe(false);
 
     await registry.close();
