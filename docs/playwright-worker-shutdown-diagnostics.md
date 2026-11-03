@@ -319,6 +319,13 @@ alone does not establish a surviving process. Native and fixture launch UUIDs
 are different namespaces. Call-site and Node event times identify the launch
 path and callback timing; they do not replace the native identity/exit checks.
 
+After tests and observation finish, `native-controller/main-child-locations.json`
+resolves observed minified positions through the same build's hidden JavaScript
+source maps. It retains only app-relative source locations and bundle, source-map
+and journal hashes. Raw maps, source contents and external source paths are not
+copied. Resolution reads files capped at 32 MiB and retains at most 4,096 unique
+positions, with explicit unavailable/unmapped results and an omission count.
+
 An external controller starts native process observation before starting pnpm,
 before Electron launcher pipes exist. Native x64 process snapshots are sampled
 with a 50 ms pause. Identities use PID plus creation FILETIME; retained,

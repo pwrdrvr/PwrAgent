@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, packageManagerCommand, parseHandleOutput } from "./windows-pipe-observation.mjs";
 import { nativeProbeFailure, nativeStackArguments, parseNativeStacks, verifiedNativeStack } from "./windows-native-stack.mjs";
+import { childProcessLocations } from "./windows-child-process-locations.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
 const root = path.join(desktop, ".local", "windows-pipe-diagnostics", randomUUID());
@@ -377,6 +378,11 @@ async function main() {
   } finally {
     try { await closeObserver(); }
     catch (error) { log("controller-cleanup-error", { error: error.message }); }
+    try {
+      const locations = childProcessLocations(desktop, path.join(desktop, "test-results", "worker-shutdown", "main-children.jsonl"));
+      mkdirSync(artifact, { recursive: true });
+      writeFileSync(path.join(artifact, "main-child-locations.json"), json(locations) + "\n");
+    } catch { log("child-location-error", { unavailable: true }); }
   }
   process.exitCode = code ?? 1;
 }
