@@ -85,6 +85,6 @@ describe("one-time archived worktree repair", () => {
     });
     expect(repair).toHaveBeenCalledTimes(2);
     expectSqliteWriteBudget({ scenario: "archived-worktree-repair-retry-marker",
-      note: "Two failed passes: 4 boundary commits, no per-item or timer writes. At 2 commits/hour and about 0.012 MB/pass, persistent failures cost about 0.30 MB/day; completed idle passes cost 0 MB/day.", writes });
+      note: "Two failed passes: 4 boundary commits, no per-item or timer writes. At 2 commits/hour and about 0.010 MB/pass, persistent failures cost about 0.25 MB/day; completed idle passes cost 0 MB/day.", writes });
   });
 });

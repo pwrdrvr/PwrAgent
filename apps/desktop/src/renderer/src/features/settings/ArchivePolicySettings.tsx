@@ -117,7 +117,8 @@ function ArchiveSweepField(props: { desktopApi?: DesktopApi; active: boolean; on
     finally { setRequesting(false); }
   };
   const time = (at: number) => sweepTimeFormatter.format(at);
-  const changed = (status?.archived ?? 0) + (status?.deleted ?? 0) + (status?.worktrees?.removed ?? 0);
+  const changed = (status?.archived ?? 0) + (status?.deleted ?? 0)
+    + (status?.worktrees?.removed ?? 0) + (status?.worktrees?.removedContainers ?? 0);
   const summary = status ? [
     status.archived > 0 ? `Archived ${status.archived} ${status.archived === 1 ? "thread" : "threads"}.` : "",
     status.deleted > 0 ? `Deleted ${status.deleted} expired ${status.deleted === 1 ? "archive" : "archives"}.` : "",
