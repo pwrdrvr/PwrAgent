@@ -71,6 +71,10 @@ test("project creation, clone, project-specific turns and restart use owner cwd"
   assert.ok(specs.some((namespace) => namespace.tools?.some((tool) => tool.name === "render_messaging_pdf_pages")));
   await v.call("backend.startTurn", { threadId: created.threadId, input: [{ type: "text", text: "project marker" }] });
   await eventually(() => existsSync(path.join(project.path, "fixture-result.txt")));
+  // The output file precedes saved history and turn/completed in the fixture.
+  // Restart only after the daemon has observed completion, so shutdown cannot
+  // interrupt that history write and leave the resumed fixture without a thread.
+  await eventually(async () => (await h.rpc("list")).some((job) => job.threadId === created.threadId && job.status === "completed"));
   assert.equal(existsSync(path.join(h.workspace, "fixture-result.txt")), false);
   const page = await v.call("backend.getNavigationQueryPage", { protocol: 2, query: { kind: "directory", directoryKey: project.path } });
   assert.equal(page.entries[0].row.projectKey, project.path);
