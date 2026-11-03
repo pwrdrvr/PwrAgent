@@ -207,6 +207,18 @@ type RunningEntry = {
   turnId?: string;
 };
 
+type ThreadTurnQueueReleaseParams = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  turnId?: string;
+  status?: string;
+  errorMessage?: string;
+};
+
+type StartingEntry = {
+  terminalEvents: Map<string, ThreadTurnQueueReleaseParams>;
+};
+
 type AdmittedEntry = {
   entryId: string;
   turnId?: string;
@@ -264,6 +276,7 @@ function restoreAfter(
 export class ThreadTurnQueue {
   private readonly queuedEntries = new Map<string, ThreadTurnQueueEntry[]>();
   private readonly startingKeys = new Set<string>();
+  private readonly startingEntries = new Map<string, StartingEntry>();
   private readonly runningEntries = new Map<string, RunningEntry>();
   private readonly recentlyAdmittedEntries = new Map<string, AdmittedEntry>();
   private readonly releasingKeys = new Set<string>();
@@ -878,12 +891,12 @@ export class ThreadTurnQueue {
     await this.withDispatchSuspended(found.entry, async () => await this.clearQueueHold(found.key));
     const result = await this.startNext(found.key);
     if (result === "started") {
-      const running = this.runningEntries.get(found.key);
-      if (running?.entry.id === entryId && running.turnId) {
+      const admitted = this.recentlyAdmittedEntries.get(entryId);
+      if (admitted?.turnId) {
         return {
           disposition: "started",
           entryId,
-          turnId: running.turnId,
+          turnId: admitted.turnId,
         };
       }
     }
@@ -907,14 +920,18 @@ export class ThreadTurnQueue {
     this.scheduleDrain(this.keyFor(params));
   }
 
-  async releaseThread(params: {
-    backend: AppServerBackendKind;
-    threadId: ThreadIdentifier;
-    turnId?: string;
-    status?: string;
-    errorMessage?: string;
-  }): Promise<void> {
+  async releaseThread(params: ThreadTurnQueueReleaseParams): Promise<void> {
     const key = this.keyFor(params);
+    const starting = this.startingEntries.get(key);
+    if (starting && params.turnId !== undefined) {
+      // The acknowledgement identifies which terminal event belongs to this
+      // admission. Claim it before the release guard: an older release can
+      // itself be awaiting this start. Idle events cannot identify the turn.
+      if (!starting.terminalEvents.has(params.turnId)) {
+        starting.terminalEvents.set(params.turnId, params);
+      }
+      return;
+    }
     if (this.releasingKeys.has(key)) {
       // Codex commonly follows a terminal event with a status→idle event.
       // Keep only that no-turn-id release if it lands while we are awaiting a
@@ -930,28 +947,7 @@ export class ThreadTurnQueue {
     this.releasingKeys.add(key);
     let startResult: StartNextResult = "none";
     try {
-      const running = this.runningEntries.get(key);
-      if (
-        running &&
-        (params.turnId === undefined ||
-          running.turnId === undefined ||
-          running.turnId === params.turnId)
-      ) {
-        this.runningEntries.delete(key);
-        await this.emit({
-          type: "terminal",
-          entry: running.entry,
-          turnId: params.turnId,
-          status: params.status,
-        });
-      }
-      if (params.status === "turn/failed") {
-        await this.holdQueue(
-          key,
-          params.errorMessage
-            ?? "The previous turn failed. Review the error before retrying queued messages.",
-        );
-      }
+      await this.settleRelease(key, params);
       if (!this.heldQueues.has(key)) {
         startResult = await this.startNext(key);
       }
@@ -966,6 +962,31 @@ export class ThreadTurnQueue {
           threadId: params.threadId,
         });
       }
+    }
+  }
+
+  private async settleRelease(key: string, params: ThreadTurnQueueReleaseParams): Promise<void> {
+    const running = this.runningEntries.get(key);
+    if (
+      running &&
+      (params.turnId === undefined ||
+        running.turnId === undefined ||
+        running.turnId === params.turnId)
+    ) {
+      this.runningEntries.delete(key);
+      await this.emit({
+        type: "terminal",
+        entry: running.entry,
+        turnId: params.turnId,
+        status: params.status,
+      });
+    }
+    if (params.status === "turn/failed") {
+      await this.holdQueue(
+        key,
+        params.errorMessage
+          ?? "The previous turn failed. Review the error before retrying queued messages.",
+      );
     }
   }
 
@@ -1047,6 +1068,8 @@ export class ThreadTurnQueue {
   ): Promise<ThreadTurnQueueStartResult> {
     const key = this.keyFor(entry);
     this.startingKeys.add(key);
+    const starting: StartingEntry = { terminalEvents: new Map() };
+    this.startingEntries.set(key, starting);
     this.rememberAdmittedEntry({ entryId: entry.id });
     try {
       const result = await this.options.startTurn(entry);
@@ -1060,6 +1083,8 @@ export class ThreadTurnQueue {
         turnId: result.turnId,
       });
       await this.emit({ type: "started", entry, turnId: result.turnId });
+      const terminal = starting.terminalEvents.get(result.turnId);
+      if (terminal) await this.settleRelease(key, terminal);
       return result;
     } catch (error) {
       this.recentlyAdmittedEntries.delete(entry.id);
@@ -1069,6 +1094,7 @@ export class ThreadTurnQueue {
       }
       throw normalized;
     } finally {
+      this.startingEntries.delete(key);
       this.startingKeys.delete(key);
       this.scheduleDrain(key);
     }
