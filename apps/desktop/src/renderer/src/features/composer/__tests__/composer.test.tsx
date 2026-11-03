@@ -6221,6 +6221,7 @@ describe("Composer", () => {
         { ...backendSummary("codex", { models: [
           { id: "owner-default", label: "Owner default", current: true, supportsReasoning: true, reasoningEfforts: ["low", "high"] },
           { id: "owner-saved", label: "Owner saved", supportsReasoning: true, reasoningEfforts: ["low", "high"] },
+          { id: "owner-plain", label: "Owner plain", supportsReasoning: false, supportsFast: false },
         ] }), label: "OpenAI", modelDefaults: { model: "owner-default", reasoningEffortsByModel: { "owner-default": "high" } } },
       ]} launchpad={launchpad} providerModelDefaults={{ codex: { model: "viewer-only", reasoningEffortsByModel: {} } }}
         onUpdateLaunchpad={async (_key, patch) => {
@@ -6234,6 +6235,9 @@ describe("Composer", () => {
     await waitFor(() => expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue(model));
     expect(onUpdateLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", model }));
     if (!remembered) expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("high");
+    chooseDropdownOption("Model", "Owner plain");
+    await waitFor(() => expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("owner-plain"));
+    expect(onUpdateLaunchpad).toHaveBeenLastCalledWith(expect.objectContaining({ model: "owner-plain", reasoningEffort: undefined, serviceTier: undefined }));
   });
 
   it("shows OpenAI model and reasoning defaults without a Default option", () => {

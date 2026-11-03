@@ -23959,11 +23959,10 @@ command = "pnpm grok"
     }
   });
 
-  it("stores remote model choices without resolving them against this viewer's catalog", async () => {
+  it.each(["directory:/owner/repo", "subthread:acp%3Akimi:parent:same-worktree"])("stores remote model choices without resolving them against this viewer's catalog: %s", async (directoryKey) => {
     const codexClient = new MockBackendClient({ models: [{ id: "viewer-only", current: true }] });
     const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     const owner = { scope: "remote" as const, instanceId: "owner" };
-    const directoryKey = "directory:/owner/repo";
     try {
       await registry.ensureDirectoryLaunchpad({ directoryKey, directoryKind: "directory", directoryLabel: "Owner", directoryPath: "/owner/repo" },
         { owner, skipFilesystemInspection: true, skipMcpConnectionDefaults: true });
