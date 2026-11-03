@@ -16375,17 +16375,24 @@ export class DesktopBackendRegistry {
     return this.threadArchiveSweeper ??= new ThreadArchiveSweeper({
       getPolicy: () => this.readThreadArchivePolicy(),
       cleanupWorktrees: async ({ manual, onProgress, onFailure }) => {
+        const publishProgress = (completed: number, report: ArchivedWorktreeRepairReport) => onProgress({
+          candidates: report.candidates.length, protected: report.protectedWorktrees,
+          processed: Math.min(completed, report.candidates.length),
+          removed: report.cleanup.filter((item) => item.removedWorktree).length,
+          emptyContainers: report.emptyContainerCandidates.length,
+          processedContainers: Math.max(0, completed - report.candidates.length),
+          removedContainers: report.containerCleanup.filter((item) => item.removed).length,
+        });
         const repair = async () => await this.repairArchivedThreadWorktrees({
-          onProgress: (_completed, _total, report) => {
-            if (report) onProgress({ candidates: report.candidates.length, protected: report.protectedWorktrees,
-              processed: _completed, removed: report.cleanup.filter((item) => item.removedWorktree).length });
+          onProgress: (completed, _total, report) => {
+            if (report) publishProgress(completed, report);
           },
         });
-        const report = manual ? await repair() : isAppStateInitialized()
-          ? await runOneTimeArchivedWorktreeRepair({ db: getAppStateDb().raw, repair }) : undefined;
+        const report = isAppStateInitialized()
+          ? await runOneTimeArchivedWorktreeRepair({ db: getAppStateDb().raw, repair, force: manual })
+          : manual ? await repair() : undefined;
         if (!report) return;
-        onProgress({ candidates: report.candidates.length, protected: report.protectedWorktrees,
-          processed: report.candidates.length, removed: report.cleanup.filter((item) => item.removedWorktree).length });
+        publishProgress(report.candidates.length + report.emptyContainerCandidates.length, report);
         for (const item of [...report.cleanup, ...report.containerCleanup]) {
           if (item.error) onFailure(new Error(item.error));
         }
@@ -38399,7 +38406,8 @@ export class DesktopBackendRegistry {
       dryRun: options.dryRun === true,
     });
     if (options.dryRun) return report;
-    options.onProgress?.(0, report.candidates.length, report);
+    const total = report.candidates.length + report.emptyContainerCandidates.length;
+    options.onProgress?.(0, total, report);
     let completed = 0;
     for (const candidate of report.candidates) {
       assertCurrent();
@@ -38429,7 +38437,7 @@ export class DesktopBackendRegistry {
         report.cleanup.push({ worktreePath: candidate.worktreePath, removedWorktree: false, deletedBranch: false,
           error: error instanceof Error ? error.message : String(error) });
       }
-      options.onProgress?.(++completed, report.candidates.length, report);
+      options.onProgress?.(++completed, total, report);
     }
     for (const candidate of report.emptyContainerCandidates) {
       assertCurrent();
@@ -38470,6 +38478,7 @@ export class DesktopBackendRegistry {
           containerPath: path.dirname(candidate.worktreePath), removed: false,
           error: error instanceof Error ? error.message : String(error) });
       }
+      options.onProgress?.(++completed, total, report);
     }
     assertCurrent();
     backendRegistryLog.info("archived worktree repair completed", {

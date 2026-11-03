@@ -49,6 +49,9 @@ export type DesktopThreadArchiveSweepStatus = {
     protected: number;
     processed: number;
     removed: number;
+    emptyContainers?: number;
+    processedContainers?: number;
+    removedContainers?: number;
   };
   /** First failure of the last finished sweep. */
   error?: string;

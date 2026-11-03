@@ -147,4 +147,19 @@ describe("ArchivePolicySettings", () => {
     expect(screen.getByText("Cleaned 498 of 498 archived worktrees. Protected 3.")).toBeInTheDocument();
     expect(onSweepChanged).toHaveBeenCalledOnce();
   });
+
+  it("shows empty-folder progress and refreshes after removing only containers", async () => {
+    const onSweepChanged = vi.fn();
+    const { api, publish } = sweepApi({ running: false, archived: 0, deleted: 0, failed: 0 });
+    render(<ArchivePolicySettings onWriteConfig={vi.fn(async () => true)} desktopApi={api} onSweepChanged={onSweepChanged} />);
+    await screen.findByText("Not run yet");
+    const worktrees = { candidates: 0, protected: 0, processed: 0, removed: 0,
+      emptyContainers: 259, processedContainers: 10, removedContainers: 10 };
+    publish({ running: true, archived: 0, deleted: 0, failed: 0, worktrees });
+    expect(screen.getByText("Folders: 10 of 259 checked, 10 cleaned.")).toBeInTheDocument();
+    publish({ running: false, finishedAt: FINISHED_AT, archived: 0, deleted: 0, failed: 0,
+      worktrees: { ...worktrees, processedContainers: 259, removedContainers: 259 } });
+    expect(screen.getByText(/Cleaned 259 of 259 empty worktree folders/)).toBeInTheDocument();
+    expect(onSweepChanged).toHaveBeenCalledOnce();
+  });
 });

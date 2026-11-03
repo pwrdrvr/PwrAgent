@@ -101,7 +101,7 @@
     "rowsChanged": 2,
     "statements": 2
   },
-  "archived-worktree-repair-retry-marker": {"commits": 4, "note": "Two failed passes: 4 boundary commits, no per-item or timer writes. At 2 commits/hour and about 0.012 MB/pass, persistent failures cost about 0.30 MB/day; completed idle passes cost 0 MB/day.", "observedWalBytes": 20632, "rowsChanged": 4, "statements": 4},
+  "archived-worktree-repair-retry-marker": {"commits": 4, "note": "Two failed passes: 4 boundary commits, no per-item or timer writes. At 2 commits/hour and about 0.010 MB/pass, persistent failures cost about 0.25 MB/day; completed idle passes cost 0 MB/day.", "observedWalBytes": 20632, "rowsChanged": 4, "statements": 4},
   "archived-worktree-repair-shared-snapshot": {
     "commits": 4,
     "note": "One-time repair of one dirty checkout shared by two archived threads, including the profile claim and completion; no timer or idle writes.",
