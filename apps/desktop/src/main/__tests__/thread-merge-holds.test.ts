@@ -103,7 +103,7 @@ describe("merge holds", () => {
       const remind = (hold: Parameters<typeof buildMergeHoldReminder>[0], stillWaiting: number) =>
         todos.raiseForDependency(buildMergeHoldReminder(hold, stillWaiting)).todo.id;
       const [hold] = measured.manageThreadMergeHolds({ ...request, followUp: ["Rebase onto #3291", "Merge #17"], offerToSend: true }, "operator");
-      const [other] = measured.manageThreadMergeHolds({ ...request, reason: "Review" }, "operator");
+      const other = measured.manageThreadMergeHolds({ ...request, reason: "Review" }, "operator").find((item) => item.reason === "Review");
       const resolve = { ...waiting, action: "resolve" as const, holdId: hold!.id, note: "Validated on Windows." };
       const { writes } = await measureSqliteWrites(async () => {
         measured.manageThreadMergeHolds(resolve, "agent:codex:validation", 5, remind);

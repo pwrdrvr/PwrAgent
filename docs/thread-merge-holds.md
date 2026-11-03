@@ -109,8 +109,9 @@ Mutations re-read under an immediate SQLite transaction. Duplicate actions
 and reads make no writes. There are no timer, per-turn, or streamed-event
 writes. The checked-in budgets measure two commits and 28,872 WAL bytes for a
 create and resolve without a reminder (`thread-merge-hold-lifecycle`), and
-one commit for a resolve together with its card
-(`thread-merge-hold-reminder`). At 50 waits a day that is under 2 MB/day.
+one commit and 32,960 WAL bytes for a resolve together with its card
+(`thread-merge-hold-reminder`). At 50 waits a day the pair projects about
+3 MB/day.
 
 A hold binds the thread and the PR URLs attached while it is waiting. A PR
 attached after creation is bound in the existing attachment write. Detaching
