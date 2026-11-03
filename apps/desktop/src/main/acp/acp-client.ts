@@ -593,13 +593,15 @@ export class AcpAgentClient {
   }
 
   /**
-   * The protocol id for a request about to use this session. Records the
-   * activity and reloads the session first if it was idle-closed.
+   * Record a request about to use this session. Returns the reload to await
+   * first when the session was idle-closed, and nothing otherwise, so a
+   * request for an open session still goes out synchronously.
    */
-  private async openSessionForRequest(sessionId: string): Promise<string> {
+  private reloadBeforeRequest(sessionId: string): Promise<void> | undefined {
     this.touchSession(sessionId);
-    await this.reopenIdleClosedSession(sessionId);
-    return this.protocolSessionIdFor(sessionId);
+    return this.idleClosedSessions.has(sessionId)
+      ? this.reopenIdleClosedSession(sessionId)
+      : undefined;
   }
 
   private touchSession(sessionId: string): void {
@@ -674,7 +676,9 @@ export class AcpAgentClient {
 
   async listRewindPoints(sessionId: string): Promise<AcpThreadRewindPoint[]> {
     return await this.withOperation(async () => {
-      const protocolSessionId = await this.openSessionForRequest(sessionId);
+      const reload = this.reloadBeforeRequest(sessionId);
+      if (reload) await reload;
+      const protocolSessionId = this.protocolSessionIdFor(sessionId);
       const result = asRecord(await this.options.transport.request(
         "_x.ai/rewind/points",
         { sessionId: protocolSessionId },
@@ -719,7 +723,9 @@ export class AcpAgentClient {
     targetPromptIndex: number;
   }): Promise<{ promptText?: string; updatedAt: number }> {
     return await this.withOperation(async () => {
-      const protocolSessionId = await this.openSessionForRequest(params.sessionId);
+      const reload = this.reloadBeforeRequest(params.sessionId);
+      if (reload) await reload;
+      const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
       const result = asRecord(await this.options.transport.request(
         "_x.ai/rewind/execute",
         {
@@ -764,7 +770,9 @@ export class AcpAgentClient {
       throw new Error("Installed Grok Build does not support turn steering over ACP");
     }
     return await this.withOperation(async () => {
-      const protocolSessionId = await this.openSessionForRequest(params.sessionId);
+      const reload = this.reloadBeforeRequest(params.sessionId);
+      if (reload) await reload;
+      const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
       const response = asRecord(await this.options.transport.request(
         "_x.ai/session/steer",
         {
@@ -790,7 +798,9 @@ export class AcpAgentClient {
     maxAgentBudget?: number;
   }): Promise<GrokWorkflowBudgetPolicy> {
     return await this.withOperation(async () => {
-      const protocolSessionId = await this.openSessionForRequest(params.sessionId);
+      const reload = this.reloadBeforeRequest(params.sessionId);
+      if (reload) await reload;
+      const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
       const response = asRecord(await this.options.transport.request(
         "_x.ai/session/workflow_budget",
         {
@@ -1198,7 +1208,9 @@ export class AcpAgentClient {
     model?: string;
     tokenUsage?: AcpSuppressedControlPrompt["tokenUsage"];
   }> {
-    const protocolSessionId = await this.openSessionForRequest(params.sessionId);
+    const reload = this.reloadBeforeRequest(params.sessionId);
+    if (reload) await reload;
+    const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     const selectedModel = readAcpSelectedModel(
       this.options.store.getSession(this.options.backendId, params.sessionId)
         ?.acpRuntime,
@@ -1257,7 +1269,9 @@ export class AcpAgentClient {
     reasoningEffort?: string;
     rejectUnofferedThoughtLevel?: boolean;
   }): Promise<BackendAcpSessionRuntimeState | undefined> {
-    const protocolSessionId = await this.openSessionForRequest(params.sessionId);
+    const reload = this.reloadBeforeRequest(params.sessionId);
+    if (reload) await reload;
+    const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     const write = await this.setRuntimeOptionOnTransport({
       protocolSessionId,
       source: params.source,
@@ -2101,19 +2115,19 @@ export class AcpAgentClient {
         timer.unref?.();
       };
     });
+    const sendPrompt = () => this.options.transport.request(
+      "session/prompt",
+      {
+        sessionId: params.protocolSessionId,
+        prompt: params.prompt,
+      },
+      ACP_TURN_PROMPT_REQUEST_TIMEOUT_MS,
+    );
+    // The turn is already tracked, so no idle close can start now; one that
+    // already released the session is undone first.
+    const reload = this.reloadBeforeRequest(params.sessionId);
     return Promise.race([
-      // The turn is already tracked, so no idle close can start now; one
-      // that already released the session is undone first.
-      this.reopenIdleClosedSession(params.sessionId).then(
-        async () => await this.options.transport.request(
-          "session/prompt",
-          {
-            sessionId: params.protocolSessionId,
-            prompt: params.prompt,
-          },
-          ACP_TURN_PROMPT_REQUEST_TIMEOUT_MS,
-        ),
-      ),
+      reload ? reload.then(sendPrompt) : sendPrompt(),
       terminalResponseGuard,
     ]);
   }
