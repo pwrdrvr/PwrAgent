@@ -427,6 +427,8 @@ export type ComposerProps = {
      */
     kind?: "rewound-prompt" | "rewound-prompt-undone";
   };
+  /** Retire the restore request so a later composer mount cannot replay it. */
+  onDraftRestoreHandled?: (id: number) => void;
   /**
    * Focus the input once this composer shows the named thread and can take
    * input. Sent for a mouse click on the thread's sidebar row only; each id
@@ -4414,6 +4416,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
     if (props.disabled) return;
     appliedDraftRestoreId.current = restore.id;
+    props.onDraftRestoreHandled?.(restore.id);
     if (restore.kind === "rewound-prompt-undone") {
       // The prompt is back in the transcript; sending this copy would send
       // it twice. Only a composer still marked with the chip holds it.
@@ -4452,7 +4455,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     requestAnimationFrame(() => inputRef.current?.focus());
     // The helpers are recreated each render; the id guard applies once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.draftRestore, props.disabled, props.thread?.id, props.thread?.source, composerRequestOwner]);
+  }, [props.draftRestore, props.onDraftRestoreHandled, props.disabled, props.thread?.id, props.thread?.source, composerRequestOwner]);
   const clearComposerDraftSnapshot = (scopeKey: string): void => {
     if (isDraftStoreScope(scopeKey)) {
       draftStore.delete(scopeKey);

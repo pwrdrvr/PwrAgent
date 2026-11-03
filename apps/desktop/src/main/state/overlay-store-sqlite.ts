@@ -93,7 +93,6 @@ import {
   MAX_MANAGED_REVIEW_ENTRIES,
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
   MAX_QUESTIONNAIRE_ACTIVITY_LOG_ENTRIES,
-  MAX_REWIND_LOG_ENTRIES,
   MAX_TURN_FAILURE_LOG_ENTRIES,
   NAVIGATION_QUERY_MAX_RESULT_BYTES,
   buildPullRequestStatusKey,
@@ -6825,12 +6824,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       executionMode: "default" as const,
       extraLinkedDirectories: [],
     };
-    const nextLog = [...(current.rewindLog ?? []), params.rewind];
+    // These entries supplement the provider's old transcript. A rewind
+    // invalidates that history; clear it together with recording the marker.
     const nextState: ThreadOverlayState = {
       ...current,
-      rewindLog: nextLog.length > MAX_REWIND_LOG_ENTRIES
-        ? nextLog.slice(nextLog.length - MAX_REWIND_LOG_ENTRIES)
-        : nextLog,
+      permissionTransitionLog: undefined,
+      messagingBindingTransitionLog: undefined,
+      turnFailureLog: undefined,
+      questionnaireActivityLog: undefined,
+      managedReviewEntries: undefined,
+      pendingManagedReviewContextEntryIds: undefined,
+      rewindLog: [params.rewind],
     };
     this.putThread(threadKey, nextState);
     return nextState;
