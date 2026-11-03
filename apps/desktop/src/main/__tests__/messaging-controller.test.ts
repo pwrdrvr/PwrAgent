@@ -16321,6 +16321,54 @@ describe("MessagingController", () => {
     );
   });
 
+  it.each(["delivered", "missed"] as const)("revalidates admission after media preparation when completion is %s", async (completion) => {
+    let releaseMedia!: () => void;
+    const mediaGate = new Promise<void>((resolve) => { releaseMedia = resolve; });
+    let active = false;
+    const downloadAttachment = vi.fn(async () => {
+      await mediaGate;
+      return { data: new TextEncoder().encode("fixture file"), fileName: "fixture.txt", mimeType: "text/plain", sizeBytes: 12 };
+    });
+    const harness = await createHarness({
+      downloadAttachment,
+      getThreadAdmissionState: async (request) => ({
+        thread: buildNavigationSnapshot().threads[0],
+        threadStatus: active ? "active" : "idle",
+        ...(active ? { activeTurn: { backend: request.backend, threadId: request.threadId, turnId: "turn-1" } } : {}),
+      }),
+    });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("first turn"));
+    active = true;
+    const handling = harness.controller.handleInboundEvent({
+      ...buildTextEvent("Read this file"), id: "completion-during-media", kind: "media", disposition: "available",
+      attachments: [{ id: "fixture-file", kind: "file", name: "fixture.txt", mimeType: "text/plain", disposition: "available", sizeBytes: 12 }],
+    });
+    try {
+      await vi.waitFor(() => expect(downloadAttachment).toHaveBeenCalledOnce());
+      active = false;
+      if (completion === "delivered") {
+        // Completion drains the empty controller queue before media is ready.
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: { threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] } },
+          },
+        });
+      }
+      expect(harness.startTurn).toHaveBeenCalledOnce();
+    } finally {
+      releaseMedia();
+      await handling;
+    }
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+    expect(harness.startTurn).toHaveBeenLastCalledWith(expect.objectContaining({
+      input: expect.arrayContaining([{ type: "text", text: "Read this file" }, expect.objectContaining({ type: "localFile" })]),
+    }));
+    expect(harness.delivered).not.toContainEqual(expect.objectContaining({ kind: "confirmation", title: "Message queued" }));
+  });
+
   it("overlaps authorized admission reads with media preparation and waits for both before dispatch", async () => {
     let releaseMedia!: () => void;
     let releaseAdmission!: () => void;
