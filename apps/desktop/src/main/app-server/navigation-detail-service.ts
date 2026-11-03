@@ -26,6 +26,7 @@ import { listCodexEnvironmentOptions } from "./codex-environment-config";
 import { NavigationQueryError } from "./navigation-query-store";
 import { detectMissingThreadWorkspace } from "./missing-thread-workspace";
 import { readMergedSubAgentPage } from "./thread-display";
+import { boundThreadPendingWakes } from "./thread-pending-wakes";
 
 /** The most records one selected-collection page holds, before the byte budget. */
 const SELECTED_COLLECTION_PAGE_RECORDS = 100;
@@ -308,6 +309,12 @@ export class NavigationDetailService {
         workspaceDirectories.push({ key: directory.id, label: directory.label, path: directory.path,
           gitStatus: directory.path ? await this.registry.readSelectedWorkspaceGitStatus(directory.path) : undefined });
       }
+    }
+    if (configuration.pendingWakes) {
+      const baseBytes = responseBytes({ ref: request.ref, thread: { ...configuration, pendingWakes: [] }, collections, workspaceDirectories }) + 512;
+      const bounded = boundThreadPendingWakes({ wakes: configuration.pendingWakes }, Math.max(0, NAVIGATION_QUERY_MAX_RESULT_BYTES - baseBytes));
+      configuration.pendingWakes = bounded.wakes;
+      if (bounded.incomplete) configuration.pendingWakesIncomplete = true;
     }
     const detailRevision = revision({ thread: configuration, workspaceDirectories });
     if (request.knownRevision === detailRevision) {

@@ -47,6 +47,49 @@ function fakeApi(lists: ThreadPendingWakesResponse[]) {
 }
 
 describe("useThreadPendingWakes", () => {
+  it("serializes invalidations during a slow read and never publishes the invalidated result", async () => {
+    let resolve!: (value: ThreadPendingWakesResponse) => void;
+    const slow = new Promise<ThreadPendingWakesResponse>((done) => { resolve = done; });
+    const { api, emit } = fakeApi([{ ok: true, wakes: [], ended: [] }]);
+    api.manageThreadPendingWakes.mockImplementationOnce(() => slow);
+    const { result } = renderHook(() => useThreadPendingWakes(thread, api));
+    expect(api.manageThreadPendingWakes).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 50; i += 1) act(() => emit({ backend: "claude", notification: {
+      method: "thread/backgroundTasks/updated", params: { threadId: thread.id, tasks: [] },
+    } } as unknown as AgentEvent));
+    expect(api.manageThreadPendingWakes).toHaveBeenCalledTimes(1);
+    await act(async () => resolve({ ok: true, wakes: [wake], ended: [] }));
+    expect(api.manageThreadPendingWakes).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(result.current.state).toMatchObject({ status: "ready", wakes: [] }));
+    expect(api.manageThreadPendingWakes).toHaveBeenCalledTimes(2);
+  });
+
+  it("loads history only on panel demand and ignores accounting-only card events", async () => {
+    const { api, emit, requests } = fakeApi([{ ok: true, wakes: [wake], ended: [] }]);
+    const { rerender } = renderHook(({ includeEnded }) => useThreadPendingWakes(thread, api, { includeEnded }),
+      { initialProps: { includeEnded: false } });
+    await waitFor(() => expect(requests).toHaveLength(1));
+    act(() => emit({ backend: "claude", notification: { method: "thread/subAgents/updated",
+      params: { threadId: thread.id, navigationChanged: false } } } as unknown as AgentEvent));
+    expect(requests).toHaveLength(1);
+    rerender({ includeEnded: true });
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(requests[1]).toMatchObject({ action: "list", endedLimit: 8 });
+  });
+
+  it("fences a late old-thread read and hides its state immediately on selection", async () => {
+    let resolve!: (value: ThreadPendingWakesResponse) => void;
+    const slow = new Promise<ThreadPendingWakesResponse>((done) => { resolve = done; });
+    const { api } = fakeApi([{ ok: true, wakes: [], ended: [] }]);
+    api.manageThreadPendingWakes.mockImplementationOnce(() => slow);
+    const { result, rerender } = renderHook(({ selected }) => useThreadPendingWakes(selected, api),
+      { initialProps: { selected: thread } });
+    rerender({ selected: { ...thread, id: "next" } });
+    await waitFor(() => expect(result.current.state).toMatchObject({ status: "ready", wakes: [] }));
+    await act(async () => resolve({ ok: true, wakes: [wake], ended: [] }));
+    expect(result.current.state).toMatchObject({ status: "ready", wakes: [] });
+  });
+
   it("reads a local thread's list, and reads it again when a wake source changes for the thread", async () => {
     const { api, requests, emit } = fakeApi([
       { ok: true, wakes: [wake], ended: [] },
@@ -54,7 +97,7 @@ describe("useThreadPendingWakes", () => {
     ]);
     const { result } = renderHook(() => useThreadPendingWakes(thread, api as never));
     await waitFor(() => expect(result.current.state).toMatchObject({ status: "ready", wakes: [wake], peer: false }));
-    expect(requests[0]).toEqual({ action: "list", backend: "claude", threadId: "waiting" });
+    expect(requests[0]).toEqual({ action: "list", backend: "claude", threadId: "waiting", endedLimit: 0 });
 
     // Another thread's change, and an unrelated method, read nothing.
     emit({ backend: "claude", notification: { method: "thread/backgroundTasks/updated", params: { threadId: "other", tasks: [] } } } as unknown as AgentEvent);

@@ -47,6 +47,17 @@ export class ThreadDependencyStore {
     ).all(backend, threadId));
   }
 
+  /** Active wakes plus only the requested ended rows; never read history for a badge. */
+  listPendingWakes(backend: string, threadId: string, endedLimit: number): ThreadDependency[] {
+    const active = this.decode(this.db.prepare(
+      "SELECT payload FROM thread_dependencies WHERE backend = ? AND thread_id = ? AND status IN ('waiting', 'ready') ORDER BY created_at ASC",
+    ).all(backend, threadId));
+    if (endedLimit === 0) return active;
+    return [...active, ...this.decode(this.db.prepare(
+      "SELECT payload FROM thread_dependencies WHERE backend = ? AND thread_id = ? AND status IN ('delivered', 'cancelled', 'dismissed') ORDER BY json_extract(payload, '$.updatedAt') DESC LIMIT ?",
+    ).all(backend, threadId, endedLimit))];
+  }
+
   /** Active registrations elsewhere that name this thread as a prerequisite. */
   dependents(backend: string, threadId: string): ThreadDependency[] {
     const target = key(backend, threadId);

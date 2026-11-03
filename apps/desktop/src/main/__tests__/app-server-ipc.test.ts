@@ -3632,6 +3632,39 @@ describe("app server ipc", () => {
     });
   });
 
+  it("reads pending wakes from initialized stores without starting the scheduler or listing unrelated PRs", async () => {
+    const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
+    const { ScheduledThreadActionStore } = await import("../scheduled-actions/scheduled-thread-action-store");
+    const scheduler = await import("../scheduled-actions/scheduled-thread-action-service");
+    const { appServerService } = await import("../ipc/app-server");
+    const appState = await import("../state/app-state");
+    const { openInMemoryStateDb } = await import("./sqlite-test-utils");
+    const db = openInMemoryStateDb();
+    const store = new SqliteOverlayStore(db);
+    const scheduled = new ScheduledThreadActionStore(db);
+    scheduled.create({ id: "wake-1", backend: "codex", threadId: "selected", kind: "turn",
+      origin: "desktop", displayText: "Follow up", scheduledFor: 100, now: 1 });
+    const service = appServerService as unknown as { getOverlayStore: () => typeof store;
+      backgroundPrPollingEnabled: boolean; prAutoDispatchAllowed: boolean };
+    const overlay = vi.spyOn(service, "getOverlayStore").mockReturnValue(store);
+    const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
+    const state = vi.spyOn(appState, "getAppStateDb").mockReturnValue(db);
+    const scheduledStore = vi.spyOn(appState, "getAppScheduledThreadActionStore").mockReturnValue(scheduled);
+    const startScheduler = vi.spyOn(scheduler, "getScheduledThreadActionService");
+    const candidates = vi.spyOn(store, "listPrAutoDispatchCandidates");
+    service.backgroundPrPollingEnabled = true;
+    service.prAutoDispatchAllowed = true;
+    try {
+      const list = await appServerService.listThreadPendingWakes({ backend: "codex", threadId: "selected" }, 0);
+      expect(list.wakes).toContainEqual(expect.objectContaining({ kind: "scheduled_action", actionId: "wake-1", displayText: "Follow up" }));
+      expect(candidates).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "selected" });
+      expect(startScheduler).not.toHaveBeenCalled();
+    } finally {
+      candidates.mockRestore(); startScheduler.mockRestore(); scheduledStore.mockRestore();
+      state.mockRestore(); mode.mockRestore(); overlay.mockRestore(); db.close();
+    }
+  });
+
   it("lists, explains, and stops PR watches over thread:prWatches, and sends a peer's to its owner", async () => {
     const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
     const { appServerService } = await import("../ipc/app-server");

@@ -333,7 +333,7 @@ import {
   DIRECTORY_GIT_STATUS_FORCE_COALESCE_WINDOW_MS,
   isFreshDirectoryGitStatusCacheEntry,
 } from "../app-server/directory-git-status-refresh-policy";
-import { getAppStateDb, getAppStateMode } from "../state/app-state";
+import { getAppScheduledThreadActionStore, getAppStateDb, getAppStateMode } from "../state/app-state";
 import { ThreadSandboxStore } from "../state/thread-sandbox-store";
 import {
   SandboxerPrCleanupService,
@@ -667,8 +667,6 @@ type ThreadPrRefreshContext = {
 };
 
 const appServerLog = getMainLogger("pwragent:app-server");
-/** How far back the Waiting for list reads ended scheduled actions. */
-const PENDING_WAKES_SCHEDULED_HISTORY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Forge Automation is owner-local and per Directories project. A remote
@@ -5276,20 +5274,15 @@ class DesktopAppServerService {
         : await this.getOverlayStore().listThreadPrStatusWatchHistory({
           ...thread, limit: Math.min(limit, THREAD_PR_WATCH_HISTORY_MAX_LIMIT),
         }),
-      autoFix: async () => await this.listThreadPrAutoFixStates(),
+      autoFix: async (thread) => await this.listThreadPrAutoFixStates(thread),
       // A plain store read: the coordinator's list waits behind evaluations,
       // and selected detail reads this list.
-      dependencies: async (thread) => new ThreadDependencyStore(getAppStateDb().raw)
-        .list(thread.backend, thread.threadId),
-      // Each action reads its payload file, so ended ones are read only for
-      // the history, and only from the last day.
-      scheduledActions: (thread, includeEnded) => getScheduledThreadActionService().list({
-        ...thread,
-        ...(includeEnded ? { terminalUpdatedAfter: Date.now() - PENDING_WAKES_SCHEDULED_HISTORY_MS } : {}),
-      }).actions,
+      dependencies: async (thread, endedLimit) => new ThreadDependencyStore(getAppStateDb().raw)
+        .listPendingWakes(thread.backend, thread.threadId, endedLimit),
+      scheduledActions: (thread, endedLimit) => getAppScheduledThreadActionStore().listPendingWakes({ ...thread, endedLimit }),
       monitors: (thread) => registry.listPendingTaskMonitorWakes(thread),
       recentSubAgents: async (thread, limit) => limit === 0 ? []
-        : await this.getOverlayStore().listThreadSubAgentPage({ ...thread, offset: 0, limit }),
+        : await this.getOverlayStore().listEndedThreadTaskMonitors({ ...thread, limit }),
       // Only Claude continues a thread when a background task ends.
       backendTasks: async (thread) => thread.backend === "claude"
         ? (await registry.listBackgroundTerminals(thread)).terminals
@@ -5350,7 +5343,7 @@ class DesktopAppServerService {
       cancelScheduledAction: async (owner, actionId) => {
         const service = getScheduledThreadActionService();
         // Cancel takes a bare id; a stop names this thread's wake only.
-        if (!service.list(owner).actions.some((action) => action.id === actionId)) {
+        if (!getAppScheduledThreadActionStore().ownsPendingWake(owner, actionId)) {
           throw new Error("That scheduled action is no longer waiting on this thread.");
         }
         await service.cancel({ id: actionId });
@@ -5367,14 +5360,15 @@ class DesktopAppServerService {
    * on the elected thread only, and not while the repair budget is paused.
    * Nothing when Git settings stop it, which the windows already know.
    */
-  private async listThreadPrAutoFixStates(): Promise<ThreadPrAutoFixState[]> {
+  private async listThreadPrAutoFixStates(thread?: { backend: AppServerBackendKind; threadId: string }): Promise<ThreadPrAutoFixState[]> {
     if (!this.backgroundPrPollingEnabled || !this.prAutoDispatchAllowed) return [];
-    const candidates = await this.getOverlayStore().listPrAutoDispatchCandidates();
+    const candidates = await this.getOverlayStore().listPrAutoDispatchCandidates(thread);
     const winners = new Map<string, (typeof candidates)[number]>();
     for (const candidate of candidates) {
       if (!winners.has(candidate.prKey)) winners.set(candidate.prKey, candidate);
     }
-    return candidates.map((candidate): ThreadPrAutoFixState => {
+    const selected = thread ? candidates.filter((candidate) => candidate.backend === thread.backend && candidate.threadId === thread.threadId) : candidates;
+    return selected.map((candidate): ThreadPrAutoFixState => {
       const base = {
         backend: candidate.backend,
         threadId: candidate.threadId,

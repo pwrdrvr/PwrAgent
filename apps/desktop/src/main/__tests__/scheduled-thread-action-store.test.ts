@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-thread-action-store";
+import { MemoryScheduledThreadActionPayloadStore } from "../scheduled-actions/scheduled-thread-action-payload-store";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
@@ -21,6 +22,42 @@ afterEach(() => {
 });
 
 describe("ScheduledThreadActionStore", () => {
+  it("reads bounded wake previews once per immutable payload and skips hidden history", () => {
+    const payloads = new MemoryScheduledThreadActionPayloadStore();
+    const previews = new ScheduledThreadActionStore(stateDb, payloads);
+    const create = (id: string, displayText = id) => previews.create({ id, backend: "codex", threadId: "selected",
+      kind: "turn", origin: "desktop", scheduledFor: 100, displayText,
+      turn: { input: [{ type: "text", text: displayText }] }, now: 1 });
+    create("active");
+    create("ended");
+    previews.cancel("ended", 2);
+    const read = vi.spyOn(payloads, "read");
+    const selected = { backend: "codex", threadId: "selected", endedLimit: 0 };
+    expect(previews.listPendingWakes(selected).actions.map((action) => action.id)).toEqual(["active"]);
+    for (let i = 0; i < 50; i += 1) previews.listPendingWakes(selected);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(previews.ownsPendingWake(selected, "active")).toBe(true);
+    expect(previews.ownsPendingWake({ ...selected, threadId: "other" }, "active")).toBe(false);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(previews.listPendingWakes({ ...selected, endedLimit: 8 }).actions.map((action) => action.id)).toEqual(["active", "ended"]);
+    expect(read).toHaveBeenCalledTimes(2);
+    previews.update("active", { displayText: "Changed", now: 3 });
+    expect(previews.listPendingWakes(selected).actions[0]?.displayText).toBe("Changed");
+    create("large", "x".repeat(300 * 1024));
+    const incomplete = previews.listPendingWakes(selected);
+    expect(incomplete.incomplete).toBe(true);
+    expect(incomplete.actions).toContainEqual(expect.objectContaining({ id: "large", displayText: "" }));
+    expect(incomplete.actions.every((action) => !("turn" in action))).toBe(true);
+  });
+
+  it("caps active wake reads and marks omitted rows incomplete", () => {
+    for (let i = 0; i < 105; i += 1) store.create({ id: `many-${i}`, backend: "codex", threadId: "many",
+      kind: "turn", origin: "desktop", scheduledFor: i, displayText: "Scheduled", now: 1 });
+    const result = store.listPendingWakes({ backend: "codex", threadId: "many", endedLimit: 0 });
+    expect(result.actions).toHaveLength(100);
+    expect(result.incomplete).toBe(true);
+  });
+
   const claim = (now: number, ownerId = "instance-1") => ({
     now,
     ownerId,

@@ -90,6 +90,12 @@ const ready = (wakes = WAKES, ended = ENDED, peer = false): ThreadPendingWakesSt
   ({ status: "ready", wakes, ended, incomplete: false, peer });
 
 describe("WaitingForPanel", () => {
+  it("does not claim nothing can wake the thread when sources are incomplete", () => {
+    render(<WaitingForPanel thread={thread} controller={controller({ status: "ready", wakes: [], ended: [], incomplete: true, peer: false })} now={NOW} />);
+    expect(screen.queryByText("Nothing will wake this thread.")).not.toBeInTheDocument();
+    expect(screen.getByText("Could not confirm everything this thread is waiting for.")).toBeInTheDocument();
+  });
+
   it("groups every pending wake, soonest first, with its count", () => {
     render(<WaitingForPanel thread={thread} controller={controller(ready())} now={NOW} />);
 

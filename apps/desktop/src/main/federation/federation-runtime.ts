@@ -744,6 +744,7 @@ type RelayedEventSubscription = IncomingEventSubscription & {
 };
 
 const NAVIGATION_EVENT_METHODS = new Set<string>([
+  "thread/dependencies/updated",
   "thread/scheduledAction/updated",
   "automation/run/transcript/updated",
   "automation/run/updated",

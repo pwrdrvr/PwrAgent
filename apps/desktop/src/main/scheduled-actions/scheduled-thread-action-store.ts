@@ -9,6 +9,7 @@ import type {
   ScheduledThreadActionStatus,
   ScheduledThreadReviewPayload,
   ScheduledThreadTurnPayload,
+  PendingWakeScheduledActions,
 } from "@pwragent/shared";
 import type { StateDb } from "../state/state-db.js";
 import {
@@ -83,6 +84,8 @@ const ROW_COLUMNS = `
 export class ScheduledThreadActionStore {
   private readonly payloadStore: ScheduledThreadActionPayloadStore;
   private readonly hasLegacyPayloadColumn: boolean;
+  // Payload refs are immutable. Retain only compact text, never execution inputs.
+  private readonly wakePreviewCache = new Map<string, string>();
 
   constructor(
     private readonly stateDb: StateDb,
@@ -156,6 +159,45 @@ export class ScheduledThreadActionStore {
       )
       .all(...values) as ScheduledThreadActionRow[];
     return rows.map((row) => this.actionFromRow(row));
+  }
+
+  ownsPendingWake(thread: { backend: string; threadId: string }, id: string): boolean {
+    return Boolean(this.stateDb.raw.prepare(
+      "SELECT 1 FROM scheduled_thread_actions WHERE action_id = ? AND backend = ? AND thread_id = ? AND status IN ('scheduled', 'held')",
+    ).get(id, thread.backend, thread.threadId));
+  }
+
+  /** Bounded metadata for Waiting for. History is admitted only on panel demand. */
+  listPendingWakes(thread: { backend: string; threadId: string; endedLimit: number }): PendingWakeScheduledActions {
+    const active = this.stateDb.raw.prepare(
+      `SELECT ${ROW_COLUMNS} FROM scheduled_thread_actions
+       WHERE backend = ? AND thread_id = ? AND status IN ('scheduled', 'held')
+       ORDER BY CASE WHEN status = 'scheduled' THEN 0 ELSE 1 END, scheduled_for, created_at, action_id LIMIT 101`,
+    ).all(thread.backend, thread.threadId) as ScheduledThreadActionRow[];
+    const ended = thread.endedLimit === 0 ? [] : this.stateDb.raw.prepare(
+      `SELECT ${ROW_COLUMNS} FROM scheduled_thread_actions
+       WHERE backend = ? AND thread_id = ? AND status IN ('started', 'cancelled', 'failed')
+       ORDER BY updated_at DESC, action_id DESC LIMIT ?`,
+    ).all(thread.backend, thread.threadId, thread.endedLimit) as ScheduledThreadActionRow[];
+    let incomplete = active.length > 100;
+    const actions = [...active.slice(0, 100), ...ended].map((row) => {
+      let displayText = "";
+      try {
+        if (!row.payload_ref) throw new Error("Missing scheduled payload");
+        const cached = this.wakePreviewCache.get(row.payload_ref);
+        displayText = cached ?? this.payloadStore.read(row.payload_ref, 256 * 1024).displayText.trim().replace(/\s+/g, " ").slice(0, 600);
+        if (cached === undefined) {
+          if (this.wakePreviewCache.size >= 128) this.wakePreviewCache.delete(this.wakePreviewCache.keys().next().value!);
+          this.wakePreviewCache.set(row.payload_ref, displayText);
+        }
+      } catch {
+        // Keep the cancellable wake visible even when its optional text is unreadable.
+        incomplete = true;
+      }
+      return { id: row.action_id, kind: row.kind, origin: row.origin, status: row.status,
+        scheduledFor: row.scheduled_for, displayText, createdAt: row.created_at, updatedAt: row.updated_at };
+    });
+    return { actions, ...(incomplete ? { incomplete: true as const } : {}) };
   }
 
   listProjectionPage(request: ListScheduledThreadActionsRequest): ListScheduledThreadActionsResponse {

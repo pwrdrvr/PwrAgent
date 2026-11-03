@@ -511,7 +511,7 @@ describe("NavigationDetailService", () => {
       prWatchHistory: vi.fn(async () => []),
       autoFix: vi.fn(async () => []),
       dependencies: vi.fn(async () => []),
-      scheduledActions: vi.fn(() => []),
+      scheduledActions: vi.fn(() => ({ actions: [] })),
       monitors: vi.fn(() => [monitor]),
       recentSubAgents: vi.fn(async () => []),
       backendTasks: vi.fn(async () => []),
@@ -533,7 +533,10 @@ describe("NavigationDetailService", () => {
     // The projection option stays inside the owner, outside the signed request.
     vi.spyOn(navigationDetail, "getDesktopNavigationDetailService").mockReturnValue(service);
     vi.spyOn(backendRegistry, "getDesktopBackendRegistry").mockReturnValue({} as DesktopBackendRegistry);
-    const { DesktopFederationRuntime } = await import("../federation/federation-runtime");
+    const { DesktopFederationRuntime, navigationInvalidationForLocalEvent } = await import("../federation/federation-runtime");
+    expect(navigationInvalidationForLocalEvent({ backend: "codex", notification: {
+      method: "thread/dependencies/updated", params: { threadId: selected.id, dependencyId: "dep-1" },
+    } })?.notification).toMatchObject({ method: "navigation/invalidated", params: { threadId: selected.id, sourceMethod: "thread/dependencies/updated" } });
     const peer = new DesktopFederationRuntime().localBackend();
     mocks.listActiveThreadPrStatusWatches.mockClear();
     const detail = await peer.getNavigationSelectedDetail!(request);
@@ -542,7 +545,8 @@ describe("NavigationDetailService", () => {
     expect(mocks.listActiveThreadPrStatusWatches).toHaveBeenCalledExactlyOnceWith(request.ref);
     expect(readers.prWatches).not.toHaveBeenCalled();
     for (const [name, reader] of Object.entries(readers)) {
-      if (name !== "prWatches") expect(reader).toHaveBeenCalledTimes(1);
+      if (name === "prWatchHistory" || name === "recentSubAgents" || name === "prWatches") expect(reader).not.toHaveBeenCalled();
+      else expect(reader).toHaveBeenCalledTimes(1);
     }
     monitor.lastActivityAt = 4;
     const updated = await peer.getNavigationSelectedDetail!({ ...request, knownRevision: detail.revision });
@@ -551,6 +555,16 @@ describe("NavigationDetailService", () => {
     expect(selected).not.toHaveProperty("pendingWakes");
     expect(await service.readSelectedDetail({ ...request, knownRevision: local.revision }))
       .toMatchObject({ revision: local.revision, unchanged: true });
+    selected.title = "é".repeat(100_000);
+    navigationDetail.setNavigationDetailPendingWakesProjector(async () => ({ wakes: Array.from({ length: 500 }, (_, index) => ({
+      kind: "monitor", key: `monitor:${index}`, monitorId: String(index), monitorBackend: "codex",
+      task: "x".repeat(600), createdAt: 1, lastActivityAt: 2, pollIntervalSeconds: 60, durable: false,
+    })) }));
+    const large = await peer.getNavigationSelectedDetail!(request);
+    expect(large.identity).toBe("present");
+    expect(large.thread?.pendingWakesIncomplete).toBe(true);
+    expect(large.thread?.pendingWakes?.length).toBeGreaterThan(0);
+    expect(Buffer.byteLength(JSON.stringify(large))).toBeLessThanOrEqual(NAVIGATION_QUERY_MAX_RESULT_BYTES);
   });
 
   it("pages a complete FIFO projection with its own revision", () => {

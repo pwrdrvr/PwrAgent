@@ -121,7 +121,7 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
       <div className="waiting-for-panel__body">
         {groups.length === 0 ? (
           <div className="waiting-for-panel__empty">
-            <p className="waiting-for-panel__empty-title">Nothing will wake this thread.</p>
+            <p className="waiting-for-panel__empty-title">{state.incomplete ? "Could not confirm everything this thread is waiting for." : "Nothing will wake this thread."}</p>
             <p className="pr-watch-list__sub">
               It runs again when a message is sent. An agent can watch CI, wait for another
               thread, or start a monitor; ask it to.
@@ -182,7 +182,7 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
         ))}
         {error ? <p className="waiting-for-panel__error" role="alert">{error}</p> : null}
         {state.incomplete ? (
-          <p className="pr-watch-list__sub">Some sources could not be read, so this list may be missing a wake.</p>
+          <p className="pr-watch-list__sub">This list is incomplete. Some wakes may be missing.</p>
         ) : null}
         {readOnlyOnPeer ? (
           <p className="pr-watch-list__owner">{`Some of these run on ${props.ownerLabel ?? "the thread's own machine"}. Stop them there.`}</p>
@@ -243,7 +243,8 @@ function groupWakes(wakes: readonly ThreadPendingWake[], thread: NavigationThrea
     const byPr = new Map<string, ThreadPendingWake[]>();
     for (const wake of members) {
       const prKey = wake.kind === "pr_watch" ? wake.watch.prKey : wake.kind === "pr_auto_fix" ? wake.prKey : "";
-      byPr.set(prKey, [...byPr.get(prKey) ?? [], wake]);
+      if (!byPr.has(prKey)) byPr.set(prKey, []);
+      byPr.get(prKey)!.push(wake);
     }
     for (const [prKey, prWakes] of byPr) {
       const prNumber = readPrNumber(prKey, prWakes, thread);

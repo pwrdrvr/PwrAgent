@@ -262,8 +262,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     : 0;
   // The Waiting for tab counts every pending wake, so a waiting thread says
   // so before the tab opens. Unknown (an older owner) draws no badge.
-  const pendingWakes = useThreadPendingWakes(props.thread, props.desktopApi);
-  const pendingWakeCount = pendingWakes.state.status === "ready" ? pendingWakes.state.wakes.length : 0;
   const dependencyContext = useThreadDependencyIndicatorsContext();
   const toolCallsFederationTarget = props.thread?.federation?.ref.target
     ?? readRendererFederationTarget();
@@ -341,6 +339,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       : props.activeTab === "todos" && !props.todos
         ? "info"
       : props.activeTab;
+  const pendingWakes = useThreadPendingWakes(props.thread, props.desktopApi, { includeEnded: open && activeTab === "waiting" });
+  const pendingWakeCount = pendingWakes.state.status === "ready" ? pendingWakes.state.wakes.length : 0;
   const [subAgentLens, setSubAgentLens] = useState<SubAgentLens>();
   const displayResource = useThreadDisplayResource({
     subAgentLens,
@@ -1027,6 +1027,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         const openContinueAfter = dependencyContext?.open;
         return (
           <WaitingForPanel
+            key={JSON.stringify([thread.source, thread.id, federationTarget])}
             thread={thread}
             controller={pendingWakes}
             ownerLabel={ownerLabel}

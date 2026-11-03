@@ -4327,6 +4327,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return this.subAgentTable.page({ ...params, storageKey: this.subAgentStorageKey(params) });
   }
 
+  async listEndedThreadTaskMonitors(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    limit: number;
+  }): Promise<ThreadSubAgentSummary[]> {
+    return this.subAgentTable.endedMonitors(this.subAgentStorageKey(params), params.limit);
+  }
+
   /** Sums over every Token Miser gate card, kept on write; reads no card. */
   async readThreadTokenMiserGateTotals(params: {
     backend: ThreadOverlayState["backend"];
@@ -7039,30 +7047,42 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   /**
    * Every opted-in thread's Auto-fix candidacy, in election order within
    * each PR: the first row for a PR is the thread Auto-fix wakes. Read-only.
+   * For selected-thread reads, return only that thread and its PR winners.
    */
-  async listPrAutoDispatchCandidates(): Promise<PrAutoDispatchCandidate[]> {
+  async listPrAutoDispatchCandidates(thread?: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<PrAutoDispatchCandidate[]> {
     const rows = this.stateDb.raw
-      .prepare(
-        `SELECT pr_key, backend, thread_id, eligible_since
+      .prepare(thread
+        ? `SELECT pr_key, backend, thread_id, eligible_since
          FROM pr_auto_dispatch_candidates
-         ORDER BY pr_key ASC, eligible_since ASC, backend ASC, thread_id ASC`,
+         WHERE pr_key IN (
+           SELECT pr_key FROM pr_auto_dispatch_candidates WHERE backend = ? AND thread_id = ?
+         )
+         ORDER BY pr_key ASC, eligible_since ASC, backend ASC, thread_id ASC`
+        : `SELECT pr_key, backend, thread_id, eligible_since
+           FROM pr_auto_dispatch_candidates
+           ORDER BY pr_key ASC, eligible_since ASC, backend ASC, thread_id ASC`,
       )
-      .all() as Array<{
+      .iterate(...(thread ? [thread.backend, thread.threadId] : [])) as Iterable<{
         backend: ThreadOverlayState["backend"];
         eligible_since: number;
         pr_key: string;
         thread_id: string;
       }>;
-    return rows.flatMap((row) =>
-      isPrAutoDispatchCandidateEligible(this.getThread(buildThreadIdentityKey(row.backend, row.thread_id)))
-        ? [{
-            backend: row.backend,
-            eligibleSince: row.eligible_since,
-            prKey: row.pr_key,
-            threadId: row.thread_id,
-          }]
-        : [],
-    );
+    const eligibility = new Map<string, boolean>();
+    const winners = new Set<string>();
+    const candidates: PrAutoDispatchCandidate[] = [];
+    for (const row of rows) {
+      if (thread && winners.has(row.pr_key) && !(row.backend === thread.backend && row.thread_id === thread.threadId)) continue;
+      const key = buildThreadIdentityKey(row.backend, row.thread_id);
+      if (!eligibility.has(key)) eligibility.set(key, isPrAutoDispatchCandidateEligible(this.getThread(key)));
+      if (!eligibility.get(key)) continue;
+      winners.add(row.pr_key);
+      candidates.push({ backend: row.backend, eligibleSince: row.eligible_since, prKey: row.pr_key, threadId: row.thread_id });
+    }
+    return candidates;
   }
 
   async resetThreadPrAutoDispatchForOperator(params: {
@@ -12226,6 +12246,7 @@ export type OverlayStoreLike = Pick<
   | "readThreadSubAgentLensCounts"
   | "listThreadSubAgentLensPage"
   | "listThreadSubAgentPage"
+  | "listEndedThreadTaskMonitors"
   | "readThreadTokenMiserGateTotals"
   | "setThreadReaction"
   | "setThreadLock"
