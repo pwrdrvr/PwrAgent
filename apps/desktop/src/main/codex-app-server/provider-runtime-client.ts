@@ -10,6 +10,10 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   onAppServerUnexpectedExit: "subscribe",
   restartAppServer: "all",
   resetAppServerRestarts: "all",
+  readAppServerProcessSample: "primary",
+  getAppServerRecycleStatus: "primary",
+  // Each runtime owns a process; each decides from its own sample.
+  maybeRecycleIdleAppServer: "all",
   recoverInvalidPersistedResponseMessageIds: "thread",
   onRealtimeEvent: "subscribe",
   onRealtimeDisconnect: "subscribe",

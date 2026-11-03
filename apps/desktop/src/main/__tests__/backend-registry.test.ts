@@ -154,6 +154,10 @@ import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-brid
 import { isBindingForThread } from "../messaging/core/messaging-binding-thread-match";
 import { ArchiveCleanupTransport } from "./fixtures/archive-cleanup-transport";
 import type { ManagedCodexSelectionChange } from "../settings/desktop-settings-service";
+import {
+  DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS,
+  type CodexAppServerRecycleSettings,
+} from "../codex-app-server/app-server-recycle-policy";
 import { managedCodexRoot } from "../codex-build-channel";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
@@ -4960,6 +4964,64 @@ describe("DesktopBackendRegistry", () => {
     expect(markSwitchComplete).toHaveBeenCalledOnce();
 
     await registry.close();
+  });
+
+  it("recycles the idle Codex app server only while no Codex work is active", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const recycle = vi.fn(async (_params: {
+      settings: CodexAppServerRecycleSettings;
+      isQuiescent: () => boolean;
+    }) => ({ kind: "not-running" as const }));
+    Object.assign(codexClient, { maybeRecycleIdleAppServer: recycle });
+    let settings: CodexAppServerRecycleSettings = {
+      ...DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS,
+      idleMs: 60_000,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      resolveCodexAppServerRecycleSettings: () => settings,
+    });
+    const internals = registry as unknown as {
+      activeTurnKeys: Set<string>;
+      codexBackgroundTerminals: Map<string, unknown[]>;
+    };
+
+    internals.activeTurnKeys.add("codex:thread-1:turn-1");
+    await registry.checkCodexAppServerRecycle();
+    expect(recycle).not.toHaveBeenCalled();
+
+    internals.activeTurnKeys.delete("codex:thread-1:turn-1");
+    await registry.checkCodexAppServerRecycle();
+    expect(recycle).toHaveBeenCalledOnce();
+    const { settings: passed, isQuiescent } = recycle.mock.calls[0]![0];
+    expect(passed).toEqual(settings);
+    expect(isQuiescent()).toBe(true);
+    // A command still running after its turn ended keeps the server.
+    internals.codexBackgroundTerminals.set("thread-1", [{ processId: "p-1" }]);
+    expect(isQuiescent()).toBe(false);
+    internals.codexBackgroundTerminals.clear();
+
+    settings = { ...settings, enabled: false };
+    await registry.checkCodexAppServerRecycle();
+    expect(recycle).toHaveBeenCalledOnce();
+
+    settings = { ...settings, enabled: true };
+    vi.useFakeTimers();
+    try {
+      registry.startCodexAppServerRecycler();
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(recycle).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(recycle).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+    await registry.close();
+    expect((registry as unknown as { codexAppServerRecycleTimer?: unknown })
+      .codexAppServerRecycleTimer).toBeUndefined();
+    await registry.checkCodexAppServerRecycle();
+    expect(recycle).toHaveBeenCalledTimes(2);
   });
 
   it("refreshes only owner-known directory Git state for federation requests", async () => {

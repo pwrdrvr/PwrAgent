@@ -536,6 +536,7 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
   // hold. Contending with it would delay first paint to no purpose.
   void startupProviderRefresh.then(() => {
     getExistingDesktopBackendRegistry()?.startThreadArchiveSweeper();
+    getExistingDesktopBackendRegistry()?.startCodexAppServerRecycler();
   }).catch((error) => {
     mainLog.warn("startup thread archive sweeper initialization failed", {
       error: error instanceof Error ? error.message : String(error),
@@ -1624,6 +1625,8 @@ export function bootstrapApp(): void {
       createPwrAgentAppManagementHandler({
         startedAt: mainProcessStartedAt,
         version: () => app.getVersion(),
+        readCodexAppServerDiagnostics: async () =>
+          await getExistingDesktopBackendRegistry()?.readCodexAppServerDiagnostics(),
       }),
     );
     // Reads the view the Star Map renderer publishes, so an Agent turn can

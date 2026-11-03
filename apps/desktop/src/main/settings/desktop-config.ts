@@ -347,6 +347,17 @@ export type DesktopSettingsConfig = {
       configOverrides?: string[];
       localModelIds?: string[];
       providers?: CodexModelProviderSettings[];
+      /**
+       * `[models.codex.app_server_recycle]`: when an idle Codex app server is
+       * replaced. Unset fields keep their defaults. Read only; no UI writes it.
+       */
+      appServerRecycle?: {
+        enabled?: boolean;
+        idleMinutes?: number;
+        maxUptimeHours?: number;
+        maxChildProcesses?: number;
+        maxOpenFds?: number;
+      };
     };
   };
   acpAgents?: {
@@ -2185,6 +2196,7 @@ function normalizeDesktopConfig(
   const line = tables["messaging.line"];
   const models = tables["models"];
   const codex = tables["models.codex"];
+  const codexAppServerRecycle = tables["models.codex.app_server_recycle"];
   const decision = tables["models.decision"];
   const acpAgentsGemini = tables["acp_agents.gemini"];
   const acpAgentsGrok = tables["acp_agents.grok"];
@@ -2593,6 +2605,19 @@ function normalizeDesktopConfig(
         configOverrides: codex?.config_overrides === undefined
           ? undefined
           : validateCodexConfigOverrides(codex.config_overrides),
+        ...(codexAppServerRecycle
+          ? {
+              appServerRecycle: {
+                enabled: readBoolean(codexAppServerRecycle.enabled),
+                idleMinutes: readPositiveNumber(codexAppServerRecycle.idle_minutes),
+                maxUptimeHours: readPositiveNumber(codexAppServerRecycle.max_uptime_hours),
+                maxChildProcesses: readPositiveNumber(
+                  codexAppServerRecycle.max_child_processes,
+                ),
+                maxOpenFds: readPositiveNumber(codexAppServerRecycle.max_open_fds),
+              },
+            }
+          : {}),
       },
     },
     acpAgents: {
@@ -4042,6 +4067,11 @@ function legacyTokenMiserGeneralComment(): string {
 
 function readNumber(value: TomlScalar | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readPositiveNumber(value: TomlScalar | undefined): number | undefined {
+  const number = readNumber(value);
+  return number !== undefined && number > 0 ? number : undefined;
 }
 
 /** A remembered pane width: a positive whole number of px, or nothing. */

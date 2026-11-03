@@ -169,12 +169,25 @@ import {
 import {
   StdioJsonRpcTransport,
   type CodexAppServerExit,
+  type CodexAppServerProcessInfo,
   type StdioJsonRpcTransportOptions,
 } from "./stdio-transport";
 import {
   CodexAppServerRestartPolicy,
   type CodexAppServerRestartPolicyOptions,
 } from "./app-server-restart-policy";
+import {
+  decideCodexAppServerRecycle,
+  type CodexAppServerProcessSample,
+  type CodexAppServerRecycleOutcome,
+  type CodexAppServerRecycleSettings,
+  type CodexAppServerRecycleStatus,
+} from "./app-server-recycle-policy";
+import {
+  collectDescendants,
+  countOpenFileDescriptors,
+  readProcessTable,
+} from "../process-descendants";
 import {
   isCodexInvalidResponseMessageIdError,
   repairCodexInvalidResponseMessageIds,
@@ -368,7 +381,26 @@ type CodexClientOptions = {
   isCodexBootstrapDeferred?: () => boolean;
   /** Test seam for the backoff and circuit breaker after unexpected exits. */
   appServerRestartPolicy?: CodexAppServerRestartPolicyOptions;
+  /** Test seam: counts below the running app server for the idle recycle. */
+  sampleAppServerProcessTree?: (
+    process: CodexAppServerProcessInfo,
+  ) => Promise<{ childProcessCount?: number; openFdCount?: number }>;
+  /** Test seam for the idle recycle's clock. */
+  now?: () => number;
 };
+
+async function sampleAppServerProcessTree(
+  process: CodexAppServerProcessInfo,
+): Promise<{ childProcessCount?: number; openFdCount?: number }> {
+  const [table, openFdCount] = await Promise.all([
+    readProcessTable().catch(() => undefined),
+    countOpenFileDescriptors(process.pid),
+  ]);
+  return {
+    ...(table ? { childProcessCount: collectDescendants(table, process.pid).length } : {}),
+    ...(openFdCount !== undefined ? { openFdCount } : {}),
+  };
+}
 
 /**
  * Thrown instead of starting Codex after it exited on its own too many times
@@ -7755,6 +7787,12 @@ export class CodexAppServerClient {
   private rejectedCodexHome?: string;
   private transportClosePromise: Promise<void> | null = null;
   private readonly restartPolicy: CodexAppServerRestartPolicy;
+  private readonly transport: StdioJsonRpcTransport;
+  /** Last message Codex sent, of any kind; the idle recycle measures from it. */
+  private lastAppServerMessageAt: number;
+  /** Requests from Codex (approvals, user input, tool calls) not yet answered. */
+  private pendingServerRequests = 0;
+  private recycleStatus: CodexAppServerRecycleStatus = { recycleCount: 0 };
   private restartStatus: CodexAppServerRestartStatus = { stopped: false };
   private readonly restartStatusListeners = new Set<
     (status: CodexAppServerRestartStatus) => void
@@ -7884,27 +7922,29 @@ export class CodexAppServerClient {
 
   constructor(private readonly options: CodexClientOptions = {}) {
     this.restartPolicy = new CodexAppServerRestartPolicy(options.appServerRestartPolicy);
+    this.lastAppServerMessageAt = this.now();
+    this.transport = new StdioJsonRpcTransport({
+      command: options.command?.trim() || "codex",
+      authenticationRecovery: options.authenticationRecovery,
+      onAuthenticationRejected: (home) => {
+        this.rejectedCodexHome = home;
+        const runningTurns = [...this.runningTurnIdsByThread];
+        this.runningTurnIdsByThread.clear();
+        void (async () => {
+          await this.close();
+          await this.failRunningTurns(runningTurns, CODEX_SIGN_IN_REQUIRED);
+        })().catch((error) => codexClientLog.warn("Codex auth shutdown failed", { error: String(error) }));
+      },
+      onUnexpectedExit: (exit) => this.handleUnexpectedExit(exit),
+      args: options.args ?? [],
+      env: options.env,
+      resolveArgs: options.resolveArgs,
+      resolveCommand: options.resolveCommand,
+      resolveEnv: options.resolveEnv,
+      bundledToolsDirectory: options.bundledToolsDirectory,
+    });
     this.rawConnection = new JsonRpcConnection(
-      new StdioJsonRpcTransport({
-        command: options.command?.trim() || "codex",
-        authenticationRecovery: options.authenticationRecovery,
-        onAuthenticationRejected: (home) => {
-          this.rejectedCodexHome = home;
-          const runningTurns = [...this.runningTurnIdsByThread];
-          this.runningTurnIdsByThread.clear();
-          void (async () => {
-            await this.close();
-            await this.failRunningTurns(runningTurns, CODEX_SIGN_IN_REQUIRED);
-          })().catch((error) => codexClientLog.warn("Codex auth shutdown failed", { error: String(error) }));
-        },
-        onUnexpectedExit: (exit) => this.handleUnexpectedExit(exit),
-        args: options.args ?? [],
-        env: options.env,
-        resolveArgs: options.resolveArgs,
-        resolveCommand: options.resolveCommand,
-        resolveEnv: options.resolveEnv,
-        bundledToolsDirectory: options.bundledToolsDirectory,
-      }),
+      this.transport,
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       createCodexObserverWithConfigReadRedaction(options.connectionObserver),
       { logContext: { backend: "codex" }, logger: getMainLogger("pwragent:json-rpc") },
@@ -7934,6 +7974,7 @@ export class CodexAppServerClient {
           })
         : enrichThreadDirectory);
     this.rawConnection.setNotificationHandler(async (method, rawParams) => {
+      this.lastAppServerMessageAt = this.now();
       const params = this.modelProviderTranslator
         ? this.modelProviderTranslator.translateNotification(method, rawParams)
         : rawParams;
@@ -8091,7 +8132,11 @@ export class CodexAppServerClient {
         await listener(normalized);
       }
     });
-    this.rawConnection.setRequestHandler(async (method, params, rpcId) => {
+    const handleServerRequest: Parameters<JsonRpcConnection["setRequestHandler"]>[0] = async (
+      method,
+      params,
+      rpcId,
+    ) => {
       const helperToolCallParams = asRecord(params);
       const helperToolHandler = helperToolCallParams
         ? this.resolveHelperThreadToolHandler(method, helperToolCallParams)
@@ -8141,7 +8186,21 @@ export class CodexAppServerClient {
       }
 
       throw new Error(`No desktop request handler registered for ${method}`);
+    };
+    this.rawConnection.setRequestHandler(async (...request) => {
+      this.lastAppServerMessageAt = this.now();
+      this.pendingServerRequests += 1;
+      try {
+        return await handleServerRequest(...request);
+      } finally {
+        this.pendingServerRequests -= 1;
+        this.lastAppServerMessageAt = this.now();
+      }
     });
+  }
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
   }
 
   async close(): Promise<void> {
@@ -8280,6 +8339,139 @@ export class CodexAppServerClient {
     this.cancelRestartBackoff?.();
     this.setRestartStatus({ stopped: false });
     codexClientLog.info("Codex app server restart history cleared", { reason, wasStopped });
+  }
+
+  /**
+   * The running app server's age and what it has started, or `undefined`
+   * when none is running. It never starts Codex.
+   */
+  async readAppServerProcessSample(): Promise<CodexAppServerProcessSample | undefined> {
+    const info = this.initialized ? this.transport.getProcessInfo?.() : undefined;
+    if (!info) return undefined;
+    const sampledAt = this.now();
+    const counts = await (this.options.sampleAppServerProcessTree ?? sampleAppServerProcessTree)(info)
+      .catch(() => ({}));
+    return {
+      pid: info.pid,
+      startedAt: info.startedAt,
+      sampledAt,
+      uptimeMs: Math.max(0, sampledAt - info.startedAt),
+      ...counts,
+    };
+  }
+
+  getAppServerRecycleStatus(): CodexAppServerRecycleStatus {
+    return this.recycleStatus;
+  }
+
+  /**
+   * Replace an idle app server that has run too long or started too much
+   * (`decideCodexAppServerRecycle`). The stop reaps its whole process tree;
+   * the next request starts a fresh server, and thread operations replay
+   * their resume and settings on it, as after a crash.
+   *
+   * Idle means no message from Codex for `settings.idleMs`, nothing this
+   * client is tracking, and `isQuiescent()` from the owner, which knows the
+   * work the client cannot see. All of it is checked again under the
+   * lifecycle barrier, where no new RPC can start, together with Codex's own
+   * report of active threads; any doubt leaves the server running.
+   */
+  async maybeRecycleIdleAppServer(params: {
+    settings: CodexAppServerRecycleSettings;
+    isQuiescent: () => boolean;
+  }): Promise<CodexAppServerRecycleOutcome> {
+    let outcome: CodexAppServerRecycleOutcome;
+    try {
+      outcome = await this.tryRecycleIdleAppServer(params);
+    } catch (error) {
+      codexClientLog.warn("Codex app server idle recycle failed", { error: String(error) });
+      outcome = { kind: "busy", blocker: "error" };
+    }
+    this.recycleStatus = {
+      ...this.recycleStatus,
+      ...(outcome.kind === "recycled"
+        ? { recycleCount: this.recycleStatus.recycleCount + 1, lastRecycle: outcome.record }
+        : {}),
+      lastCheck: {
+        at: this.now(),
+        outcome: outcome.kind,
+        ...(outcome.kind === "busy" ? { blocker: outcome.blocker } : {}),
+      },
+    };
+    return outcome;
+  }
+
+  private async tryRecycleIdleAppServer(params: {
+    settings: CodexAppServerRecycleSettings;
+    isQuiescent: () => boolean;
+  }): Promise<CodexAppServerRecycleOutcome> {
+    const blocker = (requests: boolean): string | undefined =>
+      this.appServerRecycleBlocker(requests)
+      ?? (params.isQuiescent() ? undefined : "registry-work");
+    const early = blocker(true);
+    if (early === "not-running") return { kind: "not-running" };
+    if (early) return { kind: "busy", blocker: early };
+    const idleSince = this.lastAppServerMessageAt;
+    const idleMs = this.now() - idleSince;
+    if (idleMs < params.settings.idleMs) return { kind: "not-idle", idleMs };
+    const sample = await this.readAppServerProcessSample();
+    if (!sample) return { kind: "not-running" };
+    const reasons = decideCodexAppServerRecycle(params.settings, sample);
+    if (reasons.length === 0) return { kind: "healthy", sample };
+
+    const serverGeneration = this.serverGeneration;
+    return await this.runLifecycle<CodexAppServerRecycleOutcome>(async () => {
+      // Admitted RPCs have drained and new ones wait at the barrier.
+      const late = (): string | undefined => {
+        if (serverGeneration !== this.serverGeneration) return "not-running";
+        if (this.lastAppServerMessageAt !== idleSince) return "app-server-activity";
+        return blocker(false);
+      };
+      let stillBlocked = late();
+      if (!stillBlocked) {
+        stillBlocked = (await this.listTurnsBlockingProcessStop()).length > 0
+          ? "codex-active-thread"
+          : late();
+      }
+      if (stillBlocked === "not-running") return { kind: "not-running" };
+      if (stillBlocked) return { kind: "busy", blocker: stillBlocked };
+
+      await this.closeConnection();
+      const stop = this.transport.takeLastStopReport?.();
+      const record = {
+        at: this.now(),
+        reasons,
+        pid: sample.pid,
+        uptimeMs: sample.uptimeMs,
+        idleMs: this.now() - idleSince,
+        ...(sample.childProcessCount !== undefined
+          ? { childProcessCount: sample.childProcessCount }
+          : {}),
+        ...(sample.openFdCount !== undefined ? { openFdCount: sample.openFdCount } : {}),
+        ...(stop ? { orphansReaped: stop.orphansReaped } : {}),
+      };
+      codexClientLog.info("Codex app server recycled while idle", record);
+      return { kind: "recycled", record };
+    });
+  }
+
+  /** Work on this process that a stop would cut short, by name. */
+  private appServerRecycleBlocker(includeRequests: boolean): string | undefined {
+    if (!this.initialized || this.pendingCloses > 0 || this.restartStatus.stopped) {
+      return "not-running";
+    }
+    if (this.runningTurnIdsByThread.size > 0) return "running-turn";
+    if (this.pendingServerRequests > 0) return "pending-server-request";
+    if (this.helperThreadIds.size > 0
+      || this.pendingHelperThreadStarts.size > 0
+      || this.helperTurnWaiters.size > 0) {
+      return "helper-turn";
+    }
+    if (this.ownedRealtimeThreads.size > 0) return "realtime-session";
+    // Its history exists only in this process until the first turn starts.
+    if (this.threadsAwaitingFirstTurn.size > 0) return "thread-awaiting-first-turn";
+    if (includeRequests && this.activeRequests.size > 0) return "in-flight-request";
+    return undefined;
   }
 
   private setRestartStatus(status: CodexAppServerRestartStatus): void {
