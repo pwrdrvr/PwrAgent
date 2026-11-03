@@ -1,0 +1,51 @@
+name: macOS restart diagnostics
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  restart-evidence:
+    if: github.head_ref == 'investigate/macos-ci-3312'
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          lfs: true
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        timeout-minutes: 10
+        with:
+          node-version: "^24.22.1"
+          cache-electron: "true"
+
+      - name: Capture restart scenario evidence
+        env:
+          PWRAGENT_E2E_DISABLE_GPU: "1"
+          PWRAGENT_E2E_SHUTDOWN_CIRCUIT_BREAKER: "1"
+          DEBUG: pw:api
+        shell: bash
+        run: |
+          mkdir -p .local/macos-restart-diagnostics
+          set +e
+          bash ./scripts/ci/macos-e2e-run-lane.sh pnpm --filter @pwragent/desktop test:e2e e2e/codex-environment-setup.spec.ts --grep 'directory launchpad keeps selected environment controls after restart' --trace on > .local/macos-restart-diagnostics/restart.log 2>&1
+          status=$?
+          tail -n 80 .local/macos-restart-diagnostics/restart.log
+          exit "$status"
+
+      - name: Upload restart evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-restart-diagnostics
+          path: |
+            .local/macos-restart-diagnostics/
+            apps/desktop/playwright-report/
+            apps/desktop/test-results/
+          retention-days: 30
