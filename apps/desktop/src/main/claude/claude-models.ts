@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { query, type McpServerStatus, type ModelInfo, type Options, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { BackendModelOption } from "@pwragent/shared";
 import { getMainLogger } from "../log";
@@ -6,19 +6,26 @@ import { getMainLogger } from "../log";
 const claudeModelLog = getMainLogger("pwragent:claude-models");
 
 /** Keep discovery and turns on the same unmodified Claude Code harness. */
-export function claudeHarnessOptions(executable: string, env: NodeJS.ProcessEnv): Options {
+export function claudeHarnessOptions(
+  executable: string,
+  env: NodeJS.ProcessEnv,
+  owner?: { closing(): boolean; spawned(child: ChildProcess): void },
+): Options {
   return {
     pathToClaudeCodeExecutable: executable,
     env,
     systemPrompt: { type: "preset", preset: "claude_code" },
     settingSources: ["user", "project", "local"],
     spawnClaudeCodeProcess: (options) => {
+      if (owner?.closing()) throw new Error("Claude metadata query is closed.");
       const scriptRuntime = options.command === "node" || options.command === "bun";
-      return spawn(scriptRuntime ? process.execPath : options.command, options.args, {
+      const child = spawn(scriptRuntime ? process.execPath : options.command, options.args, {
         cwd: options.cwd,
         env: scriptRuntime ? { ...options.env, ELECTRON_RUN_AS_NODE: "1" } : options.env,
         signal: options.signal, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, shell: false,
       });
+      owner?.spawned(child);
+      return child;
     },
   };
 }
@@ -28,6 +35,7 @@ export async function discoverClaudeModels(params: {
   executable: string;
   env: NodeJS.ProcessEnv;
   cliVersion?: string;
+  signal?: AbortSignal;
   query?: typeof query;
 }): Promise<BackendModelOption[]> {
   const models = await readClaudeMetadata({
@@ -88,7 +96,9 @@ export async function readClaudeMetadata<T>(params: {
   read: (session: Query) => Promise<T>;
   timeoutMessage: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<T> {
+  params.signal?.throwIfAborted();
   const controller = new AbortController();
   let release!: () => void;
   const finished = new Promise<void>((resolve) => { release = resolve; });
@@ -98,11 +108,28 @@ export async function readClaudeMetadata<T>(params: {
   }
   let session: Query | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const children: Promise<void>[] = [];
+  let closing = false;
+  let onAbort: (() => void) | undefined;
   try {
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      onAbort = () => {
+        // The SDK gives the CLI stdin EOF and its graceful shutdown window
+        // before aborting the signal forwarded to spawn().
+        controller.abort();
+        reject(params.signal!.reason);
+      };
+      params.signal?.addEventListener("abort", onAbort, { once: true });
+    });
     session = (params.query ?? query)({
       prompt: prompt(),
       options: {
-        ...claudeHarnessOptions(params.executable, params.env),
+        ...claudeHarnessOptions(params.executable, params.env, {
+          closing: () => closing,
+          spawned: (child) => {
+            children.push(new Promise((resolve) => child.once("close", () => resolve())));
+          },
+        }),
         ...(params.cwd ? { cwd: params.cwd } : {}),
         ...(params.settingSources ? { settingSources: params.settingSources } : {}),
         abortController: controller,
@@ -119,11 +146,19 @@ export async function readClaudeMetadata<T>(params: {
         reject(new Error(params.timeoutMessage));
       }, params.timeoutMs ?? 15_000);
     });
-    return await Promise.race([params.read(session), timeout]);
+    return await Promise.race([params.read(session), timeout, cancelled]);
   } finally {
+    closing = true;
+    if (onAbort) params.signal?.removeEventListener("abort", onAbort);
     clearTimeout(timer);
     release();
-    session?.close();
+    try {
+      session?.close();
+    } finally {
+      // Query.close() only requests transport shutdown. Its process and
+      // stdio must be closed before metadata discovery releases its owner.
+      await Promise.all(children);
+    }
   }
 }
 

@@ -2,8 +2,10 @@ import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, watch, writeFileSync } from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, packageManagerCommand, parseHandleOutput } from "./windows-pipe-observation.mjs";
+import { nativeProbeFailure, nativeStackArguments, parseNativeStacks, verifiedNativeStack } from "./windows-native-stack.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
 const root = path.join(desktop, ".local", "windows-pipe-diagnostics", randomUUID());
@@ -13,13 +15,19 @@ const artifact = path.join(desktop, "test-results", "worker-shutdown", "native-c
 const stopFile = path.join(root, "stop");
 const executable = path.join(root, "windows-pipe-diagnostics.exe");
 const handleExecutable = process.env.PWRAGENT_WINDOWS_HANDLE_EXE;
+const cdbExecutable = process.env.PWRAGENT_WINDOWS_CDB_EXE;
+const captureSymbols = path.join(root, "capture-symbols");
 const rows = new Map();
 const launches = new Map();
+const launchEvents = new Map();
 const processed = new Set();
 const pending = new Set();
 const scanners = new Set();
 let watcher, requestWatcher, poll, liveArtifacts = false;
 let nativeBytes = 0, omittedNativeRecords = 0, captures = 0, watcherAvailable = false;
+let stalledCaptures = 0;
+let nativeCaptures = 0;
+let nativeStackEnabled = false;
 
 // Raw tool output may contain unrelated file paths; persist only parsed pipe names.
 const json = (data) => JSON.stringify(data, (key, value) => key === "toolText" ? undefined : value);
@@ -112,10 +120,12 @@ async function inventory(event) {
   return { event, result, endpoints, source };
 }
 async function capture(event) {
-  write("trigger-" + event.launchId + ".json", { event, observedAt: Date.now(), watcherAvailable });
-  log("natural-exit-open-pipes", { ...event, observedAt: Date.now() });
-  if (++captures > 4) {
-    write("match-" + event.launchId + ".json", { event, error: "Per-run scan limit reached.", omittedScan: true });
+  const stalled = event.kind === "stalled";
+  const prefix = stalled ? "stalled-" : "trigger-";
+  write(prefix + event.launchId + ".json", { event, observedAt: Date.now(), watcherAvailable });
+  log(stalled ? "close-stalled" : "natural-exit-open-pipes", { ...event, observedAt: Date.now() });
+  if ((stalled ? ++stalledCaptures : ++captures) > 4) {
+    write((stalled ? "stalled-match-" : "match-") + event.launchId + ".json", { event, error: "Per-run scan limit reached.", omittedScan: true });
     return;
   }
   const launch = await launches.get(event.launchId);
@@ -128,7 +138,8 @@ async function capture(event) {
   const launchQueryOverlappedExit = launch.result.queries.tool.ended >= event.at;
   const deadline = Date.now() + 5000;
   const matches = [];
-  const survivors = [...rows.values()].filter((row) => !row.goneAt && row.pid !== event.pid
+  const survivors = [...rows.values()].filter((row) => !row.goneAt
+    && (stalled || row.pid !== event.pid)
     && ancestry(rows, row.pid, row.created).chain.some((parent) => parent.pid === event.pid && parent.created === launch.source.created));
   let omittedProcesses = Math.max(0, survivors.length - 16);
   const inspect = async (pid, expectedCreated, reason) => {
@@ -173,7 +184,7 @@ async function capture(event) {
   const report = { launchId: event.launchId, trigger: event, launchQueryOverlappedExit, global, globalSearchStatus,
     globalErrors: parsed?.errors, omittedGlobalErrors: parsed?.omittedErrors, matches, omittedProcesses,
     expectedNames: launch.endpoints.names, attribution: "An exact verified holder is an observation; its launch cause is not inferred." };
-  write("match-" + event.launchId + ".json", report);
+  write((stalled ? "stalled-match-" : "match-") + event.launchId + ".json", report);
   log("match-result", { launchId: event.launchId, ended: Date.now(), launchQueryOverlappedExit,
     expectedNames: launch.endpoints.names, globalSearchStatus, globalError: global?.error,
     omittedProcesses, matches: matches.map(({ pid, created, allFourExactNames, sourceVerifiedAndLive, diagnosticProcess, ancestry: chain, result }) => ({
@@ -184,6 +195,61 @@ async function capture(event) {
       error: result.error ?? result.source?.error,
       inventoryStatus: result.queries.tool.inventoryStatus,
     })) });
+}
+
+async function captureNativeStack(event) {
+  if (!nativeStackEnabled || !Number.isFinite(event.closeStartedAt)) return;
+  const due = event.closeStartedAt + 5000;
+  if (Date.now() < due) await new Promise((resolve) => setTimeout(resolve, due - Date.now()));
+  const launch = await launches.get(event.launchId);
+  if (!launch?.source?.verified || !launch.source.liveAfter) return;
+  const created = launch.source.created;
+  const row = rows.get(event.pid + ":" + created);
+  if (!row || row.ppid !== event.workerPid || row.name.toLowerCase() !== "electron.exe" || row.goneAt || nativeCaptures >= 4) return;
+  nativeCaptures++;
+  const before = await run(executable, ["identity", String(event.pid)], 1000, true);
+  if (before.value?.process?.created !== created || before.value?.process?.liveAfter !== true) return;
+  const started = Date.now();
+  const result = await new Promise((resolve) => {
+    // Loading Electron's multi-GB PDB can outlive the capture window. Retain
+    // image-relative code locations now for separate offline symbolization.
+    const child = execFile(cdbExecutable, nativeStackArguments(event.pid, captureSymbols, "lm;~* kn 40;q"),
+      { timeout: 1000, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+        scanners.delete(child);
+        resolve({ stack: parseNativeStacks(stdout, { moduleOffsets: true }), stderrBytes: Buffer.byteLength(stderr),
+          execution: error && { code: error.code, signal: error.signal, killed: error.killed } });
+      });
+    scanners.add(child);
+  });
+  const ended = Date.now();
+  const after = await run(executable, ["identity", String(event.pid)], 1000, true);
+  const verified = verifiedNativeStack(before.value?.process, after.value?.process, created, result.stack);
+  const report = { event, expectedCreated: created, due, started, ended, captureFormat: "module-offsets",
+    before: before.value?.process, after: after.value?.process, verified,
+    execution: result.execution, stderrBytes: result.stderrBytes,
+    stack: verified ? result.stack : undefined,
+    omittedFrames: verified ? 0 : result.stack.frameCount };
+  write("native-stack-" + event.launchId + ".json", report);
+  log("native-stack-capture", { launchId: event.launchId, pid: event.pid, created, verified,
+    frameCount: verified ? result.stack.frameCount : 0, started, ended, execution: result.execution });
+}
+
+async function prepareNativeStacks() {
+  if (!cdbExecutable) { write("native-stack-setup.json", { enabled: false, error: "Signed CDB unavailable." }); return; }
+  // Live capture uses module offsets. Downloading PDBs here would add startup
+  // work without improving these captures; resolve retained offsets offline.
+  mkdirSync(captureSymbols, { recursive: true });
+  const electron = createRequire(new URL("../package.json", import.meta.url))("electron");
+  let probe;
+  let probeFailed = false;
+  let probeFailure;
+  try { probe = (await import("./windows-pipe-diagnostics-probe.mjs")).probeResult; }
+  catch (error) { probeFailed = true; probeFailure = nativeProbeFailure(error); }
+  nativeStackEnabled = !probeFailed && probe?.noninvasiveDebuggerVerified === true && probe?.debuggerQuitVerified === true;
+  write("native-stack-setup.json", { enabled: nativeStackEnabled,
+    captureFormat: "module-offsets",
+    electronSha256: createHash("sha256").update(readFileSync(electron)).digest("hex"),
+    probe, probeFailed, probeFailure });
 }
 
 function enqueue(task) {
@@ -197,14 +263,19 @@ function scanRequests() {
     processed.add(filename);
     if (processed.size > 2048) { log("request-limit", { omitted: processed.size - 2048 }); continue; }
     const event = JSON.parse(readFileSync(path.join(requests, filename), "utf8"));
+    if (event.kind === "stalled") {
+      event.launchId = [...launchEvents.values()].findLast((launch) => launch.pid === event.pid && launch.workerPid === event.workerPid)?.launchId;
+    }
     if (!/^[a-f0-9-]{36}$/.test(event.launchId)) continue;
     if (!liveArtifacts) { cpSync(evidence, artifact, { recursive: true }); liveArtifacts = true; }
     if (event.kind === "launch") {
+      launchEvents.set(event.launchId, event);
       const operation = inventory(event);
       launches.set(event.launchId, operation);
       enqueue(operation);
     }
     if (event.kind === "trigger") enqueue(capture(event));
+    if (event.kind === "stalled") { enqueue(capture(event)); enqueue(captureNativeStack(event)); }
   }
 }
 async function startObserver() {
@@ -212,6 +283,7 @@ async function startObserver() {
   mkdirSync(evidence, { recursive: true });
   if (!handleExecutable || !path.isAbsolute(handleExecutable) || !existsSync(handleExecutable)) throw new Error("Official Handle utility is unavailable.");
   write("tools.json", { handleSha256: createHash("sha256").update(readFileSync(handleExecutable)).digest("hex"),
+    cdbSha256: cdbExecutable && createHash("sha256").update(readFileSync(cdbExecutable)).digest("hex"),
     nativeSourceSha256: createHash("sha256").update(readFileSync(path.join(desktop, "scripts", "windows-pipe-diagnostics.cs"))).digest("hex") });
   const compiler = path.join(process.env.SystemRoot, "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe");
   const compiled = await run(compiler, ["/nologo", "/platform:x64", "/r:System.Web.Extensions.dll", "/out:" + executable,
@@ -265,7 +337,7 @@ async function closeObserver() {
       await Promise.race([new Promise((resolve) => watcher.once("exit", resolve)), new Promise((resolve) => setTimeout(resolve, 1000))]);
       if (watcher.exitCode === null && watcher.signalCode === null) watcher.kill();
     }
-    write("summary.json", { captures, omittedNativeRecords, watcherAvailable, processIdentities: rows.size,
+    write("summary.json", { captures, stalledCaptures, nativeCaptures, omittedNativeRecords, watcherAvailable, processIdentities: rows.size,
       requestCount: processed.size, limitation: "50ms polling can miss short processes. Query/report work affects scheduling; timing alone is not attribution." });
     cpSync(evidence, artifact, { recursive: true });
   } finally {
@@ -283,6 +355,7 @@ async function main() {
   try {
     if (process.platform !== "win32" || process.arch !== "x64") throw new Error("Native diagnostics require Windows x64.");
     await startObserver();
+    await prepareNativeStacks();
     enabled = true;
   } catch (error) {
     watcher?.kill();
@@ -290,7 +363,8 @@ async function main() {
     log("setup-error", { error: error.message });
   }
   // Same build/test command, shards, worker count, retries and deadlines as CI.
-  // All diagnostic children belong to this controller, before launcher pipes exist.
+  // The watcher starts before launcher pipes exist. Later diagnostic queries
+  // are controller children, outside Electron's process ownership tree.
   const child = spawn(command.file, command.args, {
     stdio: "inherit", env: { ...process.env, ...(enabled ? { PWRAGENT_WINDOWS_PIPE_REQUESTS: requests } : {}) },
   });
@@ -298,9 +372,13 @@ async function main() {
   try {
     code = await new Promise((resolve, reject) => { child.once("exit", resolve); child.once("error", reject); });
   } finally {
-    try { await closeObserver(); } catch (error) { log("controller-cleanup-error", { error: error.message }); }
+    try { await closeObserver(); }
+    catch (error) { log("controller-cleanup-error", { error: error.message }); }
   }
   process.exitCode = code ?? 1;
 }
-process.once("exit", () => { watcher?.kill(); for (const child of scanners) child.kill(); });
+process.once("exit", () => {
+  watcher?.kill();
+  for (const child of scanners) child.kill();
+});
 await main();

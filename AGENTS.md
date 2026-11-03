@@ -142,6 +142,9 @@
 - For PwrSuiteLab Windows probes or headed E2E, read
   `.agents/skills/use-windows-vm-lab/SKILL.md` in the attached lab checkout.
   Do not use the macOS VM skill for Windows work.
+- PwrSuiteLab also manages access to reusable Windows EC2 instances when
+  available. Consult that project's current Windows EC2 skill and documentation
+  for availability and operations.
 - Review the current ownership and readiness constraints before you change:
   - Windows Git or Bash process launch and shutdown.
   - Vitest process isolation.
