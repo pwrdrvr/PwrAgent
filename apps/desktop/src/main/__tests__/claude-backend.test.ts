@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HookEvent, HookInput, Options, Query, SDKMessage, SDKUserMessage, query } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent, AppServerThreadMessageOrigin, BackendModelOption } from "@pwragent/shared";
 import {
-  CLAUDE_FORK_SOURCE_GONE_MESSAGE, CLAUDE_SESSION_GONE_MESSAGE, CLAUDE_SESSION_GONE_REWIND_MESSAGE, ClaudeBackend, ClaudeTurnActiveError,
+  CLAUDE_CONFIG_DIR_REWIND_MESSAGE, CLAUDE_FORK_SOURCE_GONE_MESSAGE, CLAUDE_SESSION_GONE_MESSAGE, CLAUDE_SESSION_GONE_REWIND_MESSAGE, ClaudeBackend, ClaudeTurnActiveError,
   type ClaudeBackendOptions,
 } from "../claude/claude-backend";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
@@ -4241,6 +4241,46 @@ describe("Claude thread rewind", () => {
     } finally {
       answered.resolve();
       await busy.waitForTurn();
+    }
+  });
+
+  it("refuses without reading sessions when Claude runs under another config directory", async () => {
+    const prompts: SDKUserMessage[] = [];
+    const rewindFiles = vi.fn();
+    const f = await fixture(promptRecorder(prompts), { rewindFiles });
+    const account = path.join(f.root, "claude-account");
+    // The operator's shell picks a second Claude account; PwrAgent's own
+    // process has none.
+    f.backendOptions.resolveEnv = async () => ({ PATH: "/fixture", CLAUDE_CONFIG_DIR: account });
+    // Like the SDK, read the sessions of this process's config directory.
+    const recorded = sessionMessages(prompts);
+    const getSessionMessages = vi.fn(async () =>
+      path.resolve(process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude")) === account ? recorded() : []);
+    Object.assign(f.backendOptions, { getSessionMessages });
+    vi.stubEnv("CLAUDE_CONFIG_DIR", undefined);
+    try {
+      const { threadId, turnIds } = await runTurns(f, ["First prompt", "Second prompt"]);
+      const target = { messageId: `user:${turnIds[1]}`, turnId: turnIds[1] };
+
+      expect(await f.backend.previewRewind(threadId, target))
+        .toEqual({ unavailableReason: CLAUDE_CONFIG_DIR_REWIND_MESSAGE });
+      for (const mode of ["conversation", "conversation-and-files"] as const) {
+        await expect(f.backend.rewindThread({ threadId, target, mode })).rejects.toThrow(CLAUDE_CONFIG_DIR_REWIND_MESSAGE);
+      }
+      // Neither the wrong account's sessions nor a control query were touched.
+      expect(getSessionMessages).not.toHaveBeenCalled();
+      expect(f.backendOptions.getSessionInfo).not.toHaveBeenCalled();
+      expect(rewindFiles).not.toHaveBeenCalled();
+      expect(f.run).toHaveBeenCalledTimes(2);
+      expect((await f.store.read(threadId)).rewinds).toBeUndefined();
+
+      // The same directory, spelled with a trailing separator, reads the
+      // conversation and rewinds.
+      vi.stubEnv("CLAUDE_CONFIG_DIR", `${account}${path.sep}`);
+      await f.backend.rewindThread({ threadId, target, mode: "conversation" });
+      expect((await f.store.read(threadId)).resumeSessionAt).toBe("assistant-1");
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 

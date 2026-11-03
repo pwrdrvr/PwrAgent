@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -138,6 +139,21 @@ export const CLAUDE_FORK_SOURCE_GONE_MESSAGE = "Claude no longer has the convers
 
 export const CLAUDE_SESSION_GONE_REWIND_MESSAGE = "Claude no longer has this conversation, so it cannot rewind it. "
   + CLAUDE_SESSION_CLEANUP_NOTE;
+
+export const CLAUDE_CONFIG_DIR_REWIND_MESSAGE = "Claude runs this thread with a different CLAUDE_CONFIG_DIR from "
+  + "PwrAgent's own, so PwrAgent cannot read the conversation to rewind it. "
+  + "Give PwrAgent the same CLAUDE_CONFIG_DIR to rewind Claude threads.";
+
+/**
+ * Whether the SDK's session reads (`getSessionInfo`, `getSessionMessages`)
+ * see the sessions of a Claude launched with `env`. They read this process's
+ * CLAUDE_CONFIG_DIR (default `~/.claude`), not `Options.env`, and the SDK has
+ * no option to point them elsewhere.
+ */
+function claudeSessionReadsSee(env: NodeJS.ProcessEnv | undefined): boolean {
+  const configDir = (value: string | undefined) => path.resolve(value ?? path.join(homedir(), ".claude"));
+  return configDir(env?.CLAUDE_CONFIG_DIR) === configDir(process.env.CLAUDE_CONFIG_DIR);
+}
 
 /**
  * Resuming a deleted session fails before the session starts, with this
@@ -1957,14 +1973,13 @@ export class ClaudeBackend {
     try {
       let current = await this.store.read(threadId);
       if (current.thread.titleSource === "explicit" || !session.sdkSessionId || live.controller.signal.aborted) return false;
-      // getSessionInfo uses the SDK host's config directory, not Options.env.
       // Do not inspect a different account's session store.
       // The SDK may spawn Git in this workspace (with its own timeout).
       // Unlike query telemetry, this read cannot be cancelled by closing the
       // query. Keep it owned by the turn so shutdown cannot release the
       // workspace while an abandoned read still holds its directory open.
       let title: string | undefined;
-      if (live.titleEnv?.CLAUDE_CONFIG_DIR === process.env.CLAUDE_CONFIG_DIR) {
+      if (claudeSessionReadsSee(live.titleEnv)) {
         try {
           const info = await (this.options.getSessionInfo ?? getSessionInfo)(session.sdkSessionId, {
             dir: session.sdkSessionDir ?? session.cwd,
@@ -2861,6 +2876,12 @@ export class ClaudeBackend {
    */
   private async rewindPoint(session: ClaudeSession, target: ThreadRewindTarget): Promise<ClaudeRewindPoint> {
     if (!session.sdkSessionId) throw new Error("Claude has no conversation to rewind yet.");
+    // The SDK's session reads see this process's account, not the one turns
+    // launch with. Another account's store would read as a missing prompt
+    // or a deleted session.
+    if (!claudeSessionReadsSee(claudeEnvironment(await this.options.resolveEnv?.() ?? process.env))) {
+      throw new Error(CLAUDE_CONFIG_DIR_REWIND_MESSAGE);
+    }
     const promptUuid = target.messageId.startsWith("user:") ? target.messageId.slice("user:".length) : undefined;
     const read = this.options.getSessionMessages ?? getSessionMessages;
     const local = await read(session.sdkSessionId, { dir: session.sdkSessionDir ?? session.cwd });
