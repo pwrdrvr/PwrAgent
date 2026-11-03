@@ -6197,6 +6197,16 @@ describe("Composer", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
+  it("shows the stored model when it is absent from the provider catalog", () => {
+    render(<Composer backends={[backendSummary("claude", { models: [{ id: "opus", label: "Opus 5.5", current: true }] })]}
+      thread={{ id: "invalid-model", source: "claude", title: "Fixture", titleSource: "explicit", model: "gpt-6.1-terra",
+        linkedDirectories: [], inbox: { inInbox: false } }} skills={[]} />);
+    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("gpt-6.1-terra");
+    expect(screen.getByRole("button", { name: "Model: gpt-6.1-terra" })).toBeVisible();
+    openDropdown("Model");
+    expect(screen.getByRole("option", { name: "Opus 5.5" })).toHaveAttribute("aria-selected", "false");
+  });
+
   it("shows OpenAI model and reasoning defaults without a Default option", () => {
     render(
       <Composer

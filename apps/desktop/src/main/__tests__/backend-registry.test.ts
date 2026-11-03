@@ -27927,6 +27927,73 @@ command = "pnpm dev"
 
     await registry.close();
   });
+  it.each([
+    { backend: "claude", model: "gpt-6.1-terra" },
+    { backend: "codex", model: "opus" },
+    { backend: "codex", model: "gpt-5.5", reasoningEffort: "ultra" },
+    { backend: "codex", model: "fixture-no-reasoning", reasoningEffort: "high" },
+    { backend: "codex", model: "fixture-no-reasoning", fastMode: true },
+    { backend: "codex", model: "gpt-5.5", serviceTier: "invented-tier" },
+    { backend: "claude", model: "opus", serviceTier: "priority" },
+    { backend: "claude", model: "opus", fastMode: true },
+  ] as const)("refuses invalid creation parameters before workspace preparation: %j", async (settings) => {
+    const codexClient = new MockBackendClient({ models: [
+      { id: "gpt-5.5", supportsReasoning: true, reasoningEfforts: ["medium", "high"], supportsFast: true },
+      { id: "fixture-no-reasoning", supportsReasoning: false, supportsFast: false },
+    ] });
+    const prepareLaunchpadWorkspace = vi.fn(async () => ({ cwd: "/fixture/worktree", workMode: "worktree" as const }));
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null, pdfToolMcpServer: null,
+      gitDirectoryService: { prepareLaunchpadWorkspace } as never });
+    try {
+      await expect(registry.startThread({ ...settings, cwd: "/fixture/repo", workMode: "worktree" }))
+        .rejects.toThrow(/not available|not supported/);
+      expect(prepareLaunchpadWorkspace).not.toHaveBeenCalled();
+      expect(codexClient.lastStartThreadParams).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("refuses a federated Claude/Terra creation at the owner", async () => {
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null, pdfToolMcpServer: null });
+    const replies: import("@pwragent/shared").FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    router.registerConnection({ peerId: "viewer", capabilities: [], sendEnvelope: (envelope) => { replies.push(envelope); } });
+    registerFederationBackendHandlers({ router, backend: registry as unknown as FederationBackendOperations });
+    try {
+      await router.routeEnvelope({ sourcePeerId: "viewer", envelope: {
+        id: "invalid-model", method: FEDERATION_BACKEND_METHODS.startThread,
+        params: { backend: "claude", model: "gpt-6.1-terra", cwd: "/fixture/repo" },
+        kind: "request", protocolVersion: 1, sourceInstanceId: "viewer", targetInstanceId: "owner", createdAt: 100,
+      } });
+      expect(replies).toContainEqual(expect.objectContaining({ requestId: "invalid-model", kind: "error",
+        error: expect.objectContaining({ message: expect.stringContaining('model="gpt-6.1-terra" is not available for backend="claude"') }) }));
+      expect(await registry.listThreads({ backend: "claude" })).toEqual([]);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("refuses invalid launchpad models before workspace preparation on local and remote sends", async () => {
+    const prepareLaunchpadWorkspace = vi.fn(async () => ({ cwd: "/fixture/worktree", workMode: "worktree" as const }));
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null, pdfToolMcpServer: null,
+      gitDirectoryService: { prepareLaunchpadWorkspace } as never });
+    try {
+      for (const sourceInstanceId of [undefined, "viewer"]) {
+        await expect(registry.materializeDirectoryLaunchpad({ directoryKey: "fixture", input: [{ type: "text", text: "Investigate" }],
+          launchpad: { directoryKey: "fixture", directoryKind: "directory", directoryLabel: "Fixture", directoryPath: "/fixture/repo",
+            backend: "claude", model: "gpt-6.1-terra", executionMode: "default", workMode: "worktree", prompt: "", createdAt: 1, updatedAt: 1 },
+        }, { sourceInstanceId })).rejects.toThrow('model="gpt-6.1-terra" is not available for backend="claude"');
+      }
+      expect(prepareLaunchpadWorkspace).not.toHaveBeenCalled();
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("applies model settings from the selected thread overlay when starting turns", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
