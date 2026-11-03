@@ -130,7 +130,7 @@ describe("backend MCP gateway dispatch", () => {
     await pending;
     expect(peak).toBe(4);
     const config = (startTurn.mock.calls[0] as unknown as [{ config: { mcp_servers: Record<string, unknown> } }])[0].config;
-    expect(Object.keys(config.mcp_servers).filter((key) => key.includes("selected"))).toEqual(ids.filter((id) => id !== "selected-2").map((id) => buildCodexConnectionMcpServerName({ name: id } as never)));
+    expect(Object.keys(config.mcp_servers).filter((key) => key.includes("selected"))).toEqual(ids.filter((id) => id !== "selected-2").map((id) => buildCodexConnectionMcpServerName({ name: id, command: "fixture", args: [], env: {} })));
   });
 
   afterEach(async () => {

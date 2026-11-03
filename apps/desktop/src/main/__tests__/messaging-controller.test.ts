@@ -270,7 +270,8 @@ describe("MessagingController", () => {
       (call) => call[0] === "messaging starting turn",
     );
     expect(startingTurn?.[1]).toMatchObject({
-      inputPreparedToAdmissionStateMs: 700,
+      inputPrepAdmissionReadMs: 700,
+      inputPreparedToAdmissionStateMs: 0,
     });
     // Everything the admission read did not spend is attributed elsewhere, so
     // the stages sum to the end-to-end number rather than overlapping it.
@@ -16331,7 +16332,7 @@ describe("MessagingController", () => {
     });
     const harness = await createHarness({ downloadAttachment });
     await bindThread(harness);
-    const state = await harness.getThreadAdmissionState({ backend: "codex", threadId: "thread-1" });
+    const state = await (harness.getThreadAdmissionState as NonNullable<MessagingBackendBridge["getThreadAdmissionState"]>)({ backend: "codex", threadId: "thread-1" });
     harness.getThreadAdmissionState.mockClear().mockImplementation(async () => { await admissionGate; return state; });
     const handling = harness.controller.handleInboundEvent({
       ...buildTextEvent("Read this file"), id: "parallel-media", kind: "media", disposition: "available",

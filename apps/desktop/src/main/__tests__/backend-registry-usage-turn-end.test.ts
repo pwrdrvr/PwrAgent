@@ -170,6 +170,31 @@ describe("DesktopBackendRegistry usage turn ends", () => {
     expect(hydration).not.toHaveBeenCalled();
   });
 
+  it("returns the transcript before optional metadata repairs and drains those repairs on close", async () => {
+    const registry = createRegistry([], { codexClient: { readThread: async () => ({ entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } }) } });
+    const privateRegistry = registry as unknown as {
+      repairCodexThreadDirectoryRelationship(): Promise<void>;
+      restoreCodexNativeSubAgentsFromReplay(): Promise<void>;
+    };
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const directory = vi.spyOn(privateRegistry, "repairCodexThreadDirectoryRelationship").mockImplementation(() => pending);
+    const workers = vi.spyOn(privateRegistry, "restoreCodexNativeSubAgentsFromReplay").mockImplementation(() => pending);
+    let closed = false;
+    try {
+      await registry.readThread({ backend: "codex", threadId: "selected", includeAccounting: false });
+      expect(directory).toHaveBeenCalledOnce();
+      expect(workers).toHaveBeenCalledOnce();
+      const closing = registry.close().then(() => { closed = true; });
+      await Promise.resolve();
+      expect(closed).toBe(false);
+      release();
+      await closing;
+    } finally {
+      release();
+    }
+  });
+
   it.each(["account", "configuration"])("records usage as unknown when %s identity lookup fails", async (failure) => {
     const registry = createRegistry([], {
       codexClient: { readAccount: async () => {

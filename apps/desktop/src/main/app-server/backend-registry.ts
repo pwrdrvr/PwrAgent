@@ -9748,6 +9748,7 @@ export class DesktopBackendRegistry {
   private liveThreadUsagePricingChain: Promise<void> = Promise.resolve();
   private readonly threadPricingPublications = new Map<string, Promise<void>>();
   private readonly transcriptRepairs = new Map<string, Promise<void>>();
+  private readonly pendingTranscriptRepairReplays = new Map<string, AppServerThreadReplay>();
   private readonly taskMonitorDelegations = new Map<
     string,
     TaskMonitorDelegationRecord
@@ -18428,7 +18429,7 @@ export class DesktopBackendRegistry {
   }
 
   async readThread(request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse> {
-    return await listingDiagnostics.trace("workflow", { query: "transcript" }, () => this.readThreadDisplay(request));
+    return await listingDiagnostics.trace("workflow", { query: !request.display || request.display.resource === "transcript" ? "transcript" : "thread-detail" }, () => this.readThreadDisplay(request));
   }
 
   private async readThreadDisplay(request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse> {
@@ -18593,6 +18594,37 @@ export class DesktopBackendRegistry {
     });
   }
 
+  private scheduleTranscriptRepairs(threadId: string, replay: AppServerThreadReplay): void {
+    if (this.closed) return;
+    // Keep only the newest pending replay while a repair runs. Repeated opens
+    // must not retain a queue of whole transcripts or repeat stale discovery.
+    this.pendingTranscriptRepairReplays.set(threadId, replay);
+    if (this.transcriptRepairs.has(threadId)) return;
+    const repair = Promise.resolve().then(async () => {
+      while (!this.closed) {
+        const next = this.pendingTranscriptRepairReplays.get(threadId);
+        if (!next) break;
+        this.pendingTranscriptRepairReplays.delete(threadId);
+        try {
+          await mapConcurrent([
+            () => this.repairCodexThreadDirectoryRelationship({ reason: "selected-thread", threadId }),
+            () => this.restoreCodexNativeSubAgentsFromReplay(threadId, next),
+          ], 2, (repair) => repair());
+        } catch (error) {
+          backendRegistryLog.warn("codex transcript metadata repair failed", {
+            threadId, error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }).finally(() => {
+      this.transcriptRepairs.delete(threadId);
+      const latest = this.pendingTranscriptRepairReplays.get(threadId);
+      this.pendingTranscriptRepairReplays.delete(threadId);
+      if (latest && !this.closed) this.scheduleTranscriptRepairs(threadId, latest);
+    });
+    this.transcriptRepairs.set(threadId, repair);
+  }
+
   private async readThreadData(
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> {
@@ -18676,22 +18708,7 @@ export class DesktopBackendRegistry {
       // Navigation repairs publish their own updates. Neither directory
       // discovery nor native-worker metadata is needed to render this replay.
       // Retain/drain the work so shutdown cannot close its store underneath it.
-      const previous = this.transcriptRepairs.get(request.threadId);
-      const repair = (previous ?? Promise.resolve()).then(async () => {
-        if (this.closed) return;
-        await mapConcurrent([
-          () => this.repairCodexThreadDirectoryRelationship({ reason: "selected-thread", threadId: request.threadId }),
-          () => this.restoreCodexNativeSubAgentsFromReplay(request.threadId, replay),
-        ], 2, (repair) => repair());
-      }).catch((error: unknown) => {
-        backendRegistryLog.warn("codex transcript metadata repair failed", {
-          threadId: request.threadId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }).finally(() => {
-        if (this.transcriptRepairs.get(request.threadId) === repair) this.transcriptRepairs.delete(request.threadId);
-      });
-      this.transcriptRepairs.set(request.threadId, repair);
+      this.scheduleTranscriptRepairs(request.threadId, replay);
     }
 
     const overlay = await this.overlayStore.getThreadOverlayState({
@@ -18796,12 +18813,11 @@ export class DesktopBackendRegistry {
       // flush the batch before hydration marks those rows superseded. Without
       // this boundary, the delayed live insert lands afterward and both rows
       // remain active in pricing.
-      await this.waitForLiveThreadUsageEmitWork({
-        backend,
-        threadId: request.threadId,
+      await listingDiagnostics.trace("workflow", { query: "usage-durability" }, async () => {
+        await this.waitForLiveThreadUsageEmitWork({ backend, threadId: request.threadId });
+        await this.flushLiveThreadUsageLines({ durabilityOnly: true });
+        await this.persistReplayUsageLines(replayWithEnvironment);
       });
-      await this.flushLiveThreadUsageLines({ durabilityOnly: true });
-      await this.persistReplayUsageLines(replayWithEnvironment);
     }
     const includeAccounting = request.includeAccounting !== false;
     const pricing = includeAccounting
@@ -29683,7 +29699,7 @@ export class DesktopBackendRegistry {
       queuedActionDetachedOutputs.push(event);
     };
     try {
-      codexEnvironmentRuntime = await applyLocalCodexEnvironmentSelection({
+      codexEnvironmentRuntime = await listingDiagnostics.trace("workflow", { query: "environment-setup" }, () => applyLocalCodexEnvironmentSelection({
         signal: operation?.controller.signal,
         commandRunner: this.codexEnvironmentCommandRunner,
         cwd: workspace.cwd,
@@ -29718,7 +29734,7 @@ export class DesktopBackendRegistry {
         owner: { backend: codexActionBackend },
         hydrationStore: this.codexEnvironmentHydrationStore,
         selection: codexEnvironmentSelection,
-      });
+      }));
     } catch (error) {
       operation?.check();
       if (!(error instanceof CodexEnvironmentStartupError)) {
@@ -35194,10 +35210,11 @@ export class DesktopBackendRegistry {
       this.liveThreadUsagePricingChain = published.catch(() => undefined);
       if (!options.durabilityOnly) await published;
       return batch?.deferredPricing;
-    }).catch((error: unknown) => {
+    }).catch(async (error: unknown) => {
       // Hydration must not supersede rows whose delayed insert could still
       // land afterward. Timer/terminal callers retain their retry behavior.
       if (options.durabilityOnly) throw error;
+      await this.liveThreadUsagePricingChain;
       return undefined;
     });
   }

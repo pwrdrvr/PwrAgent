@@ -34229,7 +34229,7 @@ command = "pnpm dev"
         line: ThreadUsageLineRecord;
         observationSequence: number;
       }): void;
-      writePendingLiveThreadUsageLines(): Promise<void>;
+      flushLiveThreadUsageLines(): Promise<void>;
     };
     lines.forEach((line, index) => {
       usageBatch.bufferLiveThreadUsageLine({
@@ -34239,7 +34239,7 @@ command = "pnpm dev"
       });
     });
 
-    await usageBatch.writePendingLiveThreadUsageLines();
+    await usageBatch.flushLiveThreadUsageLines();
 
     const pricingEvents = events.filter(
       (event) => event.notification.method === "thread/pricing/updated",
@@ -60479,6 +60479,7 @@ script = "printf setup"
         expect((await registry.listThreads({ backend: "codex" }))[0]?.codexNativeSubAgents).toBeUndefined();
       }
       await registry.readThread({ backend: "codex", threadId: parent.id });
+      await (registry as unknown as { transcriptRepairs: Map<string, Promise<void>> }).transcriptRepairs.get(parent.id);
       const overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId: parent.id });
       expect(overlay?.subAgents).toEqual(expect.arrayContaining([expect.objectContaining({
         monitorThreadId: worker.id, agentName: "Noether", status: expected, outcome: expected,
@@ -60585,6 +60586,7 @@ script = "printf setup"
     const unsubscribe = registry.onEvent((event) => { events.push(event); });
     try {
       await registry.readThread({ backend: "codex", threadId: parent.id });
+      await (registry as unknown as { transcriptRepairs: Map<string, Promise<void>> }).transcriptRepairs.get(parent.id);
       expect(discovery).toHaveBeenCalledWith({ ancestorThreadId: parent.id });
       const overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId: parent.id });
       expect(overlay?.subAgents?.[0]).toMatchObject({
@@ -60600,6 +60602,7 @@ script = "printf setup"
       // The card has its model now, so reopening the parent asks nothing.
       discovery.mockClear();
       await registry.readThread({ backend: "codex", threadId: parent.id });
+      await (registry as unknown as { transcriptRepairs: Map<string, Promise<void>> }).transcriptRepairs.get(parent.id);
       expect(discovery).not.toHaveBeenCalled();
     } finally {
       unsubscribe();
