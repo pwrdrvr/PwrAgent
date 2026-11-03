@@ -1674,6 +1674,23 @@ describe("Tangerine Terminal theme contract", () => {
     expect(disabledRule).toContain("color: var(--text-muted);");
   });
 
+  it("elides a long Unbind conversation name instead of widening the menu", () => {
+    // The platform never shrinks: it is the part that says what Unbind does.
+    const platform = extractRuleBody(css, ".thread-context-menu__binding-platform");
+    expect(platform).toContain("flex: none;");
+    expect(platform).toContain("white-space: nowrap;");
+    // `contain: inline-size` keeps the name out of the menu's intrinsic
+    // width, so the menu sizes to its other rows and the name fills what is
+    // left, ending in an ellipsis.
+    const name = extractRuleBody(css, ".thread-context-menu__binding-name");
+    expect(name).toContain("contain: inline-size;");
+    expect(name).toContain("flex: 1 1 0;");
+    expect(name).toMatch(/min-width: \d+ch;/);
+    expect(name).toContain("overflow: hidden;");
+    expect(name).toContain("text-overflow: ellipsis;");
+    expect(name).toContain("white-space: nowrap;");
+  });
+
   it("layers toast thread-chip menus above the toast stack", () => {
     const toastStackRule = extractRuleBody(css, ".app-toast-stack");
     const toastThreadMenuRule = extractRuleBody(

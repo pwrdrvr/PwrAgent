@@ -589,6 +589,32 @@ describe("sidebar thread row callback stability", () => {
       .toBeNull();
   });
 
+  it("keeps the platform whole and elides only the conversation name in Unbind", () => {
+    const title = "PwrAgent mobile: consolidated iPhone remote and GPT Live";
+    const threads = THREADS.map((entry) =>
+      entry.id === "thread-8"
+        ? { ...entry, messagingBindings: [{ ...BINDING, conversationTitle: title }] }
+        : entry,
+    );
+    render(sidebar({
+      threads,
+      onUnbindMessagingBinding: vi.fn(async () => undefined),
+    }));
+
+    fireEvent.contextMenu(row("Thread 8"), { clientX: 10, clientY: 20 });
+    const item = within(screen.getByRole("menu")).getByRole("menuitem", {
+      name: `Unbind from Telegram (${title})`,
+    });
+    // The platform is its own unshrinking span; only the name may elide, so
+    // a long conversation title cannot widen the whole menu.
+    expect(item.querySelector(".thread-context-menu__binding-platform")?.textContent)
+      .toBe("Unbind from Telegram");
+    expect(item.querySelector(".thread-context-menu__binding-name")?.textContent)
+      .toBe(`(${title})`);
+    // The full name stays readable on hover once the row elides it.
+    expect(item).toHaveAttribute("title", `Unbind from Telegram (${title})`);
+  });
+
   it("keeps a pin drag wired to the newest onReorderThreadPins", async () => {
     // `onPointerDownThread` is the handler that starts this drag, and it is
     // the one that had to give up its per-row closure over the directory and
