@@ -23959,6 +23959,25 @@ command = "pnpm grok"
     }
   });
 
+  it("stores remote model choices without resolving them against this viewer's catalog", async () => {
+    const codexClient = new MockBackendClient({ models: [{ id: "viewer-only", current: true }] });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const owner = { scope: "remote" as const, instanceId: "owner" };
+    const directoryKey = "directory:/owner/repo";
+    try {
+      await registry.ensureDirectoryLaunchpad({ directoryKey, directoryKind: "directory", directoryLabel: "Owner", directoryPath: "/owner/repo" },
+        { owner, skipFilesystemInspection: true, skipMcpConnectionDefaults: true });
+      const result = await registry.updateDirectoryLaunchpad({ directoryKey,
+        patch: { backend: "codex", model: "owner-only", reasoningEffort: "high", fastMode: true, serviceTier: "priority" },
+      }, { owner });
+      expect(result.launchpad).toMatchObject({ backend: "codex", model: "owner-only", reasoningEffort: "high", fastMode: true, serviceTier: "priority" });
+      const saved = await registry.updateDirectoryLaunchpad({ directoryKey, patch: { prompt: "Review on the owner" } }, { owner });
+      expect(saved.launchpad).toMatchObject({ model: "owner-only", reasoningEffort: "high", prompt: "Review on the owner" });
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("names a thread launched straight into a review", async () => {
     // A /review launch never calls startTurn, so the thread was born with no
     // user prompt for the title generator to work from and kept its fallback
