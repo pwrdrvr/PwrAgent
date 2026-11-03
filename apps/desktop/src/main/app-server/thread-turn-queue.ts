@@ -1001,12 +1001,15 @@ export class ThreadTurnQueue {
         let delivered = false;
         try {
           const result = await this.options.steerTurn(next);
+          const admission = this.admissions.get(key);
+          if (admission?.phase !== "starting" || admission.attempt !== attempt) return "none";
           if (!result || result === "retry") {
             this.recentlyAdmittedEntries.delete(next.id);
             restoreAfter(this.queueFor(key), next, previousId);
             if (result === "retry") this.scheduleDrain(key);
             return "none";
           }
+          this.applyAdmission(key, { type: "acknowledge", attempt, turnId: result.turnId });
           this.rememberAdmittedEntry({ entryId: next.id, turnId: result.turnId });
           delivered = true;
           await this.emit({ type: "started", entry: next, turnId: result.turnId });

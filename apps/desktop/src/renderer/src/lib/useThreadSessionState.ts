@@ -7654,12 +7654,15 @@ export function useThreadSessionState(params: {
         return;
       }
 
-      updateSession(threadKey, (current) => ({
-        ...current,
-        error: error instanceof Error ? error.message : String(error),
-        lastTouchedAt: Date.now(),
-        loadingMore: false,
-      }));
+      updateSession(threadKey, (current) => {
+        if ((hydrationsRef.current.get(threadKey)?.requestVersion ?? 0) !== requestVersion) return current;
+        return {
+          ...current,
+          error: error instanceof Error ? error.message : String(error),
+          lastTouchedAt: Date.now(),
+          loadingMore: false,
+        };
+      });
     }
   }, [
     desktopApi,
