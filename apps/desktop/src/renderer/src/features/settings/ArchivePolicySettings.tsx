@@ -93,7 +93,7 @@ function ArchiveSweepField(props: { desktopApi?: DesktopApi; active: boolean; on
     const seen = seenFinishedAtRef.current;
     seenFinishedAtRef.current = next.finishedAt ?? null;
     if (seen !== undefined && next.finishedAt !== undefined && next.finishedAt !== seen
-      && next.archived + next.deleted + (next.worktrees?.removed ?? 0) > 0) onSweepChangedRef.current?.();
+      && next.archived + next.deleted + (next.worktrees?.removed ?? 0) + (next.worktrees?.removedContainers ?? 0) > 0) onSweepChangedRef.current?.();
   }, []);
   useEffect(() => {
     if (!api?.getThreadArchiveSweepStatus) return;
@@ -122,6 +122,7 @@ function ArchiveSweepField(props: { desktopApi?: DesktopApi; active: boolean; on
     status.archived > 0 ? `Archived ${status.archived} ${status.archived === 1 ? "thread" : "threads"}.` : "",
     status.deleted > 0 ? `Deleted ${status.deleted} expired ${status.deleted === 1 ? "archive" : "archives"}.` : "",
     status.worktrees ? `Cleaned ${status.worktrees.removed} of ${status.worktrees.candidates} archived worktrees. Protected ${status.worktrees.protected}.` : "",
+    status.worktrees?.emptyContainers ? `Cleaned ${status.worktrees.removedContainers ?? 0} of ${status.worktrees.emptyContainers} empty worktree folders.` : "",
   ].filter(Boolean).join(" ") || (status.failed > 0 ? "" : "Nothing to archive.") : "";
   const error = requestError ?? (status?.running ? undefined : status?.error);
   return (
@@ -136,6 +137,7 @@ function ArchiveSweepField(props: { desktopApi?: DesktopApi; active: boolean; on
                   <span className="settings-pathrow__chip settings-pathrow__chip--warn">Running</span>
                   {status.startedAt !== undefined ? <span className="settings-archive-sweep__text">Started {time(status.startedAt)}.</span> : null}
                   {status.worktrees ? <span className="settings-archive-sweep__text">Worktrees: {status.worktrees.processed} of {status.worktrees.candidates} checked, {status.worktrees.removed} cleaned, {status.worktrees.protected} protected.</span> : null}
+                  {status.worktrees?.emptyContainers ? <span className="settings-archive-sweep__text">Folders: {status.worktrees.processedContainers ?? 0} of {status.worktrees.emptyContainers} checked, {status.worktrees.removedContainers ?? 0} cleaned.</span> : null}
                 </>
               ) : status.finishedAt === undefined ? (
                 <span className="settings-pathrow__chip">Not run yet</span>
