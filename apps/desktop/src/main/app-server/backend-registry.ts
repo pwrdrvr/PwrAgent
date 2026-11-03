@@ -2808,6 +2808,10 @@ export function buildCodexClientArgs(
     'approval_policy="on-request"',
     "-c",
     'sandbox_mode="workspace-write"',
+    // PwrAgent already waits for idle before unsubscribing; unload without
+    // a second Codex delay once the last subscriber leaves an inactive thread.
+    "-c",
+    "thread_unload_delay_secs=0",
   ];
   const pathValue = env?.PATH?.trim();
   if (pathValue) {
