@@ -536,6 +536,7 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
   // hold. Contending with it would delay first paint to no purpose.
   void startupProviderRefresh.then(() => {
     getExistingDesktopBackendRegistry()?.startThreadArchiveSweeper();
+    getExistingDesktopBackendRegistry()?.startCodexIdleThreadUnsubscriber();
   }).catch((error) => {
     mainLog.warn("startup thread archive sweeper initialization failed", {
       error: error instanceof Error ? error.message : String(error),

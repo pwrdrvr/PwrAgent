@@ -1289,6 +1289,11 @@ type BackendClient = {
   ): () => void;
   onAppServerUnexpectedExit?(listener: (threadIds?: ReadonlySet<string>) => void): () => void;
   restartAppServer?(): Promise<void>;
+  getSubscribedThreadCount?(): number;
+  unsubscribeIdleThreads?(params: {
+    idleMs: number;
+    isThreadBusy: (threadId: string) => boolean;
+  }): Promise<string[] | void>;
   resetAppServerRestarts?(reason: string): void;
   readAccount?(): Promise<BackendAccountSummary>;
   readRateLimits?(): Promise<BackendRateLimitSummary[]>;
@@ -3369,6 +3374,10 @@ function readNotificationItemType(notification: AppServerNotification): string |
 }
 
 const TASK_MONITOR_STALE_CHECK_INTERVAL_MS = 15_000;
+// Codex keeps a subscribed thread loaded, MCP servers and all. Release a
+// thread nothing has touched for this long; its next use resumes it.
+const CODEX_THREAD_IDLE_UNSUBSCRIBE_MS = 10 * 60_000;
+const CODEX_THREAD_IDLE_UNSUBSCRIBE_CHECK_INTERVAL_MS = 2 * 60_000;
 const TASK_MONITOR_STALE_GRACE_MS = 15_000;
 /** Progress reports a recovery turn is shown. */
 const TASK_MONITOR_RECOVERY_PROGRESS_LIMIT = 5;
@@ -10710,6 +10719,9 @@ export class DesktopBackendRegistry {
   private readonly codexModelProviderCatalog: CodexModelProviderCatalog;
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
   private readonly resolveTokenMiserEnabledFn: () => boolean;
+  private readonly codexThreadIdleUnsubscribeMs: number;
+  private codexIdleThreadTimer?: NodeJS.Timeout;
+  private codexIdleThreadSweep?: Promise<void>;
   private readonly resolveTokenMiserDefaultEnabledFn: () => boolean;
   private readonly resolveTokenMiserPollingReviewsEnabledFn: () => boolean;
   private readonly resolveManagedTokenMiserActivationRequiredFn: () => boolean;
@@ -10859,6 +10871,8 @@ export class DesktopBackendRegistry {
     resolvePdfAnalysisEnabled?: () => boolean;
     resolveTokenMiserEnabled?: () => boolean;
     resolveTokenMiserPollingReviewsEnabled?: () => boolean;
+    /** Test seam: how long a Codex thread idles before it is released. */
+    codexThreadIdleUnsubscribeMs?: number;
     configStore?: Pick<DesktopConfigStore, "read" | "subscribe">;
     resolveSpendAlertPolicy?: () => DesktopSpendAlertPolicy;
     resolveToolOutputAlertPolicy?: () => DesktopToolOutputAlertPolicy;
@@ -11057,6 +11071,8 @@ export class DesktopBackendRegistry {
           return true;
         }
       });
+    this.codexThreadIdleUnsubscribeMs =
+      options?.codexThreadIdleUnsubscribeMs ?? CODEX_THREAD_IDLE_UNSUBSCRIBE_MS;
     this.resolveTokenMiserEnabledFn = options?.resolveTokenMiserEnabled ?? (() => {
       try {
         return (
@@ -16070,6 +16086,59 @@ export class DesktopBackendRegistry {
       return;
     }
     throw new Error(ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR);
+  }
+
+  /**
+   * Release idle Codex threads on a timer (`unsubscribeIdleThreads`). Started
+   * by the app after startup discovery, like the archive sweeper; tests that
+   * never call this get no timer.
+   */
+  startCodexIdleThreadUnsubscriber(): void {
+    if (this.closed || this.shutdownRequested || this.codexIdleThreadTimer) return;
+    this.codexIdleThreadTimer = setInterval(() => {
+      void this.unsubscribeIdleCodexThreads();
+    }, CODEX_THREAD_IDLE_UNSUBSCRIBE_CHECK_INTERVAL_MS);
+    this.codexIdleThreadTimer.unref?.();
+  }
+
+  /** One pass over the Codex threads this app keeps loaded. Never throws. */
+  async unsubscribeIdleCodexThreads(): Promise<void> {
+    const unsubscribe = this.codexClient.unsubscribeIdleThreads?.bind(this.codexClient);
+    if (this.closed || this.shutdownRequested || this.codexIdleThreadSweep || !unsubscribe) return;
+    const sweep = (async () => {
+      await unsubscribe({
+        idleMs: this.codexThreadIdleUnsubscribeMs,
+        isThreadBusy: (threadId) => this.closed
+          || this.shutdownRequested
+          || this.codexThreadNeedsLiveEvents(threadId),
+      });
+    })().catch((error) => {
+      backendRegistryLog.warn("idle Codex thread unsubscribe failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }).finally(() => {
+      this.codexIdleThreadSweep = undefined;
+    });
+    this.codexIdleThreadSweep = sweep;
+    await sweep;
+  }
+
+  /**
+   * Work on a Codex thread that needs its live events: a turn, reserved start
+   * or accepted compaction, its review, a background terminal or live tool
+   * item, queued input, or a history repair waiting to run.
+   */
+  private codexThreadNeedsLiveEvents(threadId: string): boolean {
+    if (this.threadHasActiveTurn(threadId, "codex")) return true;
+    const turnPrefix = `codex:${threadId}:`;
+    for (const key of this.activeTurnKeys) {
+      if (key.startsWith(turnPrefix)) return true;
+    }
+    return this.codexBackgroundTerminals.has(threadId)
+      || this.liveCodexToolItemsByThread.has(threadId)
+      || this.codexRetryableOperations.has(threadId)
+      || this.threadTurnQueue.getQueuedEntries({ backend: "codex", threadId }).length > 0
+      || this.pendingCodexInvalidIdRecoveries.some((recovery) => recovery.params.threadId === threadId);
   }
 
   startThreadArchiveSweeper(): void {
@@ -30191,6 +30260,10 @@ export class DesktopBackendRegistry {
     this.workingStateCacheLoad = undefined;
     if (this.taskMonitorWatchdogTimer) {
       clearInterval(this.taskMonitorWatchdogTimer);
+    }
+    if (this.codexIdleThreadTimer) {
+      clearInterval(this.codexIdleThreadTimer);
+      this.codexIdleThreadTimer = undefined;
     }
     if (this.missingCodexThreadEvaluationTimer) {
       clearTimeout(this.missingCodexThreadEvaluationTimer);
