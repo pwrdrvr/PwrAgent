@@ -7,8 +7,7 @@ import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-thread-action-store";
 import { FileScheduledThreadActionPayloadStore } from "../scheduled-actions/scheduled-thread-action-payload-store";
-import { StateDb } from "../state/state-db";
-import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { expectPendingWakeReadBudget } from "./fixtures/pending-wake-read-budget";
 
 const THREAD = { backend: "codex" as const, threadId: "selected" };
@@ -18,7 +17,8 @@ it.each([0, 160])("budgets owner projection reads under repeated local and peer 
   vi.useFakeTimers();
   vi.setSystemTime(1_000);
   const fixture = createTempStateDb("pending-wake-read-budget-");
-  const db = StateDb.open(fixture.dbPath);
+  // Read budgets use one connection; only scheduled payloads need real files.
+  const db = openInMemoryStateDb();
   const overlay = new SqliteOverlayStore(db);
   const dependencies = new ThreadDependencyStore(db.raw);
   const payloadDirectory = path.join(fixture.tempDir, "payloads");
@@ -60,20 +60,22 @@ it.each([0, 160])("budgets owner projection reads under repeated local and peer 
     vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
       const statement = prepare(sql);
       if (!sql.trimStart().startsWith("SELECT")) return statement;
+      // These statements belong to this test's database. Wrap them directly so
+      // the uncached control does not retain thousands of spies and call logs.
       for (const method of ["get", "all"] as const) {
         const execute = statement[method].bind(statement);
-        vi.spyOn(statement, method).mockImplementation((...args: unknown[]) => {
+        statement[method] = (...args: unknown[]) => {
           recordQuery(sql, args);
           const result = execute(...args);
           for (const row of Array.isArray(result) ? result : [result]) record(row);
           return result;
-        });
+        };
       }
       const iterate = statement.iterate.bind(statement);
-      vi.spyOn(statement, "iterate").mockImplementation(function* (...args: unknown[]) {
+      statement.iterate = function* (...args: unknown[]) {
         recordQuery(sql, args);
         for (const row of iterate(...args)) { record(row); yield row; }
-      });
+      };
       return statement;
     });
     const readPayload = payloads.read.bind(payloads);
