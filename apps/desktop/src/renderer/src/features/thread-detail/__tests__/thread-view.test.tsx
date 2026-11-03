@@ -483,7 +483,7 @@ describe("ThreadView", () => {
   });
 
   it.each(["submitted", "edited"] as const)(
-    "does not restore a rewound prompt again after it is %s and the thread is reopened",
+    "does not restore a rewound prompt again after it is %s and the composer remounts",
     async (action) => {
       const thread = rewindThread("claude");
       const startTurn = vi.fn(async () => ({ backend: "claude" as const, threadId: thread.id, turnId: "resubmitted" }));
@@ -524,18 +524,19 @@ describe("ThreadView", () => {
         fireEvent.keyDown(reply, { key: "Enter" });
         await waitFor(() => {
           expect(startTurn).toHaveBeenCalledOnce();
-          expect(reply).toBeEmptyDOMElement();
+          expect(reply.textContent).toBe("");
         });
       } else {
         fireEvent.change(reply, { target: { value: "Keep this edited draft" } });
       }
 
-      view.rerender(<ThreadView {...props} selectedThread={{ ...thread, id: "other-thread" }} />);
+      view.rerender(<ThreadView {...props} selectedThread={undefined} />);
+      expect(screen.queryByRole("textbox", { name: "Reply" })).not.toBeInTheDocument();
       view.rerender(<ThreadView {...props} />);
       const reopenedReply = screen.getByRole("textbox", { name: "Reply" });
       expect(reopenedReply).not.toBe(reply);
       await waitFor(() => {
-        if (action === "submitted") expect(reopenedReply).toBeEmptyDOMElement();
+        if (action === "submitted") expect(reopenedReply.textContent).toBe("");
         else expect(reopenedReply).toHaveTextContent("Keep this edited draft");
       });
       expect(screen.queryByText("Rewound prompt")).not.toBeInTheDocument();

@@ -1207,6 +1207,11 @@ describe("sqlite write metrics", () => {
   it("holds a thread rewind, and its undo, to one commit each", async () => {
     // An operator rewinds or undoes by hand, never per turn or per event.
     // At ~16 KB of WAL per commit, 100 rewinds and undos a day is ~1.6 MB.
+    await store.appendTurnFailure({
+      backend: "claude",
+      threadId: "rewind-thread",
+      failure: { id: "failure-1", turnId: "turn-1", error: "API error", occurredAt: 1_799_999_999_000 },
+    });
     const { writes } = await measureSqliteWrites(async () => {
       await store.appendThreadRewind({
         backend: "claude",
@@ -1232,6 +1237,8 @@ describe("sqlite write metrics", () => {
       scenario: "thread-rewind-and-undo",
       writes,
     });
+    expect((await store.getThreadOverlayState({ backend: "claude", threadId: "rewind-thread" }))?.turnFailureLog)
+      .toBeUndefined();
     expect((await store.getThreadOverlayState({ backend: "claude", threadId: "rewind-thread" }))?.rewindLog)
       .toEqual([{
         id: "rewind-1",

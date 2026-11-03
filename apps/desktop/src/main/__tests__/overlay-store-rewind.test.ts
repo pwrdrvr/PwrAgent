@@ -21,6 +21,10 @@ describe("SqliteOverlayStore — rewind cleanup", () => {
       stateDb = StateDb.open(fixture.dbPath);
       let store = new SqliteOverlayStore(stateDb);
       const target = { backend, threadId: "thread-1" };
+      await store.appendThreadRewind({
+        ...target,
+        rewind: { id: "previous-rewind", occurredAt: 500, removedTurnCount: 1 },
+      });
       const otherThread = { backend, threadId: "thread-2" };
       const otherBackend = {
         backend: backend === "claude" ? "codex" as const : "claude" as const,
