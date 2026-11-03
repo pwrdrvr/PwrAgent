@@ -1063,6 +1063,8 @@ export type ArchiveThreadCleanupResult = {
   removedWorktree: boolean;
   deletedBranch: boolean;
   skippedReason?: string;
+  /** Deliberate retention needed for restoration, rather than a cleanup failure. */
+  preservedReason?: string;
   error?: string;
 };
 

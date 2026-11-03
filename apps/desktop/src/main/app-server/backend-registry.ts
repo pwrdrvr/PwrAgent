@@ -2374,6 +2374,16 @@ function linkedDirectoryWorktreePath(
   return undefined;
 }
 
+function worktreeArchiveCandidates(thread: AppServerThreadSummary): WorktreeArchiveCandidate[] {
+  const candidates = thread.linkedDirectories.flatMap((directory) => {
+    const worktreePath = linkedDirectoryWorktreePath(directory);
+    return worktreePath?.trim() ? [{ repositoryPath: directory.path, worktreePath }] : [];
+  });
+  return [...new Map(candidates.map((candidate) => [
+    `${candidate.repositoryPath}:${candidate.worktreePath}`, candidate,
+  ])).values()];
+}
+
 function normalizeWorktreePathForComparison(worktreePath: string): string {
   return path.normalize(worktreePath.trim());
 }
@@ -16726,18 +16736,20 @@ export class DesktopBackendRegistry {
         const canReuseTarget = cached?.includesArchived && cached.revision === this.archiveWorkspaceRevision;
         if (!canReuseTarget && !params.requireArchived && backend === "codex" && this.codexClient.readArchiveCleanupThreadSummary && !codexRolloutMissing) {
           targetThread = await this.codexClient.readArchiveCleanupThreadSummary(result.threadId, context.checkpoint);
-          const readOverlays = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
-          await context.checkpoint();
-          const overlays = await readOverlays.call(this.overlayStore, { backend, threadIds: [result.threadId] });
-          targetThread = { ...targetThread, linkedDirectories: withRetainedWorktrees(mergeThreadLinkedDirectories([
-            ...targetThread.linkedDirectories, ...(overlays[result.threadId]?.extraLinkedDirectories ?? []),
-          ]), overlays[result.threadId]) };
         } else if (isAcpBackendId(backend)) {
           const session = this.acpBackend.getSession(backend, result.threadId);
           if (session?.archivedAt) targetThread = this.acpBackend.sessionToThreadSummary(session);
         } else if (backend === "claude") {
           targetThread = (await this.claudeBackend.listThreads({ archived: true }))
             .find((thread) => thread.id === result.threadId);
+        }
+        if (targetThread) {
+          const readOverlays = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
+          await context.checkpoint();
+          const overlays = await readOverlays.call(this.overlayStore, { backend, threadIds: [result.threadId] });
+          targetThread = { ...targetThread, linkedDirectories: withRetainedWorktrees(mergeThreadLinkedDirectories([
+            ...targetThread.linkedDirectories, ...(overlays[result.threadId]?.extraLinkedDirectories ?? []),
+          ]), overlays[result.threadId]) };
         }
         const needsWorktreeOwnership = !params.preserveWorktrees && (!targetThread
           || targetThread.linkedDirectories.some((directory) => Boolean(linkedDirectoryWorktreePath(directory))));
@@ -16772,8 +16784,15 @@ export class DesktopBackendRegistry {
       ungroupError = error instanceof Error ? error.message : String(error);
       backendRegistryLog.warn("archive thread child ungrouping failed", { backend, threadId: result.threadId, error: ungroupError });
     }
-    const cleanup = await this.traceArchiveCleanupStage(params, "worktrees", async () => params.preserveWorktrees ? [] : cleanupMetadata
-      ? await this.archiveThreadWorktrees({
+    const cleanup = await this.traceArchiveCleanupStage(params, "worktrees", async () => cleanupMetadata
+      ? params.preserveWorktrees
+        ? worktreeArchiveCandidates(cleanupMetadata.thread).map((candidate) => ({
+            worktreePath: candidate.worktreePath,
+            removedWorktree: false,
+            deletedBranch: false,
+            preservedReason: "Worktrees stay on disk so this backend can restore archived threads.",
+          }))
+        : await this.archiveThreadWorktrees({
           backend, activeThreads: cleanupMetadata.activeThreads, archivedThreads: cleanupMetadata.archivedThreads,
           thread: cleanupMetadata.thread, context, codexRolloutMissing, worktreeEvidence: cleanupMetadata.worktreeEvidence,
         })
@@ -38350,28 +38369,7 @@ export class DesktopBackendRegistry {
         .filter((value): value is string => Boolean(value))
         .map(normalizeWorktreePathForComparison),
     );
-    const candidates: WorktreeArchiveCandidate[] =
-      params.thread.linkedDirectories.flatMap((directory) => {
-        const worktreePath = linkedDirectoryWorktreePath(directory);
-        if (!worktreePath?.trim()) {
-          return [];
-        }
-
-        return [
-          {
-            repositoryPath: directory.path,
-            worktreePath,
-          },
-        ];
-      });
-    const uniqueCandidates: WorktreeArchiveCandidate[] = [
-      ...new Map(
-        candidates.map((candidate) => [
-          `${candidate.repositoryPath}:${candidate.worktreePath}`,
-          candidate,
-        ]),
-      ).values(),
-    ];
+    const uniqueCandidates = worktreeArchiveCandidates(params.thread);
 
     if (uniqueCandidates.length === 0) {
       backendRegistryLog.debug("archive thread worktree cleanup skipped: no worktree candidates", {
