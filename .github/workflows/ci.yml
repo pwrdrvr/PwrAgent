@@ -684,6 +684,13 @@ jobs:
       matrix:
         lane: [1, 2]
     steps:
+      # Nothing on a CI runner searches the index, but a fresh VM runs 14-19
+      # Spotlight workers at about 20% CPU for the whole lane, on 3 cores.
+      # Turning indexing off halved the median load during the unit run
+      # (16-20 to 7) in run 41734854288. Nothing in the suite uses Spotlight.
+      - name: Turn off Spotlight indexing
+        run: sudo mdutil -a -i off
+
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
