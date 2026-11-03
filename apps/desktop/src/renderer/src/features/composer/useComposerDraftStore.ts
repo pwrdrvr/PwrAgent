@@ -20,6 +20,8 @@ import type { ComposerSkillToken } from "./ComposerInputTypes";
 
 export type ComposerDraftSnapshot = {
   threadOwner?: ComposerThreadOwner;
+  /** Window-local provenance used to remove this draft when its rewind is undone. */
+  rewoundPrompt?: boolean;
   draft: string;
   editorDocument?: JSONContent;
   imageAttachments: NavigationLaunchpadImageAttachment[];

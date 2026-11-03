@@ -1399,6 +1399,9 @@ export function ThreadView(props: ThreadViewProps) {
     imageAttachments: RewoundPrompt["imageAttachments"];
     kind: "rewound-prompt" | "rewound-prompt-undone";
   }>();
+  const handleDraftRestoreHandled = useCallback((id: number): void => {
+    setRewoundPromptRestore((current) => current?.id === id ? undefined : current);
+  }, []);
   const [rewindUndoBusyId, setRewindUndoBusyId] = useState<string>();
   const [workflowBudgetDialog, setWorkflowBudgetDialog] =
     useState<WorkflowBudgetDialogState>();
@@ -4129,6 +4132,7 @@ export function ThreadView(props: ThreadViewProps) {
           mcpConnectionCount: threadMcpConnectionCount,
           replySubmission: asyncQuestionReply,
           draftRestore: rewoundPromptRestore,
+          onDraftRestoreHandled: handleDraftRestoreHandled,
           onReplySubmissionSettled: handleReplySubmissionSettled,
           reviewRequest: todoReviewRequest,
           focusRequest: props.composerFocusRequest,
