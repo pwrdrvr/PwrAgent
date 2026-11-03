@@ -27944,6 +27944,7 @@ command = "pnpm dev"
     const prepareLaunchpadWorkspace = vi.fn(async () => ({ cwd: "/fixture/worktree", workMode: "worktree" as const }));
     const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null, pdfToolMcpServer: null,
+      claudeBackendOptions: { inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }) },
       gitDirectoryService: { prepareLaunchpadWorkspace } as never });
     try {
       await expect(registry.startThread({ ...settings, cwd: "/fixture/repo", workMode: "worktree" }))
@@ -27960,7 +27961,7 @@ command = "pnpm dev"
       overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null, pdfToolMcpServer: null });
     const replies: import("@pwragent/shared").FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
-    router.registerConnection({ peerId: "viewer", capabilities: [], sendEnvelope: (envelope) => { replies.push(envelope); } });
+    router.registerConnection({ peerId: "viewer", capabilities: ["turn_control"], sendEnvelope: (envelope) => { replies.push(envelope); } });
     registerFederationBackendHandlers({ router, backend: registry as unknown as FederationBackendOperations });
     try {
       await router.routeEnvelope({ sourcePeerId: "viewer", envelope: {
@@ -27989,6 +27990,35 @@ command = "pnpm dev"
         }, { sourceInstanceId })).rejects.toThrow('model="gpt-6.1-terra" is not available for backend="claude"');
       }
       expect(prepareLaunchpadWorkspace).not.toHaveBeenCalled();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it.each([true, false])("refuses invalid ACP creation models with a populated catalog=%s", async (populated) => {
+    const { registry, acpClient, acpBackendId } = createKimiAcpRegistry({ runtimeCapabilities: {
+      schemaVersion: 1, status: "discovered", checkedAt: 1,
+      models: { availableModels: populated ? [{ id: "kimi-fixture", label: "Kimi" }] : [] },
+    } });
+    try {
+      await expect(registry.startThread({ backend: acpBackendId, model: "gpt-6.1-terra", cwd: "/fixture/repo" }))
+        .rejects.toThrow('model="gpt-6.1-terra" is not available');
+      expect(acpClient.startSession).not.toHaveBeenCalled();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("refuses invalid fork models before workspace preparation", async () => {
+    const prepareLaunchpadWorkspace = vi.fn();
+    const codexClient = new MockBackendClient({ models: [{ id: "gpt-5.5" }] });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: { prepareLaunchpadWorkspace } as never });
+    try {
+      await expect(registry.forkThread({ backend: "codex", sourceThreadId: "parent", model: "opus", directoryPath: "/fixture/repo" }))
+        .rejects.toThrow('model="opus" is not available');
+      expect(prepareLaunchpadWorkspace).not.toHaveBeenCalled();
+      expect(codexClient.lastForkThreadParams).toBeUndefined();
     } finally {
       await registry.close();
     }
