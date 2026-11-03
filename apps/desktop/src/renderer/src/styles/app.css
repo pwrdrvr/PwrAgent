@@ -53182,3 +53182,12 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 .thread-merge-holds__steps li { overflow-wrap: anywhere; }
 
 .thread-merge-holds__status-aside { color: var(--text-muted); }
+
+/* A held merge card says why in place of its merge button, at the card's
+   detail size rather than the inherited body size. */
+.thread-todo-card__hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 17px;
+  overflow-wrap: anywhere;
+}
