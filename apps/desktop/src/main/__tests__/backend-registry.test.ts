@@ -23973,6 +23973,9 @@ command = "pnpm grok"
       expect(result.launchpad).toMatchObject({ backend: "codex", model: "owner-only", reasoningEffort: "high", fastMode: true, serviceTier: "priority" });
       const saved = await registry.updateDirectoryLaunchpad({ directoryKey, patch: { prompt: "Review on the owner" } }, { owner });
       expect(saved.launchpad).toMatchObject({ model: "owner-only", reasoningEffort: "high", prompt: "Review on the owner" });
+      const reopened = await registry.ensureDirectoryLaunchpad({ directoryKey, directoryKind: "directory", directoryLabel: "Owner", directoryPath: "/owner/repo" },
+        { owner, skipFilesystemInspection: true, skipMcpConnectionDefaults: true });
+      expect(reopened.launchpad).toMatchObject({ model: "owner-only", reasoningEffort: "high", fastMode: true, serviceTier: "priority" });
     } finally {
       await registry.close();
     }

@@ -6213,7 +6213,7 @@ describe("Composer", () => {
       const [launchpad, setLaunchpad] = useState<NavigationLaunchpadDraft>({
         directoryKey: "directory:/owner/repo", directoryKind: "directory", directoryLabel: "Owner", directoryPath: "/owner/repo",
         federationTarget: { scope: "remote", instanceId: "owner" }, backend: "acp:kimi", executionMode: "default",
-        model: "kimi-owner", prompt: "Review this", createdAt: 1, updatedAt: 1,
+        model: "kimi-owner", prompt: "Review this", workMode: "local", createdAt: 1, updatedAt: 1,
         providerSettings: { codex: { model: remembered ? "owner-saved" : "viewer-only" } },
       });
       return <Composer backends={[
@@ -6221,11 +6221,11 @@ describe("Composer", () => {
         { ...backendSummary("codex", { models: [
           { id: "owner-default", label: "Owner default", current: true, supportsReasoning: true, reasoningEfforts: ["low", "high"] },
           { id: "owner-saved", label: "Owner saved", supportsReasoning: true, reasoningEfforts: ["low", "high"] },
-        ] }), modelDefaults: { model: "owner-default", reasoningEffortsByModel: { "owner-default": "high" } } },
+        ] }), label: "OpenAI", modelDefaults: { model: "owner-default", reasoningEffortsByModel: { "owner-default": "high" } } },
       ]} launchpad={launchpad} providerModelDefaults={{ codex: { model: "viewer-only", reasoningEffortsByModel: {} } }}
         onUpdateLaunchpad={async (_key, patch) => {
           onUpdateLaunchpad(patch);
-          setLaunchpad((current) => applyNavigationLaunchpadProviderSettingsPatch(current, patch));
+          setLaunchpad((current) => applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(current, patch));
         }} skills={[]} />;
     }
     render(<RemoteDraft />);

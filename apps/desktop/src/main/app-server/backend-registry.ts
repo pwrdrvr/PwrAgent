@@ -28627,10 +28627,15 @@ export class DesktopBackendRegistry {
       const registeredAt = existing.registeredAt ?? request.registeredAt;
       const existingLaunchpad = projectNavigationLaunchpadProviderSettings(existing);
       const backend = await this.resolveLaunchpadBackend(existingLaunchpad.backend);
-      const modelSettings = await this.resolveLaunchpadModelSettings(
-        backend,
-        existingLaunchpad,
-      );
+      const modelSettings = isRemoteLaunchpadStorageKey(request.directoryKey)
+        && backend.kind === existingLaunchpad.backend
+        ? {
+            model: existingLaunchpad.model,
+            reasoningEffort: existingLaunchpad.reasoningEffort,
+            serviceTier: existingLaunchpad.serviceTier,
+            fastMode: existingLaunchpad.fastMode,
+          }
+        : await this.resolveLaunchpadModelSettings(backend, existingLaunchpad);
       const executionMode = getAvailableExecutionMode(
         backend,
         existingLaunchpad.executionMode,
