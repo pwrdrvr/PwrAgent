@@ -482,6 +482,66 @@ describe("ThreadView", () => {
     expect(screen.getByText("Rewound prompt")).toBeInTheDocument();
   });
 
+  it.each(["submitted", "edited"] as const)(
+    "does not restore a rewound prompt again after it is %s and the thread is reopened",
+    async (action) => {
+      const thread = rewindThread("claude");
+      const startTurn = vi.fn(async () => ({ backend: "claude" as const, threadId: thread.id, turnId: "resubmitted" }));
+      const { result } = renderHook(() => useComposerDraftStore());
+      const props: Omit<ThreadViewProps, "terminals"> = {
+        addOptimisticUserMessage: () => "optimistic-1",
+        backends: [rewindBackend("claude", "Claude")],
+        clearPendingRequest: () => undefined,
+        composerDisabled: false,
+        composerDraftStore: result.current,
+        desktopApi: {
+          startTurn,
+          rewindThread: async () => ({
+            backend: "claude", threadId: thread.id,
+            target: { messageId: "prompt-2", turnId: "turn-2" },
+            mode: "conversation", updatedAt: 2000,
+          }),
+        },
+        loading: false,
+        loadingMore: false,
+        messageCount: 4,
+        onLoadOlder: async () => undefined,
+        removeOptimisticMessage: () => undefined,
+        selectedThread: thread,
+        skills: [],
+        transcriptEntries: rewindTranscript,
+      };
+      const view = render(<ThreadView {...props} />);
+      const prompt = screen.getByText("Try holding the lock until the child exits instead.")
+        .closest(".transcript-list__item") as HTMLElement;
+      fireEvent.click(within(prompt).getByRole("button", { name: "Rewind to before this message" }));
+      const confirm = screen.getByRole("dialog", { name: "Rewind to before this message?" });
+      fireEvent.click(within(confirm).getByRole("button", { name: "Rewind and edit" }));
+      const reply = screen.getByRole("textbox", { name: "Reply" });
+      await waitFor(() => expect(reply).toHaveTextContent("Try holding the lock until the child exits instead."));
+
+      if (action === "submitted") {
+        fireEvent.keyDown(reply, { key: "Enter" });
+        await waitFor(() => {
+          expect(startTurn).toHaveBeenCalledOnce();
+          expect(reply).toBeEmptyDOMElement();
+        });
+      } else {
+        fireEvent.change(reply, { target: { value: "Keep this edited draft" } });
+      }
+
+      view.rerender(<ThreadView {...props} selectedThread={{ ...thread, id: "other-thread" }} />);
+      view.rerender(<ThreadView {...props} />);
+      const reopenedReply = screen.getByRole("textbox", { name: "Reply" });
+      expect(reopenedReply).not.toBe(reply);
+      await waitFor(() => {
+        if (action === "submitted") expect(reopenedReply).toBeEmptyDOMElement();
+        else expect(reopenedReply).toHaveTextContent("Keep this edited draft");
+      });
+      expect(screen.queryByText("Rewound prompt")).not.toBeInTheDocument();
+    },
+  );
+
   function renderGrokDialogThread(desktopApi: ThreadViewProps["desktopApi"]) {
     return render(
       <ThreadView
