@@ -5,7 +5,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, packageManagerCommand, parseHandleOutput } from "./windows-pipe-observation.mjs";
-import { nativeStackArguments, parseNativeStacks, verifiedNativeStack } from "./windows-native-stack.mjs";
+import { localSymbolDirectories, nativeProbeFailure, nativeStackArguments, parseNativeStacks, verifiedNativeStack } from "./windows-native-stack.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
 const root = path.join(desktop, ".local", "windows-pipe-diagnostics", randomUUID());
@@ -30,6 +30,7 @@ let nativeBytes = 0, omittedNativeRecords = 0, captures = 0, watcherAvailable = 
 let stalledCaptures = 0;
 let nativeCaptures = 0;
 let nativeStackEnabled = false;
+let nativeSymbols = [];
 
 // Raw tool output may contain unrelated file paths; persist only parsed pipe names.
 const json = (data) => JSON.stringify(data, (key, value) => key === "toolText" ? undefined : value);
@@ -213,7 +214,7 @@ async function captureNativeStack(event) {
   if (before.value?.process?.created !== created || before.value?.process?.liveAfter !== true) return;
   const started = Date.now();
   const result = await new Promise((resolve) => {
-    const child = execFile(cdbExecutable, nativeStackArguments(event.pid, privateSymbols),
+    const child = execFile(cdbExecutable, nativeStackArguments(event.pid, nativeSymbols),
       { timeout: 1000, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
         scanners.delete(child);
         resolve({ stack: parseNativeStacks(stdout), stderrBytes: Buffer.byteLength(stderr),
@@ -241,14 +242,16 @@ async function prepareNativeStacks() {
   const electron = createRequire(new URL("../package.json", import.meta.url))("electron");
   const symbols = `srv*${privateSymbols}*https://msdl.microsoft.com/download/symbols;srv*${privateSymbols}*https://symbols.electronjs.org`;
   const warmed = await run(symchkExecutable, [electron, "/s", symbols], 90000);
+  nativeSymbols = localSymbolDirectories(privateSymbols);
   let probe;
   let probeFailed = false;
+  let probeFailure;
   try { probe = (await import("./windows-pipe-diagnostics-probe.mjs")).probeResult; }
-  catch { probeFailed = true; }
-  nativeStackEnabled = !probeFailed && probe?.noninvasiveDebuggerVerified === true;
+  catch (error) { probeFailed = true; probeFailure = nativeProbeFailure(error); }
+  nativeStackEnabled = !probeFailed && probe?.noninvasiveDebuggerVerified === true && probe?.debuggerQuitVerified === true;
   write("native-stack-setup.json", { enabled: nativeStackEnabled,
     symbolPreload: { started: warmed.started, ended: warmed.ended, code: warmed.error?.code, stdoutBytes: warmed.stdoutBytes },
-    probe, probeFailed });
+    localSymbolDirectoryCount: nativeSymbols.length, probe, probeFailed, probeFailure });
 }
 
 function enqueue(task) {

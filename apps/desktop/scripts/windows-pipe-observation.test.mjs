@@ -1,12 +1,12 @@
 import { EventEmitter } from "node:events";
 import { execFile } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, normalizePipeName, parseHandleOutput, observeWindowsLauncher, packageManagerCommand } from "./windows-pipe-observation.mjs";
-import { nativeStackArguments, parseNativeStacks, verifiedNativeStack } from "./windows-native-stack.mjs";
+import { localSymbolDirectories, nativeDebuggerStatus, nativeProbeFailure, nativeStackArguments, parseNativeStacks, verifiedNativeStack } from "./windows-native-stack.mjs";
 
 const roots = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -18,11 +18,13 @@ describe("Windows natural pipe evidence", () => {
   it("samples with a non-suspending attach and local symbols, then rejects changed process identities", () => {
     const cache = path.resolve("private-symbol-cache");
     expect(nativeStackArguments(77, cache)).toEqual([
-      "-pvr", "-pd", "-noinh", "-noshell", "-sins", "-netsyms:no",
-      "-y", "srv*" + cache, "-p", "77", "-c", "~* kn 40;q",
+      "-pvr", "-noinh", "-noshell", "-sins", "-netsyms:no",
+      "-y", cache, "-p", "77", "-c", "~* kn 40;q",
     ]);
     expect(() => nativeStackArguments(0, cache)).toThrow();
-    expect(() => nativeStackArguments(77, "relative-cache")).toThrow();
+    for (const symbols of ["relative-cache", [], cache + ";srv*https://example.invalid", "\\\\server\\symbols", "//server/symbols"]) {
+      expect(() => nativeStackArguments(77, symbols)).toThrow();
+    }
     const before = { pid: 77, created: "134381166159731584", verified: true, liveAfter: true };
     const stack = { threads: [{ pid: "4d", frames: [] }] };
     expect(verifiedNativeStack(before, { ...before }, before.created, stack)).toBe(true);
@@ -34,6 +36,38 @@ describe("Windows natural pipe evidence", () => {
     expect(verifiedNativeStack(before, before, "134381166159731585", stack)).toBe(false);
     expect(verifiedNativeStack(before, before, before.created, { threads: [{ pid: "4e" }] })).toBe(false);
     expect(verifiedNativeStack(before, before, before.created, { threads: [] })).toBe(false);
+  });
+
+  it("finds preloaded PDBs in the symbol-store layout without enabling a symbol server", () => {
+    const cache = root();
+    const identity = "A".repeat(32) + "1";
+    const directory = path.join(cache, "electron.pdb", identity);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(path.join(directory, "electron.pdb"), "controlled PDB placeholder");
+    mkdirSync(path.join(cache, "electron.pdb", "B".repeat(32) + "2")); // Incomplete preload.
+    mkdirSync(path.join(cache, "unrelated", identity), { recursive: true });
+    symlinkSync(path.join(cache, "electron.pdb"), path.join(cache, "linked.pdb"), "junction");
+    const symbols = localSymbolDirectories(cache);
+    expect(symbols).toEqual([cache, directory]);
+    const args = nativeStackArguments(77, symbols);
+    expect(args[args.indexOf("-y") + 1]).toBe(cache + ";" + directory);
+    expect(args).not.toContain("-pd");
+    expect(args.join(" ")).not.toContain("srv*");
+  });
+
+  it("retains known preflight failure reasons without exception text or debugger output", () => {
+    const output = "cdb: The system does not support detach on exit\nWARNING: Network path disallowed\nC:\\private\\secret.pdb token";
+    const error = new Error("Noninvasive debugger exited before readiness");
+    error.nativeDebugger = { ...nativeDebuggerStatus(output), exitCode: 0, rawOutput: output };
+    const failure = nativeProbeFailure(error);
+    expect(failure).toEqual({ reason: "debugger-exited-before-readiness",
+      debugger: { exitCode: 0, detachUnsupported: true, networkPathDisallowed: true } });
+    expect(JSON.stringify(failure)).not.toMatch(/private|secret|token|rawOutput/);
+    expect(nativeDebuggerStatus("native frames")).toEqual({ detachUnsupported: false, networkPathDisallowed: false });
+    expect(nativeProbeFailure(new Error(output))).toEqual({ reason: "controlled-probe-failed" });
+    expect(nativeProbeFailure({ nativeDebugger: { exitCode: output, detachUnsupported: output } })).toEqual({
+      reason: "controlled-probe-failed", debugger: { exitCode: undefined, detachUnsupported: false, networkPathDisallowed: false },
+    });
   });
 
   it("retains native stack symbols without debugger paths, arguments or memory", () => {

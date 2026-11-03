@@ -10,7 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS } from "./windows-pipe-observation.mjs";
-import { nativeStackArguments, parseNativeStacks } from "./windows-native-stack.mjs";
+import { nativeDebuggerStatus, nativeStackArguments, parseNativeStacks } from "./windows-native-stack.mjs";
 
 const directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-native-pipe-proof-"));
 const executable = path.join(directory, "native.exe");
@@ -107,6 +107,7 @@ try {
   }
 
   let noninvasiveDebuggerVerified;
+  let debuggerQuitVerified;
   if (process.env.PWRAGENT_WINDOWS_CDB_EXE) {
     let lastBeat = 0;
     const readBeat = () => {
@@ -114,37 +115,56 @@ try {
       return lastBeat;
     };
     await waitFor(() => readBeat() > 0, "Controlled source heartbeat did not start");
-    const readyDebugger = Promise.withResolvers();
-    debuggerProcess = spawn(process.env.PWRAGENT_WINDOWS_CDB_EXE,
-      nativeStackArguments(child.pid, directory, ".echo pwragent-noninvasive-ready;~* kn 40"),
-      { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
-    debuggerClosed = once(debuggerProcess, "close");
-    void debuggerClosed.catch(() => {});
-    let output = "";
-    debuggerProcess.stdout.on("data", (chunk) => {
-      output = (output + chunk).slice(-512 * 1024);
-      if (output.includes("pwragent-noninvasive-ready")) readyDebugger.resolve();
-    });
-    debuggerProcess.stderr.resume();
-    debuggerProcess.once("error", readyDebugger.reject);
-    debuggerProcess.once("exit", () => readyDebugger.reject(new Error("Noninvasive debugger exited before readiness")));
-    await bounded(readyDebugger.promise, 5000, "Noninvasive debugger readiness was not observed");
-    await waitFor(() => parseNativeStacks(output).frameCount > 0, "Noninvasive debugger did not produce native frames");
-    const attachedBeat = readBeat();
-    await waitFor(() => readBeat() > attachedBeat + 2, "Debugger suspended the controlled source");
-    assert.equal(debuggerProcess.exitCode, null);
-    debuggerProcess.kill();
-    await bounded(debuggerClosed, 2000, "Cancelled noninvasive debugger did not close");
-    const cancelledBeat = readBeat();
-    await waitFor(() => readBeat() > cancelledBeat + 2, "Debugger cancellation suspended the controlled source");
-    noninvasiveDebuggerVerified = true;
+    let output = "", errorOutput = "";
+    const startDebugger = (command) => {
+      output = ""; errorOutput = "";
+      debuggerProcess = spawn(process.env.PWRAGENT_WINDOWS_CDB_EXE,
+        nativeStackArguments(child.pid, directory, command),
+        { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+      debuggerClosed = once(debuggerProcess, "close");
+      void debuggerClosed.catch(() => {});
+      debuggerProcess.stdout.on("data", (chunk) => { output = (output + chunk).slice(-512 * 1024); });
+      debuggerProcess.stderr.on("data", (chunk) => { errorOutput = (errorOutput + chunk).slice(-64 * 1024); });
+    };
+    try {
+      const readyDebugger = Promise.withResolvers();
+      startDebugger(".echo pwragent-noninvasive-ready;~* kn 40");
+      debuggerProcess.stdout.on("data", () => {
+        if (output.includes("pwragent-noninvasive-ready")) readyDebugger.resolve();
+      });
+      debuggerProcess.once("error", readyDebugger.reject);
+      debuggerProcess.once("exit", () => readyDebugger.reject(new Error("Noninvasive debugger exited before readiness")));
+      await bounded(readyDebugger.promise, 5000, "Noninvasive debugger readiness was not observed");
+      await waitFor(() => parseNativeStacks(output).frameCount > 0, "Noninvasive debugger did not produce native frames");
+      const attachedBeat = readBeat();
+      await waitFor(() => readBeat() > attachedBeat + 2, "Debugger suspended the controlled source");
+      assert.equal(debuggerProcess.exitCode, null);
+      debuggerProcess.kill();
+      await bounded(debuggerClosed, 2000, "Cancelled noninvasive debugger did not close");
+      const cancelledBeat = readBeat();
+      await waitFor(() => readBeat() > cancelledBeat + 2, "Debugger cancellation suspended the controlled source");
+
+      // Exercise the ordinary capture command too: q must leave the same
+      // controlled source alive, just as cancellation does.
+      startDebugger();
+      await bounded(debuggerClosed, 5000, "Noninvasive debugger quit did not close");
+      assert.equal(debuggerProcess.exitCode, 0, "Noninvasive debugger quit failed");
+      assert(parseNativeStacks(output).frameCount > 0, "Noninvasive debugger did not produce native frames");
+      const quitBeat = readBeat();
+      await waitFor(() => readBeat() > quitBeat + 2, "Debugger quit stopped the controlled source");
+      noninvasiveDebuggerVerified = true;
+      debuggerQuitVerified = true;
+    } catch (error) {
+      error.nativeDebugger = { ...nativeDebuggerStatus(output + "\n" + errorOutput), exitCode: debuggerProcess?.exitCode };
+      throw error;
+    }
   }
 
   writeFileSync(stopSource, "stop");
   await bounded(sourceClosed, 3000, "Controlled source did not finish");
   await waitFor(() => records.some((row) => row.kind === "gone" && row.pid === child.pid
     && row.created === result.process.created && BigInt(row.nativeExit) > 0n), "Native source exit FILETIME was not retained");
-  probeResult = { creationIdentityVerified: true, nativeExitTimeVerified: true, noninvasiveDebuggerVerified, exactPipes };
+  probeResult = { creationIdentityVerified: true, nativeExitTimeVerified: true, noninvasiveDebuggerVerified, debuggerQuitVerified, exactPipes };
 } finally {
   try {
     if (debuggerProcess && debuggerProcess.exitCode === null && debuggerProcess.signalCode === null) {

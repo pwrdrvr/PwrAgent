@@ -1,11 +1,70 @@
+import { lstatSync, readdirSync } from "node:fs";
 import path from "node:path";
 
-export function nativeStackArguments(pid, cache, command = "~* kn 40;q") {
-  if (!Number.isSafeInteger(pid) || pid <= 0 || !path.isAbsolute(cache)) throw new Error("Invalid native stack target or local symbol cache.");
-  // -pvr never suspends the target. -pd also prevents target termination if a
-  // debugger session ends. Symbol downloads must happen before E2E starts.
-  return ["-pvr", "-pd", "-noinh", "-noshell", "-sins", "-netsyms:no",
-    "-y", "srv*" + cache, "-p", String(pid), "-c", command];
+function localDirectory(directory) {
+  return typeof directory === "string" && path.isAbsolute(directory)
+    && !/^[\\/]{2}|[;*\r\n]/.test(directory);
+}
+
+// SymChk writes <cache>/<name>.pdb/<GUID+age>/<name>.pdb. Enumerate those
+// directories explicitly: CDB rejects even a local srv* path with -netsyms:no.
+export function localSymbolDirectories(cache) {
+  if (!localDirectory(cache)) throw new Error("Invalid local symbol cache.");
+  const directories = [cache];
+  for (const pdb of readdirSync(cache, { withFileTypes: true })) {
+    if (!pdb.isDirectory() || !/^[a-z0-9_.-]+\.pdb$/i.test(pdb.name)) continue;
+    for (const identity of readdirSync(path.join(cache, pdb.name), { withFileTypes: true })) {
+      if (!identity.isDirectory() || !/^[a-f0-9]{33,42}$/i.test(identity.name)) continue;
+      const directory = path.join(cache, pdb.name, identity.name);
+      try {
+        if (lstatSync(path.join(directory, pdb.name)).isFile()) directories.push(directory);
+      } catch { /* A partial preload is not a usable PDB. */ }
+    }
+  }
+  return directories;
+}
+
+export function nativeStackArguments(pid, symbols, command = "~* kn 40;q") {
+  const directories = Array.isArray(symbols) ? symbols : [symbols];
+  if (!Number.isSafeInteger(pid) || pid <= 0 || !directories.length || !directories.every(localDirectory)) {
+    throw new Error("Invalid native stack target or local symbol directories.");
+  }
+  // -pvr never suspends or invasively attaches to the target. Do not combine
+  // it with -pd: current CDB exits before attaching (detach-on-exit unsupported).
+  // Symbol downloads must happen before E2E starts.
+  return ["-pvr", "-noinh", "-noshell", "-sins", "-netsyms:no",
+    "-y", directories.join(";"), "-p", String(pid), "-c", command];
+}
+
+export function nativeDebuggerStatus(output) {
+  return {
+    detachUnsupported: /The system does not support detach on exit/i.test(output),
+    networkPathDisallowed: /Network path disallowed/i.test(output),
+  };
+}
+
+const probeReasons = new Map([
+  ["Noninvasive debugger exited before readiness", "debugger-exited-before-readiness"],
+  ["Noninvasive debugger readiness was not observed", "debugger-readiness-timeout"],
+  ["Noninvasive debugger did not produce native frames", "debugger-no-native-frames"],
+  ["Debugger suspended the controlled source", "debugger-blocked-heartbeat"],
+  ["Cancelled noninvasive debugger did not close", "debugger-cancellation-timeout"],
+  ["Debugger cancellation suspended the controlled source", "debugger-cancellation-blocked-heartbeat"],
+  ["Noninvasive debugger quit did not close", "debugger-quit-timeout"],
+  ["Noninvasive debugger quit failed", "debugger-quit-failed"],
+  ["Debugger quit stopped the controlled source", "debugger-quit-blocked-heartbeat"],
+]);
+export function nativeProbeFailure(error) {
+  // Never persist an exception message or raw debugger output: either can
+  // include private paths, command arguments and register contents.
+  return {
+    reason: probeReasons.get(error?.message) ?? "controlled-probe-failed",
+    debugger: error?.nativeDebugger && {
+      exitCode: Number.isSafeInteger(error.nativeDebugger.exitCode) ? error.nativeDebugger.exitCode : undefined,
+      detachUnsupported: error.nativeDebugger.detachUnsupported === true,
+      networkPathDisallowed: error.nativeDebugger.networkPathDisallowed === true,
+    },
+  };
 }
 
 export function verifiedNativeStack(before, after, expectedCreated, stack) {
