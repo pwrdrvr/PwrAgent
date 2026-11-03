@@ -1231,6 +1231,11 @@ describe("federation agent tools service", () => {
     await create({});
     expect(materializeDirectoryLaunchpad.mock.calls[2]![0]).not.toHaveProperty("worktreeBase");
     expect(materializeDirectoryLaunchpad.mock.calls[2]![0].launchpad).toMatchObject({ branchName: "feature/unpublished" });
+    expect(materializeDirectoryLaunchpad.mock.calls[2]![0]).not.toHaveProperty("requiredWorkMode");
+
+    // A caller that must not share the checkout says so; the owner refuses.
+    await create({ requiredWorkMode: "worktree" });
+    expect(materializeDirectoryLaunchpad.mock.calls[3]![0].requiredWorkMode).toBe("worktree");
   });
 
   it("uses an explicit backend instead of a remote Grok launchpad backend", async () => {

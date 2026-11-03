@@ -15963,6 +15963,95 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("refuses a launchpad whose required worktree resolved to the project checkout", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const prepareLaunchpadWorkspace = vi.fn(async (_launchpad: object) => ({
+      cwd: "/repo/project",
+      workMode: "local" as const,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: { prepareLaunchpadWorkspace } as never,
+    });
+    const launchpad = {
+      directoryKey: "directory:/repo/project",
+      directoryKind: "directory" as const,
+      directoryLabel: "project",
+      directoryPath: "/repo/project",
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      workMode: "worktree" as const,
+      createdAt: 1000,
+      updatedAt: 2000,
+    };
+
+    // A peer's New worktree card must not share the peer's checkout.
+    await expect(registry.materializeDirectoryLaunchpad({
+      directoryKey: launchpad.directoryKey,
+      launchpad,
+      requiredWorkMode: "worktree",
+      input: [{ type: "text", text: "Rewrite the CLI" }],
+    })).rejects.toThrow(/worktree/);
+    expect(codexClient.lastStartThreadParams).toBeUndefined();
+
+    // Without the requirement the fallback is unchanged.
+    await expect(registry.materializeDirectoryLaunchpad({
+      directoryKey: launchpad.directoryKey,
+      launchpad,
+    })).resolves.toMatchObject({ workMode: "local" });
+
+    await registry.close();
+  });
+
+  it("keeps a required worktree and removes it when the requirement fails", async () => {
+    const rollback = vi.fn(async () => {});
+    const prepareLaunchpadWorkspace = vi.fn(async (_launchpad: object) => ({
+      cwd: "/worktrees/abc/project",
+      repositoryPath: "/repo/project",
+      workMode: "worktree" as const,
+      rollback,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace,
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+    const launchpad = {
+      directoryKey: "directory:/repo/project",
+      directoryKind: "directory" as const,
+      directoryLabel: "project",
+      directoryPath: "/repo/project",
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      workMode: "worktree" as const,
+      createdAt: 1000,
+      updatedAt: 2000,
+    };
+
+    await expect(registry.materializeDirectoryLaunchpad({
+      directoryKey: launchpad.directoryKey,
+      launchpad,
+      requiredWorkMode: "worktree",
+    })).resolves.toMatchObject({ workMode: "worktree" });
+    expect(rollback).not.toHaveBeenCalled();
+
+    // The workspace prepared for a refused request is not left behind.
+    await expect(registry.materializeDirectoryLaunchpad({
+      directoryKey: launchpad.directoryKey,
+      launchpad,
+      requiredWorkMode: "local",
+    })).rejects.toThrow(/local/);
+    expect(rollback).toHaveBeenCalledTimes(1);
+
+    await registry.close();
+  });
+
   it("preserves the project Working Updates override after materialization", async () => {
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({

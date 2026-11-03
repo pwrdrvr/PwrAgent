@@ -293,6 +293,27 @@ describe("ThreadTodoService", () => {
     });
   });
 
+  it("puts a peer's start notice in the result", async () => {
+    const startThreadOnInstance = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "remote-1",
+      instanceId: "peer-1",
+      instanceLabel: "Studio Mac",
+      notice: "Studio Mac could not create a worktree. The thread runs in its project checkout.",
+    }));
+    const service = createService({ mergePullRequest: vi.fn(), startThread: vi.fn(), startThreadOnInstance });
+    const todo = service.add({
+      ...THREAD,
+      input: { title: "Build", action: { type: "start_thread", prompt: "Build it", workMode: "worktree" } },
+    }).todo;
+
+    await expect(service.runAction(todo.id, { startOnInstanceId: "peer-1" })).resolves.toMatchObject({
+      status: "done",
+      result: "Started thread on Studio Mac. Studio Mac could not create a worktree. The thread runs in its project checkout.",
+      startedThread: { threadId: "remote-1", instanceId: "peer-1" },
+    });
+  });
+
   it("refuses a peer start without federation", async () => {
     const service = createService({ mergePullRequest: vi.fn(), startThread: vi.fn() });
     const todo = service.add({
