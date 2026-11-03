@@ -622,11 +622,19 @@ describe("archive worktrees across a desktop restart", () => {
     let transport!: ArchiveWorktreeTransport;
     const notification = { method: terminal === "cancelled" ? "turn/cancelled" as const : terminal === "failed" ? "turn/failed" as const : "turn/completed" as const,
       params: { threadId: child.id, turnId: "native-review-turn", turn: { id: "native-review-turn",
-        status: terminal === "cancelled" ? "cancelled" as const : terminal === "failed" ? "failed" as const : "completed" as const } } };
+        status: terminal === "cancelled" ? "cancelled" as const : terminal === "failed" ? "failed" as const : "completed" as const,
+        ...(terminal === "failed" ? { error: { message: "Contrived review failure" } } : {}) } } };
     ArchiveWorktreeTransport.onReviewStart = (_params, connection) => {
       transport = connection;
-      if (terminal === "early") transport.emitNotification(notification);
-      return { reviewThreadId: child.id, turn: { id: "native-review-turn", status: "inProgress" } };
+      const result = { reviewThreadId: child.id, turn: { id: "native-review-turn", status: "inProgress" } };
+      if (terminal === "early") {
+        const completed = new Promise<void>((resolve) => instance.registry.onEvent((event) => {
+          if (event.notification.method === notification.method && event.notification.params.turnId === "native-review-turn") resolve();
+        }));
+        transport.emitNotification(notification);
+        return completed.then(() => result);
+      }
+      return result;
     };
     const archive = terminal === "archive failure" ? vi.spyOn(instance.client, "archiveThread").mockRejectedValueOnce(new Error("Provider archive rejected")) : undefined;
     const { writes } = await measureSqliteWrites(async () => {
@@ -648,8 +656,22 @@ describe("archive worktrees across a desktop restart", () => {
     expect(parent.archived).toBeUndefined();
     expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
     expect(ArchiveWorktreeTransport.requests.filter((request) => request.method === "thread/unsubscribe" && request.params.threadId === child.id)).toHaveLength(kept ? 0 : 1);
-    const subAgents = (await instance.store.getThreadOverlayState({ backend: "codex", threadId: parent.id }))?.subAgents;
-    expect(subAgents?.some((agent) => agent.monitorThreadId === child.id && ["success", "cancelled", "failed"].includes(agent.status))).toBe(true);
+    const subAgent = await instance.store.getThreadSubAgent({ backend: "codex", threadId: parent.id, monitorId: "review:native-review-turn" });
+    expect(subAgent?.monitorThreadId).toBe(child.id);
+    expect(["success", "cancelled", "failed"]).toContain(subAgent?.status);
+  });
+
+  it.each(["parent", "ordinary", "wrong parent", "unknown"])("does not retire a live or unrelated checkout owner (%s)", async (kind) => {
+    const fixture = await createFixture();
+    const child: ArchiveWorktreeThread = { id: "review-child", cwd: fixture.worktree, source: kind === "ordinary" ? "cli" : "subAgentReview",
+      ...(kind === "ordinary" ? {} : { wireSource: { subAgent: "review" as const }, threadSource: "subagent" as const }),
+      parentThreadId: "actual-parent", status: kind === "unknown" ? { type: "systemError" } : { type: "notLoaded" } };
+    ArchiveWorktreeTransport.threads = [child];
+    const instance = fixture.reopen();
+    expect(await instance.client.retireReviewThread({ threadId: child.id,
+      parentThreadId: kind === "parent" ? child.id : kind === "wrong parent" ? "other-parent" : "actual-parent" })).toBe(false);
+    expect(ArchiveWorktreeTransport.requests.some((request) => request.method === "thread/archive" || request.method === "thread/unsubscribe")).toBe(false);
+    expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
   });
 
   it.each(["active", "unknown", "ordinary", "late-active"])("preserves a checkout with a real or uncertain review owner (%s)", async (kind) => {

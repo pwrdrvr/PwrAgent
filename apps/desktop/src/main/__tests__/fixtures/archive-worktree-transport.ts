@@ -83,6 +83,10 @@ export class ArchiveWorktreeTransport implements JsonRpcTransport {
     } else if (request.method === "model/list") {
       result = { data: [], nextCursor: null };
     }
+    if (result instanceof Promise) {
+      void result.then((value) => this.handler(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: value })));
+      return;
+    }
     this.handler(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
     if (request.method === "thread/archive" && ArchiveWorktreeTransport.emitArchiveNotifications) {
       this.emitNotification({ method: "thread/archived", params: { threadId: String(params.threadId) } });
