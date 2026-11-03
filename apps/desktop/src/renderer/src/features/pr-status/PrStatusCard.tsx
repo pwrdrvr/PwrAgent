@@ -146,7 +146,7 @@ export function PrStatusCard(props: {
                 </span>
               </div>
               {row.detail ? (
-                <span className="pr-status-card__row-detail" title={row.detail}>
+                <span className="pr-status-card__row-detail">
                   {row.detail}
                 </span>
               ) : null}

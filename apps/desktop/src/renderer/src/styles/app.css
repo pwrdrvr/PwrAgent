@@ -8498,6 +8498,7 @@ a.button {
 }
 
 .pr-status-card__row-label {
+  flex: none;
   color: var(--text-secondary);
   font-size: 12px;
 }
@@ -8518,13 +8519,10 @@ a.button {
   color: var(--text-muted);
 }
 
-/* The label keeps its line; only a value that cannot fit gives way. */
-.pr-status-card__wake .pr-status-card__row-label {
-  flex: none;
-}
-
 /* Prose under a wake row, such as the thread that handles Auto-fix. Two
-   lines at most, so a long title cannot grow the card. */
+   lines at most, so a long title cannot grow the card. The card takes no
+   pointer events, so nothing can reveal the clipped rest; the side panel's
+   watch list shows the full title. */
 .pr-status-card__row-detail {
   display: -webkit-box;
   overflow: hidden;

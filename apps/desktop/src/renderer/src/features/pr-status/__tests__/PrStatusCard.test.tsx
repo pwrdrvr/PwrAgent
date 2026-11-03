@@ -92,7 +92,6 @@ describe("PrStatusCard", () => {
     expect(text(container, ".pr-status-card__row-value")).toBe("handled elsewhere");
     const detail = container.querySelector(".pr-status-card__row-detail");
     expect(detail?.textContent).toBe(`By ${longTitle}`);
-    expect(detail).toHaveAttribute("title", `By ${longTitle}`);
 
     container = renderBlocked({ reason: "handled_by_other_thread" });
     expect(text(container, ".pr-status-card__row-value")).toBe("handled elsewhere");
