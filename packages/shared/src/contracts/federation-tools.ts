@@ -13,6 +13,7 @@ import type {
 import type {
   DirectorySummaryKind,
   LaunchpadWorkMode,
+  LaunchpadWorktreeBase,
 } from "./navigation";
 import type {
   AppServerBackendKind,
@@ -228,6 +229,12 @@ export type CreateInstanceThreadToolArgs = {
   workMode?: LaunchpadWorkMode;
   /** Existing base branch/ref for workMode=worktree, e.g. `origin/main`. */
   branchName?: string;
+  /**
+   * Base for a new worktree when `branchName` is omitted. `default_branch`
+   * also skips the base saved on the project's launchpad. Owners that
+   * predate this field start from the checkout's current branch.
+   */
+  worktreeBase?: LaunchpadWorktreeBase;
   /**
    * Group the created thread beneath the calling thread, even when the two
    * threads live on different federation instances. Defaults to ungrouped.
