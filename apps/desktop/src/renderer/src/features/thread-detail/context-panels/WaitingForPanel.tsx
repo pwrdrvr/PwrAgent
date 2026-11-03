@@ -500,15 +500,12 @@ function describeWake(
       };
     }
     case "backend_wake": {
-      const plainTitle = describeBackendWakeTitle(wake, now);
-      const when = wake.wakesAt !== undefined && wake.wakesAt > now ? formatWatchTime(wake.wakesAt, now) : undefined;
+      const { lead, when } = describeBackendWakeTitle(wake, now);
       const prompt = describeBackendWakePrompt(wake);
       return {
         icon: wake.wake.recurring ? <HistoryIcon size={12} /> : <ClockIcon size={12} />,
-        title: when && plainTitle.endsWith(when)
-          ? <>{plainTitle.slice(0, -when.length)}<span className="waiting-for-panel__when">{when}</span></>
-          : plainTitle,
-        plainTitle,
+        title: when ? <>{lead}<span className="waiting-for-panel__when">{when}</span></> : lead,
+        plainTitle: `${lead}${when ?? ""}`,
         sub: (
           <>
             <span className="waiting-for-panel__quote">{`“${clipText(prompt, 90)}” `}</span>
@@ -534,16 +531,16 @@ function describeWake(
   }
 }
 
-/** A wake-up by its time, a cron by its schedule. */
-function describeBackendWakeTitle(wake: BackendWake, now: number): string {
+/** A wake-up by its time, a cron by its schedule. `when` is a time still ahead. */
+function describeBackendWakeTitle(wake: BackendWake, now: number): { lead: string; when?: string } {
   const { wake: scheduled } = wake;
   if (scheduled.recurring) {
     const schedule = scheduled.humanSchedule?.trim();
-    return schedule ? `Claude repeats ${lowerFirst(schedule)}` : `Claude repeats on ${scheduled.schedule || "a schedule"}`;
+    return { lead: schedule ? `Claude repeats ${lowerFirst(schedule)}` : `Claude repeats on ${scheduled.schedule || "a schedule"}` };
   }
   const noun = scheduled.origin === "loop_wakeup" ? "Claude loop" : "Claude reminder";
-  if (wake.wakesAt === undefined) return scheduled.schedule ? `${noun} on ${scheduled.schedule}` : `${noun} scheduled`;
-  return wake.wakesAt > now ? `${noun} at ${formatWatchTime(wake.wakesAt, now)}` : `${noun} due now`;
+  if (wake.wakesAt === undefined) return { lead: scheduled.schedule ? `${noun} on ${scheduled.schedule}` : `${noun} scheduled` };
+  return wake.wakesAt > now ? { lead: `${noun} at `, when: formatWatchTime(wake.wakesAt, now) } : { lead: `${noun} due now` };
 }
 
 /** The autonomous /loop sends itself a sentinel, not words. */

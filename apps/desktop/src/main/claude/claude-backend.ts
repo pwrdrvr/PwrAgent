@@ -769,8 +769,11 @@ export class ClaudeBackend {
 
   async setArchived(threadId: string, archived: boolean): Promise<void> {
     const live = this.sessions.get(threadId);
-    if (live?.turn) throw new Error("Interrupt the active Claude turn before archiving.");
-    if (live && (live.tasks.active().length > 0 || live.sessionWakes.pending().length === 0)) {
+    // A fired wake runs Claude before its init opens the desktop turn.
+    if (live?.turn || (live?.sessionState !== undefined && live.sessionState !== "idle")) {
+      throw new Error("Interrupt the active Claude turn before archiving.");
+    }
+    if (live && (!archived || live.tasks.active().length > 0 || !live.sessionWakes.hasPending())) {
       throw new Error("Stop Claude's background tasks before archiving.");
     }
     // Only Claude's own scheduled wakes keep this process; archiving ends them.
@@ -1507,7 +1510,7 @@ export class ClaudeBackend {
 
   /** Ending the process would end work: a running task, or a wake Claude scheduled. */
   private processHoldsWork(live: LiveSession): boolean {
-    return live.tasks.active().length > 0 || live.sessionWakes.pending().length > 0;
+    return live.tasks.active().length > 0 || live.sessionWakes.hasPending();
   }
 
   /** Bound the wait for a follow-up Claude may not run. */

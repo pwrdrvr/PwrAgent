@@ -2240,6 +2240,10 @@ describe("Claude SDK backend", () => {
   });
 
   it("archives a thread whose process stays open only for Claude's own wakes, and ends them", async () => {
+    const fired = Promise.withResolvers<void>();
+    const running = Promise.withResolvers<void>();
+    const finished = Promise.withResolvers<void>();
+    const idle = Promise.withResolvers<void>();
     const f = await fixture(async function* (options, prompt) {
       yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
       await runHooks(options, "PostToolUse", {
@@ -2250,6 +2254,14 @@ describe("Claude SDK backend", () => {
         id: "scheduled", content: [{ type: "text", text: "I'll check CI every five minutes." }],
       } } as SDKMessage;
       yield { type: "result", subtype: "success", is_error: false, result: "scheduled" } as SDKMessage;
+      await fired.promise;
+      // The cron fires: Claude runs before its init opens a desktop turn.
+      yield { type: "system", subtype: "session_state_changed", state: "running" } as SDKMessage;
+      // The pump asks for the next message only once it has handled this one.
+      running.resolve();
+      await finished.promise;
+      yield { type: "system", subtype: "session_state_changed", state: "idle" } as SDKMessage;
+      idle.resolve();
       // Claude keeps reading its input until the session closes.
       for await (const _message of prompt) { /* drain */ }
     });
@@ -2260,6 +2272,14 @@ describe("Claude SDK backend", () => {
       id: "e5f6a7b8", origin: "cron", humanSchedule: "Every 5 minutes", recurring: true,
     })]);
     expect(f.backend.liveSessionThreadIds()).toEqual([threadId]);
+    // Restoring a thread never ends Claude's wakes.
+    await expect(f.backend.setArchived(threadId, false)).rejects.toThrow("Stop Claude's background tasks before archiving.");
+    fired.resolve();
+    await running.promise;
+    await expect(f.backend.setArchived(threadId, true)).rejects.toThrow("Interrupt the active Claude turn before archiving.");
+    expect(f.close).not.toHaveBeenCalled();
+    finished.resolve();
+    await idle.promise;
 
     await f.backend.setArchived(threadId, true);
     expect(f.close).toHaveBeenCalled();

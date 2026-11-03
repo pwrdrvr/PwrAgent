@@ -60,6 +60,7 @@ describe("ClaudeSessionWakeTracker", () => {
 
   it("follows deletes and a loop's stop between Stop hooks", () => {
     const { wakes, now } = tracker();
+    wakes.applyToolResult("ScheduleWakeup", { prompt: "/loop", delaySeconds: 60, reason: "Soon." }, { scheduledFor: now() + MINUTE });
     wakes.replace([
       { id: "loop", schedule: "5 14 3 11 *", recurring: false, prompt: "/loop" },
       { id: "cron", schedule: "*/5 * * * *", recurring: true, prompt: "Check CI" },
@@ -86,17 +87,36 @@ describe("ClaudeSessionWakeTracker", () => {
     wakes.replace([
       { id: "loop", schedule: "5 14 3 11 *", recurring: false, prompt: "/loop" },
       { id: "cron", schedule: "*/5 * * * *", recurring: true, prompt: "Check CI" },
-      // A one-shot with no known time waits for the next Stop hook.
-      { id: "untimed", schedule: "0 9 4 11 *", recurring: false, prompt: "Remind me" },
+      // A one-shot whose time cannot be read from its schedule.
+      { id: "untimed", schedule: "*/30 9 * * 1", recurring: false, prompt: "Remind me" },
     ]);
+    expect(wakes.hasPending()).toBe(true);
     expect(wakes.nextExpiry()).toBe(now() + MINUTE + 60 * MINUTE);
     advance(62 * MINUTE);
     expect(wakes.pending().map((wake) => wake.id)).toEqual(["cron", "untimed"]);
-    // Claude expires a recurring job after seven days.
+    // Claude expires a recurring job after seven days, and an untimed one-shot holds no longer.
     expect(wakes.nextExpiry()).toBe(now() - 62 * MINUTE + 7 * DAY);
     advance(7 * DAY);
-    expect(wakes.pending().map((wake) => wake.id)).toEqual(["untimed"]);
+    expect(wakes.pending()).toEqual([]);
+    expect(wakes.hasPending()).toBe(false);
     expect(wakes.nextExpiry()).toBeUndefined();
+  });
+
+  it("reads a one-shot's fire time from its pinned schedule, and calls an unrecorded one a reminder", () => {
+    const start = new Date(2026, 10, 3, 12, 0).getTime();
+    const { wakes } = tracker(start);
+    wakes.replace([
+      { id: "remind", schedule: "30 14 3 11 *", recurring: false, prompt: "Check the deploy" },
+      // 31 April does not exist, so there is no time to read.
+      { id: "never", schedule: "0 9 31 4 *", recurring: false, prompt: "Never" },
+    ]);
+    expect(wakes.pending()).toEqual([
+      expect.objectContaining({ id: "remind", origin: "cron", nextFireAt: new Date(2026, 10, 3, 14, 30).getTime() }),
+      expect.not.objectContaining({ nextFireAt: expect.anything() }),
+    ]);
+    // A loop's stop leaves a reminder alone.
+    wakes.applyToolResult("ScheduleWakeup", { stop: true }, { scheduledFor: start, clampedDelaySeconds: 0, wasClamped: false, stopped: true });
+    expect(wakes.pending().map((wake) => wake.id)).toEqual(["remind", "never"]);
   });
 });
 

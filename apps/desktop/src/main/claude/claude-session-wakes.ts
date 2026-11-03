@@ -19,8 +19,11 @@ export type ClaudeSessionWake = AppServerBackendWake & {
  */
 const ONE_SHOT_OVERDUE_MS = 60 * 60_000;
 
-/** The CLI expires a recurring job after seven days by default. */
-const RECURRING_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+/**
+ * The CLI expires a recurring job after seven days by default. A one-shot
+ * wake with no fire time stops holding the session after as long.
+ */
+const MAX_AGE_MS = 7 * 24 * 60 * 60_000;
 
 /** The CLI clips `session_crons` prompts with an in-string `… [+N chars]` marker. */
 const CLIPPED_PROMPT_MARKER = /… \[\+\d+ chars\]$/;
@@ -50,16 +53,19 @@ export class ClaudeSessionWakeTracker {
       const known = this.wakes.get(cron.id);
       const claimed = known ? -1 : cron.recurring ? -1 : unclaimed.findIndex((wakeup) => samePrompt(wakeup.prompt, cron.prompt));
       const wakeup = claimed >= 0 ? unclaimed.splice(claimed, 1)[0] : undefined;
+      const fireAt = known?.nextFireAt ?? wakeup?.scheduledFor
+        ?? (cron.recurring ? undefined : oneShotFireTime(cron.schedule, now));
       next.set(cron.id, {
         id: cron.id,
-        origin: known?.origin ?? (wakeup || !cron.recurring ? "loop_wakeup" : "cron"),
+        // Only a recorded ScheduleWakeup is a /loop wake-up.
+        origin: known?.origin ?? (wakeup ? "loop_wakeup" : "cron"),
         schedule: cron.schedule,
         recurring: cron.recurring,
         // The set clips long prompts; a tool's input has the whole text.
         prompt: known?.prompt ?? wakeup?.prompt ?? cron.prompt,
         ...(known?.humanSchedule ? { humanSchedule: known.humanSchedule } : {}),
         ...(known?.reason ?? wakeup?.reason ? { reason: known?.reason ?? wakeup?.reason } : {}),
-        ...(known?.nextFireAt ?? wakeup?.scheduledFor ? { nextFireAt: known?.nextFireAt ?? wakeup?.scheduledFor } : {}),
+        ...(fireAt !== undefined ? { nextFireAt: fireAt } : {}),
         firstSeenAt: known?.firstSeenAt ?? wakeup?.seenAt ?? now,
       });
     }
@@ -90,15 +96,19 @@ export class ClaudeSessionWakeTracker {
     } else if (toolName === "CronCreate") {
       if (typeof output.id !== "string" || typeof fields.cron !== "string" || typeof fields.prompt !== "string") return;
       if (output.durable === true) return;
+      const now = this.now();
+      const recurring = typeof output.recurring === "boolean" ? output.recurring : fields.recurring !== false;
+      const fireAt = typeof output.nextFireAt === "number" ? output.nextFireAt
+        : recurring ? undefined : oneShotFireTime(fields.cron, now);
       this.wakes.set(output.id, {
         id: output.id,
         origin: "cron",
         schedule: fields.cron,
-        recurring: typeof output.recurring === "boolean" ? output.recurring : fields.recurring !== false,
+        recurring,
         prompt: fields.prompt,
         ...(typeof output.humanSchedule === "string" && output.humanSchedule.trim() ? { humanSchedule: output.humanSchedule } : {}),
-        ...(typeof output.nextFireAt === "number" ? { nextFireAt: output.nextFireAt } : {}),
-        firstSeenAt: this.now(),
+        ...(fireAt !== undefined ? { nextFireAt: fireAt } : {}),
+        firstSeenAt: now,
       });
     } else if (toolName === "CronDelete") {
       if (typeof output.id === "string") this.wakes.delete(output.id);
@@ -110,9 +120,7 @@ export class ClaudeSessionWakeTracker {
    * have fired long ago, so a missed Stop hook cannot hold a process forever.
    */
   pending(): AppServerBackendWake[] {
-    const now = this.now();
-    for (const [id, wake] of this.wakes) if (this.expiresAt(wake) <= now) this.wakes.delete(id);
-    this.loopWakeups = this.loopWakeups.filter((wakeup) => wakeup.scheduledFor + ONE_SHOT_OVERDUE_MS > now);
+    const now = this.prune();
     const rows: AppServerBackendWake[] = [...this.wakes.values()].map(({ firstSeenAt, nextFireAt, ...wake }) => ({
       ...wake,
       // A recurring job's first fire time goes stale once it passes.
@@ -136,19 +144,51 @@ export class ClaudeSessionWakeTracker {
       || (left.createdAt ?? 0) - (right.createdAt ?? 0));
   }
 
+  /** Whether any wake is still to come; cheaper than `pending()`. */
+  hasPending(): boolean {
+    this.prune();
+    return this.wakes.size > 0 || this.loopWakeups.length > 0;
+  }
+
+  /** Drop wakes that no longer hold the session; returns the time it used. */
+  private prune(): number {
+    const now = this.now();
+    for (const [id, wake] of this.wakes) if (this.expiresAt(wake) <= now) this.wakes.delete(id);
+    this.loopWakeups = this.loopWakeups.filter((wakeup) => wakeup.scheduledFor + ONE_SHOT_OVERDUE_MS > now);
+    return now;
+  }
+
   /** The soonest time a tracked wake stops holding the session open. */
   nextExpiry(): number | undefined {
     const times = [
       ...[...this.wakes.values()].map((wake) => this.expiresAt(wake)),
       ...this.loopWakeups.map((wakeup) => wakeup.scheduledFor + ONE_SHOT_OVERDUE_MS),
-    ].filter(Number.isFinite);
+    ];
     return times.length ? Math.min(...times) : undefined;
   }
 
   private expiresAt(wake: ClaudeSessionWake): number {
-    if (wake.recurring) return wake.firstSeenAt + RECURRING_MAX_AGE_MS;
-    return wake.nextFireAt !== undefined ? wake.nextFireAt + ONE_SHOT_OVERDUE_MS : Infinity;
+    if (wake.recurring || wake.nextFireAt === undefined) return wake.firstSeenAt + MAX_AGE_MS;
+    return wake.nextFireAt + ONE_SHOT_OVERDUE_MS;
   }
+}
+
+/**
+ * A one-shot cron pins its minute, hour, day and month. Its next local match,
+ * counting one that passed within the overdue window, or undefined.
+ */
+function oneShotFireTime(schedule: string, now: number): number | undefined {
+  const fields = schedule.trim().split(/\s+/);
+  if (fields.length !== 5 || fields[4] !== "*" || !fields.slice(0, 4).every((field) => /^\d+$/.test(field))) return undefined;
+  const [minute, hour, day, month] = fields.slice(0, 4).map(Number) as [number, number, number, number];
+  const year = new Date(now).getFullYear();
+  for (const candidate of [year, year + 1]) {
+    const at = new Date(candidate, month - 1, day, hour, minute);
+    // Date rolls an impossible day, such as 31 4, into the next month.
+    if (at.getMonth() !== month - 1 || at.getDate() !== day || at.getHours() !== hour || at.getMinutes() !== minute) continue;
+    if (at.getTime() > now - ONE_SHOT_OVERDUE_MS) return at.getTime();
+  }
+  return undefined;
 }
 
 /** Whether a clipped `session_crons` prompt is the start of a tool's prompt. */

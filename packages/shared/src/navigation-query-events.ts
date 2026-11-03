@@ -53,6 +53,8 @@ const THREAD_ROW_ONLY_METHODS = new Set([
   "thread/subAgents/updated",
   // Background tasks only toggle the owning row's working marker.
   "thread/backgroundTasks/updated",
+  // A backend's own scheduled wakes refresh only that thread's Waiting for.
+  "thread/sessionWakes/updated",
   "turn/started", "turn/completed", "turn/failed", "turn/cancelled",
 ]);
 

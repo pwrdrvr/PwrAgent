@@ -347,9 +347,12 @@ its turn ends. When a wake fires, Claude starts a native turn, which PwrAgent
 shows as it shows a task follow-up. A relaunch for new settings waits while a
 wake is pending, and Stop on a turn interrupts it instead of closing the query.
 
-A one-shot wake more than an hour past its fire time, or a recurring job seven
-days after PwrAgent first saw it (the CLI's default expiry), stops holding the
-session. That bounds a missed `Stop` hook.
+A one-shot wake more than an hour past its fire time stops holding the
+session. A one-shot's time comes from its tool result, or else from its pinned
+cron fields. A recurring job, or a one-shot with no readable time, stops seven
+days after PwrAgent first saw it (the CLI's default expiry for recurring jobs).
+That bounds a missed `Stop` hook. Archiving waits while a fired wake's turn
+runs, as it does for any turn.
 
 The set is published as `thread/sessionWakes/updated` and listed in Waiting
 for under Scheduled. The row has no Stop and tells the operator to ask Claude to
