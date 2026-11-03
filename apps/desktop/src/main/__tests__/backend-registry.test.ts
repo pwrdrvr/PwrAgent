@@ -3453,6 +3453,8 @@ describe("DesktopBackendRegistry", () => {
         inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
         discoverModels: async () => [
           { id: "fable", label: "Fable 5.1", current: true },
+          { id: "claude-custom-fixture", label: "Custom fixture", supportsReasoning: true,
+            reasoningEfforts: ["default", "max"], defaultReasoningEffort: "default" },
           { id: "claude-opus-4-8", label: "Opus 4.8", other: true, supportsReasoning: true,
             reasoningEfforts: ["default", "max"], defaultReasoningEffort: "default" },
         ],
@@ -16227,7 +16229,9 @@ describe("DesktopBackendRegistry", () => {
     ) => {
       const overlayStore = createOverlayStoreMock();
       const registry = new DesktopBackendRegistry({
-        codexClient: new MockBackendClient({ threads: [] }),
+        codexClient: new MockBackendClient({ threads: [], models: [
+          { id: "gpt-5.5", current: true }, { id: "project-model" },
+        ] }),
         overlayStore,
         gitDirectoryService: {
           prepareLaunchpadWorkspace: vi.fn(() => prepareLaunchpadWorkspace(overlayStore)),
@@ -16856,6 +16860,8 @@ script = "echo setup"
     const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
     const { acpBackendId, registry, sendControlPrompt, sessions } =
       createKimiAcpRegistry({
+        runtimeCapabilities: { schemaVersion: 1, status: "discovered", checkedAt: 1,
+          models: { availableModels: [{ id: "kimi-for-coding", label: "Kimi" }] } },
         codexEnvironmentCommandRunner: commandRunner,
         gitDirectoryService: {
           prepareLaunchpadWorkspace: vi.fn(async () => ({
@@ -22572,7 +22578,6 @@ script = "echo setup"
       backend: "codex",
       threadId: "turn-thread",
       input: [{ type: "text", text: "Use the migrated model" }],
-      model: "gpt-5.5",
       reasoningEffort: "low",
     });
     expect(codexClient.lastStartTurnParams).toMatchObject({
@@ -23901,11 +23906,7 @@ command = "pnpm grok"
     await registry.close();
   });
 
-  it("resolves a remote viewer's launchpad model against this instance's catalog", async () => {
-    // A remote viewer with its own Codex composes the draft against its own
-    // catalog and sends its own default model. The owner must start the
-    // thread and the review with a model it has, the one the remote window
-    // showed as the provider default.
+  it("refuses a viewer-only launchpad model before creating a thread or review", async () => {
     const launchpad = {
       directoryKey: "directory:/repo/app",
       directoryKind: "directory" as const,
@@ -23943,38 +23944,20 @@ command = "pnpm grok"
       };
     };
 
-    const remote = createRegistry();
-    const response = await remote.registry.materializeDirectoryLaunchpad(
-      {
-        directoryKey: launchpad.directoryKey,
-        reviewTarget: { type: "baseBranch", branch: "main" },
-        launchpad,
-      },
-      { sourceInstanceId: "pwr_viewer" as FederationInstanceId },
-    );
-    expect(response.turnStartFailure).toBeUndefined();
-    expect(remote.codexClient.lastStartThreadParams).toMatchObject({
-      model: "gpt-5.4",
-    });
-    expect(remote.codexClient.lastStartReviewParams).toMatchObject({
-      target: { type: "baseBranch", branch: "main" },
-      model: "gpt-5.4",
-    });
-    await remote.registry.close();
-
-    // The same draft from this instance's own window keeps the model it
-    // names, so the review refuses it as before.
-    const local = createRegistry();
-    const localResponse = await local.registry.materializeDirectoryLaunchpad({
-      directoryKey: launchpad.directoryKey,
-      reviewTarget: { type: "baseBranch", branch: "main" },
-      launchpad,
-    });
-    expect(localResponse.turnStartFailure).toMatchObject({
-      phase: "review",
-      message: expect.stringContaining("gpt-viewer-only"),
-    });
-    await local.registry.close();
+    for (const sourceInstanceId of [undefined, "pwr_viewer"]) {
+      const { registry, codexClient } = createRegistry();
+      try {
+        await expect(registry.materializeDirectoryLaunchpad({
+          directoryKey: launchpad.directoryKey,
+          reviewTarget: { type: "baseBranch", branch: "main" },
+          launchpad,
+        }, { sourceInstanceId })).rejects.toThrow('model="gpt-viewer-only" is not available for backend="codex"');
+        expect(codexClient.lastStartThreadParams).toBeUndefined();
+        expect(codexClient.lastStartReviewParams).toBeUndefined();
+      } finally {
+        await registry.close();
+      }
+    }
   });
 
   it("names a thread launched straight into a review", async () => {
@@ -28019,6 +28002,18 @@ command = "pnpm dev"
         .rejects.toThrow('model="opus" is not available');
       expect(prepareLaunchpadWorkspace).not.toHaveBeenCalled();
       expect(codexClient.lastForkThreadParams).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("refuses an invalid model carried only in ACP runtime settings", async () => {
+    const { registry, acpClient, acpBackendId } = createKimiAcpRegistry();
+    try {
+      await expect(registry.startThread({ backend: acpBackendId, cwd: "/fixture/repo",
+        acpRuntime: { currentModelId: "gpt-6.1-terra" } }))
+        .rejects.toThrow('model="gpt-6.1-terra" is not available');
+      expect(acpClient.startSession).not.toHaveBeenCalled();
     } finally {
       await registry.close();
     }

@@ -30665,14 +30665,28 @@ export class DesktopBackendRegistry {
 
   private async admitNewThreadModelSettings(
     backend: AppServerBackendKind,
-    settings: ModelSettings,
+    settings: ModelSettings & { acpRuntime?: BackendAcpSessionRuntimeState },
   ): Promise<ModelSettings> {
     if (!isAppServerBackendKind(backend)) {
       throw new Error(`backend="${backend}" is not available.`);
     }
+    const capabilities = isAcpBackendId(backend)
+      ? this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities
+      : undefined;
+    const modelOption = findAcpModelConfigOption(capabilities);
+    const effortOption = findAcpThoughtLevelConfigOption(capabilities);
+    const requested = {
+      ...settings,
+      model: settings.model
+        ?? (modelOption ? settings.acpRuntime?.configValues?.[modelOption.id] : undefined)
+        ?? settings.acpRuntime?.currentModelId,
+      reasoningEffort: settings.reasoningEffort
+        ?? (effortOption ? settings.acpRuntime?.configValues?.[effortOption.id] : undefined)
+        ?? settings.acpRuntime?.reasoningEffort,
+    };
     const options = await this.getBackendLaunchpadOptions(backend, "thread-admission");
-    const resolved = resolveModelSettingsFromOptions(backend, options, settings);
-    assertThreadModelSettingsAvailable(backend, options, settings, resolved.model);
+    const resolved = resolveModelSettingsFromOptions(backend, options, requested);
+    assertThreadModelSettingsAvailable(backend, options, requested, resolved.model);
     return this.applyCodexFastPolicy(backend, resolved);
   }
 

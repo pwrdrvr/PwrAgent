@@ -14,6 +14,9 @@ export function assertThreadModelSettingsAvailable(
   requested: RequestedModelSettings,
   resolvedModel?: string,
 ): void {
+  if (requested.fastMode !== undefined && typeof requested.fastMode !== "boolean") {
+    throw new Error("fastMode is not supported unless it is a boolean. Pass true or false, or omit fastMode.");
+  }
   const models = options?.models ?? [];
   const model = models.find((candidate) => candidate.id === (requested.model ?? resolvedModel));
   if (requested.model !== undefined && !model) {
