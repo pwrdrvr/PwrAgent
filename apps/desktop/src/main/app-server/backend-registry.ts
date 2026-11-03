@@ -30660,6 +30660,11 @@ export class DesktopBackendRegistry {
       await this.getBackendLaunchpadOptions(params.backend, "model-override-admission"),
       { model: params.model });
     if (params.backend === "codex") {
+      if (this.resolveCodexModelProvidersFn().length > 0
+        && this.codexClient.reportedModelProviderForThread
+        && !this.codexClient.reportedModelProviderForThread(params.threadId)) {
+        await this.codexClient.readThreadModelSettings?.({ threadId: params.threadId });
+      }
       this.assertCodexModelKeepsThreadProvider(params.threadId, params.model);
     }
   }

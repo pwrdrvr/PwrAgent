@@ -28072,6 +28072,31 @@ command = "pnpm dev"
     }
   });
 
+  it("reads unknown Codex provider ownership before admitting a matching model override", async () => {
+    let provider: string | undefined;
+    const model = "@fixture-provider/custom";
+    const readThreadModelSettings = vi.fn(async () => {
+      provider = "fixture-provider";
+      return { model };
+    });
+    const codexClient = Object.assign(new MockBackendClient({ models: [{ id: model }] }), {
+      modelProviderForThread: () => provider,
+      reportedModelProviderForThread: () => provider,
+      readThreadModelSettings,
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(),
+      resolveCodexModelProviders: () => [{ id: "fixture-provider", name: "Fixture", baseUrl: "http://localhost:9999/v1", models: ["custom"], discoverModels: false }] });
+    try {
+      await expect(registry.setThreadModelSettings({ backend: "codex", threadId: "fixture", model }))
+        .resolves.toMatchObject({ model });
+      expect(readThreadModelSettings).toHaveBeenCalledOnce();
+      await registry.setThreadModelSettings({ backend: "codex", threadId: "fixture", model });
+      expect(readThreadModelSettings).toHaveBeenCalledOnce();
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("applies model settings from the selected thread overlay when starting turns", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
