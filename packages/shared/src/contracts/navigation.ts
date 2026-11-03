@@ -3411,8 +3411,8 @@ export type ThreadOverlayState = {
    */
   questionnaireActivityLog?: ThreadQuestionnaireActivity[];
   /**
-   * Per-thread rewind log. Persisted to the overlay store, capped at
-   * `MAX_REWIND_LOG_ENTRIES` (oldest-first eviction).
+   * Latest rewind marker. Recording a rewind clears the thread's previous
+   * supplemental transcript history, including older rewind markers.
    */
   rewindLog?: ThreadRewindRecord[];
 };
@@ -3562,9 +3562,6 @@ export type ThreadTurnFailure = {
  * user-input turns does not evict permission or messaging history.
  */
 export const MAX_QUESTIONNAIRE_ACTIVITY_LOG_ENTRIES = 100;
-
-/** Maximum number of rewinds retained per thread in its rewind log. */
-export const MAX_REWIND_LOG_ENTRIES = 50;
 
 /**
  * A rewind, as the transcript's marker row shows it. The provider's own
