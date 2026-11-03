@@ -7052,7 +7052,8 @@ describe("App", () => {
     expect(row).toHaveFocus();
   });
 
-  it("skips the archived thread after the archive event automatically selects another thread", async () => {
+  it.each(["ready", "pending"])("skips the archived thread after automatic fallback with %s selected detail", async (detailState) => {
+    const bDetail = createDeferred<void>();
     const listeners = new Set<(event: AgentEvent) => void>();
     const threads = ["c", "a", "b"].map((id, index) => ({
       id, title: `History fixture ${id.toUpperCase()}`, titleSource: "explicit" as const,
@@ -7072,7 +7073,13 @@ describe("App", () => {
       },
       readThread,
     });
-    const selectedDetail = vi.fn(api.getNavigationSelectedDetail!);
+    const readSelectedDetail = api.getNavigationSelectedDetail!;
+    const selectedDetail = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (...args) => {
+      // Deliberately ignore cancellation: a late provider reply must not
+      // select B again or put it back in history after the archive fallback.
+      if (detailState === "pending" && args[0].ref.threadId === "b") await bDetail.promise;
+      return readSelectedDetail(...args);
+    });
     api.getNavigationSelectedDetail = selectedDetail;
     Object.defineProperty(window, "pwragent", { configurable: true, value: api });
     await renderThreadApp();
@@ -7092,6 +7099,7 @@ describe("App", () => {
       } });
     });
     await content.findByRole("heading", { level: 2, name: "History fixture C" });
+    act(() => bDetail.resolve());
     // The fallback has committed before Back is pressed. It must skip B
     // without starting a stale provider/detail lookup or showing no selection.
     await flushReactUpdates();
