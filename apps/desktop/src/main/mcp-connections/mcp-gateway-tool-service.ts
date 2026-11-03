@@ -18,7 +18,17 @@ export type McpGatewayApproval = boolean | {
 };
 export type McpGatewaySearchResult = {
   tools: Array<Omit<McpGatewayTool, "serverInstructions" | "serverIdentity"> & { invocation: { name: "call_mcp_tool"; codeModeName: "pwragent__call_mcp_tool" } }>;
-  servers?: Array<McpGatewayIdentity & { connectionId: string; serverName: string }>;
+  servers?: Array<McpGatewayIdentity & {
+    connectionId: string;
+    serverName: string;
+    /** Host-resolved alias in this thread's native MCP configuration. */
+    serverNameInAgent?: string;
+    resourceDiscovery?: {
+      server: string;
+      listTool: "list_mcp_resources";
+      readTool: "read_mcp_resource";
+    };
+  }>;
   unavailable: Array<{ connectionId: string; message: string }>;
   /** Each returned tool's server guidance, once per server. */
   serverInstructions?: Array<{ connectionId: string; serverName: string; instructions: string }>;
@@ -30,6 +40,8 @@ export type McpGatewayToolServiceOptions = {
   selectedConnections: (context: AgentToolCallContext) => Promise<string[]>;
   /** Trusted host identity, never supplied by tool arguments. */
   scopeKey?: (context: AgentToolCallContext) => string;
+  /** Current native bridge alias, never an upstream name or gateway worker alias. */
+  serverNameInAgent?: (connectionId: string, context: AgentToolCallContext) => string | undefined;
   /** A host policy can narrow discovery and invocation independently of approval. */
   toolAllowed?: (tool: McpGatewayTool, context: AgentToolCallContext) => boolean;
   /** `annotations` are the listed tool's own hints, under its exact schema revision. */
@@ -115,8 +127,15 @@ export class McpGatewayToolService {
       for (const { tool } of ranked.slice(0, args.limit ?? 3)) {
         const entry = { ...tool, invocation: { name: "call_mcp_tool" as const, codeModeName: "pwragent__call_mcp_tool" as const } };
         const identity = identities.get(tool.connectionId);
-        const servers = identity && !result.servers?.some((entry) => entry.connectionId === tool.connectionId)
-          ? [...(result.servers ?? []), { connectionId: tool.connectionId, serverName: tool.serverName, ...identity }]
+        const serverNameInAgent = this.options.serverNameInAgent?.(tool.connectionId, context);
+        const servers = (identity || serverNameInAgent) && !result.servers?.some((entry) => entry.connectionId === tool.connectionId)
+          ? [...(result.servers ?? []), {
+              ...identity, connectionId: tool.connectionId, serverName: tool.serverName,
+              ...(serverNameInAgent ? {
+                serverNameInAgent,
+                resourceDiscovery: { server: serverNameInAgent, listTool: "list_mcp_resources" as const, readTool: "read_mcp_resource" as const },
+              } : {}),
+            }]
           : result.servers;
         const guidance = instructions.get(tool.connectionId);
         const serverInstructions = guidance && !result.serverInstructions?.some((entry) => entry.connectionId === tool.connectionId)

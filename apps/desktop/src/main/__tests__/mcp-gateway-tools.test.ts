@@ -39,6 +39,58 @@ function fixture() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("fixed MCP gateway tools", () => {
+  it.each(["standalone", "desktop"])("returns a host-resolved resource route for a %s server", async (owner) => {
+    const f = fixture();
+    f.catalog.set("one", [{ ...tool(), serverIdentity: {
+      serverInfo: { name: "pwrdisk", version: "1" },
+      metadata: { interface: { owner }, serverNameInAgent: "untrusted-alias" },
+    } }, tool("one", "lookup_more")]);
+    let alias: string | undefined = "pwragent_one_native-1";
+    const service = new McpGatewayToolService({
+      connections: { requestGatewayToolOperation: f.requestGatewayToolOperation }, approve: f.approve,
+      selectedConnections: async () => f.selected.get("thread-a") ?? [],
+      serverNameInAgent: (id, caller) => {
+        expect(id).toBe("one");
+        expect(caller).toBe(context);
+        return alias;
+      },
+    });
+    const found = await service.search({ query: "lookup" }, context);
+    expect(found.servers).toHaveLength(1);
+    expect(found.servers![0]).toMatchObject({
+      serverNameInAgent: alias,
+      resourceDiscovery: { server: alias, listTool: "list_mcp_resources", readTool: "read_mcp_resource" },
+    });
+    expect(found.serverInstructions).toBeUndefined();
+    alias = "pwragent_one_native-2";
+    expect((await service.search({ query: "lookup" }, context)).servers![0].resourceDiscovery?.server).toBe(alias);
+    alias = undefined;
+    const withoutBridge = await service.search({ query: "lookup" }, context);
+    expect(withoutBridge.servers![0].serverNameInAgent).toBeUndefined();
+    expect(withoutBridge.servers![0].resourceDiscovery).toBeUndefined();
+    f.selected.set("thread-a", []);
+    expect(await service.search({ query: "lookup" }, context)).toEqual({ tools: [], unavailable: [] });
+    expect(f.approve).not.toHaveBeenCalled();
+    expect(f.requestGatewayToolOperation.mock.calls.every(([call]) => call.operation === "gateway/tools/list")).toBe(true);
+  });
+
+  it("drops resource routes when selection changes during discovery", async () => {
+    const f = fixture();
+    const serverNameInAgent = vi.fn(() => "pwragent_one_native");
+    f.requestGatewayToolOperation.mockImplementation(async () => {
+      f.selected.set("thread-a", []);
+      return [tool()];
+    });
+    const service = new McpGatewayToolService({
+      connections: { requestGatewayToolOperation: f.requestGatewayToolOperation }, approve: f.approve,
+      selectedConnections: async () => f.selected.get("thread-a") ?? [], serverNameInAgent,
+    });
+    const found = await service.search({ query: "lookup" }, context);
+    expect(found.tools).toEqual([]);
+    expect(found.servers).toBeUndefined();
+    expect(serverNameInAgent).not.toHaveBeenCalled();
+  });
+
   it("reports supplied process identity once without inferring a desktop owner", async () => {
     const f = fixture();
     const serverIdentity = { serverInfo: { name: "fixture", version: "3" }, metadata: { interface: { owner: "standalone", relayVersion: null } } };
