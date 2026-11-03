@@ -130,11 +130,12 @@ describe("Claude model catalog", () => {
     });
   });
 
-  it("waits for the metadata process to close after the SDK requests graceful shutdown", async () => {
+  it.each(["complete", "cancel"])("waits for metadata process/stdio close after %s requests graceful shutdown", async (outcome) => {
     let child: ChildProcess | undefined;
     let childClosed: Promise<void> | undefined;
     let spawnAgain: (() => void) | undefined;
     const closing = Promise.withResolvers<void>();
+    const controller = new AbortController();
     const source = [
       "process.stdin.setEncoding('utf8'); let input = '';",
       "process.stdin.on('data', chunk => { input += chunk;",
@@ -150,24 +151,29 @@ describe("Claude model catalog", () => {
       child.stdout!.once("data", () => closing.resolve());
       spawnAgain = () => { spawn(options); };
       return {
-        supportedModels: async () => [model("fable", "Fable 5.1")],
+        supportedModels: async () => outcome === "cancel"
+          ? await new Promise<ModelInfo[]>(() => {}) : [model("fable", "Fable 5.1")],
         close: () => { child!.stdin!.write("close\n"); },
       } as unknown as Query;
     };
-    const pending = discoverClaudeModels({ executable: "/fixture/claude", env: {}, query: run });
+    const pending = discoverClaudeModels({ executable: "/fixture/claude", env: {}, query: run, signal: controller.signal });
+    const assertion = outcome === "cancel"
+      ? expect(pending).rejects.toThrow("Metadata cancelled")
+      : expect(pending).resolves.toMatchObject([{ id: "fable" }]);
     let settled = false;
-    void pending.then(() => { settled = true; });
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    if (outcome === "cancel") controller.abort(new Error("Metadata cancelled"));
     try {
       await closing.promise;
       expect(settled).toBe(false);
       expect(() => spawnAgain!()).toThrow("Claude metadata query is closed");
       child!.stdin!.write("release\n");
-      await expect(pending).resolves.toMatchObject([{ id: "fable" }]);
+      await assertion;
       expect(child!.exitCode).toBe(0);
     } finally {
       if (child && child.exitCode === null) child.kill();
       await childClosed;
-      await pending;
+      await assertion;
     }
   });
 

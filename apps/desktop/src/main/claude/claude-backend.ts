@@ -511,6 +511,7 @@ export class ClaudeBackend {
   private discovery?: { models: boolean; promise: Promise<void> };
   private modelDiscovery?: Promise<void>;
   private readonly discoveryOperations = new Set<Promise<unknown>>();
+  private readonly discoveryController = new AbortController();
   private nextModelRefreshAt = 0;
   private models?: BackendModelOption[];
   // Account-wide, so one thread's turn must never clear another's view. The
@@ -560,7 +561,7 @@ export class ClaudeBackend {
         const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
         if (this.closing) return;
         this.installation = await this.ownDiscoveryOperation(
-          (this.options.inspectInstallation ?? inspectClaudeInstallation)({ env }),
+          (this.options.inspectInstallation ?? inspectClaudeInstallation)({ env, signal: this.discoveryController.signal }),
         );
         if (this.closing) return;
         if (models && this.installation.executable && this.installation.authStatus !== "sign-in-required") {
@@ -1233,7 +1234,7 @@ export class ClaudeBackend {
     this.modelDiscovery = (async () => {
       const models = await this.ownDiscoveryOperation(
         (this.options.discoverModels ?? discoverClaudeModels)({
-          executable, env, ...(version ? { cliVersion: version } : {}),
+          executable, env, signal: this.discoveryController.signal, ...(version ? { cliVersion: version } : {}),
         }),
       );
       if (this.closing) return;
@@ -2953,6 +2954,7 @@ export class ClaudeBackend {
 
   private async closeResources(): Promise<void> {
     this.closing = true;
+    this.discoveryController.abort();
     this.unsubscribePlanLimits();
     if (this.ownsPlanLimits) this.planLimits.close();
     for (const controller of this.starting.values()) controller.abort();

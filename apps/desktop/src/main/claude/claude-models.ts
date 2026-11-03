@@ -35,6 +35,7 @@ export async function discoverClaudeModels(params: {
   executable: string;
   env: NodeJS.ProcessEnv;
   cliVersion?: string;
+  signal?: AbortSignal;
   query?: typeof query;
 }): Promise<BackendModelOption[]> {
   const models = await readClaudeMetadata({
@@ -95,7 +96,9 @@ export async function readClaudeMetadata<T>(params: {
   read: (session: Query) => Promise<T>;
   timeoutMessage: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<T> {
+  params.signal?.throwIfAborted();
   const controller = new AbortController();
   let release!: () => void;
   const finished = new Promise<void>((resolve) => { release = resolve; });
@@ -107,7 +110,17 @@ export async function readClaudeMetadata<T>(params: {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const children: Promise<void>[] = [];
   let closing = false;
+  let onAbort: (() => void) | undefined;
   try {
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      onAbort = () => {
+        // The SDK gives the CLI stdin EOF and its graceful shutdown window
+        // before aborting the signal forwarded to spawn().
+        controller.abort();
+        reject(params.signal!.reason);
+      };
+      params.signal?.addEventListener("abort", onAbort, { once: true });
+    });
     session = (params.query ?? query)({
       prompt: prompt(),
       options: {
@@ -133,9 +146,10 @@ export async function readClaudeMetadata<T>(params: {
         reject(new Error(params.timeoutMessage));
       }, params.timeoutMs ?? 15_000);
     });
-    return await Promise.race([params.read(session), timeout]);
+    return await Promise.race([params.read(session), timeout, cancelled]);
   } finally {
     closing = true;
+    if (onAbort) params.signal?.removeEventListener("abort", onAbort);
     clearTimeout(timer);
     release();
     try {
