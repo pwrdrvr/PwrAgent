@@ -16,8 +16,9 @@ it("pairs over verified TLS, authenticates websocket requests and denies revoked
   const devices = new MobileDeviceStore(path.join(root, "devices.json"));
   const code = await devices.invite(["read"], "all");
   let calls = 0; let disconnects = 0;
+  const disconnected = Promise.withResolvers<void>();
   const gateway = await startMobileGateway({ host: "127.0.0.1", port: 0, tls: { cert, key }, devices,
-    adapter: { gatewayId: "fixture-gateway", request: async (device, _connection, method) => { calls++; return { method, deviceId: device.id, scopes: device.scopes }; }, disconnected: async () => { disconnects++; }, subscribe: () => () => {} } });
+    adapter: { gatewayId: "fixture-gateway", request: async (device, _connection, method) => { calls++; return { method, deviceId: device.id, scopes: device.scopes }; }, disconnected: async () => { disconnects++; disconnected.resolve(); }, subscribe: () => () => {} } });
   cleanups.push(() => gateway.close());
   const paired = await new Promise<{ token: string; deviceId: string }>((resolve, reject) => {
     const req = request({ hostname: "localhost", port: gateway.port, path: "/mobile/v1/pair", method: "POST", ca: cert }, (res) => {
@@ -34,5 +35,8 @@ it("pairs over verified TLS, authenticates websocket requests and denies revoked
   await devices.revoke(paired.deviceId);
   const closed = new Promise<number>((resolve) => socket.once("close", (code) => resolve(code)));
   socket.send(JSON.stringify({ id: "2", method: "thread", params: {} }));
-  expect(await closed).toBe(4003); expect(calls).toBe(1); expect(disconnects).toBe(1);
+  expect(await closed).toBe(4003); expect(calls).toBe(1);
+  // Client close does not establish completion of the server's close callback.
+  await disconnected.promise;
+  expect(disconnects).toBe(1);
 });
