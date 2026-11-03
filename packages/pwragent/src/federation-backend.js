@@ -126,10 +126,13 @@ export class HeadlessBackend {
     if (message.method === "headless/jobChanged") {
       this.syncJobs([message.params]);
       const job = message.params;
-      if (job.threadId && this.latest(job.threadId) === job && (job.turnId || job.status !== "starting")) {
+      if (job.threadId && this.latest(job.threadId) === job) {
+        const active = ACTIVE.has(job.status);
+        // An accepted job starts before Codex assigns its turn ID. Let the
+        // shared reducer adopt that ID without allocating another start rank.
         this.navigation.observeAttentionEvent({ backend: "codex", notification: {
-          method: ACTIVE.has(job.status) ? "turn/started" : "turn/completed",
-          params: { threadId: job.threadId, turnId: job.turnId || job.id },
+          method: active ? "turn/started" : "turn/completed",
+          params: { threadId: job.threadId, turnId: job.turnId || (active ? undefined : job.id) },
         } });
       }
       this.publish({ backend: "codex", notification: { method: "navigation/invalidated", params: { threadId: message.params.threadId, sourceMethod: "turn/completed" } } }, "navigation");
