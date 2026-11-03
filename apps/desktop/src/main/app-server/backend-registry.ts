@@ -28627,7 +28627,7 @@ export class DesktopBackendRegistry {
       const registeredAt = existing.registeredAt ?? request.registeredAt;
       const existingLaunchpad = projectNavigationLaunchpadProviderSettings(existing);
       const backend = await this.resolveLaunchpadBackend(existingLaunchpad.backend);
-      const modelSettings = isRemoteLaunchpadStorageKey(request.directoryKey)
+      const modelSettings = (owner?.scope === "remote" || isRemoteLaunchpadStorageKey(request.directoryKey))
         && backend.kind === existingLaunchpad.backend
         ? {
             model: existingLaunchpad.model,
@@ -28887,7 +28887,8 @@ export class DesktopBackendRegistry {
     // A peer's draft carries the owner's model choices. The viewer's catalog
     // cannot normalize them; the owner validates them when creating the thread.
     if (
-      !isRemoteLaunchpadStorageKey(request.directoryKey)
+      owner?.scope !== "remote"
+      && !isRemoteLaunchpadStorageKey(request.directoryKey)
       && (
         "model" in patch
         || "reasoningEffort" in patch

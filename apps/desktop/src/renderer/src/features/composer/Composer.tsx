@@ -14630,6 +14630,17 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   handleLaunchpadPatch({
                     model,
                     ...(nextSupportsFast ? {} : { fastMode: undefined }),
+                    ...(filesystemFederationTarget?.scope === "remote" ? {
+                      reasoningEffort: nextSupportsReasoning
+                        ? getReasoningEffortValue(backend, nextModelOption,
+                            props.launchpad.providerSettings?.[backend.kind]?.reasoningEffortsByModel?.[model]
+                              ?? props.launchpad.reasoningEffort)
+                        : undefined,
+                      serviceTier: nextModelOption?.serviceTiers?.includes(props.launchpad.serviceTier ?? "")
+                        || (nextSupportsFast && ["fast", "priority"].includes(props.launchpad.serviceTier ?? ""))
+                        ? props.launchpad.serviceTier
+                        : undefined,
+                    } : {}),
                   });
                   return;
                 }
