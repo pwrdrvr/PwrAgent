@@ -1267,7 +1267,11 @@ describe("PluginsSettings", () => {
         connection = { ...connection, updatedAt: 2, discovery: { state: "untested" } };
         return { connectionId: connection.id, connection };
       });
-      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+      // Finish loading the row and its mount effects before starting a test.
+      // The IPC effect retires earlier reads without opening a session.
+      await act(async () => {
+        render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+      });
       const article = (await screen.findByText("Native app", { exact: true })).closest("article")!;
       const row = within(article);
       expect(api.listMcpConnectionTools).not.toHaveBeenCalled();
