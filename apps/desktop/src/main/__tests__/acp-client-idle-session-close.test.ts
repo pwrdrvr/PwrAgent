@@ -293,6 +293,7 @@ describe("AcpAgentClient idle session close", () => {
 
   it("ignores turn ends that session/load replays while a prompt reloads", async () => {
     vi.useFakeTimers();
+    const sent: string[] = [];
     let releasePrompt: (() => void) | undefined;
     const transport = new GrokLikeTransport({
       initialize: GROK_INITIALIZE,
@@ -300,6 +301,7 @@ describe("AcpAgentClient idle session close", () => {
     });
     const request = transport.request.bind(transport);
     transport.request = async (method, params, timeoutMs) => {
+      sent.push(method);
       if (method === "session/load") {
         transport.emitSessionUpdate(String(params?.sessionId), {
           sessionUpdate: "turn_finished",
@@ -321,7 +323,7 @@ describe("AcpAgentClient idle session close", () => {
 
     client.startPrompt({ sessionId: "grok-session", prompt: "a long task" });
     await vi.advanceTimersByTimeAsync(0);
-    expect(transport.methods().slice(-2)).toEqual(["session/load", "session/prompt"]);
+    expect(sent.slice(-2)).toEqual(["session/load", "session/prompt"]);
 
     // Past the 5 s grace a live turn end would start.
     await vi.advanceTimersByTimeAsync(10_000);
