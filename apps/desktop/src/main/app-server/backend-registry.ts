@@ -18611,6 +18611,12 @@ export class DesktopBackendRegistry {
   }
 
   async readThread(request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse> {
+    return await (request.countsAsActivity === false
+      ? withCodexRequestActivity({ countsAsActivity: false }, () => this.readThreadResponse(request))
+      : this.readThreadResponse(request));
+  }
+
+  private async readThreadResponse(request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse> {
     this.cancelAutomaticArchive(request.backend ?? "codex", request.threadId);
     if (!request.display) return await this.readThreadData(request);
     const backend = request.backend ?? "codex";

@@ -2023,6 +2023,7 @@ class DesktopAppServerService {
         .readThread({
           backend: request.backend,
           display: request.display,
+          ...(request.countsAsActivity !== undefined ? { countsAsActivity: request.countsAsActivity } : {}),
           threadId: request.threadId,
           before: request.before,
           includeAllToolInvocations: request.includeAllToolInvocations,
@@ -2038,6 +2039,7 @@ class DesktopAppServerService {
     const response = await registry.readThread({
       backend,
       display: request.display,
+      ...(request.countsAsActivity !== undefined ? { countsAsActivity: request.countsAsActivity } : {}),
       threadId: request.threadId,
       includeAllToolInvocations: request.includeAllToolInvocations,
       includeTurns: request.includeTurns,

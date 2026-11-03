@@ -9146,7 +9146,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("keeps quota and terminal polls outside Codex request activity", async () => {
     const { codexRequestCountsAsActivity } = await import("../codex-app-server/request-activity");
-    const codexClient = new MockBackendClient();
+    const codexClient = new MockBackendClient({ threads: [] });
     const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
     const readAccount = codexClient.readAccount.bind(codexClient);
@@ -9175,6 +9175,22 @@ describe("DesktopBackendRegistry", () => {
       ["thread/backgroundTerminals/list", false],
     ]);
     expect(codexRequestCountsAsActivity()).toBe(true);
+    await registry.close();
+  });
+
+  it("counts operator transcript reads while excluding transcript polls", async () => {
+    const { codexRequestCountsAsActivity } = await import("../codex-app-server/request-activity");
+    const codexClient = new MockBackendClient({ threads: [] });
+    const readThread = codexClient.readThread.bind(codexClient);
+    const activity: boolean[] = [];
+    vi.spyOn(codexClient, "readThread").mockImplementation(async (params) => {
+      activity.push(codexRequestCountsAsActivity());
+      return await readThread(params);
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    await registry.readThread({ backend: "codex", threadId: "thread-1", viewOnly: true, countsAsActivity: false });
+    await registry.readThread({ backend: "codex", threadId: "thread-1", viewOnly: true });
+    expect(activity).toEqual([false, true]);
     await registry.close();
   });
 
