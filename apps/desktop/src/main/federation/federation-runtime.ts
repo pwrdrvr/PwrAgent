@@ -7214,7 +7214,7 @@ function localBackendOperations(): FederationBackendOperations {
           identity: JSON.stringify([request.ref.backend, request.ref.threadId]),
           operation: JSON.stringify([request.knownRevision ?? null, request.probeWorkingStates === true,
             request.includeWorkspaceConfiguration === true, request.collection ?? null]), deadlineAt: rpcOptions?.deadlineAt,
-          load: () => getDesktopNavigationDetailService().readSelectedDetail(request),
+          load: () => getDesktopNavigationDetailService().readSelectedDetail(request, { includePendingWakes: true }),
         }));
     },
     async getNavigationQueueProjection(request, rpcOptions) {

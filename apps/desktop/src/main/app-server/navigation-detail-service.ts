@@ -10,6 +10,7 @@ import type {
   NavigationSelectedDetailRequest,
   NavigationSelectedDetailResponse,
   ThreadSubAgentSummary,
+  ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
 import {
   NAVIGATION_DETAIL_COLLECTION_NAMES,
@@ -143,6 +144,7 @@ export class NavigationDetailService {
 
   async readSelectedDetail(
     request: NavigationSelectedDetailRequest,
+    options: { includePendingWakes?: boolean } = {},
   ): Promise<NavigationSelectedDetailResponse> {
     if (request.protocol !== NAVIGATION_QUERY_PROTOCOL_VERSION) {
       throw new NavigationQueryError(
@@ -287,12 +289,14 @@ export class NavigationDetailService {
       backend: summary.source, threadId: summary.id,
     });
     if (activePrWatches.length > 0) configuration.activePrWatches = activePrWatches;
-    // The owner's Waiting for list, for the same reason. An empty list says
-    // nothing waits; an owner that predates it sends none.
-    const pendingWakes = await readPendingWakesForDetail({ backend: summary.source, threadId: summary.id });
-    if (pendingWakes) {
-      configuration.pendingWakes = pendingWakes.wakes;
-      if (pendingWakes.incomplete) configuration.pendingWakesIncomplete = true;
+    // Only peer viewers need this projection; local windows use the pending
+    // wakes IPC channel. Keep its live activity out of local detail revisions.
+    if (options.includePendingWakes) {
+      const pendingWakes = await readPendingWakesForDetail({ backend: summary.source, threadId: summary.id }, activePrWatches);
+      if (pendingWakes) {
+        configuration.pendingWakes = pendingWakes.wakes;
+        if (pendingWakes.incomplete) configuration.pendingWakesIncomplete = true;
+      }
     }
     let workspaceDirectories: NavigationSelectedDetailResponse["workspaceDirectories"];
     if (request.includeWorkspaceConfiguration) {
@@ -486,7 +490,7 @@ export class NavigationDetailService {
 type PendingWakesProjector = (thread: {
   backend: AppServerBackendKind;
   threadId: string;
-}) => Promise<Pick<ThreadPendingWakesList, "wakes" | "incomplete">>;
+}, activePrWatches: readonly ThreadPullRequestWatchSummary[]) => Promise<Pick<ThreadPendingWakesList, "wakes" | "incomplete">>;
 
 let pendingWakesProjector: PendingWakesProjector | undefined;
 
@@ -499,10 +503,10 @@ export function setNavigationDetailPendingWakesProjector(projector: PendingWakes
 async function readPendingWakesForDetail(thread: {
   backend: AppServerBackendKind;
   threadId: string;
-}): Promise<Pick<ThreadPendingWakesList, "wakes" | "incomplete"> | undefined> {
+}, activePrWatches: readonly ThreadPullRequestWatchSummary[]): Promise<Pick<ThreadPendingWakesList, "wakes" | "incomplete"> | undefined> {
   if (!pendingWakesProjector) return undefined;
   try {
-    return await pendingWakesProjector(thread);
+    return await pendingWakesProjector(thread, activePrWatches);
   } catch {
     return undefined;
   }

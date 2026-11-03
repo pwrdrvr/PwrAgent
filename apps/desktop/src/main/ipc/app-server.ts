@@ -5301,11 +5301,13 @@ class DesktopAppServerService {
   async listThreadPendingWakes(
     thread: { backend: AppServerBackendKind; threadId: string },
     endedLimit?: number,
+    activePrWatches?: readonly ThreadPullRequestWatchSummary[],
   ): Promise<ThreadPendingWakesList> {
     // Before a profile's state opens nothing can wake a thread.
     if (!getAppStateMode()) return { wakes: [], ended: [] };
     return await buildThreadPendingWakes(this.pendingWakeReaders(), thread, {
       endedLimit,
+      activePrWatches,
       onReadError: (source, error) => appServerLog.warn("pending wake source unreadable", {
         source, backend: thread.backend, threadId: thread.threadId,
         error: error instanceof Error ? error.message : String(error),
@@ -10765,8 +10767,8 @@ export function registerAppServerIpcHandlers(): void {
     }
     return await appServerService.manageThreadPrWatches(request);
   });
-  setNavigationDetailPendingWakesProjector(async (thread) =>
-    await appServerService.listThreadPendingWakes(thread, 0));
+  setNavigationDetailPendingWakesProjector(async (thread, activePrWatches) =>
+    await appServerService.listThreadPendingWakes(thread, 0, activePrWatches));
   ipcMain.removeHandler(THREAD_PENDING_WAKES_CHANNEL);
   ipcMain.handle(THREAD_PENDING_WAKES_CHANNEL, async (event, request: ThreadPendingWakesRequest): Promise<ThreadPendingWakesResponse> => {
     const target = request?.federationTarget;

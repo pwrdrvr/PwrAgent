@@ -66,7 +66,12 @@ const DETAIL_MAX_CHARS = 80;
 export async function buildThreadPendingWakes(
   readers: ThreadPendingWakeReaders,
   thread: PendingWakeThread,
-  options: { endedLimit?: number; onReadError?: (source: string, error: unknown) => void } = {},
+  options: {
+    endedLimit?: number;
+    /** Selected detail already read the owner's watches. Reuse even an empty list. */
+    activePrWatches?: readonly ThreadPullRequestWatchSummary[];
+    onReadError?: (source: string, error: unknown) => void;
+  } = {},
 ): Promise<ThreadPendingWakesList> {
   const endedLimit = clampEndedLimit(options.endedLimit);
   let incomplete = false;
@@ -82,7 +87,7 @@ export async function buildThreadPendingWakes(
   const [
     prWatches, prHistory, autoFix, dependencies, scheduled, monitors, subAgents, tasks,
   ] = await Promise.all([
-    read("prWatches", [] as ThreadPullRequestWatchSummary[], () => readers.prWatches(thread)),
+    options.activePrWatches ?? read("prWatches", [] as ThreadPullRequestWatchSummary[], () => readers.prWatches(thread)),
     read("prWatchHistory", [] as ThreadPrWatchHistoryEntry[], () => readers.prWatchHistory(thread, endedLimit)),
     read("autoFix", [] as ThreadPrAutoFixState[], () => readers.autoFix(thread)),
     read("dependencies", [] as ThreadDependency[], () => readers.dependencies(thread)),

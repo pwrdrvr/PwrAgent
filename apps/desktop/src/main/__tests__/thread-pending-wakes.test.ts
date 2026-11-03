@@ -99,6 +99,14 @@ function readers(overrides: Partial<ThreadPendingWakeReaders> = {}): ThreadPendi
 }
 
 describe("buildThreadPendingWakes", () => {
+  it.each([{ activePrWatches: [] }, { activePrWatches: [prWatch()] }])("reuses selected detail's PR watches without another read (%j)", async ({ activePrWatches }) => {
+    const prWatches = vi.fn(async () => { throw new Error("duplicate PR watch read"); });
+    const list = await buildThreadPendingWakes(readers({ prWatches }), THREAD, { activePrWatches, endedLimit: 0 });
+    expect(list.wakes).toEqual(activePrWatches.map((watch) => expect.objectContaining({ kind: "pr_watch", watch })));
+    expect(list.incomplete).toBeUndefined();
+    expect(prWatches).not.toHaveBeenCalled();
+  });
+
   it("lists every source's pending wakes, soonest first", async () => {
     const list = await buildThreadPendingWakes(readers({
       prWatches: async () => [
@@ -272,7 +280,7 @@ describe("pending wake list writes", () => {
     vi.unstubAllEnvs();
   });
 
-  it("reads the stores and writes nothing", async () => {
+  it.each([false, true])("reads the stores and writes nothing (reuse watches: %s)", async (reuseWatches) => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const fixture = createTempStateDb("pwragent-pending-wakes-");
     const stateDb = StateDb.open(fixture.dbPath);
@@ -290,7 +298,7 @@ describe("pending wake list writes", () => {
           scheduledActions: (thread, includeEnded) => scheduledStore.list({
             ...thread, ...(includeEnded ? { terminalUpdatedAfter: 0 } : {}),
           }),
-        }), THREAD);
+        }), THREAD, reuseWatches ? { endedLimit: 0, activePrWatches: [prWatch()] } : {});
       }
     });
     expectSqliteWriteBudget({
