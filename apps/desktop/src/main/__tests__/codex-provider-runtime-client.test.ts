@@ -99,6 +99,21 @@ describe("provider-specific Codex runtimes", () => {
     await expect(client.startTurn({ threadId: "persisted", model: "@another/model", input: [] })).rejects.toThrow("Hand it off");
   });
 
+  it("forks a handed-off rollout without reading its source thread, which only the sending machine has", async () => {
+    const { primary, local, client } = setup();
+    // What Codex answers thread/read for an ID it never stored.
+    primary.raw.readThreadSummary.mockRejectedValue(new Error("json-rpc error (-32600): thread not loaded: remote-source"));
+    const params = { threadId: "remote-source", path: "/state/thread-handoffs/incoming-1/thread.jsonl", cwd: "/worktrees/a" };
+    await expect(client.forkThread({ ...params, model: "gpt-5.5" })).resolves.toEqual({ threadId: "forked-thread" });
+    expect(primary.raw.forkThread).toHaveBeenCalledExactlyOnceWith({ ...params, model: "gpt-5.5" });
+    // A requested provider still picks the runtime.
+    await client.forkThread({ ...params, model: "@bonsai/Bonsai.gguf" });
+    expect(local.raw.forkThread).toHaveBeenCalledOnce();
+    expect(primary.raw.readThreadSummary).not.toHaveBeenCalled();
+    // A fork of a local thread still resolves its owner first.
+    await expect(client.forkThread({ threadId: "remote-source", cwd: "/worktrees/a" })).rejects.toThrow("thread not loaded");
+  });
+
   it("reports a runtime thread's provider, and any other thread's as Codex named it", async () => {
     const { primary, client } = setup();
     await client.startThread({ model: "@bonsai/Bonsai.gguf" });
