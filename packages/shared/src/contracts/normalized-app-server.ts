@@ -355,6 +355,8 @@ export type WorktreeSnapshotSummary = {
   createdAt: number;
   archivedAt?: number;
   restoredAt?: number;
+  /** Physical checkout successfully recreated by restore, for shared-owner reuse. */
+  restoredCheckoutIdentity?: { device: string; inode: string; birthtimeNs: string; gitDirectory: string };
   state: WorktreeSnapshotState;
   ignoredFilesExcluded: boolean;
   unavailableReason?: string;

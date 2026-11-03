@@ -181,6 +181,41 @@ describe("WorktreeArchiveService", () => {
     expect(await git(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
   });
 
+  it.each(["available", "occupied", "advanced"] as const)("restores Claude source HEAD and saved edits without moving an %s branch", async (branchState) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-restore-"));
+    const repo = path.join(root, "repo");
+    const checkout = path.join(root, "checkout");
+    try {
+      await mkdir(repo);
+      await git(repo, ["init", "-b", "main"]);
+      await git(repo, ["config", "user.name", "Fixture"]);
+      await git(repo, ["config", "user.email", "fixture@example.invalid"]);
+      await git(repo, ["config", "core.autocrlf", "false"]);
+      await writeFile(path.join(repo, "file.txt"), "committed\n");
+      await git(repo, ["add", "."]);
+      await git(repo, ["commit", "-m", "fixture"]);
+      await git(repo, ["worktree", "add", "-b", "owned", checkout]);
+      const head = await git(checkout, ["rev-parse", "HEAD"]);
+      await writeFile(path.join(checkout, "file.txt"), "saved edits\n");
+      const service = new WorktreeArchiveService();
+      const snapshot = await service.archive({ backend: "claude", threadId: "fixture", repositoryPath: repo, worktreePath: checkout });
+      if (branchState === "occupied") await git(repo, ["worktree", "add", path.join(root, "other"), "owned"]);
+      if (branchState === "advanced") {
+        await git(repo, ["commit", "--allow-empty", "-m", "new commit"]);
+        await git(repo, ["branch", "-f", "owned", "main"]);
+      }
+      const branchHead = await git(repo, ["rev-parse", "owned"]);
+      const restored = await service.restore({ backend: "claude", threadId: "fixture", repositoryPath: repo, worktreePath: checkout,
+        snapshotRef: snapshot.snapshotRef, snapshotCommit: snapshot.snapshotCommit, snapshot, restoreSourceCheckout: true });
+      expect(await git(checkout, ["rev-parse", "HEAD"])).toBe(head);
+      expect(await git(repo, ["rev-parse", "owned"])).toBe(branchHead);
+      expect(await git(checkout, ["branch", "--show-current"])).toBe(branchState === "available" ? "owned" : "");
+      expect(await readFile(path.join(checkout, "file.txt"), "utf8")).toBe("saved edits\n");
+      expect(await git(checkout, ["status", "--porcelain"])).toBe("M file.txt");
+      if (branchState !== "available") expect(restored.unavailableReason).toContain("detached");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it("resolves the primary repository when the repository path points at the worktree", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-archive-"));
     const repoPath = path.join(root, "repo");
