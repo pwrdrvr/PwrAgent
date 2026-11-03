@@ -1,0 +1,78 @@
+name: Windows Native Quit Reproduction
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      samples:
+        description: Fresh profiles per mode
+        type: choice
+        options: ["3", "25", "100"]
+        default: "25"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-native-quit-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-quit:
+    name: Stock Electron native quit
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics'))
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        with:
+          node-version: "^24.22.1"
+          working-directory: .
+          cache-electron: "true"
+
+      - name: Verify official diagnostic tools
+        shell: pwsh
+        run: |
+          $tools = Join-Path $env:RUNNER_TEMP "electron-native-quit-tools"
+          New-Item -ItemType Directory -Path $tools -Force | Out-Null
+          $archive = Join-Path $tools "Handle.zip"
+          Invoke-WebRequest "https://download.sysinternals.com/files/Handle.zip" -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $tools -Force
+          $handle = Join-Path $tools "handle64.exe"
+          $cdb = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\Debuggers\x64\cdb.exe"
+          foreach ($tool in @($handle, $cdb)) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $tool
+            if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "(^|, )O=Microsoft Corporation(,|$)") {
+              throw "Diagnostic tool did not have a valid Microsoft signature."
+            }
+          }
+          "PWRAGENT_WINDOWS_HANDLE_EXE=$handle" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PWRAGENT_WINDOWS_CDB_EXE=$cdb" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Observe fresh-profile Electron quits
+        shell: pwsh
+        env:
+          PROBE_SAMPLES: ${{ inputs.samples || '25' }}
+        run: node apps/desktop/scripts/run-windows-e2e-with-pipe-diagnostics.mjs --electron-only --samples "$env:PROBE_SAMPLES"
+
+      - name: Upload bounded probe evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-native-quit-evidence
+          include-hidden-files: true
+          retention-days: 14
+          path: |
+            apps/desktop/.local/windows-pipe-diagnostics/*/native-controller/**
+            apps/desktop/.local/windows-pipe-diagnostics/*/cases/setup.json
+            apps/desktop/.local/windows-pipe-diagnostics/*/cases/summary.json
+            apps/desktop/.local/windows-pipe-diagnostics/*/cases/*/events.jsonl
+            apps/desktop/.local/windows-pipe-diagnostics/*/cases/*/result.json
+            apps/desktop/.local/windows-pipe-diagnostics/*/cases/*/stderr-tail.txt
