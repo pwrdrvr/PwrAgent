@@ -91,7 +91,7 @@ batches over 800 milliseconds. These are operation counts, not latency timings:
 | Measured work | Cache bypassed | Owner cache |
 | --- | ---: | ---: |
 | Projection builds | 1,280 | 4 |
-| Source calls | 9,600 | 32 |
+| Source calls | 10,880 | 36 |
 | SQLite SELECTs | 10,880 | 36 |
 | Returned SQLite rows | 8,320 | 28 |
 | Overlay payload bytes | 805,120 | 2,992 |
