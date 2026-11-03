@@ -4,6 +4,7 @@ import type { Socket } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { Duplex, Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { parseMcpIpcUrl, type McpIpcEndpoint } from "@pwragent/shared";
 
@@ -11,6 +12,28 @@ const IPC_ORIGIN = "http://pwragent-ipc.invalid";
 export const MCP_IPC_NO_RECONNECT = {
   maxRetries: 0, maxReconnectionDelay: 0, initialReconnectionDelay: 0, reconnectionDelayGrowFactor: 1,
 };
+
+/** Couple the native connection lifetime to the SDK's session lifecycle. */
+export function createMcpIpcTransport(serverUrl: string, options: { executable?: string; bearerToken?: string } = {}): StreamableHTTPClientTransport {
+  const ipc = createMcpIpcHttp(serverUrl, options);
+  const transport = new StreamableHTTPClientTransport(ipc.url, {
+    fetch: ipc.fetch, reconnectionOptions: MCP_IPC_NO_RECONNECT,
+  });
+  const close = transport.close.bind(transport);
+  let closed = false;
+  const terminal = (): void => { void transport.close().catch(() => undefined); };
+  transport.close = async () => {
+    if (closed) return;
+    closed = true;
+    ipc.signal.removeEventListener("abort", terminal);
+    ipc.close();
+    // SDK onclose rejects pending requests and lets the gateway evict the
+    // client and notify bridges. onerror alone does neither.
+    await close();
+  };
+  ipc.signal.addEventListener("abort", terminal, { once: true });
+  return transport;
+}
 
 export function normalizeMcpIpcBearerToken(value: unknown): string {
   if (typeof value !== "string" || value.length > 8192) throw new Error("Enter a valid IPC session bearer token.");
@@ -123,6 +146,7 @@ export function createMcpIpcHttp(serverUrl: string, options: { executable?: stri
   url: URL;
   fetch: FetchLike;
   close: () => void;
+  signal: AbortSignal;
 } {
   const endpoint = parseMcpIpcUrl(serverUrl);
   const bearerToken = options.bearerToken === undefined ? undefined : normalizeMcpIpcBearerToken(options.bearerToken);
@@ -132,6 +156,7 @@ export function createMcpIpcHttp(serverUrl: string, options: { executable?: stri
   const agents = new Set<Agent>();
   const pending = new Set<RelaySocket>();
   const close = (reason?: Error): void => {
+    if (lifetime.signal.aborted) return;
     lifetime.abort(reason);
     for (const socket of pending) socket.destroy();
     for (const agent of agents) agent.destroy();
@@ -205,5 +230,5 @@ export function createMcpIpcHttp(serverUrl: string, options: { executable?: stri
       req.end(init?.body ?? undefined);
     });
   };
-  return { url, fetch, close };
+  return { url, fetch, close, signal: lifetime.signal };
 }

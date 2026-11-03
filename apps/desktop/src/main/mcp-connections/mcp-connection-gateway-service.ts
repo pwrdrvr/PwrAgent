@@ -130,7 +130,7 @@ import {
   McpReauthorizationRequiredError,
 } from "./mcp-oauth-session-coordinator";
 import { createMcpSafeFetch } from "./mcp-safe-fetch";
-import { createMcpIpcHttp, MCP_IPC_NO_RECONNECT, normalizeMcpIpcBearerToken } from "./mcp-ipc-http";
+import { createMcpIpcTransport, normalizeMcpIpcBearerToken } from "./mcp-ipc-http";
 import { probeMcpConnectionUrl } from "./mcp-connection-probe";
 import {
   MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS,
@@ -2736,14 +2736,7 @@ export class McpConnectionGatewayService {
     }
     if (isMcpIpcUrl(connection.serverUrl)) {
       const credential = await this.credentialVault.read(connection.id, connection.serverUrl);
-      const ipc = createMcpIpcHttp(connection.serverUrl, { bearerToken: credential?.ipcBearerToken });
-      const http = new StreamableHTTPClientTransport(ipc.url, {
-        fetch: ipc.fetch,
-        reconnectionOptions: MCP_IPC_NO_RECONNECT,
-      });
-      const close = http.close.bind(http);
-      http.close = async () => { ipc.close(); await close(); };
-      transport = http;
+      transport = createMcpIpcTransport(connection.serverUrl, { bearerToken: credential?.ipcBearerToken });
     } else if (connection.kind === "sandboxer" && connection.authMode === "local_cli") {
       const status = await this.sandboxer.readStatus();
       if (!status.configured) throw new Error(status.detail);

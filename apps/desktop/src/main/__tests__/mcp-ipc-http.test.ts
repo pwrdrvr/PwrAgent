@@ -8,8 +8,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
-import { createMcpIpcHttp, MCP_IPC_NO_RECONNECT, validateMcpIpcPlatform } from "../mcp-connections/mcp-ipc-http";
+import { ErrorCode, ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
+import { createMcpIpcHttp, createMcpIpcTransport, MCP_IPC_NO_RECONNECT, validateMcpIpcPlatform } from "../mcp-connections/mcp-ipc-http";
+import { McpInitializationTransport } from "../mcp-connections/mcp-initialization-transport";
 import { parseMcpIpcUrl } from "@pwragent/shared";
 import { probeMcpConnectionUrl } from "../mcp-connections/mcp-connection-probe";
 
@@ -57,7 +58,14 @@ async function fixture() {
       }
     }
     if (body.id === undefined) { res.writeHead(202).end(); return; }
-    if (holdCalls && body.method === "tools/call") { heldCalls.set(body.id, res); return; }
+    if (holdCalls && body.method === "tools/call") {
+      heldCalls.set(body.id, res);
+      if (sse) {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(": waiting for tool result\n\n");
+      }
+      return;
+    }
     let result: unknown;
     switch (body.method) {
       case "initialize": result = {
@@ -100,7 +108,7 @@ async function fixture() {
   }
   const ipc = createMcpIpcHttp(url, { executable });
   cleanups.push(ipc.close);
-  return { ipc, path, directory, url, requests, server, holdCalls: () => { holdCalls = true; }, setSse: () => { sse = true; }, connections: () => connections, setHandler: (next: typeof handler) => { handler = next; }, notice: () => notice };
+  return { ipc, path, directory, url, requests, server, holdCalls: () => { holdCalls = true; }, heldCall: () => [...heldCalls.values()][0], setSse: () => { sse = true; }, connections: () => connections, setHandler: (next: typeof handler) => { handler = next; }, notice: () => notice };
 }
 
 describe("verified HTTP MCP over local IPC", () => {
@@ -221,6 +229,34 @@ describe("verified HTTP MCP over local IPC", () => {
     expect(f.connections()).toBe(count);
   });
 
+  it.each(["notification end", "notification failure", "tool stream failure"] as const)("closes the SDK session and pending SSE calls on %s without reconnecting", async (failure) => {
+    const f = await fixture();
+    f.setSse();
+    f.holdCalls();
+    const transport = createMcpIpcTransport(f.url, { executable });
+    const client = new Client({ name: "terminal-test", version: "1" }, { capabilities: {} });
+    const closed = vi.fn();
+    client.onclose = closed;
+    cleanups.push(async () => { await transport.close(); await client.close(); });
+    // Match the gateway's metadata observer: closure must cross this wrapper.
+    await client.connect(new McpInitializationTransport(transport));
+    await expect.poll(() => !!f.notice()).toBe(true);
+    const call = client.callTool({ name: "echo" }, undefined, { timeout: 60_000 });
+    const rejected = expect(call).rejects.toMatchObject({ code: ErrorCode.ConnectionClosed });
+    await expect.poll(() => !!f.heldCall()?.headersSent).toBe(true);
+    const count = f.connections();
+    if (failure === "notification end") f.notice()!.end();
+    else if (failure === "notification failure") f.notice()!.destroy();
+    else f.heldCall()!.destroy();
+    await expect.poll(() => closed.mock.calls.length).toBe(1);
+    await rejected;
+    await expect(client.listTools()).rejects.toThrow();
+    await transport.close();
+    expect(closed).toHaveBeenCalledTimes(1);
+    expect(f.connections()).toBe(count);
+    expect(f.requests.filter((r) => r.body.method === "tools/call")).toHaveLength(1);
+  });
+
   it("cancels an HTTP request and closes the connected relay", async () => {
     const f = await fixture();
     let closed = false;
@@ -238,7 +274,7 @@ describe("verified HTTP MCP over local IPC", () => {
   it("forwards SDK tool cancellation once without replaying the call", async () => {
     const f = await fixture();
     f.holdCalls();
-    const transport = new StreamableHTTPClientTransport(f.ipc.url, { fetch: f.ipc.fetch, reconnectionOptions: MCP_IPC_NO_RECONNECT });
+    const transport = createMcpIpcTransport(f.url, { executable });
     const client = new Client({ name: "cancel-test", version: "1" }, { capabilities: {} });
     cleanups.push(async () => { f.ipc.close(); await client.close(); });
     await client.connect(transport);

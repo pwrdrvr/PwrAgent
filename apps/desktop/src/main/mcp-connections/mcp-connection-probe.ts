@@ -1,25 +1,22 @@
 import { discoverOAuthServerInfo } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { StreamableHTTPError, type StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { ProbeMcpConnectionResponse } from "@pwragent/shared";
 import { MCP_CONNECTION_PROBE_TIMEOUT_MS } from "./mcp-connection-timeouts";
 import { isMcpIpcUrl } from "@pwragent/shared";
-import { createMcpIpcHttp, MCP_IPC_NO_RECONNECT } from "./mcp-ipc-http";
+import { createMcpIpcTransport } from "./mcp-ipc-http";
 
 async function probeIpc(serverUrl: string, executable?: string): Promise<ProbeMcpConnectionResponse> {
-  let ipc: ReturnType<typeof createMcpIpcHttp>;
+  let transport: StreamableHTTPClientTransport;
   try {
-    ipc = createMcpIpcHttp(serverUrl, { executable });
+    transport = createMcpIpcTransport(serverUrl, { executable });
   } catch (error) {
     return { ok: false, problem: "not_a_url", message: error instanceof Error ? error.message : String(error) };
   }
-  const transport = new StreamableHTTPClientTransport(ipc.url, {
-    fetch: ipc.fetch, reconnectionOptions: MCP_IPC_NO_RECONNECT,
-  });
   const client = new Client({ name: "PwrAgent", version: "probe" }, { capabilities: {} });
   const signal = AbortSignal.timeout(MCP_CONNECTION_PROBE_TIMEOUT_MS);
-  const abort = (): void => ipc.close();
+  const abort = (): void => { void transport.close().catch(() => undefined); };
   signal.addEventListener("abort", abort, { once: true });
   try {
     await client.connect(transport, { signal, timeout: MCP_CONNECTION_PROBE_TIMEOUT_MS });
@@ -36,8 +33,8 @@ async function probeIpc(serverUrl: string, executable?: string): Promise<ProbeMc
     };
   } finally {
     signal.removeEventListener("abort", abort);
-    ipc.close();
     await client.close().catch(() => undefined);
+    await transport.close().catch(() => undefined);
   }
 }
 

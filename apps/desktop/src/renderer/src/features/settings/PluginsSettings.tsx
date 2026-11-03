@@ -2350,7 +2350,9 @@ function ManagedMcpConnectionRow(props: {
   const { inventory: fetchedInventory, test: testConnection, testResult } = useManagedConnectionTools({
     connectionId: connection.id,
     desktopApi: props.desktopApi,
-    identity: `${connection.serverUrl}\n${connection.configured}`,
+    // IPC token edits keep the URL and configured state, but update the
+    // connection revision. Retire old tests and in-flight reads on save.
+    identity: `${connection.serverUrl}\n${connection.configured}${ipc ? `\n${connection.updatedAt}` : ""}`,
     listable,
     // Opening a session can consume a ticket approved in the native app.
     // Only an explicit test or a selected thread may do that for IPC.
