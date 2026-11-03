@@ -22,6 +22,7 @@ describe.skipIf(process.env.PWRAGENT_PROFILE_CRITICAL_PATHS !== "1")("async crit
     const samples: Record<string, number | string>[] = [];
     let nextThread = 0;
     let firstToken: Promise<void> = Promise.resolve();
+    let firstTokenAt = 0;
     let providerAcceptedAt = 0;
     const replay = { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } };
     const registry = new DesktopBackendRegistry({
@@ -38,7 +39,7 @@ describe.skipIf(process.env.PWRAGENT_PROFILE_CRITICAL_PATHS !== "1")("async crit
         startTurn: async ({ threadId }: { threadId: string }) => {
           await delay(10);
           providerAcceptedAt = performance.now();
-          firstToken = delay(60);
+          firstToken = delay(60).then(() => { firstTokenAt = performance.now(); });
           return { threadId, turnId: `turn-${threadId}` };
         },
         readThread: async () => { await delay(15); return replay; },
@@ -88,7 +89,7 @@ describe.skipIf(process.env.PWRAGENT_PROFILE_CRITICAL_PATHS !== "1")("async crit
         const acceptanceMs = performance.now() - submittedAt;
         await firstToken;
         samples.push({ operation, temperature, acceptanceMs,
-          providerAcceptanceMs: providerAcceptedAt - submittedAt, firstTokenMs: performance.now() - submittedAt });
+          providerAcceptanceMs: providerAcceptedAt - submittedAt, firstTokenMs: firstTokenAt - submittedAt });
 
         // Already-arrived live events from several active threads enter the
         // same durability batch as the selected transcript's hydration.
