@@ -6,7 +6,7 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 async function createArchiveHistoryFixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-archive-history-"));
-  const threads = ["c", "a", "b"].map((id, index) => ({
+  const threads = ["a", "b", "c"].map((id, index) => ({
     id: `history-${id}`, title: `History fixture ${id.toUpperCase()}`, titleSource: "explicit",
     source: "codex", executionMode: "default", linkedDirectories: [],
     inbox: { inInbox: true }, updatedAt: 1760000000000 - index,
@@ -29,7 +29,7 @@ async function createArchiveHistoryFixture() {
       { id: "list-after", afterResponseId: "archive", kind: "response", method: "thread/list",
         result: threads.filter((thread) => thread.id !== "history-b") },
       { id: "archived-after", afterResponseId: "archive", archived: true,
-        kind: "response", method: "thread/list", result: [threads[2]] },
+        kind: "response", method: "thread/list", result: [threads[1]] },
     ],
   }));
   return { fixturePath, cleanup: () => rm(root, { recursive: true, force: true }) };
