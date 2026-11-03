@@ -38563,10 +38563,11 @@ export class DesktopBackendRegistry {
     const workspaceObservations = new Map<string, Promise<LinkedDirectorySummary | undefined>>();
     // Admission never uses the preliminary inventory. Larger metadata pages
     // amortize RPC cost while overlay/CPU slices remain bounded at 25 rows.
+    // thread/list clamps page size at 100; requesting more does not save RPCs.
     // Scope only filesystem/Git enrichment, including aliases and descendants;
     // every provider identity and its current overlay still participates.
     const directoryFilter = params.ownershipScope ? archiveCleanupWorkspaceFilter(params.ownershipScope) : undefined;
-    const providerPageSize = directoryFilter ? 250 : ARCHIVE_CLEANUP_SLICE_SIZE;
+    const providerPageSize = directoryFilter ? 100 : ARCHIVE_CLEANUP_SLICE_SIZE;
     const scanStartedAt = Date.now();
     let providerPages = 0;
     const appendPage = async (backend: AppServerBackendKind, rows: AppServerThreadSummary[], archived: boolean, resolveCwd = isAcpBackendId(backend)) => {

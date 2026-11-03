@@ -74,7 +74,7 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
       };
       if (this.rows) {
         const rows = archived ? this.rows.archived : this.rows.active;
-        const end = page + (request.params?.limit ?? 25);
+        const end = page + Math.min(request.params?.limit ?? 25, 100);
         result = { data: rows.slice(page, end).map((row) => ({ ...row, name: row.id, updatedAt: 1 })),
           nextCursor: end < rows.length ? String(end) : null };
       }

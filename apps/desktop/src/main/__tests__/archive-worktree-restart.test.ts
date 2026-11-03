@@ -1085,8 +1085,8 @@ describe("archive worktrees across a desktop restart", () => {
     expect(result.cleanup[0]?.removedWorktree).toBe(true);
     const pages = ArchiveWorktreeTransport.requests.filter((request) => request.method === "thread/list");
     expect(pages.filter((request) => request.params.archived && request.params.cursor)).toHaveLength(1);
-    expect(pages.filter((request) => request.params.limit === 250)).toHaveLength(2);
-    expect(pages.every((request) => [25, 250].includes(Number(request.params.limit)) && request.params.useStateDbOnly === true)).toBe(true);
+    expect(pages.filter((request) => request.params.limit === 100)).toHaveLength(2);
+    expect(pages.every((request) => [25, 100].includes(Number(request.params.limit)) && request.params.useStateDbOnly === true)).toBe(true);
   });
 
   it("accepts a delayed matching archive notification through the production provider subscriber", async () => {

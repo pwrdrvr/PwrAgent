@@ -49,8 +49,8 @@ describe("archive cleanup provider slices", () => {
     const client = new CodexAppServerClient({ threadDirectoryEnricher: enrich });
     try {
       const directoryFilter = vi.fn(async () => false);
-      await client.listArchiveCleanupThreadsPage({ archived: false, limit: 250, checkpoint, directoryFilter });
-      await client.listArchiveCleanupThreadsPage({ archived: false, limit: 250, checkpoint, directoryFilter });
+      await client.listArchiveCleanupThreadsPage({ archived: false, limit: 100, checkpoint, directoryFilter });
+      await client.listArchiveCleanupThreadsPage({ archived: false, limit: 100, checkpoint, directoryFilter });
       expect(ArchiveCleanupTransport.latest.listings).toHaveLength(2);
       expect(enrich).not.toHaveBeenCalled();
       expect(checkpoint).not.toHaveBeenCalled();
@@ -78,7 +78,7 @@ describe("archive cleanup provider slices", () => {
         for (const archived of [false, true]) {
           let cursor: string | undefined;
           do {
-            const page = await client.listArchiveCleanupThreadsPage({ archived, cursor, limit: admission ? 250 : 25,
+            const page = await client.listArchiveCleanupThreadsPage({ archived, cursor, limit: admission ? 100 : 25,
               checkpoint: async () => {}, directoryObservations, directoryFilter });
             identities += page.threads.length;
             cursor = page.nextCursor;

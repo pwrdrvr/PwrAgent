@@ -614,9 +614,9 @@ describe("archive cleanup pipeline", () => {
     const result = await repair;
     expect(result.cleanup.filter((item) => item.removedWorktree)).toHaveLength(4);
     // Discovery: ceil(399/25) + ceil(1477/25) = 76 pages.
-    // Each independent authoritative admission: 2 + 6 = 8 pages.
-    expect(limits).toHaveLength(76 + 4 * 8);
-    expect(limits.filter((limit) => limit === 250)).toHaveLength(32);
+    // Each independent authoritative admission: 4 + 15 = 19 pages.
+    expect(limits).toHaveLength(76 + 4 * 19);
+    expect(limits.filter((limit) => limit === 100)).toHaveLength(76);
     expect(fixture.counts.largestOverlaySlice).toBeLessThanOrEqual(25);
   });
 
@@ -701,7 +701,7 @@ describe("archive cleanup pipeline", () => {
     await vi.advanceTimersByTimeAsync(100_000);
     const result = await repair;
     expect(result.emptyContainerCandidates).toHaveLength(2);
-    expect(limits).toEqual([25, 25, 250, 250, 250, 250]);
+    expect(limits).toEqual([25, 25, 100, 100, 100, 100]);
     if (change === "lifecycle") {
       expect(result.containerCleanup.every((item) => item.error?.includes("ownership changed"))).toBe(true);
     } else {

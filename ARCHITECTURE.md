@@ -128,7 +128,7 @@ does not spend the user allowance.
 
 Discovery identifies candidates, while every removal and empty-container repair
 obtains a fresh complete membership/overlay inventory across Codex, Claude and
-ACP. Admission requests at most 250 Codex metadata rows per page and reads
+ACP. Admission requests at most 100 Codex metadata rows per page and reads
 overlays in 25-row slices. It resolves cwd aliases through the filesystem and
 limits Git enrichment to workspaces that overlap the checkout or its container.
 Unrelated identities still contribute their current linked and retained
