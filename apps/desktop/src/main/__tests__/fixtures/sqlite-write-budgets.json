@@ -125,8 +125,8 @@
   },
   "automation-run-transcript-burst": {
     "commits": 1,
-    "note": "2,500 completed tool items across 50 windows, one shutdown-boundary artifact write",
-    "observedWalBytes": 704520,
+    "note": "250 completed tool items across 50 windows, one shutdown-boundary artifact write",
+    "observedWalBytes": 86520,
     "rowsChanged": 1,
     "statements": 1
   },
