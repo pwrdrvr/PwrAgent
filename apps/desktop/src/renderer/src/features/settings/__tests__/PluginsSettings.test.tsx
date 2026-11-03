@@ -1265,7 +1265,7 @@ describe("PluginsSettings", () => {
       api.updateMcpConnection = vi.fn(async () => {
         // Token changes retain URL/configured state, but revise the row.
         connection = { ...connection, updatedAt: 2, discovery: { state: "untested" } };
-        return { connection };
+        return { connectionId: connection.id, connection };
       });
       render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
       const article = (await screen.findByText("Native app", { exact: true })).closest("article")!;
@@ -1290,7 +1290,7 @@ describe("PluginsSettings", () => {
       fireEvent.click(dialog.getByRole("button", { name: "Save" }));
       await screen.findByText("Native app was updated.");
       expect(api.updateMcpConnection).toHaveBeenCalledWith(expect.objectContaining({ ipcBearerToken: token }));
-      expect(row.queryByRole("status")).toBeNull();
+      await waitFor(() => expect(row.queryByRole("status")).toBeNull());
       expect(row.queryByText("1 tool")).toBeNull();
       expect(article).toHaveAttribute("data-health", "unknown");
       if (finishOldTest) await act(async () => { finishOldTest!(); });
