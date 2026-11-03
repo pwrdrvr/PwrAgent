@@ -9,7 +9,7 @@ import type {
 import { buildPrependPinRank } from "@pwragent/shared";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
-import type { NavigationQueryIndex } from "../app-server/navigation-query-projection";
+import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import budgets from "./fixtures/navigation-listing-budgets.json";
 
 const mocks = vi.hoisted(() => {

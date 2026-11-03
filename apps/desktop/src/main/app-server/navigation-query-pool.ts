@@ -3,7 +3,7 @@ import { listingDiagnostics, listingRequestFields } from "../diagnostics/listing
 import type { FederationTarget, NavigationIdentity, NavigationQueryPage, NavigationQueryRequest, NavigationSelectedDetailResponse,
   NavigationLaunchpadConfigResponse, NavigationQueueProjection, ListScheduledThreadActionsResponse } from "@pwragent/shared";
 import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
-import { navigationQueryKey } from "./navigation-query-projection";
+import { navigationQueryKey } from "@pwragent/owner-core/navigation-query-projection";
 import { NavigationQueryError } from "./navigation-query-store";
 
 const MAX_QUERIES = 8;

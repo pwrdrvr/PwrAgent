@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { NavigationIndexReadPool } from "../app-server/navigation-index-read-pool";
-import type { NavigationQueryIndex } from "../app-server/navigation-query-projection";
+import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 
 const index = { threads: [], directories: [], inputRequestThreadKeys: new Set<string>() } as NavigationQueryIndex;
 function deferred() {

@@ -4,7 +4,7 @@ import type {
   AppServerTurnInputItem,
 } from "@pwragent/shared";
 import queuedMessageTitlePrompt from "./queued-message-title-prompt.md?raw";
-import type { ThreadTitleAdapterResult } from "./thread-title-generation-service";
+import type { ThreadTitleAdapterResult } from "@pwragent/owner-core/thread-title-generation-service";
 
 /**
  * Short titles for queued messages.

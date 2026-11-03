@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
-import { navigationAttentionIdentity, observeNavigationAttentionTurn, reconcileNavigationAttentionOrder } from "../app-server/navigation-attention-order";
+import { navigationAttentionIdentity, observeNavigationAttentionTurn, reconcileNavigationAttentionOrder } from "../navigation-attention-order";
 
 const thread = (id: string, updatedAt: number): NavigationThreadSummary => ({ id, source: "codex", title: id, titleSource: "fallback",
   linkedDirectories: [], updatedAt, threadStatus: "active", inbox: { inInbox: true } });

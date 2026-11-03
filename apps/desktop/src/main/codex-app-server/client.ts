@@ -197,7 +197,7 @@ import {
 import type {
   ThreadTitleAdapterParams,
   ThreadTitleAdapterResult,
-} from "../app-server/thread-title-generation-service";
+} from "@pwragent/owner-core/thread-title-generation-service";
 import {
   normalizeCompatibleApprovalPolicy,
   resolveCodexProtocolCompatibility,
