@@ -193,6 +193,29 @@ describe("archive cleanup pipeline", () => {
     }));
   });
 
+  it.each(["shared", "external", "snapshot failure"] as const)("keeps Claude worktrees on %s and publishes the cleanup outcome", async (reason) => {
+    vi.useFakeTimers();
+    const directory = { id: "repo", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree" };
+    const fixture = build(reason === "shared" ? [codexThread({ id: "active-owner", linkedDirectories: [directory] })] : []);
+    const session = { cwd: directory.worktreePath, thread: {
+      ...codexThread({ id: "claude-target", linkedDirectories: [directory] }), source: "claude" as const,
+    } };
+    vi.spyOn(fixture.claudeStore, "read").mockResolvedValue(session);
+    vi.spyOn(fixture.claudeStore, "save").mockResolvedValue(undefined);
+    vi.mocked(fixture.claudeStore.list).mockResolvedValue([session]);
+    if (reason === "external") fixture.overlays.set(session.thread.id, { backend: "claude", threadId: session.thread.id,
+      extraLinkedDirectories: [{ ...directory, worktreeOwnership: "external" }] });
+    if (reason === "snapshot failure") fixture.archiveWorktree.mockRejectedValue(new Error("Snapshot preparation failed"));
+    await fixture.registry.archiveThread({ backend: "claude", threadId: session.thread.id, backgroundCleanup: true });
+    const event = await drivePacer(fixture.registry, fixture.completion);
+    expect(event.notification.params).toMatchObject({ cleanup: [expect.objectContaining({
+      removedWorktree: false,
+      ...(reason === "snapshot failure" ? { error: "Snapshot preparation failed" }
+        : { skippedReason: expect.stringContaining(reason === "shared" ? "active-owner" : "Externally managed") }),
+    })] });
+    if (reason !== "snapshot failure") expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+  });
+
   it("reports Claude archive metadata failure instead of an empty successful cleanup", async () => {
     vi.useFakeTimers();
     const fixture = build([]);
